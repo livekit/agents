@@ -677,8 +677,10 @@ async def test_session_report_components_ignore_agent_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _create_simple_session()
-    agent = Agent(instructions="Test agent", vad=FakeVAD(), stt=FakeSTT(), tts=FakeTTS())
-    for name in ("vad", "stt", "tts"):
+    agent = Agent(
+        instructions="Test agent", vad=FakeVAD(), stt=FakeSTT(), llm=FakeLLM(), tts=FakeTTS()
+    )
+    for name in ("vad", "stt", "llm", "tts"):
         monkeypatch.setattr(
             getattr(session, name), "describe_options", lambda: {"configuration": "session"}
         )
@@ -695,7 +697,7 @@ async def test_session_report_components_ignore_agent_overrides(
             "transcript": False,
         }
         report = JobContext.make_session_report(_make_mock_job_ctx(), session)
-        assert set(report.components) == {"vad", "stt", "tts"}
+        assert set(report.components) == {"vad", "stt", "llm", "tts"}
         assert all(
             component["configuration"] == "session" for component in report.components.values()
         )

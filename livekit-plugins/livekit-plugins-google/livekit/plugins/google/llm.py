@@ -305,6 +305,47 @@ class LLM(llm.LLM):
         else:
             return "Gemini"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "temperature": self._opts.temperature,
+            "vertexai": self._opts.vertexai,
+            "max_output_tokens": self._opts.max_output_tokens,
+            "top_p": self._opts.top_p,
+            "top_k": self._opts.top_k,
+            "presence_penalty": self._opts.presence_penalty,
+            "frequency_penalty": self._opts.frequency_penalty,
+            "seed": self._opts.seed,
+            "service_tier": self._opts.service_tier,
+            "media_resolution": self._opts.media_resolution,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+            "thinking_config": types.ThinkingConfig.model_validate(
+                self._opts.thinking_config
+            ).model_dump(
+                include={"include_thoughts", "thinking_budget", "thinking_level"}, exclude_none=True
+            )
+            if is_given(self._opts.thinking_config)
+            else None,
+            "automatic_function_calling_config": types.AutomaticFunctionCallingConfig.model_validate(
+                self._opts.automatic_function_calling_config
+            ).model_dump(
+                include={"disable", "maximum_remote_calls", "ignore_call_history"},
+                exclude_none=True,
+            )
+            if is_given(self._opts.automatic_function_calling_config)
+            else None,
+            "safety_settings": [
+                types.SafetySetting.model_validate(setting).model_dump(
+                    include={"category", "method", "threshold"}, exclude_none=True
+                )
+                for setting in self._opts.safety_settings
+            ]
+            if is_given(self._opts.safety_settings)
+            else None,
+        }
+
     def chat(
         self,
         *,

@@ -529,6 +529,22 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "Amazon"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "temperature": self._opts.temperature,
+            "top_p": self._opts.top_p,
+            "max_tokens": self._opts.max_tokens,
+            "region": self._opts.region,
+            "turn_detection": self._opts.turn_detection,
+            "modalities": self._opts.modalities,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+            "generate_reply_timeout": self._generate_reply_timeout,
+        }
+
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""
         # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)

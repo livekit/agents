@@ -186,6 +186,20 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return "AWS Bedrock"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "temperature": self._opts.temperature,
+            "max_output_tokens": self._opts.max_output_tokens,
+            "top_p": self._opts.top_p,
+            "cache_system": self._opts.cache_system,
+            "cache_tools": self._opts.cache_tools,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+            "supports_sampling_params": self._supports_sampling_params,
+        }
+
     def chat(
         self,
         *,

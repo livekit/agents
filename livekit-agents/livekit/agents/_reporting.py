@@ -19,6 +19,7 @@ from .log import logger
 from .utils import is_given
 
 if TYPE_CHECKING:
+    from .llm import LLM, DuplexModel, RealtimeModel
     from .stt import STT
     from .tts import TTS
     from .vad import VAD
@@ -115,7 +116,9 @@ def _serialize_option_value(value: Any) -> Any:
     return _describe_option_object(value)
 
 
-def component_metadata(component: STT | TTS | VAD) -> dict[str, str]:
+def component_metadata(
+    component: LLM | RealtimeModel | DuplexModel | STT | TTS | VAD,
+) -> dict[str, str]:
     try:
         return {"model": component.model, "provider": component.provider}
     except Exception:
@@ -123,7 +126,9 @@ def component_metadata(component: STT | TTS | VAD) -> dict[str, str]:
         return {}
 
 
-def snapshot_component(component: STT | TTS | VAD) -> dict[str, Any]:
+def snapshot_component(
+    component: LLM | RealtimeModel | DuplexModel | STT | TTS | VAD,
+) -> dict[str, Any]:
     """Snapshot one component without letting its description failure affect siblings."""
     cls = type(component)
     options: dict[str, Any] = component_metadata(component)

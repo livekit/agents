@@ -13,7 +13,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote, urlencode
 
 import aiohttp
@@ -147,6 +147,15 @@ class RealtimeModel(llm.RealtimeModel):
     @property
     def provider(self) -> str:
         return "nvidia"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "seed": self._opts.seed,
+            "silence_threshold_ms": self._opts.silence_threshold_ms,
+            "use_ssl": self._opts.use_ssl,
+        }
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:

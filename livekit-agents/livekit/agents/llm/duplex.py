@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Mapping
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
 
+from .._reporting import component_metadata
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem
@@ -86,6 +87,10 @@ class DuplexModel(ABC):
     @property
     def provider(self) -> str:
         return "unknown"
+
+    def describe_options(self) -> Mapping[str, Any]:
+        """Return settings to include in session reports, without credentials or user content."""
+        return component_metadata(self)
 
     @property
     def capabilities(self) -> DuplexCapabilities:

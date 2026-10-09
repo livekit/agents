@@ -9,7 +9,7 @@ import typing
 import weakref
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -405,6 +405,33 @@ class RealtimeModel(llm.RealtimeModel):
     @property
     def provider(self) -> str:
         return "phonic"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "generate_welcome_message": self._opts.generate_welcome_message,
+            "default_language": self._opts.default_language,
+            "additional_languages": self._opts.additional_languages,
+            "multilingual_mode": self._opts.multilingual_mode,
+            "audio_speed": self._opts.audio_speed,
+            "min_words_to_interrupt": self._opts.min_words_to_interrupt,
+            "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
+            "no_input_poke_sec": self._opts.no_input_poke_sec,
+            "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
+            "websocket_timeout_sec": self._opts.websocket_timeout_sec,
+            "intelligence_level": self._opts.intelligence_level,
+            "phonic_model": self._opts.phonic_model,
+            "is_welcome_message_interruptible": self._opts.is_welcome_message_interruptible,
+            "vad_prebuffer_duration_ms": self._opts.vad_prebuffer_duration_ms,
+            "vad_min_speech_duration_ms": self._opts.vad_min_speech_duration_ms,
+            "vad_min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
+            "vad_threshold": self._opts.vad_threshold,
+            "enable_assistant_backchannel": self._opts.enable_assistant_backchannel,
+            "assistant_backchannel_aggressiveness": self._opts.assistant_backchannel_aggressiveness,
+            "enable_redaction": self._opts.enable_redaction,
+            "enable_watermarking": self._opts.enable_watermarking,
+        }
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)

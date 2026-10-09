@@ -150,6 +150,20 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return self._client._base_url.netloc.decode("utf-8")
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "temperature": self._opts.temperature,
+            "parallel_tool_calls": self._opts.parallel_tool_calls,
+            "caching": self._opts.caching,
+            "top_k": self._opts.top_k,
+            "max_tokens": self._opts.max_tokens,
+            "strict_tool_schema": self._opts.strict_tool_schema,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+        }
+
     def chat(
         self,
         *,

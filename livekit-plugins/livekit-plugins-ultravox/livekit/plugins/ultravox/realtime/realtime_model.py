@@ -236,6 +236,20 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "Ultravox"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "input_sample_rate": self._opts.input_sample_rate,
+            "output_sample_rate": self._opts.output_sample_rate,
+            "temperature": self._opts.temperature,
+            "language_hint": self._opts.language_hint,
+            "max_duration": self._opts.max_duration,
+            "enable_greeting_prompt": self._opts.enable_greeting_prompt,
+            "first_speaker": self._opts.first_speaker,
+            "output_medium": self._opts.output_medium,
+        }
+
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is available."""
         if self._http_session is None:

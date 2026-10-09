@@ -578,6 +578,61 @@ class RealtimeModel(llm.RealtimeModel):
 
         return urlparse(self._opts.base_url).netloc
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "modalities": self._opts.modalities,
+            "speed": self._opts.speed,
+            "max_session_duration": self._opts.max_session_duration,
+            "max_response_output_tokens": self._opts.max_response_output_tokens,
+            "is_azure": self._opts.is_azure,
+            "api_version": self._opts.api_version,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+            "input_audio_transcription": self._opts.input_audio_transcription.model_dump(
+                include={"model", "language"}, exclude_none=True
+            )
+            if self._opts.input_audio_transcription is not None
+            else None,
+            "input_audio_noise_reduction": self._opts.input_audio_noise_reduction.model_dump(
+                include={"type"}, exclude_none=True
+            )
+            if self._opts.input_audio_noise_reduction is not None
+            else None,
+            "turn_detection": self._opts.turn_detection.model_dump(
+                include={
+                    "type",
+                    "threshold",
+                    "prefix_padding_ms",
+                    "silence_duration_ms",
+                    "create_response",
+                    "interrupt_response",
+                    "idle_timeout_ms",
+                    "eagerness",
+                },
+                exclude_none=True,
+            )
+            if self._opts.turn_detection is not None
+            else None,
+            "reasoning": self._opts.reasoning.model_dump(include={"effort"}, exclude_none=True)
+            if self._opts.reasoning is not None
+            else None,
+            "truncation": self._opts.truncation
+            if isinstance(self._opts.truncation, str)
+            else self._opts.truncation.model_dump(
+                include={
+                    "type": True,
+                    "retention_ratio": True,
+                    "token_limits": {"post_instructions"},
+                },
+                exclude_none=True,
+            )
+            if self._opts.truncation is not None
+            else None,
+        }
+
     @classmethod
     def with_azure(
         cls,

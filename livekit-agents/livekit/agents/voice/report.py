@@ -37,7 +37,7 @@ class SessionReport:
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
     components: dict[str, dict[str, Any]] = field(default_factory=dict)
-    """Session VAD, STT, and TTS settings captured when the report is created."""
+    """Session VAD, STT, LLM, and TTS settings captured when the report is created."""
 
     def to_dict(self) -> dict:
         events_dict: list[dict] = []
@@ -88,6 +88,11 @@ class SessionReport:
 def _serialize_session_components(session: AgentSession) -> dict[str, dict[str, Any]]:
     return {
         name: snapshot_component(component)
-        for name, component in (("vad", session.vad), ("stt", session.stt), ("tts", session.tts))
+        for name, component in (
+            ("vad", session.vad),
+            ("stt", session.stt),
+            ("llm", session.llm),
+            ("tts", session.tts),
+        )
         if component is not None
     }

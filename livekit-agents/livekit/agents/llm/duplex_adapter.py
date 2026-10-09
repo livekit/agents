@@ -6,12 +6,13 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import numpy as np
 
 from livekit import rtc
 
+from .._reporting import snapshot_component
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
@@ -295,6 +296,13 @@ class DuplexRealtimeAdapter(RealtimeModel):
     @property
     def provider(self) -> str:
         return self._duplex_model.provider
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "llm": snapshot_component(self._duplex_model),
+            "audio_timeout": self._audio_timeout,
+        }
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # turn detection is inherent to a duplex model, so it is never asked to be off

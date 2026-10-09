@@ -252,6 +252,19 @@ class AIPlatformLLM(llm.LLM):
     def provider(self) -> str:
         return "Vertex AI Model Garden"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "temperature": self._opts.temperature,
+            "top_p": self._opts.top_p,
+            "max_completion_tokens": self._opts.max_completion_tokens,
+            "parallel_tool_calls": self._opts.parallel_tool_calls,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+            "strict_tool_schema": self._strict_tool_schema,
+        }
+
     def chat(
         self,
         *,

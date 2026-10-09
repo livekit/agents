@@ -9,7 +9,7 @@ import weakref
 from collections import deque
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from azure.ai.voicelive.aio import VoiceLiveConnection, connect
 from azure.ai.voicelive.models import (
@@ -345,6 +345,46 @@ class RealtimeModel(llm.RealtimeModel):
     @property
     def provider(self) -> str:
         return "azure-voicelive"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "input_audio_format": self._opts.input_audio_format,
+            "output_audio_format": self._opts.output_audio_format,
+            "modalities": self._opts.modalities,
+            "temperature": self._opts.temperature,
+            "max_output_tokens": self._opts.max_output_tokens,
+            "voice": self._opts.voice
+            if isinstance(self._opts.voice, str)
+            else self._opts.voice.name,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+            "input_audio_transcription": {
+                key: value
+                for key, value in self._opts.input_audio_transcription.as_dict().items()
+                if key in {"model", "language"}
+            }
+            if self._opts.input_audio_transcription is not None
+            else None,
+            "turn_detection": {
+                key: value
+                for key, value in self._opts.turn_detection.as_dict().items()
+                if key
+                in {
+                    "type",
+                    "threshold",
+                    "prefix_padding_ms",
+                    "silence_duration_ms",
+                    "create_response",
+                    "interrupt_response",
+                    "eagerness",
+                    "auto_truncate",
+                }
+            }
+            if self._opts.turn_detection is not None
+            else None,
+        }
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # manual turn-taking is unsupported (can_disable_turn_detection=False)

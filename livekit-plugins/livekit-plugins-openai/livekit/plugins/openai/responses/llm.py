@@ -336,6 +336,26 @@ class LLM(llm.LLM):
             return self._client._base_url.netloc.decode("utf-8")
         return ""
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "temperature": self._opts.temperature,
+            "parallel_tool_calls": self._opts.parallel_tool_calls,
+            "store": self._opts.store,
+            "service_tier": self._opts.service_tier,
+            "verbosity": self._opts.verbosity,
+            "max_output_tokens": self._opts.max_output_tokens,
+            "use_websocket": self._opts.use_websocket,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+            "reasoning": self._opts.reasoning.model_dump(
+                include={"effort", "summary", "generate_summary"}, exclude_none=True
+            )
+            if is_given(self._opts.reasoning)
+            else None,
+        }
+
     def chat(
         self,
         *,

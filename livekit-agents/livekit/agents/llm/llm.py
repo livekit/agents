@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any, ClassVar, Generic, Literal, TypeVar
@@ -16,6 +16,7 @@ from livekit.agents.metrics.base import Metadata
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
+from .._reporting import component_metadata
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, trace_types, tracer
@@ -144,6 +145,10 @@ class LLM(
             Plugins should override this property to provide their provider information.
         """
         return "unknown"
+
+    def describe_options(self) -> Mapping[str, Any]:
+        """Return settings to include in session reports, without credentials or user content."""
+        return component_metadata(self)
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:

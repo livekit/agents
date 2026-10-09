@@ -21,6 +21,7 @@ from typing_extensions import TypedDict
 
 from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+from .._reporting import Sensitive, reportable_option_names
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
@@ -187,35 +188,38 @@ LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModel
 
 class ChatCompletionOptions(TypedDict, total=False):
     frequency_penalty: float | None
-    logit_bias: dict[str, int] | None
+    logit_bias: Sensitive[dict[str, int] | None]
     logprobs: bool | None
     max_completion_tokens: int | None
     max_tokens: int | None
-    metadata: Metadata | None
+    metadata: Sensitive[Metadata | None]
     modalities: list[Literal["text", "audio"]] | None
     n: int | None
     parallel_tool_calls: bool
-    prediction: ChatCompletionPredictionContentParam | None
+    prediction: Sensitive[ChatCompletionPredictionContentParam | None]
     presence_penalty: float | None
-    prompt_cache_key: str
+    prompt_cache_key: Sensitive[str]
     prompt_cache_retention: Literal["in_memory", "24h"] | None
     reasoning_effort: ReasoningEffort | None
-    safety_identifier: str
+    safety_identifier: Sensitive[str]
     seed: int | None
     service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None
-    stop: str | None | list[str] | None
+    stop: Sensitive[str | None | list[str] | None]
     store: bool | None
     temperature: float | None
     top_logprobs: int | None
     top_p: float | None
-    user: str
+    user: Sensitive[str]
     verbosity: Literal["low", "medium", "high"] | None
-    web_search_options: completion_create_params.WebSearchOptions
+    web_search_options: Sensitive[completion_create_params.WebSearchOptions]
 
     # livekit-typed arguments
-    tool_choice: ToolChoice
+    tool_choice: Sensitive[ToolChoice]
     # TODO(theomonnomn): support repsonse format
     # response_format: completion_create_params.ResponseFormat
+
+
+_REPORTABLE_EXTRA_OPTIONS = reportable_option_names(ChatCompletionOptions)
 
 
 @dataclass
@@ -307,6 +311,18 @@ class LLM(llm.LLM):
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "inference_provider": self._opts.provider,
+            "inference_class": self._opts.inference_class,
+            "extra_kwargs": {
+                key: value
+                for key, value in self._opts.extra_kwargs.items()
+                if key in _REPORTABLE_EXTRA_OPTIONS
+            },
+        }
 
     def chat(
         self,

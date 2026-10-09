@@ -15,6 +15,7 @@ import aiohttp
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents._reporting import Sensitive, reportable_option_names
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -85,17 +86,20 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     model: str
     """Responses model slug; ``gpt-5.6-luna`` when unset. On Azure, the name of a Responses
     deployment in the same resource, which is required there."""
-    instructions: str
+    instructions: Sensitive[str]
     """Instructions for the backend model, distinct from the voice model's."""
-    tool_choice: llm.ToolChoice | None
+    tool_choice: Sensitive[llm.ToolChoice | None]
     parallel_tool_calls: bool
-    reasoning: Reasoning
+    reasoning: Sensitive[Reasoning]
     """Responses reasoning settings, for example ``{"effort": "medium"}``."""
-    text: ResponseTextConfigParam
+    text: Sensitive[ResponseTextConfigParam]
     """Responses text settings, for example ``{"verbosity": "low"}``."""
     service_tier: types.ServiceTier
     max_output_tokens: int
     """Upper bound on the tokens one backend response may generate; at least 16."""
+
+
+_REPORTABLE_RESPONSES_OPTIONS = reportable_option_names(ResponsesDelegationOptions)
 
 
 @dataclass
@@ -349,6 +353,21 @@ class GPTLiveModel(llm.DuplexModel):
     @property
     def provider(self) -> str:
         return urlparse(self._opts.base_url).netloc
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "delegation": self._opts.delegation,
+            "service_tier": self._opts.service_tier,
+            "max_session_duration": self._opts.max_session_duration,
+            "is_azure": self._opts.is_azure,
+            "voice": self._opts.voice if isinstance(self._opts.voice, str) else None,
+            "responses": {
+                key: value
+                for key, value in self._opts.responses.items()
+                if key in _REPORTABLE_RESPONSES_OPTIONS
+            },
+        }
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if not self._http_session:

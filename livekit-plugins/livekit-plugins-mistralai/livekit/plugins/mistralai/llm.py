@@ -158,6 +158,21 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return "MistralAI"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "api_mode": self._opts.api_mode,
+            "max_completion_tokens": self._opts.max_completion_tokens,
+            "temperature": self._opts.temperature,
+            "top_p": self._opts.top_p,
+            "presence_penalty": self._opts.presence_penalty,
+            "frequency_penalty": self._opts.frequency_penalty,
+            "random_seed": self._opts.random_seed,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+        }
+
     def update_options(
         self,
         *,

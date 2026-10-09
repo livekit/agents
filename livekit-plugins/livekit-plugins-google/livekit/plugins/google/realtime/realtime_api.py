@@ -8,7 +8,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -451,6 +451,81 @@ class RealtimeModel(llm.RealtimeModel):
             return "Vertex AI"
         else:
             return "Gemini"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "language": self._opts.language,
+            "response_modalities": self._opts.response_modalities,
+            "vertexai": self._opts.vertexai,
+            "candidate_count": self._opts.candidate_count,
+            "temperature": self._opts.temperature,
+            "max_output_tokens": self._opts.max_output_tokens,
+            "top_p": self._opts.top_p,
+            "top_k": self._opts.top_k,
+            "presence_penalty": self._opts.presence_penalty,
+            "frequency_penalty": self._opts.frequency_penalty,
+            "media_resolution": self._opts.media_resolution,
+            "enable_affective_dialog": self._opts.enable_affective_dialog,
+            "proactivity": self._opts.proactivity,
+            "api_version": self._opts.api_version,
+            "tool_behavior": self._opts.tool_behavior,
+            "tool_response_scheduling": self._opts.tool_response_scheduling,
+            "thinking_config": self._opts.thinking_config.model_dump(
+                include={"include_thoughts", "thinking_budget", "thinking_level"}, exclude_none=True
+            )
+            if is_given(self._opts.thinking_config)
+            else None,
+            "realtime_input_config": self._opts.realtime_input_config.model_dump(
+                include={
+                    "activity_handling": True,
+                    "turn_coverage": True,
+                    "automatic_activity_detection": {
+                        "disabled",
+                        "start_of_speech_sensitivity",
+                        "end_of_speech_sensitivity",
+                        "prefix_padding_ms",
+                        "silence_duration_ms",
+                    },
+                },
+                exclude_none=True,
+            )
+            if is_given(self._opts.realtime_input_config)
+            else None,
+            "context_window_compression": self._opts.context_window_compression.model_dump(
+                include={"trigger_tokens": True, "sliding_window": {"target_tokens"}},
+                exclude_none=True,
+            )
+            if is_given(self._opts.context_window_compression)
+            else None,
+            "input_audio_transcription": self._opts.input_audio_transcription.model_dump(
+                include={
+                    "language_codes",
+                    "language_auto",
+                    "language_hints",
+                    "word_timestamp",
+                    "diarization",
+                    "mode",
+                },
+                exclude_none=True,
+            )
+            if self._opts.input_audio_transcription is not None
+            else None,
+            "output_audio_transcription": self._opts.output_audio_transcription.model_dump(
+                include={
+                    "language_codes",
+                    "language_auto",
+                    "language_hints",
+                    "word_timestamp",
+                    "diarization",
+                    "mode",
+                },
+                exclude_none=True,
+            )
+            if self._opts.output_audio_transcription is not None
+            else None,
+        }
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # Gemini drives manual turns via activity_start/activity_end, not commit_audio/clear_audio,

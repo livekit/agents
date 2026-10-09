@@ -202,6 +202,23 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return self._client._base_url.netloc.decode("utf-8")
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "temperature": self._opts.temperature,
+            "top_p": self._opts.top_p,
+            "parallel_tool_calls": self._opts.parallel_tool_calls,
+            "store": self._opts.store,
+            "max_completion_tokens": self._opts.max_completion_tokens,
+            "service_tier": self._opts.service_tier,
+            "reasoning_effort": self._opts.reasoning_effort,
+            "verbosity": self._opts.verbosity,
+            "prompt_cache_retention": self._opts.prompt_cache_retention,
+            "tool_choice": self._opts.tool_choice
+            if isinstance(self._opts.tool_choice, str)
+            else None,
+        }
+
     @staticmethod
     def with_azure(
         *,

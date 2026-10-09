@@ -143,6 +143,13 @@ class RealtimeModel(_RealtimeModel):
     def provider(self) -> str:
         return "livekit"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "inference_provider": self._inference_opts.provider,
+            "inference_class": self._inference_opts.inference_class,
+        }
+
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)
