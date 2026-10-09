@@ -191,7 +191,7 @@ class STT(stt.STT):
         return "Amazon Transcribe"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._config, exclude=["session_id"])
+        return report_options(self._config)
 
     async def aclose(self) -> None:
         await super().aclose()
