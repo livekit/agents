@@ -11,12 +11,15 @@ from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
+import aiohttp
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 from multidict import CIMultiDict
 from yarl import URL
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, LanguageCode, stt
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, LanguageCode, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
@@ -725,3 +728,23 @@ async def test_configured_audio_chunks_preserve_audio_and_commit(
         assert ws.sent[-1]["audio_base_64"] == ""
     finally:
         await stream.aclose()
+
+
+async def test_recognize_does_not_retry_a_client_error() -> None:
+    requests = 0
+
+    async def handler(request: web.Request) -> web.Response:
+        nonlocal requests
+        requests += 1
+        return web.json_response({"detail": "invalid api key"}, status=401)
+
+    app = web.Application()
+    app.router.add_post("/speech-to-text", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        url = str(server.make_url(""))
+        batch_stt = elevenlabs_stt.STT(api_key="bad-key", base_url=url, http_session=session)
+        with pytest.raises(APIStatusError) as exc_info:
+            await batch_stt.recognize([_frame(100)])
+
+    assert exc_info.value.status_code == 401
+    assert requests == 1

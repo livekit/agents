@@ -332,6 +332,8 @@ class STT(stt.STT):
                 request_id=trace_id_from_headers(e.headers),
                 body=None,
             ) from e
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
