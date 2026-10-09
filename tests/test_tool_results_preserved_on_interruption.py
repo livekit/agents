@@ -412,12 +412,44 @@ async def test_realtime_inflight_tool_keeps_its_result_when_it_finishes_in_time(
             assert not outs[0].reply_required
 
 
+_LATE_RESULT = "The weather in Tokyo is sunny today."
+_LATE_CALL_ID = "1_final"
+
+
+def _assert_closed_call_and_late_success(items: Sequence, *, label: str) -> None:
+    """The original call keeps its one error output; the real result is a new call."""
+    calls = [item for item in items if item.type == "function_call"]
+    outs = _fnc_outputs(items)
+    original_outs = [item for item in outs if item.call_id == "1"]
+    late_outs = [item for item in outs if item.call_id != "1"]
+
+    assert len(original_outs) == 1, f"{label}: the original call must keep exactly one output"
+    assert original_outs[0].is_error
+    assert original_outs[0].output == _INTERRUPTED_INFLIGHT_OUTPUT
+    assert not original_outs[0].reply_required
+
+    assert len(late_outs) == 1, f"{label}: the real result must be recorded once"
+    late = late_outs[0]
+    assert late.call_id == _LATE_CALL_ID
+    assert late.name == "get_weather"
+    assert late.output == _LATE_RESULT
+    assert not late.is_error
+    assert not late.reply_required
+
+    late_calls = [item for item in calls if item.call_id == late.call_id]
+    assert len(late_calls) == 1, f"{label}: the deferred update needs its own call"
+    assert late_calls[0].name == "get_weather"
+    assert items.index(original_outs[0]) < items.index(late_calls[0]) < items.index(late)
+
+
 async def test_realtime_tool_running_past_interruption_timeout_is_answered() -> None:
     """A tool still running when INTERRUPTION_TIMEOUT cancels the generation is answered
-    with one error output, and a later result from that call is not recorded again.
+    with one error output. When the tool later succeeds, that outcome is recorded as a
+    deferred update under a new call id, and the original call still has one output.
 
-    GPT Live leaves the call in ``_backend_open_calls`` until that output is synced, and
-    refuses every later response while it is open (#7679).
+    GPT Live leaves the call in ``_backend_open_calls`` until the error output is synced,
+    and refuses every later response while it is open (#7679). Dropping the late success
+    would leave history saying the tool failed after its side effect had landed.
     """
     tool_sleep = INTERRUPTION_TIMEOUT + 10.0
     async with _interrupt_while_realtime_tool_runs(tool_sleep=tool_sleep) as (
@@ -452,17 +484,22 @@ async def test_realtime_tool_running_past_interruption_timeout_is_answered() -> 
         assert synced[0].output == _INTERRUPTED_INFLIGHT_OUTPUT
         assert not synced[0].reply_required
 
-        # the tool's own return must not become a second output
+        # the tool's own return must not be a second output on call id "1".
+        # it is recorded as a deferred update once the tool actually finishes.
         await asyncio.sleep(tool_sleep)
         assert agent.tool_finished.is_set()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5.0
+        while loop.time() < deadline and not any(
+            item.call_id == _LATE_CALL_ID for item in _fnc_outputs(agent.chat_ctx.items)
+        ):
+            await asyncio.sleep(0.05)
         for label, items in (
             ("agent chat_ctx", agent.chat_ctx.items),
             ("session history", session.history.items),
             ("realtime session", model.active_session.chat_ctx.items),
         ):
-            outs = _fnc_outputs(items)
-            assert len(outs) == 1, f"{label}: the late result must not be recorded again"
-            assert outs[0].output == _INTERRUPTED_INFLIGHT_OUTPUT
+            _assert_closed_call_and_late_success(items, label=label)
 
         # the activity can still ask the model to speak
         before = model.active_session.generate_reply_calls
