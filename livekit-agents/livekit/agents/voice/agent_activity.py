@@ -2798,7 +2798,7 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel):
             if self._rt_turn_detection_enabled:
-                return
+                return None
 
             if self._rt_session is not None:
                 if info.skip_reply:
@@ -2806,14 +2806,14 @@ class AgentActivity(RecognitionHooks):
                         # only add user message to chat context if reply should be skipped
                         self._agent._chat_ctx.items.append(user_message)
                         self._session._conversation_item_added(user_message)
-                    return
+                    return None
                 self._rt_session.commit_audio()
 
         if info.skip_reply:
             if info.new_transcript != "":
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
-            return
+            return None
 
         if (current_speech := self._current_speech) is not None:
             if not current_speech.allow_interruptions:
@@ -2821,7 +2821,7 @@ class AgentActivity(RecognitionHooks):
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
-                return
+                return None
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
             await current_speech.interrupt(source="user_turn")
@@ -2837,7 +2837,7 @@ class AgentActivity(RecognitionHooks):
             if self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
-            return
+            return None
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
         # the user can edit it for the current generation, but changes will not be kept inside the
@@ -2860,7 +2860,7 @@ class AgentActivity(RecognitionHooks):
                 )
             except StopResponse:
                 hook_span.add_event("stop_response")
-                return  # ignore this turn
+                return None  # ignore this turn
             except Exception as e:
                 # the message may quote the transcript: honour the session's redaction too
                 trace_utils.record_exception(
@@ -2869,7 +2869,7 @@ class AgentActivity(RecognitionHooks):
                     redacted=self._session._redaction_enabled or trace_utils.redaction_enabled(),
                 )
                 logger.exception("error occurred during on_user_turn_completed")
-                return
+                return None
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
@@ -2878,7 +2878,7 @@ class AgentActivity(RecognitionHooks):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
         elif self.llm is None:
-            return  # skip response if no llm is set
+            return None  # skip response if no llm is set
 
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
@@ -2888,7 +2888,7 @@ class AgentActivity(RecognitionHooks):
             if user_message and self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
-            return
+            return None
 
         speech_handle: SpeechHandle | None = None
         discarded_preemptive: SpeechHandle | None = None
