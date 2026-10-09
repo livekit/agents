@@ -112,6 +112,24 @@ def _inject_running_tool_calls(
         )
 
 
+# extra flag on an assistant message generated in an expressive turn. It survives
+# ChatContext.to_dict/from_dict, so restored history still says where its markup came from
+_EXPRESSIVE_MARKUP_KEY = "lk_expressive_markup"
+
+
+def _has_expressive_markup(chat_ctx: ChatContext) -> bool:
+    """Whether expressive could have put markup in ``chat_ctx``: an assistant message
+    carries the expressive flag, or the history holds the expressive guide."""
+    return any(
+        item.type == "message"
+        and (
+            item.id == EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID
+            or (item.role == "assistant" and item.extra.get(_EXPRESSIVE_MARKUP_KEY) is True)
+        )
+        for item in chat_ctx.items
+    )
+
+
 def _strip_assistant_markup(chat_ctx: ChatContext) -> None:
     """Remove expressive TTS markup from past assistant messages, in place.
 

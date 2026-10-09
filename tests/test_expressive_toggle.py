@@ -232,6 +232,41 @@ async def test_expressive_off_after_an_expressive_turn_scrubs_history() -> None:
     assert any("Welcome back!" in t for t in assistant_texts)
 
 
+async def test_restored_expressive_history_is_scrubbed_in_a_new_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reply from an expressive turn is flagged, so its markup is still scrubbed after
+    the history is saved and restored into a session that never ran expressive. The
+    stored history doesn't carry the guide (it's injected into each turn's copy)."""
+    from livekit.agents.voice.agent_session import DEFAULT_EXPRESSIVE_OPTIONS
+
+    # session A: FakeTTS has no markup dialect, so force expressive on for its turn
+    with monkeypatch.context() as m:
+        m.setattr(
+            AgentActivity, "_resolve_expressive_options", lambda self: DEFAULT_EXPRESSIVE_OPTIONS
+        )
+        actions = FakeActions()
+        actions.add_user_speech(0.5, 2.5, "Hi there!", stt_delay=0.2)
+        actions.add_llm(MARKED_UP, ttft=0.1, duration=0.3)
+        actions.add_tts(2.0, ttfb=0.2, duration=0.3)
+        session_a = create_session(actions)
+        agent_a = Agent(instructions="You are a helpful assistant.")
+        await asyncio.wait_for(run_session(session_a, agent_a), timeout=SESSION_TIMEOUT)
+
+    saved = agent_a.chat_ctx.to_dict()
+    assert all(item.get("id") != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID for item in saved["items"])
+    assert any("<expr" in str(item.get("content")) for item in saved["items"])
+
+    # session B: expressive never on, restored history only
+    assistant_texts = await _run_one_turn(
+        create_session(_one_turn_actions()), ChatContext.from_dict(saved)
+    )
+
+    assert all("<expr" not in t and "<sound" not in t for t in assistant_texts)
+    assert any("Welcome back!" in t for t in assistant_texts)
+    assert any("I'm doing well" in t for t in assistant_texts)
+
+
 def test_expressive_needs_a_tts_the_framework_can_lower_for() -> None:
     """Declaring a dialect is not enough — something has to lower the markers."""
 

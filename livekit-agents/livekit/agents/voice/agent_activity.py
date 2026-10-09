@@ -77,10 +77,11 @@ from .events import (
     _AgentBackchannelOpportunityEvent,
 )
 from .generation import (
-    EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
+    _EXPRESSIVE_MARKUP_KEY,
     ToolExecutionOutput,
     _AudioOutput,
     _ForwardOutput,
+    _has_expressive_markup,
     _inject_running_tool_calls,
     _interrupted_tool_output,
     _strip_assistant_markup,
@@ -3497,12 +3498,11 @@ class AgentActivity(RecognitionHooks):
             # downstream converts or strips — an unsupported tag would reach the TTS
             # as literal text and be spoken.
             # Only scrub when expressive could have put markup there: an earlier turn
-            # ran with it on, or the history carries its guide (e.g. restored from an
-            # expressive session). Otherwise the tags are the developer's own, such as
-            # a TTS's native tags their prompt asks for, and must stay.
-            strip_markup = self._session._expressive_turn_ran or (
-                chat_ctx.get_by_id(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID) is not None
-            )
+            # ran with it on, or the history holds a reply flagged as expressive or its
+            # guide (e.g. restored from an expressive session). Otherwise the tags are
+            # the developer's own, such as a TTS's native tags their prompt asks for,
+            # and must stay.
+            strip_markup = self._session._expressive_turn_ran or _has_expressive_markup(chat_ctx)
             remove_expressive_instructions(chat_ctx)
             if strip_markup:
                 _strip_assistant_markup(chat_ctx)
@@ -3887,6 +3887,13 @@ class AgentActivity(RecognitionHooks):
             extra_kwargs: dict = {}
             if llm_gen_data.generated_extra:
                 extra_kwargs["extra"] = llm_gen_data.generated_extra
+            if _expr_opts is not None:
+                # flag the markup's origin so a later expressive-off turn scrubs it, even
+                # after this history is saved and restored into another session
+                extra_kwargs["extra"] = {
+                    **llm_gen_data.generated_extra,
+                    _EXPRESSIVE_MARKUP_KEY: True,
+                }
             msg = chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
