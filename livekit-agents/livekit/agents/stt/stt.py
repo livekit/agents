@@ -15,6 +15,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .._exceptions import APIConnectionError, APIError
+from .._reporting import component_metadata
 from ..language import LanguageCode
 from ..log import logger
 from ..metrics import STTMetrics
@@ -206,7 +207,7 @@ class STT(
 
     def describe_options(self) -> Mapping[str, Any]:
         """Return settings to include in session reports, without credentials or user content."""
-        return {"model": self.model, "provider": self.provider}
+        return component_metadata(self)
 
     @abstractmethod
     async def _recognize_impl(

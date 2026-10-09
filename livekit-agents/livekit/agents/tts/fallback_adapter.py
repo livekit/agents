@@ -13,6 +13,7 @@ from livekit import rtc
 
 from .. import utils
 from .._exceptions import APIConnectionError
+from .._reporting import snapshot_component
 from ..log import logger
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
@@ -164,7 +165,7 @@ class FallbackAdapter(
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "tts": [instance.describe_options() for instance in self._tts_instances],
+            "tts": [snapshot_component(instance) for instance in self._tts_instances],
             "max_retry_per_tts": self._max_retry_per_tts,
         }
 

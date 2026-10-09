@@ -10,11 +10,10 @@ import random
 import threading
 import time
 import weakref
-from collections.abc import Callable, Iterator, Mapping, Sequence, Set
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any
 
 import aiofiles
 import aiohttp
@@ -67,130 +66,26 @@ from livekit import api
 from livekit.protocol import metrics as proto_metrics
 
 from .._proto import encode_chat_item
+from .._reporting import DescribesOptions as DescribesOptions, _serialize_option_value
 from ..log import TRACE_LEVEL, logger
 from ..types import (
     ATTRIBUTE_REDACTION_ENABLED,
     ATTRIBUTE_SIMULATION_ENABLED,
     recording_enabled,
 )
-from ..utils import is_given
 from . import gen_ai, pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
     from ..llm import ChatItem
     from ..observability import Tagger
-    from ..voice.agent_session import AgentSession, AgentSessionOptions
+    from ..voice.agent_session import AgentSessionOptions
     from ..voice.report import SessionReport
-
-
-_SESSION_OPTION_KEY_ALIASES = {
-    "keyterms": "lk.pii.keyterms",
-}
-
-# Option keys never written to the report: prompt text authored by the customer
-# (``stt_context_options.keyterm_detection.instructions``) can embed anything about their
-# business or users, and the report has no use for it.
-_SESSION_OPTION_OMITTED_KEYS = frozenset({"instructions"})
-
-
-# Public, non-callable attributes worth showing when a model-like object (turn detector,
-# interruption detector, ...) appears in the session options. Read in this order; missing,
-# NOT_GIVEN and None values are skipped. Kept to a whitelist so a plugin's credentials or
-# internals never end up in the report.
-_OPTION_PRIMITIVES = (str, bool, int, float)
-
-
-@runtime_checkable
-class DescribesOptions(Protocol):
-    """An object that can appear in ``AgentSession`` options (a turn detector, a model) and
-    wants the session report to show its configuration.
-
-    Return the options worth reporting, keyed by name; values can be primitives, mappings
-    or sequences of them. Leave secrets and endpoints out: the report is uploaded. Objects
-    without this method are reported by class name alone."""
-
-    def describe_options(self) -> Mapping[str, Any]: ...
-
-
-def _describe_option_object(obj: object) -> str:
-    """Render an object from the session options as ``module.Class`` or, when it implements
-    :class:`DescribesOptions`, ``module.Class(k=v, ...)``.
-
-    The OTel log exporter stringifies anything that is not a primitive, which for these
-    objects yields the default ``<... object at 0x...>`` repr. The class alone is stable and
-    safe; the object itself decides what else is worth showing."""
-    cls = type(obj)
-    name = f"{cls.__module__}.{cls.__name__}"
-    describe = getattr(obj, "describe_options", None)
-    if not callable(describe):
-        return name
-    try:
-        options = describe()
-    except Exception:
-        logger.debug("describe_options() failed on %s", name, exc_info=True)
-        return name
-    parts: list[str] = []
-    for key, value in options.items():
-        if value is None or not is_given(value):
-            continue
-        rendered = (
-            str(value)
-            if isinstance(value, _OPTION_PRIMITIVES)
-            else json.dumps(_serialize_option_value(value), sort_keys=True, default=str)
-        )
-        parts.append(f"{key}={rendered}")
-    return f"{name}({', '.join(parts)})"
-
-
-def _serialize_option_value(value: Any) -> Any:
-    if isinstance(value, Enum):
-        return _serialize_option_value(value.value)
-    if value is None or isinstance(value, _OPTION_PRIMITIVES):
-        return value
-    if isinstance(value, Mapping):
-        return {
-            _SESSION_OPTION_KEY_ALIASES.get(k, k): _serialize_option_value(v)
-            for k, v in value.items()
-            if k not in _SESSION_OPTION_OMITTED_KEYS and is_given(v)
-        }
-    if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
-        # any Sequence is a valid option value (tts_text_transforms accepts one), so
-        # serialize the elements rather than collapsing the container to its class name
-        items = sorted(value, key=str) if isinstance(value, Set) else value
-        return [_serialize_option_value(v) for v in items]
-    return _describe_option_object(value)
 
 
 def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
     serialized = _serialize_option_value(vars(options))
     assert isinstance(serialized, dict)
     return serialized
-
-
-def _serialize_session_components(session: AgentSession) -> dict[str, dict[str, Any]]:
-    components: dict[str, dict[str, Any]] = {}
-    for name, component in (("vad", session.vad), ("stt", session.stt), ("tts", session.tts)):
-        if component is None:
-            continue
-
-        cls = type(component)
-        options: dict[str, Any] = {"model": component.model, "provider": component.provider}
-        try:
-            described = component.describe_options()
-            options.update(
-                _serialize_option_value(
-                    {
-                        key: value
-                        for key, value in described.items()
-                        if value is not None and is_given(value)
-                    }
-                )
-            )
-        except Exception:
-            logger.debug("describe_options() failed on %s", cls.__name__, exc_info=True)
-
-        components[name] = {**options, "type": f"{cls.__module__}.{cls.__name__}"}
-    return components
 
 
 _USE_SPAN_SIGNATURE = inspect.signature(trace_api.use_span)

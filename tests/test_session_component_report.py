@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import UserDict
 from enum import Enum
 from typing import Any, TypedDict
 from unittest.mock import MagicMock
@@ -8,10 +9,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit.agents import AgentSession, JobContext, inference, stt, tts
-from livekit.agents.inference._utils import Reportable, reportable_option_names
-from livekit.agents.telemetry.traces import _serialize_session_components
+from livekit.agents._reporting import Reportable, reportable_option_names
 from livekit.agents.types import NOT_GIVEN
-from livekit.agents.voice.report import SessionReport
+from livekit.agents.voice.report import SessionReport, _serialize_session_components
 
 from .fake_stt import FakeSTT
 from .fake_tts import FakeTTS
@@ -179,6 +179,148 @@ def test_broken_component_description_keeps_identity() -> None:
         "model": "unknown",
         "provider": "unknown",
     }
+
+
+def test_broken_component_metadata_does_not_break_report() -> None:
+    class BrokenVAD(FakeVAD):
+        @property
+        def provider(self) -> str:
+            raise RuntimeError("unavailable")
+
+    report = _report(AgentSession(vad=BrokenVAD(), stt=FakeSTT()))
+    assert report.components["vad"] == {"type": f"{__name__}.BrokenVAD"}
+    assert report.components["stt"]["model"] == "unknown"
+
+
+@pytest.mark.parametrize("kind", ["stt", "tts"])
+@pytest.mark.parametrize("wrap_stream", [False, True])
+@pytest.mark.parametrize("broken_metadata", [False, True])
+async def test_adapter_snapshots_isolate_child_failures(
+    kind: str, wrap_stream: bool, broken_metadata: bool
+) -> None:
+    class HealthySTT(FakeSTT):
+        def describe_options(self) -> UserDict[str, Any]:
+            return UserDict(language="fr", optional=None, unset=NOT_GIVEN)
+
+    class BrokenSTT(FakeSTT):
+        @property
+        def provider(self) -> str:
+            if broken_metadata:
+                raise RuntimeError("unavailable")
+            return super().provider
+
+        def describe_options(self) -> dict[str, Any]:
+            raise RuntimeError("unavailable")
+
+    class HealthyTTS(FakeTTS):
+        def describe_options(self) -> UserDict[str, Any]:
+            return UserDict(voice="voice-1", optional=None, unset=NOT_GIVEN)
+
+    class BrokenTTS(FakeTTS):
+        @property
+        def provider(self) -> str:
+            if broken_metadata:
+                raise RuntimeError("unavailable")
+            return super().provider
+
+        def describe_options(self) -> dict[str, Any]:
+            raise RuntimeError("unavailable")
+
+    if kind == "stt":
+        children = [BrokenSTT(), HealthySTT()]
+        if wrap_stream:
+            children = [stt.StreamAdapter(stt=child, vad=FakeVAD()) for child in children]
+        adapter = stt.FallbackAdapter(children, max_retry_per_stt=3)
+        expected = {"language": "fr"}
+    else:
+        children = [BrokenTTS(), HealthyTTS()]
+        if wrap_stream:
+            children = [tts.StreamAdapter(tts=child) for child in children]
+        adapter = tts.FallbackAdapter(children, max_retry_per_tts=3)
+        expected = {"voice": "voice-1"}
+
+    try:
+        reported = _report(AgentSession(vad=None, **{kind: adapter})).components[kind]
+        assert reported[f"max_retry_per_{kind}"] == 3
+        broken, healthy = reported[kind]
+        if wrap_stream:
+            healthy, broken = healthy[kind], broken[kind]
+        assert healthy == {
+            "type": f"{__name__}.Healthy{kind.upper()}",
+            "model": "unknown",
+            "provider": "unknown",
+            **expected,
+        }
+        assert broken == {
+            "type": f"{__name__}.Broken{kind.upper()}",
+            **({} if broken_metadata else {"model": "unknown", "provider": "unknown"}),
+        }
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.parametrize(
+    "provider, kind, nested_key, field, value",
+    [
+        ("openai", "stt", "turn_detection", "threshold", 0.8),
+        ("elevenlabs", "stt", "server_vad", "vad_threshold", 0.6),
+        ("hume", "tts", "voice", "name", "test-voice"),
+    ],
+)
+async def test_nested_provider_settings_require_opt_in(
+    provider: str, kind: str, nested_key: str, field: str, value: Any
+) -> None:
+    plugin = pytest.importorskip(f"livekit.plugins.{provider}")
+    nested = {field: value, "api_key": "private-key", "future_setting": "private-value"}
+    component = getattr(plugin, kind.upper())(api_key="private-key", **{nested_key: nested})
+    try:
+        report = _report(AgentSession(vad=None, **{kind: component}))
+        assert report.components[kind][nested_key][field] == value
+        assert "api_key" not in report.components[kind][nested_key]
+        assert "future_setting" not in report.components[kind][nested_key]
+        assert "private-" not in json.dumps(report.to_dict())
+        nested[field] = "changed"
+        assert report.components[kind][nested_key][field] == value
+    finally:
+        await component.aclose()
+
+
+@pytest.mark.parametrize("model", ["orpheus", "qwen3-tts"])
+async def test_baseten_reports_both_backends_without_customer_content(model: str) -> None:
+    baseten = pytest.importorskip("livekit.plugins.baseten")
+    component = baseten.TTS(
+        model=model,
+        api_key="private-key",
+        model_endpoint="wss://private-endpoint.example.com",
+        voice="voice-1",
+        language="English",
+        max_new_tokens=512,
+        instructions="private-prompt",
+        ref_audio="private-audio",
+        ref_text="private-text",
+        extra_config={"api_key": "private-config-key"},
+    )
+    try:
+        session = AgentSession(vad=None, tts=component)
+        report = _report(session)
+        options = report.components["tts"]
+        assert options["model"] == model
+        assert options["voice"] == "voice-1"
+        assert options["language"] == "English"
+        assert options["sample_rate"] == 24000
+        assert options["num_channels"] == 1
+        if model == "qwen3-tts":
+            assert options["max_new_tokens"] == 512
+            assert options["task_type"] == "Base"
+            assert options["word_timestamps"] is False
+        else:
+            assert options["max_tokens"] == 2000
+        assert "private-" not in json.dumps(report.to_dict())
+        component.update_options(voice="voice-2")
+        assert options["voice"] == "voice-1"
+        assert _report(session).components["tts"]["voice"] == "voice-2"
+    finally:
+        await component.aclose()
 
 
 async def test_adapters_include_underlying_settings() -> None:

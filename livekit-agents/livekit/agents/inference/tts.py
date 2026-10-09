@@ -20,6 +20,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from .._reporting import Reportable, reportable_option_names
 from ..language import LanguageCode
 from ..log import logger
 from ..tts._provider_format import drop_bracket_cues
@@ -33,12 +34,10 @@ from ..types import (
 from ..utils import is_given
 from ._utils import (
     HEADER_SESSION_ID,
-    Reportable,
     create_access_token,
     create_inference_request_id,
     get_default_inference_url,
     get_inference_headers,
-    reportable_option_names,
 )
 
 CartesiaModels = Literal[

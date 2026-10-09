@@ -17,6 +17,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .._exceptions import APIError, APIStatusError
+from .._reporting import component_metadata
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..telemetry import trace_types, tracer
@@ -225,8 +226,7 @@ class TTS(
     def describe_options(self) -> Mapping[str, Any]:
         """Return settings to include in session reports, without credentials or user content."""
         return {
-            "model": self.model,
-            "provider": self.provider,
+            **component_metadata(self),
             "sample_rate": self.sample_rate,
             "num_channels": self.num_channels,
         }

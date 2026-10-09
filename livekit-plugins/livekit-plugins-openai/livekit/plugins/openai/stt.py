@@ -339,7 +339,19 @@ class STT(stt.STT):
             **super().describe_options(),
             "languages": self._opts.languages,
             "detect_language": self._opts.detect_language,
-            "turn_detection": self._opts.turn_detection.model_dump(exclude_none=True)
+            "turn_detection": self._opts.turn_detection.model_dump(
+                include={
+                    "type",
+                    "threshold",
+                    "prefix_padding_ms",
+                    "silence_duration_ms",
+                    "create_response",
+                    "interrupt_response",
+                    "idle_timeout_ms",
+                    "eagerness",
+                },
+                exclude_none=True,
+            )
             if self._opts.turn_detection is not None
             else None,
             "noise_reduction_type": self._opts.noise_reduction_type,

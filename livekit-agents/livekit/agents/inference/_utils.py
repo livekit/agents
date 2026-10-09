@@ -4,7 +4,7 @@ import datetime
 import os
 import platform
 from collections.abc import Mapping
-from typing import Annotated, Literal, TypeVar, get_args, get_origin, get_type_hints
+from typing import Literal
 
 from livekit import api
 
@@ -14,10 +14,6 @@ from ..version import __version__
 InferenceClass = Literal["priority", "standard", "low"]
 """Scheduling class for a request. ``low`` yields to voice traffic, so it is only
 appropriate for work no caller is waiting on."""
-
-_T = TypeVar("_T")
-Reportable = Annotated[_T, "reportable"]
-"""Marks an option for inclusion in session reports; unmarked fields are omitted."""
 
 DEFAULT_INFERENCE_URL = "https://agent-gateway.livekit.cloud/v1"
 STAGING_INFERENCE_URL = "https://agent-gateway.staging.livekit.cloud/v1"
@@ -44,15 +40,6 @@ QUOTA_HEADER_FIELDS: dict[str, str] = {
     "X-LiveKit-Inference-Credits-Limit": "credits_limit",
     "X-LiveKit-Inference-Credits-Used": "credits_used",
 }
-
-
-def reportable_option_names(*option_types: type) -> frozenset[str]:
-    return frozenset(
-        name
-        for option_type in option_types
-        for name, annotation in get_type_hints(option_type, include_extras=True).items()
-        if get_origin(annotation) is Annotated and "reportable" in get_args(annotation)[1:]
-    )
 
 
 def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:

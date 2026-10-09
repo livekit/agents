@@ -52,7 +52,6 @@ from .telemetry.traces import (
     _discard_cloud_tracer,
     _JobTelemetry,
     _prepare_cloud_tracer,
-    _serialize_session_components,
     _setup_cloud_tracer,
     _shutdown_telemetry,
 )
@@ -440,7 +439,7 @@ class JobContext:
         return self._tagger
 
     def make_session_report(self, session: AgentSession | None = None) -> SessionReport:
-        from .voice.report import SessionReport
+        from .voice.report import SessionReport, _serialize_session_components
 
         session = session or self._primary_agent_session
 

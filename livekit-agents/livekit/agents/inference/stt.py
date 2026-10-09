@@ -23,6 +23,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from .._reporting import Reportable, reportable_option_names
 from ..language import LanguageCode
 from ..log import logger
 from ..types import (
@@ -35,11 +36,9 @@ from ..types import (
 from ..utils import is_given
 from ._utils import (
     HEADER_SESSION_ID,
-    Reportable,
     create_access_token,
     get_default_inference_url,
     get_inference_headers,
-    reportable_option_names,
 )
 
 if TYPE_CHECKING:

@@ -3,13 +3,17 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from .._reporting import snapshot_component
 from ..llm import ChatContext
 from ..metrics import ModelUsage
 from ..version import __version__
 from .agent_session import AgentSessionOptions
 from .events import AgentEvent
+
+if TYPE_CHECKING:
+    from .agent_session import AgentSession
 
 
 @dataclass
@@ -79,3 +83,11 @@ class SessionReport:
         if self.model_usage is None:
             return None
         return [summary.model_dump(exclude_defaults=True) for summary in self.model_usage]
+
+
+def _serialize_session_components(session: AgentSession) -> dict[str, dict[str, Any]]:
+    return {
+        name: snapshot_component(component)
+        for name, component in (("vad", session.vad), ("stt", session.stt), ("tts", session.tts))
+        if component is not None
+    }

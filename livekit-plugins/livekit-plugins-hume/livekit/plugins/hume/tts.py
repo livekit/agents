@@ -32,6 +32,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Reportable, reportable_option_names
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -39,13 +40,13 @@ from .version import __version__
 
 
 class VoiceById(TypedDict, total=False):
-    id: str
-    provider: VoiceProvider | None
+    id: Reportable[str]
+    provider: Reportable[VoiceProvider | None]
 
 
 class VoiceByName(TypedDict, total=False):
-    name: str
-    provider: VoiceProvider | None
+    name: Reportable[str]
+    provider: Reportable[VoiceProvider | None]
 
 
 class Utterance(TypedDict, total=False):
@@ -74,6 +75,8 @@ class AudioFormat(str, Enum):
 
 
 ModelVersion = Literal["1", "2"]
+
+_REPORTABLE_VOICE_OPTIONS = reportable_option_names(VoiceById, VoiceByName)
 
 
 DEFAULT_HEADERS = {
@@ -186,7 +189,13 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "voice": self._opts.voice,
+            "voice": {
+                key: value
+                for key, value in self._opts.voice.items()
+                if key in _REPORTABLE_VOICE_OPTIONS
+            }
+            if self._opts.voice is not None
+            else None,
             "model_version": self._opts.model_version,
             "speed": self._opts.speed,
             "trailing_silence": self._opts.trailing_silence,

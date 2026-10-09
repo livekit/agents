@@ -216,6 +216,18 @@ class _Qwen3Backend:
         self._keepalive_task: asyncio.Task[None] | None = None
         self._closing = False
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            "voice": self._opts.voice,
+            "language": self._opts.language,
+            "task_type": self._opts.task_type,
+            "speed": self._opts.speed,
+            "max_new_tokens": self._opts.max_new_tokens,
+            "initial_codec_chunk_frames": self._opts.initial_codec_chunk_frames,
+            "x_vector_only_mode": self._opts.x_vector_only_mode,
+            "word_timestamps": self._opts.word_timestamps,
+        }
+
     def update_options(
         self,
         *,

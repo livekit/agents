@@ -37,6 +37,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Reportable, reportable_option_names
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
@@ -70,14 +71,17 @@ def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
 
 
 class VADOptions(TypedDict, total=False):
-    vad_silence_threshold_secs: float | None
+    vad_silence_threshold_secs: Reportable[float | None]
     """Silence threshold in seconds for VAD. Default to 1.5"""
-    vad_threshold: float | None
+    vad_threshold: Reportable[float | None]
     """Threshold for voice activity detection. Default to 0.4"""
-    min_speech_duration_ms: int | None
+    min_speech_duration_ms: Reportable[int | None]
     """Minimum speech duration in milliseconds. Default to 250"""
-    min_silence_duration_ms: int | None
+    min_silence_duration_ms: Reportable[int | None]
     """Minimum silence duration in milliseconds. Default to 2500"""
+
+
+_REPORTABLE_VAD_OPTIONS = reportable_option_names(VADOptions)
 
 
 # https://elevenlabs.io/docs/overview/models#models-overview
@@ -280,7 +284,13 @@ class STT(stt.STT):
             "tag_audio_events": self._opts.tag_audio_events,
             "include_timestamps": self._opts.include_timestamps,
             "sample_rate": self._opts.sample_rate,
-            "server_vad": self._opts.server_vad,
+            "server_vad": {
+                key: value
+                for key, value in self._opts.server_vad.items()
+                if key in _REPORTABLE_VAD_OPTIONS
+            }
+            if is_given(self._opts.server_vad) and self._opts.server_vad is not None
+            else self._opts.server_vad,
             "no_verbatim": self._opts.no_verbatim,
             "enable_logging": self._opts.enable_logging,
             "audio_chunk_duration_ms": self._opts.audio_chunk_duration_ms,

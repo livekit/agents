@@ -12,6 +12,7 @@ from livekit import rtc
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
+from .._reporting import snapshot_component
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
@@ -150,7 +151,7 @@ class FallbackAdapter(
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "stt": [instance.describe_options() for instance in self._stt_instances],
+            "stt": [snapshot_component(instance) for instance in self._stt_instances],
             "attempt_timeout": self._attempt_timeout,
             "max_retry_per_stt": self._max_retry_per_stt,
             "retry_interval": self._retry_interval,

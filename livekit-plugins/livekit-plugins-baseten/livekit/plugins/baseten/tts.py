@@ -207,6 +207,8 @@ class TTS(tts.TTS):
         return "Baseten"
 
     def describe_options(self) -> dict[str, Any]:
+        if self._qwen3 is not None:
+            return {**super().describe_options(), **self._qwen3.describe_options()}
         return {
             **super().describe_options(),
             "language": self._opts.language,
