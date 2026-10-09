@@ -7,6 +7,10 @@ import pytest
 
 from livekit.agents import Agent, AgentSession
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.audio_recognition import _EndOfTurnInfo, _EndOfTurnMetrics
+from livekit.agents.voice.speech_handle import SpeechHandle
+
+from .fake_llm import FakeLLM
 
 pytestmark = pytest.mark.unit
 
@@ -96,3 +100,101 @@ async def test_cancelling_commit_wait_does_not_cancel_turn_processing() -> None:
     assert not eou_task.cancelled()
     eou_task.cancel()
     await asyncio.gather(eou_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_commit_user_turn_waits_for_replacement_eou_task() -> None:
+    loop = asyncio.get_running_loop()
+    transcript_fut = loop.create_future()
+    recognition = _AudioRecognitionStub(transcript_fut)
+    activity = _create_activity()
+    activity._audio_recognition = cast(Any, recognition)
+
+    commit_fut = activity.commit_user_turn(transcript_timeout=2.0, stt_flush_duration=2.0)
+
+    first_eou_task = asyncio.create_task(asyncio.Event().wait())
+    recognition._end_of_turn_task = first_eou_task
+    transcript_fut.set_result("hello")
+    await asyncio.sleep(0)
+
+    replacement_gate = asyncio.Event()
+    replacement_eou_task = asyncio.create_task(replacement_gate.wait())
+    first_eou_task.cancel()
+    recognition._end_of_turn_task = replacement_eou_task
+    await asyncio.sleep(0)
+    assert not commit_fut.done()
+
+    replacement_gate.set()
+    assert await commit_fut == "hello"
+
+
+@pytest.mark.asyncio
+async def test_commit_user_turn_propagates_eou_failure() -> None:
+    loop = asyncio.get_running_loop()
+    transcript_fut = loop.create_future()
+    recognition = _AudioRecognitionStub(transcript_fut)
+    activity = _create_activity()
+    activity._audio_recognition = cast(Any, recognition)
+
+    commit_fut = activity.commit_user_turn(transcript_timeout=2.0, stt_flush_duration=2.0)
+
+    async def fail_eou() -> None:
+        raise RuntimeError("end-of-turn processing failed")
+
+    recognition._end_of_turn_task = asyncio.create_task(fail_eou())
+    transcript_fut.set_result("hello")
+
+    with pytest.raises(RuntimeError, match="end-of-turn processing failed"):
+        await commit_fut
+
+
+@pytest.mark.asyncio
+async def test_commit_user_turn_propagates_turn_processing_failure() -> None:
+    loop = asyncio.get_running_loop()
+    transcript_fut = loop.create_future()
+    recognition = _AudioRecognitionStub(transcript_fut)
+    activity = _create_activity()
+    activity._audio_recognition = cast(Any, recognition)
+
+    commit_fut = activity.commit_user_turn(transcript_timeout=2.0, stt_flush_duration=2.0)
+
+    async def fail_turn_processing() -> None:
+        raise RuntimeError("user-turn processing failed")
+
+    activity._user_turn_completed_atask = asyncio.create_task(fail_turn_processing())
+    transcript_fut.set_result("hello")
+
+    with pytest.raises(RuntimeError, match="user-turn processing failed"):
+        await commit_fut
+
+
+@pytest.mark.asyncio
+async def test_turn_processing_waits_until_pipeline_commits_user_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AgentSession()
+    activity = AgentActivity(Agent(instructions="test", llm=FakeLLM()), session)
+    activity._scheduling_paused = False
+    activity._turn_detection = "manual"
+
+    speech_handle = SpeechHandle.create()
+    monkeypatch.setattr(activity, "_generate_reply", lambda **_: speech_handle)
+    turn_info = _EndOfTurnInfo(
+        skip_reply=False,
+        new_transcript="hello",
+        transcript_confidence=1.0,
+        metrics=_EndOfTurnMetrics(
+            started_speaking_at=None,
+            stopped_speaking_at=None,
+            transcription_delay=None,
+            end_of_turn_delay=None,
+        ),
+    )
+
+    turn_task = asyncio.create_task(activity._user_turn_completed_impl(None, turn_info))
+    activity._user_turn_completed_atask = turn_task
+    await asyncio.sleep(0)
+
+    assert not turn_task.done()
+    activity._mark_user_message_committed(speech_handle)
+    await turn_task
