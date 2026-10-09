@@ -345,23 +345,46 @@ def _parse_model_string(model: str) -> tuple[str, NotGivenOr[LanguageCode]]:
     return model, language
 
 
+# Models whose provider does not endpoint server-side. The SDK has to drive its
+# own VAD for these so `session.finalize` is sent at each end of speech: without
+# a client commit they stream interim transcripts and never finalize, so user
+# turns never commit. OpenAI's realtime transcription models reject server turn
+# detection (https://developers.openai.com/api/docs/guides/realtime-vad), so the
+# gateway can only commit on `session.finalize`.
+_CLIENT_ENDPOINTING_MODELS = frozenset(
+    {
+        "openai/gpt-live-transcribe",
+        "openai/gpt-realtime-whisper",
+    }
+)
+
+
+def _requires_client_endpointing(model: NotGivenOr[STTModels | str]) -> bool:
+    """Whether the SDK must attach a VAD and finalize turns itself.
+
+    True for providers that don't endpoint server-side: the Speechmatics
+    real-time models (except ``linden-1``, which does) and OpenAI's realtime
+    transcription models.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return False
+    if model == "speechmatics/linden-1":
+        return False
+    return model.startswith("speechmatics/") or model in _CLIENT_ENDPOINTING_MODELS
+
+
 def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
 ) -> vad.VAD | None:
-    is_speechmatics_rt = (
-        is_given(model)
-        and isinstance(model, str)
-        and model.startswith("speechmatics/")
-        and model != "speechmatics/linden-1"
-    )
-    if vad_instance is not None and not is_speechmatics_rt:
+    needs_client_endpointing = _requires_client_endpointing(model)
+    if vad_instance is not None and not needs_client_endpointing:
         logger.warning(
             "`vad` will be ignored: model %r handles endpointing server-side.",
             model,
         )
         return None
-    if is_speechmatics_rt and vad_instance is None:
+    if needs_client_endpointing and vad_instance is None:
         from .vad import VAD
 
         vad_instance = VAD()
