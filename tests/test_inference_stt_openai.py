@@ -23,14 +23,39 @@ from aiohttp.test_utils import TestServer
 
 import livekit.agents.inference.vad as inference_vad
 from livekit import rtc
-from livekit.agents import APIConnectOptions
+from livekit.agents import NOT_GIVEN, APIConnectOptions
 from livekit.agents.inference.stt import STT, _keyterms_extra_for_model
 from livekit.agents.stt import RecognizeStream, SpeechEvent, SpeechEventType
 
 from .fake_stt import FakeUserSpeech
-from .fake_vad import FakeVAD
+from .fake_vad import FakeVAD, FakeVADStream
 
 pytestmark = pytest.mark.unit
+
+
+class _TrackingStream(FakeVADStream):
+    """FakeVAD stream that records when the STT retires it with aclose()."""
+
+    def __init__(self, vad: FakeVAD) -> None:
+        super().__init__(vad)
+        self.aclosed = False
+
+    async def aclose(self) -> None:
+        self.aclosed = True
+        await super().aclose()
+
+
+class _TrackingVAD(FakeVAD):
+    """FakeVAD whose streams report whether they were closed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.streams: list[_TrackingStream] = []
+
+    def stream(self) -> FakeVADStream:
+        stream = _TrackingStream(self)
+        self.streams.append(stream)
+        return stream
 
 
 class _DefaultVAD(FakeVAD):
@@ -384,3 +409,101 @@ async def test_live_switch_off_openai_unwires_the_vad(caplog) -> None:
     assert stream._vad_stream is None
     assert [u["settings"]["model"] for u in updates] == ["deepgram/nova-3"]
     assert "`vad` will be ignored" in caplog.text
+
+
+async def test_switching_off_openai_acloses_the_retired_vad_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dropping the VAD on a model switch must aclose the old stream so its dedicated
+    executor is released and it cannot finalize the model that replaced it."""
+    vad = _TrackingVAD()
+    monkeypatch.setattr(inference_vad, "VAD", lambda: vad)
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for _ in ws:
+            pass
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(base_url=base_url, http_session=session)
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream, vad=True)
+            retired = stream._vad_stream
+            assert isinstance(retired, _TrackingStream)
+
+            stt.update_options(model="deepgram/nova-3")
+            await asyncio.sleep(0.1)
+        finally:
+            await stream.aclose()
+
+    assert stream._vad_stream is None
+    assert retired.aclosed, "the retired VAD stream must be closed, not just dropped"
+
+
+async def test_a_refused_switch_does_not_change_the_language(caplog) -> None:
+    """A model refused for its sample rate must not apply its ``:language`` suffix to the
+    session that is still running on the previous model."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                await _wait_until_stream_is_live(stream)
+                stream.push_frame(_silence(16000, 0.1))
+                stt.update_options(model="openai/gpt-live-transcribe:fr")
+                await asyncio.sleep(0.1)
+            finally:
+                await stream.aclose()
+
+    assert stream._opts.model == "deepgram/nova-3"
+    assert stream._opts.language is NOT_GIVEN or stream._opts.language is None
+    assert all("language" not in u["settings"] for u in updates), (
+        "the refused model's implied language must not reach the running session"
+    )
+
+
+async def test_a_refused_switch_keeps_keyterms_on_the_running_model(caplog) -> None:
+    """Framework keyterms must reach the session under the running model's key, not the
+    refused model's key (deepgram ``keyterm`` rather than openai ``keywords``)."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                await _wait_until_stream_is_live(stream)
+                stream.push_frame(_silence(16000, 0.1))
+                # parent moves to openai, but the live 16 kHz stream refuses the switch
+                stt.update_options(model="openai/gpt-live-transcribe")
+                stt._update_session_keyterms(["Acme"])
+                await asyncio.sleep(0.1)
+            finally:
+                await stream.aclose()
+
+    extras = [u["settings"]["extra"] for u in updates if "extra" in u["settings"]]
+    assert not any("keywords" in e for e in extras), "openai key must not reach deepgram"
+    assert {"keyterm": ["Acme"]} in extras, "deepgram must still get its keyterms"

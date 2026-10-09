@@ -1004,10 +1004,15 @@ class SpeechStream(stt.SpeechStream):
                     self._start_vad_stream()
                 elif self._vad is None and self._vad_stream is not None:
                     self._retire_vad_stream()
+        model_key = _keyterms_key_for_model(self._model)
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
-            self._opts.extra_kwargs.update(extra)
+            # never store a keyterm key another model owns; a keyterm update formatted for
+            # the model the parent moved to must not leak into this session's config
+            self._opts.extra_kwargs.update(
+                {k: v for k, v in extra.items() if k not in _KEYTERM_KEYS or k == model_key}
+            )
             self._pending_extra = None
 
         # keyterms always go to the gateway under the key the model actually running
@@ -1015,7 +1020,6 @@ class SpeechStream(stt.SpeechStream):
         # across, and a refused switch must keep formatting for the running model.
         forward_extra: NotGivenOr[dict[str, Any]] = extra
         if is_given(model) or is_given(extra):
-            model_key = _keyterms_key_for_model(self._model)
             merged: dict[str, Any] = (
                 {k: v for k, v in extra.items() if k not in _KEYTERM_KEYS or k == model_key}
                 if is_given(extra)
