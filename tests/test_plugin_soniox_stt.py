@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
@@ -256,6 +256,22 @@ def _make_stream(translation: Any = None):
     with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
         stream = SpeechStream(stt=stt_instance, conn_options=DEFAULT_API_CONNECT_OPTIONS)
     return stream
+
+
+async def test_websocket_authenticates_with_header():
+    stream = _make_stream()
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.send_str = AsyncMock()
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.ws_connect = AsyncMock(return_value=ws)
+    stream._stt._http_session = session
+
+    await stream._connect_ws()
+
+    assert session.ws_connect.call_args.kwargs["headers"] == {"Authorization": "Bearer test-key"}
+    config = json.loads(ws.send_str.call_args.args[0])
+    assert "api_key" not in config
+    assert config["model"] == stream._stt._params.model
 
 
 @pytest.mark.parametrize("level", [None, 0, 2])

@@ -11,9 +11,12 @@ Idle-timeout tests use ``virtual_time`` so timers advance deterministically.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import pytest
 
 from livekit.agents import APIStatusError
@@ -34,6 +37,42 @@ SENTENCES = [
     "And here comes a second sentence! ",
     "Finally a third one?",
 ]
+
+
+async def test_websocket_authenticates_once_for_multiple_streams() -> None:
+    sent: asyncio.Queue[str] = asyncio.Queue()
+    received: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.closed = False
+    ws.send_str = AsyncMock(side_effect=sent.put)
+    ws.receive = AsyncMock(side_effect=received.get)
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.ws_connect = AsyncMock(return_value=ws)
+    tts = soniox.TTS(api_key="test-key", http_session=session)
+
+    try:
+        for stream_id in ("first", "second"):
+            connection, _, _ = await tts._current_connection(timeout=1.0)
+            waiter = asyncio.get_running_loop().create_future()
+            connection.register_stream(stream_id, MagicMock(), waiter, opts=tts._opts)
+            try:
+                connection.send_text(stream_id, "Hello!", text_end=True)
+                config = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
+                text = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
+
+                assert "api_key" not in config
+                assert config["model"] == tts.model
+                assert config["stream_id"] == stream_id
+                assert text == {"stream_id": stream_id, "text": "Hello!", "text_end": True}
+            finally:
+                connection.unregister_stream(stream_id)
+                waiter.cancel()
+
+        session.ws_connect.assert_awaited_once_with(
+            tts._opts.websocket_url, headers={"Authorization": "Bearer test-key"}
+        )
+    finally:
+        await tts.aclose()
 
 
 @dataclass

@@ -267,7 +267,6 @@ class SpeechStream(stt.SpeechStream):
 
         # Create initial config object.
         config: dict[str, Any] = {
-            "api_key": self._stt._api_key,
             "model": self._stt._params.model,
             "audio_format": "pcm_s16le",
             "num_channels": self._stt._params.num_channels or 1,
@@ -300,6 +299,7 @@ class SpeechStream(stt.SpeechStream):
         ws = await asyncio.wait_for(
             self._ensure_session().ws_connect(
                 self._stt._base_url,
+                headers={"Authorization": f"Bearer {self._stt._api_key}"},
                 # Without a heartbeat a silently dropped socket (half-open TCP, no
                 # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
                 # forever and the reconnect in `_run` is only ever triggered by that
