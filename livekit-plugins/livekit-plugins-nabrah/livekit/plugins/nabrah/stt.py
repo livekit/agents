@@ -72,6 +72,9 @@ EOT_PUNCTUATION = (".", "?", "!", "؟")
 _NO_SPACE_BEFORE = frozenset(".,?!:;،؛؟")
 
 _WATCHDOG_POLL_SECONDS = 0.1
+# a recognizer with nothing to say never moves `audio_processed`, so a flush
+# cannot wait on the acknowledgement indefinitely
+_FLUSH_ACK_TIMEOUT = 2.0
 
 
 def _strip_and_detect_eot(new_text: str) -> tuple[str, bool]:
@@ -243,6 +246,8 @@ class SpeechStream(stt.SpeechStream):
     _request_id: str = ""
     _last_progress_at: float = 0.0
     _pending_eot_at: float | None = None
+    _pending_flush_position: float | None = None
+    _pending_flush_deadline: float | None = None
     _latest_audio_processed: float | None = None
     _audio_position: float = 0.0
     _reported_audio_position: float = 0.0
@@ -271,6 +276,12 @@ class SpeechStream(stt.SpeechStream):
         `_utt_flushed_chars` would slice the front off every transcript that
         follows, and a surviving `_is_speaking` would swallow the
         `START_OF_SPEECH` that opens the next turn.
+
+        Audio already handed to the dead socket is not replayed: `_input_ch`
+        yields each frame once, and the repo's convention is that replaying
+        consumed audio risks losing or duplicating words. A reconnect therefore
+        drops whatever the recognizer had not yet acknowledged -- a fraction of
+        a second, against the whole remainder of the call if the stream dies.
         """
         self._is_speaking = False
 
@@ -291,6 +302,8 @@ class SpeechStream(stt.SpeechStream):
 
         self._last_progress_at = 0.0
         self._pending_eot_at = None
+        self._pending_flush_position = None
+        self._pending_flush_deadline = None
 
         self._latest_audio_processed = None
         self._audio_position = 0.0
@@ -406,6 +419,9 @@ class SpeechStream(stt.SpeechStream):
                 and now - self._last_progress_at >= inactivity_timeout
             ):
                 self._flush_eos()
+                continue
+            # a silent recognizer sends nothing to drive this from _recv_task
+            self._maybe_complete_flush()
 
     async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:
@@ -417,12 +433,13 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_bytes(audio_bytes)
                 elif isinstance(data, self._FlushSentinel):
                     # Nabrah has no finalize frame, so the boundary is drawn locally
-                    # on what the recognizer has sent so far. `flush()` has already
-                    # pushed the caller's remaining audio ahead of this sentinel, so
-                    # only server-side latency is unaccounted for; whatever lands
-                    # afterwards diffs against the cursors _flush_eos just advanced
-                    # and opens the next turn, exactly as a mid-utterance EOT does.
-                    self._flush_eos()
+                    # -- but writing the audio is not the recognizer consuming it.
+                    # Arm the boundary at the position outstanding now and let
+                    # _maybe_complete_flush commit it once `audio_processed` reaches
+                    # there, or the segment closes empty and the speech the caller
+                    # flushed opens the next turn instead of ending this one.
+                    self._pending_flush_position = self._audio_position
+                    self._pending_flush_deadline = time.monotonic() + _FLUSH_ACK_TIMEOUT
             self._input_done = True
             await ws.send_str(json.dumps({"type": "eof"}))
         except Exception as e:
@@ -457,6 +474,9 @@ class SpeechStream(stt.SpeechStream):
                 # contain customer transcripts. Later cumulative results can recover.
                 logger.warning("nabrah STT returned malformed data")
 
+            # after the message is folded in, so a flush commits the text it waited for
+            self._maybe_complete_flush()
+
     def _emit(self, event: stt.SpeechEvent) -> None:
         self._event_ch.send_nowait(event)
 
@@ -477,6 +497,24 @@ class SpeechStream(stt.SpeechStream):
 
     def _current_text(self) -> str:
         return _append_text(self._turn_text, self._utt_clean)
+
+    def _maybe_complete_flush(self) -> None:
+        """Commit a requested segment boundary once the recognizer has caught up.
+
+        `audio_processed` is the only acknowledgement in the protocol, so it is
+        what makes the boundary real. Backends that omit it fall back to the
+        send-side counter, where the position is satisfied immediately and the
+        boundary degrades to best-effort.
+        """
+        if self._pending_flush_position is None:
+            return
+
+        timed_out = (
+            self._pending_flush_deadline is not None
+            and time.monotonic() >= self._pending_flush_deadline
+        )
+        if self._audio_clock() >= self._pending_flush_position or timed_out:
+            self._flush_eos()
 
     def _flush_eos(self) -> None:
         text = self._current_text()
@@ -541,6 +579,8 @@ class SpeechStream(stt.SpeechStream):
         self._utt_words = ()
         self._is_speaking = False
         self._pending_eot_at = None
+        self._pending_flush_position = None
+        self._pending_flush_deadline = None
         self._segment_start_time = 0.0
         self._segment_end_time = 0.0
         self._request_id = ""

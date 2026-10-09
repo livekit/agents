@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Coroutine
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -202,22 +203,80 @@ def test_transcript_after_reconnect_is_not_truncated(stream: SpeechStream) -> No
     assert stream._current_text() == "مرحبا بكم"
 
 
-async def test_flush_commits_the_open_segment(stream: SpeechStream) -> None:
-    """flush() means end of segment; Nabrah has no finalize frame, so commit locally."""
-    stream._process_message({"type": "transcript", "text": "مرحبا", "is_final": False})
+async def _flush(stream: SpeechStream) -> None:
     ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
     ws.send_bytes = AsyncMock()
     ws.send_str = AsyncMock()
-
-    emitted: list[stt.SpeechEvent] = []
     stream._input_ch.send_nowait(SpeechStream._FlushSentinel())
     stream._input_ch.close()
+    await stream._send_task(ws)
+
+
+async def test_flush_waits_for_the_recognizer_to_acknowledge_the_audio(
+    stream: SpeechStream,
+) -> None:
+    """Writing audio is not consuming it: committing on the spot closes an empty turn."""
+    stream._audio_position = 1.0
+    emitted: list[stt.SpeechEvent] = []
 
     with patch.object(stream, "_emit", side_effect=emitted.append):
-        await stream._send_task(ws)
+        await _flush(stream)
+
+        assert stream._pending_flush_position == 1.0
+        assert not emitted
+
+        stream._process_message(
+            {"type": "transcript", "text": "مرحبا", "is_final": False, "audio_processed": 1.0}
+        )
+        stream._maybe_complete_flush()
 
     finals = [e for e in emitted if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
     assert [e.alternatives[0].text for e in finals] == ["مرحبا"]
+    assert stream._pending_flush_position is None
+
+
+async def test_flush_does_not_commit_before_the_clock_catches_up(stream: SpeechStream) -> None:
+    stream._audio_position = 5.0
+    emitted: list[stt.SpeechEvent] = []
+
+    with patch.object(stream, "_emit", side_effect=emitted.append):
+        await _flush(stream)
+        stream._process_message(
+            {"type": "transcript", "text": "مرحبا", "is_final": False, "audio_processed": 1.0}
+        )
+        stream._maybe_complete_flush()
+
+    assert not [e for e in emitted if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert stream._pending_flush_position == 5.0
+
+
+async def test_flush_commits_when_the_recognizer_never_acknowledges(
+    stream: SpeechStream,
+) -> None:
+    """A recognizer with nothing to say never moves the clock."""
+    stream._audio_position = 5.0
+    stream._process_message({"type": "transcript", "text": "مرحبا", "is_final": False})
+    emitted: list[stt.SpeechEvent] = []
+
+    with patch.object(stream, "_emit", side_effect=emitted.append):
+        await _flush(stream)
+        stream._pending_flush_deadline = time.monotonic() - 0.1
+        stream._maybe_complete_flush()
+
+    finals = [e for e in emitted if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["مرحبا"]
+
+
+def test_reset_drops_a_flush_the_dead_socket_can_no_longer_acknowledge(
+    stream: SpeechStream,
+) -> None:
+    stream._pending_flush_position = 5.0
+    stream._pending_flush_deadline = time.monotonic() + 2.0
+
+    stream._reset_connection_state()
+
+    assert stream._pending_flush_position is None
+    assert stream._pending_flush_deadline is None
 
 
 @pytest.mark.parametrize(
