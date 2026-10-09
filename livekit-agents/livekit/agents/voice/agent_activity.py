@@ -115,6 +115,12 @@ if TYPE_CHECKING:
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
+
+_RESPEAK_INSTRUCTIONS = (
+    "Your last reply was returned as text and was not spoken. Say that same reply aloud now."
+)
+"""Sent once when an audio-modality realtime model answers a turn in text with no audio and
+no TTS is available to voice it; a retry that is again text-only is not retried."""
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
 
@@ -4364,6 +4370,7 @@ class AgentActivity(RecognitionHooks):
                 self._disable_vad_interruption_soon()
 
         read_transcript_from_tts = False
+        unspoken_text_msg_ids: set[str] = set()
 
         # multiple message items may be produced for a single realtime response
         # (e.g. GPT-Realtime-2.0). We process each one serially: push frames,
@@ -4426,11 +4433,7 @@ class AgentActivity(RecognitionHooks):
                         else realtime_audio
                     )
                 elif self.llm.capabilities.audio_output:
-                    logger.error(
-                        "Text message received from Realtime API with audio modality. "
-                        "This usually happens when text chat context is synced to the API. "
-                        "Try to add a TTS model as fallback or use text modality with TTS instead."  # noqa: E501
-                    )
+                    unspoken_text_msg_ids.add(msg.message_id)
                 else:
                     logger.warning(
                         "audio output is enabled but neither tts nor realtime audio is available",
@@ -4519,6 +4522,14 @@ class AgentActivity(RecognitionHooks):
 
         stopped_speaking_at = time.time()
 
+        # the respeak carries the reply into the history, so the unspoken text is left out
+        respeak_expected = (
+            bool(unspoken_text_msg_ids)
+            and not speech_handle.interrupted
+            and not function_calls
+            and instructions != _RESPEAK_INSTRUCTIONS
+        )
+
         def _create_assistant_message(
             message_id: str, forwarded_text: str, interrupted: bool
         ) -> llm.ChatMessage:
@@ -4580,6 +4591,9 @@ class AgentActivity(RecognitionHooks):
                 )
 
             if not forwarded_text:
+                continue
+
+            if respeak_expected and entry.msg.message_id in unspoken_text_msg_ids:
                 continue
 
             trace_text_parts.append(forwarded_text)
@@ -4793,8 +4807,27 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
+        if respeak_expected:
+            # nothing voiced the text reply; ask the model once for the same reply aloud
+            speech_handle._num_steps += 1
+            self._create_speech_task(
+                self._realtime_reply_task(
+                    speech_handle=speech_handle,
+                    model_settings=ModelSettings(tool_choice="none"),
+                    instructions=_RESPEAK_INSTRUCTIONS,
+                ),
+                speech_handle=speech_handle,
+                name="AgentActivity.realtime_respeak",
+            )
+            self._schedule_speech(speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True)
+        elif unspoken_text_msg_ids:
+            logger.error(
+                "Text message received from Realtime API with audio modality and it was not "
+                "spoken. Try to add a TTS model as fallback or use text modality with TTS instead."
+            )
+
         # no reply follows, so nothing else clears the "thinking" the tool asserted
-        if not tool_reply_expected and self._no_pending_speech:
+        if not tool_reply_expected and not respeak_expected and self._no_pending_speech:
             self._session._update_agent_state(
                 "thinking" if self._background_speeches else "listening"
             )
