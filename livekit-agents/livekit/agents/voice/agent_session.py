@@ -691,6 +691,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         self._forward_audio_atask: asyncio.Task[None] | None = None
+        # the user's audio format, which input silence matches; known once a frame arrives
+        self._input_sample_rate: int | None = None
         self._forward_video_atask: asyncio.Task[None] | None = None
         self._update_activity_atask: asyncio.Task[None] | None = None
         self._activity_lock = asyncio.Lock()
@@ -2038,6 +2040,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         async for frame in audio_input:
+            self._input_sample_rate = frame.sample_rate
             if self._activity is not None:
                 self._activity.push_audio(frame)
 

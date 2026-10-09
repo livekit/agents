@@ -334,8 +334,6 @@ class AgentActivity(RecognitionHooks):
         self._rt_session: llm.RealtimeSession | None = None
         self._input_silence_atask: asyncio.Task[None] | None = None
         self._input_audio_off = asyncio.Event()
-        # the user's audio format, which the silence matches; known once a frame arrives
-        self._input_sample_rate: int | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
@@ -1667,8 +1665,6 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        self._input_sample_rate = frame.sample_rate
-
         aec_warmup_active: bool = (
             self._session.agent_state == "speaking"
             and self._session._aec_warmup_remaining > 0
@@ -1713,10 +1709,9 @@ class AgentActivity(RecognitionHooks):
         while True:
             await self._input_audio_off.wait()
             # no frame yet means no format to match, so this round stays quiet
+            sample_rate = self._session._input_sample_rate
             silence = (
-                utils.audio.silence_frame(0.1, self._input_sample_rate)
-                if self._input_sample_rate is not None
-                else None
+                utils.audio.silence_frame(0.1, sample_rate) if sample_rate is not None else None
             )
             next_push = time.monotonic()
             while self._input_audio_off.is_set():
