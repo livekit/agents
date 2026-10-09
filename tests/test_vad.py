@@ -225,10 +225,11 @@ async def test_plugin_checkpoint_matches_inference_vad() -> None:
 
 def test_silero_with_options_matches_load_on_the_same_session() -> None:
     base = silero.VAD.load()
-    vad = base.with_options(activation_threshold=0.6, sample_rate=8000)
+    options = {"activation_threshold": 0.6, "deactivation_threshold": 0.4, "sample_rate": 8000}
+    vad = base.with_options(**options)
 
     assert vad._onnx_session is base._onnx_session
-    assert vad._opts == silero.VAD.load(activation_threshold=0.6, sample_rate=8000)._opts
+    assert vad._opts == silero.VAD.load(**options)._opts
     assert base._opts == silero.VAD.load()._opts, "the source VAD must not change"
 
 

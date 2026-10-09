@@ -49,10 +49,6 @@ class _VADOptions:
     sample_rate: int
 
 
-def _default_deactivation_threshold(activation_threshold: float) -> float:
-    return max(activation_threshold - 0.15, 0.01)
-
-
 class VAD(agents.vad.VAD):
     """
     Silero Voice Activity Detection (VAD) class.
@@ -142,8 +138,7 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration=prefix_padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
-            deactivation_threshold=deactivation_threshold
-            or _default_deactivation_threshold(activation_threshold),
+            deactivation_threshold=deactivation_threshold or max(activation_threshold - 0.15, 0.01),
             sample_rate=sample_rate,
         )
         return cls(session=session, opts=opts)
@@ -174,9 +169,8 @@ class VAD(agents.vad.VAD):
         Create a new VAD with other options on this VAD's ONNX inference session.
 
         Unlike `load`, this method does not build a new session, so it returns without
-        blocking. Options that are not given keep this VAD's values. If `activation_threshold`
-        is given without `deactivation_threshold`, the deactivation threshold is derived from
-        it as in `load`. This VAD and its streams are not changed.
+        blocking. Options that are not given keep this VAD's values, and the given ones
+        apply as in `update_options`. This VAD and its streams are not changed.
 
         **Example:**
 
@@ -196,7 +190,7 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
-            deactivation_threshold (float): Negative threshold (noise or exit threshold). Default is max(activation_threshold - 0.15, 0.01) when `activation_threshold` is given, else this VAD's value.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold).
             sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
 
         Returns:
@@ -211,25 +205,19 @@ class VAD(agents.vad.VAD):
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
 
-        if is_given(activation_threshold) and not is_given(deactivation_threshold):
-            deactivation_threshold = _default_deactivation_threshold(activation_threshold)
-
         opts = replace(self._opts)
-        if is_given(min_speech_duration):
-            opts.min_speech_duration = min_speech_duration
-        if is_given(min_silence_duration):
-            opts.min_silence_duration = min_silence_duration
-        if is_given(prefix_padding_duration):
-            opts.prefix_padding_duration = prefix_padding_duration
-        if is_given(max_buffered_speech):
-            opts.max_buffered_speech = max_buffered_speech
-        if is_given(activation_threshold):
-            opts.activation_threshold = activation_threshold
-        if is_given(deactivation_threshold):
-            opts.deactivation_threshold = deactivation_threshold
         if is_given(sample_rate):
             opts.sample_rate = sample_rate
-        return type(self)(session=self._onnx_session, opts=opts)
+        vad = type(self)(session=self._onnx_session, opts=opts)
+        vad.update_options(
+            min_speech_duration=min_speech_duration,
+            min_silence_duration=min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration,
+            max_buffered_speech=max_buffered_speech,
+            activation_threshold=activation_threshold,
+            deactivation_threshold=deactivation_threshold,
+        )
+        return vad
 
     @property
     def model(self) -> str:
