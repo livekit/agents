@@ -249,6 +249,46 @@ async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
     await fallback_adapter.aclose()
 
 
+async def test_stt_stream_fallback_offset_continues_at_the_forwarded_audio() -> None:
+    """A leg created after a switch starts where the forwarded audio left off.
+
+    The parent offset is a pushed-audio position, so the delta between two legs must
+    be the audio that flowed between them, not wall-clock time: wall-clock time
+    includes gaps in the input, which the framework's clock then adds a second time.
+    """
+    fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    stream = fallback_adapter.stream()
+    stream.start_time_offset = 30.0
+
+    async def _frame(duration: float = 0.2) -> rtc.AudioFrame:
+        samples = int(16000 * duration)
+        return rtc.AudioFrame(
+            data=bytes([0x11, 0x11]) * samples,
+            sample_rate=16000,
+            num_channels=1,
+            samples_per_channel=samples,
+        )
+
+    async with stream:
+        for _ in range(5):  # 1 s of audio forwarded before the switch
+            stream.push_frame(await _frame())
+            await asyncio.sleep(0)
+        stream.end_input()
+        async for _ in stream:
+            pass
+
+    leg1 = fake1.stream_ch.recv_nowait()
+    leg2 = fake2.stream_ch.recv_nowait()
+    assert leg1.start_time_offset == pytest.approx(30.0, abs=0.1)
+    assert leg2.start_time_offset == pytest.approx(31.0, abs=0.1)  # 30 + the forwarded audio
+
+    await fallback_adapter.aclose()
+
+
 async def test_stt_stream_fallback() -> None:
     fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeSTT(fake_transcript="hello world")
