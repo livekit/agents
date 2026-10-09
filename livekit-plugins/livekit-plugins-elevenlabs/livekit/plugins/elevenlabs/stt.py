@@ -305,14 +305,16 @@ class STT(stt.STT):
                 data=form,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ) as response:
-                response_json = await response.json()
                 if response.status != 200:
+                    # check the status first: an error body may be empty or not JSON
+                    body = await response.text()
                     raise APIStatusError(
-                        message=response_json.get("detail", "Unknown ElevenLabs error"),
+                        message=body or "Unknown ElevenLabs error",
                         status_code=response.status,
                         request_id=trace_id_from_headers(response.headers),
-                        body=response_json,
+                        body=body,
                     )
+                response_json = await response.json()
                 extracted_text = response_json.get("text")
                 language_code = response_json.get("language_code")
                 speaker_id = None

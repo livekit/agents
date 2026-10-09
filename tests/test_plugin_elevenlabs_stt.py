@@ -730,13 +730,14 @@ async def test_configured_audio_chunks_preserve_audio_and_commit(
         await stream.aclose()
 
 
-async def test_recognize_does_not_retry_a_client_error() -> None:
+@pytest.mark.parametrize("body", ['{"detail": "invalid api key"}', "", "{not json"])
+async def test_recognize_does_not_retry_a_client_error(body: str) -> None:
     requests = 0
 
     async def handler(request: web.Request) -> web.Response:
         nonlocal requests
         requests += 1
-        return web.json_response({"detail": "invalid api key"}, status=401)
+        return web.Response(status=401, text=body, content_type="application/json")
 
     app = web.Application()
     app.router.add_post("/speech-to-text", handler)
