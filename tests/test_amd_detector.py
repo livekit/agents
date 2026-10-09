@@ -28,6 +28,7 @@ from livekit.agents import (
 from livekit.agents.types import APIConnectOptions
 from livekit.agents.voice._turn_hooks import TurnHooks
 from livekit.agents.voice.amd import AMDCategory, AMDReason, _fsm, _inference
+from livekit.agents.voice.amd._chat_context import AGENT_REPLY
 from livekit.agents.voice.amd.detector import (
     _DEFAULT_HUMAN_INSTRUCTIONS,
     _DEFAULT_IVR_INSTRUCTIONS,
@@ -1673,6 +1674,31 @@ async def test_amd_collects_only_successful_dtmf_calls_from_its_run() -> None:
         await detector.execute()
         dtmf_executed(session, "5")
         assert dtmf_calls(detector._chat_ctx) == success.function_calls
+
+
+@pytest.mark.asyncio
+async def test_classifier_sees_that_the_agent_spoke_but_not_its_words() -> None:
+    async with running() as (detector, session, classifier, _):
+        session._conversation_item_added(
+            llm.ChatMessage(
+                role="assistant", content=["before AMD"], created_at=detector._started_at - 1
+            )
+        )
+        commit_turn(detector, end_of_turn("Leave a message after the tone."))
+        await classifier.request()
+        session._conversation_item_added(llm.ChatMessage(role="assistant", content=[""]))
+        session._conversation_item_added(
+            llm.ChatMessage(role="assistant", content=["Hi Sam, this is Alex."])
+        )
+        commit_turn(detector, end_of_turn("To erase it and start over, press two."))
+        request = await classifier.request()
+
+        history = [(m.role, m.text_content) for m in request.chat_ctx.messages()[2:]]
+        assert history == [
+            ("user", "Leave a message after the tone."),
+            ("assistant", AGENT_REPLY),
+            ("user", "To erase it and start over, press two."),
+        ]
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from ..events import (
         AgentFalseInterruptionEvent,
         AgentStateChangedEvent,
+        ConversationItemAddedEvent,
         FunctionToolsExecutedEvent,
         SpeechCreatedEvent,
         UserInputTranscribedEvent,
@@ -407,6 +408,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 (self._session, "user_state_changed", self._on_user_state_changed),
                 (self._session, "user_input_transcribed", self._on_user_input_transcribed),
                 (self._session, "function_tools_executed", self._on_function_tools_executed),
+                (self._session, "conversation_item_added", self._on_conversation_item_added),
                 (self._session, "speech_created", self._on_speech_created),
                 (self._session, "agent_state_changed", self._on_agent_state_changed),
                 (self._session, "agent_false_interruption", self._on_false_interruption),
@@ -521,6 +523,19 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         for call, output in event.zipped():
             if call.created_at >= self._started_at:
                 self._chat_ctx.add_tool_result(call, output)
+
+    def _on_conversation_item_added(self, event: ConversationItemAddedEvent) -> None:
+        if self.lifecycle not in {AMDLifecycle.PENDING, AMDLifecycle.ACTIVE}:
+            return
+        item = event.item
+        assert self._started_at is not None
+        if (
+            isinstance(item, llm.ChatMessage)
+            and item.role == "assistant"
+            and item.text_content
+            and item.created_at >= self._started_at
+        ):
+            self._chat_ctx.add_agent_reply()
 
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
         if self.lifecycle is not AMDLifecycle.ACTIVE:

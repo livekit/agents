@@ -10,6 +10,7 @@ from .events import AMDCategory, AMDPredictionEvent
 
 AMDTranscriptSource = Literal["session", "amd"]
 _HISTORY_LIMIT = 20
+AGENT_REPLY = "(the agent spoke)"
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,10 @@ class AMDChatContext(llm.ChatContext):
             content=turn.transcript.transcript,
             extra={"turn_id": turn.turn_id, "transcript_source": turn.transcript.source},
         )
+
+    def add_agent_reply(self) -> None:
+        # that the agent spoke, never its words
+        self.add_message(role="assistant", content=AGENT_REPLY)
 
     def add_tool_result(self, call: llm.FunctionCall, output: llm.FunctionCallOutput) -> None:
         if (
