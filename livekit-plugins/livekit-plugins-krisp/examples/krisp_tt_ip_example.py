@@ -65,9 +65,9 @@ async def entrypoint(ctx: JobContext) -> None:
             # keep the turn open briefly after TT says "done", so resuming after a short
             # mid-sentence pause (or a slow final transcript) doesn't split the turn
             "endpointing": {"min_delay": 0.5},
-            # 0.3 instead of the 0.5 default: unrecognized speech counts as an interruption
-            # after ~0.9 s of overlap instead of ~1.5 s
-            "interruption": {"mode": krisp.InterruptionDetector(threshold=0.3)},
+            # 0.35 instead of the 0.5 default: unrecognized speech counts as an interruption
+            # after ~1 s of overlap instead of ~1.5 s (0.3 also stopped the agent on "yeah")
+            "interruption": {"mode": krisp.InterruptionDetector(threshold=0.35)},
         },
     )
 
