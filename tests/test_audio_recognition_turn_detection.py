@@ -62,6 +62,8 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._turn_backchannel_over_agent = False
     ar._transcription_timeout_handle = None
     ar._audio_transcript = ""
+    ar._transcript_request_ids = []
+    ar._transcript_request_ids_complete = True
     ar._turn_detection_mode = "vad"
 
     # turn_detector must be an _StreamingTurnDetector for the speaking-guard

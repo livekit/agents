@@ -57,6 +57,26 @@ _NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
 _EOU_MAX_HISTORY_TURNS = 6
 # backoff before recreating the stt stream after an unrecoverable error
 _STT_RECONNECT_INTERVAL = 0.5
+_MAX_TRANSCRIPT_REQUEST_IDS = 128
+_MAX_TRANSCRIPT_REQUEST_ID_LENGTH = 256
+
+
+@dataclass(frozen=True)
+class _TranscriptSource:
+    """Provider IDs for accepted final text, not every event seen by the STT stream.
+
+    IDs are ordered and distinct within this user turn. ``complete`` describes
+    identity coverage only, not transcription or provider-result quality.
+    """
+
+    request_ids: tuple[str, ...] = ()
+    complete: bool = False
+
+    def as_extra(self) -> dict[str, Any]:
+        return {
+            "stt_request_ids": list(self.request_ids),
+            "stt_request_ids_complete": self.complete,
+        }
 
 
 @dataclass
@@ -74,6 +94,7 @@ class _EndOfTurnInfo:
     new_transcript: str
     transcript_confidence: float
     metrics: _EndOfTurnMetrics
+    transcript_source: _TranscriptSource = _TranscriptSource()
     backchannel_over_agent: bool = False
     """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
     user_turn_span: trace.Span | None = None
@@ -128,6 +149,7 @@ class _PreemptiveGenerationInfo:
     new_transcript: str
     transcript_confidence: float
     started_speaking_at: float | None
+    transcript_source: _TranscriptSource = _TranscriptSource()
 
 
 @dataclass
@@ -289,6 +311,8 @@ class AudioRecognition:
         self._final_transcript_received = asyncio.Event()
         self._final_transcript_confidence: list[float] = []
         self._audio_transcript = ""
+        self._transcript_request_ids: list[str] = []
+        self._transcript_request_ids_complete = True
         self._audio_interim_transcript = ""
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
         self._audio_preflight_transcript = ""
@@ -1002,8 +1026,16 @@ class AudioRecognition:
         self._turn_detector_prediction_fut = None
         return stream
 
+    def _transcript_source(self) -> _TranscriptSource:
+        return _TranscriptSource(
+            request_ids=tuple(self._transcript_request_ids),
+            complete=bool(self._audio_transcript) and self._transcript_request_ids_complete,
+        )
+
     def _clear_user_turn(self) -> None:
         self._audio_transcript = ""
+        self._transcript_request_ids = []
+        self._transcript_request_ids_complete = True
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
@@ -1094,6 +1126,8 @@ class AudioRecognition:
                 self._audio_transcript = (
                     f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
                 )
+                # No finalized provider request covers this promoted interim text.
+                self._transcript_request_ids_complete = False
 
             transcript = self._audio_transcript
             self._audio_interim_transcript = ""
@@ -1248,6 +1282,16 @@ class AudioRecognition:
             self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
+            # Collect only accepted final text, after the held-transcript gate.
+            # The tracing accumulator also includes interim/ignored events and
+            # therefore cannot identify the text delivered to the user-turn hook.
+            if not ev.request_id or len(ev.request_id) > _MAX_TRANSCRIPT_REQUEST_ID_LENGTH:
+                self._transcript_request_ids_complete = False
+            elif ev.request_id not in self._transcript_request_ids:
+                if len(self._transcript_request_ids) < _MAX_TRANSCRIPT_REQUEST_IDS:
+                    self._transcript_request_ids.append(ev.request_id)
+                else:
+                    self._transcript_request_ids_complete = False
             self._final_transcript_confidence.append(confidence)
             transcript_changed = self._audio_transcript != self._audio_preflight_transcript
             self._audio_interim_transcript = ""
@@ -1271,6 +1315,7 @@ class AudioRecognition:
                                 else 0
                             ),
                             started_speaking_at=self._speech_start_time,
+                            transcript_source=self._transcript_source(),
                         )
                     )
 
@@ -1318,6 +1363,7 @@ class AudioRecognition:
                         new_transcript=self._audio_preflight_transcript,
                         transcript_confidence=sum(confidence_vals) / len(confidence_vals),
                         started_speaking_at=self._speech_start_time,
+                        transcript_source=replace(self._transcript_source(), complete=False),
                     )
                 )
 
@@ -1758,6 +1804,7 @@ class AudioRecognition:
                 new_transcript=self._audio_transcript,
                 transcript_confidence=confidence_avg,
                 metrics=metrics,
+                transcript_source=self._transcript_source(),
                 backchannel_over_agent=self._turn_backchannel_over_agent,
                 user_turn_span=user_turn_span,
             )
@@ -1799,6 +1846,8 @@ class AudioRecognition:
 
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
+                self._transcript_request_ids = []
+                self._transcript_request_ids_complete = True
                 self._final_transcript_confidence = []
                 self._last_final_transcript_time = None
                 # concurrent user speech might have changed it

@@ -70,6 +70,7 @@ members = [
     "livekit-plugins-nltk",
     "livekit-plugins-nvidia",
     "livekit-plugins-openai",
+    "livekit-plugins-oruk",
     "livekit-plugins-palabra",
     "livekit-plugins-perplexity",
     "livekit-plugins-phonic",
@@ -2160,6 +2161,9 @@ nvidia = [
 openai = [
     { name = "livekit-plugins-openai" },
 ]
+oruk = [
+    { name = "livekit-plugins-oruk" },
+]
 palabra = [
     { name = "livekit-plugins-palabra" },
 ]
@@ -2306,6 +2310,7 @@ requires-dist = [
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
     { name = "livekit-plugins-nvidia", marker = "extra == 'nvidia'", editable = "livekit-plugins/livekit-plugins-nvidia" },
     { name = "livekit-plugins-openai", marker = "extra == 'openai'", editable = "livekit-plugins/livekit-plugins-openai" },
+    { name = "livekit-plugins-oruk", marker = "extra == 'oruk'", editable = "livekit-plugins/livekit-plugins-oruk" },
     { name = "livekit-plugins-palabra", marker = "extra == 'palabra'", editable = "livekit-plugins/livekit-plugins-palabra" },
     { name = "livekit-plugins-perplexity", marker = "extra == 'perplexity'", editable = "livekit-plugins/livekit-plugins-perplexity" },
     { name = "livekit-plugins-phonic", marker = "extra == 'phonic'", editable = "livekit-plugins/livekit-plugins-phonic" },
@@ -2356,7 +2361,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "oruk", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -3350,6 +3355,23 @@ requires-dist = [
     { name = "openai", specifier = ">=2.50" },
 ]
 provides-extras = ["vertex"]
+
+[[package]]
+name = "livekit-plugins-oruk"
+source = { editable = "livekit-plugins/livekit-plugins-oruk" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "httpx" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10,<4" },
+    { name = "async-timeout", marker = "python_full_version < '3.11'", specifier = ">=4,<6" },
+    { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+]
 
 [[package]]
 name = "livekit-plugins-palabra"

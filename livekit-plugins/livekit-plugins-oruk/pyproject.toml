@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-oruk"
+dynamic = ["version"]
+description = "LiveKit Agents plugin for the hosted Oruk speech API"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+dependencies = [
+    "livekit-agents>=1.8.3",
+    "httpx>=0.28,<1",
+    "aiohttp>=3.10,<4",
+    "async-timeout>=4,<6; python_version < '3.11'",
+]
+
+[project.urls]
+Documentation = "https://oruk.ai/docs"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/oruk/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit", "/README.md"]

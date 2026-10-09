@@ -43,6 +43,8 @@ MAX_DELAY = 0.5
 def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecognition:
     """AudioRecognition wired to drive one real eou bounce against ``hooks``."""
     ar = AudioRecognition.__new__(AudioRecognition)
+    ar._transcript_request_ids = []
+    ar._transcript_request_ids_complete = True
     ar._session = MagicMock()
     ar._session._root_span_context = None
     ar._hooks = hooks
