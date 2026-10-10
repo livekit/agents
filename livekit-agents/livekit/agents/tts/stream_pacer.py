@@ -32,9 +32,21 @@ class SentenceStreamPacer:
             max_text_length=max_text_length,
         )
 
-    def wrap(self, sent_stream: SentenceStream, audio_emitter: AudioEmitter) -> StreamPacerWrapper:
+    def wrap(
+        self,
+        sent_stream: SentenceStream,
+        audio_emitter: AudioEmitter,
+        *,
+        max_text_length: int | None = None,
+    ) -> StreamPacerWrapper:
+        options = self._options
+        if max_text_length is not None:
+            options = StreamPacerOptions(
+                min_remaining_audio=options.min_remaining_audio,
+                max_text_length=min(options.max_text_length, max_text_length),
+            )
         return StreamPacerWrapper(
-            options=self._options, sent_stream=sent_stream, audio_emitter=audio_emitter
+            options=options, sent_stream=sent_stream, audio_emitter=audio_emitter
         )
 
 
@@ -135,11 +147,17 @@ class StreamPacerWrapper(SentenceStream):
                 generation_stopped and remaining_audio <= self._options.min_remaining_audio
             ):
                 batch: list[str] = []
+                batch_length = 0
                 while self._sentences:
+                    sentence = self._sentences[0]
+                    next_length = batch_length + len(sentence) + (1 if batch else 0)
+                    if batch and next_length > self._options.max_text_length:
+                        break
                     batch.append(self._sentences.pop(0))
+                    batch_length = next_length
                     if (
                         first_sentence  # send first sentence immediately
-                        or sum(len(s) for s in batch) >= self._options.max_text_length
+                        or batch_length >= self._options.max_text_length
                     ):
                         break
 

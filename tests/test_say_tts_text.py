@@ -208,3 +208,29 @@ async def test_stream_adapter_rejects_xml_scope_over_request_limit() -> None:
 
     with pytest.raises(ChanEmpty):
         tts.synthesize_ch.recv_nowait()
+
+
+@pytest.mark.asyncio
+async def test_stream_adapter_pacing_respects_request_limit() -> None:
+    tts = NonStreamingFakeTTS()
+    model = StreamAdapter(
+        tts=tts,
+        sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(max_token_len=100),
+        text_pacing=True,
+    )
+    sentences = [
+        f"Sentence {i} has enough words to make a useful text to speech request." for i in range(3)
+    ]
+    agent = RecordingAgent(model)
+    session = AgentSession(vad=None, turn_handling={"turn_detection": None})
+    session.output.audio = FakeAudioOutput()
+    await session.start(agent)
+    try:
+        handle = session.say("Spoken sentences", tts_text=" ".join(sentences))
+        await handle.wait_for_playout()
+
+        assert [tts.synthesize_ch.recv_nowait()._input_text for _ in sentences] == sentences
+        with pytest.raises(ChanEmpty):
+            tts.synthesize_ch.recv_nowait()
+    finally:
+        await session.aclose()

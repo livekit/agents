@@ -158,6 +158,7 @@ class StreamAdapterWrapper(SynthesizeStream):
             sent_stream = self._tts._stream_pacer.wrap(
                 sent_stream=sent_stream,
                 audio_emitter=output_emitter,
+                max_text_length=max_token_len,
             )
 
         request_id = utils.shortuuid()
