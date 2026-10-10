@@ -549,18 +549,37 @@ class _ToolExecutor:
     async def _deliver_reply(self, session: AgentSession) -> None:
         from .agent_activity import ActivityClosedError
 
-        target_agent: Agent
-        try:
-            if self._owning_activity is not None:
-                await self._owning_activity.wait_for_idle()
-                target_agent = self._owning_activity.agent
-            else:
-                target_activity = await session.wait_for_idle()
-                target_agent = target_activity.agent
-        except ActivityClosedError:
-            logger.debug("dropping tool reply — owning activity closed")
-            self._pending_updates.clear()
-            return
+        while True:
+            try:
+                if self._owning_activity is not None:
+                    activity = self._owning_activity
+                    await activity.wait_for_idle()
+                else:
+                    activity = await session.wait_for_idle()
+
+                if not activity.scheduling_paused:
+                    break
+
+                # idle but paused: it resumes once an AgentTask returns, or closes at a handoff
+                await activity._scheduling_resumed.wait()
+                if activity._closed:
+                    raise ActivityClosedError(f"activity {activity.agent.label} is closing")
+            except ActivityClosedError:
+                # a session-scoped reply follows a handoff in flight to the next agent;
+                # anything else (session close included) drops it
+                if (
+                    self._owning_activity is not None
+                    or session._is_closing()
+                    or not session._activity_lock.locked()
+                ):
+                    logger.debug("dropping tool reply — owning activity closed")
+                    self._pending_updates.clear()
+                    return
+
+                async with session._activity_lock:
+                    pass
+
+        target_agent = activity.agent
 
         # no await after this line
 
