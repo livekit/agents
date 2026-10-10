@@ -45,7 +45,6 @@ from .constants import (
     API_VERSION,
     API_VERSION_HEADER,
     API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
-    MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
     REQUEST_ID_HEADER,
     USER_AGENT,
 )
@@ -114,7 +113,7 @@ class TTS(tts.TTS):
             language (str, optional): The language code for synthesis. Defaults to "en".
             encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str | list[float], optional): The voice ID or embedding array.
-            speed (TTSVoiceSpeed | float, optional): Speed of speech, with sonic-3, the value is valid between 0.6 and 2.0 (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-speed)
+            speed (TTSVoiceSpeed | float, optional): Speed of speech, with sonic-3, the value is valid between 0.6 and 1.5 (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-speed)
             emotion (list[TTSVoiceEmotion], optional): Emotion of the speech (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-emotion)
             volume (float, optional): Volume of the speech, with sonic-3, the value is valid between 0.5 and 2.0
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
@@ -277,8 +276,8 @@ class TTS(tts.TTS):
             model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-3".
             language (str, optional): The language code for synthesis. Defaults to "en".
             voice (str | list[float], optional): The voice ID or embedding array.
-            speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
-            emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
+            speed (TTSVoiceSpeed | float, optional): Speed of speech, sonic-3 models only (https://docs.cartesia.ai/build-with-cartesia/capability-guides/volume-speed-emotion)
+            emotion (list[TTSVoiceEmotion], optional): Emotion of the speech, sonic-3 models only (https://docs.cartesia.ai/build-with-cartesia/capability-guides/volume-speed-emotion)
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations.
         """
         if is_given(model):
@@ -330,21 +329,22 @@ class TTS(tts.TTS):
             if self._opts.speed:
                 if not isinstance(self._opts.speed, float):
                     raise ValueError("speed must be a float for sonic-3")
-                if not 0.6 <= self._opts.speed <= 2.0:
-                    logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
+                if not 0.6 <= self._opts.speed <= 1.5:
+                    logger.warning("speed must be between 0.6 and 1.5 for sonic-3")
             if self._opts.volume is not None and not 0.5 <= self._opts.volume <= 2.0:
                 logger.warning("volume must be between 0.5 and 2.0 for sonic-3")
-        elif (
-            self._opts.api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
-            or self._opts.model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
-        ):
+        elif self._opts.speed or self._opts.emotion or self._opts.volume is not None:
+            # the old speed/emotion controls only worked with sonic-2-2025-03-07,
+            # which Cartesia switched off on June 1, 2026
             logger.warning(
-                f"speed and emotion controls are only supported for model '{MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', and API version '{API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', "
-                "see https://docs.cartesia.ai/developer-tools/changelog for details",
+                "speed, emotion and volume are only supported for sonic-3 models, where they are "
+                "sent as generation_config; use a sonic-3 model such as 'sonic-3', see "
+                "https://docs.cartesia.ai/build-with-cartesia/capability-guides/volume-speed-emotion",
                 extra={
                     "model": self._opts.model,
                     "speed": self._opts.speed,
                     "emotion": self._opts.emotion,
+                    "volume": self._opts.volume,
                 },
             )
 

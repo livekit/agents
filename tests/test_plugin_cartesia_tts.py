@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from collections import deque
 from unittest.mock import MagicMock
 
@@ -270,3 +271,51 @@ async def test_rest_request_sends_the_configured_api_version_header():
     )
 
     await tts.aclose()
+
+
+def test_controls_on_an_older_model_point_to_sonic_3_generation_config(caplog):
+    """The speed/emotion warning must not send people to a model Cartesia switched off."""
+    from livekit.plugins.cartesia import TTS
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
+        TTS(api_key=SECRET_API_KEY, model="sonic-2", speed="fast", emotion="positivity:high")
+
+    assert "generation_config" in caplog.text
+    assert "sonic-2-2025-03-07" not in caplog.text
+
+
+def test_controls_on_sonic_3_do_not_warn(caplog):
+    from livekit.plugins.cartesia import TTS
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
+        tts = TTS(api_key=SECRET_API_KEY, model="sonic-3", speed=1.2, emotion="calm", volume=1.1)
+
+    assert caplog.text == ""
+    assert tts._opts.emotion == ["calm"]
+
+
+def test_pronunciation_dict_alone_does_not_trigger_the_controls_warning(caplog):
+    from livekit.plugins.cartesia import TTS
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
+        TTS(api_key=SECRET_API_KEY, model="sonic-2", pronunciation_dict_id="dict-1")
+
+    assert "pronunciation_dict_id is only supported for sonic-3 models" in caplog.text
+    assert "emotion" not in caplog.text
+
+
+@pytest.mark.parametrize("model", ["sonic-latest", "sonic-preview"])
+def test_sonic_3_aliases_send_generation_config(caplog, model):
+    """sonic-latest and sonic-preview are sonic-3 or newer: no warning, and the controls are sent."""
+    from livekit.plugins.cartesia import TTS
+    from livekit.plugins.cartesia.tts import _to_cartesia_options
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
+        tts = TTS(api_key=SECRET_API_KEY, model=model, speed=1.2, emotion="calm", volume=1.1)
+
+    assert caplog.text == ""
+    assert _to_cartesia_options(tts._opts, streaming=False)["generation_config"] == {
+        "speed": 1.2,
+        "emotion": "calm",
+        "volume": 1.1,
+    }
