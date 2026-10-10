@@ -709,13 +709,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "cleaning prometheus multiprocess directory",
                     extra={"path": self._prometheus_multiproc_dir},
                 )
-                for filename in os.listdir(self._prometheus_multiproc_dir):
-                    file_path = os.path.join(self._prometheus_multiproc_dir, filename)
-                    try:
-                        if os.path.isfile(file_path):
-                            os.unlink(file_path)
-                    except Exception as e:
-                        logger.warning(f"failed to remove {file_path}", exc_info=e)
+                telemetry.metrics._clean_multiproc_dir(self._prometheus_multiproc_dir)
 
             if self._ws_url:
                 os.environ["LIVEKIT_URL"] = self._ws_url

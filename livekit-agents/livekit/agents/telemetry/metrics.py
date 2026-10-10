@@ -4,6 +4,7 @@ import prometheus_client
 import psutil
 
 from .. import utils
+from ..log import logger
 
 PROC_INITIALIZE_TIME = prometheus_client.Histogram(
     "lk_agents_proc_initialize_duration_seconds",
@@ -45,6 +46,39 @@ def _update_child_proc_count() -> None:
     except Exception:
         # Process might not exist anymore or access denied
         pass
+
+
+def _clean_multiproc_dir(path: str) -> None:
+    """Remove the metric files of processes that no longer run, and the files with
+    this process's pid that it does not have open.
+
+    prometheus_client keeps each file open and keeps writing to it after it is
+    deleted, so the collector would lose every metric of that kind. The directory
+    is listed before the open files are, so a file created during the cleanup is
+    either not listed or already open.
+    """
+    own_pid = os.getpid()
+    filenames = os.listdir(path)
+    open_paths = {os.path.realpath(f.path) for f in psutil.Process().open_files()}
+    for filename in filenames:
+        file_path = os.path.join(path, filename)
+        if os.path.realpath(file_path) in open_paths:
+            continue
+        try:
+            pid_str = filename.removesuffix(".db").rpartition("_")[2]
+            pid = int(pid_str)
+            # prometheus_client's mark_process_dead has the same limit: a live process
+            # that reused a dead process's pid keeps the dead process's file
+            other_running = str(pid) == pid_str and pid != own_pid and psutil.pid_exists(pid)
+        except (ValueError, OverflowError):  # not a pid
+            other_running = False
+        if other_running:
+            continue
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            logger.warning(f"failed to remove {file_path}", exc_info=e)
 
 
 def _update_worker_load(worker_load: float) -> None:
