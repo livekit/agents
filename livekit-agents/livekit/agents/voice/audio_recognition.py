@@ -273,6 +273,7 @@ class AudioRecognition:
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
+        self._stt_speech_ended = False
 
         self._sample_rate: int | None = None
 
@@ -1012,6 +1013,7 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
+        self._stt_speech_ended = False
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
             self._turn_detector_stream.flush(reason="clear_user_turn")
@@ -1217,6 +1219,11 @@ class AudioRecognition:
             or self._last_speaking_time is None
             or (self._turn_detection_mode == "stt" and has_stt_end_time)
         )
+        if ev.type == stt.SpeechEventType.START_OF_SPEECH:
+            self._stt_speech_ended = False
+        elif ev.type == stt.SpeechEventType.END_OF_SPEECH:
+            self._stt_speech_ended = True
+
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
@@ -1259,7 +1266,8 @@ class AudioRecognition:
             # check user turn limit after accumulating transcript
             self._check_user_turn_limit(transcript)
 
-            if self._vad_base_turn_detection or self._user_turn_committed:
+            stt_turn_ended = self._turn_detection_mode == "stt" and self._stt_speech_ended
+            if self._vad_base_turn_detection or self._user_turn_committed or stt_turn_ended:
                 if transcript_changed:
                     self._hooks.on_preemptive_generation(
                         _PreemptiveGenerationInfo(
