@@ -59,6 +59,22 @@ async def test_tee_close_closes_unstarted_upstream_only_once(n):
 
 
 @pytest.mark.asyncio
+async def test_tee_close_retries_after_a_peer_fails_to_close_upstream():
+    class Source(CloseableSource):
+        async def aclose(self):
+            await super().aclose()
+            if self.close_count == 1:
+                raise ValueError("first close failed")
+
+    source = Source()
+    tee = Tee(source)
+    await tee.aclose()
+    assert source.close_count == 2
+    await tee.aclose()
+    assert source.close_count == 2
+
+
+@pytest.mark.asyncio
 async def test_closing_all_unstarted_peers_closes_the_upstream_once():
     source = CloseableSource()
     tee = Tee(source)
