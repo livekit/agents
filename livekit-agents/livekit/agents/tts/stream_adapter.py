@@ -67,8 +67,11 @@ class StreamAdapter(TTS):
         tokenizer when it builds the adapter itself; a caller relying on the default gets
         one here, and only while markup is actually flowing, so a plain turn never pays
         the stray-``<`` stall.
+
+        Explicit ``tts_text`` uses the XML-aware tokenizer even when the adapter
+        has a caller-provided tokenizer, so a tag cannot be split across requests.
         """
-        if (not lowering and not xml_aware) or self._explicit_tokenizer:
+        if not xml_aware and (not lowering or self._explicit_tokenizer):
             return self._sentence_tokenizer
         if self._markup_tokenizer is None:
             self._markup_tokenizer = tokenize.blingfire.SentenceTokenizer(

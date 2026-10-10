@@ -5,7 +5,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, ModelSettings
+from livekit.agents import Agent, AgentSession, ModelSettings, tokenize
 from livekit.agents.tts import TTS, FallbackAdapter, StreamAdapter, TTSCapabilities
 from livekit.agents.utils.aio.channel import ChanEmpty
 from tests.fake_io import FakeAudioOutput, FakeTextOutput
@@ -125,7 +125,7 @@ async def test_say_tees_shared_text_stream() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("adapter", ["direct", "stream", "fallback"])
+@pytest.mark.parametrize("adapter", ["direct", "stream", "custom_tokenizer", "fallback"])
 @pytest.mark.parametrize(
     "markup",
     [
@@ -138,6 +138,10 @@ async def test_say_keeps_ssml_scope_in_one_non_streaming_request(markup: str, ad
     model: TTS = tts
     if adapter == "stream":
         model = StreamAdapter(tts=tts)
+    elif adapter == "custom_tokenizer":
+        model = StreamAdapter(
+            tts=tts, sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True)
+        )
     elif adapter == "fallback":
         model = FallbackAdapter([tts, FakeTTS(fake_audio_duration=0.01)])
     agent = RecordingAgent(model)
