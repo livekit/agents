@@ -118,6 +118,7 @@ class STTv2(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
+                manual_flush=True,
                 interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
@@ -486,6 +487,7 @@ class SpeechStreamv2(stt.SpeechStream):
 
                     if has_ended:
                         self._audio_duration_collector.flush()
+                        await ws.send_str(json.dumps({"type": "ForceEndTurn"}))
                         has_ended = False
 
                 # tell deepgram we are done sending audio/inputs

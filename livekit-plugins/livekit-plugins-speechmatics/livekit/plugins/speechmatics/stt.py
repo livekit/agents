@@ -259,7 +259,7 @@ class STT(stt.STT):
                 mode where its end-of-speech drives `finalize()`. Ignored in `VAD` mode.
                 When omitted in `EXTERNAL` mode, `livekit-plugins-silero` is loaded if it
                 is installed, so a bare `STT()` still closes turns. Pass `vad=None` to opt
-                out and drive `finalize()` yourself. Defaults to NOT_GIVEN.
+                out and use session VAD or call `finalize()` yourself. Defaults to NOT_GIVEN.
 
             **kwargs: Catches deprecated parameters. A warning is logged for every name,
                 whether it is a recognised deprecation or not.
@@ -276,19 +276,6 @@ class STT(stt.STT):
             vad = _load_default_vad()
 
         self._vad = vad if is_given(vad) else None
-
-        # EXTERNAL mode needs something to close turns. The service does not endpoint on its own,
-        # and LiveKit never calls STT.finalize() itself, so with no `vad` turns close only if the
-        # caller drives finalize() by hand — otherwise nothing is ever finalized. Warn loudly
-        # instead of silently producing no transcripts.
-        if turn_detection_mode == TurnDetectionMode.EXTERNAL and self._vad is None:
-            logger.warning(
-                "Speechmatics STT is in EXTERNAL turn-detection mode with no `vad`: the service "
-                "will not endpoint on its own and LiveKit does not call finalize() for you, so "
-                "turns close only if you call STT.finalize() yourself. Pass a `vad` to drive "
-                "finalize() from end-of-speech, or use turn_detection_mode=VAD for service-side "
-                "endpointing."
-            )
 
         # Set STT options
         def _set(value: Any) -> Any:
@@ -320,6 +307,8 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
+                manual_flush=self._vad is None
+                and turn_detection_mode == TurnDetectionMode.EXTERNAL,
                 interim_results=opts.include_partials is not False,
                 diarization=opts.enable_diarization is not False,
                 aligned_transcript="chunk",
@@ -733,6 +722,14 @@ class SpeechStream(stt.RecognizeStream):
 
                         # Only audio the service accepted counts towards usage.
                         self._speech_duration += frame.duration
+
+                    if (
+                        isinstance(data, self._FlushSentinel)
+                        and self._vad_stream is None
+                        and self._turn_detection_mode == TurnDetectionMode.EXTERNAL
+                        and self._client.is_ready_for_audio
+                    ):
+                        self._client.finalize()
 
             # No more input — let the VAD flush any pending event
             if self._vad_stream is not None:
