@@ -10,6 +10,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
+from .utils import DELEGATOR_CONFIRMATION
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -26,6 +27,12 @@ Ignore unrelated input and avoid going off-topic. Do not generate markdown, gree
 Avoid verbosity by not sharing example names or spellings unless prompted to do so. Do not deviate from the goal of collecting the user's name.
 Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.\
 {extra_instructions}
+"""
+
+_DELEGATOR_INSTRUCTIONS = """
+You're collecting the caller's name, in this order: {name_format}. Keep replies to one short sentence.
+Every time the caller says or spells their name, delegate it so it gets recorded.
+{spelling_instructions}{confirmation_instructions}{extra_instructions}
 """
 
 _AUDIO_SPECIFIC = """
@@ -148,6 +155,18 @@ class GetNameTask(AgentTask[GetNameResult]):
                     spelling_instructions=spelling_instructions,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is True else ""
+                    ),
+                    extra_instructions=extra,
+                ),
+                delegator=_DELEGATOR_INSTRUCTIONS.format(
+                    name_format=self._name_format,
+                    spelling_instructions=(
+                        "When you read it back, spell each part letter by letter.\n"
+                        if verify_spelling
+                        else ""
+                    ),
+                    confirmation_instructions=(
+                        DELEGATOR_CONFIRMATION if require_confirmation is not False else ""
                     ),
                     extra_instructions=extra,
                 ),

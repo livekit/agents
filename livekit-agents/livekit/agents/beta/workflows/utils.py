@@ -45,6 +45,14 @@ def format_dtmf(events: list[DtmfEvent]) -> str:
     return " ".join(event.value for event in events)
 
 
+# the confirmation step for a model that hands its tool calls to another model
+# (Instructions.delegator), told as when to hand off rather than which tool to call
+DELEGATOR_CONFIRMATION = (
+    "Then read back what was recorded and ask if it's right. When the caller confirms it's "
+    "right, delegate that confirmation; when they correct it, delegate the correction."
+)
+
+
 class WorkflowInstructions(Instructions):
     """Customizable instruction sections for built-in workflow tasks.
 

@@ -305,9 +305,12 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        delegator_instructions: NotGivenOr[str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
+        # delegator_instructions (Instructions.delegator) is only for a model that hands its tool
+        # calls to a separate model; one that runs its own tools needs the full instructions
         if is_given(instructions):
             try:
                 await self.update_instructions(instructions)

@@ -12,7 +12,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from .utils import WorkflowInstructions
+from .utils import DELEGATOR_CONFIRMATION, WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.turn import TurnDetectionMode
@@ -50,7 +50,11 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         if isinstance(instructions, WorkflowInstructions):
             instructions = instructions.resolve(
                 template=INSTRUCTIONS_TEMPLATE,
+                delegator_template=DELEGATOR_TEMPLATE,
                 default_persona=PERSONA,
+                _delegator_confirmation=DELEGATOR_CONFIRMATION
+                if require_confirmation is not False
+                else "",
                 _modality_specific=Instructions(audio=AUDIO_SPECIFIC, text=TEXT_SPECIFIC),
                 _confirmation=Instructions(
                     # confirmation is enabled by default for audio, disabled by default for text
@@ -218,6 +222,14 @@ If the email is unclear or invalid, or it takes too much back-and-forth, prompt 
 
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
 Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.
+
+{extra}
+"""
+
+DELEGATOR_TEMPLATE = """\
+You're collecting the caller's email address. Keep replies to one short sentence.
+Every time the caller says or spells their email, delegate it so it gets recorded.
+{_delegator_confirmation}
 
 {extra}
 """
