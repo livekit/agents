@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 import openai

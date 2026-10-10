@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 
-import httpx
+import httpx2 as httpx
 import pytest
 from speechify.types.error_detail import ErrorDetail
 from speechify.types.nested_chunk import NestedChunk
@@ -13,7 +13,13 @@ from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechError,
 )
 
-from livekit.agents import APIConnectOptions, APIStatusError, tts
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    tts,
+)
 from livekit.agents.types import NOT_GIVEN, USERDATA_TIMED_TRANSCRIPT
 from livekit.plugins.speechify import tts as sfy_tts
 
@@ -217,6 +223,54 @@ def _mock_http(monkeypatch: pytest.MonkeyPatch, handler: object) -> None:
         real_init(self, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", init)
+
+
+async def test_owned_client_connect_error_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _mock_http(monkeypatch, handler)
+    t = sfy_tts.TTS(api_key="sk-test", base_url="https://api.example.test/")
+    try:
+        with pytest.raises(APIConnectionError):
+            async with t.synthesize(
+                "Hello",
+                conn_options=APIConnectOptions(max_retry=2, retry_interval=0),
+            ) as stream:
+                async for _ in stream:
+                    pass
+    finally:
+        await t.aclose()
+
+    assert attempts == 3
+
+
+async def test_owned_client_timeout_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadTimeout("stalled", request=request)
+
+    _mock_http(monkeypatch, handler)
+    t = sfy_tts.TTS(api_key="sk-test", base_url="https://api.example.test/")
+    try:
+        with pytest.raises(APITimeoutError):
+            async with t.synthesize(
+                "Hello",
+                conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+            ) as stream:
+                async for _ in stream:
+                    pass
+    finally:
+        await t.aclose()
+
+    assert attempts == 2
 
 
 async def test_prewarm_opens_connection_without_credentials(

@@ -49,7 +49,9 @@ dependencies = [
     "opentelemetry-sdk>=1.45,<1.46",
     "opentelemetry-exporter-otlp>=1.45,<1.46",
     "prometheus-client>=0.22",
-    "openai>=2.50,<3",
+    "openai>=3.19,<4",
+    # Direct HTTP clients (inference, MCP) use httpx2, matching the OpenAI 3 / MCP 2 SDKs.
+    "httpx2>=2.12,<3",
     "aiofiles>=24",
     "json-repair==0.63.5",
     "pyyaml>=6.0.3",
@@ -61,7 +63,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.24.0, <2"]
+mcp = ["mcp>=2.2, <3"]
 codecs = ["numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
 anam = ["livekit-plugins-anam>=1.8.6"]

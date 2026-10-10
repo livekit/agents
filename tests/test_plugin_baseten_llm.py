@@ -17,7 +17,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 

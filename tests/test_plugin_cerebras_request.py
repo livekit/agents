@@ -4,7 +4,7 @@ import gzip
 import inspect
 from typing import Any, get_args
 
-import httpx
+import httpx2 as httpx
 import msgpack
 import pytest
 

@@ -8,25 +8,23 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from typing_extensions import Self, TypedDict
 
 from ..log import logger
 
 try:
-    import httpx
+    import httpx2
     import mcp.types
     from mcp import ClientSession, stdio_client
+    from mcp.client._transport import TransportStreams
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
-    from mcp.client.streamable_http import GetSessionIdCallback, streamable_http_client
-    from mcp.shared.message import SessionMessage
-    from mcp.shared.session import ProgressFnT
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.shared.dispatcher import ProgressFnT
 except ImportError as e:
     raise ImportError(
         "The 'mcp' package is required to run the MCP server integration but is not installed.\n"
@@ -99,9 +97,11 @@ MCPToolResultResolver = Callable[[MCPToolResultContext], Any | Awaitable[Any]]
 def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str:
     # TODO(theomonnom): handle images & binary messages
     if len(ctx.result.content) == 1:
-        return str(ctx.result.content[0].model_dump_json())
+        return str(ctx.result.content[0].model_dump_json(by_alias=True))
     elif len(ctx.result.content) > 1:
-        return json.dumps([item.model_dump() for item in ctx.result.content], ensure_ascii=False)
+        return json.dumps(
+            [item.model_dump(by_alias=True) for item in ctx.result.content], ensure_ascii=False
+        )
 
     raise ToolError(
         f"Tool '{ctx.tool_name}' completed without producing a result. "
@@ -169,9 +169,7 @@ class MCPServer(ABC):
                 async with ClientSession(
                     receive_stream,
                     send_stream,
-                    read_timeout_seconds=timedelta(seconds=self._read_timeout)
-                    if self._read_timeout
-                    else None,
+                    read_timeout_seconds=self._read_timeout or None,
                 ) as client:
                     await client.initialize()
                     self._client = client
@@ -214,7 +212,7 @@ class MCPServer(ABC):
             self._make_function_tool(
                 tool.name,
                 tool.description,
-                tool.inputSchema,
+                tool.input_schema,
                 tool.meta,
                 options=_resolve_tool_options(options.get(tool.name)),
             )
@@ -233,7 +231,7 @@ class MCPServer(ABC):
         async def _resolve(
             tool_result: mcp.types.CallToolResult, raw_arguments: dict[str, Any]
         ) -> Any:
-            if tool_result.isError:
+            if tool_result.is_error:
                 error_str = "\n".join(
                     part.text if hasattr(part, "text") else str(part)
                     for part in tool_result.content
@@ -317,27 +315,21 @@ class MCPServer(ABC):
         *,
         progress_callback: ProgressFnT | None = None,
     ) -> mcp.types.CallToolResult:
-        """Call a tool, and tell the server when the call is cancelled so its tool stops too."""
+        """Call a tool.
+
+        Cancelling the task awaiting ``call_tool`` is enough: MCP SDK 2 sends
+        ``notifications/cancelled`` for that request itself. v1 did not, and the
+        private ``ClientSession._request_id`` used to synthesize the notification
+        is gone.
+        """
         client = self._client
         assert client is not None
-        # the SDK numbers requests from this counter, and reads it before its first await
-        request_id = client._request_id
-        try:
-            return await client.call_tool(name, arguments, progress_callback=progress_callback)
-        except asyncio.CancelledError:
-            notification = mcp.types.ClientNotification(
-                mcp.types.CancelledNotification(
-                    params=mcp.types.CancelledNotificationParams(
-                        requestId=request_id, reason="the tool call was cancelled"
-                    )
-                )
+        result = await client.call_tool(name, arguments, progress_callback=progress_callback)
+        if not isinstance(result, mcp.types.CallToolResult):
+            raise ToolError(
+                f"Tool '{name}' returned an unexpected MCP result ({type(result).__name__})."
             )
-            try:
-                # bounded: a cancel must not hang on a connection that stopped reading
-                await asyncio.wait_for(client.send_notification(notification), timeout=1.0)
-            except Exception:
-                logger.debug("could not tell the MCP server a call was cancelled")
-            raise
+        return result
 
     async def aclose(self) -> None:
         self._closing_ev.set()
@@ -349,19 +341,7 @@ class MCPServer(ABC):
             self._closing_ev.clear()
 
     @abstractmethod
-    def client_streams(
-        self,
-    ) -> AbstractAsyncContextManager[
-        tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
-        ]
-        | tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
-            GetSessionIdCallback,
-        ]
-    ]: ...
+    def client_streams(self) -> AbstractAsyncContextManager[TransportStreams]: ...
 
 
 class MCPServerHTTP(MCPServer):
@@ -420,7 +400,7 @@ class MCPServerHTTP(MCPServer):
             # Fall back to URL-based detection for backward compatibility
             self._use_streamable_http = self._should_use_streamable_http(url)
 
-        self._http_client: httpx.AsyncClient | None = None
+        self._http_client: httpx2.AsyncClient | None = None
 
     @property
     def headers(self) -> dict[str, Any]:
@@ -435,20 +415,21 @@ class MCPServerHTTP(MCPServer):
     def _create_http_client(
         self,
         headers: dict[str, Any] | None = None,
-        timeout: httpx.Timeout | None = None,
-        auth: httpx.Auth | None = None,
-    ) -> httpx.AsyncClient:
-        # ported from mcp.shared._httpx_utils.create_mcp_http_client
+        timeout: httpx2.Timeout | None = None,
+        auth: httpx2.Auth | None = None,
+    ) -> httpx2.AsyncClient:
+        # MCP 2 transports take an httpx2 client. Redirects are followed by the
+        # transport itself, so follow_redirects stays off, matching
+        # mcp.shared._httpx_utils.create_mcp_http_client.
         kwargs: dict[str, Any] = {
-            "follow_redirects": True,
             "timeout": timeout
             if timeout is not None
-            else httpx.Timeout(self._timeout, read=self._sse_read_timeout),
+            else httpx2.Timeout(self._timeout, read=self._sse_read_timeout),
             "headers": headers if headers is not None else self._headers,
         }
         if auth is not None:
             kwargs["auth"] = auth
-        self._http_client = httpx.AsyncClient(**kwargs)
+        self._http_client = httpx2.AsyncClient(**kwargs)
         return self._http_client
 
     def _should_use_streamable_http(self, url: str) -> bool:
@@ -462,19 +443,7 @@ class MCPServerHTTP(MCPServer):
         path_lower = parsed_url.path.lower().rstrip("/")
         return path_lower.endswith("/mcp")
 
-    def client_streams(
-        self,
-    ) -> AbstractAsyncContextManager[
-        tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
-        ]
-        | tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
-            GetSessionIdCallback,
-        ]
-    ]:
+    def client_streams(self) -> AbstractAsyncContextManager[TransportStreams]:
         if self._use_streamable_http:
 
             @asynccontextmanager
@@ -485,7 +454,7 @@ class MCPServerHTTP(MCPServer):
                     ) as streams:
                         yield streams
 
-            return _streamable_http_with_client()  # type: ignore[return-value]
+            return _streamable_http_with_client()
         else:
             return sse_client(  # type: ignore[no-any-return]
                 url=self.url,
@@ -559,14 +528,7 @@ class MCPServerStdio(MCPServer):
         self.env = env
         self.cwd = cwd
 
-    def client_streams(
-        self,
-    ) -> AbstractAsyncContextManager[
-        tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
-        ]
-    ]:
+    def client_streams(self) -> AbstractAsyncContextManager[TransportStreams]:
         return stdio_client(  # type: ignore[no-any-return]
             StdioServerParameters(command=self.command, args=self.args, env=self.env, cwd=self.cwd)
         )

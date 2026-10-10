@@ -20,7 +20,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import Literal
 
-import httpx
+import httpx2 as httpx
 
 import openai
 from livekit.agents import (

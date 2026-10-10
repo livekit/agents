@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "livekit-agents[openai]>=1.8.6",
     "azure-cognitiveservices-speech>=1.48.2",
+    "httpx2>=2.12,<3",
 ]
 
 [project.optional-dependencies]
