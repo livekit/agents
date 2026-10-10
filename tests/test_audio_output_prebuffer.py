@@ -210,9 +210,9 @@ async def test_interruption_during_flush_does_not_hang() -> None:
     # must not hang - the in-flight task completes and flushes the sink
     await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
 
-    # the sink was interrupted (not flushed), so flushed remains False,
-    # but the interruption event allows wait_for_playout to complete.
-    assert sink.flushed is False
+    # the sink receives flush (from the interrupted segment) which completes
+    # it; wait_for_playout completes without hanging.
+    assert sink.flushed is True
 
 
 async def test_adjacent_replies_do_not_merge_segments() -> None:
