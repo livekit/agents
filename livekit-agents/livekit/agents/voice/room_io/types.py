@@ -90,12 +90,6 @@ class AudioOutputOptions:
     )
     track_name: NotGivenOr[str] = NOT_GIVEN
     """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
-    prebuffer_ms: NotGivenOr[int] = NOT_GIVEN
-    """Hold this much audio back before playback starts, in milliseconds.
-
-    Useful for providers that stream audio at roughly real-time pace, where a late chunk
-    otherwise plays as an audible gap. Adds the same latency to the first word of every
-    reply, so it is disabled by default and rarely helps pipeline TTS."""
 
 
 @dataclass

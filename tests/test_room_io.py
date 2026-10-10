@@ -25,7 +25,6 @@ from livekit.agents.voice.room_io._output import (
 from livekit.agents.voice.room_io.room_io import RoomIO
 from livekit.agents.voice.room_io.types import (
     AudioInputOptions,
-    AudioOutputOptions,
     NoiseCancellationParams,
     RoomOptions,
     TextInputEvent,
@@ -66,12 +65,6 @@ class _FakeRoom:
 
     def isconnected(self) -> bool:
         return self.connected
-
-    def register_byte_stream_handler(self, topic: str, callback: Callable[..., None]) -> None:
-        self.on(f"bytes:{topic}", callback)
-
-    def unregister_byte_stream_handler(self, topic: str) -> None:
-        self._events.pop(f"bytes:{topic}", None)
 
     def register_text_stream_handler(self, topic: str, callback: Callable[..., None]) -> None:
         self.on(f"text:{topic}", callback)
@@ -1539,6 +1532,7 @@ async def test_audio_output_waits_for_active_submission_and_source_playout() -> 
 
     assert not finished.interrupted
     assert finished.playback_position == pytest.approx(frame.duration)
+<<<<<<< HEAD
 
 
 <<<<<<< HEAD
@@ -1796,3 +1790,5 @@ async def test_prebuffer_and_transcription_synchronizer_chain_correctly() -> Non
     finally:
         await room_io.aclose()
 >>>>>>> a33f6a1f2 (test(voice): verify prebuffer + transcription sync chain order)
+=======
+>>>>>>> 33518af8d (fix(voice): address longcw review issues in BufferedAudioOutput)
