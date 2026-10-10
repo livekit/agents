@@ -1696,10 +1696,24 @@ class AgentActivity(RecognitionHooks):
         self,
         text: str | AsyncIterable[str],
         *,
+        tts_text: NotGivenOr[str | AsyncIterable[str]] = NOT_GIVEN,
         audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
+        if is_given(tts_text) and is_given(audio):
+            raise ValueError("tts_text cannot be used with audio")
+
+        use_realtime_say = (
+            self._rt_session is not None
+            and not is_given(audio)
+            and not self.tts
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.supports_say
+        )
+        if is_given(tts_text) and not self.tts:
+            raise ValueError("tts_text requires a TTS model")
+
         if (
             not is_given(audio)
             and not self.tts
@@ -1730,13 +1744,7 @@ class AgentActivity(RecognitionHooks):
         )
         user_metrics = self._take_on_enter_user_metrics()
 
-        if (
-            self._rt_session is not None
-            and not is_given(audio)
-            and not self.tts
-            and isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.supports_say
-        ):
+        if use_realtime_say:
             if not add_to_chat_ctx:
                 logger.warning(
                     "add_to_chat_ctx=False is not supported when say() uses a RealtimeModel; "
@@ -1756,9 +1764,10 @@ class AgentActivity(RecognitionHooks):
                 self._tts_task(
                     speech_handle=handle,
                     text=text,
+                    tts_text=tts_text,
                     audio=audio or None,
                     add_to_chat_ctx=add_to_chat_ctx,
-                    model_settings=ModelSettings(),
+                    model_settings=ModelSettings(tts_text_is_markup=is_given(tts_text)),
                     _previous_user_metrics=user_metrics,
                 ),
                 speech_handle=handle,
@@ -3114,6 +3123,7 @@ class AgentActivity(RecognitionHooks):
         self,
         speech_handle: SpeechHandle,
         text: str | AsyncIterable[str],
+        tts_text: NotGivenOr[str | AsyncIterable[str]],
         audio: AsyncIterable[rtc.AudioFrame] | None,
         add_to_chat_ctx: bool,
         model_settings: ModelSettings,
@@ -3127,6 +3137,7 @@ class AgentActivity(RecognitionHooks):
             await self._tts_task_impl(
                 speech_handle=speech_handle,
                 text=text,
+                tts_text=tts_text,
                 audio=audio,
                 add_to_chat_ctx=add_to_chat_ctx,
                 model_settings=model_settings,
@@ -3137,6 +3148,7 @@ class AgentActivity(RecognitionHooks):
         self,
         speech_handle: SpeechHandle,
         text: str | AsyncIterable[str],
+        tts_text: NotGivenOr[str | AsyncIterable[str]],
         audio: AsyncIterable[rtc.AudioFrame] | None,
         add_to_chat_ctx: bool,
         model_settings: ModelSettings,
@@ -3173,16 +3185,21 @@ class AgentActivity(RecognitionHooks):
         audio_source: AsyncIterable[str] | None = None
 
         tee: utils.aio.itertools.Tee[str] | None = None
-        if isinstance(text, AsyncIterable):
+        if isinstance(text, AsyncIterable) and (not is_given(tts_text) or text is tts_text):
             tee = utils.aio.itertools.tee(text, 2)
             text_source, audio_source = tee
-        elif isinstance(text, str):
+        else:
 
-            async def _read_text() -> AsyncIterable[str]:
-                yield text
+            async def _read_text(value: str) -> AsyncIterable[str]:
+                yield value
 
-            text_source = _read_text()
-            audio_source = _read_text()
+            text_source = text if isinstance(text, AsyncIterable) else _read_text(text)
+            tts_input: str | AsyncIterable[str] = text
+            if isinstance(tts_text, (str, AsyncIterable)):
+                tts_input = tts_text
+            audio_source = (
+                tts_input if isinstance(tts_input, AsyncIterable) else _read_text(tts_input)
+            )
 
         tts_task: asyncio.Task[Any] | None = None
         forward_audio_task: asyncio.Task[Any] | None = None
@@ -3233,6 +3250,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 if (
                     self.use_tts_aligned_transcript
+                    and not is_given(tts_text)
                     and (tts := self.tts)
                     and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                     and (timed_texts := await tts_gen_data.timed_texts_fut)

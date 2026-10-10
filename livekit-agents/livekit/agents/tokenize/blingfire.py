@@ -93,6 +93,21 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
             xml_aware=xml_aware,
         )
 
+    @property
+    def max_token_len(self) -> int | None:
+        return self._config.max_token_len
+
+    def with_xml_aware(self) -> SentenceTokenizer:
+        """Copy the tokenizer's batching limits while keeping XML scopes together."""
+        return SentenceTokenizer(
+            min_sentence_len=self._config.min_sentence_len,
+            stream_context_len=self._config.stream_context_len,
+            retain_format=self._config.retain_format,
+            max_token_len=self._config.max_token_len,
+            min_token_len=self._config.min_token_len,
+            xml_aware=True,
+        )
+
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         tokenize_fnc: token_stream.TokenizeCallable = functools.partial(
             _split_sentences,

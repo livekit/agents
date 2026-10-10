@@ -14,7 +14,7 @@ TokenizeCallable = Callable[[str], list[str] | list[tuple[str, int, int]]]
 # the tag name must start with a letter so "<5>" / "<3 wins>" are not counted as
 # tags — this keeps the depth counter consistent with the letter-start tail check
 # in _has_unclosed_xml_tags (all TTS markup tags are letter-named)
-_XML_TAG_RE = re.compile(r"<(/?)([A-Za-z]\w*)[^>]*?(/?)\s*>")
+_XML_TAG_RE = re.compile(r"<(/?)([A-Za-z][\w:.-]*)[^>]*?(/?)\s*>")
 
 
 def _has_unclosed_xml_tags(text: str) -> bool:

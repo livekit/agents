@@ -162,6 +162,7 @@ class TTS(
         # read this to batch into larger chunks (continuous prosody); False (the
         # default) means per-sentence chunking. See `_set_expressive`.
         self._expressive: bool = False
+        self._xml_aware: bool = False
 
     @property
     def markup(self) -> Markup:
@@ -176,6 +177,10 @@ class TTS(
         own input.
         """
         self._expressive = enabled
+
+    def _set_xml_aware(self, enabled: bool) -> None:
+        """Keep explicit TTS markup scopes intact when adapting text to sentences."""
+        self._xml_aware = enabled
 
     @property
     def label(self) -> str:
