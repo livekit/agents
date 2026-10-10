@@ -7,7 +7,7 @@ from typing import Annotated
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import StreamWriter
@@ -15,6 +15,7 @@ from typing_extensions import TypedDict
 
 from livekit.agents.llm import ChatContext
 from livekit.plugins.langchain import LLMAdapter
+from livekit.plugins.langchain.langgraph import _to_chat_chunk
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
@@ -259,3 +260,48 @@ async def test_messages_mode_no_custom_output():
     chunks = await collect_chunks(stream)
 
     assert chunks == []
+
+def test_to_chat_chunk_includes_usage():
+    from livekit.plugins.langchain.langgraph import _to_chat_chunk
+
+    msg = AIMessageChunk(
+        content="hello",
+        usage_metadata={
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+        },
+    )
+
+    chunk = _to_chat_chunk(msg)
+
+    assert chunk is not None
+    assert chunk.delta.content == "hello"
+    assert chunk.usage is not None
+    assert chunk.usage.prompt_tokens == 10
+    assert chunk.usage.completion_tokens == 5
+    assert chunk.usage.total_tokens == 15
+
+
+def test_to_chat_chunk_preserves_usage_only_chunk():
+    from livekit.plugins.langchain.langgraph import _to_chat_chunk
+
+    msg = AIMessageChunk(
+        content="",
+        usage_metadata={
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+        },
+    )
+
+    chunk = _to_chat_chunk(msg)
+
+    assert chunk is not None
+    assert chunk.delta.content == ""
+    assert chunk.usage is not None
+    assert chunk.usage.prompt_tokens == 10
+    assert chunk.usage.completion_tokens == 5
+    assert chunk.usage.total_tokens == 15
+    
+
