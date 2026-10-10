@@ -400,6 +400,20 @@ STTEncoding = Literal["pcm_s16le"]
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
 
+# OpenAI's Realtime transcription endpoint accepts pcm_s16le only at 24 kHz, and the
+# gateway does not resample, so an openai/* model must not inherit the 16 kHz default
+# the other providers expect. The gateway refuses any other rate with a 2004.
+_SAMPLE_RATE_BY_MODEL_PREFIX: tuple[tuple[str, int], ...] = (("openai/", 24000),)
+
+
+def _default_sample_rate_for_model(model: NotGivenOr[STTModels | str]) -> int:
+    """Sample rate to use when the caller did not pin one, keyed off the model prefix."""
+    if is_given(model) and isinstance(model, str):
+        for prefix, rate in _SAMPLE_RATE_BY_MODEL_PREFIX:
+            if model.startswith(prefix):
+                return rate
+    return DEFAULT_SAMPLE_RATE
+
 
 @dataclass
 class STTOptions:
@@ -681,7 +695,9 @@ class STT(stt.STT):
             model=model,
             language=LanguageCode(language) if isinstance(language, str) else language,
             encoding=encoding if is_given(encoding) else DEFAULT_ENCODING,
-            sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
+            sample_rate=sample_rate
+            if is_given(sample_rate)
+            else _default_sample_rate_for_model(model),
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
