@@ -912,6 +912,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._preserve_function_call_history = preserve_function_call_history
 
         self._old_agent: Agent | None = None
+        # set while awaited: complete() watches it on the active run, the awaiter resolves it
+        # once the parent's task is watched again
+        self.__resume_guard: asyncio.Future[None] | None = None
+        self.__resume_session: AgentSession | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
@@ -933,6 +937,13 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             self.__fut.set_result(result)
 
         self.__fut.exception()  # silence exc not retrieved warnings
+
+        # the run checks its handles as soon as the completing task returns; the awaiter
+        # that re-watches the parent only resumes a loop step later
+        if (guard := self.__resume_guard) is not None and self.__resume_session is not None:
+            run_state = self.__resume_session._global_run_state
+            if run_state and not run_state.done():
+                run_state._watch_handle(guard)
 
         from .agent_activity import _SpeechHandleContextVar
 
@@ -1014,6 +1025,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             self.__inactive_ev.clear()
             suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
             pending_on_enter_task: asyncio.Task[None] | None = None
+            # armed before on_enter can run: a task completing from its own on_enter does so
+            # while this awaiter is still parked on it
+            self.__resume_guard = resume_guard = asyncio.get_running_loop().create_future()
+            self.__resume_session = session
             try:
                 # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
                 # AgentTasks that require user input, but session.run() can't return until
@@ -1059,6 +1074,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             # asyncio.CancelledError derives from BaseException, not Exception
             except BaseException:
                 self.__inactive_ev.set()
+                if not resume_guard.done():
+                    resume_guard.set_result(None)
                 raise
 
             try:
@@ -1073,6 +1090,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 if run_state and not run_state.done():
                     for handle in [*suspended_handles, current_task]:
                         run_state._watch_handle(handle)
+
+                if not resume_guard.done():
+                    resume_guard.set_result(None)
 
                 if pending_on_enter_task:
                     try:
