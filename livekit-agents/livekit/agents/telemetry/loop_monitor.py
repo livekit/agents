@@ -190,6 +190,7 @@ class _PendingReport:
     cpu_time: float
     watchdog_gap: float
     completed_at: float
+    started_at: float
 
 
 @dataclass
@@ -242,6 +243,7 @@ class EventLoopMonitor:
         # written by the watchdog, read by the loop thread under _lock
         self._lock = threading.Lock()
         self._incident: _Incident | None = None
+        self._deferred_report: BlockedReport | None = None
 
         self._gc_started_at: float | None = None
         self._gc_time: float = 0.0
@@ -288,9 +290,10 @@ class EventLoopMonitor:
 
     def stop(self) -> None:
         """Stop the heartbeat and the watchdog. Idempotent."""
-        if self._closed:
-            return
-        self._closed = True
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
         self._stop_event.set()
         if self._timer is not None:
             self._timer.cancel()
@@ -299,6 +302,13 @@ class EventLoopMonitor:
             gc.callbacks.remove(self._on_gc)
         if self._watchdog is not None and self._watchdog is not threading.current_thread():
             self._watchdog.join(timeout=1.0)
+        self._deliver_deferred_report()
+
+    def _deliver_deferred_report(self) -> None:
+        with self._lock:
+            report, self._deferred_report = self._deferred_report, None
+        if report is not None:
+            self._report(report)
 
     # -- loop thread --
 
@@ -333,12 +343,14 @@ class EventLoopMonitor:
         self._last_thread_cpu = thread_cpu
         watchdog_gap = self._consume_watchdog_gap(now, window_start=expected_at - self._tick)
         self._timer = self._loop.call_later(self._tick, self._on_tick)
+        report_started_at = time.time() - lag if lag >= self._warn else None
 
         with self._lock:
             incident = self._incident
             self._incident = None
             deferred = False
             if incident is not None and incident.tick_seq == blocked_seq and lag >= self._warn:
+                assert report_started_at is not None
                 if incident.samples_in_flight:
                     incident.pending_report = _PendingReport(
                         lag=lag,
@@ -346,6 +358,7 @@ class EventLoopMonitor:
                         cpu_time=cpu_time,
                         watchdog_gap=watchdog_gap,
                         completed_at=now,
+                        started_at=report_started_at,
                     )
                     deferred = True
                 else:
@@ -357,7 +370,11 @@ class EventLoopMonitor:
         if deferred:
             return
 
-        self._report(self._build_report(lag, gc_time, cpu_time, watchdog_gap, samples))
+        self._report(
+            self._build_report(
+                lag, gc_time, cpu_time, watchdog_gap, samples, started_at=report_started_at
+            )
+        )
 
     def _build_report(
         self,
@@ -366,6 +383,8 @@ class EventLoopMonitor:
         cpu_time: float,
         watchdog_gap: float,
         samples: list[_StackSample],
+        *,
+        started_at: float | None = None,
     ) -> BlockedReport:
         # the watchdog is an independent thread: if it too woke late by most of the stall,
         # either the process was not being scheduled (host contention, CPU quota, a suspended
@@ -390,7 +409,7 @@ class EventLoopMonitor:
         return BlockedReport(
             duration=lag,
             # the block started no earlier than the last on-time tick
-            started_at=time.time() - lag,
+            started_at=started_at if started_at is not None else time.time() - lag,
             warn_threshold=self._warn,
             severity="error" if lag >= self._error and not process_descheduled else "warning",
             gc_time=min(gc_time, lag),
@@ -615,11 +634,20 @@ class EventLoopMonitor:
                     pending_report.cpu_time,
                     pending_report.watchdog_gap,
                     pending_samples,
+                    started_at=pending_report.started_at,
                 )
-                try:
-                    self._loop.call_soon_threadsafe(self._report, report)
-                except RuntimeError:
+                with self._lock:
+                    self._deferred_report = report
+                    report_directly = self._closed or not self._loop.is_running()
+                    if report_directly:
+                        self._deferred_report = None
+                if report_directly:
                     self._report(report)
+                    return
+                try:
+                    self._loop.call_soon_threadsafe(self._deliver_deferred_report)
+                except RuntimeError:
+                    self._deliver_deferred_report()
 
     def _sample_loop_thread(self, lag: float) -> _StackSample:
         task_name: str | None = None

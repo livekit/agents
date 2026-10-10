@@ -931,6 +931,7 @@ def test_tick_does_not_wait_for_watchdog_sample(captured_before_tick: bool) -> N
     monitor._last_tick_at = time.monotonic() - 0.15
     sample_ready = threading.Event()
     release_sample = threading.Event()
+    tick_completed_at: list[float] = []
 
     def sample(lag: float) -> loop_monitor._StackSample:
         captured_at = time.monotonic() if captured_before_tick else None
@@ -947,28 +948,55 @@ def test_tick_does_not_wait_for_watchdog_sample(captured_before_tick: bool) -> N
     watchdog = threading.Thread(target=monitor._watchdog_check)
     watchdog.start()
     ready = sample_ready.wait(1)
-    tick = threading.Thread(target=monitor._on_tick)
+
+    def run_tick() -> None:
+        monitor._on_tick()
+        tick_completed_at.append(time.time())
+
+    tick = threading.Thread(target=run_tick)
     tick_completed_during_sample = False
     if ready:
         tick.start()
         tick.join(0.1)
         tick_completed_during_sample = not tick.is_alive()
+    if tick_completed_during_sample:
+        time.sleep(0.15)
     release_sample.set()
     if ready:
         tick.join(1)
     watchdog.join(1)
-    loop.run_until_complete(asyncio.sleep(0))
 
     try:
         assert ready and not watchdog.is_alive() and not tick.is_alive()
         assert tick_completed_during_sample
         assert len(reports) == 1
+        loop.run_until_complete(asyncio.sleep(0))
+        assert len(reports) == 1
+        assert abs(reports[0].started_at + reports[0].duration - tick_completed_at[0]) < 0.1
         if captured_before_tick:
             assert reports[0].stacks[0].startswith("# loop thread sampled")
         else:
             assert reports[0].stacks[0].startswith("# no sample:")
     finally:
         monitor.stop()
+        loop.close()
+
+
+def test_deferred_report_is_flushed_when_monitor_stops_before_loop_closes() -> None:
+    loop = asyncio.new_event_loop()
+    monitor = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+    reports: list[BlockedReport] = []
+    monitor._on_report = reports.append
+    report = monitor._build_report(0.15, 0.0, 0.15, 0.0, [])
+    monitor._deferred_report = report
+    loop.call_soon_threadsafe(monitor._deliver_deferred_report)
+
+    try:
+        monitor.stop()
+        assert reports == [report]
+        loop.run_until_complete(asyncio.sleep(0))
+        assert reports == [report]
+    finally:
         loop.close()
 
 
