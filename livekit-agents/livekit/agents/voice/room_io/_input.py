@@ -54,6 +54,17 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._forward_tasks: set[asyncio.Task[None]] = set()
         self._tasks: set[asyncio.Task[Any]] = set()
 
+        # Stream creation runs off the loop (its FFI requests can block for tens of
+        # milliseconds, e.g. while initializing noise cancellation). Tasks are tracked
+        # so _close_stream knows a creation is in flight and aclose can wait for it.
+        self._create_tasks: set[asyncio.Task[None]] = set()
+        self._create_task: asyncio.Task[None] | None = None
+        # one at a time: keeps processor ownership consistent across replacements
+        self._create_lock = asyncio.Lock()
+        # bumped by _close_stream; a creation that settles with a stale generation
+        # discards its stream instead of installing it
+        self._stream_gen = 0
+
         self._room.on("track_subscribed", self._on_track_available)
         self._room.on("track_unsubscribed", self._on_track_unsubscribed)
         self._room.on("track_unpublished", self._on_track_unavailable)
@@ -141,6 +152,24 @@ class _ParticipantInputStream(Generic[T], ABC):
             return
         self._closed = True
 
+        # let in-flight creations settle first: they discard their stream and run
+        # the deferred processor cleanup before we tear the rest down. a creator may
+        # be inside asyncio.to_thread, which cannot be interrupted: cancellation must
+        # never reach it, or the stream its worker returns would be orphaned. it
+        # discards that stream itself once self._closed is set, so shield until every
+        # creator is done — even across repeated cancellations — then propagate.
+        if self._create_tasks:
+            settle = asyncio.gather(*list(self._create_tasks), return_exceptions=True)
+            try:
+                await asyncio.shield(settle)
+            except asyncio.CancelledError:
+                while not settle.done():
+                    try:
+                        await asyncio.shield(settle)
+                    except asyncio.CancelledError:
+                        pass
+                raise
+
         stream = self._stream
         self._stream = None
         self._track = None
@@ -221,9 +250,15 @@ class _ParticipantInputStream(Generic[T], ABC):
             span.end()
 
     @abstractmethod
-    def _create_stream(
+    async def _create_stream(
         self, track: rtc.RemoteTrack, participant: rtc.Participant
-    ) -> rtc.VideoStream | rtc.AudioStream: ...
+    ) -> rtc.VideoStream | rtc.AudioStream:
+        """Create the media stream for a track.
+
+        Called from a task (never synchronously from an event handler): the FFI
+        requests involved can block the event loop for tens of milliseconds, so
+        implementations run them via ``asyncio.to_thread``.
+        """
 
     def _update_processor(self, processor: rtc.FrameProcessor[T] | None) -> None:
         if processor is None and not self._processor_owned:
@@ -240,10 +275,15 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream = None
         self._track = None
         self._publication = None
+        self._stream_gen += 1
         if stream is not None:
             task = asyncio.create_task(stream.aclose())
             task.add_done_callback(self._tasks.discard)
             self._tasks.add(task)
+        if self._create_tasks:
+            # a creation is in flight; it may have already installed a processor that
+            # its stream still references — that task's stale path closes it instead
+            return
         self._update_processor(None)
 
     def _on_track_available(
@@ -265,7 +305,6 @@ class _ParticipantInputStream(Generic[T], ABC):
             return False
 
         self._close_stream()
-        self._stream = self._create_stream(track, participant)
         self._track = track
         self._publication = publication
         if (span := self._track_wait_span) is not None and span.is_recording():
@@ -276,13 +315,73 @@ class _ParticipantInputStream(Generic[T], ABC):
                     trace_types.ATTR_TRACK_SOURCE: rtc.TrackSource.Name(publication.source),
                 },
             )
-        forward_task = asyncio.create_task(
-            self._forward_task(self._forward_atask, self._stream, track, publication, participant)
+        gen = self._stream_gen
+        task = asyncio.create_task(
+            self._create_and_forward_stream(gen, track, publication, participant)
         )
-        self._forward_atask = forward_task
-        self._forward_tasks.add(forward_task)
-        forward_task.add_done_callback(self._forward_tasks.discard)
+        self._create_task = task
+        self._create_tasks.add(task)
+        task.add_done_callback(self._create_tasks.discard)
         return True
+
+    async def _create_and_forward_stream(
+        self,
+        gen: int,
+        track: rtc.RemoteTrack,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        """Create the stream off the event loop, then start forwarding its frames.
+
+        Serialized under ``_create_lock`` so a replacement's processor lifecycle never
+        overlaps with an in-flight creation, and discarded when a newer close bumped
+        the generation while this task was queued or inside the FFI.
+        """
+        try:
+            async with self._create_lock:
+                if gen != self._stream_gen or self._closed:
+                    # _close_stream deferred its processor cleanup to us
+                    self._update_processor(None)
+                    return
+
+                try:
+                    stream = await self._create_stream(track, participant)
+                except Exception:
+                    if gen == self._stream_gen and not self._closed:
+                        logger.exception(
+                            "failed to create stream",
+                            extra={
+                                "participant": participant.identity,
+                                "source": rtc.TrackSource.Name(publication.source),
+                            },
+                        )
+                        # allow a later event to retry, as a synchronous failure did
+                        if self._track is track:
+                            self._track = None
+                        if self._publication is publication:
+                            self._publication = None
+                    self._update_processor(None)
+                    return
+
+                if gen != self._stream_gen or self._closed:
+                    # superseded while the FFI call was in flight
+                    await stream.aclose()
+                    self._update_processor(None)
+                    return
+
+                self._stream = stream
+                forward_task = asyncio.create_task(
+                    self._forward_task(self._forward_atask, stream, track, publication, participant)
+                )
+                self._forward_atask = forward_task
+                self._forward_tasks.add(forward_task)
+                forward_task.add_done_callback(self._forward_tasks.discard)
+        finally:
+            # drop out of the set synchronously with the task's end: a done-callback
+            # would run a tick later, and _close_stream could observe a stale entry
+            # and defer its processor cleanup to a task that no longer exists
+            if (task := asyncio.current_task()) is not None:
+                self._create_tasks.discard(task)
 
     def _on_track_unsubscribed(
         self,
@@ -371,7 +470,9 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             self._apm.process_stream(frame)
 
     @override
-    def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.AudioStream:
+    async def _create_stream(
+        self, track: rtc.Track, participant: rtc.Participant
+    ) -> rtc.AudioStream:
         noise_cancellation = self._noise_cancellation
         if callable(noise_cancellation):
             noise_cancellation = noise_cancellation(NoiseCancellationParams(participant, track))
@@ -380,13 +481,18 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             else:
                 self._update_processor(None)
 
-        return rtc.AudioStream.from_track(
+        # the FFI request below can block for tens of milliseconds (e.g. while
+        # initializing noise cancellation); keep it off the event loop. The stream
+        # must still dispatch frames onto this loop — pass it explicitly.
+        return await asyncio.to_thread(
+            rtc.AudioStream.from_track,
             track=track,
             sample_rate=self._sample_rate,
             num_channels=self._num_channels,
             frame_size_ms=self._frame_size_ms,
             noise_cancellation=noise_cancellation,
             auto_close_noise_cancellation=False,
+            loop=asyncio.get_running_loop(),
         )
 
     @override
@@ -505,5 +611,9 @@ class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], Vide
         VideoInput.__init__(self, label="RoomIO")
 
     @override
-    def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.VideoStream:
-        return rtc.VideoStream.from_track(track=track)
+    async def _create_stream(
+        self, track: rtc.Track, participant: rtc.Participant
+    ) -> rtc.VideoStream:
+        return await asyncio.to_thread(
+            rtc.VideoStream.from_track, track=track, loop=asyncio.get_running_loop()
+        )

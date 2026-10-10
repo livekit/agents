@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 from unittest.mock import AsyncMock
@@ -487,3 +488,97 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     assert exc_info.value.message == "LiveKit Inference STT returned an error"
     assert exc_info.value.body == {"code": error_code}
     assert exc_info.value.retryable is False
+
+
+async def test_retryable_error_logs_at_debug_not_error(caplog: pytest.LogCaptureFixture) -> None:
+    """A reject before input end is handled by SpeechStream's retry loop, so recv_task
+    must not log it as ERROR — the retry WARNING should be the only visible log."""
+    connection_count = 0
+    second_connection = asyncio.Event()
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connection_count
+        connection_count += 1
+        connection = connection_count
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                if connection == 1:
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "code": 2006,
+                            "message": "Streaming ASR unavailable",
+                        }
+                    )
+                else:
+                    second_connection.set()
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "final words", "language": "en"}
+                )
+                await ws.send_json({"type": "session.closed"})
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(base_url, session, sample_rate=16000)
+        stream = stt.stream(
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0.001, timeout=1.0)
+        )
+        # the shared "livekit" parent logger is silenced to WARN by conftest, so
+        # enable DEBUG on the agents logger itself to observe the demoted records
+        with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+            try:
+                await asyncio.wait_for(second_connection.wait(), timeout=1.0)
+                stream.end_input()
+                transcripts = await asyncio.wait_for(_final_transcripts(stream), timeout=1.0)
+            finally:
+                await stream.aclose()
+
+    assert connection_count == 2
+    assert transcripts == ["final words"]
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any(
+        r.levelno == logging.DEBUG
+        and (
+            "retryable error in recv_task" in r.getMessage()
+            or "received error from LiveKit Inference STT" in r.getMessage()
+        )
+        for r in caplog.records
+    )
+    # the retry loop's WARNING is the only visible log for the handled failure
+    assert any(
+        r.levelno == logging.WARNING and "failed to recognize speech" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+async def test_non_retryable_error_still_logs_at_error(caplog: pytest.LogCaptureFixture) -> None:
+    """After input end the error is terminal: it must still surface as ERROR."""
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if json.loads(msg.data)["type"] == "session.finalize":
+                await ws.send_json({"type": "error", "code": 2006, "message": "too late"})
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(base_url, session)
+        stream = stt.stream(
+            conn_options=APIConnectOptions(max_retry=0, retry_interval=0.001, timeout=1.0)
+        )
+        with caplog.at_level(logging.DEBUG):
+            try:
+                stream.end_input()
+                with pytest.raises(APIError):
+                    await asyncio.wait_for(_final_transcripts(stream), timeout=1.0)
+            finally:
+                await stream.aclose()
+
+    error_messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert "received error from LiveKit Inference STT" in error_messages
+    assert any("Error in recv_task" in msg for msg in error_messages)
