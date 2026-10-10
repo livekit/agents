@@ -72,6 +72,9 @@ EOT_PUNCTUATION = (".", "?", "!", "؟")
 _NO_SPACE_BEFORE = frozenset(".,?!:;،؛؟")
 
 _WATCHDOG_POLL_SECONDS = 0.1
+# a recognizer with nothing to say never moves `audio_processed`, so a flush
+# cannot wait on the acknowledgement indefinitely
+_FLUSH_ACK_TIMEOUT = 2.0
 
 
 def _strip_and_detect_eot(new_text: str) -> tuple[str, bool]:
@@ -226,6 +229,8 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
+    _is_speaking: bool = False
+    _turn_text: str = ""
     _utt_raw: str = ""
     _utt_clean: str = ""
     _utt_closed: bool = False
@@ -236,6 +241,17 @@ class SpeechStream(stt.SpeechStream):
     _utt_words: tuple[TimedString, ...] = ()
     _utt_flushed_words: int = 0
     _utt_raw_seen: int = 0
+    _segment_start_time: float = 0.0
+    _segment_end_time: float = 0.0
+    _request_id: str = ""
+    _last_progress_at: float = 0.0
+    _pending_eot_at: float | None = None
+    _pending_flush_position: float | None = None
+    _pending_flush_deadline: float | None = None
+    _latest_audio_processed: float | None = None
+    _audio_position: float = 0.0
+    _reported_audio_position: float = 0.0
+    _last_message_position: float = 0.0
 
     def __init__(
         self,
@@ -250,6 +266,23 @@ class SpeechStream(stt.SpeechStream):
         self._language = LanguageCode(language)
         self._session = http_session
 
+        self._reset_connection_state()
+
+    def _reset_connection_state(self) -> None:
+        """Clear everything scoped to a single WebSocket connection.
+
+        Every cursor here indexes into one socket's cumulative stream. A
+        reconnect replays the utterance from zero, so a surviving
+        `_utt_flushed_chars` would slice the front off every transcript that
+        follows, and a surviving `_is_speaking` would swallow the
+        `START_OF_SPEECH` that opens the next turn.
+
+        Audio already handed to the dead socket is not replayed: `_input_ch`
+        yields each frame once, and the repo's convention is that replaying
+        consumed audio risks losing or duplicating words. A reconnect therefore
+        drops whatever the recognizer had not yet acknowledged -- a fraction of
+        a second, against the whole remainder of the call if the stream dies.
+        """
         self._is_speaking = False
 
         self._turn_text = ""
@@ -263,17 +296,20 @@ class SpeechStream(stt.SpeechStream):
         self._utt_flushed_words = 0
         self._utt_raw_seen = 0
 
-        self._segment_start_time: float = 0.0
-        self._segment_end_time: float = 0.0
-        self._request_id: str = ""
+        self._segment_start_time = 0.0
+        self._segment_end_time = 0.0
+        self._request_id = ""
 
-        self._last_progress_at: float = 0.0
-        self._pending_eot_at: float | None = None
+        self._last_progress_at = 0.0
+        self._pending_eot_at = None
+        self._pending_flush_position = None
+        self._pending_flush_deadline = None
 
-        self._latest_audio_processed: float | None = None
-        self._audio_position: float = 0.0
-        self._reported_audio_position: float = 0.0
-        self._last_message_position: float = 0.0
+        self._latest_audio_processed = None
+        self._audio_position = 0.0
+        self._reported_audio_position = 0.0
+        self._last_message_position = 0.0
+        self._input_done = False
 
     def _config_frame(self) -> dict[str, Any]:
         return {
@@ -291,22 +327,24 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(self._stt._base_url),
                 self._conn_options.timeout,
             )
-        except (
-            aiohttp.ClientConnectorError,
-            aiohttp.WSServerHandshakeError,
-            asyncio.TimeoutError,
-        ) as e:
+        except aiohttp.WSServerHandshakeError as e:
+            # the upgrade got an HTTP response back, so the status says whether
+            # redialling the same URL could ever succeed: a bad key or a stale
+            # path never will, and retrying only delays the real error.
+            raise APIStatusError(
+                "nabrah STT rejected the connection",
+                status_code=e.status,
+                retryable=e.status in (408, 429) or 500 <= e.status < 600,
+            ) from e
+        except (aiohttp.InvalidURL, aiohttp.TooManyRedirects) as e:
+            # a URL no redial can fix, so this fails fast for the same reason a
+            # rejected handshake does
+            raise APIConnectionError("nabrah STT base_url is not usable", retryable=False) from e
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to nabrah STT") from e
 
-    def _stream_failure(self, message: str) -> APIConnectionError:
-        return APIConnectionError(message, retryable=self._audio_position == 0.0)
-
     async def _run(self) -> None:
-        self._latest_audio_processed = None
-        self._audio_position = 0.0
-        self._reported_audio_position = 0.0
-        self._last_message_position = 0.0
-        self._input_done = False
+        self._reset_connection_state()
 
         ws = await self._connect_ws()
         try:
@@ -385,6 +423,9 @@ class SpeechStream(stt.SpeechStream):
                 and now - self._last_progress_at >= inactivity_timeout
             ):
                 self._flush_eos()
+                continue
+            # a silent recognizer sends nothing to drive this from _recv_task
+            self._maybe_complete_flush()
 
     async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:
@@ -394,17 +435,36 @@ class SpeechStream(stt.SpeechStream):
                     if audio_bytes:
                         self._audio_position += data.samples_per_channel / data.sample_rate
                         await ws.send_bytes(audio_bytes)
+                elif isinstance(data, self._FlushSentinel):
+                    # Nabrah has no finalize frame, so the boundary is drawn locally
+                    # -- but writing the audio is not the recognizer consuming it.
+                    # Arm the boundary at the position outstanding now and let
+                    # _maybe_complete_flush commit it once `audio_processed` reaches
+                    # there, or the segment closes empty and the speech the caller
+                    # flushed opens the next turn instead of ending this one.
+                    if self._pending_flush_position is not None:
+                        # the caller asked for two boundaries; overwriting would
+                        # silently merge them into one
+                        self._flush_eos()
+                    self._pending_flush_position = self._audio_position
+                    self._pending_flush_deadline = time.monotonic() + _FLUSH_ACK_TIMEOUT
+            # `end_input()` is flush() + close(), so the last sentinel before the
+            # channel closes is the teardown, not a segment the caller wants cut
+            # short: `eof` and _run's finalizer draw that boundary once the
+            # recognizer has actually emitted its trailing text.
+            self._pending_flush_position = None
+            self._pending_flush_deadline = None
             self._input_done = True
             await ws.send_str(json.dumps({"type": "eof"}))
         except Exception as e:
-            raise self._stream_failure(f"nabrah STT send failed ({type(e).__name__})") from None
+            raise APIConnectionError(f"nabrah STT send failed ({type(e).__name__})") from None
 
     async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         while True:
             try:
                 msg = await ws.receive()
             except Exception as e:
-                raise self._stream_failure(
+                raise APIConnectionError(
                     f"nabrah STT receive failed ({type(e).__name__})"
                 ) from None
             if msg.type in (
@@ -413,10 +473,10 @@ class SpeechStream(stt.SpeechStream):
                 aiohttp.WSMsgType.CLOSING,
             ):
                 if not self._input_done:
-                    raise self._stream_failure("nabrah STT closed unexpectedly")
+                    raise APIConnectionError("nabrah STT closed unexpectedly")
                 return
             if msg.type == aiohttp.WSMsgType.ERROR:
-                raise self._stream_failure("nabrah STT WebSocket failed")
+                raise APIConnectionError("nabrah STT WebSocket failed")
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:
@@ -427,6 +487,9 @@ class SpeechStream(stt.SpeechStream):
                 # Never attach an exception or payload here: malformed messages can
                 # contain customer transcripts. Later cumulative results can recover.
                 logger.warning("nabrah STT returned malformed data")
+
+            # after the message is folded in, so a flush commits the text it waited for
+            self._maybe_complete_flush()
 
     def _emit(self, event: stt.SpeechEvent) -> None:
         self._event_ch.send_nowait(event)
@@ -448,6 +511,24 @@ class SpeechStream(stt.SpeechStream):
 
     def _current_text(self) -> str:
         return _append_text(self._turn_text, self._utt_clean)
+
+    def _maybe_complete_flush(self) -> None:
+        """Commit a requested segment boundary once the recognizer has caught up.
+
+        `audio_processed` is the only acknowledgement in the protocol, so it is
+        what makes the boundary real. Backends that omit it fall back to the
+        send-side counter, where the position is satisfied immediately and the
+        boundary degrades to best-effort.
+        """
+        if self._pending_flush_position is None:
+            return
+
+        timed_out = (
+            self._pending_flush_deadline is not None
+            and time.monotonic() >= self._pending_flush_deadline
+        )
+        if self._audio_clock() >= self._pending_flush_position or timed_out:
+            self._flush_eos()
 
     def _flush_eos(self) -> None:
         text = self._current_text()
@@ -512,6 +593,8 @@ class SpeechStream(stt.SpeechStream):
         self._utt_words = ()
         self._is_speaking = False
         self._pending_eot_at = None
+        self._pending_flush_position = None
+        self._pending_flush_deadline = None
         self._segment_start_time = 0.0
         self._segment_end_time = 0.0
         self._request_id = ""
