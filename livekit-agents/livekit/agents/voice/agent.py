@@ -388,6 +388,11 @@ class Agent:
         You can override this node with your own implementation for more flexibility (e.g.,
         custom pre-processing of audio, additional buffering, or alternative STT strategies).
 
+        If your override buffers audio passed to Agent.default.stt_node, framework
+        flushing can occur before that audio reaches STT. Set
+        stt.capabilities.manual_flush = False on the underlying STT providers and manage
+        flushing in your implementation.
+
         Args:
             audio (AsyncIterable[rtc.AudioFrame]): An asynchronous stream of audio frames.
             model_settings (ModelSettings): Configuration and parameters for model execution.
@@ -506,6 +511,8 @@ class Agent:
             agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
         ) -> AsyncGenerator[stt.SpeechEvent, None]:
             """Default implementation for `Agent.stt_node`"""
+            from .audio_recognition import _STTPipelineContextVar
+
             activity = agent._get_activity_or_raise()
             assert activity.stt is not None, "stt_node called but no STT node is available"
 
@@ -540,6 +547,10 @@ class Agent:
                     )
                     stream.start_time_offset = time.time() - _audio_input_started_at
 
+                    pipeline = _STTPipelineContextVar.get(None)
+                    if pipeline:
+                        pipeline._recognize_stream = stream
+
                     @utils.log_exceptions(logger=logger)
                     async def _forward_input() -> None:
                         async for frame in audio:
@@ -550,6 +561,8 @@ class Agent:
                         async for event in stream:
                             yield event
                     finally:
+                        if pipeline:
+                            pipeline._recognize_stream = None
                         await utils.aio.cancel_and_wait(forward_task)
             finally:
                 if temporary_adapter is not None:
