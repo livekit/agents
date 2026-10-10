@@ -78,6 +78,7 @@ SpeechmaticsModels = Literal[
 ]
 InworldModels = Literal["inworld/inworld-stt-1",]
 GoogleModels = Literal["google/gemini-3.5-transcribe-live",]
+OpenAIModels = Literal["openai/gpt-live-transcribe",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -192,6 +193,16 @@ class GoogleOptions(TypedDict, total=False):
     custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
 
 
+class OpenaiOptions(TypedDict, total=False):
+    # Mirrors the transcription config of an OpenAI Realtime transcription session.
+    # https://developers.openai.com/api/docs/guides/realtime-transcription
+    languages: list[str]  # expected input languages; overrides `language`
+    prompt: str  # describes the recording or its setting, up to 1024 characters
+    keywords: list[str]  # literal terms the audio may contain
+    delay: Literal["minimal", "low", "medium", "high", "xhigh"]  # latency vs. accuracy
+    noise_reduction: Literal["near_field", "far_field"]
+
+
 # Diarization is requested via different extra_kwargs keys across
 # providers. Keep this list in one place so adding a new provider is a
 # single-line change and there's no divergence between __init__ and
@@ -218,6 +229,27 @@ def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
     return False
 
 
+_KEYTERM_KEYS = frozenset({"keyterm", "keyterms_prompt", "keywords", "additional_vocab"})
+
+
+def _keyterms_key_for_model(model: NotGivenOr[str]) -> str | None:
+    """The ``extra`` key a model takes its keyterms under, or None if it has no keyterm
+    prompting. Also serves as the capability check."""
+    if not (is_given(model) and isinstance(model, str)):
+        return None
+    if model == "speechmatics/linden-1":
+        return None
+    if model.startswith("speechmatics/"):
+        return "additional_vocab"
+    if model.startswith("deepgram/"):
+        return "keyterm"
+    if model.startswith("assemblyai/"):
+        return "keyterms_prompt"
+    if _is_openai_model(model):
+        return "keywords"
+    return None
+
+
 def _keyterms_extra_for_model(
     model: NotGivenOr[str],
     *,
@@ -230,30 +262,20 @@ def _keyterms_extra_for_model(
     None if the model has no keyterm prompting, so ``_keyterms_extra_for_model(model) is not
     None`` is also the capability check.
     """
-    if not (is_given(model) and isinstance(model, str)):
+    key = _keyterms_key_for_model(model)
+    if key is None:
         return None
 
     extra_kwargs = extra_kwargs or {}
     session_keyterms = session_keyterms or []
 
-    if model == "speechmatics/linden-1":
-        return None
-
-    if model.startswith("speechmatics/"):
+    if key == "additional_vocab":
         # keep existing entries as-is (they may carry sounds_like etc.); append new session terms
-        existing = list(extra_kwargs.get("additional_vocab", []))
+        existing = list(extra_kwargs.get(key, []))
         seen = {v["content"] for v in existing}
         additions = set(session_keyterms) - seen
-        return {"additional_vocab": existing + [{"content": term} for term in additions]}
+        return {key: existing + [{"content": term} for term in additions]}
 
-    key: str | None = None
-    if model.startswith("deepgram/"):
-        key = "keyterm"
-    elif model.startswith("assemblyai/"):
-        key = "keyterms_prompt"
-
-    if key is None:
-        return None
     # deepgram's keyterm may be a bare string; wrap it so it isn't splat char-by-char
     existing = extra_kwargs.get(key, [])
     if isinstance(existing, str):
@@ -345,23 +367,54 @@ def _parse_model_string(model: str) -> tuple[str, NotGivenOr[LanguageCode]]:
     return model, language
 
 
+def _is_openai_model(model: str) -> bool:
+    # a bare "openai" resolves to the provider's default model on the gateway
+    return model == "openai" or model.startswith("openai/")
+
+
+def _needs_client_endpointing(model: NotGivenOr[STTModels | str]) -> bool:
+    """True for models that finalize a turn only when the client sends session.finalize.
+
+    Speechmatics RT and OpenAI gpt-live-transcribe detect no turns themselves, so without a
+    VAD-driven finalize they return interim transcripts and no finals.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return False
+    if model.startswith("speechmatics/"):
+        return model != "speechmatics/linden-1"
+    return _is_openai_model(model)
+
+
+def _required_sample_rate(model: NotGivenOr[STTModels | str]) -> int | None:
+    # OpenAI transcription sessions take PCM only at 24 kHz; the gateway refuses other rates.
+    if is_given(model) and isinstance(model, str) and _is_openai_model(model):
+        return 24000
+    return None
+
+
+def _warn_if_sample_rate_refused(model: NotGivenOr[STTModels | str], sample_rate: int) -> None:
+    required = _required_sample_rate(model)
+    if required is not None and sample_rate != required:
+        logger.warning(
+            "model %r takes audio only at %d Hz; the gateway will refuse %d Hz",
+            model,
+            required,
+            sample_rate,
+        )
+
+
 def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
 ) -> vad.VAD | None:
-    is_speechmatics_rt = (
-        is_given(model)
-        and isinstance(model, str)
-        and model.startswith("speechmatics/")
-        and model != "speechmatics/linden-1"
-    )
-    if vad_instance is not None and not is_speechmatics_rt:
+    needs_vad = _needs_client_endpointing(model)
+    if vad_instance is not None and not needs_vad:
         logger.warning(
             "`vad` will be ignored: model %r handles endpointing server-side.",
             model,
         )
         return None
-    if is_speechmatics_rt and vad_instance is None:
+    if needs_vad and vad_instance is None:
         from .vad import VAD
 
         vad_instance = VAD()
@@ -392,6 +445,7 @@ STTModels = (
     | SpeechmaticsModels
     | InworldModels
     | GoogleModels
+    | OpenAIModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -591,6 +645,7 @@ class STT(stt.STT):
             | SpeechmaticsOptions
             | InworldOptions
             | GoogleOptions
+            | OpenaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -602,7 +657,8 @@ class STT(stt.STT):
             model (STTModels | str, optional): STT model to use, in "provider/model[:language]" format.
             language (str, optional): Language of the STT model.
             encoding (STTEncoding, optional): Encoding of the STT model.
-            sample_rate (int, optional): Sample rate of the STT model.
+            sample_rate (int, optional): Sample rate of the STT model. Defaults to 24000 for
+                OpenAI models, which accept no other rate, and to 16000 otherwise.
             base_url (str, optional): LIVEKIT_URL, if not provided, read from environment variable.
             api_key (str, optional): LIVEKIT_API_KEY, if not provided, read from environment variable.
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
@@ -613,8 +669,9 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
             vad (VAD, optional): External Voice Activity Detector. When provided, each audio
                 frame is forwarded to the VAD and `session.finalize` is sent to the inference
-                gateway on end of speech. Only applicable to the Speechmatics RT models
-                (enhanced/standard); linden-1 detects turns server-side.
+                gateway on end of speech. Only applicable to models that detect no turns
+                themselves: the Speechmatics RT models (enhanced/standard) and OpenAI
+                gpt-live-transcribe. They get a default VAD when none is passed.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
@@ -631,6 +688,12 @@ class STT(stt.STT):
                 language = parsed_language
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
+        resolved_sample_rate = (
+            sample_rate
+            if is_given(sample_rate)
+            else (_required_sample_rate(model) or DEFAULT_SAMPLE_RATE)
+        )
+        _warn_if_sample_rate_refused(model, resolved_sample_rate)
 
         fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
         if is_given(fallback):
@@ -681,7 +744,7 @@ class STT(stt.STT):
             model=model,
             language=LanguageCode(language) if isinstance(language, str) else language,
             encoding=encoding if is_given(encoding) else DEFAULT_ENCODING,
-            sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
+            sample_rate=resolved_sample_rate,
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
@@ -692,6 +755,8 @@ class STT(stt.STT):
 
         self._session = http_session
         self._vad = vad
+        # a default sample rate follows the model; an explicit one is the caller's choice
+        self._explicit_sample_rate = is_given(sample_rate)
         self._session_keyterms: list[str] = []  # framework-managed; merged into extra_kwargs
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -767,6 +832,11 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
+            if not self._explicit_sample_rate:
+                # the default rate follows the model; a live stream's own rate stays
+                # fixed at its creation, but streams created from now on must work
+                self._opts.sample_rate = _required_sample_rate(model) or DEFAULT_SAMPLE_RATE
+            _warn_if_sample_rate_refused(model, self._opts.sample_rate)
             models = [self._opts.model]
             if is_given(self._opts.fallback):
                 models.extend(item["model"] for item in self._opts.fallback)
@@ -857,6 +927,9 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._stt: STT = stt
         self._opts = opts
+        # the model this session actually runs on the gateway: a refused in-band model
+        # switch leaves it behind while the parent moves on
+        self._model: NotGivenOr[STTModels | str] = opts.model
         self._request_id = str(utils.shortuuid("stt_request_"))
 
         self._speaking = False
@@ -866,6 +939,13 @@ class SpeechStream(stt.SpeechStream):
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._vad: vad.VAD | None = vad_instance
+        # the live VAD stream and its finalize forwarder; rewired in place when a model
+        # update switches the session in or out of client endpointing
+        self._vad_stream: vad.VADStream | None = None
+        self._vad_tasks: set[asyncio.Task[None]] = set()
+        # aclose tasks for streams retired by a model switch; awaited (not cancelled) so
+        # the inference VAD's dedicated executor is always shut down
+        self._vad_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._session_update_tasks: set[asyncio.Task[None]] = set()
 
     def update_options(
@@ -880,24 +960,89 @@ class SpeechStream(stt.SpeechStream):
         When the WebSocket is live, a mid-stream session.update is sent so providers
         that support it (e.g. AssemblyAI, Deepgram Flux) can apply changes without
         reconnecting. Unsupported providers ignore the message.
+
+        A model that requires an audio rate this stream was not created with is not
+        applied live: the stream's rate is fixed at creation, so the session keeps the
+        model it was created with (new streams pick up the switch). Switching in or
+        out of client endpointing rewires the session's VAD so `session.finalize`
+        matches the model in use.
         """
         if is_given(model):
-            self._opts.model = model
+            # Mirror __init__/STT.update_options: strip ":language" suffix and apply
+            # if not overridden.
+            if isinstance(model, str):
+                parsed_model, parsed_language = _parse_model_string(model)
+                model = parsed_model
+                if is_given(parsed_language) and not is_given(language):
+                    language = parsed_language
+
+            required = _required_sample_rate(model)
+            if required is not None and required != self._opts.sample_rate:
+                # this stream's audio rate is fixed at creation, so a model that refuses
+                # it cannot run here; the live session keeps the model it was created
+                # with, and streams created after the parent switch carry the new rate.
+                # Drop the whole switch: any language or keyterms derived from the
+                # refused model must not leak into the session that is still running.
+                logger.warning(
+                    "live stream stays on %r: %r takes audio only at %d Hz, this "
+                    "stream was created at %d Hz",
+                    self._model,
+                    model,
+                    required,
+                    self._opts.sample_rate,
+                )
+                model = NOT_GIVEN
+                language = NOT_GIVEN
+                extra = NOT_GIVEN
+            else:
+                self._model = model
+                self._opts.model = model
+                # endpointing needs can change with the model; re-resolve the VAD and
+                # rewire the live stream so session.finalize tracks the new model
+                self._vad = _resolve_vad_for_model(model, self._vad)
+                if self._vad is not None and self._vad_stream is None:
+                    self._start_vad_stream()
+                elif self._vad is None and self._vad_stream is not None:
+                    self._retire_vad_stream()
+        model_key = _keyterms_key_for_model(self._model)
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
-            self._opts.extra_kwargs.update(extra)
+            # never store a keyterm key another model owns; a keyterm update formatted for
+            # the model the parent moved to must not leak into this session's config
+            self._opts.extra_kwargs.update(
+                {k: v for k, v in extra.items() if k not in _KEYTERM_KEYS or k == model_key}
+            )
             self._pending_extra = None
 
-        has_update = is_given(model) or is_given(language) or is_given(extra)
+        # keyterms always go to the gateway under the key the model actually running
+        # uses: a switch from deepgram (keyterm) to openai (keywords) must move them
+        # across, and a refused switch must keep formatting for the running model.
+        forward_extra: NotGivenOr[dict[str, Any]] = extra
+        if is_given(model) or is_given(extra):
+            merged: dict[str, Any] = (
+                {k: v for k, v in extra.items() if k not in _KEYTERM_KEYS or k == model_key}
+                if is_given(extra)
+                else {}
+            )
+            keyterm_extra = _keyterms_extra_for_model(
+                self._model,
+                extra_kwargs=self._opts.extra_kwargs,
+                session_keyterms=self._stt._session_keyterms,
+            )
+            if keyterm_extra is not None:
+                merged = {**merged, **keyterm_extra}
+            forward_extra = merged if merged else NOT_GIVEN
+
+        has_update = is_given(model) or is_given(language) or is_given(forward_extra)
         if has_update and self._ws is not None and not self._ws.closed:
             settings: dict[str, Any] = {}
             if is_given(model):
                 settings["model"] = model
             if is_given(language):
                 settings["language"] = str(LanguageCode(language))
-            if is_given(extra):
-                settings["extra"] = extra
+            if is_given(forward_extra):
+                settings["extra"] = forward_extra
             update_msg = {
                 "type": "session.update",
                 "settings": settings,
@@ -907,6 +1052,33 @@ class SpeechStream(stt.SpeechStream):
             task = asyncio.create_task(self._send_session_update(update_msg))
             self._session_update_tasks.add(task)
             task.add_done_callback(self._session_update_tasks.discard)
+
+    def _start_vad_stream(self) -> None:
+        """Open a VAD stream and its finalize forwarder for the live session."""
+        if self._ws is None or self._ws.closed or self._vad is None:
+            return
+        self._vad_stream = self._vad.stream()
+        task = asyncio.create_task(self._vad_finalize_task(self._ws, self._vad_stream))
+        self._vad_tasks.add(task)
+        task.add_done_callback(self._vad_tasks.discard)
+
+    def _retire_vad_stream(self) -> None:
+        """Stop feeding the current VAD stream and close it, so its executor is released
+        even though this synchronous call cannot await the cleanup.
+
+        A model switch can leave a stale VAD finalize task running; closing the stream
+        ends its event channel, which tells the forwarder to exit before it can send a
+        `session.finalize` for the model that is no longer in use.
+        """
+        stream = self._vad_stream
+        if stream is None:
+            return
+        self._vad_stream = None
+        with contextlib.suppress(RuntimeError):
+            stream.end_input()
+        task = asyncio.create_task(stream.aclose())
+        self._vad_cleanup_tasks.add(task)
+        task.add_done_callback(self._vad_cleanup_tasks.discard)
 
     def _on_end_of_speech(self) -> None:
         if self._pending_extra is not None:
@@ -920,13 +1092,28 @@ class SpeechStream(stt.SpeechStream):
         except Exception:
             logger.debug("failed to send session.update, ws may be closing")
 
+    @utils.log_exceptions(logger=logger)
+    async def _vad_finalize_task(
+        self, ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream
+    ) -> None:
+        async for ev in stream:
+            if ev.type != vad.VADEventType.END_OF_SPEECH:
+                continue
+            # a retired stream must not finalize the model that replaced it
+            if ws.closed or self._vad_stream is not stream:
+                return
+            try:
+                await ws.send_str(json.dumps({"type": "session.finalize"}))
+            except Exception:
+                logger.debug("failed to send session.finalize from VAD, ws may be closing")
+                return
+
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
         input_ended = asyncio.Event()
         transcript_timeout = utils.aio.sleep(FINALIZATION_TIMEOUT)
         session_closed = False
         http_session = self._stt._ensure_session()
-        vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
 
         async def wait_for_inactivity() -> None:
             await input_ended.wait()
@@ -944,8 +1131,8 @@ class SpeechStream(stt.SpeechStream):
                 async for ev in self._input_ch:
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(ev, rtc.AudioFrame):
-                        if vad_stream is not None:
-                            vad_stream.push_frame(ev)
+                        if self._vad_stream is not None:
+                            self._vad_stream.push_frame(ev)
                         frames.extend(audio_bstream.push(ev.data))
                     elif isinstance(ev, self._FlushSentinel):
                         frames.extend(audio_bstream.flush())
@@ -960,8 +1147,9 @@ class SpeechStream(stt.SpeechStream):
                         }
                         await ws.send_str(json.dumps(audio_msg))
 
-                if vad_stream is not None:
-                    vad_stream.end_input()
+                if self._vad_stream is not None:
+                    with contextlib.suppress(RuntimeError):
+                        self._vad_stream.end_input()
 
                 input_ended.set()
                 finalize_msg = {
@@ -974,19 +1162,6 @@ class SpeechStream(stt.SpeechStream):
                 raise APIConnectionError(
                     "LiveKit Inference STT connection closed unexpectedly"
                 ) from e
-
-        @utils.log_exceptions(logger=logger)
-        async def vad_task(ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream) -> None:
-            async for ev in stream:
-                if ev.type != vad.VADEventType.END_OF_SPEECH:
-                    continue
-                if ws.closed:
-                    return
-                try:
-                    await ws.send_str(json.dumps({"type": "session.finalize"}))
-                except Exception:
-                    logger.debug("failed to send session.finalize from VAD, ws may be closing")
-                    return
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -1058,6 +1233,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await self._connect_ws(http_session)
             self._ws = ws
+            self._vad_stream = self._vad.stream() if self._vad is not None else None
             receiver = asyncio.create_task(recv_task(ws))
             inactivity = asyncio.create_task(wait_for_inactivity())
             tasks = [
@@ -1065,8 +1241,8 @@ class SpeechStream(stt.SpeechStream):
                 receiver,
                 inactivity,
             ]
-            if vad_stream is not None:
-                tasks.append(asyncio.create_task(vad_task(ws, vad_stream)))
+            if self._vad_stream is not None:
+                tasks.append(asyncio.create_task(self._vad_finalize_task(ws, self._vad_stream)))
             try:
                 pending = set(tasks)
                 while True:
@@ -1083,6 +1259,14 @@ class SpeechStream(stt.SpeechStream):
             if self._session_update_tasks:
                 await utils.aio.gracefully_cancel(*self._session_update_tasks)
                 self._session_update_tasks.clear()
+            if self._vad_tasks:
+                await utils.aio.gracefully_cancel(*self._vad_tasks)
+                self._vad_tasks.clear()
+            if self._vad_cleanup_tasks:
+                # streams retired during a model switch; awaiting their aclose releases
+                # the inference VAD's dedicated executor
+                await utils.aio.gracefully_cancel(*self._vad_cleanup_tasks)
+                self._vad_cleanup_tasks.clear()
             if ws is not None:
                 try:
                     if not session_closed and not ws.closed:
@@ -1090,8 +1274,9 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.debug("failed to send session.close, ws may be closing")
                 await ws.close()
-            if vad_stream is not None:
-                await vad_stream.aclose()
+            if self._vad_stream is not None:
+                await self._vad_stream.aclose()
+                self._vad_stream = None
 
     async def _connect_ws(
         self, http_session: aiohttp.ClientSession
