@@ -1,9 +1,5 @@
 [tool.uv]
-constraint-dependencies = [
-    'onnxruntime<1.24; python_version < "3.11"',
-    # 2.11.19 left the index, and 2.12.2 published Windows wheels only.
-    "bithuman<2.12.2",
-]
+constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
 default-groups = ["dev", "typing"]
 # Universal resolution only checks that a wheel exists for the Python version.
 # A release that publishes wheels for one platform and no sdist (bithuman 2.12.2

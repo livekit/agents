@@ -109,10 +109,7 @@ members = [
     "livekit-plugins-xai",
 ]
 default-groups = ["dev", "typing"]
-constraints = [
-    { name = "bithuman", specifier = "<2.12.2" },
-    { name = "onnxruntime", marker = "python_full_version < '3.11'", specifier = "<1.24" },
-]
+constraints = [{ name = "onnxruntime", marker = "python_full_version < '3.11'", specifier = "<1.24" }]
 
 [manifest.dependency-groups]
 dev = [
@@ -720,6 +717,11 @@ wheels = [
 name = "bithuman"
 version = "2.12.1"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform != 'win32'",
+]
 dependencies = [
     { name = "av" },
     { name = "loguru" },
@@ -734,15 +736,36 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/bc/bd/f4b3d921bce9f115b274a2b88bcb85ad58f0a4570c3580432b6380a0dcf2/bithuman-2.12.1-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:cd9365259b5697bdfb05c4a59788e2e5f9f5f273a60be7f4c5e8bda4855a3227", size = 31444293, upload-time = "2026-10-08T11:30:36.758Z" },
     { url = "https://files.pythonhosted.org/packages/41/e0/b5110659062ef7b13807e96442d5c7ee4ad2e2544449438e913dfb92ac48/bithuman-2.12.1-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:806f39aa6159e770ea07ef1e1a40986223ca88932dc0ee95f8434930a02913f7", size = 21375615, upload-time = "2026-10-08T11:30:13.987Z" },
     { url = "https://files.pythonhosted.org/packages/dc/84/b983ca9710b922c7d890e55de5f4698871e63a8f2b370777638d2b2eab85/bithuman-2.12.1-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:6bed8322e895badaad2a150525291963890721f91a81274bdd3978cee765bcb5", size = 23050243, upload-time = "2026-10-08T11:30:16.591Z" },
-    { url = "https://files.pythonhosted.org/packages/1c/6d/d9a026cd89a2e04045d8f2a7bab2acaf1a9ffe27b565de9e16aa5b8fec5e/bithuman-2.12.1-cp312-cp312-win_amd64.whl", hash = "sha256:3bc5d33a0f5a8e3f33212532bd1044ffef921fde560d8656e138e21d14ad239f", size = 13231727, upload-time = "2026-10-08T11:30:49.642Z" },
     { url = "https://files.pythonhosted.org/packages/e1/5c/bf9c8db8ba958ce1ba92353ccfd97bd20cb5cb2411f9d741d44e8f608583/bithuman-2.12.1-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:544958bd47f76f682352df6fba1aa7f6318e4e53d88c7f989ccaf3ec2cb86dfd", size = 31444294, upload-time = "2026-10-08T11:30:39.024Z" },
     { url = "https://files.pythonhosted.org/packages/4f/ff/287b956b5e249e4433665556f5867843fd6ab37c0198f391a25da67870fb/bithuman-2.12.1-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:b2044f162522d871445cec854b58e0a6ea3d6a9a2ee50fd671bb98d6c08b585e", size = 21375611, upload-time = "2026-10-08T11:30:19.564Z" },
     { url = "https://files.pythonhosted.org/packages/9f/0b/97bfa25c8e93543c2b94b7fa2cc3cf80b306de75fb9912174ac3ba1f9e75/bithuman-2.12.1-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:63ee4a575d7c8022507ec353fcd1dc5dae9806af4676d597c14a5c74b0fe3519", size = 23049864, upload-time = "2026-10-08T11:30:21.847Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/29/c9da282f0f21855dee917174b13ec2f0ce7fc6af05578f0f8c9a8b822568/bithuman-2.12.1-cp313-cp313-win_amd64.whl", hash = "sha256:5f76d993fe8e0153ac8400c0315843b9e0b114864d57c8d02a1b1fc65723a150", size = 13231707, upload-time = "2026-10-08T11:30:51.676Z" },
     { url = "https://files.pythonhosted.org/packages/d3/7b/2cdec676477e8e18af595cd3d24c4d45cb83614a555aad63b2e0354d69a8/bithuman-2.12.1-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:9964dea021219dd0e6ab28317247c34a8ee70280854056e69ac0fda1947e17ca", size = 31444719, upload-time = "2026-10-08T11:30:41.692Z" },
     { url = "https://files.pythonhosted.org/packages/9f/b5/6e0eb191f439b3ac63945b5a4e49c1e5f4fce28bc068c6712bb9e2cc6007/bithuman-2.12.1-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:f8638b58c5decc1828cba88e458f1b8cf07b36f4dad55189a8cfe45847b94153", size = 21376317, upload-time = "2026-10-08T11:30:24.404Z" },
     { url = "https://files.pythonhosted.org/packages/d5/f2/2213c3e6cc17ff49aae4f70bb5fefbfc332e9ce9ec4958d041422663af4d/bithuman-2.12.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:0c2854b8b17316546b67c92e336b540d3acb85494a398eee83dc4b05d5bebf41", size = 23050461, upload-time = "2026-10-08T11:30:26.985Z" },
-    { url = "https://files.pythonhosted.org/packages/17/80/d020b22b5f064b94af7d36b1d3a888a582239f240cb8ff6c21695383f643/bithuman-2.12.1-cp314-cp314-win_amd64.whl", hash = "sha256:4d1f0c26cc71bce95ebe5015fa460a76f27e651551ce29c6d316483ba468cb05", size = 13507792, upload-time = "2026-10-08T11:30:53.945Z" },
+]
+
+[[package]]
+name = "bithuman"
+version = "2.12.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+]
+dependencies = [
+    { name = "av" },
+    { name = "loguru" },
+    { name = "numpy" },
+    { name = "opencv-python-headless" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "soundfile" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0e/2e/ef3670df1cb2190a9beabd54b2016fd6724451994fcad9acfef7c6cf326f/bithuman-2.12.2-cp312-cp312-win_amd64.whl", hash = "sha256:2ec844b85b4a1181df2152ffdb7f1ede3c37acfc97aefaaae5132f228736ef6b", size = 13233447, upload-time = "2026-10-08T22:04:47.832Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/d6/5443c4430100a9b4815fc394eca748618b6c757ea8e0d58dce3e7f52c95f/bithuman-2.12.2-cp313-cp313-win_amd64.whl", hash = "sha256:e7c8602bfd777553572fa0aa94dd482c171e2a10883e8d4093c7bd33a118206d", size = 13233425, upload-time = "2026-10-08T22:04:50.235Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/da/55089afe4fd931213a98aa4e372378f22d727193adf1b0ea7f4587be2644/bithuman-2.12.2-cp314-cp314-win_amd64.whl", hash = "sha256:e138051af186f323bcd53bf9b05c4bf5d5c712ed16a965a532af06dc2fc2d7c4", size = 13509508, upload-time = "2026-10-08T22:04:52.857Z" },
 ]
 
 [[package]]
@@ -2865,7 +2888,8 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 name = "livekit-plugins-bithuman"
 source = { editable = "livekit-plugins/livekit-plugins-bithuman" }
 dependencies = [
-    { name = "bithuman" },
+    { name = "bithuman", version = "2.12.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
+    { name = "bithuman", version = "2.12.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'win32'" },
     { name = "livekit-agents" },
     { name = "pillow" },
 ]
