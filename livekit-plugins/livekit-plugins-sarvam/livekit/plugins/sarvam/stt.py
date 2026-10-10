@@ -65,6 +65,10 @@ SarvamSTTModels = Literal["saaras:v3", "saaras:v4"]
 SarvamSTTModes = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 _SUNSET_STT_MODELS = frozenset({"saarika:v2.5", "saaras:v2.5"})
 
+# Keyterm prompting limits, per https://docs.sarvam.ai (saaras:v4 only).
+MAX_KEYTERMS = 50
+MAX_KEYTERM_LENGTH = 64
+
 
 def _warn_if_sunset_stt_model(model: str) -> None:
     if model in _SUNSET_STT_MODELS:
@@ -115,6 +119,7 @@ class ModelConfig:
 
     Attributes:
         supports_prompt: Whether the model accepts prompt parameter.
+        supports_keyterms: Whether the model accepts keyterms for recognition biasing.
         supports_mode: Whether the model accepts mode parameter.
         supports_language: Whether the model accepts language parameter.
         supports_vad_params: Whether the model accepts fine-grained VAD parameters.
@@ -126,6 +131,7 @@ class ModelConfig:
     """
 
     supports_prompt: bool
+    supports_keyterms: bool
     supports_mode: bool
     supports_language: bool
     supports_vad_params: bool
@@ -139,6 +145,7 @@ class ModelConfig:
 MODEL_CONFIGS: dict[str, ModelConfig] = {
     "saaras:v3": ModelConfig(
         supports_prompt=False,
+        supports_keyterms=False,
         supports_mode=True,
         supports_language=True,
         supports_vad_params=True,
@@ -150,6 +157,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
     ),
     "saaras:v4": ModelConfig(
         supports_prompt=False,
+        supports_keyterms=True,
         supports_mode=True,
         supports_language=True,
         supports_vad_params=True,
@@ -232,6 +240,44 @@ def _model_supports_prompt(model: str) -> bool:
     return model.startswith("saaras")
 
 
+def _model_supports_keyterms(model: str) -> bool:
+    """Check whether the model supports keyterms for recognition biasing."""
+    model_config = _get_model_config(model)
+    if model_config:
+        return model_config.supports_keyterms
+    # Sarvam only documents keyterm prompting for saaras:v4
+    return False
+
+
+def _validate_keyterms(keyterms: list[str] | None) -> list[str] | None:
+    """Validate keyterms against Sarvam's limits.
+
+    Sarvam accepts up to 50 distinct terms of at most 64 characters each, so
+    terms are de-duplicated (order preserved) before the limits are enforced.
+
+    Args:
+        keyterms: The requested keyterms (None = no keyterms).
+
+    Returns:
+        The de-duplicated keyterms, or None when no keyterms were given.
+
+    Raises:
+        ValueError: If more than 50 distinct terms are given or a term is
+            longer than 64 characters.
+    """
+    if keyterms is None:
+        return None
+    deduped = list(dict.fromkeys(keyterms))
+    if len(deduped) > MAX_KEYTERMS:
+        raise ValueError(f"keyterms must contain at most {MAX_KEYTERMS} distinct terms")
+    for term in deduped:
+        if len(term) > MAX_KEYTERM_LENGTH:
+            raise ValueError(
+                f"keyterm {term!r} is longer than the {MAX_KEYTERM_LENGTH}-character limit"
+            )
+    return deduped
+
+
 def _model_supports_mode(model: str) -> bool:
     """Check whether the model supports mode parameter."""
     model_config = _get_model_config(model)
@@ -269,6 +315,7 @@ class SarvamSTTOptions:
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
+        keyterms: Optional terms to bias recognition toward (saaras:v4 only)
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
@@ -278,6 +325,7 @@ class SarvamSTTOptions:
     base_url: str | None = None
     streaming_url: str | None = None
     prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
+    keyterms: list[str] | None = None  # Terms to bias recognition (saaras:v4 only)
     high_vad_sensitivity: bool | None = None
     sample_rate: int = 16000
     flush_signal: bool | None = None
@@ -306,6 +354,7 @@ class SarvamSTTOptions:
             self.language = model_config.default_language
         _validate_language_for_model(self.model, self.language)
         self.mode = _validate_mode_for_model(self.model, self.mode)
+        self.keyterms = _validate_keyterms(self.keyterms)
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be greater than zero")
 
@@ -390,6 +439,9 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
         params["mode"] = opts.mode
     if opts.input_audio_codec:
         params["input_audio_codec"] = opts.input_audio_codec
+    if opts.keyterms and _model_supports_keyterms(opts.model):
+        # Sarvam expects one JSON-encoded array as the query parameter value.
+        params["keyterms"] = json.dumps(opts.keyterms)
 
     if _model_supports_vad_params(opts.model):
         if opts.positive_speech_threshold is not None:
@@ -462,6 +514,8 @@ class STT(stt.STT):
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
         prompt: Optional prompt for STT translate (saaras models only)
+        keyterms: Optional terms to bias recognition toward, e.g. names and
+            domain words (up to 50 terms of 64 characters; saaras:v4 only)
     """
 
     def __init__(
@@ -474,6 +528,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         prompt: str | None = None,
+        keyterms: list[str] | None = None,
         high_vad_sensitivity: bool | None = None,
         sample_rate: int = 16000,
         flush_signal: bool | None = None,
@@ -495,6 +550,7 @@ class STT(stt.STT):
                 interim_results=True,
                 # chunk timestamps don't seem to work despite the docs saying they do
                 aligned_transcript=False,
+                keyterms=_model_supports_keyterms(model),
             )
         )
 
@@ -512,6 +568,7 @@ class STT(stt.STT):
             mode=mode,
             base_url=base_url,
             prompt=prompt,
+            keyterms=keyterms,
             high_vad_sensitivity=high_vad_sensitivity,
             sample_rate=sample_rate,
             flush_signal=flush_signal,
@@ -529,6 +586,11 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
+        # Keyterms passed by the user are kept separate from the framework-managed
+        # session set (see _update_session_keyterms), so detected terms never drop
+        # them. `self._opts.keyterms` always holds the effective merged set.
+        self._user_keyterms: list[str] = list(self._opts.keyterms or [])
+        self._session_keyterms: list[str] = []
         # Strong ownership: a stream that finishes and gets garbage-collected would
         # otherwise take its still-open per-stream aiohttp.ClientSession with it.
         # Streams discard themselves in SpeechStream.aclose() once closed.
@@ -542,6 +604,33 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Sarvam"
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        """Apply the framework-managed keyterms merged with the user's own terms.
+
+        The set (session config plus auto-detected terms) is merged with the
+        constructor's keyterms and capped to Sarvam's limits rather than
+        rejecting it, so an over-long detected set cannot break the session.
+        """
+        if not self._capabilities.keyterms:
+            super()._update_session_keyterms(keyterms)
+            return
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = list(dict.fromkeys([*self._user_keyterms, *keyterms]))
+        capped = [term for term in merged if len(term) <= MAX_KEYTERM_LENGTH][:MAX_KEYTERMS]
+        if len(capped) != len(merged):
+            self._logger.warning(
+                f"keyterms exceed Sarvam's limits ({MAX_KEYTERMS} terms of "
+                f"{MAX_KEYTERM_LENGTH} characters); applying {len(capped)} of "
+                f"{len(merged)} terms"
+            )
+        self._opts.keyterms = capped or None
+        # Keyterms are fixed when the connection opens, so running streams are
+        # reopened to pick up the new set.
+        for stream in list(self._streams):
+            stream._update_keyterms(capped)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -648,6 +737,9 @@ class STT(stt.STT):
             form_data.add_field("model", str(opts_model))
         if _model_supports_mode(opts_model):
             form_data.add_field("mode", str(opts_mode))
+        if self._opts.keyterms and _model_supports_keyterms(opts_model):
+            # Sarvam expects one JSON-encoded array in a single form field.
+            form_data.add_field("keyterms", json.dumps(self._opts.keyterms))
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
@@ -835,6 +927,7 @@ class STT(stt.STT):
             model=opts_model,
             mode=opts_mode,
             prompt=final_prompt,
+            keyterms=self._opts.keyterms,
             high_vad_sensitivity=opts_high_vad,
             sample_rate=opts_sample_rate,
             flush_signal=opts_flush_signal,
@@ -1136,8 +1229,14 @@ class SpeechStream(stt.SpeechStream):
         model: str,
         prompt: str | None = None,
         mode: str | None = None,
+        keyterms: list[str] | None = None,
     ) -> None:
-        """Update streaming options."""
+        """Update streaming options.
+
+        ``keyterms=None`` keeps the current keyterms; a new set takes effect on
+        the reconnection this call triggers (Sarvam fixes keyterms when the
+        WebSocket connection opens). Keyterms are saaras:v4 only.
+        """
         if not language or not language.strip():
             raise ValueError("LanguageCode cannot be empty")
         if not model or not model.strip():
@@ -1149,6 +1248,8 @@ class SpeechStream(stt.SpeechStream):
         self._opts.base_url, self._opts.streaming_url = _get_urls_for_model(model)
         if prompt is not None:
             self._opts.prompt = prompt
+        if keyterms is not None:
+            self._opts.keyterms = _validate_keyterms(keyterms)
 
         # Use centralised validation
         self._opts.mode = _validate_mode_for_model(model, mode)
@@ -1159,6 +1260,22 @@ class SpeechStream(stt.SpeechStream):
             extra={**self._build_log_context(), "lk.pii.prompt": prompt},
         )
         self._reconnect_event.set()
+
+    def _update_keyterms(self, keyterms: list[str]) -> None:
+        """Apply framework-managed keyterms without interrupting the connection.
+
+        Sarvam fixes keyterms when the connection opens, and this stream makes a
+        single connection attempt, so the updated set cannot take effect on the
+        live connection: it is recorded for the next stream and the current
+        audio keeps flowing with the terms this connection was opened with.
+        """
+        if keyterms == (self._opts.keyterms or []):
+            return
+        self._opts.keyterms = keyterms or None
+        self._logger.debug(
+            "keyterms updated; the new set applies to the next stream",
+            extra=self._build_log_context(),
+        )
 
     async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Send initial configuration message with prompt for saaras models."""
@@ -1226,7 +1343,8 @@ class SpeechStream(stt.SpeechStream):
 
         self._logger.info(
             "Connecting to STT WebSocket",
-            extra={**self._build_log_context(), "url": ws_url, "user-agent": USER_AGENT},
+            # the URL carries the keyterms (PII), so it is marked for redaction
+            extra={**self._build_log_context(), "lk.pii.url": ws_url, "user-agent": USER_AGENT},
         )
 
         ws = await asyncio.wait_for(
