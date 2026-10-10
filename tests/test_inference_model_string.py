@@ -25,8 +25,6 @@ def inference_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         "openai/gpt-realtime",
         "openai/gpt-realtime-mini",
-        "openai/gpt-realtime-1.5",
-        "openai/gpt-realtime-2",
         "openai/gpt-realtime-2.1",
         "openai/gpt-realtime-2.1-mini",
         "xai/grok-voice",
