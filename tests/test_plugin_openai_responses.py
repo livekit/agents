@@ -538,3 +538,94 @@ async def test_response_created_alone_stays_retryable() -> None:
 async def test_generated_text_is_not_retried() -> None:
     """Text already delivered must not be regenerated."""
     assert await _attempts_until_stall([_RESPONSE_CREATED, _TEXT_DELTA], max_retry=2) == 1
+
+
+def _response_completed_with_usage(**usage: dict) -> dict:
+    return {
+        "type": "response.completed",
+        "sequence_number": 1,
+        "response": {**_RESPONSE_CREATED["response"], "status": "completed", "usage": usage},
+    }
+
+
+class _UsageResponsesWS:
+    """Records the chunk the stream sent for the frames it replays."""
+
+    _base_url = "https://api.openai.com/v1"
+
+    def __init__(self, frames: list[dict]) -> None:
+        self._frames = frames
+
+    def generate_response(self, payload: dict):  # noqa: ANN201
+        frames = self._frames
+
+        async def _replay():  # noqa: ANN202
+            for frame in frames:
+                yield frame
+
+        return _replay()
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def _usage_from_frames(frames: list[dict]) -> agents_llm.CompletionUsage:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    llm_model._ws = _UsageResponsesWS(frames)  # type: ignore[assignment]
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    usage: agents_llm.CompletionUsage | None = None
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=5.0)
+        ) as stream:
+            async for chunk in stream:
+                if chunk.usage is not None:
+                    usage = chunk.usage
+    finally:
+        await llm_model.aclose()
+
+    assert usage is not None
+    return usage
+
+
+async def test_completed_response_reports_cache_write_tokens() -> None:
+    """`response.usage.input_tokens_details.cache_write_tokens` is the Responses
+    API's cache-write counterpart to the Chat Completions field of the same name.
+    It is a subset of `input_tokens`, so it must not move any total."""
+    usage = await _usage_from_frames(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=2596,
+                output_tokens=40,
+                total_tokens=2636,
+                input_tokens_details={"cached_tokens": 1024, "cache_write_tokens": 1536},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+
+    assert usage.cache_creation_tokens == 1536
+    assert usage.prompt_cached_tokens == 1024
+    assert usage.prompt_tokens == 2596
+    assert usage.total_tokens == 2636
+
+
+async def test_completed_response_without_cache_write_reports_zero() -> None:
+    usage = await _usage_from_frames(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=100,
+                output_tokens=10,
+                total_tokens=110,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+
+    assert usage.cache_creation_tokens == 0
