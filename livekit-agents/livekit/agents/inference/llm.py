@@ -84,6 +84,31 @@ _MODEL_THINK_TAGS = {
 }
 
 
+def _apply_bedrock_mantle_tool_compatibility(
+    tool_schemas: list[ChatCompletionToolParam], base_url: httpx.URL
+) -> None:
+    """Adapt empty tool schemas for Mantle without mutating shared raw tools."""
+    host = base_url.host
+    if not host or not host.startswith("bedrock-mantle.") or not host.endswith(".api.aws"):
+        return
+
+    for tool_schema in tool_schemas:
+        function = tool_schema.get("function")
+        if not isinstance(function, dict):
+            continue
+        parameters = function.get("parameters")
+        if (
+            isinstance(parameters, dict)
+            and parameters.get("properties") == {}
+            and "required" not in parameters
+        ):
+            compatible_parameters = parameters.copy()
+            compatible_parameters["required"] = []
+            compatible_function = function.copy()
+            compatible_function["parameters"] = compatible_parameters
+            tool_schema["function"] = compatible_function
+
+
 def drop_unsupported_params(
     model: str, params: dict[str, Any], tools: list[Any] | None = None
 ) -> dict[str, Any]:
@@ -444,6 +469,7 @@ class LLMStream(llm.LLMStream):
                 list[ChatCompletionToolParam],
                 self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema),
             )
+            _apply_bedrock_mantle_tool_compatibility(tool_schemas, self._client.base_url)
             if lk_oai_debug:
                 tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
                 logger.debug(
