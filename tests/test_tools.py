@@ -797,12 +797,18 @@ class TestNoParametersSchema:
         assert params["properties"] == {}
         assert "required" not in params
 
-    def test_strict_schema_no_parameters_has_no_required(self):
-        """Strict schema for no-param function must not include 'required'."""
+    def test_strict_schema_no_parameters_has_empty_required(self):
+        """Strict schema for a no-param function must include 'required': [].
+
+        The strict dialect requires the key to be present and to name every
+        declared property; with no properties that is an empty list. Omitting it
+        is valid JSON Schema but not valid strict mode, and endpoints that
+        enforce the strict rules reject the tool (livekit#7637).
+        """
         params = build_strict_openai_schema(mock_tool_3)["function"]["parameters"]
         assert "properties" in params
         assert params["properties"] == {}
-        assert "required" not in params
+        assert params["required"] == []
 
 
 class _NullableEnumModel(BaseModel):
