@@ -17,13 +17,32 @@ class _ACloseable(Protocol):
 T = TypeVar("T")
 
 
-async def _close_peer(iterator: AsyncIterator[T], buffer: deque[T], peers: list[deque[T]]) -> None:
+class _TeeCloseState(Generic[T]):
+    def __init__(self, iterator: AsyncIterator[T]) -> None:
+        self._iterator = iterator
+        self._closed = False
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if isinstance(self._iterator, _ACloseable):
+            try:
+                await self._iterator.aclose()
+            except BaseException:
+                self._closed = False
+                raise
+
+
+async def _close_peer(
+    close_state: _TeeCloseState[T], buffer: deque[T], peers: list[deque[T]]
+) -> None:
     for idx, peer_buffer in enumerate(peers):
         if peer_buffer is buffer:
             peers.pop(idx)
             buffer.clear()
-            if not peers and isinstance(iterator, _ACloseable):
-                await iterator.aclose()
+            if not peers:
+                await close_state.aclose()
             return
 
 
@@ -33,6 +52,7 @@ async def tee_peer(
     peers: list[deque[T]],
     lock: AsyncContextManager[Any],
     exception: list[BaseException | None],
+    close_state: _TeeCloseState[T],
 ) -> AsyncGenerator[T, None]:
     # exception is a shared mutable container across all peers. When the upstream
     # iterator raises, only the first peer to call __anext__() would normally see
@@ -67,7 +87,7 @@ async def tee_peer(
                             peer_buffer.append(item)
             yield buffer.popleft()
     finally:
-        await _close_peer(iterator, buffer, peers)
+        await _close_peer(close_state, buffer, peers)
 
 
 class _TeePeer(AsyncIterator[T]):
@@ -78,11 +98,12 @@ class _TeePeer(AsyncIterator[T]):
         peers: list[deque[T]],
         lock: AsyncContextManager[Any],
         exception: list[BaseException | None],
+        close_state: _TeeCloseState[T],
     ) -> None:
-        self._iterator = iterator
+        self._close_state = close_state
         self._buffer = buffer
         self._peers = peers
-        self._generator = tee_peer(iterator, buffer, peers, lock, exception)
+        self._generator = tee_peer(iterator, buffer, peers, lock, exception, close_state)
 
     def __aiter__(self) -> "_TeePeer[T]":
         return self
@@ -93,11 +114,11 @@ class _TeePeer(AsyncIterator[T]):
     async def aclose(self) -> None:
         await self._generator.aclose()
         # Closing an unstarted async generator does not execute its finally block.
-        await _close_peer(self._iterator, self._buffer, self._peers)
+        await _close_peer(self._close_state, self._buffer, self._peers)
 
 
 class Tee(Generic[T]):
-    __slots__ = ("_iterator", "_buffers", "_children")
+    __slots__ = ("_iterator", "_buffers", "_children", "_close_state")
 
     def __init__(
         self,
@@ -105,6 +126,7 @@ class Tee(Generic[T]):
         n: int = 2,
     ):
         self._iterator = iterator.__aiter__()
+        self._close_state = _TeeCloseState(self._iterator)
         self._buffers: list[deque[T]] = [deque() for _ in range(n)]
 
         lock = asyncio.Lock()
@@ -116,6 +138,7 @@ class Tee(Generic[T]):
                 peers=self._buffers,
                 lock=lock,
                 exception=exception,
+                close_state=self._close_state,
             )
             for buffer in self._buffers
         )
@@ -148,11 +171,10 @@ class Tee(Generic[T]):
             except Exception:
                 pass
 
-        if isinstance(self._iterator, _ACloseable):
-            try:
-                await self._iterator.aclose()
-            except Exception:
-                pass
+        try:
+            await self._close_state.aclose()
+        except Exception:
+            pass
 
 
 tee = Tee

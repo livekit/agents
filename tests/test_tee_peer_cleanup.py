@@ -49,6 +49,16 @@ class CloseableSource:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("n", [0, 1, 2])
+async def test_tee_close_closes_unstarted_upstream_only_once(n):
+    source = CloseableSource()
+    tee = Tee(source, n=n)
+    await tee.aclose()
+    await tee.aclose()
+    assert source.close_count == 1
+
+
+@pytest.mark.asyncio
 async def test_closing_all_unstarted_peers_closes_the_upstream_once():
     source = CloseableSource()
     tee = Tee(source)
