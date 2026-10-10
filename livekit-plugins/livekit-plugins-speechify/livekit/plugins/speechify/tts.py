@@ -175,9 +175,10 @@ class TTS(tts.TTS):
             # issues is attributed to this integration, regardless of call site.
             # Timeout/limits mirror the openai plugin's owned-client defaults —
             # the client's own 5s default is too short for longer synthesis requests.
-            # speechify-api types this argument as httpx.AsyncClient and retries
-            # httpx.ConnectError. request/stream work against httpx2; a connect
-            # failure raised by httpx2 is not retried inside the SDK.
+            # speechify-api types this argument as httpx.AsyncClient and only
+            # retries httpx.ConnectError. request/stream still work against
+            # httpx2; _raise_from maps the httpx2 errors onto APIError so the
+            # TTS retry loop runs.
             self._httpx_client = httpx.AsyncClient(
                 headers={CALLER_HEADER: "livekit", CALLER_VERSION_HEADER: __version__},
                 timeout=httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=5.0),
@@ -434,7 +435,11 @@ def _raise_from(e: Exception) -> None:
         ) from None
     if isinstance(e, asyncio.TimeoutError):
         raise APITimeoutError() from None
-    if isinstance(e, ConnectionError):
+    # The SDK only recognizes httpx v1 errors from its own client. The client
+    # we own is httpx2, so connect and timeout failures arrive here unwrapped.
+    if isinstance(e, httpx.TimeoutException):
+        raise APITimeoutError() from e
+    if isinstance(e, (ConnectionError, httpx.TransportError)):
         raise APIConnectionError() from e
     raise e
 
