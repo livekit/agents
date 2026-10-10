@@ -44,7 +44,13 @@ class _VADOptions:
     prefix_padding_duration: float
     max_buffered_speech: float
     activation_threshold: float
-    deactivation_threshold: float
+    explicit_deactivation_threshold: NotGivenOr[float]
+
+    @property
+    def deactivation_threshold(self) -> float:
+        if is_given(self.explicit_deactivation_threshold):
+            return self.explicit_deactivation_threshold
+        return max(self.activation_threshold - 0.15, 0.01)
 
 
 class VAD(vad.VAD):
@@ -81,9 +87,7 @@ class VAD(vad.VAD):
             prefix_padding_duration=prefix_padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
-            deactivation_threshold=deactivation_threshold
-            if is_given(deactivation_threshold)
-            else max(activation_threshold - 0.15, 0.01),
+            explicit_deactivation_threshold=deactivation_threshold,
         )
         self._streams: weakref.WeakSet[_VADStream] = weakref.WeakSet()
 
@@ -126,7 +130,7 @@ class VAD(vad.VAD):
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
-            self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.explicit_deactivation_threshold = deactivation_threshold
 
         for stream in self._streams:
             stream.update_options(
@@ -188,7 +192,7 @@ class _VADStream(vad.VADStream):
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
-            self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.explicit_deactivation_threshold = deactivation_threshold
 
         if self._input_sample_rate:
             assert self._speech_buffer is not None
