@@ -120,13 +120,6 @@ def _warn_model_api_mismatch(model: str, use_vertexai: bool) -> None:
         )
 
 
-def _warn_vertex_scheduling_unsupported() -> None:
-    logger.warning(
-        "tool_response_scheduling is not supported by Vertex AI and will be ignored; "
-        "tool responses use the default scheduling there."
-    )
-
-
 def _get_1008_error_hint(error_message: str) -> str | None:
     """
     Generate a hint for WebSocket 1008 policy violation errors.
@@ -334,8 +327,6 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(vertexai)
             else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
-        if use_vertexai and is_given(tool_response_scheduling):
-            _warn_vertex_scheduling_unsupported()
         if not is_given(model):
             model = (
                 "gemini-live-2.5-flash-native-audio"
@@ -629,8 +620,6 @@ class RealtimeSession(llm.RealtimeSession):
             and self._opts.tool_response_scheduling != tool_response_scheduling
         ):
             self._opts.tool_response_scheduling = tool_response_scheduling
-            if self._opts.vertexai:
-                _warn_vertex_scheduling_unsupported()
             # no need to restart
 
         if is_given(tool_choice):
@@ -726,10 +715,9 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
-            supports_silent_scheduling = (
-                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
-            )
+            # Both APIs read `scheduling`, and only on NON_BLOCKING tools. Vertex AI
+            # used to drop it (#3784); it no longer does (#7660).
+            supports_silent_scheduling = self._opts.tool_behavior == types.Behavior.NON_BLOCKING
             if not supports_silent_scheduling and (
                 silenced := [
                     item.name

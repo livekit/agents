@@ -581,6 +581,41 @@ async def test_tool_response_scheduling_follows_the_output(
         assert responses[0].function_responses[0].scheduling == scheduling
 
 
+@pytest.mark.parametrize("vertexai", [False, True])
+async def test_silent_scheduling_is_claimed_on_vertex_too(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    vertexai: bool,
+) -> None:
+    """A NON_BLOCKING tool that wants no reply goes out SILENT on Vertex AI as well.
+
+    Vertex AI was excluded (#3793, after #3784) and so every such result on it was
+    sent with no scheduling and logged as unavoidably answered -- the model then
+    replied, which is #7660. The exclusion is gone, so the warning must not fire
+    on either API.
+    """
+    async with _make_connected_session(monkeypatch, non_blocking_tools=True) as session:
+        session._opts.vertexai = vertexai
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        await _drain_sent(session)
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(reply_required=False))
+        with caplog.at_level(logging.WARNING):
+            await session.update_chat_ctx(chat_ctx)
+
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert responses[0].function_responses[0].scheduling == (
+            types.FunctionResponseScheduling.SILENT
+        )
+        assert not [r for r in caplog.records if "wants no reply" in r.message]
+
+
 async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -619,18 +654,23 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
 
 
 @pytest.mark.parametrize("vertexai", [False, True])
-def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> None:
-    """Vertex AI rejects `scheduling`, so it is set only for the Gemini API."""
+def test_function_response_scheduling_is_set_on_both_apis(vertexai: bool) -> None:
+    """`scheduling` goes out on Vertex AI too.
+
+    This inverts what the test here previously asserted. It was added with #3793
+    because gemini-live-2.5-flash-preview-native-audio-09-2025 on Vertex AI closed
+    the session with 1007 `Unknown name "scheduling"` (#3784). That model is gone
+    from Vertex AI, the field is in the Vertex AI Live API reference, and #7660
+    measured gemini-3.8-live and gemini-live-2.5-flash-native-audio accepting it
+    and staying silent over 10 trials each.
+    """
     res = create_function_response(
         _tool_output(),
         vertexai=vertexai,
         tool_response_scheduling=types.FunctionResponseScheduling.SILENT,
     )
 
-    if vertexai:
-        assert res.scheduling is None
-    else:
-        assert res.scheduling == types.FunctionResponseScheduling.SILENT
+    assert res.scheduling == types.FunctionResponseScheduling.SILENT
 
 
 @pytest.mark.parametrize("vertexai", [False, True])
@@ -699,30 +739,27 @@ async def test_tool_response_omits_a_locally_made_call_id(
         assert replayed[0].function_responses[0].id is None
 
 
-def test_vertex_scheduling_warns(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("vertexai", [False, True])
+def test_scheduling_is_not_reported_as_unsupported(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, vertexai: bool
 ) -> None:
-    """An explicitly set scheduling is dropped on Vertex AI, so say so instead of ignoring it."""
+    """Neither API warns that scheduling is ignored, because neither ignores it.
+
+    This replaces test_vertex_scheduling_warns, which asserted the opposite. The
+    warning told Vertex AI callers their setting would be dropped; it is now sent,
+    so saying so would be the one thing worse than silence -- telling them the
+    opposite of what the session does.
+    """
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    kwargs: dict[str, object] = (
+        {"vertexai": True, "project": "p", "location": "us-central1"} if vertexai else {}
+    )
 
     with caplog.at_level(logging.WARNING):
         RealtimeModel(
-            vertexai=True,
-            project="p",
-            location="us-central1",
             tool_response_scheduling=types.FunctionResponseScheduling.SILENT,
+            **kwargs,  # type: ignore[arg-type]
         )
-
-    assert any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
-
-
-def test_gemini_api_scheduling_does_not_warn(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-
-    with caplog.at_level(logging.WARNING):
-        RealtimeModel(tool_response_scheduling=types.FunctionResponseScheduling.SILENT)
 
     assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
 
