@@ -130,12 +130,18 @@ def _env_seconds(name: str, default: float) -> float:
         value_ms = float(raw)
     except ValueError:
         logger.warning(
-            "invalid %s=%r, expected milliseconds; using %.0fms", name, raw, default * 1000
+            "invalid %s=%r, expected milliseconds; using %.0fms",
+            name,
+            raw,
+            default * 1000,
         )
         return default
     if not math.isfinite(value_ms) or value_ms < 0:
         logger.warning(
-            "invalid %s=%r, must be finite and >= 0; using %.0fms", name, raw, default * 1000
+            "invalid %s=%r, must be finite and >= 0; using %.0fms",
+            name,
+            raw,
+            default * 1000,
         )
         return default
     return value_ms / 1000.0
@@ -305,7 +311,9 @@ class EventLoopMonitor:
         gc.callbacks.append(self._on_gc)
         self._timer = self._loop.call_later(self._tick, self._on_tick)
         self._watchdog = threading.Thread(
-            target=self._watchdog_main, name=f"livekit-loop-monitor-{self._name}", daemon=True
+            target=self._watchdog_main,
+            name=f"livekit-loop-monitor-{self._name}",
+            daemon=True,
         )
         self._watchdog.start()
 
@@ -590,7 +598,8 @@ class EventLoopMonitor:
                         pending is None or sample.captured_at <= pending.completed_at
                     )
                     if captured_before_tick and (
-                        (self._incident is incident and self._tick_seq == seq) or pending is not None
+                        (self._incident is incident and self._tick_seq == seq)
+                        or pending is not None
                     ):
                         incident.samples.append(sample)
                         if want_late:
@@ -782,7 +791,8 @@ def _tick_interval_for(warn_threshold: float) -> float:
     so fewer ticks per threshold means blocks just over it go unreported; more ticks cost
     wake-ups (two per tick, heartbeat and watchdog) for no gain."""
     return min(
-        max(warn_threshold / _TICKS_PER_WARN_THRESHOLD, _MIN_TICK_INTERVAL), _MAX_TICK_INTERVAL
+        max(warn_threshold / _TICKS_PER_WARN_THRESHOLD, _MIN_TICK_INTERVAL),
+        _MAX_TICK_INTERVAL,
     )
 
 
