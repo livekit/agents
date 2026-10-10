@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from livekit.agents import llm
 
-from .utils import group_tool_calls
+from .utils import group_tool_calls, merge_dynamic_instructions
 
 _EXTRA_CONTENT_KEYS = ("google", "livekit", "xai")
 
@@ -27,6 +27,8 @@ def to_chat_ctx(
     is sent as its own part tagged with ``prompt_cache_breakpoint``. Without it the
     markers are dropped and the output matches a context that never had them.
     """
+    if not prompt_cache_breakpoints:
+        chat_ctx = merge_dynamic_instructions(chat_ctx)
     item_groups = group_tool_calls(chat_ctx)
     messages = []
     for group in item_groups:
@@ -208,6 +210,8 @@ def to_responses_chat_ctx(
     ``prompt_cache_breakpoints`` behaves as in :func:`to_chat_ctx`, except that
     assistant messages never carry one.
     """
+    if not prompt_cache_breakpoints:
+        chat_ctx = merge_dynamic_instructions(chat_ctx)
     item_groups = group_tool_calls(chat_ctx)
     items = []
     for group in item_groups:

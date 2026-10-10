@@ -250,3 +250,27 @@ async def test_stream_ignores_flag_for_non_openai_format():
         await stream.aclose()
         await llm.aclose()
     assert "prompt_cache_breakpoint" not in json.dumps(captured)
+
+
+async def test_wire_folds_dynamic_instructions_for_google_model():
+    # the gateway keeps one system prompt for Gemini and Gemma; a second one becomes a user turn
+    from livekit.agents.llm.chat_context import Instructions
+    from livekit.agents.voice.generation import update_instructions
+
+    llm = _llm("google/gemini-3.5-flash")
+    captured = _capture_requests(llm)
+    ctx = ChatContext()
+    update_instructions(
+        ctx, instructions=Instructions(STATIC, dynamic=DYNAMIC), add_if_missing=True
+    )
+    ctx.add_message(role="user", content="Hi, I need to reschedule.")
+    stream = llm.chat(chat_ctx=ctx)
+    try:
+        async for _ in stream:
+            pass
+    finally:
+        await stream.aclose()
+        await llm.aclose()
+
+    assert captured["messages"][0] == {"role": "system", "content": f"{STATIC}\n{DYNAMIC}"}
+    assert [m["role"] for m in captured["messages"]] == ["system", "user"]
