@@ -3271,31 +3271,38 @@ class AgentActivity(RecognitionHooks):
         all_tasks: list[asyncio.Future[Any]] = [
             t for t in (tts_task, forward_audio_task, forward_text_task) if t is not None
         ]
-        await speech_handle.wait_if_not_interrupted(all_tasks)
+        try:
+            await speech_handle.wait_if_not_interrupted(all_tasks)
 
-        # check for errors in generation/forwarding tasks (e.g. missing audio file)
-        for task in (tts_task, forward_audio_task, forward_text_task):
-            if task is not None and task.done() and not task.cancelled():
-                if exc := task.exception():
-                    raise exc
-
-        if audio_output is not None:
-            await speech_handle.wait_if_not_interrupted(
-                [asyncio.ensure_future(audio_output.wait_for_playout())]
-            )
-
-        stopped_speaking_at = time.time()
-        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
-        _record_interruption(speech_handle)
-        if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*all_tasks)
+            # check for errors in generation/forwarding tasks (e.g. missing audio file)
+            for task in (tts_task, forward_audio_task, forward_text_task):
+                if task is not None and task.done() and not task.cancelled():
+                    if exc := task.exception():
+                        raise exc
 
             if audio_output is not None:
-                audio_output.clear_buffer()
-                await audio_output.wait_for_playout()
+                await speech_handle.wait_if_not_interrupted(
+                    [asyncio.ensure_future(audio_output.wait_for_playout())]
+                )
 
-        if tee is not None:
-            await tee.aclose()
+            stopped_speaking_at = time.time()
+            current_span.set_attribute(
+                trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted
+            )
+            _record_interruption(speech_handle)
+            if speech_handle.interrupted:
+                await utils.aio.cancel_and_wait(*all_tasks)
+
+                if audio_output is not None:
+                    audio_output.clear_buffer()
+                    await audio_output.wait_for_playout()
+
+        finally:
+            await utils.aio.cancel_and_wait(*all_tasks)
+            if audio_out is not None:
+                audio_out.first_frame_fut.cancel()
+            if tee is not None:
+                await tee.aclose()
 
         # use synchronized transcript when available after interruption
         forwarded_text = text_out.text if text_out else ""
