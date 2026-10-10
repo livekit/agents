@@ -970,6 +970,9 @@ def test_tick_does_not_wait_for_watchdog_sample(captured_before_tick: bool) -> N
         assert ready and not watchdog.is_alive() and not tick.is_alive()
         assert tick_completed_during_sample
         assert len(reports) == 1
+        if monitor._timer is not None:
+            monitor._timer.cancel()
+            monitor._timer = None
         loop.run_until_complete(asyncio.sleep(0))
         assert len(reports) == 1
         assert abs(reports[0].started_at + reports[0].duration - tick_completed_at[0]) < 0.1
