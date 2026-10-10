@@ -274,8 +274,8 @@ async def test_full_fake_session_is_well_formed(span_exporter: InMemorySpanExpor
 
 
 async def test_adapter_request_shapes_are_allowed(span_exporter: InMemorySpanExporter) -> None:
-    """Each fallback or stream adapter attempt opens the wrapped stream inside its
-    ``*_request_run``, so the provider's request span nests under the attempt."""
+    """Each fallback or stream adapter opens the wrapped request directly under its own span,
+    with no attempt span of its own in between."""
     from livekit.agents import APIConnectOptions
     from livekit.agents.llm import ChatContext, FallbackAdapter as LLMFallbackAdapter
     from livekit.agents.tts import FallbackAdapter as TTSFallbackAdapter, StreamAdapter

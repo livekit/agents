@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from ..llm import LLM, ChatContext, function_tool, utils as llm_utils
 from ..log import logger
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
 from ..types import APIConnectOptions
 
 _JUDGE_CONN_OPTIONS = APIConnectOptions(timeout=90.0)
@@ -113,7 +114,18 @@ def _has_handoffs(chat_ctx: ChatContext) -> bool:
     )
 
 
-async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
+async def _evaluate_with_llm(llm: LLM, prompt: str, *, name: str) -> JudgmentResult:
+    """Run one judgment under a span naming the judge, so its LLM request is attributed."""
+    with tracer.start_as_current_span("judge_evaluation") as span:
+        span.set_attribute(trace_types.ATTR_GEN_AI_EVALUATION_NAME, name)
+        result = await _judge_with_llm(llm, prompt)
+        span.set_attribute(trace_types.ATTR_GEN_AI_EVALUATION_SCORE_LABEL, result.verdict)
+        if gen_ai_telemetry.capture_content_enabled():
+            span.set_attribute(trace_types.ATTR_GEN_AI_EVALUATION_EXPLANATION, result.reasoning)
+        return result
+
+
+async def _judge_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
     """Run LLM evaluation using function calling for reliable verdict extraction."""
 
     @function_tool
@@ -246,7 +258,7 @@ class _LLMJudge:
             ]
         )
 
-        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts), name=self._name)
         result.instructions = self._instructions
         return result
 
@@ -304,7 +316,7 @@ class _TaskCompletionJudge:
             reference = reference.copy(exclude_instructions=True)
             prompt_parts.extend(["", f"Reference:\n{_format_chat_ctx(reference)}"])
 
-        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts), name=self.name)
         result.instructions = criteria
         return result
 
@@ -362,7 +374,7 @@ class _HandoffJudge:
             reference = reference.copy(exclude_instructions=True)
             prompt_parts.extend(["", f"Reference:\n{_format_chat_ctx(reference)}"])
 
-        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts), name=self.name)
         result.instructions = criteria
         return result
 
