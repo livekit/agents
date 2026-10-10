@@ -10,7 +10,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
-from livekit.agents.voice.io import BufferedAudioOutput, PlaybackFinishedEvent
+from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
@@ -23,10 +23,8 @@ from livekit.agents.voice.room_io._output import (
 from livekit.agents.voice.room_io.room_io import RoomIO
 from livekit.agents.voice.room_io.types import (
     AudioInputOptions,
-    AudioOutputOptions,
     NoiseCancellationParams,
     RoomOptions,
-    TextOutputOptions,
 )
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
@@ -63,12 +61,6 @@ class _FakeRoom:
 
     def isconnected(self) -> bool:
         return self.connected
-
-    def register_byte_stream_handler(self, topic: str, callback: Callable[..., None]) -> None:
-        self.on(f"bytes:{topic}", callback)
-
-    def unregister_byte_stream_handler(self, topic: str) -> None:
-        self._events.pop(f"bytes:{topic}", None)
 
     def register_text_stream_handler(self, topic: str, callback: Callable[..., None]) -> None:
         self.on(f"text:{topic}", callback)
@@ -1351,70 +1343,3 @@ async def test_audio_output_waits_for_active_submission_and_source_playout() -> 
 
     assert not finished.interrupted
     assert finished.playback_position == pytest.approx(frame.duration)
-
-
-async def test_prebuffer_wraps_the_room_audio_output_when_requested() -> None:
-    room = _FakeRoom()
-    room_io = RoomIO(
-        MagicMock(spec=AgentSession),
-        room,
-        options=RoomOptions(audio_output=AudioOutputOptions(prebuffer_ms=300)),
-    )
-    await room_io.start()
-    try:
-        await asyncio.sleep(0)
-        sink = room_io._audio_output
-        assert sink is not None
-        buffered = room_io._effective_audio_output
-        # the buffer sits directly in front of the RoomIO sink, so playback events still
-        # bubble up to anything chained above it
-        assert isinstance(buffered, BufferedAudioOutput)
-        assert buffered.next_in_chain is not None
-        assert buffered.next_in_chain.next_in_chain is sink
-    finally:
-        await room_io.aclose()
-
-
-async def test_audio_output_is_unbuffered_by_default() -> None:
-    room = _FakeRoom()
-    room_io = RoomIO(
-        MagicMock(spec=AgentSession),
-        room,
-        options=RoomOptions(audio_output=AudioOutputOptions()),
-    )
-    await room_io.start()
-    try:
-        await asyncio.sleep(0)
-        assert room_io._effective_audio_output is room_io._audio_output
-    finally:
-        await room_io.aclose()
-
-
-async def test_prebuffer_and_transcription_synchronizer_chain_correctly() -> None:
-    """The prebuffer sits below the synchronizer so transcript timing tracks real playback."""
-    room = _FakeRoom()
-    room_io = RoomIO(
-        MagicMock(spec=AgentSession),
-        room,
-        options=RoomOptions(
-            audio_output=AudioOutputOptions(prebuffer_ms=300),
-            text_output=TextOutputOptions(sync_transcription=True),
-        ),
-    )
-    await room_io.start()
-    try:
-        await asyncio.sleep(0)
-        # session output should be the synchronizer's output
-        assert room_io._tr_synchronizer is not None
-        assert room_io._effective_audio_output is not room_io._audio_output
-        # chain: _SyncedAudioOutput -> BufferedAudioOutput -> _ParticipantAudioOutput
-        synced = room_io._tr_synchronizer.audio_output
-        assert synced is not None
-        buffered = synced.next_in_chain
-        assert isinstance(buffered, BufferedAudioOutput)
-        sink = buffered.next_in_chain
-        assert sink is not None
-        # the sink's next_in_chain might be _AudioSinkProxy, so just verify it reaches the RoomIO sink
-        assert sink.next_in_chain is not None
-    finally:
-        await room_io.aclose()

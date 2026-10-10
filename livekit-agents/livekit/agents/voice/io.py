@@ -499,8 +499,15 @@ class BufferedAudioOutput(AudioOutput):
     anything on, so the sink always starts with a full reserve to absorb those gaps.
 
     The cost is the same amount of latency on the first word of every reply, so this is
-    opt-in: use it for realtime models whose providers drift, not for pipeline TTS that
+    opt-in. Use it for realtime models whose providers drift, not for pipeline TTS that
     already pushes audio faster than real-time.
+
+    Example::
+
+        session.output.audio = BufferedAudioOutput(
+            next_in_chain=session.output.audio,
+            buffer_duration=0.3,
+        )
     """
 
     def __init__(
@@ -591,38 +598,41 @@ class BufferedAudioOutput(AudioOutput):
             await self._forward(frame)
 
     def flush(self) -> None:
-        super().flush()
         # snapshot held frames so the async task works on its own copy; new
-        # captures go to a fresh _held list
+        # captures go to a fresh _held list. don't call super().flush() yet —
+        # the segment isn't complete until the held frames are released.
         held_snapshot, self._held = self._held, []
         self._held_duration = 0.0
-        # flush() is synchronous but handing held frames over is not, so do it in the
-        # background and let wait_for_playout() join in before waiting on the sink
         self._flush_task = asyncio.create_task(self._release_and_flush(held_snapshot))
 
     async def _release_and_flush(self, held: list[rtc.AudioFrame]) -> None:
-        # forward the snapshot frames
+        # release held frames as part of the current segment
         for frame in held:
             await self._forward(frame)
-        # then flush the sink; the next segment starts after flush completes
+        # complete the segment, then flush downstream, then start the next segment
+        super().flush()
         self.next_in_chain.flush()
         self._start_segment()
 
     async def wait_for_playout(self) -> PlaybackFinishedEvent:
         task, self._flush_task = self._flush_task, None
         if task is not None:
-            await task
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         return await super().wait_for_playout()
 
     def clear_buffer(self) -> None:
-        _ = self._flush_task
-        self._flush_task = None
+        # cancel any pending flush task; complete the interrupted segment
+        # synchronously so wait_for_playout() doesn't hang.
+        task, self._flush_task = self._flush_task, None
+        if task is not None and not task.done():
+            task.cancel()
         self._held.clear()
         self._held_duration = 0.0
+        super().flush()
         self._start_segment()
-        # interrupt downstream immediately; the old flush task (if any) will still
-        # run with its snapshot and call flush() on the already-cleared sink,
-        # which is a no-op for the room sink.
         self.next_in_chain.clear_buffer()
 
     def pause(self) -> None:
