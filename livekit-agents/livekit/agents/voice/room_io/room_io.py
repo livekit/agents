@@ -20,7 +20,7 @@ from ...types import (
     NotGivenOr,
 )
 from ..events import AgentStateChangedEvent, CloseEvent, CloseReason, UserInputTranscribedEvent
-from ..io import AudioInput, AudioOutput, BufferedAudioOutput, TextOutput, VideoInput
+from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
 from ._pre_connect_audio import PreConnectAudioHandler
 
@@ -71,7 +71,6 @@ class RoomIO:
         self._audio_input: _ParticipantAudioInputStream | None = None
         self._video_input: _ParticipantVideoInputStream | None = None
         self._audio_output: _ParticipantAudioOutput | None = None
-        self._effective_audio_output: AudioOutput | None = None
         self._user_tr_output: _ParticipantTranscriptionOutput | None = None
         self._agent_tr_output: _ParticipantTranscriptionOutput | None = None
         self._tr_synchronizer: TranscriptSynchronizer | None = None
@@ -143,7 +142,7 @@ class RoomIO:
         # -- create outputs --
         output_audio_options = self._options.get_audio_output_options()
         if output_audio_options:
-            audio_output = _ParticipantAudioOutput(
+            self._audio_output = _ParticipantAudioOutput(
                 self._room,
                 sample_rate=output_audio_options.sample_rate,
                 num_channels=output_audio_options.num_channels,
@@ -153,16 +152,6 @@ class RoomIO:
                     if utils.is_given(output_audio_options.track_name)
                     else "roomio_audio"
                 ),
-            )
-
-            self._audio_output = audio_output
-            self._effective_audio_output = (
-                BufferedAudioOutput(
-                    next_in_chain=audio_output,
-                    buffer_duration=output_audio_options.prebuffer_ms / 1000,
-                )
-                if utils.is_given(output_audio_options.prebuffer_ms)
-                else audio_output
             )
 
         output_text_options = self._options.get_text_output_options()
@@ -186,11 +175,10 @@ class RoomIO:
             # use the RoomIO's audio output if available, otherwise use the agent's audio output
             # (e.g the audio output isn't using RoomIO with our avatar datastream impl)
             if output_text_options.sync_transcription is not False and (
-                sync_audio_output := self._effective_audio_output
-                or self._agent_session.output.audio
+                audio_output := self._audio_output or self._agent_session.output.audio
             ):
                 self._tr_synchronizer = TranscriptSynchronizer(
-                    next_in_chain_audio=sync_audio_output,
+                    next_in_chain_audio=audio_output,
                     next_in_chain_text=self._agent_tr_output,
                     speed=output_text_options.transcription_speed_factor,
                 )
@@ -291,7 +279,7 @@ class RoomIO:
         if self._tr_synchronizer:
             return self._tr_synchronizer.audio_output
 
-        return self._effective_audio_output
+        return self._audio_output
 
     @property
     def transcription_output(self) -> TextOutput | None:
