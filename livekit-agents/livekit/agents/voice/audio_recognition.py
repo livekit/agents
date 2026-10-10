@@ -273,8 +273,6 @@ class AudioRecognition:
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
-        # set on STT END_OF_SPEECH, cleared on STT START_OF_SPEECH. outlives the EOU task,
-        # so a final transcript arriving after its turn was committed still ends a turn
         self._stt_speech_ended = False
 
         self._sample_rate: int | None = None
@@ -1015,6 +1013,7 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
+        self._stt_speech_ended = False
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
             self._turn_detector_stream.flush(reason="clear_user_turn")
@@ -1220,6 +1219,11 @@ class AudioRecognition:
             or self._last_speaking_time is None
             or (self._turn_detection_mode == "stt" and has_stt_end_time)
         )
+        if ev.type == stt.SpeechEventType.START_OF_SPEECH:
+            self._stt_speech_ended = False
+        elif ev.type == stt.SpeechEventType.END_OF_SPEECH:
+            self._stt_speech_ended = True
+
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
@@ -1361,7 +1365,6 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            self._stt_speech_ended = True
 
             # always use STT speaking time since turn detection mode is set to STT. we would want
             # alignment here since _last_speaking_time is used for turn detection timing
@@ -1391,7 +1394,6 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
             self._speaking = True
-            self._stt_speech_ended = False
             self._last_speaking_time = stt_last_speaking_time
 
             if self._end_of_turn_task is not None:

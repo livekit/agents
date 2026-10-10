@@ -1426,6 +1426,17 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
         await _close_test_session(recognition._session)
 
 
+async def _send_stt_event(recognition: AudioRecognition, type: SpeechEventType) -> None:
+    await recognition._on_stt_event(SpeechEvent(type=type))
+
+
+async def _send_final_transcript(recognition: AudioRecognition, text: str) -> None:
+    await recognition._on_stt_event(
+        _final_transcript_event(text=text, start_time=0.0, end_time=0.0)
+    )
+    await asyncio.sleep(0.05)
+
+
 async def test_stt_final_after_a_later_end_of_speech_ends_its_own_turn() -> None:
     """The user resumes between an utterance's END_OF_SPEECH and its final, so each
     final lands one END_OF_SPEECH late. The last one must still end the turn instead
@@ -1434,27 +1445,45 @@ async def test_stt_final_after_a_later_end_of_speech_ends_its_own_turn() -> None
     hooks = recognition._hooks
     assert isinstance(hooks, _TestRecognitionHooks)
 
-    async def stt_event(type: SpeechEventType) -> None:
-        await recognition._on_stt_event(SpeechEvent(type=type))
-
-    async def final_transcript(text: str) -> None:
-        await recognition._on_stt_event(
-            _final_transcript_event(text=text, start_time=0.0, end_time=0.0)
-        )
-
     try:
-        await stt_event(SpeechEventType.START_OF_SPEECH)
-        await stt_event(SpeechEventType.END_OF_SPEECH)
-        await stt_event(SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_final_transcript(recognition, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
         await asyncio.sleep(0.05)
-        await final_transcript("I need the OTP.")
-        await asyncio.sleep(0.2)
-        await stt_event(SpeechEventType.END_OF_SPEECH)
-        await asyncio.sleep(0.05)
-        await final_transcript("For the guard.")
-        await asyncio.sleep(0.05)
+        await _send_final_transcript(recognition, "For the guard.")
 
         assert hooks.committed_turns == ["I need the OTP.", "For the guard."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_speech_boundary_is_tracked_while_another_mode_is_active() -> None:
+    """An utterance that starts while another turn detection mode is active must not
+    be ended by the END_OF_SPEECH of the previous one once the mode returns to stt."""
+    recognition = await _make_stt_eos_recognition()
+    hooks = recognition._hooks
+    assert isinstance(hooks, _TestRecognitionHooks)
+
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_final_transcript(recognition, "first")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.05)
+
+        recognition._update_options(turn_detection="vad")
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        recognition._update_options(turn_detection="stt")
+
+        await _send_final_transcript(recognition, "second")
+        assert hooks.committed_turns == ["first"]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.05)
+        assert hooks.committed_turns == ["first", "second"]
     finally:
         if recognition._end_of_turn_task is not None:
             await aio.cancel_and_wait(recognition._end_of_turn_task)
