@@ -21,17 +21,15 @@ class _TeeCloseState(Generic[T]):
     def __init__(self, iterator: AsyncIterator[T]) -> None:
         self._iterator = iterator
         self._closed = False
+        self._lock = asyncio.Lock()
 
     async def aclose(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if isinstance(self._iterator, _ACloseable):
-            try:
+        async with self._lock:
+            if self._closed:
+                return
+            if isinstance(self._iterator, _ACloseable):
                 await self._iterator.aclose()
-            except BaseException:
-                self._closed = False
-                raise
+            self._closed = True
 
 
 async def _close_peer(

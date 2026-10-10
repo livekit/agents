@@ -1,3 +1,4 @@
+import asyncio
 import gc
 import weakref
 
@@ -72,6 +73,40 @@ async def test_tee_close_retries_after_a_peer_fails_to_close_upstream():
     assert source.close_count == 2
     await tee.aclose()
     assert source.close_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("n", [0, 2])
+async def test_concurrent_close_waits_and_retries_after_the_first_caller_is_cancelled(n):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class Source(CloseableSource):
+        async def aclose(self):
+            started.set()
+            await release.wait()
+            await super().aclose()
+
+    source = Source()
+    tee = Tee(source, n=n)
+    first = asyncio.create_task(tee.aclose())
+    await started.wait()
+    second = asyncio.create_task(tee.aclose())
+    try:
+        await asyncio.sleep(0)
+        assert not second.done()
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        release.set()
+        await second
+        assert source.close_count == 1
+    finally:
+        release.set()
+        first.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
+    await tee.aclose()
+    assert source.close_count == 1
 
 
 @pytest.mark.asyncio
