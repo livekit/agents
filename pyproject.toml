@@ -1,6 +1,15 @@
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
 default-groups = ["dev", "typing"]
+# Universal resolution only checks that a wheel exists for the Python version.
+# A release that publishes wheels for one platform and no sdist (bithuman 2.12.2
+# is win_amd64-only) would otherwise lock and then fail `uv sync` on the others.
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
@@ -95,7 +104,7 @@ dev = [
     "python-dotenv>=1.0.1",
     "mypy",
     "scikit-learn",
-    "pytest>=9.0.3,<9.1",
+    "pytest>=9.1.1,<9.2",
     { include-group = "lint" },
     "pytest-asyncio>=0.25.3",
     "pytest-asyncio-concurrent==0.5.2",
