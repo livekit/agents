@@ -53,6 +53,7 @@ members = [
     "livekit-plugins-fal",
     "livekit-plugins-fireworksai",
     "livekit-plugins-fishaudio",
+    "livekit-plugins-giggy",
     "livekit-plugins-gladia",
     "livekit-plugins-gnani",
     "livekit-plugins-google",
@@ -3081,6 +3082,20 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "msgpack", specifier = ">=1.0" },
+]
+
+[[package]]
+name = "livekit-plugins-giggy"
+source = { editable = "livekit-plugins/livekit-plugins-giggy" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10,<4" },
+    { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
 [[package]]
