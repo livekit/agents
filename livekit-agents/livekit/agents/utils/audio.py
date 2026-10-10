@@ -105,19 +105,28 @@ class AudioByteStream:
             progressive: When *True*, start with a small 20 ms frame and double
                 the frame size on each subsequent emission until
                 ``samples_per_channel`` is reached.
+
+        Raises:
+            ValueError: If the sample rate, channel count, or resolved frame size is not positive.
         """
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be greater than 0")
+        if num_channels <= 0:
+            raise ValueError("num_channels must be greater than 0")
         self._sample_rate = sample_rate
         self._num_channels = num_channels
 
         if samples_per_channel is None:
             samples_per_channel = sample_rate // 10  # 100ms by default
+        if samples_per_channel <= 0:
+            raise ValueError("samples_per_channel must be greater than 0")
 
         self._bytes_per_sample = num_channels * ctypes.sizeof(ctypes.c_int16)
         self._target_bytes_per_frame = samples_per_channel * self._bytes_per_sample
         self._buf = bytearray()
 
         if progressive:
-            min_samples = sample_rate * self._MIN_PROGRESSIVE_MS // 1000
+            min_samples = max(1, sample_rate * self._MIN_PROGRESSIVE_MS // 1000)
             self._initial_bytes_per_frame = min(
                 min_samples * self._bytes_per_sample, self._target_bytes_per_frame
             )
