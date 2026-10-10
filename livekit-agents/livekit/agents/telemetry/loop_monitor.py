@@ -643,11 +643,11 @@ class EventLoopMonitor:
                         self._deferred_report = None
                 if report_directly:
                     self._report(report)
-                    return
-                try:
-                    self._loop.call_soon_threadsafe(self._deliver_deferred_report)
-                except RuntimeError:
-                    self._deliver_deferred_report()
+                else:
+                    try:
+                        self._loop.call_soon_threadsafe(self._deliver_deferred_report)
+                    except RuntimeError:
+                        self._deliver_deferred_report()
 
     def _sample_loop_thread(self, lag: float) -> _StackSample:
         task_name: str | None = None
