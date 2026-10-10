@@ -152,12 +152,14 @@ _NAMED: ToolChoice = {"type": "function", "function": {"name": "get_weather"}}
 
 
 async def test_forced_tool_choice_sent_as_auto_for_opus_5_5() -> None:
-    # Claude Opus 5.5 and Fable 5.1 reject forced tool use with a ValidationException
+    # Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 reject forced tool use with a ValidationException
     # ('tool_choice: type "tool" and "any" are not supported for this model.').
     for model in (
         "us.anthropic.claude-opus-5-5",
         "global.anthropic.claude-opus-5-5",
         "anthropic.claude-opus-5-5",
+        "us.anthropic.claude-sonnet-5-5",
+        "global.anthropic.claude-sonnet-5-5",
         "us.anthropic.claude-fable-5-1",
     ):
         assert await _tool_choice(model, "required") == {"auto": {}}
@@ -165,9 +167,10 @@ async def test_forced_tool_choice_sent_as_auto_for_opus_5_5() -> None:
 
 
 async def test_forced_tool_choice_kept_for_other_models() -> None:
-    # Opus 5 and Fable 5 still accept any/tool; "claude-fable-5" must not match "-5-1".
+    # Opus 5, Sonnet 5 and Fable 5 still accept any/tool; "claude-fable-5" must not match "-5-1".
     for model in (
         "us.anthropic.claude-opus-5",
+        "us.anthropic.claude-sonnet-5",
         "us.anthropic.claude-fable-5",
         "us.anthropic.claude-sonnet-4-6",
     ):
