@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 from typing import Any
 
@@ -994,6 +995,67 @@ def test_to_provider_format_non_object_tool_arguments(fmt: str, arguments: str):
 
     messages, _ = ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == {}
+
+
+def _anthropic_tool_result_content(output: str) -> Any:
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments="{}"))
+    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output=output, is_error=False))
+
+    messages, _ = ctx.to_provider_format(format="anthropic")
+    for msg in messages:
+        for block in msg["content"]:
+            if block.get("type") == "tool_result":
+                return block["content"]
+    raise AssertionError("no tool_result found in anthropic messages")
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "[9, 13, 18]",
+        '[{"name": "Margherita", "price": 12}]',
+        '["Margherita", "Pepperoni"]',
+        '[{"type": "vegetarian", "name": "Margherita"}]',
+        '[{"type": "text", "name": "Margherita"}]',
+        '[{"type": "image", "url": "https://example.com/margherita.png"}]',
+        '[{"type": "search_result", "source": "https://example.com/menu", "snippet": "..."}]',
+        '[{"type": "text", "text": "Found 1 order."}, {"order_id": 42}]',
+        "[]",
+    ],
+    ids=[
+        "numbers",
+        "records",
+        "strings",
+        "records-with-type-field",
+        "record-typed-text",
+        "record-typed-image",
+        "record-typed-search-result",
+        "mixed",
+        "empty",
+    ],
+)
+def test_anthropic_tool_result_keeps_json_lists_as_text(output: str):
+    """A tool that returns a JSON list (open slots, search results, menu items) is sent as text.
+
+    `tool_result.content` only accepts a string or a list of content blocks. Sending
+    any other list makes the Messages API reject the request, and since the output
+    stays in the chat history, every later turn fails the same way.
+    """
+    assert _anthropic_tool_result_content(output) == output
+
+
+def test_anthropic_tool_result_passes_content_blocks_through():
+    """Tools that return content blocks as JSON, like the browser computer-use tool
+    with its screenshots, still have them sent as blocks."""
+    blocks = [
+        {"type": "text", "text": "Page loaded."},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "aGk="},
+        },
+    ]
+    assert _anthropic_tool_result_content(json.dumps(blocks)) == blocks
 
 
 def test_copy_keeps_a_tool_output_with_no_name():
