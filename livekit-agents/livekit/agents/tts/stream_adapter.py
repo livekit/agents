@@ -68,15 +68,19 @@ class StreamAdapter(TTS):
         one here, and only while markup is actually flowing, so a plain turn never pays
         the stray-``<`` stall.
 
-        Explicit ``tts_text`` uses the XML-aware tokenizer even when the adapter
+        Explicit ``tts_text`` uses an XML-aware tokenizer even when the adapter
         has a caller-provided tokenizer, so a tag cannot be split across requests.
+        The built-in tokenizer's batching limits are preserved.
         """
         if not xml_aware and (not lowering or self._explicit_tokenizer):
             return self._sentence_tokenizer
         if self._markup_tokenizer is None:
-            self._markup_tokenizer = tokenize.blingfire.SentenceTokenizer(
-                retain_format=True, xml_aware=True
-            )
+            if isinstance(self._sentence_tokenizer, tokenize.blingfire.SentenceTokenizer):
+                self._markup_tokenizer = self._sentence_tokenizer.with_xml_aware()
+            else:
+                self._markup_tokenizer = tokenize.blingfire.SentenceTokenizer(
+                    retain_format=True, xml_aware=True
+                )
         return self._markup_tokenizer
 
     def _set_expressive(self, enabled: bool) -> None:
@@ -142,9 +146,14 @@ class StreamAdapterWrapper(SynthesizeStream):
         markup = self._tts._wrapped_tts.markup
         lowering = bool(markup._provider_key()) and self._expressive
 
-        sent_stream = self._tts._tokenizer_for(
-            lowering=lowering, xml_aware=self._xml_aware
-        ).stream()
+        sentence_tokenizer = self._tts._tokenizer_for(lowering=lowering, xml_aware=self._xml_aware)
+        sent_stream = sentence_tokenizer.stream()
+        max_token_len = (
+            sentence_tokenizer.max_token_len
+            if self._xml_aware
+            and isinstance(sentence_tokenizer, tokenize.blingfire.SentenceTokenizer)
+            else None
+        )
         if self._tts._stream_pacer:
             sent_stream = self._tts._stream_pacer.wrap(
                 sent_stream=sent_stream,
@@ -178,10 +187,6 @@ class StreamAdapterWrapper(SynthesizeStream):
 
             duration = 0.0
             async for ev in sent_stream:
-                output_emitter.push_timed_transcript(
-                    TimedString(text=ev.token, start_time=duration)
-                )
-
                 if not (text := ev.token.strip()):
                     continue
 
@@ -191,6 +196,15 @@ class StreamAdapterWrapper(SynthesizeStream):
                     if not (text := markup.convert(markup.normalize(text)).strip()):
                         continue
 
+                if max_token_len is not None and len(text) > max_token_len:
+                    raise ValueError(
+                        f"TTS request exceeds max_token_len={max_token_len}; "
+                        "shorten the marked-up text or increase the tokenizer limit"
+                    )
+
+                output_emitter.push_timed_transcript(
+                    TimedString(text=ev.token, start_time=duration)
+                )
                 self._mark_started()
                 async with self._tts._wrapped_tts.synthesize(
                     text, conn_options=self._wrapped_tts_conn_options

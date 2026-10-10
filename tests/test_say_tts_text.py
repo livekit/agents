@@ -161,3 +161,50 @@ async def test_say_keeps_ssml_scope_in_one_non_streaming_request(markup: str, ad
             tts.synthesize_ch.recv_nowait()
     finally:
         await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_say_keeps_custom_stream_adapter_request_limit() -> None:
+    tts = NonStreamingFakeTTS()
+    model = StreamAdapter(
+        tts=tts,
+        sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
+            retain_format=True, max_token_len=100
+        ),
+    )
+    agent = RecordingAgent(model)
+    session = AgentSession(vad=None, turn_handling={"turn_detection": None})
+    session.output.audio = FakeAudioOutput()
+    await session.start(agent)
+    try:
+        first = "<prosody>" + "First sentence. " * 3 + "</prosody>"
+        second = "<prosody>" + "Second sentence. " * 3 + "</prosody>"
+        handle = session.say("First sentence. Second sentence.", tts_text=f"{first} End. {second}")
+        await handle.wait_for_playout()
+
+        assert tts.synthesize_ch.recv_nowait()._input_text == f"{first} End."
+        assert tts.synthesize_ch.recv_nowait()._input_text == second
+        with pytest.raises(ChanEmpty):
+            tts.synthesize_ch.recv_nowait()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_adapter_rejects_xml_scope_over_request_limit() -> None:
+    tts = NonStreamingFakeTTS()
+    model = StreamAdapter(
+        tts=tts,
+        sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(max_token_len=100),
+    )
+    markup = "<prosody>" + "Long sentence. " * 10 + "</prosody>"
+
+    async with model.stream(xml_aware=True) as stream:
+        stream.push_text(markup)
+        stream.end_input()
+        with pytest.raises(ValueError, match="TTS request exceeds max_token_len=100"):
+            async for _ in stream:
+                pass
+
+    with pytest.raises(ChanEmpty):
+        tts.synthesize_ch.recv_nowait()
