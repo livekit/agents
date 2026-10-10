@@ -1043,18 +1043,11 @@ class AudioEmitter:
         timed_transcripts: list[TimedString] = []
 
         flush_timer: asyncio.TimerHandle | None = None
-        sent_start: float | None = None
-        sent_duration: float = 0.0
+        playout_end = 0.0
         event_loop = asyncio.get_event_loop()
 
-        def _send_audio(ev: SynthesizedAudio, *, flush_if_delayed: bool = False) -> None:
-            nonlocal sent_start, sent_duration, flush_timer
-
-            self._dst_ch.send_nowait(ev)
-            if sent_start is None:
-                sent_start = event_loop.time()
-            sent_duration += ev.frame.duration
-
+        def _schedule_flush() -> None:
+            nonlocal flush_timer
             if flush_timer is not None:
                 flush_timer.cancel()
 
@@ -1062,13 +1055,19 @@ class AudioEmitter:
                 self.flush()
                 logger.debug("flush audio emitter due to slow audio generation")
 
-            if flush_if_delayed and sent_duration > 0.15:
-                # force flush the buffer if the audio comes slower than realtime.
-                # skip during the initial progressive ramp-up where sent_duration
-                # is too small for a meaningful slow-generation check.
-                delay = sent_duration - (event_loop.time() - sent_start) - 0.02
-                if delay > 0:
-                    flush_timer = event_loop.call_later(delay, _flush)
+            # Release buffered audio before the estimated downstream playback runs out.
+            delay = max(0.0, playout_end - event_loop.time() - 0.02)
+            flush_timer = event_loop.call_later(delay, _flush)
+
+        def _send_audio(ev: SynthesizedAudio, *, flush_if_delayed: bool = False) -> None:
+            nonlocal playout_end, flush_timer
+            self._dst_ch.send_nowait(ev)
+            playout_end = max(playout_end, event_loop.time()) + ev.frame.duration
+            if flush_if_delayed:
+                _schedule_flush()
+            elif flush_timer is not None:
+                flush_timer.cancel()
+                flush_timer = None
 
         # Number of samples held back in last_frame so we can tag is_final
         # on the very last audio of a segment.  10 ms is small enough to be
@@ -1176,7 +1175,6 @@ class AudioEmitter:
 
         def _flush_frame() -> None:
             nonlocal last_frame, segment_ctx, timed_transcripts
-            nonlocal flush_timer, sent_start, sent_duration
             assert segment_ctx is not None
 
             if last_frame is None:
@@ -1200,12 +1198,6 @@ class AudioEmitter:
                 debug_frames.append(last_frame)
 
             last_frame = None
-            # reset sent duration after flush
-            sent_start = None
-            sent_duration = 0.0
-            if flush_timer is not None:
-                flush_timer.cancel()
-                flush_timer = None
 
         def dump_segment() -> None:
             nonlocal segment_ctx
@@ -1278,6 +1270,7 @@ class AudioEmitter:
                 if self._is_raw_pcm:
                     if isinstance(data, rtc.AudioFrame):
                         _emit_frame(data)
+                        _schedule_flush()
                     elif isinstance(data, bytes):
                         if audio_byte_stream is None:
                             audio_byte_stream = audio.AudioByteStream(
@@ -1291,6 +1284,7 @@ class AudioEmitter:
 
                         for f in audio_byte_stream.push(data):
                             _emit_frame(f)
+                        _schedule_flush()
                     elif isinstance(data, AudioEmitter._FlushSegment):
                         if audio_byte_stream:
                             for f in audio_byte_stream.flush():
