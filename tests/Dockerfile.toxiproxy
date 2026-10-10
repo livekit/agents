@@ -4,6 +4,7 @@ RUN apk add --no-cache git make
 
 WORKDIR /build
 
+# pinned: upstream main tracks the newest Go toolchain, which can outrun the builder image
 RUN git clone --depth 1 --branch v2.12.0 https://github.com/Shopify/toxiproxy.git .
 
 RUN make build
