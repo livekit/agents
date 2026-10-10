@@ -987,15 +987,16 @@ def test_deferred_report_is_flushed_when_monitor_stops_before_loop_closes() -> N
     monitor = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
     reports: list[BlockedReport] = []
     monitor._on_report = reports.append
-    report = monitor._build_report(0.15, 0.0, 0.15, 0.0, [])
-    monitor._deferred_report = report
+    first = monitor._build_report(0.15, 0.0, 0.15, 0.0, [])
+    second = monitor._build_report(0.2, 0.0, 0.2, 0.0, [])
+    monitor._deferred_reports.extend((first, second))
     loop.call_soon_threadsafe(monitor._deliver_deferred_report)
 
     try:
         monitor.stop()
-        assert reports == [report]
+        assert reports == [first, second]
         loop.run_until_complete(asyncio.sleep(0))
-        assert reports == [report]
+        assert reports == [first, second]
     finally:
         loop.close()
 

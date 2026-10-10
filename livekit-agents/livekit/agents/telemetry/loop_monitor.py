@@ -243,7 +243,7 @@ class EventLoopMonitor:
         # written by the watchdog, read by the loop thread under _lock
         self._lock = threading.Lock()
         self._incident: _Incident | None = None
-        self._deferred_report: BlockedReport | None = None
+        self._deferred_reports: deque[BlockedReport] = deque()
 
         self._gc_started_at: float | None = None
         self._gc_time: float = 0.0
@@ -305,9 +305,11 @@ class EventLoopMonitor:
         self._deliver_deferred_report()
 
     def _deliver_deferred_report(self) -> None:
-        with self._lock:
-            report, self._deferred_report = self._deferred_report, None
-        if report is not None:
+        while True:
+            with self._lock:
+                if not self._deferred_reports:
+                    return
+                report = self._deferred_reports.popleft()
             self._report(report)
 
     # -- loop thread --
@@ -637,12 +639,10 @@ class EventLoopMonitor:
                     started_at=pending_report.started_at,
                 )
                 with self._lock:
-                    self._deferred_report = report
+                    self._deferred_reports.append(report)
                     report_directly = self._closed or not self._loop.is_running()
-                    if report_directly:
-                        self._deferred_report = None
                 if report_directly:
-                    self._report(report)
+                    self._deliver_deferred_report()
                 else:
                     try:
                         self._loop.call_soon_threadsafe(self._deliver_deferred_report)
