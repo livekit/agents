@@ -162,7 +162,9 @@ def test_mistralai_format_converts_mid_conversation_instructions():
     assert entries[-1] == {
         "type": "message.input",
         "role": "user",
-        "content": f"<instructions>\n{instructions}\n</instructions>",
+        "content": (
+            f"I'd like to refill my prescription.\n<instructions>\n{instructions}\n</instructions>"
+        ),
     }
 
 
@@ -175,8 +177,8 @@ def test_per_turn_instructions_convert_without_a_preamble():
     entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
 
     assert extra_data.instructions is None
-    assert [e["role"] for e in entries] == ["user", "user"]
-    assert entries[-1]["content"].startswith("<instructions>")
+    assert [e["role"] for e in entries] == ["user"]
+    assert entries[-1]["content"].startswith("I'd like to refill my prescription.\n<instructions>")
 
 
 def test_empty_mid_conversation_system_messages_are_dropped():
@@ -190,6 +192,65 @@ def test_empty_mid_conversation_system_messages_are_dropped():
 
     assert extra_data.instructions == "You are a helpful assistant."
     assert [e["role"] for e in entries] == ["user"]
+
+
+def _ctx_with_unanswered_user_turns() -> ChatContext:
+    # a request and a trailing "Thanks." committed as two turns, the reply to the first
+    # discarded before it played
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="assistant", content=["Bright Smile Dental, how can I help?"])
+    chat_ctx.add_message(role="user", content=["Can you move my cleaning to Thursday?"])
+    chat_ctx.add_message(role="user", content=["Thanks."])
+    return chat_ctx
+
+
+def test_openai_format_merges_consecutive_user_messages():
+    chat_ctx = _ctx_with_unanswered_user_turns()
+
+    messages, _ = chat_ctx.to_provider_format(format="openai")
+
+    assert messages[-1] == {
+        "role": "user",
+        "content": "Can you move my cleaning to Thursday?\nThanks.",
+    }
+    assert [m["role"] for m in messages] == ["assistant", "user"]
+    # the chat context keeps both turns
+    assert [m.text_content for m in chat_ctx.messages()][-2:] == [
+        "Can you move my cleaning to Thursday?",
+        "Thanks.",
+    ]
+
+
+def test_openai_responses_and_mistralai_formats_merge_consecutive_user_messages():
+    chat_ctx = _ctx_with_unanswered_user_turns()
+
+    items, _ = chat_ctx.to_provider_format(format="openai.responses")
+    entries, _ = chat_ctx.to_provider_format(format="mistralai")
+
+    assert [i["role"] for i in items] == ["assistant", "user"]
+    assert [e["role"] for e in entries] == ["assistant", "user"]
+    assert entries[-1]["content"] == "Can you move my cleaning to Thursday?\nThanks."
+
+
+def test_user_messages_separated_by_an_answer_are_not_merged():
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["What's the weather?"])
+    chat_ctx.insert(FunctionCall(call_id="1", name="get_weather", arguments="{}"))
+    chat_ctx.insert(FunctionCallOutput(call_id="1", output="sunny", is_error=False))
+    chat_ctx.add_message(role="user", content=["And tomorrow?"])
+    chat_ctx.add_message(role="assistant", content=["Sunny today."])
+    chat_ctx.add_message(role="user", content=["Thanks."])
+
+    messages, _ = chat_ctx.to_provider_format(format="openai")
+
+    assert [m["role"] for m in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "user",
+        "assistant",
+        "user",
+    ]
 
 
 def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():

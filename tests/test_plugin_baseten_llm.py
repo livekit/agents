@@ -31,6 +31,7 @@ pytestmark = pytest.mark.unit
 PREAMBLE = "You are a helpful assistant."
 INSTRUCTIONS = "Ask the caller for the year they were born."
 INLINED = f"<instructions>\n{INSTRUCTIONS}\n</instructions>"
+USER_TURN = "I'd like to refill my prescription."
 
 INLINE_MODELS = ["Qwen/Qwen3.8-27B"]
 PASSTHROUGH_MODELS = [
@@ -109,7 +110,7 @@ def _per_turn_ctx() -> ChatContext:
     chat_ctx = ChatContext.empty()
     chat_ctx.add_message(role="system", content=[PREAMBLE])
     chat_ctx.add_message(role="assistant", content=["Hello! How can I help you?"])
-    chat_ctx.add_message(role="user", content=["I'd like to refill my prescription."])
+    chat_ctx.add_message(role="user", content=[USER_TURN])
     chat_ctx.add_message(role="system", content=[INSTRUCTIONS])
     return chat_ctx
 
@@ -171,9 +172,9 @@ def test_inline_instructions_inferred_from_model_id(model: str, expected: bool) 
 async def test_per_turn_instructions_are_inlined_for_single_system_models(model: str) -> None:
     messages = await _sent_messages(model, _per_turn_ctx())
 
-    assert [m["role"] for m in messages] == ["system", "assistant", "user", "user"]
+    assert [m["role"] for m in messages] == ["system", "assistant", "user"]
     assert messages[0] == {"role": "system", "content": PREAMBLE}
-    assert messages[-1] == {"role": "user", "content": INLINED}
+    assert messages[-1] == {"role": "user", "content": f"{USER_TURN}\n{INLINED}"}
 
 
 async def test_inlining_preserves_tool_call_history() -> None:
@@ -247,8 +248,8 @@ async def test_conversation_without_mid_system_messages_is_identical_across_mode
 async def test_override_enables_inlining_for_models_not_on_the_list(model: str) -> None:
     messages = await _sent_messages(model, _per_turn_ctx(), inline=True)
 
-    assert [m["role"] for m in messages] == ["system", "assistant", "user", "user"]
-    assert messages[-1] == {"role": "user", "content": INLINED}
+    assert [m["role"] for m in messages] == ["system", "assistant", "user"]
+    assert messages[-1] == {"role": "user", "content": f"{USER_TURN}\n{INLINED}"}
 
 
 async def test_override_disables_inlining_for_a_listed_model() -> None:
