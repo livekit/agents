@@ -332,6 +332,8 @@ class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
+        self._input_silence_atask: asyncio.Task[None] | None = None
+        self._input_audio_off = asyncio.Event()
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
@@ -1270,6 +1272,11 @@ class AgentActivity(RecognitionHooks):
             )
 
             self._realtime_spans = utils.BoundedDict[str, trace.Span](maxsize=100)
+            if capabilities.continuous_input_required:
+                self._on_input_audio_changed()
+                self._input_silence_atask = asyncio.create_task(
+                    self._input_silence_task(), name="AgentActivity._input_silence_task"
+                )
             if not capabilities.audio_output and not self.tts and self._session.output.audio:
                 logger.error(
                     "audio output is enabled but RealtimeModel has no audio modality "
@@ -1596,6 +1603,9 @@ class AgentActivity(RecognitionHooks):
 
         self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
 
+        if self._input_silence_atask is not None:
+            await utils.aio.cancel_and_wait(self._input_silence_atask)
+
         if self._rt_session is not None:
             await self._rt_session.aclose()
             # after aclose, so a model that reports its final usage while closing is still counted
@@ -1684,6 +1694,33 @@ class AgentActivity(RecognitionHooks):
 
         if self._audio_recognition is not None:
             self._audio_recognition._push_audio(frame, stt_frame=stt_frame)
+
+    def _on_input_audio_changed(self) -> None:
+        agent_input = self._session.input
+        if agent_input.audio is not None and agent_input.audio_enabled:
+            self._input_audio_off.clear()
+        else:
+            self._input_audio_off.set()
+
+    @utils.log_exceptions(logger=logger)
+    async def _input_silence_task(self) -> None:
+        # the model stalls without input audio, so silence stands in while the user's audio is off;
+        # only the model gets it, VAD and STT hear nothing as they would without the model
+        while True:
+            await self._input_audio_off.wait()
+            # no frame yet means no format to match, so this round stays quiet
+            sample_rate = self._session._input_sample_rate
+            silence = (
+                utils.audio.silence_frame(0.1, sample_rate) if sample_rate is not None else None
+            )
+            next_push = time.monotonic()
+            while self._input_audio_off.is_set():
+                if self._rt_session is None:
+                    return  # handed over to the next activity
+                if silence is not None:
+                    self._rt_session.push_audio(silence)
+                next_push += 0.1
+                await asyncio.sleep(max(0.0, next_push - time.monotonic()))
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:

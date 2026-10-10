@@ -202,6 +202,8 @@ class GPTLiveModel(llm.DuplexModel):
                 mutable_instructions=False,
                 # tools live on the backend model, and a client delegation has none
                 mutable_tools=delegation == "responses",
+                # output advances with the input audio, so the model goes quiet without it
+                continuous_input_required=True,
             )
         )
         responses = (
