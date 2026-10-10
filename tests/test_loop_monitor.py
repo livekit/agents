@@ -779,7 +779,7 @@ def test_a_block_the_watchdog_missed_is_still_blocking_code() -> None:
         m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
         missed = m._build_report(0.11, gc_time=0.0, cpu_time=0.0001, watchdog_gap=0.0, samples=[])
         assert not missed.process_descheduled
-        assert missed.stacks and "before the watchdog looked" in missed.stacks[0]
+        assert missed.stacks and "before a stack snapshot was available" in missed.stacks[0]
         sample = loop_monitor._StackSample(
             lag=0.06,
             task_name="t",
@@ -813,7 +813,7 @@ def test_watchdog_samples_one_tick_before_the_threshold() -> None:
         loop.close()
 
 
-def test_tick_waits_for_watchdog_sample() -> None:
+def test_tick_does_not_wait_for_watchdog_sample() -> None:
     import traceback
 
     loop = asyncio.new_event_loop()
@@ -839,8 +839,11 @@ def test_tick_waits_for_watchdog_sample() -> None:
     watchdog.start()
     ready = sample_ready.wait(1)
     tick = threading.Thread(target=monitor._on_tick)
+    tick_completed_during_sample = False
     if ready:
         tick.start()
+        tick.join(0.1)
+        tick_completed_during_sample = not tick.is_alive()
     release_sample.set()
     if ready:
         tick.join(1)
@@ -848,8 +851,9 @@ def test_tick_waits_for_watchdog_sample() -> None:
 
     try:
         assert ready and not watchdog.is_alive() and not tick.is_alive()
+        assert tick_completed_during_sample
         assert len(reports) == 1
-        assert reports[0].stacks[0].startswith("# loop thread sampled")
+        assert reports[0].stacks[0].startswith("# no sample:")
     finally:
         monitor.stop()
         loop.close()

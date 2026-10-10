@@ -351,7 +351,7 @@ class EventLoopMonitor:
                 "# no sample: the loop thread held the GIL for the whole stall, so the sampler "
                 "could not run (a native call that does not release the GIL)"
                 if watchdog_starved
-                else "# no sample: the block ended before the watchdog looked"
+                else "# no sample: the event loop resumed before a stack snapshot was available"
             ]
         return BlockedReport(
             duration=lag,
@@ -547,9 +547,15 @@ class EventLoopMonitor:
             if not (want_first or want_late):
                 return
 
-            # Keep the incident lock while sampling so the heartbeat cannot report it before
-            # the sample is attached.
-            incident.samples.append(self._sample_loop_thread(lag))
+        # Stack inspection can take long enough for the loop to resume. Never hold _lock
+        # across it: _on_tick must not be sampled blocked on the monitor's own lock.
+        sample = self._sample_loop_thread(lag)
+        with self._lock:
+            # A resumed loop detaches the incident before reporting it. Do not attach a
+            # snapshot taken after that tick, since it would describe the resumed callback.
+            if self._incident is not incident or self._tick_seq != seq:
+                return
+            incident.samples.append(sample)
             if want_late:
                 incident.late_sampled = True
 
