@@ -217,7 +217,8 @@ def _ensure_strict_json_schema(
             )
             assert is_dict(non_null)
 
-            if "type" not in non_null:
+            # A nullable type still cannot satisfy a non-null const constraint.
+            if "type" not in non_null or "const" in non_null:
                 continue
 
             t = non_null["type"]
