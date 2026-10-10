@@ -7,6 +7,49 @@ from livekit.agents.utils.audio import AudioByteStream
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("progressive", [False, True])
+@pytest.mark.parametrize(
+    "sample_rate, num_channels, samples_per_channel, parameter",
+    [
+        (0, 1, 1, "sample_rate"),
+        (-1, 1, 1, "sample_rate"),
+        (24000, 0, 1, "num_channels"),
+        (24000, -1, 1, "num_channels"),
+        (24000, 1, 0, "samples_per_channel"),
+        (24000, 1, -1, "samples_per_channel"),
+        (1, 1, None, "samples_per_channel"),
+    ],
+)
+def test_invalid_frame_configuration(
+    sample_rate: int,
+    num_channels: int,
+    samples_per_channel: int | None,
+    parameter: str,
+    progressive: bool,
+) -> None:
+    with pytest.raises(ValueError, match=parameter):
+        AudioByteStream(
+            sample_rate=sample_rate,
+            num_channels=num_channels,
+            samples_per_channel=samples_per_channel,
+            progressive=progressive,
+        )
+
+
+@pytest.mark.parametrize("sample_rate", [1, 25, 49])
+def test_progressive_frames_contain_at_least_one_sample(sample_rate: int) -> None:
+    pcm = b"\x11\x22" * 7
+    stream = AudioByteStream(
+        sample_rate=sample_rate, num_channels=1, samples_per_channel=4, progressive=True
+    )
+
+    frames = stream.push(pcm)
+    frames.extend(stream.flush())
+
+    assert [frame.samples_per_channel for frame in frames] == [1, 2, 4]
+    assert b"".join(frame.data.tobytes() for frame in frames) == pcm
+
+
 @pytest.mark.parametrize("num_channels", [1, 2])
 @pytest.mark.parametrize("progressive", [False, True])
 @pytest.mark.parametrize("split", [1, 2, 3, 960, 961, 3001, 4095, 4096, 4097])
