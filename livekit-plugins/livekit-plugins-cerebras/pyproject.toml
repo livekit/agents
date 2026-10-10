@@ -24,8 +24,8 @@ classifiers = [
 dependencies = [
     "livekit-agents[codecs, openai]>=1.8.6",
     # _CerebrasClient._build_request sets options.content on FinalRequestOptions,
-    # a field added in openai 2.16.0 (binary request streaming support).
-    "openai>=2.16.0",
+    # a field added in openai 2.16.0. SDK 3.x builds those requests with httpx2.
+    "openai>=3.19,<4",
     "msgpack>=1.0",
     "msgpack-types>=0.7.0",
 ]

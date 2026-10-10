@@ -23,8 +23,8 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.8.6",
-    "anthropic>=1.8,<2",  # 1.0 switched to httpx2 and dropped temperature/top_k (#7235)
-    "httpx",
+    "anthropic>=1.8,<2",
+    "httpx2",
 ]
 
 [project.urls]
