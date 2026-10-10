@@ -69,6 +69,7 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
+    RunContext,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -81,11 +82,13 @@ from .generation import (
     _AudioOutput,
     _ForwardOutput,
     _inject_running_tool_calls,
+    _interrupted_inflight_tool_output,
     _interrupted_tool_output,
     _strip_assistant_markup,
     _strip_running_tool_calls,
     _TextOutput,
     _time_to_first_sentence,
+    _ToolOutput,
     _TTSGenerationData,
     forward_generation,
     perform_audio_forwarding,
@@ -385,6 +388,13 @@ class AgentActivity(RecognitionHooks):
         self._tool_executor = _ToolExecutor(
             owning_activity=self, async_tool_options=activity_options
         )
+        # results of calls closed by an interruption timeout, held while the
+        # synthetic error is synced and then delivered under a new call id
+        self._closed_call_result_hold = 0
+        self._queued_closed_call_results: list[
+            tuple[_ToolExecutor, RunContext[Any], list[llm.ChatItem]]
+        ] = []
+        self._closed_call_result_tasks: set[asyncio.Task[None]] = set()
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False
@@ -1627,8 +1637,14 @@ class AgentActivity(RecognitionHooks):
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
 
-            # cancel cancellable tools and await the rest before teardown
+            # cancel cancellable tools and await the rest before teardown.
+            # a tool that finishes here may queue its real result; deliver that
+            # before the realtime session is closed.
             await self._tool_executor.drain()
+            if self._closed_call_result_hold == 0:
+                self._flush_queued_closed_call_results()
+            if self._closed_call_result_tasks:
+                await asyncio.gather(*list(self._closed_call_result_tasks), return_exceptions=True)
 
             await self._close_session()
             await asyncio.gather(*self._interrupt_background_speeches(force=False))
@@ -4200,6 +4216,190 @@ class AgentActivity(RecognitionHooks):
                 except Exception:
                     logger.exception("failed to reset tools")
 
+    def _on_suppressed_tool_result(self, out: ToolExecutionOutput) -> None:
+        """Publish a tool outcome that arrived after its call was already answered.
+
+        The synthetic error stays on the original call id. The real outcome is a
+        deferred update with a new id, same as ``RunContext.update()`` after the
+        first result, so the session learns what the tool actually did.
+        """
+        if isinstance(out.raw_exception, asyncio.CancelledError):
+            return
+
+        running = _RunningTasks.get(self._session, {}).get(out.fnc_call.call_id)
+        if running is None:
+            logger.debug(
+                "dropped a tool result that finished after its call was closed",
+                extra={"call_id": out.fnc_call.call_id, "function": out.fnc_call.name},
+            )
+            return
+        # ctx.update() already owns the deferred path for this call, including
+        # the terminal ``_final`` pair the executor emits when the tool returns
+        if running.ctx._updates:
+            return
+
+        payload: Any = out.raw_output
+        if out.agent_task is not None:
+            # the interruption declined the handoff; don't apply it after the fact
+            payload = ToolError("the agent handoff was interrupted and did not happen")
+        elif out.raw_exception is not None:
+            payload = out.raw_exception
+
+        try:
+            items = running.executor._prepare_closed_call_result(running.ctx, payload)
+        except Exception:
+            logger.exception(
+                "failed to record a tool result after its call was closed",
+                extra={"call_id": out.fnc_call.call_id, "function": out.fnc_call.name},
+            )
+            return
+
+        if self._defer_closed_call_result(running.executor, running.ctx, items):
+            return
+        self._schedule_closed_call_result(running.executor, running.ctx, items)
+
+    def _defer_closed_call_result(
+        self,
+        executor: _ToolExecutor,
+        ctx: RunContext[Any],
+        items: list[llm.ChatItem],
+    ) -> bool:
+        """Queue ``items`` while a synthetic error is syncing. False means deliver now."""
+        if not self._closed_call_result_hold:
+            return False
+        self._queued_closed_call_results.append((executor, ctx, items))
+        return True
+
+    def _schedule_closed_call_result(
+        self,
+        executor: _ToolExecutor,
+        ctx: RunContext[Any],
+        items: list[llm.ChatItem],
+    ) -> None:
+        async def _run() -> None:
+            try:
+                await executor._emit_deferred_items(ctx, items)
+            except Exception:
+                logger.exception(
+                    "failed to deliver a tool result after its call was closed",
+                    extra={
+                        "call_id": ctx.function_call.call_id,
+                        "function": ctx.function_call.name,
+                    },
+                )
+
+        task = asyncio.create_task(_run(), name="AgentActivity.closed_call_result")
+        self._closed_call_result_tasks.add(task)
+        task.add_done_callback(self._closed_call_result_tasks.discard)
+
+    def _flush_queued_closed_call_results(self) -> None:
+        queued = self._queued_closed_call_results
+        self._queued_closed_call_results = []
+        for executor, ctx, items in queued:
+            self._schedule_closed_call_result(executor, ctx, items)
+
+    async def _commit_interrupted_realtime_tools(
+        self,
+        *,
+        speech_handle: SpeechHandle,
+        tool_output: _ToolOutput,
+        function_calls: list[llm.FunctionCall],
+        suppressed_completions: set[str],
+    ) -> None:
+        """Record one output per tool call on an interrupted realtime turn.
+
+        Tools that already finished keep their result. A call still running — the
+        interruption timeout cancels this generation before the tool returns — is
+        answered with an error, so the model is not left waiting on it (#7679).
+        The tool keeps running. Its real outcome is recorded later under a new
+        call id, and does not replace this error.
+        """
+        assert self._rt_session is not None
+
+        finished = list(tool_output.output)
+        answered = {out.fnc_call.call_id for out in finished}
+        interrupted_calls = [out.fnc_call for out in finished]
+        interrupted_fnc_outputs = [_interrupted_tool_output(out) for out in finished]
+
+        inflight: dict[str, llm.FunctionCall] = {}
+        running_by_id: dict[str, RunContext[Any]] = {}
+        for task in _RunningTasks.get(self._session, {}).values():
+            fnc_call = task.ctx.function_call
+            if task.ctx.speech_handle is not speech_handle or fnc_call.call_id in answered:
+                continue
+            inflight[fnc_call.call_id] = fnc_call
+            running_by_id[fnc_call.call_id] = task.ctx
+        for fnc_call in function_calls:
+            if fnc_call.call_id not in answered:
+                inflight.setdefault(fnc_call.call_id, fnc_call)
+
+        if inflight:
+            logger.debug(
+                "answering tool calls still running after interruption",
+                extra={
+                    "functions": [fnc_call.name for fnc_call in inflight.values()],
+                    "speech_id": speech_handle.id,
+                },
+            )
+        for fnc_call in inflight.values():
+            # set before the first await, so a tool that finishes while the output is
+            # synced cannot record a second result for this call. the real outcome
+            # still arrives, under a new call id.
+            suppressed_completions.add(fnc_call.call_id)
+            if (run_ctx := running_by_id.get(fnc_call.call_id)) is not None:
+                run_ctx._call_closed = True
+            interrupted_calls.append(fnc_call)
+            interrupted_fnc_outputs.append(_interrupted_inflight_tool_output(fnc_call))
+
+        if not interrupted_fnc_outputs:
+            return
+
+        recorded_call_ids = {
+            item.call_id for item in speech_handle.chat_items if item.type == "function_call"
+        }
+        agent_call_ids = {
+            item.call_id for item in self._agent.chat_ctx.items if item.type == "function_call"
+        }
+        for fnc_call in interrupted_calls:
+            if fnc_call.call_id in answered:
+                continue
+            if fnc_call.call_id not in agent_call_ids:
+                self._agent._chat_ctx._upsert_item(fnc_call)
+                self._session._tool_items_added([fnc_call])
+            if fnc_call.call_id not in recorded_call_ids:
+                speech_handle._item_added([fnc_call])
+
+        self._session.emit(
+            "function_tools_executed",
+            FunctionToolsExecutedEvent(
+                function_calls=interrupted_calls,
+                function_call_outputs=interrupted_fnc_outputs,
+            ),
+        )
+        self._agent._chat_ctx.insert(interrupted_fnc_outputs)
+        self._session._tool_items_added(interrupted_fnc_outputs)
+        for fnc_out in interrupted_fnc_outputs:
+            if fnc_out.call_id in suppressed_completions:
+                speech_handle._item_added([fnc_out])
+
+        # unlike the pipeline, a realtime model holds the call open server-side.
+        # hold late results across this await: it replaces the realtime context,
+        # and a correction applied in the middle would be overwritten.
+        chat_ctx = self._rt_session.chat_ctx.copy()
+        chat_ctx.items.extend(interrupted_fnc_outputs)
+        self._closed_call_result_hold += 1
+        try:
+            await self._rt_session.update_chat_ctx(chat_ctx)
+        except llm.RealtimeError as e:
+            logger.warning(
+                "failed to sync the tool results of an interrupted generation",
+                extra={"error": str(e)},
+            )
+        finally:
+            self._closed_call_result_hold -= 1
+            if self._closed_call_result_hold == 0:
+                self._flush_queued_closed_call_results()
+
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
         self,
@@ -4477,7 +4677,16 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx._upsert_item(fnc_call)
             self._session._tool_items_added([fnc_call])
 
+        # call ids answered early because the interruption tore the generation down
+        # while the tool was still running. a later result must not be a second
+        # output for that call; it is delivered as a deferred update under a new
+        # call id so the session still learns the real outcome (#7679)
+        suppressed_completions: set[str] = set()
+
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
+            if out.fnc_call.call_id in suppressed_completions:
+                self._on_suppressed_tool_result(out)
+                return
             speech_handle._item_added([out.fnc_call_out])
 
         exe_task, tool_output = perform_tool_executions(
@@ -4616,37 +4825,18 @@ class AgentActivity(RecognitionHooks):
         speech_handle._mark_generation_done()
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(exe_task)
+            # Waiting for the tool here is what the pipeline does, but INTERRUPTION_TIMEOUT
+            # cancels this task inside that wait when the tool runs past it — before any
+            # output is committed. The calls are answered below either way (#7679).
+            with contextlib.suppress(asyncio.CancelledError):
+                await utils.aio.cancel_and_wait(exe_task)
 
-            # commit results of tools that finished despite the interruption, as the pipeline
-            # task does. the calls are already recorded, so each one answers or the model waits
-            interrupted_calls: list[llm.FunctionCall] = []
-            interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
-            for sanitized_out in tool_output.output:
-                interrupted_calls.append(sanitized_out.fnc_call)
-                interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
-
-            if interrupted_fnc_outputs:
-                self._session.emit(
-                    "function_tools_executed",
-                    FunctionToolsExecutedEvent(
-                        function_calls=interrupted_calls,
-                        function_call_outputs=interrupted_fnc_outputs,
-                    ),
-                )
-                self._agent._chat_ctx.insert(interrupted_fnc_outputs)
-                self._session._tool_items_added(interrupted_fnc_outputs)
-
-                # unlike the pipeline, a realtime model holds the call open server-side
-                chat_ctx = self._rt_session.chat_ctx.copy()
-                chat_ctx.items.extend(interrupted_fnc_outputs)
-                try:
-                    await self._rt_session.update_chat_ctx(chat_ctx)
-                except llm.RealtimeError as e:
-                    logger.warning(
-                        "failed to sync the tool results of an interrupted generation",
-                        extra={"error": str(e)},
-                    )
+            await self._commit_interrupted_realtime_tools(
+                speech_handle=speech_handle,
+                tool_output=tool_output,
+                function_calls=function_calls,
+                suppressed_completions=suppressed_completions,
+            )
             return
 
         # wait for the tool execution to complete

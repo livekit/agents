@@ -405,7 +405,7 @@ class _ToolExecutor:
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
-            await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+            await self._emit_deferred_items(run_ctx, [pair[0], pair[1]])
             return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
@@ -519,6 +519,44 @@ class _ToolExecutor:
         """Cancel cancellable tools, await the rest. Reply delivery is left running;
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
+
+    def _prepare_closed_call_result(self, ctx: RunContext, output: Any) -> list[ChatItem]:
+        """A deferred call/output pair for a tool that finished after its call was closed.
+
+        The id is ``{call_id}_final``, the same suffix a deferred terminal return uses.
+        ``reply_required`` stays off unless the tool returned a ``ToolResult`` that asks
+        for a reply: the interrupted turn already declined to speak, and this pair only
+        corrects history so the next turn sees the real outcome.
+        """
+        pair = ctx._make_update_pair(output, call_id_suffix="_final")
+        if not isinstance(output, ToolResult):
+            pair[1].reply_required = False
+        ctx._updates.append(pair)
+        logger.debug(
+            "tool finished after its call was closed; recording the result under a new call id",
+            extra={
+                "call_id": ctx.function_call.call_id,
+                "result_call_id": pair[0].call_id,
+                "function": ctx.function_call.name,
+            },
+        )
+        return [pair[0], pair[1]]
+
+    async def _emit_deferred_items(self, ctx: RunContext, items: list[ChatItem]) -> None:
+        """Deliver a deferred update, waiting out a synthetic-error sync when one is in flight.
+
+        ``_commit_interrupted_realtime_tools`` replaces the realtime chat context with
+        the error output. A result that lands during that await has to be applied after
+        it, or the sync would drop the correction.
+        """
+        activity = ctx._activity
+        if (
+            ctx._call_closed
+            and activity is not None
+            and activity._defer_closed_call_result(self, ctx, items)
+        ):
+            return
+        await self._enqueue_reply(ctx, items)
 
     async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
         # eager insert so a reply firing before delivery sees the items

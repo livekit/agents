@@ -67,6 +67,10 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
+        # the original call_id already has its one output (an interrupted realtime
+        # turn closed it). later results must use a different call id.
+        self._call_closed = False
+
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
         self._run_state = session._global_run_state
@@ -180,6 +184,8 @@ class RunContext(Generic[Userdata_T]):
 
         The first update releases control to the LLM with ``message`` as the tool's
         synthetic return; subsequent updates are coalesced into a deferred reply.
+        If the original call was already answered, every update takes a new call id
+        and is deferred the same way, so the call is not answered twice.
         Outside the voice path (e.g. ``execute_function_call``) updates are recorded
         on the result but no reply is fired.
 
@@ -216,10 +222,12 @@ class RunContext(Generic[Userdata_T]):
                 },
             )
 
-        # first update keeps the original call_id
+        # first update keeps the original call_id, unless that call was already answered
         update_step = len(self._updates)
+        closed = self._call_closed
         pair = self._make_update_pair(
-            message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
+            message,
+            call_id_suffix=f"_update_{update_step}" if closed or update_step > 0 else "",
         )
         self._updates.append(pair)
 
@@ -237,12 +245,16 @@ class RunContext(Generic[Userdata_T]):
         )
 
         assert self._first_update_fut is not None
-        if not self._first_update_fut.done():
+        if not closed and not self._first_update_fut.done():
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+        if closed and not self._first_update_fut.done():
+            # unblock dispatch; the pair above is this update's record
+            self._first_update_fut.set_result(None)
+
+        await self._executor._emit_deferred_items(self, [pair[0], pair[1]])
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]
