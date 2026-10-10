@@ -273,6 +273,9 @@ class AudioRecognition:
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
+        # set on STT END_OF_SPEECH, cleared on STT START_OF_SPEECH. outlives the EOU task,
+        # so a final transcript arriving after its turn was committed still ends a turn
+        self._stt_speech_ended = False
 
         self._sample_rate: int | None = None
 
@@ -1259,7 +1262,8 @@ class AudioRecognition:
             # check user turn limit after accumulating transcript
             self._check_user_turn_limit(transcript)
 
-            if self._vad_base_turn_detection or self._user_turn_committed:
+            stt_turn_ended = self._turn_detection_mode == "stt" and self._stt_speech_ended
+            if self._vad_base_turn_detection or self._user_turn_committed or stt_turn_ended:
                 if transcript_changed:
                     self._hooks.on_preemptive_generation(
                         _PreemptiveGenerationInfo(
@@ -1357,6 +1361,7 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
+            self._stt_speech_ended = True
 
             # always use STT speaking time since turn detection mode is set to STT. we would want
             # alignment here since _last_speaking_time is used for turn detection timing
@@ -1386,6 +1391,7 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
             self._speaking = True
+            self._stt_speech_ended = False
             self._last_speaking_time = stt_last_speaking_time
 
             if self._end_of_turn_task is not None:

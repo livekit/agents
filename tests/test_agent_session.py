@@ -1426,6 +1426,41 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
         await _close_test_session(recognition._session)
 
 
+async def test_stt_final_after_a_later_end_of_speech_ends_its_own_turn() -> None:
+    """The user resumes between an utterance's END_OF_SPEECH and its final, so each
+    final lands one END_OF_SPEECH late. The last one must still end the turn instead
+    of waiting for an END_OF_SPEECH that only the next utterance would bring."""
+    recognition = await _make_stt_eos_recognition()
+    hooks = recognition._hooks
+    assert isinstance(hooks, _TestRecognitionHooks)
+
+    async def stt_event(type: SpeechEventType) -> None:
+        await recognition._on_stt_event(SpeechEvent(type=type))
+
+    async def final_transcript(text: str) -> None:
+        await recognition._on_stt_event(
+            _final_transcript_event(text=text, start_time=0.0, end_time=0.0)
+        )
+
+    try:
+        await stt_event(SpeechEventType.START_OF_SPEECH)
+        await stt_event(SpeechEventType.END_OF_SPEECH)
+        await stt_event(SpeechEventType.START_OF_SPEECH)
+        await asyncio.sleep(0.05)
+        await final_transcript("I need the OTP.")
+        await asyncio.sleep(0.2)
+        await stt_event(SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.05)
+        await final_transcript("For the guard.")
+        await asyncio.sleep(0.05)
+
+        assert hooks.committed_turns == ["I need the OTP.", "For the guard."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
 async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     actions = FakeActions()
     session = create_session(
@@ -2498,6 +2533,7 @@ class _TestRecognitionHooks:
     def __init__(self) -> None:
         self.interruptions: list[inference.OverlappingSpeechEvent] = []
         self.final_transcripts: list[str] = []
+        self.committed_turns: list[str] = []
         self.interruption_by_audio_activity_enabled = False
 
     def on_overlap_speech(self, ev: inference.OverlappingSpeechEvent) -> None:
@@ -2523,6 +2559,7 @@ class _TestRecognitionHooks:
         self.final_transcripts.append(ev.alternatives[0].text)
 
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+        self.committed_turns.append(info.new_transcript)
         return True
 
     def on_preemptive_generation(self, info: object) -> None:
