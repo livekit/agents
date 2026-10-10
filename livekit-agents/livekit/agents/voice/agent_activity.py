@@ -333,6 +333,7 @@ class AgentActivity(RecognitionHooks):
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
+        self._realtime_user_input_answered_at: float = 0.0
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
         # one awaited inline AgentTask may pause this activity at a time
@@ -688,6 +689,20 @@ class AgentActivity(RecognitionHooks):
     @property
     def realtime_llm_session(self) -> llm.RealtimeSession | None:
         return self._rt_session
+
+    @property
+    def _last_user_speaking_time(self) -> float | None:
+        """Last speech time from recognition or the pending committed user turn."""
+        if (recognition := self._audio_recognition) is not None:
+            if (last_speaking_time := recognition.last_speaking_time) is not None:
+                return last_speaking_time
+            # New speech must not fall back to the previous committed turn.
+            if recognition._speech_start_time is not None:
+                return None
+
+        if metrics := self._session._unanswered_user_metrics:
+            return metrics.get("stopped_speaking_at")
+        return None
 
     @property
     def current_speech(self) -> SpeechHandle | None:
@@ -2702,6 +2717,14 @@ class AgentActivity(RecognitionHooks):
         if not info.skip_reply and not self._rt_turn_detection_enabled:
             self._cancel_false_interruption_timer()
 
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and (last_speaking_time := self._last_user_speaking_time) is not None
+            and last_speaking_time > self._realtime_user_input_answered_at
+        ):
+            # AudioRecognition clears its turn timestamps after this hook returns.
+            self._session._unanswered_user_metrics = {"stopped_speaking_at": last_speaking_time}
+
         old_task = self._user_turn_completed_atask
         # the user turn ends after on_user_turn_completed (see _end_user_turn_span)
         info.user_turn_span_adopted = info.user_turn_span is not None
@@ -4142,6 +4165,9 @@ class AgentActivity(RecognitionHooks):
                     ori_tools = self._rt_session.tools.flatten()
                     await self._rt_session.update_tools(turn_tools)
 
+            if speech_handle.input_details.modality == "text":
+                self._realtime_user_input_answered_at = time.time()
+                self._session._unanswered_user_metrics = None
             generate_reply_fut = self._rt_session.generate_reply(
                 instructions=instructions or NOT_GIVEN,
                 tool_choice=(model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN),
@@ -4320,6 +4346,7 @@ class AgentActivity(RecognitionHooks):
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
         started_forwarding_at: float | None = None
+        e2e_latency: float | None = None
 
         def _on_first_frame(
             fut: asyncio.Future[float] | asyncio.Future[None], audio_out: _AudioOutput | None = None
@@ -4329,7 +4356,7 @@ class AgentActivity(RecognitionHooks):
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at, started_forwarding_at
+            nonlocal started_speaking_at, started_forwarding_at, e2e_latency
             # only the first message's first frame should trigger state transitions
             if started_speaking_at is not None:
                 return
@@ -4342,6 +4369,28 @@ class AgentActivity(RecognitionHooks):
                 )
             except BaseException:
                 return
+
+            if speech_handle.input_details.modality == "audio":
+                last_speaking_time = self._last_user_speaking_time
+                if (
+                    last_speaking_time is not None
+                    and last_speaking_time > self._realtime_user_input_answered_at
+                    and last_speaking_time <= started_speaking_at
+                ):
+                    e2e_latency = started_speaking_at - last_speaking_time
+                    current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
+                # A late VAD EOS must not make the same speech eligible for another reply.
+                self._realtime_user_input_answered_at = max(
+                    self._realtime_user_input_answered_at, started_speaking_at
+                )
+                self._session._unanswered_user_metrics = None
+
+            early_metrics: llm.MetricsReport = {
+                "playback_latency": started_speaking_at - started_forwarding_at
+            }
+            if e2e_latency is not None:
+                early_metrics["e2e_latency"] = e2e_latency
+            self._session._early_assistant_metrics = early_metrics
 
             self._session._update_agent_state(
                 "speaking",
@@ -4516,6 +4565,8 @@ class AgentActivity(RecognitionHooks):
 
             if generation_ev.response_id:
                 assistant_metrics["provider_request_ids"] = [generation_ev.response_id]
+            if e2e_latency is not None:
+                assistant_metrics["e2e_latency"] = e2e_latency
 
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at
