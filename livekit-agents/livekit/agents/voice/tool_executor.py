@@ -564,6 +564,13 @@ class _ToolExecutor:
 
         # no await after this line
 
+        # idle, but draining for a handoff or paused under an AgentTask: a reply now raises or
+        # is spoken by another agent. the owning agent's chat_ctx already has the results
+        if self._owning_activity is not None and self._owning_activity.scheduling_paused:
+            logger.debug("dropping tool reply — owning activity is paused")
+            self._pending_updates.clear()
+            return
+
         updates = self._pending_updates[:]
         self._pending_updates.clear()
 
