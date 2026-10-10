@@ -16,7 +16,9 @@ from ..plugin import Plugin
 # noisy loggers are set to warn by default
 NOISY_LOGGERS = [
     "httpx",
+    "httpx2",
     "httpcore",
+    "httpcore2",
     "openai",
     "watchfiles",
     "anthropic",

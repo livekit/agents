@@ -21,7 +21,12 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents[codecs]>=1.8.6", "speechify-api>=4.0.0"]
+dependencies = [
+    "livekit-agents[codecs]>=1.8.6",
+    "speechify-api>=4.0.0",
+    # The client we own and pass into speechify-api. The SDK still depends on httpx v1.
+    "httpx2>=2.12,<3",
+]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

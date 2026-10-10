@@ -50,6 +50,8 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.45,<1.46",
     "prometheus-client>=0.22",
     "openai>=3.19,<4",
+    # Direct HTTP clients (inference, MCP) use httpx2, matching the OpenAI 3 / MCP 2 SDKs.
+    "httpx2>=2.12,<3",
     "aiofiles>=24",
     "json-repair==0.63.5",
     "pyyaml>=6.0.3",

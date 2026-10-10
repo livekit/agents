@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 
-import httpx
+import httpx2 as httpx
 import pytest
 from speechify.types.error_detail import ErrorDetail
 from speechify.types.nested_chunk import NestedChunk

@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Literal
 
-import httpx
+import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
 
 from livekit.agents import (
     APIConnectionError,

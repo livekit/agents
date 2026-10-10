@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
-import httpx
+import httpx2 as httpx
 
 from livekit.agents import (
     APIConnectionError,
@@ -171,10 +171,13 @@ class TTS(tts.TTS):
                     "Speechify API key is required, either as the api_key argument "
                     "or via the SPEECHIFY_API_KEY environment variable"
                 )
-            # Fixed httpx.AsyncClient default header so every request the SDK
+            # Fixed httpx2.AsyncClient default header so every request the SDK
             # issues is attributed to this integration, regardless of call site.
             # Timeout/limits mirror the openai plugin's owned-client defaults —
-            # httpx's own 5s default is too short for longer synthesis requests.
+            # the client's own 5s default is too short for longer synthesis requests.
+            # speechify-api types this argument as httpx.AsyncClient and retries
+            # httpx.ConnectError. request/stream work against httpx2; a connect
+            # failure raised by httpx2 is not retried inside the SDK.
             self._httpx_client = httpx.AsyncClient(
                 headers={CALLER_HEADER: "livekit", CALLER_VERSION_HEADER: __version__},
                 timeout=httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=5.0),
@@ -185,7 +188,7 @@ class TTS(tts.TTS):
             self._client = AsyncSpeechify(
                 token=resolved_key,
                 base_url=self._base_url,
-                httpx_client=self._httpx_client,
+                httpx_client=self._httpx_client,  # type: ignore[arg-type]
             )
 
         self._tokenizer = tokenizer if is_given(tokenizer) else tokenize.basic.SentenceTokenizer()

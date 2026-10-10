@@ -7,7 +7,7 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
 from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
