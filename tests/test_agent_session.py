@@ -43,7 +43,7 @@ from livekit.agents.llm import (
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
-from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
@@ -1214,6 +1214,25 @@ def test_explicit_aec_warmup_duration_overrides_outbound_sip_default(
     assert session._aec_warmup_remaining == (duration or 0.0)
 
 
+@pytest.mark.parametrize(
+    ("explicit", "expected_duration"),
+    [(NOT_GIVEN, None), (1.5, 1.5)],
+)
+def test_simulation_has_no_aec_warmup_by_default(
+    explicit: NotGivenOr[float | None], expected_duration: float | None
+) -> None:
+    session = AgentSession(vad=None, aec_warmup_duration=explicit)
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    participant.attributes = {}
+
+    with patch("livekit.agents.job.current_simulation", return_value=object()):
+        session._on_room_io_participant_linked(participant)
+
+    assert session.options.aec_warmup_duration == expected_duration
+    assert session._aec_warmup_remaining == (expected_duration or 0.0)
+
+
 def test_outbound_sip_cancels_aec_warmup_that_already_started() -> None:
     session = AgentSession(vad=None)
     timer = MagicMock(spec=asyncio.TimerHandle)
@@ -2184,6 +2203,23 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
         max_abs_diff=0.2,
     )
     assert agent_state_events[3].new_state == "listening"
+
+
+@pytest.mark.parametrize(
+    "preflight, final, expected",
+    [
+        ("hello how are you", "Hello, how are you?", True),
+        ("مرحبا كيف حالك", "مرحبا، كيف حالك؟", True),
+        ("نعم أريد الحجز", "نعم، أريد الحجز؛", True),
+        ("آپ کیسے ہیں", "آپ کیسے ہیں۔", True),
+        ("आप कैसे हैं", "आप कैसे हैं।", True),
+        ("你好 我很好", "你好，我很好。", True),
+        # different words must still invalidate the preemptive generation
+        ("مرحبا كيف حالك", "مرحبا كيف حالكم؟", False),
+    ],
+)
+def test_preemptive_transcripts_equivalent(preflight: str, final: str, expected: bool) -> None:
+    assert _transcripts_equivalent(preflight, final) is expected
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-import httpx
+import httpx2 as httpx
 import openai as openai_api
 from openai.types import Reasoning
 

@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-bithuman"
 dynamic = ["version"]
-description = "Agent Framework plugin for services from BitHuman Avatar Rendering"
+description = "LiveKit Agents plugin for bitHuman real-time avatars (Essence 2, Expression 2)"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "support@livekit.io" }]
-keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "webrtc"]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "webrtc", "avatar", "bithuman"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -27,7 +27,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "livekit-agents>=1.8.4",
+    "livekit-agents>=1.8.6",
     "bithuman>=0.5.25,<3",
     "pillow>=10.3.0",
 ]
@@ -36,6 +36,7 @@ dependencies = [
 Documentation = "https://docs.livekit.io"
 Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
+"bitHuman docs" = "https://docs.bithuman.ai/platforms/livekit"
 
 [tool.hatch.version]
 path = "livekit/plugins/bithuman/version.py"

@@ -19,7 +19,7 @@ import json
 import os
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 import msgpack
 import openai
 from openai._models import FinalRequestOptions

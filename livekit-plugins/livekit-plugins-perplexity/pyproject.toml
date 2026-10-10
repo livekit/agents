@@ -22,7 +22,8 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[openai]>=1.8.4",
+    "livekit-agents[openai]>=1.8.6",
+    "httpx2>=2.12,<3",
 ]
 
 [project.urls]

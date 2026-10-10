@@ -1,6 +1,15 @@
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
 default-groups = ["dev", "typing"]
+# Universal resolution only checks that a wheel exists for the Python version.
+# A release that publishes wheels for one platform and no sdist (bithuman 2.12.2
+# is win_amd64-only) would otherwise lock and then fail `uv sync` on the others.
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
@@ -15,6 +24,7 @@ livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-bland = { workspace = true }
+livekit-plugins-boson-avatar = { workspace = true }
 livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-cerebras = { workspace = true }
@@ -42,6 +52,7 @@ livekit-plugins-microsoft-ai = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-murf = { workspace = true }
+livekit-plugins-nabrah = { workspace = true }
 livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-nvidia = { workspace = true }
@@ -93,7 +104,7 @@ dev = [
     "python-dotenv>=1.0.1",
     "mypy",
     "scikit-learn",
-    "pytest>=9.0.3,<9.1",
+    "pytest>=9.1.1,<9.2",
     { include-group = "lint" },
     "pytest-asyncio>=0.25.3",
     "pytest-asyncio-concurrent==0.5.2",
@@ -115,6 +126,8 @@ typing = [
     "types-grpcio>=1.0.0.20260607",
     "types-grpcio-status>=1.0.0.20260408",
     "types-gunicorn>=26.0.0.20260518",
+    "types-jsonschema>=4.26.0.20261006",
+    "types-nanoid>=2.0.0.20260508",
     "types-openpyxl>=3.1.5.20260518",
     "types-pexpect>=4.9.0.20260518",
     "types-psutil>=7.2.2.20260518",

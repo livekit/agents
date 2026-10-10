@@ -11,14 +11,18 @@ Idle-timeout tests use ``virtual_time`` so timers advance deterministically.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import pytest
 
 from livekit.agents import APIStatusError
 from livekit.agents.tts import AudioEmitter
 from livekit.plugins import soniox
+from livekit.plugins.soniox.tts import _Connection
 
 pytestmark = [
     pytest.mark.plugin("soniox"),
@@ -34,6 +38,110 @@ SENTENCES = [
     "And here comes a second sentence! ",
     "Finally a third one?",
 ]
+
+
+async def test_websocket_authenticates_once_for_multiple_streams() -> None:
+    sent: asyncio.Queue[str] = asyncio.Queue()
+    received: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.closed = False
+    ws.send_str = AsyncMock(side_effect=sent.put)
+    ws.receive = AsyncMock(side_effect=received.get)
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.ws_connect = AsyncMock(return_value=ws)
+    tts = soniox.TTS(api_key="test-key", http_session=session)
+
+    try:
+        for stream_id in ("first", "second"):
+            connection, _, _ = await tts._current_connection(timeout=1.0)
+            waiter = asyncio.get_running_loop().create_future()
+            connection.register_stream(stream_id, MagicMock(), waiter, opts=tts._opts)
+            try:
+                connection.send_text(stream_id, "Hello!", text_end=True)
+                config = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
+                text = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
+
+                assert "api_key" not in config
+                assert config["model"] == tts.model
+                assert config["stream_id"] == stream_id
+                assert text == {"stream_id": stream_id, "text": "Hello!", "text_end": True}
+            finally:
+                connection.unregister_stream(stream_id)
+                waiter.cancel()
+
+        session.ws_connect.assert_awaited_once_with(
+            tts._opts.websocket_url, headers={"Authorization": "Bearer test-key"}
+        )
+    finally:
+        await tts.aclose()
+
+
+@pytest.mark.parametrize("stream_id", [None, ""])
+@pytest.mark.parametrize("status_code", [401, 429])
+@pytest.mark.parametrize("register_before_error", [False, True])
+async def test_connection_error_reaches_all_streams(
+    stream_id: str | None, status_code: int, register_before_error: bool
+) -> None:
+    tts = soniox.TTS(api_key="test-key")
+    connection = _Connection(tts._opts, MagicMock())
+    payload: dict[str, Any] = {
+        "error_code": status_code,
+        "error_message": "Connection rejected",
+        "request_id": "test-request",
+    }
+    if stream_id is not None:
+        payload["stream_id"] = stream_id
+
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.closed = False
+    ws.close_code = 1008
+    ws.receive = AsyncMock(
+        side_effect=[
+            aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(payload), ""),
+            aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1008, ""),
+        ]
+    )
+    connection._ws = ws
+    waiters: list[asyncio.Future[None]] = []
+
+    def register_stream(name: str) -> None:
+        waiter = asyncio.get_running_loop().create_future()
+        waiters.append(waiter)
+        connection.register_stream(name, MagicMock(), waiter, opts=tts._opts)
+
+    try:
+        if register_before_error:
+            register_stream("first")
+            register_stream("second")
+
+        await connection._recv_loop()
+        register_stream("closing")
+        assert connection._close_task is not None
+        await connection._close_task
+        register_stream("closed")
+
+        for waiter in waiters:
+            with pytest.raises(APIStatusError) as exc_info:
+                await asyncio.wait_for(waiter, timeout=1.0)
+            assert exc_info.value.status_code == status_code
+            assert exc_info.value.message == "Connection rejected"
+            assert exc_info.value.retryable is (status_code == 429)
+            assert exc_info.value.request_id == "test-request"
+
+        assert not connection.is_current
+        assert connection.closed
+        assert connection.num_active_streams == 0
+        ws.receive.assert_awaited_once()
+    finally:
+        await connection.aclose()
+        if connection._close_task is not None:
+            await connection._close_task
+        for waiter in waiters:
+            if waiter.done() and not waiter.cancelled():
+                waiter.exception()
+            else:
+                waiter.cancel()
+        await tts.aclose()
 
 
 @dataclass

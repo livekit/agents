@@ -1,16 +1,18 @@
 """
 Regression tests for Nova Sonic turn-detection serialization in sessionStart.
 
-Nova Sonic 2 (amazon.nova-2-sonic-v1:0) rejects the sessionStart event with a
-ValidationException unless the turn-detection setting is nested under
-turnDetectionConfiguration.  Nova Sonic 1 (amazon.nova-sonic-v1:0) predates
-controllable endpointing and uses the legacy flat endpointingSensitivity field.
+Nova Sonic 2 and later (amazon.nova-2-sonic-v1:0, amazon.nova-2-5-sonic) reject
+the sessionStart event with a ValidationException unless the turn-detection
+setting is nested under turnDetectionConfiguration.  Nova Sonic 1
+(amazon.nova-sonic-v1:0) predates controllable endpointing and uses the legacy
+flat endpointingSensitivity field.
 
-SonicEventBuilder serializes model-aware: Nova 2 (including cross-region
-inference-profile ids such as us.amazon.nova-2-sonic-v1:0) → nested form;
-Nova 1 → flat form.
+SonicEventBuilder serializes model-aware: Nova 1 is the special case that keeps
+the flat form; every other model id (including cross-region inference-profile
+ids such as us.amazon.nova-2-sonic-v1:0) → nested form.
 """
 
+import importlib.util
 import json
 import sys
 from typing import Literal
@@ -21,8 +23,10 @@ import pytest
 pytestmark = pytest.mark.unit
 
 # ---------------------------------------------------------------------------
-# Stub out the optional AWS Smithy/Bedrock SDK not installed in the base venv.
+# Stub out the optional AWS Smithy/Bedrock SDK when not installed in the venv.
 # Importing the realtime package pulls in realtime_model, which imports the SDK.
+# Only stub modules that are actually missing: replacing an installed package
+# with a MagicMock breaks real submodule imports (e.g. smithy_core.aio.utils).
 # ---------------------------------------------------------------------------
 _AWS_STUBS = [
     "aws_sdk_bedrock_runtime",
@@ -39,7 +43,13 @@ _AWS_STUBS = [
     "smithy_core.aio.interfaces.identity",
 ]
 for _mod in _AWS_STUBS:
-    if _mod not in sys.modules:
+    if _mod in sys.modules:
+        continue
+    try:
+        _installed = importlib.util.find_spec(_mod) is not None
+    except (ImportError, ValueError):
+        _installed = False
+    if not _installed:
         sys.modules[_mod] = MagicMock()
 
 
@@ -68,6 +78,12 @@ class TestSessionStartTurnDetection:
         # the nested field must not be emitted for Nova 1
         assert "turnDetectionConfiguration" not in ss
 
+    def test_nova_sonic_2_5_nests_under_turn_detection_configuration(self):
+        ss = _session_start("amazon.nova-2-5-sonic")
+
+        assert ss["turnDetectionConfiguration"]["endpointingSensitivity"] == "HIGH"
+        assert "endpointingSensitivity" not in ss
+
     def test_cross_region_inference_profile_uses_nested_form(self):
         # Bedrock cross-region inference profiles prefix the model id with a
         # region group (us./eu./apac.); these are still Nova 2 and must nest.
@@ -75,3 +91,15 @@ class TestSessionStartTurnDetection:
 
         assert ss["turnDetectionConfiguration"]["endpointingSensitivity"] == "HIGH"
         assert "endpointingSensitivity" not in ss
+
+    def test_nova_sonic_2_5_cross_region_inference_profile_uses_nested_form(self):
+        ss = _session_start("us.amazon.nova-2-5-sonic")
+
+        assert ss["turnDetectionConfiguration"]["endpointingSensitivity"] == "HIGH"
+        assert "endpointingSensitivity" not in ss
+
+    def test_nova_sonic_1_cross_region_inference_profile_keeps_flat_field(self):
+        ss = _session_start("us.amazon.nova-sonic-v1:0")
+
+        assert ss["endpointingSensitivity"] == "HIGH"
+        assert "turnDetectionConfiguration" not in ss

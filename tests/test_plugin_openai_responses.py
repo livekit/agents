@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
 from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
@@ -224,6 +225,113 @@ async def test_create_ws_enables_heartbeat() -> None:
     assert await transport._create_ws(timeout=1.0) is fake_ws
     _, kwargs = session.ws_connect.call_args
     assert kwargs["heartbeat"] == _WS_HEARTBEAT
+
+
+async def test_responses_llm_prewarms_websocket_pool() -> None:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    assert llm_model._ws is not None
+    llm_model._ws._pool.prewarm = prewarm = MagicMock()  # type: ignore[method-assign]
+
+    try:
+        await llm_model._prewarm_impl()
+        prewarm.assert_called_once_with()
+    finally:
+        await llm_model.aclose()
+
+
+@pytest.mark.parametrize("connect_timeout", [0.05, 1.0])
+async def test_responses_prewarm_uses_configured_connect_timeout(connect_timeout: float) -> None:
+    llm_model = ResponsesLLM(
+        model="gpt-4.1", api_key="test-key", timeout=httpx.Timeout(connect_timeout)
+    )
+    assert llm_model._ws is not None
+    transport = llm_model._ws
+    ws = _RecordingWS({"type": "response.completed"})
+    timeouts: list[float] = []
+
+    async def connect(timeout: float) -> _RecordingWS:
+        timeouts.append(timeout)
+        return ws
+
+    transport._pool._connect_cb = connect  # type: ignore[assignment]
+    try:
+        await llm_model._prewarm_impl()
+        assert transport._pool._prewarm_task is not None
+        prewarm_task = transport._pool._prewarm_task()
+        assert prewarm_task is not None
+        await asyncio.wait_for(asyncio.shield(prewarm_task), timeout=1.0)
+        assert timeouts == [connect_timeout]
+        assert await transport._acquire_and_send("{}") is cast(aiohttp.ClientWebSocketResponse, ws)
+        assert timeouts == [connect_timeout], "the first turn should reuse the prewarmed socket"
+        transport._pool.put(ws)  # type: ignore[arg-type]
+    finally:
+        await llm_model.aclose()
+    assert ws.closed
+
+
+@pytest.mark.parametrize("cancel_request", [False, True])
+async def test_responses_acquisition_preserves_shared_prewarm(
+    cancel_request: bool,
+) -> None:
+    transport = _ResponsesWebsocket(api_key="test-key", timeout=0.05, model="gpt-4.1")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    ws = _RecordingWS({"type": "response.completed"})
+
+    async def connect(_timeout: float) -> _RecordingWS:
+        started.set()
+        await release.wait()
+        return ws
+
+    transport._pool._connect_cb = connect  # type: ignore[assignment]
+    transport._pool.prewarm()
+    request: asyncio.Task[aiohttp.ClientWebSocketResponse] | None = None
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert transport._pool._prewarm_task is not None
+        prewarm_task = transport._pool._prewarm_task()
+        assert prewarm_task is not None
+        request = asyncio.create_task(transport._acquire_and_send("{}"))
+        if cancel_request:
+            await asyncio.sleep(0)
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+        else:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(request), timeout=0.1)
+            assert not request.done(), "acquisition should wait for the shared prewarm"
+
+        assert not prewarm_task.done(), "a request must not cancel the shared prewarm"
+        assert ws.sent is None
+        release.set()
+        await asyncio.wait_for(asyncio.shield(prewarm_task), timeout=1.0)
+        if cancel_request:
+            acquired = await transport._acquire_and_send("{}")
+        else:
+            acquired = await asyncio.wait_for(request, timeout=1.0)
+        assert acquired is cast(aiohttp.ClientWebSocketResponse, ws)
+        assert transport._pool.last_connection_reused
+        transport._pool.put(ws)  # type: ignore[arg-type]
+    finally:
+        if request is not None and not request.done():
+            request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+        await transport.aclose()
+    assert ws.closed
+
+
+async def test_responses_llm_prewarms_http_client() -> None:
+    client = MagicMock()
+    client._base_url = httpx.URL("https://api.openai.com/v1")
+    client.models.list = list_models = AsyncMock()
+    llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+
+    try:
+        await llm_model._prewarm_impl()
+        list_models.assert_awaited_once_with()
+    finally:
+        await llm_model.aclose()
 
 
 _RESPONSE_CREATED = {

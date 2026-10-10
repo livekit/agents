@@ -594,7 +594,8 @@ class EventLoopMonitor:
         if frame is not None:
             importing = _module_being_imported(frame)
             # no source lookup here: the watchdog holds the GIL while it samples, and the loop
-            # thread is what it is taking it from. Lines load lazily when a report is formatted.
+            # thread is what it is taking it from. Its wake-ups also measure host starvation,
+            # so it must never wait on a file.
             frames = list(
                 traceback.StackSummary.extract(traceback.walk_stack(frame), lookup_lines=False)
             )
@@ -687,7 +688,9 @@ def _format_frames(frames: list[traceback.FrameSummary], *, importing: str | Non
         if run:
             entries.append(_import_run_line(run, importing))
             run = 0
-        entries.append("".join(traceback.format_list([f])))
+        # file, line and function, like faulthandler: the source text would be read from the
+        # file here, on the loop thread that just unblocked
+        entries.append(f'  File "{f.filename}", line {f.lineno}, in {f.name}\n')
     if run:
         entries.append(_import_run_line(run, importing))
     return "".join(entries[-MAX_STACK_FRAMES:]).rstrip()
