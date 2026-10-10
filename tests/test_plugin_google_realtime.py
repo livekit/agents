@@ -1060,3 +1060,12 @@ def test_explicit_tool_behavior_wins_over_the_model_default(
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     model = RealtimeModel(model="gemini-3.8-live", tool_behavior=types.Behavior.BLOCKING)
     assert model._opts.tool_behavior == types.Behavior.BLOCKING
+
+
+async def test_generate_reply_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert RealtimeModel(api_key="test")._opts.generate_reply_timeout == 5.0
+    async with _make_configured_session(monkeypatch, generate_reply_timeout=0.01) as session:
+        monkeypatch.setattr(session, "_send_client_event", lambda event: None)
+        fut = session.generate_reply()
+        with pytest.raises(llm.RealtimeError, match="timed out"):
+            await asyncio.wait_for(fut, 1.0)
