@@ -432,6 +432,17 @@ class AudioRecognition:
         self._update_interruption_detection(None)
 
     @property
+    def last_speaking_time(self) -> float | None:
+        """Last known speech time, if it belongs to the current user turn."""
+        if (
+            self._speech_start_time is not None
+            and self._last_speaking_time is not None
+            and self._last_speaking_time >= self._speech_start_time
+        ):
+            return self._last_speaking_time
+        return None
+
+    @property
     def stt_context(self) -> BaseModel | None:
         """Live speaker metadata from the STT stream.
 
