@@ -38,6 +38,10 @@ from .log import logger
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
 
 
+def _default_deactivation_threshold(activation_threshold: float) -> float:
+    return max(activation_threshold - 0.15, 0.01)
+
+
 @dataclass
 class _VADOptions:
     min_speech_duration: float
@@ -47,6 +51,8 @@ class _VADOptions:
     activation_threshold: float
     deactivation_threshold: float
     sample_rate: int
+    # when False, deactivation_threshold follows activation_threshold
+    deactivation_threshold_explicit: bool = False
 
 
 class VAD(agents.vad.VAD):
@@ -135,8 +141,10 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration=prefix_padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
-            deactivation_threshold=deactivation_threshold or max(activation_threshold - 0.15, 0.01),
+            deactivation_threshold=deactivation_threshold
+            or _default_deactivation_threshold(activation_threshold),
             sample_rate=sample_rate,
+            deactivation_threshold_explicit=is_given(deactivation_threshold),
         )
         return cls(session=session, opts=opts)
 
@@ -197,6 +205,7 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Unless set explicitly, it follows activation_threshold as max(activation_threshold - 0.15, 0.01).
         """  # noqa: E501
         if is_given(min_speech_duration):
             self._opts.min_speech_duration = min_speech_duration
@@ -210,6 +219,11 @@ class VAD(agents.vad.VAD):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.deactivation_threshold_explicit = True
+        elif is_given(activation_threshold) and not self._opts.deactivation_threshold_explicit:
+            self._opts.deactivation_threshold = _default_deactivation_threshold(
+                activation_threshold
+            )
 
         for stream in self._streams:
             stream.update_options(
@@ -259,7 +273,7 @@ class VADStream(agents.vad.VADStream):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
-            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Unless set explicitly, it follows activation_threshold as max(activation_threshold - 0.15, 0.01).
         """  # noqa: E501
         old_max_buffered_speech = self._opts.max_buffered_speech
 
@@ -275,6 +289,11 @@ class VADStream(agents.vad.VADStream):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.deactivation_threshold_explicit = True
+        elif is_given(activation_threshold) and not self._opts.deactivation_threshold_explicit:
+            self._opts.deactivation_threshold = _default_deactivation_threshold(
+                activation_threshold
+            )
 
         if self._input_sample_rate:
             assert self._speech_buffer is not None
