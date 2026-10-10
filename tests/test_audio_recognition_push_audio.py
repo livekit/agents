@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
 
 from livekit import rtc
-from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.audio_recognition import AudioRecognition, _STTPipeline
 
 pytestmark = pytest.mark.unit
 
@@ -20,13 +21,22 @@ def _make_frame(byte: int = 0x11, samples: int = 160, sample_rate: int = 16000) 
     )
 
 
+def _make_pipeline() -> _STTPipeline:
+    """A real pipeline carrying only the state ``push_frame`` touches (no pump task)."""
+    pipeline = _STTPipeline.__new__(_STTPipeline)
+    pipeline._audio_ch = MagicMock()  # type: ignore[attr-defined]
+    # the input anchor and the arrival lags live on the pipeline (see push_frame)
+    pipeline.input_started_at = time.time()
+    pipeline.pushed_duration = 0.0
+    pipeline._arrival_lags = []  # type: ignore[attr-defined]
+    return pipeline
+
+
 def _make_recognition() -> AudioRecognition:
     """Build an AudioRecognition stub with just the attributes ``push_audio`` reads."""
     ar = object.__new__(AudioRecognition)
     ar._sample_rate = None  # type: ignore[attr-defined]
-    ar._stt_pipeline = MagicMock()  # type: ignore[attr-defined]
-    # the input anchor lives on the pipeline (see _STTPipeline.input_started_at)
-    ar._stt_pipeline.input_started_at = None  # type: ignore[attr-defined]
+    ar._stt_pipeline = _make_pipeline()  # type: ignore[attr-defined]
     ar._vad_ch = MagicMock()  # type: ignore[attr-defined]
     ar._interruption_ch = MagicMock()  # type: ignore[attr-defined]
     ar._session = MagicMock()  # type: ignore[attr-defined]
@@ -71,11 +81,14 @@ def test_push_audio_skips_optional_consumers_when_unset() -> None:
     ar._push_audio(_make_frame())
 
 
-def test_push_audio_records_sample_rate_and_input_start() -> None:
+def test_push_audio_records_sample_rate_and_input_lag() -> None:
     ar = _make_recognition()
     frame = _make_frame(sample_rate=24000)
+    pipeline = ar._stt_pipeline
 
     ar._push_audio(frame)
 
     assert ar._sample_rate == 24000  # type: ignore[attr-defined]
-    assert ar._input_started_at is not None  # type: ignore[attr-defined]
+    assert pipeline.pushed_duration == pytest.approx(frame.duration)
+    assert ar._input_duration == pytest.approx(frame.duration)
+    assert len(pipeline._arrival_lags) == 1

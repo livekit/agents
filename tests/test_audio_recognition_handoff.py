@@ -233,7 +233,7 @@ async def test_input_anchor_preserved_when_pipeline_reused() -> None:
     ar = _stub_recognition()
     ar._update_stt(MagicMock(), pipeline=reused)
 
-    assert ar._input_started_at == 1000.0  # carried over, not reset to None
+    assert reused.input_started_at == 1000.0  # carried over, not reset to None
     if ar._stt_consumer_atask is not None:
         await ar._stt_consumer_atask
 
@@ -262,13 +262,14 @@ async def test_reused_pipeline_rebinds_stt_node() -> None:
         await ar._stt_consumer_atask
 
 
-def test_input_anchor_reads_through_to_pipeline() -> None:
-    """The anchor lives on the pipeline so it travels with the stream across handoff."""
+def test_input_duration_reads_through_to_pipeline() -> None:
+    """The pushed-audio position lives on the pipeline so it travels with the stream
+    across a handoff and a recreated stream can start its timeline there."""
     ar = _stub_recognition()
-    assert ar._input_started_at is None  # no pipeline attached yet
+    assert ar._input_duration == 0.0  # no pipeline attached yet
 
     pipeline = object.__new__(_STTPipeline)
-    pipeline.input_started_at = 1234.5
+    pipeline.pushed_duration = 12.5
     ar._stt_pipeline = pipeline  # type: ignore[attr-defined]
 
-    assert ar._input_started_at == 1234.5  # read-only view of the pipeline's anchor
+    assert ar._input_duration == 12.5  # read-only view of the pipeline's position

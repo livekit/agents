@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import contextlib
 import json
 import math
@@ -57,6 +58,8 @@ _NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
 _EOU_MAX_HISTORY_TURNS = 6
 # backoff before recreating the stt stream after an unrecoverable error
 _STT_RECONNECT_INTERVAL = 0.5
+# lag differences below this are scheduling jitter, not audio that fell behind
+_LAG_TOLERANCE = 0.05
 
 
 @dataclass
@@ -88,25 +91,38 @@ def _compute_end_of_turn_metrics(
     last_speaking_time: float | None,
     last_final_transcript_time: float | None,
     now: float,
+    provider_speaking_time: float | None = None,
 ) -> _EndOfTurnMetrics:
     """Compute the end-of-turn timing metrics from the captured turn anchors.
 
-    ``last_speaking_time`` is the internal ``_last_speaking_time`` anchor (reported
-    as ``stopped_speaking_at``). When the turn detector commits a turn whose anchor
-    was never refreshed for this segment, that value can be stale and predate the
-    start of the current turn, producing wildly inflated delays (see issue #6093).
+    ``stopped_speaking_at`` prefers ``provider_speaking_time``, the wall-clock end of
+    the user's speech derived from the STT provider's own timestamps, and falls back
+    to the ``last_speaking_time`` endpointing anchor (a VAD, or the arrival of an
+    explicit end-of-speech signal) when the provider gave no timing. A provider value
+    that predates ``speech_start_time`` is dropped like a stale anchor: it belongs to
+    an earlier segment. When the turn detector commits a turn whose anchor was never
+    refreshed for this segment, that value can be stale and predate the start of the
+    current turn, producing wildly inflated delays (see issue #6093).
 
     We treat such an inconsistent anchor the same way we treat unreliable VAD: skip
     the calculation and return ``None`` rather than emit a likely wrong value. A
     valid anchor must satisfy ``last_speaking_time >= speech_start_time`` (you cannot
     stop speaking before the turn started).
     """
+    stopped_speaking_at = provider_speaking_time
+    if stopped_speaking_at is not None and (
+        speech_start_time is None or stopped_speaking_at < speech_start_time
+    ):
+        stopped_speaking_at = None
+    if stopped_speaking_at is None:
+        stopped_speaking_at = last_speaking_time
+
     if (
         speech_start_time is None
-        or last_speaking_time is None
+        or stopped_speaking_at is None
         or last_final_transcript_time is None
         # stale/out-of-order anchor: stopping to speak cannot predate the turn start
-        or last_speaking_time < speech_start_time
+        or stopped_speaking_at < speech_start_time
     ):
         return _EndOfTurnMetrics(
             started_speaking_at=None,
@@ -117,9 +133,9 @@ def _compute_end_of_turn_metrics(
 
     return _EndOfTurnMetrics(
         started_speaking_at=speech_start_time,
-        stopped_speaking_at=last_speaking_time,
-        transcription_delay=max(last_final_transcript_time - last_speaking_time, 0),
-        end_of_turn_delay=max(now - last_speaking_time, 0),
+        stopped_speaking_at=stopped_speaking_at,
+        transcription_delay=max(last_final_transcript_time - stopped_speaking_at, 0),
+        end_of_turn_delay=max(now - stopped_speaking_at, 0),
     )
 
 
@@ -177,8 +193,16 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
-        # wall-clock anchor for stream-based (STT and barge-in) timestamps
-        self.input_started_at: float | None = None
+        # wall-clock anchor for stream-based (STT and barge-in) timestamps. It is
+        # stamped here, before the node creates its stream, so a pipeline created
+        # mid-session anchors the stream's `start_time_offset` on itself instead of
+        # falling back to the session start (which would count the session time twice
+        # in `_process_stt_event`).
+        self.input_started_at: float = time.time()
+        # seconds of audio pushed into the pipeline so far, and the lag plateaus of
+        # how late that audio arrived relative to its position (see `push_frame`)
+        self.pushed_duration: float = 0.0
+        self._arrival_lags: list[tuple[float, float]] = []
 
     @property
     def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
@@ -187,6 +211,45 @@ class _STTPipeline:
     @property
     def event_ch(self) -> aio.Chan[stt.SpeechEvent]:
         return self._event_ch
+
+    def push_frame(self, frame: rtc.AudioFrame, stt_frame: rtc.AudioFrame | None = None) -> None:
+        """Send a frame into the STT input, recording how late it arrived.
+
+        Provider timestamps count pushed audio, which only moves while frames flow,
+        so a gap in the mic audio makes them lag the wall clock by the length of the
+        gap (see ``wall_time``). Frames are pushed as they are captured, so the lag
+        is 0 in a steady stream; a new plateau is recorded when it moves by more than
+        the scheduling jitter, one entry per plateau.
+        """
+        now = time.time()
+        self.pushed_duration += frame.duration
+        lag = now - self.input_started_at - self.pushed_duration
+        if not self._arrival_lags or abs(lag - self._arrival_lags[-1][1]) > _LAG_TOLERANCE:
+            self._arrival_lags.append((self.pushed_duration - frame.duration, lag))
+        self._audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
+
+    def wall_time(self, audio_position: float) -> float | None:
+        """Map a position on the pushed-audio timeline to the wall clock.
+
+        ``audio_position`` is the number of seconds of audio pushed into the
+        pipeline that precede the event. The lag plateau the position falls in is
+        added, so audio captured before a gap keeps its wall time and everything
+        after the gap is shifted by the gap. A later plateau never moves audio that
+        was pushed before it, and a plateau whose lag is negative maps audio pushed
+        during a synthetic silence flush back to real time. Before any frame is
+        pushed the position maps straight onto the anchor, like a stream whose
+        node reports timings without feeding the input.
+        """
+        lag = 0.0
+        if self._arrival_lags:
+            # an event ending exactly at a plateau's first position describes audio
+            # that ended just before it, so an exact boundary keeps the previous
+            # plateau (bisect_left, not bisect_right)
+            index = bisect.bisect_left(
+                self._arrival_lags, audio_position, key=lambda entry: entry[0]
+            )
+            lag = self._arrival_lags[max(index - 1, 0)][1]
+        return self.input_started_at + audio_position + lag
 
     @utils.log_exceptions(logger=logger)
     async def _stt_pump(self) -> None:
@@ -283,6 +346,11 @@ class AudioRecognition:
 
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
+        # provider-derived estimate of when the user stopped speaking, reported as
+        # `stopped_speaking_at`. Unlike `_last_speaking_time` it is never derived from
+        # event arrival times, and it is only tracked in stt turn detection, where the
+        # provider owns the turn boundary. Reset with the turn.
+        self._stopped_speaking_at: float | None = None
         self._speech_start_time: float | None = None
 
         # used for manual commit_user_turn
@@ -410,8 +478,26 @@ class AudioRecognition:
             self._last_language = language
 
     @property
-    def _input_started_at(self) -> float | None:
-        return self._stt_pipeline.input_started_at if self._stt_pipeline is not None else None
+    def _input_duration(self) -> float:
+        """Seconds of audio pushed into the pipeline: the position a stream created
+        now starts its timeline at. Wall-clock time would include the audio that
+        never reached the pipeline (a gap in the mic, frames dropped while a stream
+        was down), which ``wall_time`` adds back exactly once."""
+        return self._stt_pipeline.pushed_duration if self._stt_pipeline is not None else 0.0
+
+    def _provider_wall_time(self, ev: stt.SpeechEvent) -> float | None:
+        """Wall-clock end of the speech the event's alternatives cover, or ``None``.
+
+        ``None`` means the provider gave no usable timing: a missing ``end_time``,
+        or no frame pushed yet. Plugins lay provider timestamps out on the pipeline's
+        pushed-audio timeline (they add the ``start_time_offset`` the node seeded, so
+        that a stream created mid-session keeps one timeline), which ``wall_time``
+        maps back to the wall clock, including the lag of audio behind a gap.
+        """
+        pipeline = self._stt_pipeline
+        if pipeline is None or not ev.alternatives or ev.alternatives[0].end_time <= 0:
+            return None
+        return pipeline.wall_time(ev.alternatives[0].end_time)
 
     def _start(
         self,
@@ -756,10 +842,7 @@ class AudioRecognition:
         """
         self._sample_rate = frame.sample_rate
         if self._stt_pipeline is not None:
-            # stamp the wall-clock anchor on the first frame to reach the pipeline
-            if self._stt_pipeline.input_started_at is None:
-                self._stt_pipeline.input_started_at = time.time() - frame.duration
-            self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
+            self._stt_pipeline.push_frame(frame, stt_frame)
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
@@ -1010,6 +1093,7 @@ class AudioRecognition:
         self._last_final_transcript_time = None
         self._speech_start_time = None
         self._last_speaking_time = None
+        self._stopped_speaking_at = None
         self._vad_speech_started = False
         self._user_turn_committed = False
         self._last_emitted_prediction = None
@@ -1145,15 +1229,10 @@ class AudioRecognition:
                 }
             )
 
-        if (
-            ev.speech_end_time is None
-            and self._stt_aligned_transcript
-            and ev.alternatives
-            and ev.alternatives[0].end_time > 0
-            and self._input_started_at is not None
-        ):
-            speech_end_time = self._input_started_at + ev.alternatives[0].end_time
-            if speech_end_time <= ev.created_at:
+        if ev.speech_end_time is None and self._stt_aligned_transcript:
+            # fill the wall-clock speech end from the plugin's word timestamps
+            speech_end_time = self._provider_wall_time(ev)
+            if speech_end_time is not None and speech_end_time <= ev.created_at:
                 ev = replace(ev, speech_end_time=speech_end_time)
 
         # Collect provider-known STT ids for this user turn. The actual attribute
@@ -1196,16 +1275,11 @@ class AudioRecognition:
         self._process_stt_event(ev)
 
     def _process_stt_event(self, ev: stt.SpeechEvent) -> None:
-        has_stt_end_time = bool(
-            len(ev.alternatives) > 0
-            and ev.alternatives[0].end_time > 0
-            and self._input_started_at is not None
-        )
+        provider_speech_end_time = self._provider_wall_time(ev)
+        has_stt_end_time = provider_speech_end_time is not None
         now = time.time()
         stt_last_speaking_time = (
-            min(ev.alternatives[0].end_time + self._input_started_at, now)
-            if has_stt_end_time and self._input_started_at is not None
-            else now
+            min(provider_speech_end_time, now) if provider_speech_end_time is not None else now
         )
         # Prefer the provider's speaking time when there is no VAD anchor to beat:
         # no VAD at all, or the VAD missed this segment. In STT turn detection the
@@ -1255,6 +1329,11 @@ class AudioRecognition:
 
             if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
+                if has_stt_end_time and self._turn_detection_mode == "stt":
+                    # the provider's word end is the best estimate of when the user
+                    # stopped speaking, and unlike the anchor an untimestamped
+                    # END_OF_SPEECH will not overwrite it with its arrival time
+                    self._stopped_speaking_at = stt_last_speaking_time
 
             # check user turn limit after accumulating transcript
             self._check_user_turn_limit(transcript)
@@ -1310,6 +1389,8 @@ class AudioRecognition:
 
             if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
+                if has_stt_end_time and self._turn_detection_mode == "stt":
+                    self._stopped_speaking_at = stt_last_speaking_time
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
                 confidence_vals = list(self._final_transcript_confidence) + [confidence]
@@ -1365,9 +1446,15 @@ class AudioRecognition:
                 # otherwise push the anchor into the future and extend `extra_sleep`,
                 # delaying the turn commit by the skew
                 self._last_speaking_time = min(ev.speech_end_time, now)
+                self._stopped_speaking_at = self._last_speaking_time
             else:
                 # use an implied version computed based on either word timestamps or current time
                 self._last_speaking_time = stt_last_speaking_time
+                if has_stt_end_time:
+                    self._stopped_speaking_at = stt_last_speaking_time
+                # without provider timing the anchor above is the arrival time: it is
+                # still an explicit endpointing signal, but the metrics keep the word
+                # end from the last transcript instead of reporting it as 0-delay
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
@@ -1387,6 +1474,8 @@ class AudioRecognition:
 
             self._speaking = True
             self._last_speaking_time = stt_last_speaking_time
+            # the previous end-of-speech estimate predates this segment
+            self._stopped_speaking_at = None
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -1541,6 +1630,7 @@ class AudioRecognition:
             last_speaking_time: float | None = None,
             last_final_transcript_time: float | None = None,
             speech_start_time: float | None = None,
+            stopped_speaking_at: float | None = None,
         ) -> None:
             endpointing_delay = self._endpointing.min_delay
             # a turn created here (no VAD/start-of-speech opened it) starts at the earliest
@@ -1750,6 +1840,7 @@ class AudioRecognition:
             metrics = _compute_end_of_turn_metrics(
                 speech_start_time=speech_start_time,
                 last_speaking_time=last_speaking_time,
+                provider_speaking_time=stopped_speaking_at,
                 last_final_transcript_time=last_final_transcript_time,
                 now=time.time(),
             )
@@ -1767,6 +1858,7 @@ class AudioRecognition:
                     "user turn committed",
                     extra={
                         "last_speaking_time": last_speaking_time,
+                        "stopped_speaking_at": stopped_speaking_at,
                         "last_final_transcript_time": last_final_transcript_time,
                         "speech_start_time": speech_start_time,
                         "delay_completed": delay_completed,
@@ -1807,6 +1899,7 @@ class AudioRecognition:
                     self._speech_start_time = None
                     self._vad_speech_started = False
                     self._last_speaking_time = None
+                    self._stopped_speaking_at = None
 
                 if self._turn_detector_stream is not None:
                     self._turn_detector_stream.flush(reason="turn committed")
@@ -1824,12 +1917,13 @@ class AudioRecognition:
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
             self._end_of_turn_task.cancel()
-        # copy the last_speaking_time before awaiting (the value can change)
+        # copy the anchors before awaiting (the values can change)
         self._end_of_turn_task = asyncio.create_task(
             _bounce_eou_task(
                 self._last_speaking_time,
                 self._last_final_transcript_time,
                 self._user_turn_start,
+                self._stopped_speaking_at,
             )
         )
 

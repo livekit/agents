@@ -350,6 +350,9 @@ class FallbackRecognizeStream(RecognizeStream):
         self._language = language
         self._fallback_adapter = stt
         self._recovering_streams: list[RecognizeStream] = []
+        # seconds of audio consumed from the input so far, the position a leg created
+        # now starts its timeline at (see the start_time_offset below)
+        self._forwarded_duration: float = 0.0
 
     async def _run(self) -> None:
         start_time = time.time()
@@ -363,6 +366,9 @@ class FallbackRecognizeStream(RecognizeStream):
 
         async def _forward_input_task() -> None:
             async for data in self._input_ch:
+                if isinstance(data, rtc.AudioFrame):
+                    self._forwarded_duration += data.duration
+
                 for stream in list(self._recovering_streams):
                     try:
                         if isinstance(data, rtc.AudioFrame):
@@ -400,9 +406,13 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
-                    # update main_stream start time offset so transcript timestamps are properly adjusted
-                    main_stream.start_time_offset = self.start_time_offset + (
-                        time.time() - self._start_time
+                    # update main_stream start time offset so transcript timestamps are properly
+                    # adjusted: the leg's timeline continues where the forwarded audio
+                    # left off, and the parent offset is a pushed-audio position, so the
+                    # delta must be audio. Wall-clock time would include the gaps in the
+                    # input, which the framework then adds a second time
+                    main_stream.start_time_offset = (
+                        self.start_time_offset + self._forwarded_duration
                     )
 
                     if forward_input_task is None or forward_input_task.done():
