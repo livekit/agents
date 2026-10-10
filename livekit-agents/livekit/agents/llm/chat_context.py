@@ -955,8 +955,9 @@ class ChatContext:
         preserved: list[ChatItem] = []
         for it in head_items:
             if isinstance(it, ChatMessage) and it.role in ("user", "assistant"):
-                continue
-            if isinstance(it, (FunctionCall, FunctionCallOutput)):
+                if it.extra.get("is_summary") is not True:
+                    continue
+            elif isinstance(it, (FunctionCall, FunctionCallOutput)):
                 continue
             preserved.append(it)
 
