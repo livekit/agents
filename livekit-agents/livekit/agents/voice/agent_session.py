@@ -1542,10 +1542,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         text: str | AsyncIterable[str],
         *,
+        tts_text: NotGivenOr[str | AsyncIterable[str]] = NOT_GIVEN,
         audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
+        """Speak text and add it to the conversation.
+
+        Args:
+            text: Text used for transcription and chat history. Also sent to TTS unless
+                ``tts_text`` is provided.
+            tts_text: Optional separate TTS input, such as SSML with pause tags. The
+                plain ``text`` remains the transcript and chat message. Not available
+                with supplied audio or a realtime model's ``say()`` path.
+            audio: Optional audio frames to play instead of generating speech with TTS.
+            allow_interruptions: Whether the speech may be interrupted.
+            add_to_chat_ctx: Whether to add the spoken text to chat history.
+        """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
@@ -1563,6 +1576,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         with use_span:
             handle = activity.say(
                 text,
+                tts_text=tts_text,
                 audio=audio,
                 allow_interruptions=allow_interruptions,
                 add_to_chat_ctx=add_to_chat_ctx,
