@@ -32,6 +32,7 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
+import psutil
 from aiohttp import web
 from google.protobuf.json_format import MessageToDict, MessageToJson
 
@@ -71,6 +72,37 @@ def _default_setup_fnc(proc: JobProcess) -> Any:
 
 async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
+
+
+def _clean_prometheus_multiproc_dir(path: str) -> None:
+    """Remove the files in a Prometheus multiprocess directory, except the ones this process
+    has open.
+
+    prometheus_client keeps each multiprocess file open for the lifetime of the process, so
+    deleting one that was opened before the server started (e.g. by an application metric)
+    would make the process keep writing to an unlinked file that /metrics never reads again.
+    The process id in a file name can't be used instead: a restarted container usually reuses
+    the same pid, and its stale files must still be removed.
+    """
+    try:
+        open_files = {os.path.realpath(f.path) for f in psutil.Process().open_files()}
+    except psutil.Error as e:
+        # without the open-file list, deleting could break live metrics; stale files are safer
+        logger.warning(
+            "failed to list open files, skipping prometheus multiprocess directory cleanup",
+            exc_info=e,
+        )
+        return
+
+    for filename in os.listdir(path):
+        file_path = os.path.join(path, filename)
+        if os.path.realpath(file_path) in open_files:
+            continue
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            logger.warning(f"failed to remove {file_path}", exc_info=e)
 
 
 class ServerType(Enum):
@@ -709,13 +741,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "cleaning prometheus multiprocess directory",
                     extra={"path": self._prometheus_multiproc_dir},
                 )
-                for filename in os.listdir(self._prometheus_multiproc_dir):
-                    file_path = os.path.join(self._prometheus_multiproc_dir, filename)
-                    try:
-                        if os.path.isfile(file_path):
-                            os.unlink(file_path)
-                    except Exception as e:
-                        logger.warning(f"failed to remove {file_path}", exc_info=e)
+                _clean_prometheus_multiproc_dir(self._prometheus_multiproc_dir)
 
             if self._ws_url:
                 os.environ["LIVEKIT_URL"] = self._ws_url
