@@ -22,22 +22,23 @@ model. Pass it as a string or as `speechmatics.Model.LINDEN_1`.
 
 The `turn_detection_mode` parameter controls how end-of-turn (endpointing) is detected:
 
-- `VAD` (default) — Speechmatics runs its own VAD and closes turns itself (service-side
+- `VAD` — Speechmatics runs its own VAD and closes turns itself (service-side
   endpointing). No `vad` is required. Pair it with `turn_detection="stt"` on the `AgentSession`,
   otherwise the session's own turn detector decides and Speechmatics' end-of-turn is ignored.
-- `EXTERNAL` — Speechmatics does not endpoint on its own. Turns close when the caller
+- `EXTERNAL` (default) — Speechmatics does not endpoint on its own. Turns close when the caller
   calls `finalize()`. In practice you pass a `vad` to the plugin and its end-of-speech drives
-  `finalize()`; LiveKit does **not** call `finalize()` for you, and no VAD is auto-loaded. Without a
-  `vad` (and without calling `finalize()` yourself) turns never close, so nothing is finalized.
-  The session's own turn detector decides when the user's turn ends; `finalize()` only makes
-  Speechmatics flush what it has as a final segment.
+  `finalize()`; LiveKit does **not** call `finalize()` for you. When no `vad` is given, Silero is
+  auto-loaded (requires `livekit-plugins-silero`), so a bare `STT()` still closes turns — pass
+  `vad=None` to opt out and drive `finalize()` yourself. The session's own turn detector decides
+  when the user's turn ends; `finalize()` only makes Speechmatics flush what it has as a final
+  segment.
 
 The earlier `FIXED`, `ADAPTIVE` and `SMART_TURN` modes each selected one of the old engine's
 service-side endpointing strategies. Agent STT exposes a single one, so all three are deprecated
-and resolve to `VAD` with a warning. `FIXED` additionally loses its `end_of_utterance_silence_trigger`
+and resolve to `EXTERNAL` (the default) with a warning. `FIXED` additionally loses its `end_of_utterance_silence_trigger`
 timing, which Agent STT does not support.
 
-## Usage — service-side endpointing (`VAD`, default)
+## Usage — service-side endpointing (`VAD`)
 
 Let Speechmatics detect turns and tell the session to act on them:
 
@@ -46,7 +47,7 @@ from livekit.agents import AgentSession
 from livekit.plugins import speechmatics
 
 agent = AgentSession(
-    stt=speechmatics.STT(),
+    stt=speechmatics.STT(turn_detection_mode=speechmatics.TurnDetectionMode.VAD),
     turn_detection="stt",
     ...
 )
