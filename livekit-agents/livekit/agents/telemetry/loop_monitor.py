@@ -174,6 +174,16 @@ class _StackSample:
     # the module a lazy import was loading when sampled; the import machinery's frames say
     # nothing useful by themselves
     importing: str | None = None
+    captured_at: float = field(default_factory=time.monotonic)
+
+
+@dataclass
+class _PendingReport:
+    lag: float
+    gc_time: float
+    cpu_time: float
+    watchdog_gap: float
+    completed_at: float
 
 
 @dataclass
@@ -183,6 +193,8 @@ class _Incident:
     tick_seq: int
     samples: list[_StackSample] = field(default_factory=list)
     late_sampled: bool = False
+    samples_in_flight: int = 0
+    pending_report: _PendingReport | None = None
 
 
 class EventLoopMonitor:
@@ -317,11 +329,25 @@ class EventLoopMonitor:
         with self._lock:
             incident = self._incident
             self._incident = None
+            deferred = False
+            if incident is not None and incident.tick_seq == blocked_seq and lag >= self._warn:
+                if incident.samples_in_flight:
+                    incident.pending_report = _PendingReport(
+                        lag=lag,
+                        gc_time=gc_time,
+                        cpu_time=cpu_time,
+                        watchdog_gap=watchdog_gap,
+                        completed_at=now,
+                    )
+                    deferred = True
+                else:
+                    samples = list(incident.samples)
+            else:
+                samples = []
         if lag < self._warn:
             return
-        samples = (
-            incident.samples if incident is not None and incident.tick_seq == blocked_seq else []
-        )
+        if deferred:
+            return
 
         self._report(self._build_report(lag, gc_time, cpu_time, watchdog_gap, samples))
 
@@ -544,20 +570,47 @@ class EventLoopMonitor:
                 incident = self._incident = _Incident(tick_seq=seq)
             want_first = not incident.samples
             want_late = not incident.late_sampled and lag >= self._warn * _LATE_SAMPLE_FACTOR
-            if not (want_first or want_late):
+            if incident.samples_in_flight or not (want_first or want_late):
                 return
+            incident.samples_in_flight += 1
 
         # Stack inspection can take long enough for the loop to resume. Never hold _lock
         # across it: _on_tick must not be sampled blocked on the monitor's own lock.
-        sample = self._sample_loop_thread(lag)
-        with self._lock:
-            # A resumed loop detaches the incident before reporting it. Do not attach a
-            # snapshot taken after that tick, since it would describe the resumed callback.
-            if self._incident is not incident or self._tick_seq != seq:
-                return
-            incident.samples.append(sample)
-            if want_late:
-                incident.late_sampled = True
+        sample: _StackSample | None = None
+        try:
+            sample = self._sample_loop_thread(lag)
+        finally:
+            pending_report: _PendingReport | None = None
+            pending_samples: list[_StackSample] = []
+            with self._lock:
+                incident.samples_in_flight -= 1
+                if sample is not None:
+                    pending = incident.pending_report
+                    captured_before_tick = (
+                        pending is None or sample.captured_at <= pending.completed_at
+                    )
+                    if captured_before_tick and (
+                        (self._incident is incident and self._tick_seq == seq) or pending is not None
+                    ):
+                        incident.samples.append(sample)
+                        if want_late:
+                            incident.late_sampled = True
+                if incident.pending_report is not None and incident.samples_in_flight == 0:
+                    pending_report = incident.pending_report
+                    pending_samples = list(incident.samples)
+                    incident.pending_report = None
+            if pending_report is not None:
+                report = self._build_report(
+                    pending_report.lag,
+                    pending_report.gc_time,
+                    pending_report.cpu_time,
+                    pending_report.watchdog_gap,
+                    pending_samples,
+                )
+                try:
+                    self._loop.call_soon_threadsafe(self._report, report)
+                except RuntimeError:
+                    self._report(report)
 
     def _sample_loop_thread(self, lag: float) -> _StackSample:
         task_name: str | None = None
@@ -573,7 +626,9 @@ class EventLoopMonitor:
                     span_context = _current_span_in(get_context())
 
         frames: list[traceback.FrameSummary] = []
-        current_frames = sys._current_frames()
+        with self._lock:
+            current_frames = sys._current_frames()
+            captured_at = time.monotonic()
         # the entry for this thread is this function's own frame, which holds the dict in a
         # local: the cycle would keep every thread's frame and locals alive until a gc pass
         current_frames.pop(threading.get_ident(), None)
@@ -604,6 +659,7 @@ class EventLoopMonitor:
             lag=lag,
             task_name=task_name,
             frames=frames,
+            captured_at=captured_at,
             span_context=span_context,
             importing=importing,
         )

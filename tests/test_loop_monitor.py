@@ -914,7 +914,8 @@ def test_watchdog_samples_one_tick_before_the_threshold() -> None:
         loop.close()
 
 
-def test_tick_does_not_wait_for_watchdog_sample() -> None:
+@pytest.mark.parametrize("captured_before_tick", [True, False])
+def test_tick_does_not_wait_for_watchdog_sample(captured_before_tick: bool) -> None:
     import traceback
 
     loop = asyncio.new_event_loop()
@@ -927,12 +928,14 @@ def test_tick_does_not_wait_for_watchdog_sample() -> None:
     release_sample = threading.Event()
 
     def sample(lag: float) -> loop_monitor._StackSample:
+        captured_at = time.monotonic() if captured_before_tick else None
         sample_ready.set()
         release_sample.wait(1)
         return loop_monitor._StackSample(
             lag=lag,
             task_name=None,
             frames=[traceback.FrameSummary(__file__, 1, "blocked")],
+            captured_at=captured_at if captured_at is not None else time.monotonic(),
         )
 
     monitor._sample_loop_thread = sample  # type: ignore[method-assign]
@@ -949,12 +952,16 @@ def test_tick_does_not_wait_for_watchdog_sample() -> None:
     if ready:
         tick.join(1)
     watchdog.join(1)
+    loop.run_until_complete(asyncio.sleep(0))
 
     try:
         assert ready and not watchdog.is_alive() and not tick.is_alive()
         assert tick_completed_during_sample
         assert len(reports) == 1
-        assert reports[0].stacks[0].startswith("# no sample:")
+        if captured_before_tick:
+            assert reports[0].stacks[0].startswith("# loop thread sampled")
+        else:
+            assert reports[0].stacks[0].startswith("# no sample:")
     finally:
         monitor.stop()
         loop.close()
