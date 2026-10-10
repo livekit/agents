@@ -336,6 +336,10 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return "livekit"
 
+    @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        return "livekit_inference"
+
     def chat(
         self,
         *,

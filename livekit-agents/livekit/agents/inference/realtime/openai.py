@@ -143,6 +143,10 @@ class RealtimeModel(_RealtimeModel):
     def provider(self) -> str:
         return "livekit"
 
+    @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        return "livekit_inference"
+
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)

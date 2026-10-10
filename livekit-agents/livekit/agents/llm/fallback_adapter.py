@@ -124,6 +124,11 @@ class FallbackAdapter(
         return self._next_instance().provider
 
     @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        """Usage source of the instance that most recently served a request."""
+        return self._active_instance.usage_source
+
+    @property
     def metrics_metadata(self) -> MetricsMetadata:
         """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
         return self._active_instance.metrics_metadata

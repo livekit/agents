@@ -146,9 +146,18 @@ class LLM(
         return "unknown"
 
     @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        """Whether usage is routed through LiveKit Inference or a provider plugin."""
+        return "provider_plugin"
+
+    @property
     def metrics_metadata(self) -> MetricsMetadata:
         """Metadata used to label turn metrics emitted for this LLM instance."""
-        return {"model_name": self.model, "model_provider": self.provider}
+        return {
+            "model_name": self.model,
+            "model_provider": self.provider,
+            "usage_source": self.usage_source,
+        }
 
     @abstractmethod
     def chat(
@@ -433,6 +442,7 @@ class LLMStream(ABC):
             metadata=Metadata(
                 model_name=self._llm.model,
                 model_provider=self._llm.provider,
+                usage_source=self._llm.usage_source,
             ),
         )
         if self._llm_request_span:

@@ -654,6 +654,7 @@ async def test_reports_active_instance_model_and_provider() -> None:
         assert fallback_adapter.metrics_metadata == {
             "model_name": "primary-model",
             "model_provider": "primary",
+            "usage_source": "provider_plugin",
         }
 
         chat_ctx = ChatContext.empty()
@@ -666,6 +667,7 @@ async def test_reports_active_instance_model_and_provider() -> None:
         assert fallback_adapter.metrics_metadata == {
             "model_name": "fallback-model",
             "model_provider": "fallback",
+            "usage_source": "provider_plugin",
         }
         # model and provider follow the instance that serves next, so spans and metrics name
         # the model that answered rather than the adapter; the label stays the adapter's own

@@ -703,6 +703,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             metadata=Metadata(
                 model_name=self._realtime_model.model,
                 model_provider=self._realtime_model.provider,
+                usage_source=self._realtime_model.usage_source,
             ),
         )
 
