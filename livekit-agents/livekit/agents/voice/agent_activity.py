@@ -2302,9 +2302,12 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity.realtime_generation",
         )
 
+        # a generation scheduled while a run is open belongs to that run, whichever activity
+        # ran the tool it continues from and whether or not a placeholder waits for it
+        if (run_state := self._session._global_run_state) is not None and not run_state.done():
+            run_state._watch_handle(handle)
+
         if (fut := self._pending_auto_tool_reply_fut) and not fut.done():
-            if (run_state := self._session._global_run_state) is not None and not run_state.done():
-                run_state._watch_handle(handle)
             self._pending_auto_tool_reply_fut = None
             fut.set_result(None)
 
