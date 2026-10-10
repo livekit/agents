@@ -79,6 +79,9 @@ def test_models_that_do_send_words_keep_their_claim(_fake_credentials: None) -> 
     assert inference.STT(
         model="assemblyai/universal-streaming"
     ).capabilities.aligned_transcript == ("word")
+    # xai/stt-2 returns word timings through Inference just like xai/stt-1 (#7467)
+    assert inference.STT(model="xai/stt-1").capabilities.aligned_transcript == "word"
+    assert inference.STT(model="xai/stt-2").capabilities.aligned_transcript == "word"
     # the provider is resolved server-side per language, so alignment can't be promised
     assert inference.STT(model="auto").capabilities.aligned_transcript is False
     assert inference.STT(model="inworld/inworld-stt-1").capabilities.aligned_transcript is False
@@ -102,6 +105,7 @@ def test_unknown_models_do_not_claim_alignment(_fake_credentials: None) -> None:
     ("fallback", "expected"),
     [
         pytest.param("cartesia/ink-whisper", "word", id="aligned-fallback"),
+        pytest.param("xai/stt-2", "word", id="aligned-xai-stt2-fallback"),
         pytest.param("cartesia/ink-2", False, id="unaligned-fallback"),
         pytest.param("new-provider/new-turn-model", False, id="unknown-fallback"),
     ],
