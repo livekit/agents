@@ -5,7 +5,6 @@ import contextlib
 import contextvars
 import functools
 import json
-import os
 import weakref
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -26,7 +25,7 @@ from .. import llm
 from ..llm import function_tool, utils as llm_utils
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
+from ..utils import is_given, resolve_env_int
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -34,7 +33,7 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 
-lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
+lk_evals_verbose = resolve_env_int("LIVEKIT_EVALS_VERBOSE")
 
 _OUTPUT_RETRY_PROMPT = (
     "You have not provided the final output yet. Call the appropriate function "

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
@@ -26,14 +25,14 @@ from ..types import (
     USERDATA_TTS_STARTED_TIME,
     APIConnectOptions,
 )
-from ..utils import aio, audio, codecs, log_exceptions, shortuuid
+from ..utils import aio, audio, codecs, log_exceptions, resolve_env_int, shortuuid
 
 if TYPE_CHECKING:
     from ..llm.chat_context import MetricsMetadata
     from ..voice.agent_session import SpeechSteeringOptions
     from ..voice.io import TimedString
 
-lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
+lk_dump_tts = resolve_env_int("LK_DUMP_TTS")
 
 
 @dataclass
