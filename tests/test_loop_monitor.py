@@ -23,6 +23,11 @@ from traceback import FrameSummary
 from types import ModuleType, SimpleNamespace
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
 from livekit.agents.telemetry import (
     loop_monitor,
     set_tracer_provider,
@@ -39,10 +44,6 @@ from livekit.agents.telemetry.loop_monitor import (
     _RateLimiter,
     _StackSample,
 )
-from opentelemetry import trace
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
