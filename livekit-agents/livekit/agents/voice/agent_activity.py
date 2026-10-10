@@ -1969,6 +1969,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             self._rt_session.clear_audio()
+            self._realtime_user_input_answered_at = time.time()
+            self._session._unanswered_user_metrics = None
 
     def commit_user_turn(
         self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
@@ -1976,8 +1978,11 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             # commit audio buffer and conditionally trigger response generation
             self._rt_session.commit_audio()
-            if not skip_reply:
-                self._session.generate_reply()
+            if skip_reply:
+                self._realtime_user_input_answered_at = time.time()
+                self._session._unanswered_user_metrics = None
+            else:
+                self._session.generate_reply(input_modality="audio")
             # `skip_reply` prevents duplicate reply from _on_user_turn_completed
             # but keeps flushing STT transcript into the chat context
             skip_reply = True
@@ -4347,6 +4352,7 @@ class AgentActivity(RecognitionHooks):
         stopped_speaking_at: float | None = None
         started_forwarding_at: float | None = None
         e2e_latency: float | None = None
+        first_played_message_id: str | None = None
 
         def _on_first_frame(
             fut: asyncio.Future[float] | asyncio.Future[None], audio_out: _AudioOutput | None = None
@@ -4478,13 +4484,22 @@ class AgentActivity(RecognitionHooks):
             tr_node = self._agent.transcription_node(tr_text_input, model_settings)
             text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
 
+            def _on_message_first_frame(
+                fut: asyncio.Future[float] | asyncio.Future[None],
+                audio_out: _AudioOutput | None = None,
+            ) -> None:
+                nonlocal first_played_message_id
+                _on_first_frame(fut, audio_out)
+                if first_played_message_id is None and started_speaking_at is not None:
+                    first_played_message_id = msg.message_id
+
             out = await forward_generation(
                 speech_handle=speech_handle,
                 audio_output=audio_output,
                 text_output=text_output,
                 audio_source=audio_source,
                 text_source=text_source,
-                on_first_frame=_on_first_frame,
+                on_first_frame=_on_message_first_frame,
                 reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
             )
             return _MsgOutput(msg=msg, out=out)
@@ -4565,7 +4580,7 @@ class AgentActivity(RecognitionHooks):
 
             if generation_ev.response_id:
                 assistant_metrics["provider_request_ids"] = [generation_ev.response_id]
-            if e2e_latency is not None:
+            if e2e_latency is not None and message_id == first_played_message_id:
                 assistant_metrics["e2e_latency"] = e2e_latency
 
             if stopped_speaking_at and started_speaking_at:

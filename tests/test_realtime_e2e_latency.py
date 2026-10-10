@@ -54,7 +54,11 @@ async def _vad(
 
 
 def _start_reply(
-    session: AgentSession, model: FakeRealtimeModel, *, requested: SpeechHandle | None = None
+    session: AgentSession,
+    model: FakeRealtimeModel,
+    *,
+    requested: SpeechHandle | None = None,
+    additional_message: llm.MessageGeneration | None = None,
 ) -> tuple[SpeechHandle, utils.aio.Chan[rtc.AudioFrame]]:
     messages = utils.aio.Chan[llm.MessageGeneration]()
     functions = utils.aio.Chan[llm.FunctionCall]()
@@ -72,6 +76,8 @@ def _start_reply(
     )
     text.send_nowait("Hello")
     text.close()
+    if additional_message is not None:
+        messages.send_nowait(additional_message)
     messages.close()
     functions.close()
     speeches: list[SpeechCreatedEvent] = []
@@ -219,17 +225,122 @@ async def test_realtime_e2e_does_not_use_previous_turn_when_user_resumes(
     assert "e2e_latency" not in reply.metrics
 
 
+@pytest.mark.parametrize("committed", [False, True])
 async def test_realtime_e2e_does_not_use_cleared_user_speech(
+    realtime: tuple[AgentSession, FakeRealtimeModel], committed: bool
+) -> None:
+    session, model = realtime
+    now = time.time()
+    await _vad(session, vad.VADEventType.START_OF_SPEECH, at=now - 1.0)
+    await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now)
+    if committed:
+        assert session._activity is not None
+        assert session._activity._audio_recognition is not None
+        assert session._activity._audio_recognition._end_of_turn_task is not None
+        await session._activity._audio_recognition._end_of_turn_task
+    session.clear_user_turn()
+
+    reply = await _finish_reply(session, *_start_reply(session, model))
+    assert "e2e_latency" not in reply.metrics
+
+
+async def test_realtime_e2e_does_not_use_skipped_user_speech(
     realtime: tuple[AgentSession, FakeRealtimeModel],
 ) -> None:
     session, model = realtime
     now = time.time()
     await _vad(session, vad.VADEventType.START_OF_SPEECH, at=now - 1.0)
     await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now)
-    session.clear_user_turn()
+    await session.commit_user_turn(skip_reply=True)
 
     reply = await _finish_reply(session, *_start_reply(session, model))
     assert "e2e_latency" not in reply.metrics
+
+
+@pytest.mark.parametrize("committed_before_generation", [False, True])
+async def test_realtime_e2e_uses_latest_turn_before_playback(
+    realtime: tuple[AgentSession, FakeRealtimeModel], committed_before_generation: bool
+) -> None:
+    session, model = realtime
+    assert session._activity is not None
+    assert session._activity._audio_recognition is not None
+    recognition = session._activity._audio_recognition
+    now = time.time()
+    await _vad(session, vad.VADEventType.START_OF_SPEECH, at=now - 6.0)
+    await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now - 4.0)
+    assert recognition._end_of_turn_task is not None
+    if committed_before_generation:
+        await recognition._end_of_turn_task
+    first_handle, first_audio = _start_reply(session, model)
+    await recognition._end_of_turn_task
+
+    await _vad(session, vad.VADEventType.START_OF_SPEECH, at=now - 3.0)
+    await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now - 1.0)
+    assert recognition._end_of_turn_task is not None
+    await recognition._end_of_turn_task
+
+    first = await _finish_reply(session, first_handle, first_audio)
+    second = await _finish_reply(session, *_start_reply(session, model))
+    assert first.metrics["e2e_latency"] == pytest.approx(
+        first.metrics["started_speaking_at"] - (now - 1.0)
+    )
+    assert "e2e_latency" not in second.metrics
+
+
+async def test_realtime_manual_commit_preserves_speech_timing(
+    realtime: tuple[AgentSession, FakeRealtimeModel],
+) -> None:
+    session, model = realtime
+    now = time.time()
+    await _vad(session, vad.VADEventType.START_OF_SPEECH, at=now - 1.0)
+    await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now)
+    speeches: list[SpeechCreatedEvent] = []
+    session.on("speech_created", speeches.append)
+    await session.commit_user_turn()
+    for _ in range(100):
+        if model.active_session._reply_futs:
+            break
+        await asyncio.sleep(0)
+    assert model.active_session._reply_futs
+    assert len(speeches) == 1
+    reply = await _finish_reply(
+        session, *_start_reply(session, model, requested=speeches[0].speech_handle)
+    )
+    assert reply.metrics["e2e_latency"] == pytest.approx(reply.metrics["started_speaking_at"] - now)
+
+
+async def test_realtime_e2e_is_reported_only_on_first_played_message(
+    realtime: tuple[AgentSession, FakeRealtimeModel],
+) -> None:
+    session, model = realtime
+    now = time.time()
+    await _vad(session, vad.VADEventType.START_OF_SPEECH, at=now - 1.0)
+    await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now)
+    text = utils.aio.Chan[str]()
+    text.send_nowait("Another message")
+    text.close()
+    audio = utils.aio.Chan[rtc.AudioFrame]()
+    audio.send_nowait(rtc.AudioFrame.create(24000, 1, 240))
+    audio.close()
+    modalities = asyncio.Future[list[str]]()
+    modalities.set_result(["audio", "text"])
+    additional_message = llm.MessageGeneration(
+        message_id=utils.shortuuid("message_"),
+        text_stream=text,
+        audio_stream=audio,
+        modalities=modalities,
+    )
+    await _finish_reply(
+        session, *_start_reply(session, model, additional_message=additional_message)
+    )
+    replies = [
+        item
+        for item in session.history.items
+        if isinstance(item, llm.ChatMessage) and item.role == "assistant"
+    ]
+    assert len(replies) == 2
+    assert "e2e_latency" in replies[0].metrics
+    assert "e2e_latency" not in replies[1].metrics
 
 
 @pytest.mark.parametrize("speaking", [False, True])
