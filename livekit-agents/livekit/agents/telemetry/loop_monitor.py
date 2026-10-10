@@ -130,12 +130,18 @@ def _env_seconds(name: str, default: float) -> float:
         value_ms = float(raw)
     except ValueError:
         logger.warning(
-            "invalid %s=%r, expected milliseconds; using %.0fms", name, raw, default * 1000
+            "invalid %s=%r, expected milliseconds; using %.0fms",
+            name,
+            raw,
+            default * 1000,
         )
         return default
     if not math.isfinite(value_ms) or value_ms < 0:
         logger.warning(
-            "invalid %s=%r, must be finite and >= 0; using %.0fms", name, raw, default * 1000
+            "invalid %s=%r, must be finite and >= 0; using %.0fms",
+            name,
+            raw,
+            default * 1000,
         )
         return default
     return value_ms / 1000.0
@@ -174,6 +180,17 @@ class _StackSample:
     # the module a lazy import was loading when sampled; the import machinery's frames say
     # nothing useful by themselves
     importing: str | None = None
+    captured_at: float = field(default_factory=time.monotonic)
+
+
+@dataclass
+class _PendingReport:
+    lag: float
+    gc_time: float
+    cpu_time: float
+    watchdog_gap: float
+    completed_at: float
+    started_at: float
 
 
 @dataclass
@@ -183,6 +200,8 @@ class _Incident:
     tick_seq: int
     samples: list[_StackSample] = field(default_factory=list)
     late_sampled: bool = False
+    samples_in_flight: int = 0
+    pending_report: _PendingReport | None = None
 
 
 class EventLoopMonitor:
@@ -224,6 +243,7 @@ class EventLoopMonitor:
         # written by the watchdog, read by the loop thread under _lock
         self._lock = threading.Lock()
         self._incident: _Incident | None = None
+        self._deferred_reports: deque[BlockedReport] = deque()
 
         self._gc_started_at: float | None = None
         self._gc_time: float = 0.0
@@ -270,9 +290,10 @@ class EventLoopMonitor:
 
     def stop(self) -> None:
         """Stop the heartbeat and the watchdog. Idempotent."""
-        if self._closed:
-            return
-        self._closed = True
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
         self._stop_event.set()
         if self._timer is not None:
             self._timer.cancel()
@@ -281,6 +302,15 @@ class EventLoopMonitor:
             gc.callbacks.remove(self._on_gc)
         if self._watchdog is not None and self._watchdog is not threading.current_thread():
             self._watchdog.join(timeout=1.0)
+        self._deliver_deferred_report()
+
+    def _deliver_deferred_report(self) -> None:
+        while True:
+            with self._lock:
+                if not self._deferred_reports:
+                    return
+                report = self._deferred_reports.popleft()
+            self._report(report)
 
     # -- loop thread --
 
@@ -293,7 +323,9 @@ class EventLoopMonitor:
         gc.callbacks.append(self._on_gc)
         self._timer = self._loop.call_later(self._tick, self._on_tick)
         self._watchdog = threading.Thread(
-            target=self._watchdog_main, name=f"livekit-loop-monitor-{self._name}", daemon=True
+            target=self._watchdog_main,
+            name=f"livekit-loop-monitor-{self._name}",
+            daemon=True,
         )
         self._watchdog.start()
 
@@ -313,17 +345,38 @@ class EventLoopMonitor:
         self._last_thread_cpu = thread_cpu
         watchdog_gap = self._consume_watchdog_gap(now, window_start=expected_at - self._tick)
         self._timer = self._loop.call_later(self._tick, self._on_tick)
+        report_started_at = time.time() - lag if lag >= self._warn else None
 
         with self._lock:
             incident = self._incident
             self._incident = None
+            deferred = False
+            if incident is not None and incident.tick_seq == blocked_seq and lag >= self._warn:
+                assert report_started_at is not None
+                if incident.samples_in_flight:
+                    incident.pending_report = _PendingReport(
+                        lag=lag,
+                        gc_time=gc_time,
+                        cpu_time=cpu_time,
+                        watchdog_gap=watchdog_gap,
+                        completed_at=now,
+                        started_at=report_started_at,
+                    )
+                    deferred = True
+                else:
+                    samples = list(incident.samples)
+            else:
+                samples = []
         if lag < self._warn:
             return
-        samples = (
-            incident.samples if incident is not None and incident.tick_seq == blocked_seq else []
-        )
+        if deferred:
+            return
 
-        self._report(self._build_report(lag, gc_time, cpu_time, watchdog_gap, samples))
+        self._report(
+            self._build_report(
+                lag, gc_time, cpu_time, watchdog_gap, samples, started_at=report_started_at
+            )
+        )
 
     def _build_report(
         self,
@@ -332,6 +385,8 @@ class EventLoopMonitor:
         cpu_time: float,
         watchdog_gap: float,
         samples: list[_StackSample],
+        *,
+        started_at: float | None = None,
     ) -> BlockedReport:
         # the watchdog is an independent thread: if it too woke late by most of the stall,
         # either the process was not being scheduled (host contention, CPU quota, a suspended
@@ -351,12 +406,12 @@ class EventLoopMonitor:
                 "# no sample: the loop thread held the GIL for the whole stall, so the sampler "
                 "could not run (a native call that does not release the GIL)"
                 if watchdog_starved
-                else "# no sample: the block ended before the watchdog looked"
+                else "# no sample: the event loop resumed before a stack snapshot was available"
             ]
         return BlockedReport(
             duration=lag,
             # the block started no earlier than the last on-time tick
-            started_at=time.time() - lag,
+            started_at=started_at if started_at is not None else time.time() - lag,
             warn_threshold=self._warn,
             severity="error" if lag >= self._error and not process_descheduled else "warning",
             gc_time=min(gc_time, lag),
@@ -529,28 +584,70 @@ class EventLoopMonitor:
                 logger.exception("event loop watchdog failed")
 
     def _watchdog_check(self) -> None:
-        # snapshot both together: the tick updates seq then time, so a torn read can only
-        # make the lag look smaller for one iteration
-        seq = self._tick_seq
-        lag = time.monotonic() - (self._last_tick_at + self._tick)
-        if lag < self._first_sample_lag:
-            return
-
         with self._lock:
+            seq = self._tick_seq
+            lag = time.monotonic() - (self._last_tick_at + self._tick)
+            if lag < self._first_sample_lag:
+                return
+
             incident = self._incident
-            if incident is None or incident.tick_seq != seq:
+            if incident is not None and incident.tick_seq != seq:
+                # The heartbeat is between updating its sequence and acquiring this lock.
+                # Leave the previous incident for that heartbeat to report.
+                return
+            if incident is None:
                 incident = self._incident = _Incident(tick_seq=seq)
             want_first = not incident.samples
             want_late = not incident.late_sampled and lag >= self._warn * _LATE_SAMPLE_FACTOR
-        if not (want_first or want_late):
-            return
+            if incident.samples_in_flight or not (want_first or want_late):
+                return
+            incident.samples_in_flight += 1
 
-        sample = self._sample_loop_thread(lag)
-        with self._lock:
-            if self._incident is incident:
-                incident.samples.append(sample)
-                if want_late:
-                    incident.late_sampled = True
+        # Stack inspection can take long enough for the loop to resume. Never hold _lock
+        # across it: _on_tick must not be sampled blocked on the monitor's own lock.
+        sample: _StackSample | None = None
+        try:
+            sample = self._sample_loop_thread(lag)
+        finally:
+            pending_report: _PendingReport | None = None
+            pending_samples: list[_StackSample] = []
+            with self._lock:
+                incident.samples_in_flight -= 1
+                if sample is not None:
+                    pending = incident.pending_report
+                    captured_before_tick = (
+                        pending is None or sample.captured_at <= pending.completed_at
+                    )
+                    if captured_before_tick and (
+                        (self._incident is incident and self._tick_seq == seq)
+                        or pending is not None
+                    ):
+                        incident.samples.append(sample)
+                        if want_late:
+                            incident.late_sampled = True
+                if incident.pending_report is not None and incident.samples_in_flight == 0:
+                    pending_report = incident.pending_report
+                    pending_samples = list(incident.samples)
+                    incident.pending_report = None
+            if pending_report is not None:
+                report = self._build_report(
+                    pending_report.lag,
+                    pending_report.gc_time,
+                    pending_report.cpu_time,
+                    pending_report.watchdog_gap,
+                    pending_samples,
+                    started_at=pending_report.started_at,
+                )
+                with self._lock:
+                    self._deferred_reports.append(report)
+                    report_directly = self._closed or not self._loop.is_running()
+                if report_directly:
+                    self._deliver_deferred_report()
+                else:
+                    try:
+                        self._loop.call_soon_threadsafe(self._deliver_deferred_report)
+                    except RuntimeError:
+                        self._deliver_deferred_report()
 
     def _sample_loop_thread(self, lag: float) -> _StackSample:
         task_name: str | None = None
@@ -566,7 +663,9 @@ class EventLoopMonitor:
                     span_context = _current_span_in(get_context())
 
         frames: list[traceback.FrameSummary] = []
-        current_frames = sys._current_frames()
+        with self._lock:
+            current_frames = sys._current_frames()
+            captured_at = time.monotonic()
         # the entry for this thread is this function's own frame, which holds the dict in a
         # local: the cycle would keep every thread's frame and locals alive until a gc pass
         current_frames.pop(threading.get_ident(), None)
@@ -597,6 +696,7 @@ class EventLoopMonitor:
             lag=lag,
             task_name=task_name,
             frames=frames,
+            captured_at=captured_at,
             span_context=span_context,
             importing=importing,
         )
@@ -719,7 +819,8 @@ def _tick_interval_for(warn_threshold: float) -> float:
     so fewer ticks per threshold means blocks just over it go unreported; more ticks cost
     wake-ups (two per tick, heartbeat and watchdog) for no gain."""
     return min(
-        max(warn_threshold / _TICKS_PER_WARN_THRESHOLD, _MIN_TICK_INTERVAL), _MAX_TICK_INTERVAL
+        max(warn_threshold / _TICKS_PER_WARN_THRESHOLD, _MIN_TICK_INTERVAL),
+        _MAX_TICK_INTERVAL,
     )
 
 
