@@ -621,6 +621,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             recording_options=_RECORDING_ALL_OFF.copy(),
         )
         self._expressive: bool | ExpressiveOptions = expressive
+        # set once a turn runs with expressive on: only then can the chat history hold
+        # markup the framework asked for, which an expressive-off turn has to scrub
+        self._expressive_turn_ran = False
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
 
@@ -1465,9 +1468,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             expressive (NotGivenOr[bool | ExpressiveOptions], optional): Turn expressive TTS
                 delivery on/off or change its options mid-session. Takes effect on the
                 next reply. An ``expressive`` set on the active :class:`Agent` overrides the
-                session value. When a turn runs with expressive off, markup left in past
-                assistant messages is stripped from the chat history so the LLM doesn't
-                imitate tags nothing downstream converts.
+                session value. When a turn runs with expressive off after an earlier turn
+                ran with it on, markup left in past assistant messages is stripped from the
+                chat history so the LLM doesn't imitate tags nothing downstream converts.
+                Tags in a session that never ran expressive are left alone.
             min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
