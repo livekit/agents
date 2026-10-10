@@ -1060,3 +1060,34 @@ def test_explicit_tool_behavior_wins_over_the_model_default(
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     model = RealtimeModel(model="gemini-3.8-live", tool_behavior=types.Behavior.BLOCKING)
     assert model._opts.tool_behavior == types.Behavior.BLOCKING
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("gemini-3.8-live", [("user", "<instructions>\nGreet the guest.\n</instructions>")]),
+        (
+            "gemini-3.1-flash-live-preview",
+            [("user", "<instructions>\nGreet the guest.\n</instructions>")],
+        ),
+        (
+            "gemini-2.5-flash-native-audio-preview-12-2025",
+            [("model", "Greet the guest."), ("user", ".")],
+        ),
+    ],
+)
+async def test_reply_instructions_turns_follow_the_model(
+    monkeypatch: pytest.MonkeyPatch, model: str, expected: list[tuple[str, str]]
+) -> None:
+    """Without the placeholder, a trailing model turn is continued rather than answered, and
+    an unwrapped user turn is later recalled as something the user said."""
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.model = model
+        fut = session.generate_reply(instructions="Greet the guest.")
+        try:
+            sent = [m for m in await _drain_sent(session) if isinstance(m, types.LiveClientContent)]
+        finally:
+            fut.cancel()
+        assert len(sent) == 1
+        assert sent[0].turn_complete
+        assert [(t.role, t.parts[0].text) for t in sent[0].turns or [] if t.parts] == expected
