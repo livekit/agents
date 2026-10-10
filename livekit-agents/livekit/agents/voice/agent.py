@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 class ModelSettings:
     tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
     """The tool choice to use when calling the LLM."""
+    tts_text_is_markup: bool = False
+    """Keep explicit TTS markup scopes intact when adapting a non-streaming model."""
 
 
 class Agent:
@@ -602,8 +604,8 @@ class Agent:
                     tts=wrapped_tts,
                     sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
                         retain_format=True,
-                        # markup only exists in the stream when expressive is active
-                        xml_aware=expressive_active,
+                        # preserve expressive markers and explicit TTS markup scopes
+                        xml_aware=expressive_active or model_settings.tts_text_is_markup,
                     ),
                 )
                 wrapped_tts = temporary_adapter
@@ -615,6 +617,7 @@ class Agent:
                 # rather than leaving stale state on the instance. The provider's chunk
                 # defaults then drive the TTS's input tokenizer.
                 activity.tts._set_expressive(expressive_active)
+                activity.tts._set_xml_aware(model_settings.tts_text_is_markup)
 
                 conn_options = activity.session.conn_options.tts_conn_options
                 async with wrapped_tts.stream(conn_options=conn_options) as stream:

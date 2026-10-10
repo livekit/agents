@@ -55,7 +55,9 @@ class StreamAdapter(TTS):
             assert isinstance(self._tts, StreamAdapter)
             return self._tts._wrapped_tts.markup._provider_key()
 
-    def _tokenizer_for(self, *, lowering: bool) -> tokenize.SentenceTokenizer:
+    def _tokenizer_for(
+        self, *, lowering: bool, xml_aware: bool = False
+    ) -> tokenize.SentenceTokenizer:
         """The sentence tokenizer for one synthesis.
 
         A marker must never be split across two tokens -- the sentence-level lowering in
@@ -66,7 +68,7 @@ class StreamAdapter(TTS):
         one here, and only while markup is actually flowing, so a plain turn never pays
         the stray-``<`` stall.
         """
-        if not lowering or self._explicit_tokenizer:
+        if (not lowering and not xml_aware) or self._explicit_tokenizer:
             return self._sentence_tokenizer
         if self._markup_tokenizer is None:
             self._markup_tokenizer = tokenize.blingfire.SentenceTokenizer(
@@ -94,9 +96,12 @@ class StreamAdapter(TTS):
         return self._wrapped_tts.synthesize(text=text, conn_options=conn_options)
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        xml_aware: bool | None = None,
     ) -> StreamAdapterWrapper:
-        return StreamAdapterWrapper(tts=self, conn_options=conn_options)
+        return StreamAdapterWrapper(tts=self, conn_options=conn_options, xml_aware=xml_aware)
 
     def prewarm(self) -> None:
         self._wrapped_tts.prewarm()
@@ -111,7 +116,9 @@ class StreamAdapter(TTS):
 class StreamAdapterWrapper(SynthesizeStream):
     _tts_request_span_name: ClassVar[str] = "tts_stream_adapter"
 
-    def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self, *, tts: StreamAdapter, conn_options: APIConnectOptions, xml_aware: bool | None = None
+    ) -> None:
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
         self._tts: StreamAdapter = tts
         self._wrapped_tts_conn_options = conn_options
@@ -120,6 +127,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         # its own task, and _expressive lives on the shared TTS, so another turn or
         # session could flip it in between.
         self._expressive = tts._wrapped_tts._expressive
+        self._xml_aware = tts._xml_aware if xml_aware is None else xml_aware
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         async for _ in event_aiter:
@@ -131,7 +139,9 @@ class StreamAdapterWrapper(SynthesizeStream):
         markup = self._tts._wrapped_tts.markup
         lowering = bool(markup._provider_key()) and self._expressive
 
-        sent_stream = self._tts._tokenizer_for(lowering=lowering).stream()
+        sent_stream = self._tts._tokenizer_for(
+            lowering=lowering, xml_aware=self._xml_aware
+        ).stream()
         if self._tts._stream_pacer:
             sent_stream = self._tts._stream_pacer.wrap(
                 sent_stream=sent_stream,

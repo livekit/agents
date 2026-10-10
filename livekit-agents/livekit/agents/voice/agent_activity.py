@@ -1767,7 +1767,7 @@ class AgentActivity(RecognitionHooks):
                     tts_text=tts_text,
                     audio=audio or None,
                     add_to_chat_ctx=add_to_chat_ctx,
-                    model_settings=ModelSettings(),
+                    model_settings=ModelSettings(tts_text_is_markup=is_given(tts_text)),
                     _previous_user_metrics=user_metrics,
                 ),
                 speech_handle=handle,
@@ -3185,7 +3185,7 @@ class AgentActivity(RecognitionHooks):
         audio_source: AsyncIterable[str] | None = None
 
         tee: utils.aio.itertools.Tee[str] | None = None
-        if isinstance(text, AsyncIterable) and not is_given(tts_text):
+        if isinstance(text, AsyncIterable) and (not is_given(tts_text) or text is tts_text):
             tee = utils.aio.itertools.tee(text, 2)
             text_source, audio_source = tee
         else:

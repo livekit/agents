@@ -6,6 +6,8 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, ModelSettings
+from livekit.agents.tts import TTS, FallbackAdapter, StreamAdapter, TTSCapabilities
+from livekit.agents.utils.aio.channel import ChanEmpty
 from tests.fake_io import FakeAudioOutput, FakeTextOutput
 from tests.fake_llm import FakeLLM
 from tests.fake_tts import FakeTTS
@@ -14,8 +16,10 @@ pytestmark = pytest.mark.unit
 
 
 class RecordingAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions="test", llm=FakeLLM(), tts=FakeTTS(fake_audio_duration=0.01))
+    def __init__(self, tts: TTS | None = None) -> None:
+        super().__init__(
+            instructions="test", llm=FakeLLM(), tts=tts or FakeTTS(fake_audio_duration=0.01)
+        )
         self.tts_inputs: list[str] = []
 
     async def tts_node(
@@ -28,6 +32,12 @@ class RecordingAgent(Agent):
 
         async for frame in Agent.default.tts_node(self, record_input(), model_settings):
             yield frame
+
+
+class NonStreamingFakeTTS(FakeTTS):
+    def __init__(self) -> None:
+        super().__init__(fake_audio_duration=0.01)
+        self._capabilities = TTSCapabilities(streaming=False)
 
 
 @pytest.mark.asyncio
@@ -88,5 +98,62 @@ async def test_say_keeps_literal_markup_without_tts_text() -> None:
         assert "".join(agent.tts_inputs) == 'Explain the <break time="1s"/> tag'
         messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
         assert [msg.text_content for msg in messages] == ['Explain the <break time="1s"/> tag']
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_say_tees_shared_text_stream() -> None:
+    async def shared_text() -> AsyncIterator[str]:
+        yield "Hello "
+        yield "world"
+
+    agent = RecordingAgent()
+    session = AgentSession(vad=None, turn_handling={"turn_detection": None})
+    session.output.audio = FakeAudioOutput()
+    await session.start(agent)
+    try:
+        stream = shared_text()
+        handle = session.say(stream, tts_text=stream)
+        await handle.wait_for_playout()
+
+        assert "".join(agent.tts_inputs) == "Hello world"
+        messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
+        assert [msg.text_content for msg in messages] == ["Hello world"]
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter", ["direct", "stream", "fallback"])
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<prosody rate="slow">This is the first long sentence. This is the second long sentence.</prosody>',
+        '<mstts:express-as style="cheerful">This is the first long sentence. This is the second long sentence.</mstts:express-as>',
+    ],
+)
+async def test_say_keeps_ssml_scope_in_one_non_streaming_request(markup: str, adapter: str) -> None:
+    tts = NonStreamingFakeTTS()
+    model: TTS = tts
+    if adapter == "stream":
+        model = StreamAdapter(tts=tts)
+    elif adapter == "fallback":
+        model = FallbackAdapter([tts, FakeTTS(fake_audio_duration=0.01)])
+    agent = RecordingAgent(model)
+    session = AgentSession(vad=None, turn_handling={"turn_detection": None})
+    session.output.audio = FakeAudioOutput()
+    await session.start(agent)
+    try:
+        handle = session.say(
+            "This is the first long sentence. This is the second long sentence.",
+            tts_text=markup,
+        )
+        await handle.wait_for_playout()
+
+        assert "".join(agent.tts_inputs) == markup
+        assert tts.synthesize_ch.recv_nowait()._input_text == markup
+        with pytest.raises(ChanEmpty):
+            tts.synthesize_ch.recv_nowait()
     finally:
         await session.aclose()

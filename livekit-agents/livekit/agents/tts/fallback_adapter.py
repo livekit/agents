@@ -359,6 +359,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
     def __init__(self, *, tts: FallbackAdapter, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._fallback_adapter = tts
+        self._xml_aware = tts._xml_aware
         self._caller_span = trace.get_current_span()
         self._pushed_tokens: list[str] = []
 
@@ -376,14 +377,20 @@ class FallbackSynthesizeStream(SynthesizeStream):
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         # If TTS doesn't support streaming, wrap it with StreamAdapter
         temporary_adapter: StreamAdapter | None = None
+        stream: SynthesizeStream
         if tts.capabilities.streaming:
-            stream = tts.stream(conn_options=conn_options)
+            if isinstance(tts, StreamAdapter):
+                stream = tts.stream(conn_options=conn_options, xml_aware=self._xml_aware)
+            else:
+                stream = tts.stream(conn_options=conn_options)
         else:
             from .. import tokenize
 
             temporary_adapter = StreamAdapter(
                 tts=tts,
-                sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+                sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
+                    retain_format=True, xml_aware=self._xml_aware
+                ),
             )
             stream = temporary_adapter.stream(conn_options=conn_options)
 
