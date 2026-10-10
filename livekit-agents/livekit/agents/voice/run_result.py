@@ -173,7 +173,7 @@ class RunResult(Generic[Run_T]):
         if not self._done_fut.done():
             raise RuntimeError("cannot retrieve final_output, RunResult is not done")
 
-        if not self._final_output:
+        if self._final_output is None:
             raise RuntimeError("no final output")
 
         return self._final_output
