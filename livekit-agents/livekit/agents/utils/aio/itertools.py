@@ -17,6 +17,16 @@ class _ACloseable(Protocol):
 T = TypeVar("T")
 
 
+async def _close_peer(iterator: AsyncIterator[T], buffer: deque[T], peers: list[deque[T]]) -> None:
+    for idx, peer_buffer in enumerate(peers):
+        if peer_buffer is buffer:
+            peers.pop(idx)
+            buffer.clear()
+            if not peers and isinstance(iterator, _ACloseable):
+                await iterator.aclose()
+            return
+
+
 async def tee_peer(
     iterator: AsyncIterator[T],
     buffer: deque[T],
@@ -57,13 +67,33 @@ async def tee_peer(
                             peer_buffer.append(item)
             yield buffer.popleft()
     finally:
-        for idx, peer_buffer in enumerate(peers):  # pragma: no branch
-            if peer_buffer is buffer:
-                peers.pop(idx)
-                break
+        await _close_peer(iterator, buffer, peers)
 
-        if not peers and isinstance(iterator, _ACloseable):
-            await iterator.aclose()
+
+class _TeePeer(AsyncIterator[T]):
+    def __init__(
+        self,
+        iterator: AsyncIterator[T],
+        buffer: deque[T],
+        peers: list[deque[T]],
+        lock: AsyncContextManager[Any],
+        exception: list[BaseException | None],
+    ) -> None:
+        self._iterator = iterator
+        self._buffer = buffer
+        self._peers = peers
+        self._generator = tee_peer(iterator, buffer, peers, lock, exception)
+
+    def __aiter__(self) -> "_TeePeer[T]":
+        return self
+
+    async def __anext__(self) -> T:
+        return await self._generator.__anext__()
+
+    async def aclose(self) -> None:
+        await self._generator.aclose()
+        # Closing an unstarted async generator does not execute its finally block.
+        await _close_peer(self._iterator, self._buffer, self._peers)
 
 
 class Tee(Generic[T]):
@@ -80,7 +110,7 @@ class Tee(Generic[T]):
         lock = asyncio.Lock()
         exception: list[BaseException | None] = [None]
         self._children = tuple(
-            tee_peer(
+            _TeePeer(
                 iterator=self._iterator,
                 buffer=buffer,
                 peers=self._buffers,
