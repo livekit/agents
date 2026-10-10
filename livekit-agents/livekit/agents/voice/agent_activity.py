@@ -363,7 +363,7 @@ class AgentActivity(RecognitionHooks):
         self._q_updated = asyncio.Event()
 
         self._scheduling_atask: asyncio.Task[None] | None = None
-        self._user_turn_completed_atask: asyncio.Task[None] | None = None
+        self._user_turn_completed_atask: asyncio.Task[SpeechHandle | None] | None = None
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
@@ -1967,13 +1967,32 @@ class AgentActivity(RecognitionHooks):
             # but keeps flushing STT transcript into the chat context
             skip_reply = True
 
-        assert self._audio_recognition is not None
-        return self._audio_recognition._commit_user_turn(
+        audio_recognition = self._audio_recognition
+        assert audio_recognition is not None
+        turn_completion_fut: asyncio.Future[SpeechHandle | None] = (
+            asyncio.get_running_loop().create_future()
+        )
+        transcript_fut = audio_recognition._commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
             skip_reply=skip_reply,
+            turn_completion_fut=turn_completion_fut,
         )
+
+        async def _wait_for_turn_commit() -> str:
+            transcript = await asyncio.shield(transcript_fut)
+            speech_handle = await asyncio.shield(turn_completion_fut)
+
+            if (
+                speech_handle is not None
+                and (message_committed_fut := speech_handle._user_message_committed_fut) is not None
+            ):
+                await asyncio.shield(message_committed_fut)
+
+            return transcript
+
+        return asyncio.ensure_future(_wait_for_turn_commit())
 
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
         # when force=True, we still allow to schedule a new speech even if
@@ -2662,6 +2681,12 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
 
+            if (
+                info.manual_turn_completion_fut is not None
+                and not info.manual_turn_completion_fut.done()
+            ):
+                info.manual_turn_completion_fut.set_result(None)
+
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
 
@@ -2705,24 +2730,40 @@ class AgentActivity(RecognitionHooks):
         old_task = self._user_turn_completed_atask
         # the user turn ends after on_user_turn_completed (see _end_user_turn_span)
         info.user_turn_span_adopted = info.user_turn_span is not None
-        self._user_turn_completed_atask = self._create_speech_task(
+        turn_task = self._create_speech_task(
             self._user_turn_completed_task(old_task, info),
             name="AgentActivity._user_turn_completed_task",
         )
+        self._user_turn_completed_atask = turn_task
+
+        if info.manual_turn_completion_fut is not None:
+            completion_fut = info.manual_turn_completion_fut
+
+            def _on_turn_done(task: asyncio.Task[SpeechHandle | None]) -> None:
+                if completion_fut.done():
+                    return
+                if task.cancelled():
+                    completion_fut.cancel()
+                elif (exc := task.exception()) is not None:
+                    completion_fut.set_exception(exc)
+                else:
+                    completion_fut.set_result(task.result())
+
+            turn_task.add_done_callback(_on_turn_done)
         return True
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
-        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
-    ) -> None:
+        self, old_task: asyncio.Task[SpeechHandle | None] | None, info: _EndOfTurnInfo
+    ) -> SpeechHandle | None:
         try:
-            await self._user_turn_completed_impl(old_task, info)
+            return await self._user_turn_completed_impl(old_task, info)
         finally:
             _end_user_turn_span(info)
 
     async def _user_turn_completed_impl(
-        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
-    ) -> None:
+        self, old_task: asyncio.Task[SpeechHandle | None] | None, info: _EndOfTurnInfo
+    ) -> SpeechHandle | None:
         if old_task is not None:
             # We never cancel user code as this is very confusing.
             # So we wait for the old execution of on_user_turn_completed to finish.
@@ -2730,7 +2771,20 @@ class AgentActivity(RecognitionHooks):
             # is detected. So the previous execution should complete quickly.
             await asyncio.wait({old_task})
             if not old_task.cancelled():
-                old_task.result()
+                previous_speech_handle = old_task.result()
+                if (
+                    previous_speech_handle is not None
+                    and (
+                        previous_message_committed_fut := (
+                            previous_speech_handle._user_message_committed_fut
+                        )
+                    )
+                    is not None
+                ):
+                    await asyncio.gather(
+                        asyncio.shield(previous_message_committed_fut),
+                        return_exceptions=True,
+                    )
 
         self._preemptive_generation_count = 0
 
@@ -2757,7 +2811,7 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel):
             if self._rt_turn_detection_enabled:
-                return
+                return None
 
             if self._rt_session is not None:
                 if info.skip_reply:
@@ -2765,14 +2819,14 @@ class AgentActivity(RecognitionHooks):
                         # only add user message to chat context if reply should be skipped
                         self._agent._chat_ctx.items.append(user_message)
                         self._session._conversation_item_added(user_message)
-                    return
+                    return None
                 self._rt_session.commit_audio()
 
         if info.skip_reply:
             if info.new_transcript != "":
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
-            return
+            return None
 
         if (current_speech := self._current_speech) is not None:
             if not current_speech.allow_interruptions:
@@ -2780,7 +2834,7 @@ class AgentActivity(RecognitionHooks):
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
-                return
+                return None
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
             await current_speech.interrupt(source="user_turn")
@@ -2796,7 +2850,7 @@ class AgentActivity(RecognitionHooks):
             if self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
-            return
+            return None
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
         # the user can edit it for the current generation, but changes will not be kept inside the
@@ -2819,7 +2873,7 @@ class AgentActivity(RecognitionHooks):
                 )
             except StopResponse:
                 hook_span.add_event("stop_response")
-                return  # ignore this turn
+                return None  # ignore this turn
             except Exception as e:
                 # the message may quote the transcript: honour the session's redaction too
                 trace_utils.record_exception(
@@ -2828,7 +2882,7 @@ class AgentActivity(RecognitionHooks):
                     redacted=self._session._redaction_enabled or trace_utils.redaction_enabled(),
                 )
                 logger.exception("error occurred during on_user_turn_completed")
-                return
+                return None
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
@@ -2837,7 +2891,7 @@ class AgentActivity(RecognitionHooks):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
         elif self.llm is None:
-            return  # skip response if no llm is set
+            return None  # skip response if no llm is set
 
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
@@ -2847,7 +2901,7 @@ class AgentActivity(RecognitionHooks):
             if user_message and self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
-            return
+            return None
 
         speech_handle: SpeechHandle | None = None
         discarded_preemptive: SpeechHandle | None = None
@@ -2896,6 +2950,10 @@ class AgentActivity(RecognitionHooks):
             # the invalidated preemptive attempt answered this same turn: one agent_turn
             _continue_discarded_turn(discarded_preemptive, speech_handle)
 
+        if user_message is not None:
+            message_committed_fut = asyncio.Future[None]()
+            speech_handle._user_message_committed_fut = message_committed_fut
+
         if self._user_turn_completed_atask != asyncio.current_task():
             # If a new user turn has already started, interrupt this one since it's now outdated
             # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
@@ -2920,6 +2978,7 @@ class AgentActivity(RecognitionHooks):
             metadata=metadata,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
+        return speech_handle
 
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
         if self._scheduling_paused or self._new_turns_blocked:
@@ -3098,7 +3157,31 @@ class AgentActivity(RecognitionHooks):
     def _no_pending_speech(self) -> bool:
         return not self._speech_q and (not self._current_speech or self._current_speech.done())
 
-    def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
+    def _mark_user_message_committed(self, speech_handle: SpeechHandle) -> None:
+        if (
+            commit_fut := speech_handle._user_message_committed_fut
+        ) is not None and not commit_fut.done():
+            commit_fut.set_result(None)
+
+    def _on_pipeline_reply_done(self, task: asyncio.Task[None]) -> None:
+        task_info = _get_activity_task_info(task)
+        speech_handle = task_info.speech_handle if task_info is not None else None
+        if (
+            speech_handle is not None
+            and (commit_fut := speech_handle._user_message_committed_fut) is not None
+            and not commit_fut.done()
+        ):
+            if task.cancelled():
+                commit_fut.cancel()
+            elif (exc := task.exception()) is not None:
+                commit_fut.set_exception(exc)
+            else:
+                commit_fut.set_exception(
+                    RuntimeError("reply processing finished before committing the user message")
+                )
+            if not commit_fut.cancelled():
+                commit_fut.exception()  # silence warnings when no caller is waiting
+
         if self._no_pending_speech:
             # a speech awaiting its tool executions keeps the agent busy: stay in
             # "thinking" so the user-away timer isn't armed mid-tool (#6904)
@@ -3648,6 +3731,7 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(new_message)
             user_metrics = new_message.metrics
             self._session._unanswered_user_metrics = user_metrics
+            self._mark_user_message_committed(speech_handle)
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)

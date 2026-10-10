@@ -80,6 +80,14 @@ class _EndOfTurnInfo:
     """The turn's open ``user_turn`` span. The activity sets ``user_turn_span_adopted`` to take
     ownership and ends it after ``on_user_turn_completed``; otherwise recognition ends it."""
     user_turn_span_adopted: bool = False
+    manual_turn_completion_fut: asyncio.Future[Any] | None = None
+    """Completion signal for the specific manual commit that initiated this turn."""
+
+
+@dataclass
+class _PendingManualTurn:
+    completion_fut: asyncio.Future[Any]
+    skip_reply: bool
 
 
 def _compute_end_of_turn_metrics(
@@ -260,6 +268,7 @@ class AudioRecognition:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._commit_user_turn_atask: asyncio.Task[None] | None = None
+        self._pending_manual_turn: _PendingManualTurn | None = None
         self._stt_consumer_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
@@ -395,6 +404,7 @@ class AudioRecognition:
                         if not self._end_of_turn_task.done():
                             self._end_of_turn_task.cancel()
                     self._end_of_turn_task = None
+                    self._cancel_pending_manual_turn()
                     # the pending decision is abandoned with the mode; the user turn stays open
                     self._end_eou_wait_span("dropped")
                     self._user_turn_committed = False
@@ -819,6 +829,7 @@ class AudioRecognition:
                 self._backchannel_boundary_timer = None
                 self._backchannel_boundary_callback = None
         finally:
+            self._cancel_pending_manual_turn()
             self._cancel_transcription_timeout()
             # EOU normally ends this span, but teardown cancels EOU before a
             # pending speech segment necessarily produces a transcript.
@@ -1037,15 +1048,20 @@ class AudioRecognition:
         transcript_timeout: float,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
+        turn_completion_fut: asyncio.Future[Any] | None = None,
     ) -> asyncio.Future[str]:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
+        pending_manual_turn: _PendingManualTurn | None = None
 
         if not self._stt or self._closing.is_set():
             fut.set_result("")
+            if turn_completion_fut is not None:
+                turn_completion_fut.set_result(None)
             return fut
 
         async def _commit_user_turn() -> None:
+            nonlocal pending_manual_turn
             if self._last_final_transcript_time is None or (
                 time.time() - self._last_final_transcript_time > 0.5
             ):
@@ -1098,6 +1114,13 @@ class AudioRecognition:
             transcript = self._audio_transcript
             self._audio_interim_transcript = ""
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+            if turn_completion_fut is not None:
+                self._cancel_pending_manual_turn()
+                pending_manual_turn = _PendingManualTurn(
+                    completion_fut=turn_completion_fut,
+                    skip_reply=skip_reply,
+                )
+                self._pending_manual_turn = pending_manual_turn
             self._run_eou_detection(
                 chat_ctx,
                 skip_reply=skip_reply,
@@ -1112,8 +1135,22 @@ class AudioRecognition:
                 return
             if task.cancelled():
                 fut.cancel()
+                if turn_completion_fut is not None and not turn_completion_fut.done():
+                    turn_completion_fut.cancel()
+                    if (
+                        pending_manual_turn is not None
+                        and self._pending_manual_turn is pending_manual_turn
+                    ):
+                        self._pending_manual_turn = None
             elif exc := task.exception():
                 fut.set_exception(exc)
+                if turn_completion_fut is not None and not turn_completion_fut.done():
+                    turn_completion_fut.set_exception(exc)
+                    if (
+                        pending_manual_turn is not None
+                        and self._pending_manual_turn is pending_manual_turn
+                    ):
+                        self._pending_manual_turn = None
 
         if self._commit_user_turn_atask is not None:
             self._commit_user_turn_atask.cancel()
@@ -1121,6 +1158,15 @@ class AudioRecognition:
         self._commit_user_turn_atask = asyncio.create_task(_commit_user_turn())
         self._commit_user_turn_atask.add_done_callback(_on_task_done)
         return fut
+
+    def _cancel_pending_manual_turn(self) -> None:
+        pending = getattr(self, "_pending_manual_turn", None)
+        if pending is None:
+            return
+        if not pending.completion_fut.done():
+            pending.completion_fut.cancel()
+        if self._pending_manual_turn is pending:
+            self._pending_manual_turn = None
 
     @property
     def _current_transcript(self) -> str:
@@ -1521,6 +1567,12 @@ class AudioRecognition:
             # stt enabled but no transcript yet
             return
 
+        # Some focused tests construct recognition with ``__new__`` and populate only the
+        # fields needed by EOU detection.
+        manual_turn: _PendingManualTurn | None = getattr(self, "_pending_manual_turn", None)
+        if manual_turn is not None:
+            skip_reply = manual_turn.skip_reply
+
         chat_ctx = chat_ctx.copy()
         if self._audio_transcript:
             chat_ctx.add_message(role="user", content=self._audio_transcript)
@@ -1760,9 +1812,14 @@ class AudioRecognition:
                 metrics=metrics,
                 backchannel_over_agent=self._turn_backchannel_over_agent,
                 user_turn_span=user_turn_span,
+                manual_turn_completion_fut=(
+                    manual_turn.completion_fut if manual_turn is not None else None
+                ),
             )
             committed = self._hooks.on_end_of_turn(end_of_turn)
             if committed:
+                if getattr(self, "_pending_manual_turn", None) is manual_turn:
+                    self._pending_manual_turn = None
                 logger.debug(
                     "user turn committed",
                     extra={
@@ -1813,8 +1870,17 @@ class AudioRecognition:
                     self._turn_detector_prediction_fut = None
                     self._turn_detector_flushed = True
 
-            elif eou_wait_span.is_recording():
-                self._eou_wait_not_committed += 1
+            else:
+                if eou_wait_span.is_recording():
+                    self._eou_wait_not_committed += 1
+                completion_fut = manual_turn.completion_fut if manual_turn is not None else None
+                if (
+                    completion_fut is not None
+                    and not completion_fut.done()
+                    and getattr(self, "_pending_manual_turn", None) is manual_turn
+                ):
+                    completion_fut.set_exception(RuntimeError("manual user turn was not committed"))
+                    self._pending_manual_turn = None
 
             # reset turn-scoped barge-in state once per logical turn (commit or drop)
             self._turn_backchannel_over_agent = False
@@ -1825,13 +1891,26 @@ class AudioRecognition:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
             self._end_of_turn_task.cancel()
         # copy the last_speaking_time before awaiting (the value can change)
-        self._end_of_turn_task = asyncio.create_task(
+        eou_task = asyncio.create_task(
             _bounce_eou_task(
                 self._last_speaking_time,
                 self._last_final_transcript_time,
                 self._user_turn_start,
             )
         )
+        self._end_of_turn_task = eou_task
+
+        if manual_turn is not None:
+
+            def _on_eou_done(task: asyncio.Task[None]) -> None:
+                if task.cancelled() or manual_turn.completion_fut.done():
+                    return
+                if (exc := task.exception()) is not None and self._end_of_turn_task is task:
+                    manual_turn.completion_fut.set_exception(exc)
+                    if getattr(self, "_pending_manual_turn", None) is manual_turn:
+                        self._pending_manual_turn = None
+
+            eou_task.add_done_callback(_on_eou_done)
 
     def _check_user_turn_limit(self, transcript: str) -> None:
         """Check if the user turn exceeds configured limits.
