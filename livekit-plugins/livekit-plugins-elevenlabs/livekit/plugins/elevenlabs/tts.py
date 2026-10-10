@@ -1196,6 +1196,20 @@ class _DialogueConnection(_Connection):
                 ctx = self._context_data.get(context_id) if context_id is not None else None
 
                 if error := data.get("error"):
+                    # the server drops sockets after 20s without input; harmless unless a
+                    # stream is registered, including one that hasn't sent text yet
+                    if (
+                        error == "input_timeout_exceeded"
+                        and data.get("code") == 1008
+                        and context_id is None
+                        and not self._context_data
+                    ):
+                        logger.debug(
+                            "elevenlabs text-to-dialogue socket idle timeout",
+                            extra={"lk.pii.data": data},
+                        )
+                        continue
+
                     logger.error(
                         "elevenlabs text-to-dialogue returned error",
                         extra={

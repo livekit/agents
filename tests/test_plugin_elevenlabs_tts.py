@@ -5,6 +5,7 @@ import base64
 import contextlib
 import json
 import logging
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 
 import aiohttp
@@ -17,9 +18,10 @@ pytestmark = pytest.mark.plugin("elevenlabs")
 
 
 class _FakeWebSocket:
-    def __init__(self, messages: list[object]) -> None:
+    def __init__(self, messages: list[object], *, close_code: int = 1000) -> None:
         self._messages = messages
         self.closed = False
+        self.close_code = close_code
 
     async def receive(self) -> object:
         if self._messages:
@@ -945,3 +947,150 @@ async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
 
         connection._input_queue.close()
         await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.fixture
+async def dialogue_connection() -> AsyncIterator[elevenlabs_tts._DialogueConnection]:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(tts._opts, session)
+        try:
+            yield connection
+        finally:
+            await connection.aclose()
+
+
+_DIALOGUE_ERROR_LOG = "elevenlabs text-to-dialogue returned error"
+_DIALOGUE_IDLE_TIMEOUT_LOG = "elevenlabs text-to-dialogue socket idle timeout"
+
+
+def _dialogue_idle_timeout() -> dict[str, object]:
+    return {
+        "error": "input_timeout_exceeded",
+        "message": "No message received within 20s.",
+        "code": 1008,
+        "context_id": None,
+    }
+
+
+def _register_dialogue_stream(
+    connection: elevenlabs_tts._DialogueConnection,
+) -> asyncio.Future[None]:
+    stream = SimpleNamespace(
+        _context_id="ctx-1",
+        _text_buffer="",
+        _start_times_ms=[],
+        _durations_ms=[],
+        _conn_options=SimpleNamespace(timeout=60),
+    )
+    waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    connection.register_stream(stream, _FakeEmitter(), waiter)  # type: ignore[arg-type]
+    return waiter
+
+
+def _log_records(caplog: pytest.LogCaptureFixture, message: str) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if record.getMessage() == message]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_context_id", [False, True])
+async def test_dialogue_idle_timeout_without_streams_logs_debug(
+    dialogue_connection: elevenlabs_tts._DialogueConnection,
+    caplog: pytest.LogCaptureFixture,
+    include_context_id: bool,
+) -> None:
+    payload = _dialogue_idle_timeout()
+    if not include_context_id:
+        payload.pop("context_id")
+    dialogue_connection._ws = _FakeWebSocket([_websocket_text_message(payload)], close_code=1008)  # type: ignore[assignment]
+
+    with caplog.at_level(logging.DEBUG, logger=elevenlabs_tts.logger.name):
+        await dialogue_connection._recv_loop()
+
+    records = _log_records(caplog, _DIALOGUE_IDLE_TIMEOUT_LOG)
+    assert [record.levelno for record in records] == [logging.DEBUG]
+    assert getattr(records[0], "lk.pii.data") == payload
+    assert not any(record.levelno >= logging.WARNING for record in caplog.records)
+    assert dialogue_connection._closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_closed", [False, True])
+async def test_dialogue_idle_timeout_with_registered_stream_logs_error(
+    dialogue_connection: elevenlabs_tts._DialogueConnection,
+    caplog: pytest.LogCaptureFixture,
+    input_closed: bool,
+) -> None:
+    # registered before its first text packet, or waiting for its final audio
+    waiter = _register_dialogue_stream(dialogue_connection)
+    if input_closed:
+        dialogue_connection._context_data["ctx-1"].input_closed = True
+        dialogue_connection._active_contexts.add("ctx-1")
+        dialogue_connection._closing_contexts.add("ctx-1")
+    dialogue_connection._ws = _FakeWebSocket(
+        [_websocket_text_message(_dialogue_idle_timeout())], close_code=1008
+    )  # type: ignore[assignment]
+
+    await dialogue_connection._recv_loop()
+
+    records = _log_records(caplog, _DIALOGUE_ERROR_LOG)
+    assert [record.levelno for record in records] == [logging.ERROR]
+    exc = waiter.exception()
+    assert isinstance(exc, elevenlabs_tts.APIStatusError)
+    assert exc.status_code == 1008
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"context_id": "ctx-1"},
+        {"context_id": ""},
+        {"error": "invalid_api_key"},
+        {"code": 1000},
+        {"code": None},
+    ],
+)
+async def test_dialogue_other_errors_log_error(
+    dialogue_connection: elevenlabs_tts._DialogueConnection,
+    caplog: pytest.LogCaptureFixture,
+    overrides: dict[str, object],
+) -> None:
+    payload = _dialogue_idle_timeout() | overrides
+    dialogue_connection._ws = _FakeWebSocket([_websocket_text_message(payload)])  # type: ignore[assignment]
+
+    with caplog.at_level(logging.DEBUG, logger=elevenlabs_tts.logger.name):
+        await dialogue_connection._recv_loop()
+
+    records = _log_records(caplog, _DIALOGUE_ERROR_LOG)
+    assert [record.levelno for record in records] == [logging.ERROR]
+    assert not _log_records(caplog, _DIALOGUE_IDLE_TIMEOUT_LOG)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_dialogue_idle_timeout_after_stream_ends_logs_debug(
+    dialogue_connection: elevenlabs_tts._DialogueConnection,
+    caplog: pytest.LogCaptureFixture,
+    cancelled: bool,
+) -> None:
+    waiter = _register_dialogue_stream(dialogue_connection)
+    dialogue_connection._active_contexts.add("ctx-1")
+    messages: list[object] = []
+    if cancelled:
+        waiter.cancel()
+        dialogue_connection.unregister_stream("ctx-1")
+    else:
+        messages.append(_websocket_text_message({"context_id": "ctx-1", "is_final": True}))
+    messages.append(_websocket_text_message(_dialogue_idle_timeout()))
+    dialogue_connection._ws = _FakeWebSocket(messages, close_code=1008)  # type: ignore[assignment]
+
+    with caplog.at_level(logging.DEBUG, logger=elevenlabs_tts.logger.name):
+        await dialogue_connection._recv_loop()
+
+    records = _log_records(caplog, _DIALOGUE_IDLE_TIMEOUT_LOG)
+    assert [record.levelno for record in records] == [logging.DEBUG]
+    assert not _log_records(caplog, _DIALOGUE_ERROR_LOG)
+    assert waiter.cancelled() if cancelled else waiter.result() is None
