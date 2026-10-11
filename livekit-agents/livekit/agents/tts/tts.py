@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
@@ -19,7 +20,7 @@ from livekit.agents.metrics.base import Metadata
 from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..telemetry import trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     USERDATA_TIMED_TRANSCRIPT,
@@ -267,10 +268,27 @@ class TTS(
         await self.aclose()
 
 
+@contextlib.contextmanager
+def _attempt_span(name: str | None, tts: TTS) -> Iterator[trace.Span]:
+    """One retry attempt's span, or the request span itself when ``name`` is None."""
+    if name is None:
+        yield trace.get_current_span()
+        return
+
+    with tracer.start_as_current_span(name) as span:
+        # a failed attempt names the model it asked without opening its parent
+        gen_ai_telemetry.set_request_attributes(
+            span, operation=None, provider=tts.provider, model=tts.model
+        )
+        yield span
+
+
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
     _tts_request_span_name: ClassVar[str] = "tts_request"
+    # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
+    _tts_attempt_span_name: ClassVar[str | None] = "tts_request_run"
 
     def __init__(
         self,
@@ -385,11 +403,15 @@ class ChunkedStream(ABC):
                 trace_types.ATTR_TTS_LABEL: self._tts.label,
             }
         )
+        # an adapter names the instance expected to serve; the one that did is its response
+        gen_ai_telemetry.set_request_attributes(
+            current_span, operation=None, provider=self._tts.provider, model=self._tts.model
+        )
 
         for i in range(self._conn_options.max_retry + 1):
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
-                with tracer.start_as_current_span("tts_request_run") as attempt_span:
+                with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
                     await self._run(output_emitter)
 
@@ -529,6 +551,8 @@ class _ChunkedStreamFromStream(ChunkedStream):
 
 class SynthesizeStream(ABC):
     _tts_request_span_name: ClassVar[str] = "tts_request"
+    # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
+    _tts_attempt_span_name: ClassVar[str | None] = "tts_request_run"
 
     class _FlushSentinel: ...
 
@@ -582,11 +606,15 @@ class SynthesizeStream(ABC):
                 trace_types.ATTR_TTS_LABEL: self._tts.label,
             }
         )
+        # an adapter names the instance expected to serve; the one that did is its response
+        gen_ai_telemetry.set_request_attributes(
+            current_span, operation=None, provider=self._tts.provider, model=self._tts.model
+        )
 
         for i in range(self._conn_options.max_retry + 1):
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
-                with tracer.start_as_current_span("tts_request_run") as attempt_span:
+                with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
                     await self._run(output_emitter)
 

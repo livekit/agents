@@ -82,27 +82,28 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
         "realtime_inference": {"agent_turn"},
         "realtime_metrics": {"realtime_inference", "agent_turn"},
         # -- model requests: under the node that made them, or the feature that owns them.
-        # An adapter's request span stands in for the provider's; each attempt (`*_request_run`)
-        # opens the wrapped stream, whose own request span nests inside it:
-        #   llm_fallback_adapter → llm_request_run → llm_request → llm_request_run
-        #   tts_fallback_adapter → tts_request_run → tts_stream_adapter → tts_request_run → …
+        # An adapter's request span stands in for the provider's and opens no attempt span of
+        # its own: each wrapped request nests directly under it, with its own attempts:
+        #   llm_fallback_adapter → llm_request → llm_request_run
+        #   tts_fallback_adapter → [tts_stream_adapter →] tts_request → tts_request_run
         "llm_request": {
             "llm_node",
-            "llm_request_run",
+            "llm_fallback_adapter",
             "keyterm_detection",
             "judge_evaluation",
             "amd",
         },
         "llm_fallback_adapter": {"llm_node", "keyterm_detection", "judge_evaluation", "amd"},
-        "llm_request_run": {"llm_request", "llm_fallback_adapter"},
-        "tts_request": {"tts_node", "tts_request_run"},
+        "llm_request_run": {"llm_request"},
+        "tts_request": {"tts_node", "tts_fallback_adapter", "tts_stream_adapter"},
         "tts_fallback_adapter": {"tts_node"},
-        "tts_stream_adapter": {"tts_node", "tts_request_run"},
-        "tts_request_run": {"tts_request", "tts_fallback_adapter", "tts_stream_adapter"},
+        "tts_stream_adapter": {"tts_node", "tts_fallback_adapter"},
+        "tts_request_run": {"tts_request"},
         # -- session-scoped features
         "keyterm_detection": {"agent_turn", "agent_session"},
         "amd": {"agent_session"},
-        "judge_evaluation": {"agent_session", ROOT},
+        # an evals judge runs wherever its caller does (a session hook, a turn, on_session_end)
+        "judge_evaluation": {ANY},
         # -- RPC: handlers are session events, calls follow their caller
         "rpc_handler": {"agent_session", "job_entrypoint"},
         "rpc_call": {ANY},
@@ -130,6 +131,18 @@ MAY_OUTLIVE_PARENT: dict[tuple[str, str], str] = {
         "keyterm_detection",
         "agent_turn",
     ): "the pass runs alongside the reply and can outlast a short or interrupted turn",
+    (
+        "llm_request",
+        "llm_fallback_adapter",
+    ): "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+    (
+        "tts_request",
+        "tts_fallback_adapter",
+    ): "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+    (
+        "tts_stream_adapter",
+        "tts_fallback_adapter",
+    ): "a recovery probe (lk.fallback.recovery) runs in the background past the request",
 }
 """Child/parent edges where the child may end after its parent, with the reason. Deliberate:
 each is a known property of the code, and a viewer draws them poking out of the parent."""
