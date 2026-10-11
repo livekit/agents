@@ -51,6 +51,7 @@ livekit-plugins-meta = { workspace = true }
 livekit-plugins-microsoft-ai = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
+livekit-plugins-moss = { workspace = true }
 livekit-plugins-murf = { workspace = true }
 livekit-plugins-nabrah = { workspace = true }
 livekit-plugins-neuphonic = { workspace = true }
