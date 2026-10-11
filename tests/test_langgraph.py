@@ -305,6 +305,41 @@ async def test_checkpointed_graph_does_not_duplicate_prior_replies():
 
 
 @pytest.mark.asyncio
+async def test_checkpointed_graph_receives_replies_it_did_not_produce():
+    """session.say() and interrupted replies: send the former, not a prefix of a stored reply."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    seen: list[list[str]] = []
+
+    def chat_node(state: MessagesState):
+        seen.append([m.content for m in state["messages"]])
+        return {"messages": [AIMessage(content="a long reply", id=f"graph-reply-{len(seen)}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("chat", chat_node)
+    builder.add_edge(START, "chat")
+    builder.add_edge("chat", END)
+    adapter = LLMAdapter(
+        builder.compile(checkpointer=InMemorySaver()),
+        config={"configurable": {"thread_id": "t1"}},
+    )
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="assistant", content="Welcome!")
+    chat_ctx.add_message(role="user", content="first")
+    await collect_chunks(adapter.chat(chat_ctx=chat_ctx))
+
+    chat_ctx.add_message(role="assistant", content="a long")  # interrupted playback
+    chat_ctx.add_message(role="user", content="second")
+    await collect_chunks(adapter.chat(chat_ctx=chat_ctx))
+
+    assert seen == [
+        ["Welcome!", "first"],
+        ["Welcome!", "first", "a long reply", "second"],
+    ]
+
+
+@pytest.mark.asyncio
 async def test_graph_without_checkpointer_still_receives_prior_replies():
     seen: list[list[str]] = []
 
