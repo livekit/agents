@@ -117,7 +117,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         self._stream_mode = stream_mode
 
     async def _run(self) -> None:
-        state = self._chat_ctx_to_state()
+        state = await self._chat_ctx_to_state()
         is_multi_mode = isinstance(self._stream_mode, list)
 
         # Some LangGraph versions don't accept the `subgraphs` or `context` kwargs yet.
@@ -173,19 +173,19 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                 if chat_chunk:
                     self._event_ch.send_nowait(chat_chunk)
 
-    def _chat_ctx_to_state(self) -> dict[str, Any]:
+    async def _chat_ctx_to_state(self) -> dict[str, Any]:
         """Convert chat context to langgraph input"""
 
         # A checkpointed graph already stores its own replies. The chat context's copies have
-        # different ids, so add_messages would keep both; user and system messages keep their ids
-        # across turns and are merged.
-        checkpointed = bool(getattr(self._graph, "checkpointer", None))
+        # different ids, so add_messages would keep both. Only replies the graph didn't produce
+        # (e.g. session.say()) are sent; an interrupted reply is a prefix of the stored one.
+        checkpointed_replies = await self._checkpointed_replies()
         messages: list[AIMessage | HumanMessage | SystemMessage] = []
         for msg in self._chat_ctx.messages():
             content = msg.raw_text_content
             if content:
                 if msg.role == "assistant":
-                    if not checkpointed:
+                    if not any(reply.startswith(content) for reply in checkpointed_replies):
                         messages.append(AIMessage(content=content, id=msg.id))
                 elif msg.role == "user":
                     messages.append(HumanMessage(content=content, id=msg.id))
@@ -193,6 +193,16 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                     messages.append(SystemMessage(content=content, id=msg.id))
 
         return {"messages": messages}
+
+    async def _checkpointed_replies(self) -> list[str]:
+        if not getattr(self._graph, "checkpointer", None):
+            return []
+        snapshot = await self._graph.aget_state(self._config or {})
+        return [
+            m.content
+            for m in snapshot.values.get("messages", [])
+            if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content
+        ]
 
 
 def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
