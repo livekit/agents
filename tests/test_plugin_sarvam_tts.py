@@ -369,6 +369,72 @@ async def test_model_switch_during_the_pool_handshake_keeps_config_and_socket_in
     ]
 
 
+async def _wait_for_prewarm(tts: sarvam_tts.TTS) -> None:
+    task_ref = tts._pool._prewarm_task
+    assert task_ref is not None
+    task = task_ref()
+    assert task is not None
+    await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+
+
+@pytest.mark.parametrize("switch_back", [False, True], ids=["updated", "updated-twice"])
+async def test_prewarm_retries_with_current_options_after_handshake_update(
+    socket_tts: _SocketTTS,
+    monkeypatch: pytest.MonkeyPatch,
+    switch_back: bool,
+) -> None:
+    tts, session = socket_tts()
+    connect = session.ws_connect
+
+    async def connect_then_update(url: str, **kwargs: Any) -> _FakeSocket:
+        ws = await connect(url, **kwargs)
+        if len(session.sockets) == 1:
+            tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+        elif len(session.sockets) == 2 and switch_back:
+            tts.update_options(model="bulbul:v3", speaker="shubh", send_completion_event=False)
+        return ws
+
+    monkeypatch.setattr(session, "ws_connect", connect_then_update)
+    tts.prewarm()
+    await _wait_for_prewarm(tts)
+    warmed = session.sockets[-1]
+    assert warmed.url == sarvam_tts._websocket_url(tts._opts)
+    assert all(ws.closed for ws in session.sockets[:-1])
+
+    await _speak(_ws_stream(tts))
+    assert len(session.sockets) == (3 if switch_back else 2)
+    assert not warmed.closed
+    assert warmed.configs()[0]["model"] == tts._opts.model
+
+
+async def test_prewarm_waiting_for_pool_lock_uses_current_options(
+    socket_tts: _SocketTTS,
+) -> None:
+    tts, session = socket_tts()
+    async with tts._pool._connect_lock:
+        tts.prewarm()
+        await asyncio.sleep(0)
+        assert not session.sockets
+        tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+    await _wait_for_prewarm(tts)
+    await _speak(_ws_stream(tts))
+
+    (warmed,) = session.sockets
+    assert warmed.url == sarvam_tts._websocket_url(tts._opts)
+    assert warmed.configs()[0]["speaker"] == "ritu_hi_medical"
+
+
+async def test_rest_only_tts_does_not_prewarm_after_options_update(
+    socket_tts: _SocketTTS,
+) -> None:
+    tts, session = socket_tts(speech_sample_rate=48000)
+    tts.prewarm()
+    tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+    tts.prewarm()
+    assert tts._pool._prewarm_task is None
+    assert not session.sockets
+
+
 async def test_config_only_update_keeps_pending_stream_snapshot_on_the_same_socket(
     socket_tts: _SocketTTS,
 ) -> None:

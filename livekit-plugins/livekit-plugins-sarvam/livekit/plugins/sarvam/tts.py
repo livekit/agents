@@ -833,11 +833,7 @@ class TTS(tts.TTS):
         """Prewarm WebSocket connections."""
         if not self.capabilities.streaming:
             return
-        opts = replace(self._opts)
-        self._pool.prewarm(
-            key=_ws_connection_key(opts),
-            connect_cb=lambda timeout: self._connect_ws(timeout, opts=opts),
-        )
+        self._pool.prewarm(key=lambda: _ws_connection_key(self._opts))
 
     async def aclose(self) -> None:
         """Close all active streams and connections."""
