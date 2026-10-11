@@ -47,15 +47,18 @@ Gated models (such as Llama) need `HF_TOKEN` set while downloading. Pass
 
 ## Loading weights
 
-Weights load in a background thread when the `AgentSession` starts, so the event loop
+Weights load (with a one-token warm-up, so the first reply is fast) in a background thread
+when the `AgentSession` starts, so the event loop
 stays responsive. To have them ready before a job is assigned, load them when the job
 process starts:
 
 ```python
 from livekit.agents import AgentServer, JobProcess
 
+
 def setup(proc: JobProcess) -> None:
     hf.LLM(model="Qwen/Qwen2.5-7B-Instruct").load()
+
 
 server = AgentServer(setup_fnc=setup)
 ```

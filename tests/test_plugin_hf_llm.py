@@ -251,3 +251,17 @@ async def test_generate_error_does_not_hang(fake_model: Any) -> None:
 
     with pytest.raises(APIConnectionError):
         _ = [c async for c in instance.chat(chat_ctx=_user_ctx())]
+
+
+def test_warm_up_generates_one_token() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Model(_FakeModel):
+        def generate(self, **kwargs: Any) -> None:  # type: ignore[override]
+            calls.append(kwargs)
+
+    hf_llm._warm_up(_Model([]), _FakeTokenizer())
+
+    assert len(calls) == 1
+    assert calls[0]["max_new_tokens"] == 1
+    assert calls[0]["do_sample"] is False

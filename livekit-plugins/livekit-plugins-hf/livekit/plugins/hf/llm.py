@@ -379,5 +379,17 @@ def _load_model(key: _ModelKey, *, local_files_only: bool) -> _LoadedModel:
         ) from e
 
     model.eval()
+    _warm_up(model, tokenizer)
     logger.info("model loaded", extra={"model": key.model})
     return _LoadedModel(model=model, tokenizer=tokenizer, generate_lock=threading.Lock())
+
+
+def _warm_up(model: Any, tokenizer: Any) -> None:
+    """Generate one token so the first reply doesn't pay for lazy weight paging and
+    kernel compilation (seconds on MPS and CUDA), which would otherwise land on the
+    caller's first turn."""
+    import torch
+
+    with torch.inference_mode():
+        inputs = tokenizer("hi", return_tensors="pt").to(model.device)
+        model.generate(**inputs, max_new_tokens=1, do_sample=False)
