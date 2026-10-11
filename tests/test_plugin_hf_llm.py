@@ -436,3 +436,23 @@ def test_loading_one_model_does_not_block_another(monkeypatch: pytest.MonkeyPatc
         release.set()
         loader.join(5)
         hf_llm._models.pop(slow._opts.key, None)
+
+
+async def test_duplicate_and_parallel_tool_calls(fake_model: Any) -> None:
+    call = '<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>'
+    other = '<tool_call>{"name": "get_time", "arguments": {}}</tool_call>'
+
+    async def _names(**kwargs: Any) -> list[str]:
+        instance, _ = fake_model(_FakeModel([call, call, other]))
+        chunks = [
+            c
+            async for c in instance.chat(
+                chat_ctx=_user_ctx(), tools=[get_weather, get_time], **kwargs
+            )
+        ]
+        return [
+            tc.name for c in chunks if c.delta and c.delta.tool_calls for tc in c.delta.tool_calls
+        ]
+
+    assert await _names() == ["get_weather", "get_time"]
+    assert await _names(parallel_tool_calls=False) == ["get_weather"]

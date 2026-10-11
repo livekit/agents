@@ -198,6 +198,7 @@ class LLM(llm.LLM):
             tools=tools or [],
             tool_schemas=tool_schemas,
             required_tool=required_tool,
+            parallel_tool_calls=parallel_tool_calls is not False,
             conn_options=conn_options,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
         )
@@ -212,6 +213,7 @@ class LLMStream(llm.LLMStream):
         tools: list[Tool],
         tool_schemas: list[dict[str, Any]],
         required_tool: str | bool,
+        parallel_tool_calls: bool,
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:
@@ -220,6 +222,7 @@ class LLMStream(llm.LLMStream):
         self._tool_schemas = tool_schemas
         # True when any tool call is required, or the name of the required tool
         self._required_tool = required_tool
+        self._parallel_tool_calls = parallel_tool_calls
         self._extra_kwargs = extra_kwargs
 
     async def _run(self) -> None:
@@ -326,6 +329,11 @@ class LLMStream(llm.LLMStream):
         gen_fut.result()
 
         content, tool_calls = parser.flush()
+        # small models sometimes repeat a call verbatim, which would run the tool twice
+        unique_calls = {(call.name, call.arguments): call for call in tool_calls}
+        tool_calls = list(unique_calls.values())
+        if not self._parallel_tool_calls:
+            tool_calls = tool_calls[:1]
         if self._required_tool and not tool_calls:
             # nothing was emitted yet, so a retry starts clean
             raise APIConnectionError("model did not make the required tool call", retryable=True)
