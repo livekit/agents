@@ -23,6 +23,7 @@ def _make_stream_under_test(
 
     instance._event_ch = event_ch  # type: ignore[attr-defined]
     instance._logger = MagicMock()  # type: ignore[attr-defined]
+    instance._stt = None  # type: ignore[attr-defined]
     instance._build_log_context = lambda: {}  # type: ignore[attr-defined]
     instance._server_request_id = "req-session"  # type: ignore[attr-defined]
     instance._opts = SimpleNamespace(language="en-IN", sample_rate=16000)  # type: ignore[attr-defined]

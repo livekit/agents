@@ -74,6 +74,8 @@ SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 #    pooled connections.
 _WS_HEARTBEAT_INTERVAL: float = 20.0
 _KEEPALIVE_INTERVAL: float = 30.0
+_SARVAM_SAMPLE_RATES: tuple[int, ...] = (8000, 16000, 22050, 24000, 32000, 44100, 48000)
+_SARVAM_STREAMING_SAMPLE_RATES: tuple[int, ...] = (8000, 16000, 22050, 24000)
 
 # bulbul:v4-flash rides the same pipeline as v3/v3-beta: temperature and the websocket
 # buffering knobs apply to all three.
@@ -113,6 +115,15 @@ def _codec_to_mime_type(codec: str) -> str:
     if mime is None:
         raise ValueError(f"Unsupported output_audio_codec: {codec}")
     return mime
+
+
+def _validate_streaming_sample_rate(sample_rate: int) -> None:
+    if sample_rate not in _SARVAM_STREAMING_SAMPLE_RATES:
+        supported = ", ".join(str(rate) for rate in _SARVAM_STREAMING_SAMPLE_RATES)
+        raise ValueError(
+            f"Sarvam streaming TTS supports only {supported} Hz; "
+            "32000, 44100, and 48000 Hz are available through synthesize() only"
+        )
 
 
 def _build_mulaw_table() -> np.ndarray:
@@ -196,6 +207,10 @@ _PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "loudness": (0.5, 2.0),
     "temperature": (0.01, 2.0),
 }
+_MODEL_PACE_BOUNDS: dict[str, tuple[float, float]] = {
+    "bulbul:v3": (0.5, 2.0),
+    "bulbul:v3-beta": (0.5, 2.0),
+}
 _V4_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "pitch": (-0.5, 0.5),
     "pace": (0.5, 2.0),
@@ -206,6 +221,8 @@ _V4_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
 
 def _param_bounds(model: str, param: str) -> tuple[float, float]:
     """Accepted range for a synthesis parameter on the given model."""
+    if param == "pace" and model in _MODEL_PACE_BOUNDS:
+        return _MODEL_PACE_BOUNDS[model]
     return (_V4_PARAM_BOUNDS if model == "bulbul:v4-flash" else _PARAM_BOUNDS)[param]
 
 
@@ -250,7 +267,7 @@ class SarvamTTSOptions:
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
         speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000;
-            streaming bulbul:v4-flash is limited to 8000, 16000, 22050 or 24000)
+            streaming supports only 8000, 16000, 22050 or 24000)
         enable_preprocessing: Whether to use text preprocessing (bulbul:v2 and bulbul:v4-flash;
             bulbul:v4-flash forces it on server-side regardless of this value)
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 and bulbul:v4-flash)
@@ -282,6 +299,10 @@ class SarvamTTSOptions:
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
     send_completion_event: bool = True
     output_audio_codec: str = "mp3"
+
+
+def _ws_connection_key(opts: SarvamTTSOptions) -> tuple[str, str, str, bool]:
+    return (opts.api_key, opts.ws_url, opts.model, opts.send_completion_event)
 
 
 # Streaming bulbul:v4-flash rejects the higher REST sample rates, and OPUS narrows it further.
@@ -362,7 +383,8 @@ class TTS(tts.TTS):
         target_language_code: BCP-47 language code for supported Indian languages
         model: Sarvam TTS model to use (bulbul:v2)
         speaker: Voice to use for synthesis
-        speech_sample_rate: Audio sample rate in Hz
+        speech_sample_rate: Audio sample rate in Hz. REST supports all Sarvam rates; streaming
+            supports 8000, 16000, 22050, and 24000 Hz.
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75; -0.5 to 0.5 for bulbul:v4-flash) -
             only supported in v2 and v4-flash
@@ -412,7 +434,9 @@ class TTS(tts.TTS):
         output_audio_codec: str = "mp3",
     ) -> None:
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(
+                streaming=speech_sample_rate in _SARVAM_STREAMING_SAMPLE_RATES
+            ),
             sample_rate=speech_sample_rate,
             num_channels=num_channels,
         )
@@ -450,7 +474,7 @@ class TTS(tts.TTS):
             raise ValueError("min_buffer_size must be between 30 and 200")
         if not 50 <= max_chunk_length <= 500:
             raise ValueError("max_chunk_length must be between 50 and 500")
-        if speech_sample_rate not in [8000, 16000, 22050, 24000, 32000, 44100, 48000]:
+        if speech_sample_rate not in _SARVAM_SAMPLE_RATES:
             raise ValueError(
                 "Sample rate must be one of 8000, 16000, 22050, 24000, 32000, 44100, or 48000 Hz"
             )
@@ -512,16 +536,19 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=False,
         )
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(
+        self, timeout: float, *, opts: SarvamTTSOptions | None = None
+    ) -> aiohttp.ClientWebSocketResponse:
+        opts = opts or self._opts
         session = self._ensure_session()
         headers = {
-            "api-subscription-key": self._opts.api_key,
+            "api-subscription-key": opts.api_key,
             "User-Agent": USER_AGENT,
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate, br",
         }
         # Add model parameter to URL like the client does
-        ws_url = _websocket_url(self._opts)
+        ws_url = _websocket_url(opts)
 
         logger.info("Connecting to Sarvam TTS WebSocket")
 
@@ -543,10 +570,9 @@ class TTS(tts.TTS):
         except Exception as e:
             logger.error(
                 "Failed to connect to Sarvam TTS WebSocket",
-                extra={"error": str(e), "url": ws_url},
-                exc_info=True,
+                extra={"exception_type": type(e).__name__},
             )
-            raise APIConnectionError(f"WebSocket connection failed: {e}") from e
+            raise APIConnectionError(f"WebSocket connection failed ({type(e).__name__})") from None
 
         self._start_keepalive(ws)
         self._open_ws_ids.add(id(ws))
@@ -798,13 +824,20 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
+        _validate_streaming_sample_rate(self._opts.speech_sample_rate)
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     def prewarm(self) -> None:
         """Prewarm WebSocket connections."""
-        self._pool.prewarm()
+        if not self.capabilities.streaming:
+            return
+        opts = replace(self._opts)
+        self._pool.prewarm(
+            key=_ws_connection_key(opts),
+            connect_cb=lambda timeout: self._connect_ws(timeout, opts=opts),
+        )
 
     async def aclose(self) -> None:
         """Close all active streams and connections."""
@@ -1136,19 +1169,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                # Nothing suspends between the pool's get() and here, and every change to a
-                # handshake option invalidates the pool, so this socket was opened with the
-                # TTS's current model and completion setting. Adopt every model-coupled
-                # option at once: update_options validates them as one set, so taking only
-                # some could pair a model with a speaker or language it rejects. Sample
-                # rate and codec stay this stream's own, as the output emitter is already
-                # initialized from them.
-                self._opts = replace(
-                    self._tts._opts,
-                    speech_sample_rate=self._opts.speech_sample_rate,
-                    output_audio_codec=self._opts.output_audio_codec,
-                )
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.timeout,
+                key=_ws_connection_key(self._opts),
+                connect_cb=lambda timeout: self._tts._connect_ws(timeout, opts=self._opts),
+            ) as ws:
+                # Keep the option snapshot captured when this stream was created; the pool
+                # key and callback must use the same model and completion setting.
                 self._acquire_time = self._tts._pool.last_acquire_time
                 self._connection_reused = self._tts._pool.last_connection_reused
                 # Pause the keepalive while this stream holds the socket so its pings don't
