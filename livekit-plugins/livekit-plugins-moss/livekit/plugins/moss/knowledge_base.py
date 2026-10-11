@@ -58,7 +58,9 @@ class KnowledgeBase(llm.Toolset):
             top_k: Number of passages each search returns, across all indexes.
         """
         self._indexes = [indexes] if isinstance(indexes, str) else list(indexes)
-        super().__init__(id=f"moss_{'_'.join(self._indexes)}")
+        if not self._indexes:
+            raise ValueError("at least one Moss index is required")
+        super().__init__(id="moss/" + "/".join(self._indexes))  # index names cannot hold "/"
         self._project_id = project_id or os.environ.get("MOSS_PROJECT_ID", "")
         self._project_key = project_key or os.environ.get("MOSS_PROJECT_KEY", "")
         if not (self._project_id and self._project_key):

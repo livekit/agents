@@ -59,6 +59,8 @@ def test_requires_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MOSS_PROJECT_KEY", raising=False)
     with pytest.raises(ValueError, match="MOSS_PROJECT_ID"):
         KnowledgeBase("faq")
+    with pytest.raises(ValueError, match="index"):
+        KnowledgeBase([], project_id="id", project_key="key")
 
 
 async def test_tool_returns_passages(kb: KnowledgeBase) -> None:
@@ -71,6 +73,7 @@ async def test_tool_returns_passages(kb: KnowledgeBase) -> None:
 async def test_one_tool_searches_every_index() -> None:
     kb = KnowledgeBase(["faq", "policies"], project_id="id", project_key="key")
     assert [tool.id for tool in kb.tools] == ["search_knowledge_base"]
+    assert kb.id != KnowledgeBase("faq_policies", project_id="id", project_key="key").id
     assert await kb.search_knowledge_base("hours?")
     assert kb._client.searched == ["faq", "policies"]  # type: ignore[union-attr]
 
