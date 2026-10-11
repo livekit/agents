@@ -209,8 +209,6 @@ class _ResponseGeneration:
 
     _created_timestamp: float = field(default_factory=time.time)
     """The timestamp when the generation is created"""
-    _first_token_timestamp: float | None = None
-    """The timestamp when the first audio token is received"""
     _completed_timestamp: float | None = None
     """The timestamp when the generation is completed"""
     _done: bool = False
@@ -1417,8 +1415,6 @@ class RealtimeSession(llm.RealtimeSession):
                                 "Gemini sent audio after generation completed; dropping it"
                             )
                         continue
-                    if not current_gen._first_token_timestamp:
-                        current_gen._first_token_timestamp = time.time()
                     frame_data = part.inline_data.data
                     try:
                         if not isinstance(frame_data, bytes):
@@ -1608,11 +1604,6 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.warning("no active generation to report metrics for")
             return
 
-        ttft = (
-            current_gen._first_token_timestamp - current_gen._created_timestamp
-            if current_gen._first_token_timestamp
-            else -1
-        )
         duration = (
             current_gen._completed_timestamp or time.time()
         ) - current_gen._created_timestamp
@@ -1641,7 +1632,9 @@ class RealtimeSession(llm.RealtimeSession):
             request_id=current_gen.response_id,
             timestamp=current_gen._created_timestamp,
             duration=duration,
-            ttft=ttft,
+            # Gemini has no response-start event; generation creation can be triggered
+            # by an input transcript or by the first output packet.
+            ttft=-1,
             cancelled=False,
             input_tokens=usage_metadata.prompt_token_count or 0,
             output_tokens=usage_metadata.response_token_count or 0,
