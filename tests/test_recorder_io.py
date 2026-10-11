@@ -590,3 +590,36 @@ async def test_the_writer_waits_on_the_agent_but_not_on_a_quiet_source() -> None
             assert flushed[-1] == pytest.approx(segment_began)
 
             task.cancel()
+
+
+async def _start_unwritable(tmp_path: Path) -> tuple[RecorderIO, io.AudioInput, _Source]:
+    """A recorder whose output directory cannot be created, so its encode thread fails."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+
+    source = _Source()
+    recorder = RecorderIO(agent_session=MagicMock(), sample_rate=RATE)
+    audio_in = recorder.record_input(source)
+    recorder.record_output(_Sink())
+    await recorder.start(output_path=blocker / "audio.ogg")
+    return recorder, audio_in, source
+
+
+async def test_a_failed_encoder_setup_does_not_hang_close(tmp_path: Path) -> None:
+    """The thread that would have resolved the close is the one that failed."""
+    recorder, _, _ = await _start_unwritable(tmp_path)
+    await asyncio.wait_for(recorder.aclose(), timeout=5)
+
+
+async def test_a_failed_encoder_stops_buffering_audio(tmp_path: Path) -> None:
+    """Nothing drains the queue once the encode thread has exited."""
+    recorder, audio_in, source = await _start_unwritable(tmp_path)
+    await asyncio.wait_for(asyncio.shield(recorder._close_fut), timeout=5)
+
+    queued = recorder._q.qsize()
+    for _ in range(10):
+        source.frames.append(_tone(0.1))
+        await audio_in.__anext__()
+
+    assert recorder._q.qsize() == queued
+    await recorder.aclose()

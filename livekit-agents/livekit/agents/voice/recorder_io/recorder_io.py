@@ -209,8 +209,8 @@ class RecorderIO:
 
             self._end_run(channel=0)
             self._end_run(channel=1)
-            self._q.put_nowait(_Flush(until=time.time()))
-            self._q.put_nowait(None)
+            self._put(_Flush(until=time.time()))
+            self._put(None)
             await asyncio.shield(self._close_fut)
             self._started = False
 
@@ -219,7 +219,7 @@ class RecorderIO:
         def on_frame(started_at: float, frame: rtc.AudioFrame) -> None:
             # a contiguous stream, so what has arrived is exactly what is settled
             self._input_settled = started_at + frame.duration
-            self._q.put_nowait(_Captured(channel=0, started_at=started_at, frame=frame))
+            self._put(_Captured(channel=0, started_at=started_at, frame=frame))
 
         self._in_record = RecorderAudioInput(
             recording_io=self, source=audio_input, on_frame=on_frame
@@ -229,7 +229,7 @@ class RecorderIO:
     def record_output(self, audio_output: io.AudioOutput) -> RecorderAudioOutput:
 
         def on_played(started_at: float, frame: rtc.AudioFrame) -> None:
-            self._q.put_nowait(_Captured(channel=1, started_at=started_at, frame=frame))
+            self._put(_Captured(channel=1, started_at=started_at, frame=frame))
 
         self._out_record = RecorderAudioOutput(
             recording_io=self, audio_output=audio_output, on_played=on_played
@@ -237,7 +237,12 @@ class RecorderIO:
         return self._out_record
 
     def _end_run(self, *, channel: int) -> None:
-        self._q.put_nowait(_EndRun(channel=channel))
+        self._put(_EndRun(channel=channel))
+
+    def _put(self, item: _Captured | _Flush | _EndRun | None) -> None:
+        # once the encode thread has exited nothing drains the queue, so audio would pile up
+        if not self._close_fut.done():
+            self._q.put_nowait(item)
 
     @property
     def recording(self) -> bool:
@@ -263,37 +268,35 @@ class RecorderIO:
                 # a segment in flight has not said where its audio went
                 settled = min(settled, pending)
 
-            self._q.put_nowait(_Flush(until=settled))
+            self._put(_Flush(until=settled))
 
     def _encode_thread(self) -> None:
         assert self._output_path is not None and self._t0 is not None
-        self._output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        container = av.open(self._output_path, mode="w", format="ogg")
-
-        # prefer libopus; fallback to native opus only if necessary
-        try:
-            av.Codec("libopus", "w")
-            codec_name = "libopus"
-        except av.codec.codec.UnknownCodecError:
-            logger.trace("libopus codec is not available, using opus")
-            codec_name = "opus"
-
-        stream: av.AudioStream = container.add_stream(  # type: ignore
-            codec_name,
-            rate=self._sample_rate,
-            layout="stereo",
-        )
-
-        # native ffmpeg opus encoder is experimental
-        if codec_name == "opus":
-            stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
-
         tracks = [_Track(sample_rate=self._sample_rate, t0=self._t0) for _ in range(2)]
         cursor = 0
 
+        # setup failures go through the same handler, so aclose() is never left waiting
         try:
-            with container:
+            # prefer libopus; fallback to native opus only if necessary
+            try:
+                av.Codec("libopus", "w")
+                codec_name = "libopus"
+            except av.codec.codec.UnknownCodecError:
+                logger.trace("libopus codec is not available, using opus")
+                codec_name = "opus"
+
+            self._output_path.parent.mkdir(parents=True, exist_ok=True)
+            with av.open(self._output_path, mode="w", format="ogg") as container:
+                stream: av.AudioStream = container.add_stream(  # type: ignore
+                    codec_name,
+                    rate=self._sample_rate,
+                    layout="stereo",
+                )
+
+                # native ffmpeg opus encoder is experimental
+                if codec_name == "opus":
+                    stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
+
                 while (item := self._q.get()) is not None:
                     if isinstance(item, _Captured):
                         tracks[item.channel].push(item.started_at, item.frame)
