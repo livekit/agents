@@ -16,8 +16,14 @@ import pytest
 from livekit import rtc
 from livekit.agents import stt
 from livekit.plugins import sherpa
-from livekit.plugins.sherpa.batch_stt import OfflineResult, OfflineStream
-from livekit.plugins.sherpa.stt import SAMPLE_RATE, TAIL_PADDING_S, OnlineResult, OnlineStream
+from livekit.plugins.sherpa.stt import (
+    SAMPLE_RATE,
+    TAIL_PADDING_S,
+    OfflineResult,
+    OfflineStream,
+    OnlineResult,
+    OnlineStream,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -234,18 +240,28 @@ class ScriptedOfflineRecognizer:
         pass
 
 
-def test_batch_stt_is_batch_only() -> None:
-    engine = sherpa.BatchSTT(recognizer=ScriptedOfflineRecognizer())
+def test_an_online_recognizer_streams() -> None:
+    engine = sherpa.STT(recognizer=ScriptedRecognizer([]))
+
+    assert engine.capabilities.streaming
+    assert engine.capabilities.interim_results
+    assert engine.capabilities.aligned_transcript == "word"
+
+
+def test_an_offline_recognizer_is_batch_only() -> None:
+    engine = sherpa.STT(recognizer=ScriptedOfflineRecognizer())
 
     assert not engine.capabilities.streaming
     assert engine.capabilities.offline_recognize
     assert engine.model == "custom"
     assert engine.provider == "sherpa-onnx"
+    with pytest.raises(NotImplementedError, match="StreamAdapter"):
+        engine.stream()
 
 
-async def test_batch_stt_resamples_room_audio_and_returns_one_final() -> None:
+async def test_offline_recognize_resamples_room_audio_and_returns_one_final() -> None:
     recognizer = ScriptedOfflineRecognizer()
-    engine = sherpa.BatchSTT(recognizer=recognizer, language="en")
+    engine = sherpa.STT(recognizer=recognizer, language="en")
     n = 48000  # one second of 48 kHz room audio
     frame = rtc.AudioFrame(b"\x00\x01" * n, 48000, 1, n)
 

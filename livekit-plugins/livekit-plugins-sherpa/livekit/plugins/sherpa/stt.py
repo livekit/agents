@@ -18,7 +18,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 import numpy.typing as npt
@@ -37,7 +37,14 @@ from livekit.agents import (
 from livekit.agents.types import TimedString
 from livekit.agents.utils import AudioBuffer, is_given
 
-from .models import STT_MODELS, STTModels, TransducerModel, local_model_dir
+from .models import (
+    STT_MODELS,
+    MoonshineModel,
+    STTModels,
+    TransducerModel,
+    WhisperModel,
+    local_model_dir,
+)
 
 SAMPLE_RATE = 16000
 # Silence appended when an utterance is forced to end, so the model can emit its last tokens.
@@ -56,6 +63,7 @@ class OnlineStream(Protocol):
     def input_finished(self) -> None: ...
 
 
+@runtime_checkable
 class OnlineRecognizer(Protocol):
     """The subset of `sherpa_onnx.OnlineRecognizer` this plugin uses."""
 
@@ -65,6 +73,24 @@ class OnlineRecognizer(Protocol):
     def get_result_all(self, s: OnlineStream) -> OnlineResult: ...
     def is_endpoint(self, s: OnlineStream) -> bool: ...
     def reset(self, s: OnlineStream) -> None: ...
+
+
+class OfflineResult(Protocol):
+    @property
+    def text(self) -> str: ...
+
+
+class OfflineStream(Protocol):
+    def accept_waveform(self, sample_rate: int, waveform: npt.NDArray[np.float32]) -> None: ...
+    @property
+    def result(self) -> OfflineResult: ...
+
+
+class OfflineRecognizer(Protocol):
+    """The subset of `sherpa_onnx.OfflineRecognizer` this plugin uses."""
+
+    def create_stream(self) -> OfflineStream: ...
+    def decode_stream(self, s: OfflineStream) -> None: ...
 
 
 @dataclass
@@ -90,32 +116,46 @@ class STT(stt.STT):
         model: STTModels = "zipformer-en-2023-06-26",
         num_threads: int = 2,
         endpoint_silence: float = 0.5,
-        recognizer: OnlineRecognizer | None = None,
+        recognizer: OnlineRecognizer | OfflineRecognizer | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        """Streaming, fully offline STT backed by a sherpa-onnx online recognizer.
+        """Local STT backed by sherpa-onnx. The model decides how it runs.
+
+        Online models (zipformer and other transducer, paraformer and CTC models) stream:
+        interim transcripts while the user speaks, a final transcript with word timings when
+        they pause. Offline models (Whisper, Moonshine, SenseVoice, Parakeet and others)
+        transcribe a whole utterance at once, so this STT reports `streaming=False` and
+        `AgentSession` runs it live through `stt.StreamAdapter` with the session VAD.
 
         Args:
             model: Built-in model to load. Fetch it first with `download-files`.
             num_threads: ONNX Runtime threads used by the recognizer.
-            endpoint_silence: Trailing silence, in seconds, after which an utterance ends
-                and a final transcript is emitted.
-            recognizer: Use an already built `sherpa_onnx.OnlineRecognizer` instead of `model`
-                (any online model sherpa-onnx supports). Endpoint detection must be enabled.
+            endpoint_silence: Online models only. Trailing silence, in seconds, after which an
+                utterance ends and a final transcript is emitted.
+            recognizer: Use an already built `sherpa_onnx.OnlineRecognizer` (endpoint
+                detection enabled) or `sherpa_onnx.OfflineRecognizer` instead of `model`.
             language: Language reported on transcripts. Defaults to the model's language.
         """
-        super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=True,
-                interim_results=True,
-                aligned_transcript="word",
-                offline_recognize=True,
-            )
-        )
         spec = STT_MODELS[model]
         self._model_name = model if recognizer is None else "custom"
-        self._recognizer = recognizer or _load_transducer(
-            spec, num_threads=num_threads, endpoint_silence=endpoint_silence
+        if recognizer is None:
+            recognizer = _load_recognizer(
+                spec, num_threads=num_threads, endpoint_silence=endpoint_silence
+            )
+        self._online: OnlineRecognizer | None = None
+        self._offline: OfflineRecognizer | None = None
+        if isinstance(recognizer, OnlineRecognizer):
+            self._online = recognizer
+        else:
+            self._offline = recognizer
+        streaming = self._online is not None
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=streaming,
+                interim_results=streaming,
+                aligned_transcript="word" if streaming else False,
+                offline_recognize=True,
+            )
         )
         self._opts = _STTOptions(
             language=LanguageCode(language if is_given(language) else spec.language)
@@ -143,21 +183,22 @@ class STT(stt.STT):
             )
             frame = rtc.combine_audio_frames([*resampler.push(frame), *resampler.flush()])
 
-        snap = await asyncio.to_thread(self._recognize_blocking, _to_float32(frame))
         lang = LanguageCode(language) if is_given(language) else self._opts.language
+        samples = _to_float32(frame)
+        if self._offline is not None:
+            text = await asyncio.to_thread(_decode_offline, self._offline, samples)
+            return stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=utils.shortuuid(),
+                alternatives=[stt.SpeechData(language=lang, text=text, end_time=frame.duration)],
+            )
+
+        assert self._online is not None
+        snap = await asyncio.to_thread(_decode_online, self._online, samples)
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[_speech_data(snap, lang, start_time_offset=0.0)],
         )
-
-    def _recognize_blocking(self, samples: npt.NDArray[np.float32]) -> _Snapshot:
-        s = self._recognizer.create_stream()
-        s.accept_waveform(SAMPLE_RATE, samples)
-        s.accept_waveform(SAMPLE_RATE, _silence(TAIL_PADDING_S))
-        s.input_finished()
-        while self._recognizer.is_ready(s):
-            self._recognizer.decode_stream(s)
-        return _snapshot(self._recognizer.get_result_all(s), endpoint=True, clock_shift=0.0)
 
     def stream(
         self,
@@ -165,9 +206,14 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        if self._online is None:
+            raise NotImplementedError(
+                f"{self._model_name} is a batch (offline) model: AgentSession wraps it in "
+                "stt.StreamAdapter with a VAD; outside a session, wrap it yourself"
+            )
         lang = LanguageCode(language) if is_given(language) else self._opts.language
         return SpeechStream(
-            stt=self, recognizer=self._recognizer, language=lang, conn_options=conn_options
+            stt=self, recognizer=self._online, language=lang, conn_options=conn_options
         )
 
 
@@ -272,21 +318,61 @@ class SpeechStream(stt.RecognizeStream):
         self._unreported_audio_s = 0.0
 
 
-def _load_transducer(
-    spec: TransducerModel, *, num_threads: int, endpoint_silence: float
-) -> OnlineRecognizer:
+def _load_recognizer(
+    spec: TransducerModel | MoonshineModel | WhisperModel,
+    *,
+    num_threads: int,
+    endpoint_silence: float,
+) -> OnlineRecognizer | OfflineRecognizer:
     root = Path(local_model_dir(spec))
-    recognizer: OnlineRecognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
-        tokens=str(root / spec.tokens),
-        encoder=str(root / spec.encoder),
-        decoder=str(root / spec.decoder),
-        joiner=str(root / spec.joiner),
-        num_threads=num_threads,
-        sample_rate=SAMPLE_RATE,
-        enable_endpoint_detection=True,
-        rule2_min_trailing_silence=endpoint_silence,
-    )
-    return recognizer
+    if isinstance(spec, TransducerModel):
+        online: OnlineRecognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+            tokens=str(root / spec.tokens),
+            encoder=str(root / spec.encoder),
+            decoder=str(root / spec.decoder),
+            joiner=str(root / spec.joiner),
+            num_threads=num_threads,
+            sample_rate=SAMPLE_RATE,
+            enable_endpoint_detection=True,
+            rule2_min_trailing_silence=endpoint_silence,
+        )
+        return online
+    offline: OfflineRecognizer
+    if isinstance(spec, MoonshineModel):
+        offline = sherpa_onnx.OfflineRecognizer.from_moonshine(
+            preprocessor=str(root / spec.preprocessor),
+            encoder=str(root / spec.encoder),
+            uncached_decoder=str(root / spec.uncached_decoder),
+            cached_decoder=str(root / spec.cached_decoder),
+            tokens=str(root / spec.tokens),
+            num_threads=num_threads,
+        )
+    else:
+        offline = sherpa_onnx.OfflineRecognizer.from_whisper(
+            encoder=str(root / spec.encoder),
+            decoder=str(root / spec.decoder),
+            tokens=str(root / spec.tokens),
+            language=spec.language,
+            num_threads=num_threads,
+        )
+    return offline
+
+
+def _decode_online(recognizer: OnlineRecognizer, samples: npt.NDArray[np.float32]) -> _Snapshot:
+    s = recognizer.create_stream()
+    s.accept_waveform(SAMPLE_RATE, samples)
+    s.accept_waveform(SAMPLE_RATE, _silence(TAIL_PADDING_S))
+    s.input_finished()
+    while recognizer.is_ready(s):
+        recognizer.decode_stream(s)
+    return _snapshot(recognizer.get_result_all(s), endpoint=True, clock_shift=0.0)
+
+
+def _decode_offline(recognizer: OfflineRecognizer, samples: npt.NDArray[np.float32]) -> str:
+    s = recognizer.create_stream()
+    s.accept_waveform(SAMPLE_RATE, samples)
+    recognizer.decode_stream(s)
+    return s.result.text.strip()
 
 
 def _snapshot(result: OnlineResult, *, endpoint: bool, clock_shift: float) -> _Snapshot:

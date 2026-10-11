@@ -14,21 +14,19 @@
 
 """Local speech-to-text for LiveKit Agents, powered by sherpa-onnx.
 
-`STT` streams with an online recognizer (zipformer and other transducer, paraformer and CTC
-models). `BatchSTT` transcribes whole utterances with an offline recognizer (Whisper,
-Moonshine, SenseVoice, Parakeet and others). Both run on ONNX Runtime, in process.
+`STT` runs any sherpa-onnx recognizer. Online models (zipformer and other transducer,
+paraformer and CTC models) stream; offline models (Whisper, Moonshine, SenseVoice, Parakeet
+and others) transcribe whole utterances. All run on ONNX Runtime, in process.
 """
 
 import os
+from typing import cast
 
 from livekit.agents import Plugin
 
-from .batch_stt import BatchSTT
 from .log import logger
 from .models import (
-    BATCH_STT_MODELS,
     STT_MODELS,
-    BatchSTTModels,
     HubModel,
     STTModels,
     download_model,
@@ -36,7 +34,7 @@ from .models import (
 from .stt import STT, SpeechStream
 from .version import __version__
 
-__all__ = ["STT", "BatchSTT", "BatchSTTModels", "STTModels", "SpeechStream", "__version__"]
+__all__ = ["STT", "STTModels", "SpeechStream", "__version__"]
 
 MODELS_ENV_VAR = "LIVEKIT_SHERPA_MODELS"
 DEFAULT_MODELS = ("zipformer-en-2023-06-26",)
@@ -45,14 +43,11 @@ DEFAULT_MODELS = ("zipformer-en-2023-06-26",)
 def models_to_download() -> list[HubModel]:
     """Built-in models fetched by `download-files`: the default streaming model, or the
     comma separated names in `LIVEKIT_SHERPA_MODELS` (e.g. "moonshine-tiny-en-int8")."""
-    registry: dict[str, HubModel] = {
-        name: spec for table in (STT_MODELS, BATCH_STT_MODELS) for name, spec in table.items()
-    }
     names = [n.strip() for n in os.environ.get(MODELS_ENV_VAR, "").split(",") if n.strip()]
-    unknown = [n for n in names if n not in registry]
+    unknown = [n for n in names if n not in STT_MODELS]
     if unknown:
-        raise ValueError(f"unknown {MODELS_ENV_VAR} entries {unknown}; known: {list(registry)}")
-    return [registry[n] for n in names or DEFAULT_MODELS]
+        raise ValueError(f"unknown {MODELS_ENV_VAR} entries {unknown}; known: {list(STT_MODELS)}")
+    return [STT_MODELS[cast(STTModels, n)] for n in names or DEFAULT_MODELS]
 
 
 class SherpaPlugin(Plugin):

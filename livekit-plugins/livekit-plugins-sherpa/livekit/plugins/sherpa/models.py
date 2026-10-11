@@ -20,8 +20,12 @@ from typing import Literal
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import LocalEntryNotFoundError
 
-STTModels = Literal["zipformer-en-2023-06-26", "zipformer-en-20M-2023-02-17"]
-BatchSTTModels = Literal["moonshine-tiny-en-int8", "whisper-tiny.en-int8"]
+STTModels = Literal[
+    "zipformer-en-2023-06-26",
+    "zipformer-en-20M-2023-02-17",
+    "moonshine-tiny-en-int8",
+    "whisper-tiny.en-int8",
+]
 
 
 @dataclass(frozen=True)
@@ -73,7 +77,8 @@ def _transducer(repo_id: str, revision: str, suffix: str) -> TransducerModel:
     )
 
 
-STT_MODELS: dict[STTModels, TransducerModel] = {
+STT_MODELS: dict[STTModels, TransducerModel | MoonshineModel | WhisperModel] = {
+    # Streaming (online) models.
     # Default. ~70M params, 80 MB int8.
     "zipformer-en-2023-06-26": _transducer(
         "csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26",
@@ -87,9 +92,7 @@ STT_MODELS: dict[STTModels, TransducerModel] = {
         "d42f2d9f7ca24806fb667456a18a9f1b60f70d16",
         "epoch-99-avg-1.int8.onnx",
     ),
-}
-
-BATCH_STT_MODELS: dict[BatchSTTModels, MoonshineModel | WhisperModel] = {
+    # Batch (offline) models: AgentSession runs them live through stt.StreamAdapter + VAD.
     # Default. Moonshine tiny, ~27M params, 120 MB int8.
     "moonshine-tiny-en-int8": MoonshineModel(
         repo_id="csukuangfj/sherpa-onnx-moonshine-tiny-en-int8",

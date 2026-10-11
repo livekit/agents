@@ -18,7 +18,6 @@ from livekit import rtc
 from livekit.agents import inference, stt, utils
 from livekit.plugins import sherpa
 from livekit.plugins.sherpa.models import (
-    BATCH_STT_MODELS,
     STT_MODELS,
     STTModels,
     TransducerModel,
@@ -159,23 +158,26 @@ def _wav(name: str) -> rtc.AudioFrame:
         )
 
 
-@pytest.fixture(scope="module", params=list(BATCH_STT_MODELS))
-def batch_engine(request: pytest.FixtureRequest) -> sherpa.BatchSTT:
-    name: sherpa.BatchSTTModels = request.param
+BATCH_MODELS: list[STTModels] = ["moonshine-tiny-en-int8", "whisper-tiny.en-int8"]
+
+
+@pytest.fixture(scope="module", params=BATCH_MODELS)
+def batch_engine(request: pytest.FixtureRequest) -> sherpa.STT:
+    name: STTModels = request.param
     try:
-        download_model(BATCH_STT_MODELS[name])
+        download_model(STT_MODELS[name])
         download_model(STT_MODELS[MODEL])
     except Exception as e:
         pytest.skip(f"model not available: {e}")
-    return sherpa.BatchSTT(model=name)
+    return sherpa.STT(model=name)
 
 
-def test_batch_declares_batch_only(batch_engine: sherpa.BatchSTT) -> None:
+def test_batch_declares_batch_only(batch_engine: sherpa.STT) -> None:
     assert not batch_engine.capabilities.streaming
     assert batch_engine.capabilities.offline_recognize
 
 
-async def test_batch_transcribes_a_real_recording(batch_engine: sherpa.BatchSTT) -> None:
+async def test_batch_transcribes_a_real_recording(batch_engine: sherpa.STT) -> None:
     event = await batch_engine.recognize([_wav("0.wav")])
 
     assert event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
@@ -184,7 +186,7 @@ async def test_batch_transcribes_a_real_recording(batch_engine: sherpa.BatchSTT)
 
 
 async def test_batch_live_audio_through_stream_adapter_and_vad(
-    batch_engine: sherpa.BatchSTT,
+    batch_engine: sherpa.STT,
 ) -> None:
     # What AgentSession does with a batch STT: the VAD cuts utterances, the STT transcribes each.
     adapter = stt.StreamAdapter(stt=batch_engine, vad=inference.VAD(model="silero"))
