@@ -125,6 +125,9 @@ class VAD(vad.VAD):
             self._opts.max_buffered_speech = max_buffered_speech
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
+            if not is_given(deactivation_threshold):
+                # keep the hysteresis pair consistent, same default derivation as __init__
+                self._opts.deactivation_threshold = max(activation_threshold - 0.15, 0.01)
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
 
@@ -187,6 +190,9 @@ class _VADStream(vad.VADStream):
             self._opts.max_buffered_speech = max_buffered_speech
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
+            if not is_given(deactivation_threshold):
+                # keep the hysteresis pair consistent, same default derivation as __init__
+                self._opts.deactivation_threshold = max(activation_threshold - 0.15, 0.01)
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
 
