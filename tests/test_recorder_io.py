@@ -561,6 +561,63 @@ async def test_a_recording_matches_when_each_channel_happened(tmp_path: Path) ->
     ]
 
 
+async def _packet_sizes_of_a_quiet_then_spoken_second(
+    path: Path, *, bit_rate: int | None = None, constant_bit_rate: bool = False
+) -> list[int]:
+    """The agent is silent for a second, then speaks for one; returns the Opus packet sizes."""
+    now = 1000.0
+    with patch(_CLOCK, side_effect=lambda: now):
+        source, sink = _Source(), _Sink()
+        recorder = RecorderIO(
+            agent_session=MagicMock(),
+            sample_rate=RATE,
+            bit_rate=bit_rate,
+            constant_bit_rate=constant_bit_rate,
+        )
+        recorder.record_input(source)
+        audio_out = recorder.record_output(sink)
+        await recorder.start(output_path=path)
+        t0 = now
+
+        await audio_out.capture_frame(_tone(1.0, level=8000))
+        audio_out.flush()
+        audio_out.on_playback_started(created_at=t0 + 1.0)
+        audio_out.on_playback_progressed(started_at=t0 + 1.0, offset=0.0, duration=1.0)
+        now = t0 + 2.0
+        audio_out.on_playback_finished(playback_position=1.0, interrupted=False)
+
+        await recorder.aclose()
+
+    with av.open(str(path)) as container:
+        return [packet.size for packet in container.demux(audio=0) if packet.size]
+
+
+@pytest.mark.parametrize("bit_rate", [64_000, 128_000])
+async def test_a_constant_bit_rate_packs_silence_and_speech_alike(
+    tmp_path: Path, bit_rate: int
+) -> None:
+    """Every 20 ms packet carries the same share of the bit rate, so the file size tells the
+    length: 50 packets per second, bit_rate / 50 / 8 bytes each."""
+    sizes = await _packet_sizes_of_a_quiet_then_spoken_second(
+        tmp_path / "cbr.ogg", bit_rate=bit_rate, constant_bit_rate=True
+    )
+
+    assert 99 <= len(sizes) <= 101
+    assert set(sizes) == {bit_rate // 50 // 8}
+
+
+async def test_the_encoding_stays_variable_unless_asked(tmp_path: Path) -> None:
+    """The defaults are unchanged: silence still packs into a few bytes."""
+    sizes = await _packet_sizes_of_a_quiet_then_spoken_second(tmp_path / "vbr.ogg")
+
+    assert min(sizes) < 10 < max(sizes)
+
+
+def test_a_bit_rate_that_is_not_positive_is_rejected() -> None:
+    with pytest.raises(ValueError, match="bit_rate"):
+        RecorderIO(agent_session=MagicMock(), bit_rate=0)
+
+
 async def test_the_writer_waits_on_the_agent_but_not_on_a_quiet_source() -> None:
     """A segment in flight holds the timeline; a microphone that went quiet does not."""
     now = 1000.0
