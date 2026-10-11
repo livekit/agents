@@ -157,8 +157,6 @@ class RoomSessionTransport(SessionTransport):
         # one send at a time, so messages reach the receiver in the order they were sent
         async with self._send_lock:
             try:
-                # a one-shot send (not stream_bytes) lets the sdk deliver a small message as a
-                # single packet, and compress a large one, for receivers that support it
                 await self._room.local_participant.send_bytes(
                     data,
                     name=utils.shortuuid("AS_"),
