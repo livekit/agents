@@ -158,14 +158,29 @@ class RecorderIO:
         *,
         agent_session: AgentSession,
         sample_rate: int = 48000,
+        bit_rate: int | None = None,
+        constant_bit_rate: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        """
+        Args:
+            agent_session: The session whose audio is recorded.
+            sample_rate: Sample rate of the recording, in Hz.
+            bit_rate: Target bit rate of the Opus encoder, in bits per second. ``None`` keeps
+                the encoder's default.
+            constant_bit_rate: Encode at a constant bit rate instead of a variable one. Players
+                that estimate an Ogg Opus duration from the file size (e.g. macOS Finder and
+                QuickLook) only get it right on a constant bit rate.
+            loop: Event loop the recorder runs on. Defaults to the current one.
+        """
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
 
         self._q: queue.Queue[_Captured | _Flush | _EndRun | None] = queue.Queue()
         self._session = agent_session
         self._sample_rate = sample_rate
+        self._bit_rate = bit_rate
+        self._constant_bit_rate = constant_bit_rate
         self._started = False
         self._loop = loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
@@ -288,6 +303,11 @@ class RecorderIO:
         # native ffmpeg opus encoder is experimental
         if codec_name == "opus":
             stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
+
+        if self._bit_rate is not None:
+            stream.codec_context.bit_rate = self._bit_rate
+        if self._constant_bit_rate:
+            stream.codec_context.options["vbr"] = "off"
 
         tracks = [_Track(sample_rate=self._sample_rate, t0=self._t0) for _ in range(2)]
         cursor = 0

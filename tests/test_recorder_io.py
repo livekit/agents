@@ -590,3 +590,37 @@ async def test_the_writer_waits_on_the_agent_but_not_on_a_quiet_source() -> None
             assert flushed[-1] == pytest.approx(segment_began)
 
             task.cancel()
+
+
+async def _packet_sizes(path: Path, **options: object) -> list[int]:
+    """Record a second of silence then a second of tone, and return the encoded packet sizes."""
+    now = 1000.0
+    with patch(_CLOCK, side_effect=lambda: now):
+        source = _Source()
+        recorder = RecorderIO(agent_session=MagicMock(), sample_rate=RATE, **options)  # type: ignore[arg-type]
+        audio_in = recorder.record_input(source)
+        recorder.record_output(_Sink())
+        await recorder.start(output_path=path)
+
+        for i in range(20):
+            now += 0.1
+            source.frames.append(_tone(0.1, level=8000 if i >= 10 else 0))
+            await audio_in.__anext__()
+
+        await recorder.aclose()
+
+    with av.open(str(path)) as container:
+        sizes = [p.size for p in container.demux(audio=0) if p.size]
+    # the last packet holds the encoder's padding
+    return sizes[:-1]
+
+
+async def test_the_default_encoding_packs_silence_into_smaller_packets(tmp_path: Path) -> None:
+    sizes = await _packet_sizes(tmp_path / "vbr.ogg")
+    assert min(sizes) < max(sizes)
+
+
+async def test_a_constant_bit_rate_encodes_every_packet_at_the_same_size(tmp_path: Path) -> None:
+    """At 128 kb/s, a 20 ms packet is 320 bytes, silent or not, as in Egress recordings."""
+    sizes = await _packet_sizes(tmp_path / "cbr.ogg", bit_rate=128_000, constant_bit_rate=True)
+    assert set(sizes) == {320}
