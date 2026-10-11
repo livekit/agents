@@ -140,6 +140,20 @@ def test_models_to_download(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+def test_download_files_forwards_revisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents import Plugin
+
+    calls: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        hf, "download_model", lambda model, *, revision=None: calls.append((model, revision))
+    )
+    monkeypatch.setenv("LIVEKIT_HF_MODELS", "a/b@rev1,c/d")
+
+    (plugin,) = [p for p in Plugin.registered_plugins if isinstance(p, hf.HFPlugin)]
+    plugin.download_files()
+    assert calls == [("a/b", "rev1"), ("c/d", None)]
+
+
 def test_chat_template_messages_use_dict_arguments() -> None:
     chat_ctx = ChatContext.empty()
     chat_ctx.add_message(role="system", content="be brief")
