@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 WRITE_INTERVAL = 2.5
 FFMPEG_STRICT_LEVEL = "experimental"
 
+# the range libopus accepts for a stereo stream
+MIN_BIT_RATE = 500
+MAX_BIT_RATE = 512_000
+
 # how long the writer waits on a source that stopped delivering before taking the silence as real
 INPUT_STALL_TIMEOUT = 1.0
 
@@ -166,13 +170,23 @@ class RecorderIO:
         Args:
             agent_session: The session whose audio is recorded.
             sample_rate: Sample rate of the recording, in Hz.
-            bit_rate: Target bit rate of the Opus encoder, in bits per second. ``None`` keeps
-                the encoder's default.
+            bit_rate: Target bit rate of the Opus encoder, in bits per second, between 500 and
+                512000. ``None`` keeps the encoder's default.
             constant_bit_rate: Encode at a constant bit rate instead of a variable one. Players
                 that estimate an Ogg Opus duration from the file size (e.g. macOS Finder and
-                QuickLook) only get it right on a constant bit rate.
+                QuickLook) only get it right on a constant bit rate. Applies to libopus only;
+                the native FFmpeg fallback encoder has no such option.
             loop: Event loop the recorder runs on. Defaults to the current one.
         """
+        # the encoder opens on its own thread, where a rejected bit rate would only be logged
+        if bit_rate is not None and not (
+            isinstance(bit_rate, int) and MIN_BIT_RATE <= bit_rate <= MAX_BIT_RATE
+        ):
+            raise ValueError(
+                f"bit_rate must be an int between {MIN_BIT_RATE} and {MAX_BIT_RATE}, "
+                f"got {bit_rate!r}"
+            )
+
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
 
@@ -307,7 +321,10 @@ class RecorderIO:
         if self._bit_rate is not None:
             stream.codec_context.bit_rate = self._bit_rate
         if self._constant_bit_rate:
-            stream.codec_context.options["vbr"] = "off"
+            if codec_name == "libopus":
+                stream.codec_context.options["vbr"] = "off"
+            else:
+                logger.warning("constant_bit_rate requires libopus, which is not available")
 
         tracks = [_Track(sample_rate=self._sample_rate, t0=self._t0) for _ in range(2)]
         cursor = 0
