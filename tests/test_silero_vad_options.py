@@ -82,3 +82,19 @@ def test_with_options_shares_session_and_derives_defaults() -> None:
     # original is not mutated
     assert vad._opts.activation_threshold == 0.5
     assert math.isclose(vad._opts.deactivation_threshold, 0.35)
+
+
+def test_with_options_rejects_invalid_deactivation() -> None:
+    """`with_options` must enforce the same deactivation_threshold > 0 validation as `load`.
+
+    Devin review (PR #7735): a zero exit threshold would keep an active stream in speech
+    forever, since any positive probability exceeds it.
+    """
+    vad = _make_vad()
+    with pytest.raises(ValueError):
+        vad.with_options(deactivation_threshold=0)
+    with pytest.raises(ValueError):
+        vad.with_options(deactivation_threshold=-0.1)
+    # an explicit bad pair must never slip through either
+    with pytest.raises(ValueError):
+        vad.with_options(activation_threshold=0.0, deactivation_threshold=0.0)

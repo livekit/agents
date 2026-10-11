@@ -179,6 +179,15 @@ class VAD(agents.vad.VAD):
         `stream()` allocates its own `OnnxModel` state.
         """  # noqa: E501
         cur = self._opts
+        eff_activation = activation_threshold if is_given(activation_threshold) else cur.activation_threshold
+        eff_deactivation = (
+            deactivation_threshold
+            if is_given(deactivation_threshold)
+            else (max(eff_activation - 0.15, 0.01) if is_given(activation_threshold) else cur.deactivation_threshold)
+        )
+        if eff_deactivation <= 0:
+            # same validation as `load`: a zero/negative exit threshold wedges the stream in SPEECH
+            raise ValueError("deactivation_threshold must be greater than 0")
         opts = _VADOptions(
             min_speech_duration=min_speech_duration if is_given(min_speech_duration) else cur.min_speech_duration,
             min_silence_duration=min_silence_duration if is_given(min_silence_duration) else cur.min_silence_duration,
@@ -186,12 +195,8 @@ class VAD(agents.vad.VAD):
             if is_given(prefix_padding_duration)
             else cur.prefix_padding_duration,
             max_buffered_speech=max_buffered_speech if is_given(max_buffered_speech) else cur.max_buffered_speech,
-            activation_threshold=activation_threshold if is_given(activation_threshold) else cur.activation_threshold,
-            deactivation_threshold=(
-                deactivation_threshold
-                if is_given(deactivation_threshold)
-                else (max(activation_threshold - 0.15, 0.01) if is_given(activation_threshold) else cur.deactivation_threshold)
-            ),
+            activation_threshold=eff_activation,
+            deactivation_threshold=eff_deactivation,
             sample_rate=cur.sample_rate,
         )
         return VAD(session=self._onnx_session, opts=opts)
