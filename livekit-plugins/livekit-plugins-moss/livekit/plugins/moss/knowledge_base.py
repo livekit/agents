@@ -72,15 +72,12 @@ class KnowledgeBase(llm.Toolset):
 
     async def setup(self) -> Self:
         """Start loading the index in the background. Runs when the agent starts."""
-        if self._client is None:
-            self._client = MossClient(self._project_id, self._project_key)
-            self._loading = asyncio.create_task(self._client.load_index(self._index_name))
-            self._loading.add_done_callback(_log_load_failure)
+        self._load()
         return await super().setup()
 
     async def aclose(self) -> None:
         """Free the index and send Moss the final usage report."""
-        client, self._client = self._client, None
+        client, self._client, self._loading = self._client, None, None
         if client is not None:
             await client.close()
         await super().aclose()
@@ -100,11 +97,11 @@ class KnowledgeBase(llm.Toolset):
         A tool reply in the same turn keeps the passages already added and does not search again.
         Before the index loads, or if a search fails, it adds nothing and the agent still answers.
         """
-        passages_id = f"{self.id}_passages"
         user_messages = [m for m in chat_ctx.messages() if m.role == "user"]
-        if not user_messages or chat_ctx.get_by_id(passages_id) is not None:
+        if not user_messages or not self._load().done():
             return
-        if self._loading is not None and not self._loading.done():
+        passages_id = f"{self.id}_{user_messages[-1].id}"
+        if chat_ctx.get_by_id(passages_id) is not None:
             return
         if not (query := user_messages[-1].text_content):
             return
@@ -118,11 +115,19 @@ class KnowledgeBase(llm.Toolset):
             content = f"{_PASSAGES_HEADER}\n<passages>\n{body}\n</passages>"
             chat_ctx.add_message(role="system", content=content, id=passages_id)
 
-    async def _search(self, query: str) -> list[str]:
+    def _load(self) -> asyncio.Task[str]:
+        """Start loading the index unless it is loaded or loading, so a failed load runs again."""
         if self._client is None:
-            await self.setup()
-        client, loading = self._client, self._loading
-        assert client is not None and loading is not None
+            self._client = MossClient(self._project_id, self._project_key)
+        loading = self._loading
+        if loading is None or (loading.done() and (loading.cancelled() or loading.exception())):
+            loading = self._loading = asyncio.create_task(self._client.load_index(self._index_name))
+            loading.add_done_callback(_log_load_failure)
+        return loading
+
+    async def _search(self, query: str) -> list[str]:
+        loading, client = self._load(), self._client
+        assert client is not None
         await asyncio.wait_for(asyncio.shield(loading), 5)
         result = await client.query(self._index_name, query, self._options)
         return [doc.text for doc in result.docs]

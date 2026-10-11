@@ -66,7 +66,7 @@ async def test_tool_returns_passages(kb: KnowledgeBase) -> None:
     assert await kb.search_knowledge_base("parking?") == "No matching passages."
 
 
-async def test_add_context_searches_the_latest_user_message_once(kb: KnowledgeBase) -> None:
+async def test_add_context_searches_each_user_message_once(kb: KnowledgeBase) -> None:
     chat_ctx = _chat("old question", "When are you open?")
     await kb.add_context(chat_ctx)
     await kb.add_context(chat_ctx)  # the tool reply of the same turn
@@ -76,7 +76,28 @@ async def test_add_context_searches_the_latest_user_message_once(kb: KnowledgeBa
     assert "<passages>\nSupport hours are 9am to 9pm EST.\n</passages>" in (
         passages.text_content or ""
     )
-    assert kb._client.queries == ["When are you open?"]  # type: ignore[union-attr]
+    chat_ctx.add_message(role="user", content="Where do I park?")
+    await kb.add_context(chat_ctx)
+    assert kb._client.queries == ["When are you open?", "Where do I park?"]  # type: ignore[union-attr]
+
+
+async def test_a_failed_load_runs_again_on_the_next_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loads: list[str] = []
+
+    async def load_index(self: FakeMossClient, name: str) -> str:
+        loads.append(name)
+        if len(loads) == 1:
+            raise RuntimeError("network down")
+        return name
+
+    monkeypatch.setattr(FakeMossClient, "load_index", load_index)
+    kb = KnowledgeBase("faq", project_id="id", project_key="key")
+    await kb.setup()
+    await asyncio.sleep(0)
+    assert await kb.search_knowledge_base("hours?") == "Support hours are 9am to 9pm EST."
+    assert loads == ["faq", "faq"]
 
 
 async def test_add_context_skips_while_the_index_loads() -> None:
