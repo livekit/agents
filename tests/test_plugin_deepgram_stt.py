@@ -41,7 +41,7 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
         _opts=opts,
         _reconnect_event=asyncio.Event(),
         _reconfigure_atask=None,
-        _missed_configure={},
+        _missed_configure=set(),
         _ws=ws,
     )
     stream._send_configure = SpeechStreamv2._send_configure.__get__(stream)
@@ -560,5 +560,28 @@ async def test_flux_keyterms_updated_during_the_handshake_reach_the_server():
         await _wait_until(lambda: session.ws.configures)
         assert "keyterm" not in session.urls[0]
         assert session.ws.configures == [{"type": "Configure", "keyterms": ["LiveKit"]}]
+    finally:
+        await stream.aclose()
+
+
+async def test_flux_handshake_replay_does_not_override_a_newer_update():
+    from typing import Any, cast
+
+    from livekit.plugins.deepgram import STTv2
+
+    session = _SlowHandshakeSession()
+    stt = STTv2(api_key="test-key", http_session=cast(Any, session))
+    stream = stt.stream()
+    try:
+        await asyncio.wait_for(session.connecting.wait(), timeout=5.0)
+        stt._update_session_keyterms(["Alpha"])
+        await asyncio.sleep(0)
+        # the handshake completes while a newer update is still queued
+        session.release.set()
+        stt._update_session_keyterms(["Beta"])
+
+        await _wait_until(lambda: session.ws.configures)
+        await stream._reconfigure_atask
+        assert session.ws.configures[-1] == {"type": "Configure", "keyterms": ["Beta"]}
     finally:
         await stream.aclose()
