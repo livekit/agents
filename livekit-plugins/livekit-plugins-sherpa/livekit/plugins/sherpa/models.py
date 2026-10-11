@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import LocalEntryNotFoundError
@@ -26,6 +26,20 @@ STTModels = Literal[
     "moonshine-tiny-en-int8",
     "whisper-tiny.en-int8",
 ]
+TTSModels = Literal["kokoro-int8-multi-lang-v1_0", "kitten-nano-en-v0_2", "piper-en_US-amy-low"]
+
+
+# Speaker ids of the Kokoro v1.0 voice table, in order (see the model's `speaker2id` metadata).
+KokoroVoice = Literal[
+    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore", "af_nicole",
+    "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir",
+    "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa", "bf_alice", "bf_emma",
+    "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis", "ef_dora",
+    "em_alex", "ff_siwis", "hf_alpha", "hf_beta", "hm_omega", "hm_psi", "if_sara", "im_nicola",
+    "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo", "pf_dora", "pm_alex",
+    "pm_santa", "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi",
+    "zm_yunxia", "zm_yunyang", "em_santa",
+]  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -63,6 +77,34 @@ class WhisperModel(HubModel):
     decoder: str = ""
     tokens: str = ""
     language: str = "en"
+
+
+@dataclass(frozen=True)
+class TTSModel(HubModel):
+    """A sherpa-onnx TTS model and its speaker table (index = speaker id)."""
+
+    model: str = ""
+    tokens: str = "tokens.txt"
+    data_dir: str = "espeak-ng-data"
+    speakers: tuple[str, ...] = ()
+    default_voice: str = ""
+    language: str = "en"
+
+
+@dataclass(frozen=True)
+class KokoroModel(TTSModel):
+    voices: str = "voices.bin"
+    lexicon: str = "lexicon-us-en.txt"
+
+
+@dataclass(frozen=True)
+class KittenModel(TTSModel):
+    voices: str = "voices.bin"
+
+
+@dataclass(frozen=True)
+class VitsModel(TTSModel):
+    """Piper and other VITS voices."""
 
 
 def _transducer(repo_id: str, revision: str, suffix: str) -> TransducerModel:
@@ -113,6 +155,49 @@ STT_MODELS: dict[STTModels, TransducerModel | MoonshineModel | WhisperModel] = {
         encoder="tiny.en-encoder.int8.onnx",
         decoder="tiny.en-decoder.int8.onnx",
         tokens="tiny.en-tokens.txt",
+    ),
+}
+
+
+# Speaker tables come from each model's `speaker2id` metadata.
+KITTEN_VOICES = (
+    "expr-voice-2-m", "expr-voice-2-f", "expr-voice-3-m", "expr-voice-3-f",
+    "expr-voice-4-m", "expr-voice-4-f", "expr-voice-5-m", "expr-voice-5-f",
+)  # fmt: skip
+
+TTS_MODELS: dict[TTSModels, TTSModel] = {
+    # Default. Kokoro v1.0, 82M params, 114 MB int8, 54 voices.
+    "kokoro-int8-multi-lang-v1_0": KokoroModel(
+        repo_id="csukuangfj/kokoro-int8-multi-lang-v1_0",
+        revision="2a360693d79b88b49b88e29aec2b53577f41f206",
+        files=(
+            "model.int8.onnx",
+            "voices.bin",
+            "tokens.txt",
+            "lexicon-us-en.txt",
+            "espeak-ng-data/**",
+        ),
+        model="model.int8.onnx",
+        speakers=get_args(KokoroVoice),
+        default_voice="af_heart",
+    ),
+    # Kitten nano v0.2, ~15M params, 24 MB fp16, 8 voices.
+    "kitten-nano-en-v0_2": KittenModel(
+        repo_id="csukuangfj/kitten-nano-en-v0_2-fp16",
+        revision="7d14a97d38072576ddca7a673ab5bb49c43bb169",
+        files=("model.fp16.onnx", "voices.bin", "tokens.txt", "espeak-ng-data/**"),
+        model="model.fp16.onnx",
+        speakers=KITTEN_VOICES,
+        default_voice="expr-voice-2-f",
+    ),
+    # Piper en_US amy (low), 63 MB, one speaker, 16 kHz.
+    "piper-en_US-amy-low": VitsModel(
+        repo_id="csukuangfj/vits-piper-en_US-amy-low",
+        revision="76da6ca287517a49f58b943c4c4fdb0c1e94d61f",
+        files=("en_US-amy-low.onnx", "tokens.txt", "espeak-ng-data/**"),
+        model="en_US-amy-low.onnx",
+        speakers=("amy",),
+        default_voice="amy",
     ),
 }
 

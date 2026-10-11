@@ -1,6 +1,6 @@
 # Sherpa-ONNX plugin for LiveKit Agents
 
-Local speech-to-text with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). Runs in process on ONNX Runtime: no API key, no network at runtime, no torch, no GPU required.
+Local speech-to-text and text-to-speech with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). Runs in process on ONNX Runtime: no API key, no network at runtime, no torch, no GPU required.
 
 ## Installation
 
@@ -8,7 +8,7 @@ Local speech-to-text with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). 
 pip install livekit-plugins-sherpa
 ```
 
-Fetch the models once while online. `download-files` gets the default streaming model; name others in `LIVEKIT_SHERPA_MODELS`:
+Fetch the models once while online. `download-files` gets the default streaming STT and Kokoro; name others in `LIVEKIT_SHERPA_MODELS`:
 
 ```bash
 python -m livekit.agents download-files
@@ -53,3 +53,35 @@ session = AgentSession(stt=sherpa.STT(recognizer=recognizer), ...)
 | `language` | model language | Language reported on transcripts |
 
 `zipformer-en-20M-2023-02-17` is smaller but drops the first words of an utterance on audio resampled from 48 kHz, so it is not the default. The built-in models are wideband; for 8 kHz telephony audio pass an 8 kHz model through `recognizer=`.
+
+## TTS
+
+`sherpa.TTS` runs a sherpa-onnx offline TTS model. Kokoro is the default; Kitten and Piper are built in, and any other sherpa-onnx TTS model (VITS, Matcha, newer Kokoro) works through `engine=`. The phonemizer data ships with each model, so there is no system espeak dependency.
+
+```python
+session = AgentSession(tts=sherpa.TTS(voice="af_heart"), ...)
+session = AgentSession(tts=sherpa.TTS(model="kitten-nano-en-v0_2", voice="expr-voice-3-f"), ...)
+
+# any other sherpa-onnx TTS model: pick the voice by id, or pass its speaker names
+engine = sherpa_onnx.OfflineTts(config)
+session = AgentSession(tts=sherpa.TTS(engine=engine, voice=0), ...)
+```
+
+| Built-in model | Size | Voices |
+| --- | --- | --- |
+| `kokoro-int8-multi-lang-v1_0` (default) | 82M parameters, int8, 24 kHz | 54, e.g. `af_heart` (`sherpa.KokoroVoice`) |
+| `kitten-nano-en-v0_2` | about 15M parameters, 24 kHz | 8, `expr-voice-2-m` to `expr-voice-5-f` |
+| `piper-en_US-amy-low` | 63 MB, 16 kHz | 1, `amy` |
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `model` | `kokoro-int8-multi-lang-v1_0` | Built-in model |
+| `voice` | the model's default | A speaker name from the model's table, or a speaker id |
+| `speed` | `1.0` | Speaking rate |
+| `num_threads` | `2` | ONNX Runtime threads |
+| `engine` | `None` | Any `sherpa_onnx.OfflineTts` |
+| `speakers` | `None` | Speaker names of `engine`, in id order, so `voice` can be a name |
+
+Capabilities: `streaming=False`. `AgentSession` wraps it in `tts.StreamAdapter`, which splits LLM output into sentences. Each sentence's audio is pushed through `AudioEmitter` as sherpa-onnx produces it, and an interruption stops generation at the next chunk. `aligned_transcript` is off: sherpa-onnx does not expose phoneme durations.
+
+Kokoro's English phonemes come from [misaki](https://github.com/hexgrad/misaki)'s dictionaries (the model's `lexicon-us-en.txt`), with espeak-ng for words outside the lexicon.

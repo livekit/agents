@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-sherpa"
 dynamic = ["version"]
-description = "Local speech-to-text for LiveKit Agents, powered by sherpa-onnx"
+description = "Local speech-to-text and text-to-speech for LiveKit Agents, powered by sherpa-onnx"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -18,6 +18,9 @@ keywords = [
     "livekit-agents",
     "stt",
     "speech-to-text",
+    "tts",
+    "text-to-speech",
+    "kokoro",
     "streaming",
     "offline",
     "local",
