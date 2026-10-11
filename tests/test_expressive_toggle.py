@@ -5,11 +5,12 @@ import asyncio
 import pytest
 
 from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference, tokenize, tts
-from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.llm.chat_context import ChatContext, ChatItem
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.generation import (
+    _EXPRESSIVE_MARKUP_KEY,
     EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
     _strip_assistant_markup,
     remove_expressive_instructions,
@@ -29,6 +30,11 @@ SESSION_TIMEOUT = 60
 MARKED_UP = (
     '<expr type="expression" label="happy"/> Welcome back! <sound value="chuckle"/> '
     "Glad you called again. Docs: [the guide](https://docs.livekit.io)."
+)
+# MARKED_UP as the TTS receives it in an expressive turn without a markup dialect
+MARKED_UP_TTS_INPUT = (
+    '<expr type="expression" label="happy"/> Welcome back! <sound value="chuckle"/> '
+    "Glad you called again. Docs: the guide."
 )
 
 
@@ -232,15 +238,11 @@ async def test_expressive_off_after_an_expressive_turn_scrubs_history() -> None:
     assert any("Welcome back!" in t for t in assistant_texts)
 
 
-async def test_restored_expressive_history_is_scrubbed_in_a_new_session(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A reply from an expressive turn is flagged, so its markup is still scrubbed after
-    the history is saved and restored into a session that never ran expressive. The
-    stored history doesn't carry the guide (it's injected into each turn's copy)."""
+async def _saved_expressive_history(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Run one expressive turn replying ``MARKED_UP`` and return the saved history."""
     from livekit.agents.voice.agent_session import DEFAULT_EXPRESSIVE_OPTIONS
 
-    # session A: FakeTTS has no markup dialect, so force expressive on for its turn
+    # FakeTTS has no markup dialect, so force expressive on for this turn
     with monkeypatch.context() as m:
         m.setattr(
             AgentActivity, "_resolve_expressive_options", lambda self: DEFAULT_EXPRESSIVE_OPTIONS
@@ -248,14 +250,30 @@ async def test_restored_expressive_history_is_scrubbed_in_a_new_session(
         actions = FakeActions()
         actions.add_user_speech(0.5, 2.5, "Hi there!", stt_delay=0.2)
         actions.add_llm(MARKED_UP, ttft=0.1, duration=0.3)
-        actions.add_tts(2.0, ttfb=0.2, duration=0.3)
-        session_a = create_session(actions)
-        agent_a = Agent(instructions="You are a helpful assistant.")
-        await asyncio.wait_for(run_session(session_a, agent_a), timeout=SESSION_TIMEOUT)
+        # key the audio on the text the TTS receives (the markdown link is flattened), so
+        # the reply plays out and is committed
+        actions.add_tts(2.0, ttfb=0.2, duration=0.3, input=MARKED_UP_TTS_INPUT)
+        session = create_session(actions)
+        agent = Agent(instructions="You are a helpful assistant.")
+        await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
-    saved = agent_a.chat_ctx.to_dict()
+    saved = agent.chat_ctx.to_dict()
     assert all(item.get("id") != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID for item in saved["items"])
     assert any("<expr" in str(item.get("content")) for item in saved["items"])
+    return saved
+
+
+def _is_flagged(item: ChatItem) -> bool:
+    return item.type == "message" and _EXPRESSIVE_MARKUP_KEY in item.extra
+
+
+async def test_restored_expressive_history_is_scrubbed_in_a_new_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reply from an expressive turn is flagged, so its markup is still scrubbed after
+    the history is saved and restored into a session that never ran expressive. The
+    stored history doesn't carry the guide (it's injected into each turn's copy)."""
+    saved = await _saved_expressive_history(monkeypatch)
 
     # session B: expressive never on, restored history only
     assistant_texts = await _run_one_turn(
@@ -265,6 +283,32 @@ async def test_restored_expressive_history_is_scrubbed_in_a_new_session(
     assert all("<expr" not in t and "<sound" not in t for t in assistant_texts)
     assert any("Welcome back!" in t for t in assistant_texts)
     assert any("I'm doing well" in t for t in assistant_texts)
+
+
+async def test_restored_expressive_history_keeps_developer_markup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Restored history mixing a flagged expressive reply with a developer's own tags:
+    only the flagged reply is scrubbed, and its flag is dropped so later turns in the
+    session don't scrub anything either."""
+    saved = await _saved_expressive_history(monkeypatch)
+    seeded = ChatContext.empty()
+    seeded.add_message(role="assistant", content=NATIVE_TAGS)
+    seeded.items.extend(ChatContext.from_dict(saved).items)
+
+    agent = Agent(instructions="You are a helpful assistant.", chat_ctx=seeded)
+    session = create_session(_one_turn_actions())
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    assistant_texts = [
+        item.text_content or ""
+        for item in agent.chat_ctx.items
+        if item.type == "message" and item.role == "assistant"
+    ]
+
+    assert NATIVE_TAGS in assistant_texts
+    assert not any("<expr" in t or "<sound" in t for t in assistant_texts)
+    assert any("Welcome back!" in t for t in assistant_texts)
+    assert not any(_is_flagged(item) for item in agent.chat_ctx.items)
 
 
 def test_expressive_needs_a_tts_the_framework_can_lower_for() -> None:
