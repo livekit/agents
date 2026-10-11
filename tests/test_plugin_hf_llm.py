@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import APIConnectionError, llm
+from livekit.agents import APIConnectionError, APIConnectOptions, llm
 from livekit.agents.llm import ChatContext, function_tool
 from livekit.plugins import hf
 from livekit.plugins.hf import llm as hf_llm
@@ -14,6 +14,8 @@ from livekit.plugins.hf.download import models_to_download
 from livekit.plugins.hf.tool_parser import ToolCallStreamParser
 
 pytestmark = pytest.mark.unit
+
+_TOOLS = ["get_weather", "lookup", "a", "b"]
 
 
 def _feed_all(parser: ToolCallStreamParser, chunks: list[str]) -> tuple[str, list[Any]]:
@@ -23,14 +25,14 @@ def _feed_all(parser: ToolCallStreamParser, chunks: list[str]) -> tuple[str, lis
 
 
 def test_parser_passes_text_through_without_tools() -> None:
-    parser = ToolCallStreamParser(detect_tool_calls=False)
+    parser = ToolCallStreamParser(tool_names=[])
     text, calls = _feed_all(parser, ["{not", " a tool}", " <tool_call>"])
     assert text == "{not a tool} <tool_call>"
     assert calls == []
 
 
 def test_parser_streams_plain_reply() -> None:
-    parser = ToolCallStreamParser(detect_tool_calls=True)
+    parser = ToolCallStreamParser(tool_names=_TOOLS)
     assert parser.feed("Hello") == "Hello"
     assert parser.feed(" there <") == " there "
     assert parser.feed("3") == "<3"
@@ -38,7 +40,7 @@ def test_parser_streams_plain_reply() -> None:
 
 
 def test_parser_holds_back_tagged_tool_call() -> None:
-    parser = ToolCallStreamParser(detect_tool_calls=True)
+    parser = ToolCallStreamParser(tool_names=_TOOLS)
     chunks = [
         "Let me check. <tool",
         "_call>\n",
@@ -56,7 +58,7 @@ def test_parser_holds_back_tagged_tool_call() -> None:
 
 
 def test_parser_handles_multiple_and_unterminated_tagged_calls() -> None:
-    parser = ToolCallStreamParser(detect_tool_calls=True)
+    parser = ToolCallStreamParser(tool_names=_TOOLS)
     text, calls = _feed_all(
         parser,
         ['<tool_call>{"name": "a", "arguments": {}}</tool_call>', '<tool_call>{"name": "b"}'],
@@ -66,15 +68,55 @@ def test_parser_handles_multiple_and_unterminated_tagged_calls() -> None:
 
 
 def test_parser_parses_bare_json_tool_call() -> None:
-    parser = ToolCallStreamParser(detect_tool_calls=True)
+    parser = ToolCallStreamParser(tool_names=_TOOLS)
     text, calls = _feed_all(parser, ["  {", '"name": "lookup", "parameters": {"id": 3}}'])
     assert text == ""
     assert calls[0].name == "lookup"
     assert json.loads(calls[0].arguments) == {"id": 3}
 
 
+def test_parser_keeps_text_after_tool_call() -> None:
+    parser = ToolCallStreamParser(tool_names=_TOOLS)
+    text, calls = _feed_all(
+        parser,
+        ["Checking. <tool_call>", '{"name": "lookup", "arguments": {}}', "</tool_call> Found it."],
+    )
+    assert text == "Checking.  Found it."
+    assert [c.name for c in calls] == ["lookup"]
+
+
+def test_parser_ignores_json_answer_naming_no_tool() -> None:
+    parser = ToolCallStreamParser(tool_names=_TOOLS)
+    text, calls = _feed_all(parser, ['{"name": "Alice", "age": 3}'])
+    assert text == '{"name": "Alice", "age": 3}'
+    assert calls == []
+
+
+def test_parser_bare_json_needs_arguments() -> None:
+    parser = ToolCallStreamParser(tool_names=_TOOLS)
+    text, calls = _feed_all(parser, ['{"name": "lookup"}'])
+    assert text == '{"name": "lookup"}'
+    assert calls == []
+
+
+def test_parser_drops_tagged_call_to_unknown_tool() -> None:
+    parser = ToolCallStreamParser(tool_names=_TOOLS)
+    text, calls = _feed_all(parser, ['<tool_call>{"name": "rm_rf", "arguments": {}}</tool_call>'])
+    assert text == ""
+    assert calls == []
+
+
+def test_parser_holds_content_until_flush() -> None:
+    parser = ToolCallStreamParser(tool_names=_TOOLS, hold_content=True)
+    assert parser.feed("Sure. ") == ""
+    assert parser.feed('<tool_call>{"name": "a", "arguments": {}}</tool_call>') == ""
+    text, calls = parser.flush()
+    assert text == "Sure. "
+    assert [c.name for c in calls] == ["a"]
+
+
 def test_parser_emits_brace_reply_that_is_not_a_tool_call() -> None:
-    parser = ToolCallStreamParser(detect_tool_calls=True)
+    parser = ToolCallStreamParser(tool_names=_TOOLS)
     text, calls = _feed_all(parser, ["{curly}", " braces"])
     assert text == "{curly} braces"
     assert calls == []
@@ -144,14 +186,19 @@ class _FakeIds:
 
 
 class _FakeTokenizer:
-    def __init__(self) -> None:
+    def __init__(self, chat_template: str = "") -> None:
+        self.chat_template = chat_template
         self.template_kwargs: dict[str, Any] = {}
+        self.messages: list[dict[str, Any]] = []
+        self.prompt = ""
 
     def apply_chat_template(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
         self.template_kwargs = kwargs
+        self.messages = messages
         return "prompt"
 
     def __call__(self, text: str, **kwargs: Any) -> _FakeInputs:
+        self.prompt = text
         return _FakeInputs(input_ids=_FakeIds())
 
     def encode(self, text: str, **kwargs: Any) -> list[int]:
@@ -161,16 +208,30 @@ class _FakeTokenizer:
 class _FakeModel:
     device = "cpu"
 
-    def __init__(self, chunks: list[str], error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        chunks: list[str],
+        error: Exception | None = None,
+        generated_ids: int | None = None,
+    ) -> None:
         self._chunks = chunks
         self._error = error
+        self._generated_ids = generated_ids
 
-    def generate(self, *, streamer: _FakeStreamer, **kwargs: Any) -> None:
+    def generate(self, *, streamer: _FakeStreamer, **kwargs: Any) -> Any:
         for chunk in self._chunks:
             streamer.put_text(chunk)
         if self._error is not None:
             raise self._error
         streamer.end()
+        if self._generated_ids is None:
+            return None
+        return _FakeSequences(_FakeIds.shape[1] + self._generated_ids)
+
+
+class _FakeSequences:
+    def __init__(self, length: int) -> None:
+        self.shape = (1, length)
 
 
 @pytest.fixture
@@ -179,8 +240,8 @@ def fake_model(monkeypatch: pytest.MonkeyPatch) -> Any:
 
     monkeypatch.setattr(transformers, "TextIteratorStreamer", _FakeStreamer)
 
-    def _install(model: _FakeModel) -> tuple[hf.LLM, _FakeTokenizer]:
-        tokenizer = _FakeTokenizer()
+    def _install(model: _FakeModel, chat_template: str = "") -> tuple[hf.LLM, _FakeTokenizer]:
+        tokenizer = _FakeTokenizer(chat_template)
         instance = hf.LLM(model="fake/model")
         loaded = hf_llm._LoadedModel(
             model=model, tokenizer=tokenizer, generate_lock=threading.Lock()
@@ -265,3 +326,113 @@ def test_warm_up_generates_one_token() -> None:
     assert len(calls) == 1
     assert calls[0]["max_new_tokens"] == 1
     assert calls[0]["do_sample"] is False
+
+
+@function_tool
+async def get_weather(city: str) -> str:
+    """Get the weather.
+
+    Args:
+        city: the city
+    """
+    return "sunny"
+
+
+@function_tool
+async def get_time() -> str:
+    """Get the time."""
+    return "noon"
+
+
+async def test_usage_counts_generated_token_ids(fake_model: Any) -> None:
+    instance, _ = fake_model(_FakeModel(["Hi", "!"], generated_ids=5))
+
+    chunks = [c async for c in instance.chat(chat_ctx=_user_ctx())]
+
+    usage = [c.usage for c in chunks if c.usage][0]
+    assert usage is not None
+    assert usage.completion_tokens == 5
+    assert usage.total_tokens == 12
+
+
+async def test_required_tool_prefills_tagged_call(fake_model: Any) -> None:
+    instance, tokenizer = fake_model(
+        _FakeModel(['{"name": "get_weather", "arguments": {"city": "Paris"}}\n</tool_call>']),
+        chat_template="... <tool_call> ...",
+    )
+
+    chunks = [
+        c
+        async for c in instance.chat(
+            chat_ctx=_user_ctx(), tools=[get_weather, get_time], tool_choice="required"
+        )
+    ]
+
+    assert tokenizer.prompt == "prompt<tool_call>\n"
+    calls = [tc for c in chunks if c.delta and c.delta.tool_calls for tc in c.delta.tool_calls]
+    assert [(c.name, json.loads(c.arguments)) for c in calls] == [
+        ("get_weather", {"city": "Paris"})
+    ]
+
+
+async def test_named_tool_choice_offers_only_that_tool(fake_model: Any) -> None:
+    instance, tokenizer = fake_model(
+        _FakeModel(['{"city": "Paris"}}</tool_call>']), chat_template="<tool_call>"
+    )
+
+    chunks = [
+        c
+        async for c in instance.chat(
+            chat_ctx=_user_ctx(),
+            tools=[get_weather, get_time],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+    ]
+
+    assert [t["function"]["name"] for t in tokenizer.template_kwargs["tools"]] == ["get_weather"]
+    assert tokenizer.prompt.endswith('<tool_call>\n{"name": "get_weather", "arguments": ')
+    calls = [tc for c in chunks if c.delta and c.delta.tool_calls for tc in c.delta.tool_calls]
+    assert [c.name for c in calls] == ["get_weather"]
+
+
+async def test_required_tool_without_call_fails(fake_model: Any) -> None:
+    instance, tokenizer = fake_model(_FakeModel(["It is sunny."]))
+
+    stream = instance.chat(
+        chat_ctx=_user_ctx(),
+        tools=[get_weather],
+        tool_choice="required",
+        conn_options=APIConnectOptions(max_retry=0),
+    )
+    with pytest.raises(APIConnectionError):
+        _ = [c async for c in stream]
+
+    # templates without a call tag get an instruction instead of a prefill
+    assert tokenizer.messages[0]["role"] == "system"
+    assert "must reply by calling" in tokenizer.messages[0]["content"]
+
+
+def test_loading_one_model_does_not_block_another(monkeypatch: pytest.MonkeyPatch) -> None:
+    release = threading.Event()
+    started = threading.Event()
+
+    def _slow_load(key: Any, *, local_files_only: bool) -> Any:
+        started.set()
+        release.wait(5)
+        return hf_llm._LoadedModel(model=None, tokenizer=None, generate_lock=threading.Lock())
+
+    monkeypatch.setattr(hf_llm, "_load_model", _slow_load)
+    slow, cached = hf.LLM(model="slow/model"), hf.LLM(model="cached/model")
+    cached_model = hf_llm._LoadedModel(model=None, tokenizer=None, generate_lock=threading.Lock())
+    monkeypatch.setitem(hf_llm._models, cached._opts.key, cached_model)
+    monkeypatch.setattr(hf_llm, "_load_locks", {})
+
+    loader = threading.Thread(target=slow.load)
+    loader.start()
+    try:
+        assert started.wait(5)
+        assert cached._get_model() is cached_model
+    finally:
+        release.set()
+        loader.join(5)
+        hf_llm._models.pop(slow._opts.key, None)

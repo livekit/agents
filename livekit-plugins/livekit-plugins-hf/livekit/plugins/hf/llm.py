@@ -33,7 +33,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given, shortuuid
 
 from .log import logger
-from .tool_parser import ToolCallStreamParser
+from .tool_parser import TOOL_CALL_OPEN, ToolCallStreamParser
 
 DEFAULT_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 
@@ -59,6 +59,8 @@ class _LoadedModel:
 # weights are shared by every LLM instance in the process (one copy per job process,
 # or one copy per worker when jobs run in a thread executor)
 _models: dict[_ModelKey, _LoadedModel] = {}
+_load_locks: dict[_ModelKey, threading.Lock] = {}
+# guards the two dicts only; loads hold their model's own lock so they don't block others
 _models_lock = threading.Lock()
 
 
@@ -156,8 +158,16 @@ class LLM(llm.LLM):
     def _get_model(self) -> _LoadedModel:
         key = self._opts.key
         with _models_lock:
-            if (loaded := _models.get(key)) is None:
-                loaded = _load_model(key, local_files_only=self._opts.local_files_only)
+            if (loaded := _models.get(key)) is not None:
+                return loaded
+            load_lock = _load_locks.setdefault(key, threading.Lock())
+
+        with load_lock:
+            with _models_lock:
+                if (loaded := _models.get(key)) is not None:
+                    return loaded
+            loaded = _load_model(key, local_files_only=self._opts.local_files_only)
+            with _models_lock:
                 _models[key] = loaded
             return loaded
 
@@ -172,14 +182,22 @@ class LLM(llm.LLM):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         tool_schemas: list[dict[str, Any]] = []
+        required_tool: str | bool = False
         if tools and not (is_given(tool_choice) and tool_choice == "none"):
             tool_schemas = llm.ToolContext(tools).parse_function_tools("openai", strict=False)
+            if is_given(tool_choice) and isinstance(tool_choice, dict):
+                name = tool_choice["function"]["name"]
+                tool_schemas = [t for t in tool_schemas if t["function"]["name"] == name]
+                required_tool = name
+            elif is_given(tool_choice) and tool_choice == "required":
+                required_tool = True
 
         return LLMStream(
             self,
             chat_ctx=chat_ctx,
             tools=tools or [],
             tool_schemas=tool_schemas,
+            required_tool=required_tool,
             conn_options=conn_options,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
         )
@@ -193,12 +211,15 @@ class LLMStream(llm.LLMStream):
         chat_ctx: ChatContext,
         tools: list[Tool],
         tool_schemas: list[dict[str, Any]],
+        required_tool: str | bool,
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._hf_llm = llm
         self._tool_schemas = tool_schemas
+        # True when any tool call is required, or the name of the required tool
+        self._required_tool = required_tool
         self._extra_kwargs = extra_kwargs
 
     async def _run(self) -> None:
@@ -224,7 +245,19 @@ class LLMStream(llm.LLMStream):
         if self._tool_schemas:
             template_kwargs["tools"] = self._tool_schemas
 
-        prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
+        # there is no constrained decoding here, so a required tool call is enforced by
+        # starting the reply with the call ourselves where the template has a call tag,
+        # by instruction otherwise, and by validating the result either way
+        prefill = ""
+        if self._required_tool:
+            if TOOL_CALL_OPEN in str(getattr(tokenizer, "chat_template", None) or ""):
+                prefill = TOOL_CALL_OPEN + "\n"
+                if isinstance(self._required_tool, str):
+                    prefill += f'{{"name": {json.dumps(self._required_tool)}, "arguments": '
+            else:
+                messages = _with_tool_instruction(messages, self._required_tool)
+
+        prompt = tokenizer.apply_chat_template(messages, **template_kwargs) + prefill
         inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
         prompt_tokens = int(inputs["input_ids"].shape[1])
 
@@ -248,12 +281,14 @@ class LLMStream(llm.LLMStream):
             gen_kwargs["top_p"] = opts.top_p
         gen_kwargs.update(self._extra_kwargs)
 
+        output: list[Any] = []
+
         def _generate_blocking() -> None:
             try:
                 with loaded.generate_lock:
                     if stop_event.is_set():
                         return
-                    model.generate(**gen_kwargs)
+                    output.append(model.generate(**gen_kwargs))
             finally:
                 # unblocks the streamer consumer when generate() raises or never runs
                 streamer.end()
@@ -269,7 +304,11 @@ class LLMStream(llm.LLMStream):
                 loop.call_soon_threadsafe(text_ch.put_nowait, None)
 
         request_id = shortuuid("hf_")
-        parser = ToolCallStreamParser(detect_tool_calls=bool(self._tool_schemas))
+        parser = ToolCallStreamParser(
+            tool_names=[t["function"]["name"] for t in self._tool_schemas],
+            hold_content=bool(self._required_tool),
+        )
+        parser.feed(prefill)
         completion = ""
 
         gen_fut = loop.run_in_executor(None, _generate_blocking)
@@ -287,6 +326,10 @@ class LLMStream(llm.LLMStream):
         gen_fut.result()
 
         content, tool_calls = parser.flush()
+        if self._required_tool and not tool_calls:
+            # nothing was emitted yet, so a retry starts clean
+            raise APIConnectionError("model did not make the required tool call", retryable=True)
+
         self._send_content(request_id, content)
         if tool_calls:
             self._event_ch.send_nowait(
@@ -306,7 +349,11 @@ class LLMStream(llm.LLMStream):
                 )
             )
 
-        completion_tokens = len(tokenizer.encode(completion, add_special_tokens=False))
+        completion_tokens = _generated_token_count(output, prompt_tokens)
+        if completion_tokens is None:
+            completion_tokens = len(
+                tokenizer.encode(prefill + completion, add_special_tokens=False)
+            )
         self._event_ch.send_nowait(
             llm.ChatChunk(
                 id=request_id,
@@ -351,6 +398,32 @@ def _to_chat_template_messages(chat_ctx: ChatContext) -> list[dict[str, Any]]:
                 except json.JSONDecodeError:
                     pass
     return messages
+
+
+def _with_tool_instruction(
+    messages: list[dict[str, Any]], required_tool: str | bool
+) -> list[dict[str, Any]]:
+    instruction = (
+        f"You must reply by calling the `{required_tool}` tool."
+        if isinstance(required_tool, str)
+        else "You must reply by calling one of the provided tools."
+    )
+    if messages and messages[0].get("role") == "system":
+        first = dict(messages[0])
+        first["content"] = f"{first.get('content') or ''}\n\n{instruction}".strip()
+        return [first, *messages[1:]]
+    return [{"role": "system", "content": instruction}, *messages]
+
+
+def _generated_token_count(output: list[Any], prompt_tokens: int) -> int | None:
+    """Count generated token ids, special tokens included; None if generate() didn't return."""
+    if not output:
+        return None
+    sequences = getattr(output[0], "sequences", output[0])
+    shape = getattr(sequences, "shape", None)
+    if not shape:
+        return None
+    return max(int(shape[-1]) - prompt_tokens, 0)
 
 
 def _load_model(key: _ModelKey, *, local_files_only: bool) -> _LoadedModel:
