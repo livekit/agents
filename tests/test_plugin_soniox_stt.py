@@ -735,6 +735,53 @@ async def test_recognition_usage_still_reported_on_endpoint_frame():
     assert events[-1].recognition_usage.audio_duration == pytest.approx(1.5)
 
 
+# --- Speaking state across endpoints ----------------------------------------
+
+
+async def test_endpoint_after_retracted_tokens_ends_speech():
+    """An endpoint after every non-final token was retracted still closes the
+    segment, so the next utterance opens its own START_OF_SPEECH."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {"tokens": [_nonfinal_token(" 42", "pl")]},
+            # " 42" is retracted: the endpoint arrives with no final text.
+            {"tokens": [END_TOKEN_FINAL]},
+            {"tokens": [_nonfinal_token(" Halo.", "pl")]},
+        ],
+        expect_events=5,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+    ]
+
+
+async def test_endpoint_without_speech_emits_nothing():
+    """An endpoint with no open segment does not emit a stray END_OF_SPEECH."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {"tokens": [END_TOKEN_FINAL]},
+            {"tokens": [_final_token("Hello.", "en"), END_TOKEN_FINAL]},
+        ],
+        expect_events=2,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Half-open socket detection (same fix as #7206 for Deepgram v1)
 # ---------------------------------------------------------------------------

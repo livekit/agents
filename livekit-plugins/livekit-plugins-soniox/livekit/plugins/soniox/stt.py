@@ -519,6 +519,15 @@ class SpeechStream(stt.SpeechStream):
                 is_speaking = False
             else:
                 final_original.reset()
+                if is_speaking:
+                    # every non-final token was retracted: still close the segment
+                    # that START_OF_SPEECH opened, or the user stays "speaking".
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=SpeechEventType.END_OF_SPEECH,
+                        )
+                    )
+                    is_speaking = False
 
         if not self._ws:
             return
