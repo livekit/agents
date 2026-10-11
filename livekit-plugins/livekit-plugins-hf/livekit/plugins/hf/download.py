@@ -37,8 +37,23 @@ def download_model(model: str, *, revision: str | None = None) -> str:
     return path
 
 
-def models_to_download(default_model: str) -> list[str]:
-    """Models fetched by ``download-files``: ``LIVEKIT_HF_MODELS`` (comma separated)."""
+def models_to_download(default_model: str) -> list[tuple[str, str | None]]:
+    """Models fetched by ``download-files``: ``LIVEKIT_HF_MODELS`` (comma separated).
+
+    Each entry is ``repo_id`` or ``repo_id@revision``, so a pinned ``LLM(revision=...)``
+    finds the same snapshot offline.
+    """
     configured = os.environ.get(MODELS_ENV_VAR, "")
-    models = [m.strip() for m in configured.split(",") if m.strip()]
-    return models or [default_model]
+    models = [_parse_entry(m.strip()) for m in configured.split(",") if m.strip()]
+    return models or [(default_model, None)]
+
+
+def _parse_entry(entry: str) -> tuple[str, str | None]:
+    if os.path.isdir(entry):
+        return entry, None
+    repo_id, sep, revision = entry.rpartition("@")
+    # only a Hub repo id ("org/name") takes a revision; local paths are kept whole
+    is_repo_id = repo_id.count("/") == 1 and not repo_id.startswith((".", "/", "~"))
+    if sep and revision and is_repo_id:
+        return repo_id, revision
+    return entry, None

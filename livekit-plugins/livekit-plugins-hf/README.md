@@ -41,6 +41,8 @@ python my_agent.py download-files
 LIVEKIT_HF_MODELS="Qwen/Qwen2.5-7B-Instruct" python my_agent.py download-files
 ```
 
+Pin a revision with `LIVEKIT_HF_MODELS="Qwen/Qwen2.5-7B-Instruct@<commit>"`, matching `LLM(revision=...)`.
+
 You can also call `hf.download_model("Qwen/Qwen2.5-7B-Instruct")` from a build script.
 Gated models (such as Llama) need `HF_TOKEN` set while downloading. Pass
 `local_files_only=False` to let the model download on first use instead.

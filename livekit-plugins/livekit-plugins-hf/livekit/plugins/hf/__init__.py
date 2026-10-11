@@ -31,10 +31,10 @@ class HFPlugin(Plugin):
         super().__init__(__name__, __version__, __package__, logger)
 
     def download_files(self) -> None:
-        for model in models_to_download(DEFAULT_MODEL):
+        for model, revision in models_to_download(DEFAULT_MODEL):
             if os.path.isdir(model):
                 continue
-            download_model(model)
+            download_model(model, revision=revision)
 
 
 Plugin.register_plugin(HFPlugin())
