@@ -136,6 +136,56 @@ class TestSearchStrategies:
         assert results[0].name == "get_stock_price"
 
     @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["checking_balance", "checking balance"])
+    def test_match_by_underscore_term_in_description(self, strategy: SearchStrategy, query: str):
+        """Underscore-joined terms in the description must match, like the
+        space-separated query normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch the user's checking_balance from the ledger",
+                parameters={"record_type": "Which records to fetch"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["pending_refunds", "pending refunds"])
+    def test_match_by_underscore_term_in_param_description(
+        self, strategy: SearchStrategy, query: str
+    ):
+        """Underscore-joined terms in parameter descriptions must match, like
+        the space-separated query normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch ledger records for the user",
+                parameters={"filter": "One of: pending_refunds only, settled only, all"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
     def test_max_results_limit(self, strategy: SearchStrategy):
         items = _make_items()
         strategy.build_index(items)
