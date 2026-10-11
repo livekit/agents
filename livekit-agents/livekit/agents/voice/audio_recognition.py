@@ -272,7 +272,9 @@ class AudioRecognition:
         self._stt_aligned_transcript = stt_aligned_transcript
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
-        self._user_turn_committed = False  # true if user turn ended but EOU task not done
+        # true if user turn ended but EOU task not done; STT turn detection keeps it set
+        # until the next START_OF_SPEECH, so a late final still ends a turn
+        self._user_turn_committed = False
 
         self._sample_rate: int | None = None
 
@@ -1386,6 +1388,7 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
             self._speaking = True
+            self._user_turn_committed = False
             self._last_speaking_time = stt_last_speaking_time
 
             if self._end_of_turn_task is not None:
@@ -1819,7 +1822,11 @@ class AudioRecognition:
             # reset turn-scoped barge-in state once per logical turn (commit or drop)
             self._turn_backchannel_over_agent = False
             self._overlap_in_current_turn = False
-            self._user_turn_committed = False
+            # STT turn detection clears it on START_OF_SPEECH instead: a final arriving after
+            # this commit (END_OF_SPEECH came first) must still end a turn, not wait for the
+            # next END_OF_SPEECH and leave every later turn one utterance late
+            if self._turn_detection_mode != "stt":
+                self._user_turn_committed = False
 
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
