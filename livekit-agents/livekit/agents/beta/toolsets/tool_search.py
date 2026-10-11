@@ -324,11 +324,11 @@ class BM25SearchStrategy:
     def _tokenize(self, item: SearchItem) -> list[str]:
         """Tokenize with field weighting: name 3x, description 2x, parameters 1x."""
         name_tokens = item.name.lower().replace("_", " ").split()
-        desc_tokens = item.description.lower().split()
+        desc_tokens = item.description.lower().replace("_", " ").split()
         param_tokens = []
         for k, v in item.parameters.items():
             param_tokens.extend(k.lower().replace("_", " ").split())
-            param_tokens.extend(v.lower().split())
+            param_tokens.extend(v.lower().replace("_", " ").split())
 
         # weight by repeating tokens
         return name_tokens * 3 + desc_tokens * 2 + param_tokens

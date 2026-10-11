@@ -183,6 +183,25 @@ class TestSearchStrategies:
 class TestBM25Specific:
     """Tests specific to BM25 behavior."""
 
+    @pytest.mark.parametrize("query", ["checking_balance", "checking balance", "CHECKING_BALANCE"])
+    @pytest.mark.parametrize("field", ["description", "parameter_description"])
+    def test_matches_underscore_joined_descriptions(self, query: str, field: str):
+        item = SearchItem(
+            name="get_records",
+            description="Fetch ledger records",
+            parameters={"filter": "Records to fetch"},
+            source=stock_tool,
+        )
+        if field == "description":
+            item.description = "Fetch the user's checking_balance from the ledger"
+        else:
+            item.parameters["filter"] = "Include checking_balance in the results"
+        items = [item, _make_items()[0]]
+        strategy = BM25SearchStrategy()
+        strategy.build_index(items)
+
+        assert strategy.search(query, items, 5) == [item]
+
     def test_specific_term_ranks_higher_than_common(self):
         """Rare terms (high IDF) should rank higher than common ones."""
         strategy = BM25SearchStrategy()
@@ -204,6 +223,22 @@ class TestBM25Specific:
 
 
 class TestToolSearchToolset:
+    @pytest.mark.parametrize("query", ["checking_balance", "checking balance"])
+    async def test_default_strategy_loads_tool_with_underscore_description(self, query: str):
+        @function_tool
+        async def get_records() -> str:
+            """Fetch the user's checking_balance from the ledger."""
+            return "records"
+
+        ts = ToolSearchToolset(id="search", tools=[get_records, weather_tool])
+        await ts.setup()
+
+        await ts._handle_search({"query": query})
+
+        ctx = ToolContext([ts])
+        assert "get_records" in ctx.function_tools
+        assert "weather_tool" not in ctx.function_tools
+
     def test_initial_tools_only_search(self):
         ts = ToolSearchToolset(
             id="search",
