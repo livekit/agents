@@ -41,6 +41,7 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
         _opts=opts,
         _reconnect_event=asyncio.Event(),
         _reconfigure_atask=None,
+        _missed_configure={},
         _ws=ws,
     )
     stream._send_configure = SpeechStreamv2._send_configure.__get__(stream)
@@ -439,5 +440,125 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
     try:
         await _wait_until(lambda: len(sockets) > 1)
         assert sockets[0].receives == 1
+    finally:
+        await stream.aclose()
+
+
+async def test_session_keyterms_are_not_sent_to_models_without_keyterm_prompting():
+    from livekit.plugins.deepgram import STT
+
+    stt = STT(api_key="test-key", model="nova-2-general")
+    assert not stt.capabilities.keyterms
+
+    stt._update_session_keyterms(["LiveKit"])
+    assert stt._opts.keyterm == []
+
+
+async def test_session_keyterms_follow_a_model_switch():
+    from livekit.plugins.deepgram import STT
+
+    stt = STT(api_key="test-key", model="nova-2-general")
+    stt._update_session_keyterms(["LiveKit"])
+
+    stt.update_options(model="nova-3")
+    assert stt.capabilities.keyterms
+    assert stt._opts.keyterm == ["LiveKit"]
+
+    stt.update_options(model="nova-2-general")
+    assert not stt.capabilities.keyterms
+    assert stt._opts.keyterm == []
+
+
+async def test_update_options_validates_keyterm_and_keywords_against_the_model():
+    from livekit.plugins.deepgram import STT
+
+    nova2 = STT(api_key="test-key", model="nova-2-general")
+    with pytest.raises(ValueError, match="Keyterm Prompting"):
+        nova2.update_options(keyterm=["LiveKit"])
+    assert nova2._opts.keyterm == []
+
+    nova3 = STT(api_key="test-key", model="nova-3", keyterm=["LiveKit"])
+    with pytest.raises(ValueError, match="Keywords"):
+        nova3.update_options(keywords=[("LiveKit", 1.5)])
+    with pytest.raises(ValueError, match="Keyterm Prompting"):
+        nova3.update_options(model="nova-2-general")
+    assert nova3._opts.model == "nova-3"
+
+    # dropping the keyterms in the same call makes the switch valid
+    nova3.update_options(model="nova-2-general", keyterm=[])
+    assert nova3._opts.model == "nova-2-general"
+    assert nova3._opts.keyterm == []
+
+
+async def test_flux_stream_keyterm_accepts_a_bare_string():
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    ws = _FakeWS()
+    stream = _make_flux_stream(ws=ws)
+    SpeechStreamv2.update_options(stream, keyterm="LiveKit")
+    await stream._reconfigure_atask
+
+    assert json.loads(ws.sent[0]) == {"type": "Configure", "keyterms": ["LiveKit"]}
+
+
+class _FluxWS:
+    def __init__(self) -> None:
+        self.closed = False
+        self.configures: list[dict] = []
+        self._response = SimpleNamespace(headers={})
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        msg = json.loads(data)
+        if msg["type"] == "Configure":
+            self.configures.append(msg)
+
+    async def send_bytes(self, data: bytes) -> None:
+        pass
+
+    async def receive(self):
+        await self._closed.wait()
+        raise AssertionError("the test should never let recv_task resume")
+
+    async def close(self) -> None:
+        self.closed = True
+        self._closed.set()
+
+
+class _SlowHandshakeSession:
+    """Holds the websocket handshake open so an update can land in the middle of it."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.urls: list[str] = []
+        self.connecting = asyncio.Event()
+        self.release = asyncio.Event()
+        self.ws = _FluxWS()
+
+    async def ws_connect(self, url: str, **kwargs):
+        self.urls.append(url)
+        self.connecting.set()
+        await self.release.wait()
+        return self.ws
+
+
+async def test_flux_keyterms_updated_during_the_handshake_reach_the_server():
+    from typing import Any, cast
+
+    from livekit.plugins.deepgram import STTv2
+
+    session = _SlowHandshakeSession()
+    stt = STTv2(api_key="test-key", http_session=cast(Any, session))
+    stream = stt.stream()
+    try:
+        await asyncio.wait_for(session.connecting.wait(), timeout=5.0)
+        # the query string is already built and the socket is not usable yet
+        stt._update_session_keyterms(["LiveKit"])
+        await asyncio.sleep(0)
+        session.release.set()
+
+        await _wait_until(lambda: session.ws.configures)
+        assert "keyterm" not in session.urls[0]
+        assert session.ws.configures == [{"type": "Configure", "keyterms": ["LiveKit"]}]
     finally:
         await stream.aclose()

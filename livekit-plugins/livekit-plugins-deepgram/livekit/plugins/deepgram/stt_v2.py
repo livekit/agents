@@ -341,6 +341,8 @@ class SpeechStreamv2(stt.SpeechStream):
         # active connection for in-band Configure updates; None while disconnected
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconfigure_atask: asyncio.Task[None] | None = None
+        # Configure updates that found no usable connection since the last query string was built
+        self._missed_configure: dict[str, Any] = {}
 
     def update_options(
         self,
@@ -375,7 +377,7 @@ class SpeechStreamv2(stt.SpeechStream):
             )
             keyterm = keyterms
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(numerals):
@@ -446,14 +448,22 @@ class SpeechStreamv2(stt.SpeechStream):
             await asyncio.gather(prev, return_exceptions=True)
 
         ws = self._ws
-        if ws is None or ws.closed:
-            # not connected; next connection carries the latest options
-            return
-        try:
-            await ws.send_str(json.dumps({"type": "Configure", **options}))
-        except Exception:
-            # closing; next connection carries the latest options
-            logger.debug("failed to send Configure to deepgram")
+        if ws is not None and not ws.closed:
+            try:
+                await ws.send_str(json.dumps({"type": "Configure", **options}))
+                return
+            except Exception:
+                logger.debug("failed to send Configure to deepgram")
+
+        # the next connection carries the latest options, unless its handshake has already
+        # started: _run replays these once that connection is up
+        thresholds = {
+            **self._missed_configure.get("thresholds", {}),
+            **options.get("thresholds", {}),
+        }
+        self._missed_configure.update(options)
+        if thresholds:
+            self._missed_configure["thresholds"] = thresholds
 
     async def _run(self) -> None:
         closing_ws = False
@@ -544,9 +554,15 @@ class SpeechStreamv2(stt.SpeechStream):
 
         while True:
             try:
+                self._missed_configure = {}
                 ws = await self._connect_ws()
                 # expose the connection for in-band Configure updates
                 self._ws = ws
+                if self._missed_configure:
+                    missed, self._missed_configure = self._missed_configure, {}
+                    self._reconfigure_atask = asyncio.create_task(
+                        self._send_configure(missed, self._reconfigure_atask)
+                    )
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
