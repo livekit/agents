@@ -34,30 +34,31 @@ _PASSAGES_TAG = re.compile(r"<(?=\s*/?\s*passages)", re.IGNORECASE)
 
 
 class KnowledgeBase(llm.Toolset):
-    """A Moss index that the agent searches in memory, with no network request per search.
+    """Moss indexes that the agent searches in memory, with no network request per search.
 
-    Pass it to ``Agent(tools=[...])``. The agent loads the index when it starts,
-    and the LLM gets a ``search_knowledge_base`` tool. To also search on every user
+    Pass it to ``Agent(tools=[...])``. The agent loads the indexes when it starts,
+    and the LLM gets one ``search_knowledge_base`` tool. To also search on every user
     turn before the LLM runs, call :meth:`add_context` from your ``Agent.llm_node`` override.
     """
 
     def __init__(
         self,
-        index_name: str,
+        indexes: str | list[str],
         *,
         project_id: str | None = None,
         project_key: str | None = None,
         top_k: int = 3,
     ) -> None:
-        """Create a knowledge base over a Moss index.
+        """Create a knowledge base over one or more Moss indexes.
 
         Args:
-            index_name: Name of the Moss index to search.
+            indexes: The Moss index to search, or several that use the same embedding model.
             project_id: Moss project ID. Defaults to the ``MOSS_PROJECT_ID`` environment variable.
             project_key: Moss project key. Defaults to the ``MOSS_PROJECT_KEY`` environment variable.
-            top_k: Number of passages each search returns.
+            top_k: Number of passages each search returns, across all indexes.
         """
-        super().__init__(id=f"moss_{index_name}")
+        self._indexes = [indexes] if isinstance(indexes, str) else list(indexes)
+        super().__init__(id=f"moss_{'_'.join(self._indexes)}")
         self._project_id = project_id or os.environ.get("MOSS_PROJECT_ID", "")
         self._project_key = project_key or os.environ.get("MOSS_PROJECT_KEY", "")
         if not (self._project_id and self._project_key):
@@ -65,18 +66,17 @@ class KnowledgeBase(llm.Toolset):
                 "Moss credentials are required: pass project_id and project_key, "
                 "or set MOSS_PROJECT_ID and MOSS_PROJECT_KEY"
             )
-        self._index_name = index_name
         self._options = QueryOptions(top_k=top_k)
         self._client: MossClient | None = None
-        self._loading: asyncio.Task[str] | None = None
+        self._loading: asyncio.Task[None] | None = None
 
     async def setup(self) -> Self:
-        """Start loading the index in the background. Runs when the agent starts."""
+        """Start loading the indexes in the background. Runs when the agent starts."""
         self._load()
         return await super().setup()
 
     async def aclose(self) -> None:
-        """Free the index and send Moss the final usage report."""
+        """Free the indexes and send Moss the final usage report."""
         client, self._client, self._loading = self._client, None, None
         if client is not None:
             await client.close()
@@ -115,24 +115,29 @@ class KnowledgeBase(llm.Toolset):
             content = f"{_PASSAGES_HEADER}\n<passages>\n{body}\n</passages>"
             chat_ctx.add_message(role="system", content=content, id=passages_id)
 
-    def _load(self) -> asyncio.Task[str]:
-        """Start loading the index unless it is loaded or loading, so a failed load runs again."""
+    def _load(self) -> asyncio.Task[None]:
+        """Start loading the indexes unless loaded or loading, so a failed load runs again."""
         if self._client is None:
             self._client = MossClient(self._project_id, self._project_key)
         loading = self._loading
         if loading is None or (loading.done() and (loading.cancelled() or loading.exception())):
-            loading = self._loading = asyncio.create_task(self._client.load_index(self._index_name))
+            loading = self._loading = asyncio.create_task(self._load_indexes(self._client))
             loading.add_done_callback(_log_load_failure)
         return loading
+
+    async def _load_indexes(self, client: MossClient) -> None:
+        result = await client.load_indexes(self._indexes)
+        if result.failed:
+            raise RuntimeError(f"Moss indexes not loaded: {result.failed}")
 
     async def _search(self, query: str) -> list[str]:
         loading, client = self._load(), self._client
         assert client is not None
         await asyncio.wait_for(asyncio.shield(loading), 5)
-        result = await client.query(self._index_name, query, self._options)
+        result = await client.query_multi_index(self._indexes, query, self._options)
         return [doc.text for doc in result.docs]
 
 
-def _log_load_failure(task: asyncio.Task[str]) -> None:
+def _log_load_failure(task: asyncio.Task[None]) -> None:
     if not task.cancelled() and (e := task.exception()) is not None:
-        logger.error("failed to load the Moss index", exc_info=e)
+        logger.error("failed to load the Moss indexes", exc_info=e)

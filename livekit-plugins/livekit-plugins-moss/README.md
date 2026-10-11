@@ -29,6 +29,9 @@ agent = Agent(
 )
 ```
 
+To search several indexes with the same tool, pass a list, such as
+`moss.KnowledgeBase(["support-faq", "policies"])`. They must use the same embedding model.
+
 Or also search on every user turn and add the passages to that turn, so the LLM can answer without
 a tool call:
 

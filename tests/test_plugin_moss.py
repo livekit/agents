@@ -16,15 +16,17 @@ class FakeMossClient:
     def __init__(self, project_id: str, project_key: str) -> None:
         self.texts = ["Support hours are 9am to 9pm EST."]
         self.queries: list[str] = []
+        self.searched: list[str] = []
         self.closed = False
 
-    async def load_index(self, name: str) -> str:
-        return name
+    async def load_indexes(self, names: list[str]) -> Any:
+        return SimpleNamespace(loaded=names, failed={})
 
-    async def query(self, name: str, query: str, options: Any) -> Any:
+    async def query_multi_index(self, names: list[str], query: str, options: Any) -> Any:
         if self.closed:
             raise RuntimeError("client is closed")
         self.queries.append(query)
+        self.searched = names
         return SimpleNamespace(docs=[SimpleNamespace(text=text) for text in self.texts])
 
     async def close(self) -> None:
@@ -66,6 +68,13 @@ async def test_tool_returns_passages(kb: KnowledgeBase) -> None:
     assert await kb.search_knowledge_base("parking?") == "No matching passages."
 
 
+async def test_one_tool_searches_every_index() -> None:
+    kb = KnowledgeBase(["faq", "policies"], project_id="id", project_key="key")
+    assert [tool.id for tool in kb.tools] == ["search_knowledge_base"]
+    assert await kb.search_knowledge_base("hours?")
+    assert kb._client.searched == ["faq", "policies"]  # type: ignore[union-attr]
+
+
 async def test_add_context_searches_each_user_message_once(kb: KnowledgeBase) -> None:
     chat_ctx = _chat("old question", "When are you open?")
     await kb.add_context(chat_ctx)
@@ -84,20 +93,20 @@ async def test_add_context_searches_each_user_message_once(kb: KnowledgeBase) ->
 async def test_a_failed_load_runs_again_on_the_next_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    loads: list[str] = []
+    loads: list[list[str]] = []
 
-    async def load_index(self: FakeMossClient, name: str) -> str:
-        loads.append(name)
-        if len(loads) == 1:
-            raise RuntimeError("network down")
-        return name
+    async def load_indexes(self: FakeMossClient, names: list[str]) -> Any:
+        loads.append(names)
+        return SimpleNamespace(
+            loaded=[], failed={"faq": "Index not found."} if len(loads) == 1 else {}
+        )
 
-    monkeypatch.setattr(FakeMossClient, "load_index", load_index)
+    monkeypatch.setattr(FakeMossClient, "load_indexes", load_indexes)
     kb = KnowledgeBase("faq", project_id="id", project_key="key")
     await kb.setup()
     await asyncio.sleep(0)
     assert await kb.search_knowledge_base("hours?") == "Support hours are 9am to 9pm EST."
-    assert loads == ["faq", "faq"]
+    assert loads == [["faq"], ["faq"]]
 
 
 async def test_add_context_skips_while_the_index_loads() -> None:
