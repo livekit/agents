@@ -221,9 +221,12 @@ class DynamicEndpointing(BaseEndpointing):
                 )
 
         else:
-            # Only learn an intra-user pause when no agent turn occurred between utterances.
+            # Only learn an intra-user pause when no agent turn occurred between utterances
+            # and the pause does not exceed max_delay (longer pauses are separate turns,
+            # not mid-turn hesitations, and learning them would artificially inflate min_delay).
             if (
                 (pause := self.between_utterance_delay) > 0
+                and pause <= self.max_delay
                 and self._agent_speech_ended_at is None
                 and self._agent_speech_started_at is None
             ):
