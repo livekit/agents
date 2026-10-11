@@ -218,8 +218,8 @@ class _WavInlineDecoder:
                 if frame.samples_per_channel > 0:
                     self._output_ch.send_nowait(frame)
         if self._remixer is not None:
-            for frame in self._remixer.resample(None):
-                self._emit_remixed(frame)
+            for remixed in self._remixer.resample(None):
+                self._emit_remixed(remixed)
             self._remixer = None
 
     def _reset_state(self) -> None:
