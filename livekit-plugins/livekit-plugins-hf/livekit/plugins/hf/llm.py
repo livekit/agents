@@ -329,9 +329,6 @@ class LLMStream(llm.LLMStream):
         gen_fut.result()
 
         content, tool_calls = parser.flush()
-        # small models sometimes repeat a call verbatim, which would run the tool twice
-        unique_calls = {(call.name, call.arguments): call for call in tool_calls}
-        tool_calls = list(unique_calls.values())
         if not self._parallel_tool_calls:
             tool_calls = tool_calls[:1]
         if self._required_tool and not tool_calls:
