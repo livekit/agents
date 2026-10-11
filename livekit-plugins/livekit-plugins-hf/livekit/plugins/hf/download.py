@@ -52,8 +52,8 @@ def _parse_entry(entry: str) -> tuple[str, str | None]:
     if os.path.isdir(entry):
         return entry, None
     repo_id, sep, revision = entry.rpartition("@")
-    # only a Hub repo id ("org/name") takes a revision; local paths are kept whole
-    is_repo_id = repo_id.count("/") == 1 and not repo_id.startswith((".", "/", "~"))
+    # only a Hub repo id ("name" or "org/name") takes a revision; local paths are kept whole
+    is_repo_id = repo_id.count("/") <= 1 and not repo_id.startswith((".", "/", "~"))
     if sep and revision and is_repo_id:
         return repo_id, revision
     return entry, None

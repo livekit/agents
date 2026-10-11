@@ -129,6 +129,8 @@ def test_models_to_download(monkeypatch: pytest.MonkeyPatch) -> None:
     assert models_to_download("default/model") == [("a/b", None), ("c/d", None)]
     monkeypatch.setenv("LIVEKIT_HF_MODELS", "a/b@abc123")
     assert models_to_download("default/model") == [("a/b", "abc123")]
+    monkeypatch.setenv("LIVEKIT_HF_MODELS", "gpt2@abc123, gpt2")
+    assert models_to_download("default/model") == [("gpt2", "abc123"), ("gpt2", None)]
     monkeypatch.setenv("LIVEKIT_HF_MODELS", "a/b@v1.0, c/d, ./local@dir, e/f@")
     assert models_to_download("default/model") == [
         ("a/b", "v1.0"),
