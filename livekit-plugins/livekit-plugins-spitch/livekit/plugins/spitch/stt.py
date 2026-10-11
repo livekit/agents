@@ -4,7 +4,7 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+import httpx  # spitch requires httpx<1 and isinstance-checks this Timeout
 
 import spitch
 from livekit import rtc

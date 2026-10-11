@@ -22,7 +22,7 @@ class _FakeToolDesc:
     def __init__(self, name: str) -> None:
         self.name = name
         self.description = "echo back"
-        self.inputSchema: dict[str, Any] = {"type": "object", "properties": {}}
+        self.input_schema: dict[str, Any] = {"type": "object", "properties": {}}
         self.meta = None
 
 
@@ -291,20 +291,20 @@ async def test_a_caller_giving_up_leaves_the_connect_to_the_one_still_waiting(
 
 
 @pytest.mark.asyncio
-async def test_a_cancelled_call_tells_the_server_to_cancel_it() -> None:
-    """The server's tool keeps running unless the client says the request is cancelled."""
-    import asyncio
+async def test_a_cancelled_call_propagates() -> None:
+    """Cancelling a tool call raises CancelledError.
 
-    import mcp.types
+    MCP SDK 2 sends ``notifications/cancelled`` when the task awaiting
+    ``ClientSession.call_tool`` is cancelled. This wrapper used to synthesize
+    that notification from the private ``_request_id`` attribute, which v2 removed.
+    """
+    import asyncio
 
     calling = asyncio.Event()
     sent: list[Any] = []
 
     class _HangingClient(_FakeClient):
-        _request_id = 7
-
         async def call_tool(self, name: str, arguments: Any, **kwargs: Any) -> Any:
-            self._request_id += 1
             calling.set()
             await asyncio.Event().wait()
 
@@ -321,6 +321,4 @@ async def test_a_cancelled_call_tells_the_server_to_cancel_it() -> None:
     with pytest.raises(asyncio.CancelledError):
         await call
 
-    (notification,) = sent
-    assert isinstance(notification.root, mcp.types.CancelledNotification)
-    assert notification.root.params.requestId == 7
+    assert sent == []

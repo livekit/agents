@@ -13,7 +13,7 @@ import weakref
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import socketio  # type: ignore[import-not-found]
+import socketio  # type: ignore[import-untyped]
 
 from livekit.agents import (
     APIConnectionError,

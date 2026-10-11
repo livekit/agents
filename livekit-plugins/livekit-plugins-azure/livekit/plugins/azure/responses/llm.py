@@ -1,4 +1,4 @@
-import httpx
+import httpx2 as httpx
 from openai import AsyncAzureOpenAI
 from openai.types import Reasoning
 from openai.types.shared_params import ResponsesModel

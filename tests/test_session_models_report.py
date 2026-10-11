@@ -451,6 +451,28 @@ async def test_deepgram_reports_settings_without_tags_or_keyterms(version: int) 
         await model.aclose()
 
 
+async def test_nabrah_reports_settings_without_credentials_or_custom_vocabulary() -> None:
+    nabrah = pytest.importorskip("livekit.plugins.nabrah")
+    model = nabrah.STT(
+        api_key="private-key",
+        base_url="wss://private-endpoint.example.com",
+        priority_words=["private-name"],
+        end_of_utterance_silence_ms=500,
+        disable_number_normalization=True,
+    )
+    try:
+        reported = _report(AgentSession(vad=None, stt=model)).models["stt"]
+        assert reported["model"] == "nabrah-stt-v1"
+        assert reported["provider"] == "nabrah"
+        assert reported["recognition_model"] == "eot_nabrah"
+        assert reported["language"] == "ar-SA"
+        assert reported["end_of_utterance_silence_ms"] == 500
+        assert reported["disable_number_normalization"] is True
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
 async def test_gladia_reports_nested_settings_without_customer_content() -> None:
     gladia = pytest.importorskip("livekit.plugins.gladia")
     model = gladia.STT(

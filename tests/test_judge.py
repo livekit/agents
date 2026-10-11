@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit.agents import llm
 from livekit.agents.evals import JudgeGroup
-from livekit.agents.evals.judge import _evaluate_with_llm
+from livekit.agents.evals.judge import _evaluate_with_llm, safety_judge
 from livekit.agents.inference import LLM as InferenceLLM
 from livekit.agents.inference.llm import min_reasoning_effort
 from livekit.agents.llm import (
@@ -17,6 +21,7 @@ from livekit.agents.llm import (
     LLMStream,
     Tool,
 )
+from livekit.agents.telemetry import gen_ai, set_tracer_provider, trace_types, tracer
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -109,11 +114,64 @@ async def test_evals_judge_uses_required_tool_choice() -> None:
         )
     )
 
-    result = await _evaluate_with_llm(fake_llm, "does the conversation meet the criteria?")
+    result = await _evaluate_with_llm(
+        fake_llm, "does the conversation meet the criteria?", name="criteria"
+    )
 
     assert result.verdict == "pass"
     assert fake_llm.tool_choice == "required"
     assert fake_llm.extra_kwargs == {"temperature": 0.0}
+
+
+@pytest.fixture
+def span_exporter() -> Iterator[InMemorySpanExporter]:
+    original_provider = tracer._tracer_provider
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    set_tracer_provider(provider)
+    try:
+        yield exporter
+    finally:
+        set_tracer_provider(original_provider)
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("capture_content", [False, True])
+async def test_llm_judge_span_names_judge_and_verdict(
+    span_exporter: InMemorySpanExporter, capture_content: bool
+) -> None:
+    fake_llm = _CapturingLLM(
+        FunctionToolCall(
+            type="function",
+            name="submit_verdict",
+            arguments='{"verdict": "fail", "reasoning": "rude reply"}',
+            call_id="call_1",
+        )
+    )
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+    original_capture = gen_ai.capture_content_enabled()
+    gen_ai.set_capture_content(capture_content)
+    try:
+        result = await safety_judge(fake_llm).evaluate(chat_ctx=chat_ctx)
+    finally:
+        gen_ai.set_capture_content(original_capture)
+
+    assert result.verdict == "fail"
+    spans = span_exporter.get_finished_spans()
+    [judge] = [s for s in spans if s.name == "judge_evaluation"]
+    attrs = judge.attributes or {}
+    assert attrs[trace_types.ATTR_GEN_AI_EVALUATION_NAME] == "safety"
+    assert attrs[trace_types.ATTR_GEN_AI_EVALUATION_SCORE_LABEL] == "fail"
+    if capture_content:
+        assert attrs[trace_types.ATTR_GEN_AI_EVALUATION_EXPLANATION] == "rude reply"
+    else:
+        assert trace_types.ATTR_GEN_AI_EVALUATION_EXPLANATION not in attrs
+    # the judge's LLM request nests under it, not under whatever span the caller had open
+    [request] = [s for s in spans if s.name == "llm_request"]
+    assert request.parent is not None
+    assert request.parent.span_id == judge.context.span_id
 
 
 def test_min_reasoning_effort_mapping() -> None:

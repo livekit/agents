@@ -27,7 +27,7 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 import openai
