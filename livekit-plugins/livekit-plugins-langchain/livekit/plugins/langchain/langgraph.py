@@ -176,12 +176,17 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
     def _chat_ctx_to_state(self) -> dict[str, Any]:
         """Convert chat context to langgraph input"""
 
+        # A checkpointed graph already stores its own replies. The chat context's copies have
+        # different ids, so add_messages would keep both; user and system messages keep their ids
+        # across turns and are merged.
+        checkpointed = bool(getattr(self._graph, "checkpointer", None))
         messages: list[AIMessage | HumanMessage | SystemMessage] = []
         for msg in self._chat_ctx.messages():
             content = msg.raw_text_content
             if content:
                 if msg.role == "assistant":
-                    messages.append(AIMessage(content=content, id=msg.id))
+                    if not checkpointed:
+                        messages.append(AIMessage(content=content, id=msg.id))
                 elif msg.role == "user":
                     messages.append(HumanMessage(content=content, id=msg.id))
                 elif msg.role in ["system", "developer"]:
