@@ -189,6 +189,8 @@ class RecorderIO:
 
             self._output_path = Path(output_path)
             self._started = True
+            # a fresh queue per run: a run whose encoder failed can leave audio behind
+            self._q = queue.Queue()
             self._close_fut = self._loop.create_future()
             self._t0 = self._input_settled = time.time()
             self._write_atask = asyncio.create_task(self._write_task())
@@ -239,9 +241,13 @@ class RecorderIO:
     def _end_run(self, *, channel: int) -> None:
         self._put(_EndRun(channel=channel))
 
+    @property
+    def _encoding(self) -> bool:
+        # once the encode thread has exited nothing consumes audio, so it would pile up
+        return not self._close_fut.done()
+
     def _put(self, item: _Captured | _Flush | _EndRun | None) -> None:
-        # once the encode thread has exited nothing drains the queue, so audio would pile up
-        if not self._close_fut.done():
+        if self._encoding:
             self._q.put_nowait(item)
 
     @property
@@ -482,7 +488,7 @@ class RecorderAudioOutput(io.AudioOutput):
 
         await super().capture_frame(frame)
 
-        if self.__recording_io.recording:
+        if self.__recording_io.recording and self.__recording_io._encoding:
             if not self.__acc:
                 self.__segment_since = time.time()
             self.__acc.append(frame)
