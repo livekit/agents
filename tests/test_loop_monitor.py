@@ -715,6 +715,10 @@ def test_watchdog_gap_survives_the_wake_up_race() -> None:
         m._watchdog_late = (window_start - 1.0, 0.9)
         m._watchdog_last_wake = now - 0.002
         assert m._consume_watchdog_gap(now, window_start=window_start) == 0.0
+
+        m._watchdog_late = None
+        m._watchdog_last_wake = window_start + 0.01
+        assert m._consume_watchdog_gap(now, window_start=window_start) == pytest.approx(0.49 - TICK)
     finally:
         loop.close()
 
