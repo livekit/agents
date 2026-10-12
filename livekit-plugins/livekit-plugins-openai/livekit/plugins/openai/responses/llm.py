@@ -38,6 +38,7 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseIncompleteEvent,
     ResponseInputParam,
+    ResponseOutputItem,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
     ResponseTextDeltaEvent,
@@ -216,6 +217,29 @@ class _LLMOptions:
     prompt_cache_breakpoints: bool | Literal["auto"]
 
 
+# identifies an item the agent copies from a response into its chat context
+_OutputKey = tuple[Literal["message", "function_call"], str]
+
+
+def _response_output_keys(output: list[ResponseOutputItem]) -> list[_OutputKey]:
+    keys: list[_OutputKey] = []
+    # the agent stores a generation's text as one assistant message, even when the model
+    # splits it into several (e.g. `commentary` and `final_answer` phases)
+    text = "".join(
+        part.text
+        for item in output
+        if item.type == "message"
+        for part in item.content
+        if part.type == "output_text"
+    )
+    # an empty reply is never added to the chat context
+    if text:
+        keys.append(("message", text))
+    # reasoning and provider-executed tools stay server-side
+    keys.extend(("function_call", item.call_id) for item in output if item.type == "function_call")
+    return keys
+
+
 class LLM(llm.LLM):
     # the plugin's ProviderTool subclass; subclasses (e.g. xAI) override this so server-side
     # provider tools are recognized when serializing the request. See to_responses_fnc_ctx.
@@ -303,6 +327,8 @@ class LLM(llm.LLM):
         self._parallel_generation: bool = False
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
+        # what the previous response produced, which the server already holds
+        self._prev_resp_output: list[_OutputKey] = []
         self._pending_tool_calls = set[str]()  # tool call ids that are pending for a response
 
         if use_websocket:
@@ -711,6 +737,7 @@ class LLMStream(llm.LLMStream):
         self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
         self._llm._prev_resp_id = self._response_id
+        self._llm._prev_resp_output = _response_output_keys(event.response.output)
         self._llm._pending_tool_calls = self._pending_tool_calls
 
         chunk = None
