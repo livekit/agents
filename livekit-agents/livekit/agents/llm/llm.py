@@ -167,7 +167,7 @@ class LLM(
 
         Establishes DNS resolution and the TLS connection to the provider before the
         first inference request, reducing time-to-first-token on the initial reply.
-        It is called automatically when an ``AgentSession`` is constructed and when an
+        It is called automatically when an ``LiveSession`` is constructed and when an
         agent activity starts, but can also be called directly.
 
         Non-blocking (fire-and-forget) and idempotent. Providers enable it by

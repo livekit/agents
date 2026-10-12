@@ -1,0 +1,511 @@
+/* Reset and the few global rules. Everything else is a utility on the element. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--room);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: default;
+}
+
+:focus-visible {
+  outline: var(--line-width) solid var(--accent);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+/* Blender's scrollbars: thin, no arrows, dim until hovered. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--control) transparent;
+}
+
+/* ---- The Blender control -------------------------------------------
+ * One button, one field, used everywhere. These are Blender's own metrics
+ * (20px row, 4px radius, no stroke, the control fill).
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pad-2);
+  height: var(--h-row);
+  padding: 0 var(--pad-3);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--control);
+  color: var(--text);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+.btn:disabled {
+  color: var(--text-label);
+  opacity: 0.5;
+}
+
+.btn[data-primary="true"] {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.btn[data-primary="true"]:hover:not(:disabled) {
+  background: var(--accent);
+  filter: var(--accent-lift);
+}
+
+/* A control that reads as text until you reach for it. */
+.btnQuiet {
+  background: transparent;
+  color: var(--text-label);
+}
+
+.btnQuiet:hover:not(:disabled) {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.field {
+  height: var(--h-row);
+  padding: 0 var(--pad-3);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.field::placeholder {
+  color: var(--text-label);
+}
+
+.field:focus {
+  outline: var(--line-width) solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ---- The thinking dots ----------------------------------------------
+ * Three dots breathing in turn, in the label grey: it is a state, not a
+ * signal, so it does not take the accent. Under reduced motion the pulse
+ * token is 0s and the dots simply sit at rest.
+ */
+@keyframes thinking-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+.thinkingDot {
+  width: var(--pad-2);
+  height: var(--pad-2);
+  border-radius: var(--radius-sm);
+  background: var(--text-label);
+  opacity: 0.25;
+  animation: thinking-pulse var(--dur-pulse) var(--ease) infinite;
+}
+
+.thinkingDot:nth-child(2) {
+  animation-delay: calc(var(--dur-pulse) / 6);
+}
+
+.thinkingDot:nth-child(3) {
+  animation-delay: calc(var(--dur-pulse) / 3);
+}
+
+/* A details block whose summary is a quiet control, for the JSON behind a row. */
+.json > summary {
+  display: inline-flex;
+  align-items: center;
+  height: var(--h-row-sm);
+  padding: 0 var(--pad-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-label);
+  font-size: var(--fs-micro);
+  list-style: none;
+}
+
+.json > summary::-webkit-details-marker {
+  display: none;
+}
+
+.json > summary:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.json > pre {
+  margin: var(--pad-1) 0 0;
+  padding: var(--pad-2) var(--pad-3);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- The debug drawer ------------------------------------------------
+ * Under the conversation, as a browser's devtools. Its top edge is a 1px
+ * hairline with a grab area taller than the line, the accent while held.
+ * The tabs are quiet text; the open one is underlined in the accent.
+ */
+.drawerEdge {
+  position: relative;
+  flex: none;
+  height: calc(var(--pad-2) + var(--pad-1));
+  margin: calc((var(--pad-2) + var(--pad-1)) * -1 / 2) 0;
+  cursor: ns-resize;
+  z-index: 1;
+  touch-action: none;
+}
+
+.drawerEdge::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% - var(--line-width) / 2);
+  height: var(--line-width);
+  background: var(--line);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.drawerEdge:hover::before,
+.drawerEdge[data-dragging="true"]::before {
+  background: var(--accent);
+}
+
+.drawerTab {
+  padding: 0 var(--pad-3);
+  border: 0;
+  border-bottom: var(--pad-1) solid transparent;
+  background: transparent;
+  color: var(--text-label);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.drawerTab:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.drawerTab[data-active="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text-strong);
+}
+
+.drawerTab:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* A drag spends nearly all of its time with the pointer over the panes, and
+   what it crosses answers it. For its length the panes take no pointer and
+   the room keeps one cursor. */
+[data-splitting="true"],
+[data-splitting="true"] * {
+  cursor: ns-resize;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+[data-splitting="true"] [data-pane] {
+  pointer-events: none;
+}
+
+/* ---- The composer ------------------------------------------------------
+ * The field grown to hold more than one line, and the one control on the
+ * page with more air than Blender's row: a 36px well, the speech button and
+ * the send glyph inside it as 28px quiet buttons, the ring on the well
+ * since the glyphs are inside it.
+ */
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--pad-3);
+  padding: var(--pad-2) var(--pad-2) var(--pad-2) var(--pad-4);
+  border-radius: var(--radius-bubble);
+  background: var(--sunken);
+  transition: outline-color var(--dur-fast) var(--ease);
+  outline: var(--line-width) solid transparent;
+  outline-offset: -1px;
+}
+
+/* A call up: its pill, centered over the composer. */
+.callPill {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-3);
+  justify-self: center;
+  height: var(--sz-composer-btn);
+  padding: 0 var(--pad-1) 0 var(--pad-4);
+  border-radius: var(--radius-bubble);
+  background: var(--header-quaternary);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* Live once the agent is in the room; hollow until then. */
+.callDot {
+  width: var(--pad-3);
+  height: var(--pad-3);
+  flex: none;
+  border-radius: var(--radius-bubble);
+  box-shadow: inset 0 0 0 var(--line-width) var(--text-label);
+}
+
+.callPill[data-live="true"] .callDot {
+  background: var(--orb);
+  box-shadow: none;
+}
+
+.callBtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(var(--sz-composer-btn) - var(--pad-2));
+  min-width: calc(var(--sz-composer-btn) - var(--pad-2));
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-bubble);
+  background: transparent;
+  color: var(--text-label);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.callBtn:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.callBtn[data-muted="true"] {
+  color: var(--attention);
+}
+
+.callDevice {
+  min-width: var(--pad-4);
+}
+
+.callEnd:hover {
+  color: var(--attention);
+}
+
+.composer:focus-within {
+  outline-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.composer textarea {
+  display: block;
+  width: 100%;
+  min-height: var(--sz-composer-btn);
+  max-height: calc(var(--h-row) * 8);
+  margin: 0;
+  padding: calc((var(--sz-composer-btn) - var(--fs-chat) * var(--lh-chat)) / 2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-chat);
+  line-height: var(--lh-chat);
+  resize: none;
+  overflow-y: auto;
+}
+
+.composer textarea:focus {
+  outline: none;
+}
+
+.composer textarea::placeholder {
+  color: var(--text-label);
+}
+
+.composer textarea:disabled {
+  color: var(--text-label);
+}
+
+/* Round, as the field around them is. */
+.composerBtn {
+  width: var(--sz-composer-btn);
+  height: var(--sz-composer-btn);
+  padding: 0;
+  border-radius: var(--radius-bubble);
+}
+
+/* ---- Message bubbles --------------------------------------------------
+ * The person's words in a pill tinted with the accent on the right; the
+ * agent's as plain text on the left.
+ */
+.bubble {
+  max-width: 85%;
+  font-size: var(--fs-chat);
+  line-height: var(--lh-chat);
+  padding: var(--pad-3) var(--pad-4);
+  border-radius: var(--radius-bubble);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* The person's words on the accent, mixed down into the room; the agent's as plain text on the room. */
+.bubble[data-side="user"] {
+  justify-self: end;
+  background: color-mix(in srgb, var(--accent) 28%, var(--room));
+  color: color-mix(in srgb, var(--accent) 18%, var(--text-strong));
+}
+
+.bubble[data-side="agent"] {
+  justify-self: start;
+  padding: 0;
+  color: var(--text);
+}
+
+/* A link that reads as text until hovered: the example prompts, the card's footer. */
+.quietLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-label);
+  font: inherit;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.quietLink:hover {
+  color: var(--text);
+}
+
+/* A conversation in the strip over the debug tabs: a quiet pill; the
+   selected one sits on the glyph capsule (chips.tsx) instead. */
+.chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: var(--h-chip);
+  padding: 0 var(--pad-3);
+  border: 0;
+  border-radius: var(--radius-bubble);
+  background: transparent;
+  color: var(--text-label);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.chip:hover {
+  color: var(--text);
+}
+
+/* The current conversation: its fill is the blob drawn under the row. */
+.chip[data-selected="true"],
+.chip[data-selected="true"]:hover {
+  color: var(--text-strong);
+}
+
+/* "+": a round button at the row's end. */
+.chipIcon {
+  justify-content: center;
+  width: var(--h-chip);
+  padding: 0;
+}
+
+.chipIcon:hover,
+.chipIcon[data-selected="true"] {
+  background: var(--header-quaternary);
+}
+
+/* A page of the strip: a dot, the shown page's drawn out into a pill. */
+.pageDot {
+  width: calc(var(--pad-2) + var(--pad-1));
+  height: calc(var(--pad-2) + var(--pad-1));
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-bubble);
+  background: var(--control);
+  cursor: pointer;
+  transition:
+    width var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.pageDot:hover {
+  background: var(--text-label);
+}
+
+.pageDot[data-current="true"] {
+  width: var(--pad-5);
+  background: var(--text-strong);
+}
+
+/* The accent swatches: a dot per palette (agents-playground's colours), the
+   chosen one ringed. */
+.swatch {
+  width: var(--pad-4);
+  height: var(--pad-4);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-bubble);
+  background: var(--swatch);
+  cursor: pointer;
+  outline: var(--line-width) solid transparent;
+  outline-offset: var(--pad-1);
+  transition:
+    outline-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.swatch:hover {
+  transform: scale(1.15);
+}
+
+.swatch[aria-pressed="true"] {
+  outline-color: var(--text-label);
+}

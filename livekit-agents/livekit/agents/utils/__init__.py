@@ -1,6 +1,6 @@
 from livekit import rtc
 
-from . import aio, audio, codecs, http_context, http_server, hw, images
+from . import aio, audio, codecs, http_context, http_server, images
 from .audio import AudioArrayBuffer, AudioBuffer, combine_frames, merge_frames
 from .bounded_dict import BoundedDict
 from .connection_pool import ConnectionPool
@@ -32,7 +32,6 @@ __all__ = [
     "images",
     "audio",
     "aio",
-    "hw",
     "is_dev_mode",
     "is_given",
     "is_hosted",

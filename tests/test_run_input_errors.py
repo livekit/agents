@@ -13,7 +13,7 @@ import pytest
 
 from livekit.agents import APIStatusError
 from livekit.agents.types import APIConnectOptions
-from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice import Agent, LiveSession
 from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.agents.voice.remote_session import (
     RemoteSession,
@@ -75,7 +75,7 @@ class PairedTransport(SessionTransport):
 
 @pytest.mark.asyncio
 async def test_run_propagates_llm_error_no_retry():
-    session = AgentSession(
+    session = LiveSession(
         conn_options=SessionConnectOptions(llm_conn_options=APIConnectOptions(max_retry=0))
     )
     agent = Agent(instructions="test agent", llm=FailingLLM())
@@ -91,7 +91,7 @@ async def test_run_propagates_llm_error_no_retry():
 
 @pytest.mark.asyncio
 async def test_run_propagates_llm_error_with_retry():
-    session = AgentSession(
+    session = LiveSession(
         conn_options=SessionConnectOptions(
             llm_conn_options=APIConnectOptions(max_retry=1, retry_interval=0.01)
         )
@@ -109,14 +109,14 @@ async def test_run_propagates_llm_error_with_retry():
 
 @pytest.mark.asyncio
 async def test_run_input_error_e2e_through_remote_session():
-    """Full e2e: RemoteSession → SessionHost → AgentSession with failing LLM.
+    """Full e2e: RemoteSession → SessionHost → LiveSession with failing LLM.
 
     Verifies that an LLM 401 error propagates all the way back to the
     RemoteSession.run_input() caller as a RuntimeError.
     """
     host_transport, client_transport = PairedTransport.create_pair()
 
-    session = AgentSession(
+    session = LiveSession(
         conn_options=SessionConnectOptions(llm_conn_options=APIConnectOptions(max_retry=0))
     )
     agent = Agent(instructions="test agent", llm=FailingLLM())
@@ -151,7 +151,7 @@ async def test_run_silent_turn_is_not_an_error():
     """
     host_transport, client_transport = PairedTransport.create_pair()
 
-    session = AgentSession()
+    session = LiveSession()
     # FakeLLM yields an empty completion for any input outside its response map
     agent = Agent(instructions="test agent", llm=FakeLLM())
 

@@ -1,0 +1,14 @@
+.next/
+node_modules/
+out/
+.env*
+!.env.example
+*.tsbuildinfo
+next-env.d.ts
+
+# The repository root ignores lib/ for Python builds; this app's src/lib is source.
+!lib/
+
+# Playwright
+test-results/
+playwright-report/

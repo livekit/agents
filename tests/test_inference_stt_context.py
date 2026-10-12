@@ -2,7 +2,7 @@
 
 The chat_context capability follows the model's native support (the AssemblyAI Universal-3
 Pro family); whether turns are actually forwarded is decided by
-``AgentSession(stt_context_options=...)``, not a per-STT flag. The sink
+``LiveSession(stt_context_options=...)``, not a per-STT flag. The sink
 (``_push_conversation_item``) mirrors the AssemblyAI plugin's carryover behavior (see
 tests/test_plugin_assemblyai_stt.py), applied through the inference ``extra`` path.
 """

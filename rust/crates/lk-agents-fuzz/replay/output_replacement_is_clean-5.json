@@ -1,0 +1,573 @@
+{
+  "case": {
+    "setup": {
+      "stt": false,
+      "turn": "Default",
+      "preemptive": false,
+      "tools": [
+        "lookup"
+      ],
+      "max_tool_steps": null,
+      "instructions": "You are a test agent.",
+      "max_unrecoverable_errors": 3,
+      "hook_bound_ms": null
+    },
+    "inputs": [
+      {
+        "SetSpeakerFilter": {
+          "enabled": false
+        }
+      },
+      {
+        "PushVideo": {}
+      },
+      {
+        "Say": {
+          "text": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "uh let me think... okay so it was last tuesday I think? maybe wednesday",
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "SetStaticKeyterms": {
+          "terms": [
+            "agent-2",
+            "sip_1",
+            "caller"
+          ]
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "Handoff": {
+          "agent": "sip_1",
+          "instructions": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "tools": [],
+          "pause_previous": true,
+          "resume": false
+        }
+      },
+      {
+        "Say": {
+          "text": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Handoff": {
+          "agent": "sip_1",
+          "instructions": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "tools": [
+            "lookup_order",
+            "caller"
+          ],
+          "pause_previous": false,
+          "resume": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Ivr": {
+          "input": "SeedTranscript",
+          "silence": 700,
+          "text": "okay thanks bye"
+        }
+      },
+      {
+        "SetTranscriptionOutput": {
+          "attach": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "Words",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "Configure": {
+          "knob": "MaxEndpointing",
+          "mode": "Stt",
+          "ms": 10,
+          "on": true,
+          "words": 0
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HostMetrics": {}
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 200,
+          "stt_flush": 10,
+          "skip_reply": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetTranscriptionOutput": {
+          "attach": false
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "Stt"
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "yeah hi um I'm calling about my order",
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "UpdateInstructions": {
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?"
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": "can you hear me",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "FeedText": {
+          "stream": 1,
+          "text": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60)."
+        }
+      },
+      {
+        "Interrupt": {
+          "force": true,
+          "wait": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "okay thanks bye",
+          "instructions": "Let me pull up your account -- one moment.",
+          "allow": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetStaticKeyterms": {
+          "terms": [
+            "agent-2",
+            "transfer",
+            "lookup_order"
+          ]
+        }
+      },
+      {
+        "SetAudioOutput": {
+          "attach": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "UpdateInstructions": {
+          "text": ""
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "allow": false
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 20,
+          "stt_flush": 1000,
+          "skip_reply": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "Audio",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "WAIT stop stop stop",
+          "instructions": "Sure, I can help with that.",
+          "allow": true
+        }
+      },
+      {
+        "Interrupt": {
+          "force": true,
+          "wait": true
+        }
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "okay thanks bye",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "what",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "Ivr": {
+          "input": "Close",
+          "silence": 5000,
+          "text": "yeah hi um I'm calling about my order"
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "Words",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "UpdateModels": {
+          "legs": "All"
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "WAIT stop stop stop",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?",
+          "allow": null
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": "my number is five five five, oh one four seven",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "Words",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": "can you hear me",
+          "instructions": "Let me pull up your account -- one moment.",
+          "allow": false
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "UpdateTools": {
+          "tools": []
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "no no not that one, the other one",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "",
+          "instructions": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "allow": null
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "no no not that one, the other one",
+          "instructions": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?",
+          "allow": true
+        }
+      },
+      {
+        "Interrupt": {
+          "force": true,
+          "wait": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "TextStream",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "what",
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "no no not that one, the other one",
+          "instructions": "Sure, I can help with that.",
+          "allow": null
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 2500,
+          "stt_flush": 200,
+          "skip_reply": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Advance": {
+          "ms": 200
+        }
+      }
+    ]
+  },
+  "expect": {
+    "Fails": {
+      "contract": "output_replacement_is_clean",
+      "subject": {
+        "Resource": [
+          "Output",
+          0
+        ]
+      }
+    }
+  }
+}

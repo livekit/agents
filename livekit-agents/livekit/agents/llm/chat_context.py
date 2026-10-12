@@ -432,7 +432,7 @@ class FunctionCallOutput(_ChatItemBase):
     reply_required: bool = Field(default=True)
     """Whether the model should answer once it receives this output.
 
-    AgentSession uses it to decide whether to generate a follow-up reply.
+    LiveSession uses it to decide whether to generate a follow-up reply.
     Realtime models can also use it to schedule their response.
     """
 
@@ -1019,7 +1019,8 @@ class _ReadOnlyChatContext(ChatContext):
 
     error_msg = (
         "trying to modify a read-only chat context, "
-        "please use .copy() and agent.update_chat_ctx() to modify the chat context"
+        "edit the turn's context in on_user_turn_completed or hand a new history to "
+        "session.update_agent(agent, chat_ctx=)"
     )
 
     class _ImmutableList(list[ChatItem]):

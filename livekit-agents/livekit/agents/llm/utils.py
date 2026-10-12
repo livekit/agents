@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import copy
 import inspect
 import json
@@ -10,8 +11,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     cast,
+    get_args,
     get_origin,
     get_type_hints,
 )
@@ -20,7 +23,7 @@ import json_repair
 import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticUndefined, from_json
+from pydantic_core import PydanticSerializationError, PydanticUndefined, from_json, to_json
 from typing_extensions import TypeVar
 
 from livekit import rtc
@@ -29,7 +32,7 @@ from ..log import logger
 from ..utils import images
 from . import _strict
 from .chat_context import ChatContext, ImageContent
-from .tool_context import FunctionTool, RawFunctionTool, ToolError
+from .tool_context import FunctionTool, RawFunctionTool, ToolError, is_raw_function_tool
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -612,6 +615,23 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
     return args_dict
 
 
+def answer_arguments(fnc: FunctionTool | RawFunctionTool, answer: str) -> dict[str, Any] | None:
+    """The arguments that hand ``answer`` to ``fnc`` as an ``InputRequired(tool=)`` names it:
+    the tool's first string parameter. ``None`` for a tool without one: the model reads the
+    answer and calls the tool itself."""
+    if is_raw_function_tool(fnc):
+        properties = fnc.info.raw_schema.get("parameters", {}).get("properties", {})
+        names = [n for n, p in properties.items() if p.get("type") == "string"]
+    else:
+        hints = get_type_hints(fnc, include_extras=True)
+        names = [n for n in inspect.signature(fnc).parameters if _is_str(hints.get(n))]
+    return {names[0]: answer} if names else None
+
+
+def _is_str(hint: Any) -> bool:
+    return hint is str or (get_origin(hint) is Annotated and get_args(hint)[0] is str)
+
+
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
@@ -932,6 +952,10 @@ def make_function_call_output(
     if isinstance(output, ToolResult):
         reply_required = output.reply_required
         output = output.output
+    if not _is_valid_function_output(output):
+        # dataclasses and models, alone or in lists and dicts, reach the model as their JSON
+        with contextlib.suppress(PydanticSerializationError):
+            output = to_json(output).decode()
 
     if not _is_valid_function_output(output):
         logger.error(

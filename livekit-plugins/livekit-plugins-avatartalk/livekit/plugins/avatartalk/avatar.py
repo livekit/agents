@@ -1,7 +1,7 @@
 import os
 
 from livekit import api, rtc
-from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, get_job_context
+from livekit.agents import NOT_GIVEN, LiveSession, NotGivenOr, get_job_context
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 
@@ -69,7 +69,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def start(
         self,
-        agent_session: AgentSession,
+        agent_session: LiveSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str | None] = NOT_GIVEN,

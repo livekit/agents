@@ -653,7 +653,7 @@ class _SyncedAudioOutput(io.AudioOutput):
                 logger.warning(
                     "TranscriptSynchronizer text output was detached while audio output is "
                     "still active; transcription sync is disabled. This usually means "
-                    "session.output.transcription was replaced after AgentSession.start()."
+                    "session.output.transcription was replaced after LiveSession.start()."
                 )
             return
 
@@ -764,7 +764,7 @@ class _SyncedTextOutput(io.TextOutput):
                 logger.warning(
                     "TranscriptSynchronizer audio output was detached while text output is "
                     "still active; transcription sync is disabled. This usually means "
-                    "session.output.audio was replaced after AgentSession.start()."
+                    "session.output.audio was replaced after LiveSession.start()."
                 )
             if self.next_in_chain:
                 await self.next_in_chain.capture_text(text)

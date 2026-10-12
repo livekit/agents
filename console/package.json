@@ -1,0 +1,44 @@
+{
+  "name": "console",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "pnpm guard && next build --webpack",
+    "start": "next start",
+    "lint": "eslint .",
+    "guard": "node scripts/check-tokens.mjs",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit --incremental false",
+    "check": "pnpm typecheck && pnpm lint && pnpm guard && pnpm test"
+  },
+  "dependencies": {
+    "@livekit/components-react": "^2.9.24",
+    "livekit-client": "^2.22.3",
+    "livekit-server-sdk": "^2.19.1",
+    "lucide-react": "^1.40.0",
+    "next": "^16.3.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "eslint": "^9.39.2",
+    "eslint-config-next": "^16.3.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^6.0.2",
+    "vitest": "^3.2.4"
+  },
+  "packageManager": "pnpm@10.30.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "unrs-resolver"
+    ]
+  }
+}

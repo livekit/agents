@@ -14,7 +14,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents import Agent, LiveSession, TurnHandlingOptions
 from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
 from livekit.agents.voice.audio_recognition import (
@@ -128,7 +128,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     return ar
 
 
-def _paused_activity(session: AgentSession) -> tuple[AgentActivity, MagicMock]:
+def _paused_activity(session: LiveSession) -> tuple[AgentActivity, MagicMock]:
     activity = AgentActivity(Agent(instructions="test"), session)
     activity._scheduling_paused = False
     session.output.audio = FakeAudioOutput(can_pause=True)
@@ -166,8 +166,8 @@ def _swallow_task(coro: object, **kwargs: object) -> MagicMock:
     return MagicMock()
 
 
-def _session() -> AgentSession:
-    return AgentSession(
+def _session() -> LiveSession:
+    return LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(

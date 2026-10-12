@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, LiveSession
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -46,7 +46,7 @@ async def test_start_capture_run_records_every_on_enter_speech() -> None:
     ``generate_reply`` issued after an awaited ``say`` never reached the
     RunResult (#4662).
     """
-    async with AgentSession(llm=_llm()) as sess:
+    async with LiveSession(llm=_llm()) as sess:
         result = await asyncio.wait_for(sess.start(ChattyAgent(), capture_run=True), timeout=10.0)
 
         result.expect.next_event().is_agent_handoff(new_agent_type=ChattyAgent)
@@ -63,7 +63,7 @@ async def test_start_capture_run_completes_with_a_silent_on_enter() -> None:
     Without a watched handle the RunResult never resolved, and
     ``start(capture_run=True)`` hung forever.
     """
-    async with AgentSession(llm=_llm()) as sess:
+    async with LiveSession(llm=_llm()) as sess:
         result = await asyncio.wait_for(sess.start(SilentAgent(), capture_run=True), timeout=5.0)
 
         result.expect.next_event().is_agent_handoff(new_agent_type=SilentAgent)

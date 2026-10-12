@@ -16,6 +16,7 @@ from ..llm.tool_context import (
     DuplicateMode,
     DuplicateScope,
     FunctionTool,
+    InputRequired,
     RawFunctionTool,
     StopResponse,
     Tool,
@@ -23,7 +24,11 @@ from ..llm.tool_context import (
     ToolFlag,
     ToolResult,
     Toolset,
+    approval_granted,
+    approval_scope,
+    delivered,
     function_tool,
+    is_transition,
 )
 from ..llm.utils import prepare_function_arguments, validated_arguments
 from ..log import logger
@@ -37,9 +42,8 @@ from .events import (
 )
 
 if TYPE_CHECKING:
-    from .agent import Agent
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession
+    from .agent_session import LiveSession
     from .speech_handle import SpeechHandle
 
 
@@ -120,13 +124,13 @@ class ToolHandlingOptions(TypedDict, total=False):
 
     Can be passed as a plain dict::
 
-        AgentSession(
+        LiveSession(
             tool_handling={
                 "async_options": {"update_template": "..."},
             },
         )
 
-    Set on ``AgentSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
+    Set on ``LiveSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
     """
 
     async_options: AsyncToolOptions
@@ -162,7 +166,7 @@ def _resolve_async_tool_options(
 # session-scoped view shared across executors, so cancel_task / get_running_tasks
 # see all tasks of their session but never a nested session's. weak-keyed so a
 # dropped session can't leak its tasks.
-_RunningTasks: weakref.WeakKeyDictionary[AgentSession, dict[str, _RunningTask]] = (
+_RunningTasks: weakref.WeakKeyDictionary[LiveSession, dict[str, _RunningTask]] = (
     weakref.WeakKeyDictionary()
 )
 
@@ -254,7 +258,7 @@ class _RunningTask:
 class _PendingUpdate:
     ctx: RunContext
     items: list[ChatItem]
-    target: Agent  # agent that received the eager chat_ctx insert
+    target: AgentActivity  # activity whose history received the eager insert
 
 
 class _ToolExecutor:
@@ -348,15 +352,26 @@ class _ToolExecutor:
         # derives the call's single terminal entry from how the task ended
         async def _execute_tool() -> Any:
             try:
+                arguments = raw_arguments
+                if (activity := self._owning_activity) is not None:
+                    # a call that answers an InputRequired(tool=) carries the person's words,
+                    # and the history shows the call as it ran
+                    arguments = await activity._answer_arguments(tool, raw_arguments)
+                    if arguments is not raw_arguments:
+                        run_ctx.function_call.arguments = json.dumps(arguments)
                 fnc_args, fnc_kwargs = prepare_function_arguments(
-                    fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
+                    fnc=tool, json_arguments=arguments, call_ctx=run_ctx
                 )
+                granted = isinstance(tool, FunctionTool) and tool.info.requires_approval
+                if granted:
+                    granted = approval_granted(run_ctx.session.history.items, run_ctx.function_call)
                 if mock is not None:
                     from .run_result import _run_mock
 
                     output = await _run_mock(mock, *fnc_args, **fnc_kwargs)
                 else:
-                    output = await tool(*fnc_args, **fnc_kwargs)
+                    with approval_scope(run_ctx.function_call, granted):
+                        output = await tool(*fnc_args, **fnc_kwargs)
             except asyncio.CancelledError:
                 logger.debug("tool cancelled", extra={"call_id": call_id, "function": fnc_name})
                 if not first_update_fut.done():
@@ -364,6 +379,12 @@ class _ToolExecutor:
                 raise  # _on_done emits the cancelled terminal
             except Exception as e:
                 output = e
+
+            if isinstance(output, ToolResult) and output.verbatim:
+                # the person hears it as written; the model reads that it was said
+                if (activity := self._owning_activity) is not None:
+                    activity.say(str(output.output))
+                output = delivered(output)
 
             if not first_update_fut.done():
                 # tool returned without ctx.update() — surface the result to dispatch
@@ -405,6 +426,13 @@ class _ToolExecutor:
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
+            if is_transition(output) and (activity := self._owning_activity) is not None:
+                # the activity acts on it as it does when a tool returns without updates:
+                # an InputRequired speaks the question itself, so no reply is generated
+                pair[1].reply_required = not isinstance(output, InputRequired)
+                await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+                activity._apply_transition(output, fnc_call_out=pair[1])
+                return output
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
             return output
 
@@ -523,11 +551,11 @@ class _ToolExecutor:
     async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
         # eager insert so a reply firing before delivery sees the items
         target = (
-            self._owning_activity.agent
+            self._owning_activity
             if self._owning_activity is not None
-            else ctx.session.current_agent
+            else ctx.session._current_activity_or_raise()
         )
-        chat_ctx = target.chat_ctx.copy()
+        chat_ctx = target._chat_ctx.copy()
         chat_ctx.insert(items)
         await target.update_chat_ctx(chat_ctx)
         ctx.session.history.insert(items)
@@ -546,17 +574,16 @@ class _ToolExecutor:
             if run_state is not None:
                 run_state._watch_handle(self._reply_task)
 
-    async def _deliver_reply(self, session: AgentSession) -> None:
+    async def _deliver_reply(self, session: LiveSession) -> None:
         from .agent_activity import ActivityClosedError
 
-        target_agent: Agent
+        target_activity: AgentActivity
         try:
             if self._owning_activity is not None:
                 await self._owning_activity.wait_for_idle()
-                target_agent = self._owning_activity.agent
+                target_activity = self._owning_activity
             else:
                 target_activity = await session.wait_for_idle()
-                target_agent = target_activity.agent
         except ActivityClosedError:
             logger.debug("dropping tool reply — owning activity closed")
             self._pending_updates.clear()
@@ -577,23 +604,25 @@ class _ToolExecutor:
         # only insert again if delivery target differs (session-scoped handoff)
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN
         items_to_insert = [
-            item for u in updates for item in u.items if u.target is not target_agent
+            item for u in updates for item in u.items if u.target is not target_activity
         ]
         if items_to_insert:
             logger.warning(
                 "agent handoff happened while tool waiting for reply delivering",
                 extra={
                     "tools": [
-                        u.ctx.function_call.name for u in updates if u.target is not target_agent
+                        u.ctx.function_call.name for u in updates if u.target is not target_activity
                     ],
                 },
             )
-            chat_ctx = target_agent.chat_ctx.copy()
+            chat_ctx = target_activity._chat_ctx.copy()
             chat_ctx.insert(items_to_insert)
 
-        # if the update is still the tail, the agent hasn't spoken since — summarize
+        # if the update is still the tail, the agent hasn't spoken since: summarize
         # directly; otherwise let the LLM decide whether it already covered this
-        at_tail = (items := target_agent.chat_ctx.items) and items[-1].id == pending_items[-1].id
+        at_tail = (items := target_activity._chat_ctx.items) and items[-1].id == pending_items[
+            -1
+        ].id
         template = (
             self._tool_options["reply_at_tail_template"]
             if at_tail

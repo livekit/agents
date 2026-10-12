@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
+from livekit.agents import NOT_GIVEN, Agent, LiveSession, utils
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -366,7 +366,7 @@ async def test_roomio_dtmf_resets_away_only_for_linked_participant(event_source:
     other = MagicMock(spec=rtc.RemoteParticipant)
     other.identity = "other"
 
-    async with AgentSession(
+    async with LiveSession(
         vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
     ) as session:
         await session.start(
@@ -437,7 +437,7 @@ async def test_roomio_away_timer_waits_for_linked_participant(unlinked_reason: s
     if unlinked_reason == "reselect_other":
         room.remote_participants[replacement.identity] = replacement
 
-    async with AgentSession(
+    async with LiveSession(
         vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
     ) as session:
         await session.start(
@@ -499,7 +499,7 @@ async def test_roomio_set_participant_wakes_initial_waiter(initial_identity: str
         kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     )
     room_io = RoomIO(
-        MagicMock(spec=AgentSession),
+        MagicMock(spec=LiveSession),
         room,
         participant=initial_identity,
         options=RoomOptions(
@@ -541,7 +541,7 @@ async def test_roomio_dtmf_follows_participant_switch(replacement_connected: boo
     caller_digit = rtc.SipDTMF(code=1, digit="1", participant=caller)
     replacement_digit = rtc.SipDTMF(code=2, digit="2", participant=replacement)
 
-    async with AgentSession(
+    async with LiveSession(
         vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
     ) as session:
         await session.start(

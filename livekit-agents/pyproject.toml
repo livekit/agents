@@ -1,10 +1,14 @@
+# The wheel is built by maturin and carries the Python package together with `livekit.agents._core`,
+# the pyo3 extension from `rust/crates/lk-agents-py` (plan 13.1: one wheel). `uv sync` builds it
+# through PEP 517 (a Rust toolchain is required); `cache-keys` below rebuilds the editable install
+# when a Rust source changes, not only when this file does.
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "livekit-agents"
-dynamic = ["version"]
+version = "2.0.0.dev0"
 description = "A powerful framework for building realtime voice AI agents"
 readme = "README.md"
 license = "Apache-2.0"
@@ -58,6 +62,13 @@ dependencies = [
     "click~=8.1",
     "sounddevice>=0.5",
     "watchfiles>=1.0",
+    # `AgentServer.http`: the ASGI app and the two codecs the endpoint bridge drives it with
+    # (`http.py`). Pure Python, all three.
+    "starlette>=0.40",
+    "h11>=0.14",
+    "wsproto>=1.2",
+    # the text door, its client and the delegate speak A2A
+    "a2a-sdk>=1.1.2,<2",
 ]
 
 [project.optional-dependencies]
@@ -144,17 +155,27 @@ Documentation = "https://docs.livekit.io"
 Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
-[tool.hatch.version]
-path = "livekit/agents/version.py"
-
-[tool.hatch.build.targets.wheel]
-packages = ["livekit"]
-include = ["livekit/agents/resources/*", "livekit/agents/debug/index.html"]
-
-
-[tool.hatch.build.targets.sdist]
-include = ["/livekit"]
+[tool.maturin]
+module-name = "livekit.agents._core"
+python-source = "."
+manifest-path = "../rust/crates/lk-agents-py/Cargo.toml"
+features = ["pyo3/extension-module"]
+include = [
+    { path = "livekit/agents/resources/*", format = "wheel" },
+    { path = "livekit/agents/debug/index.html", format = "wheel" },
+]
+exclude = [
+    { path = "**/__pycache__/**", format = "wheel" },
+    { path = "**/*.pyc", format = "wheel" },
+]
 
 [tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "../rust/Cargo.toml" },
+    { file = "../rust/Cargo.lock" },
+    { file = "../rust/crates/**/Cargo.toml" },
+    { file = "../rust/crates/**/*.rs" },
+]
 exclude-newer = "7 days"
 exclude-newer-package = { livekit = "0 days", livekit-api = "0 days", livekit-protocol = "0 days", livekit-blingfire = "0 days" }

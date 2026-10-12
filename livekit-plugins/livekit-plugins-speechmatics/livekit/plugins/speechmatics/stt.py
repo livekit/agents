@@ -204,7 +204,7 @@ class STT(stt.STT):
                 `finalize()` itself. With no `vad` and none loadable, `EXTERNAL` never
                 closes a turn, so nothing is finalized. `VAD` instead lets the service
                 and close turns itself; pair it with `turn_detection="stt"` on the
-                `AgentSession`, which otherwise ignores the end-of-speech events this
+                `LiveSession`, which otherwise ignores the end-of-speech events this
                 plugin emits. The deprecated `FIXED`, `ADAPTIVE` and `SMART_TURN` modes
                 all resolve to the default mode with a warning. Defaults to
                 `DEFAULT_TURN_DETECTION_MODE`.
@@ -940,7 +940,7 @@ def _load_default_vad() -> vad.VAD | None:
     with the `EXTERNAL`-without-a-`vad` warning, which says what to do about it.
 
     Deliberately not `livekit.agents.inference.VAD`: that one is bundled, so it would load
-    for everybody and run a second VAD over the same audio as the one `AgentSession` fills
+    for everybody and run a second VAD over the same audio as the one `LiveSession` fills
     in for itself, with independent thresholds.
     """
     try:

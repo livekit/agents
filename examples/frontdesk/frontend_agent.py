@@ -1,0 +1,53 @@
+import os
+
+from livekit.agents import Agent, AgentHandler, JobContext, LiveSession
+from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.delegation import A2ADelegate
+from livekit.plugins import openai
+
+# the back office on the project's own host, which the worker connects to
+BACKEND = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/dentist/default/backend"
+
+PERSONA = (
+    "You are the front desk of Pearl Dental, a small dental practice. You speak English. Warm "
+    "and brief, never a script. Anything about a visit, a cleaning, a check-up, a toothache, "
+    "openings or a booking goes to the back office, stated in full with what the patient said, "
+    "dates, times and email included; it holds the calendar and asks for what it still needs. "
+    "Tell the patient what it answered, in your own words, and nothing is booked until it "
+    "says so. Never guess what it will say or "
+    "confirm anything it did not return; dates and times are its, repeated as given. Only "
+    "pleasantries and the conversation itself are yours."
+)
+
+# the back office as the front desk's one tool, described from its card
+back_office = A2ADelegate(BACKEND)
+
+chat = Agent(
+    instructions=PERSONA + " By text: one or two plain sentences, no lists.",
+    llm="google/gemma-4-31b-it",
+    tools=[back_office],
+)
+
+voice = Agent(
+    instructions=PERSONA + " On the phone: one short sentence at a time, one question per "
+    "turn, plain speech. Say times the way a person does, Monday at two, no AM or PM. While "
+    "the back office works, keep the patient company in one line.",
+    tools=[back_office],
+)
+
+
+front_desk = AgentHandler()  # the worker's own lane: the phone and the text door share it
+
+
+@front_desk.rtc_session()
+async def phone(ctx: JobContext) -> None:
+    session = LiveSession(llm=openai.realtime.RealtimeModel(), thread=ctx.thread)
+    await session.start(agent=voice, room=ctx.room)
+    if not session.history.items:
+        await session.generate_reply(instructions="Greet the patient and offer to book a visit.")
+
+
+@front_desk.a2a_session(endpoint="frontend", description="Pearl Dental front desk.")
+async def text(ctx: A2ASessionContext) -> str:
+    result = await chat.run(ctx.message, message_history=ctx.message_history)
+    return result.input_required or str(result.output)

@@ -1,0 +1,145 @@
+{
+  "case": {
+    "setup": {
+      "stt": false,
+      "turn": "Default",
+      "preemptive": false,
+      "tools": [
+        "lookup"
+      ],
+      "max_tool_steps": null,
+      "instructions": "You are a test agent.",
+      "max_unrecoverable_errors": 3,
+      "hook_bound_ms": null
+    },
+    "inputs": [
+      {
+        "HostMetrics": {}
+      },
+      {
+        "Say": {
+          "text": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "no no not that one, the other one",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "Run": {
+          "user_input": null,
+          "expects_output": true,
+          "retries": 2
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Interrupt": {
+          "force": true,
+          "wait": true
+        }
+      },
+      {
+        "SetAudioOutput": {
+          "attach": false
+        }
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "Say": {
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "yeah hi um I'm calling about my order",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "SetTranscriptionOutput": {
+          "attach": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "Words",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "Ivr": {
+          "input": "SeedTranscript",
+          "silence": 0,
+          "text": "what"
+        }
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": "yeah hi um I'm calling about my order",
+          "instructions": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "allow": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetVideoInput": {
+          "attach": false
+        }
+      },
+      {
+        "HostMetrics": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Advance": {
+          "ms": 200
+        }
+      }
+    ]
+  },
+  "expect": {
+    "Fails": {
+      "contract": "no_premature_completion",
+      "subject": {
+        "Speech": 8
+      }
+    }
+  }
+}

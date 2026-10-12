@@ -38,7 +38,7 @@ from .classifier import (
 if TYPE_CHECKING:
     from ...llm import LLM
     from ...stt import STT
-    from ..agent_session import AgentSession
+    from ..agent_session import LiveSession
     from ..audio_recognition import _EndOfTurnInfo
 
 EVALUATED_LLM_MODELS: set[str] = {
@@ -119,7 +119,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             result = await detector.execute()
 
     Args:
-        session: The :class:`AgentSession` to wire AMD to.
+        session: The :class:`LiveSession` to wire AMD to.
         llm: LLM used for greeting classification. Accepts an :class:`LLM`
             instance or an inference model string (e.g.
             ``"openai/gpt-4.1-mini"``). When omitted, AMD auto-selects:
@@ -168,7 +168,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     def __init__(
         self,
-        session: AgentSession,
+        session: LiveSession,
         *,
         llm: NotGivenOr[LLM | LLMModels | str | None] = NOT_GIVEN,
         stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
@@ -195,7 +195,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 stt = self._DEFAULT_STT_MODEL if auto_select else None
 
         self._llm_config: LLM | LLMModels | str | None = llm
-        self._session: AgentSession = session
+        self._session: LiveSession = session
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
         self._wait_until_finished = wait_until_finished
@@ -358,7 +358,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     # region: internal methods
 
-    async def _run(self, session: AgentSession) -> None:
+    async def _run(self, session: LiveSession) -> None:
         if self._classifier:
             logger.warning("AMD already running, skipping")
             return
@@ -395,7 +395,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
         self._setup_task = asyncio.create_task(self._setup(session), name="amd_setup")
 
-    async def _setup(self, session: AgentSession) -> None:
+    async def _setup(self, session: LiveSession) -> None:
         if self._closed:
             return
         if not session._room_io:
@@ -580,7 +580,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     def _resolve_classifier(
         self,
-        session: AgentSession,
+        session: LiveSession,
     ) -> _AMDClassifier | None:
         _llm: _InferenceLLM | _LLM | None = None
         if isinstance(self._llm_config, str):

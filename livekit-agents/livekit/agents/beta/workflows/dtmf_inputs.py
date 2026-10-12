@@ -8,7 +8,6 @@ from livekit import rtc
 
 from ... import function_tool
 from ...job import get_job_context
-from ...llm.chat_context import ChatContext
 from ...llm.tool_context import ToolError
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
@@ -42,7 +41,6 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         ask_for_confirmation: bool = False,
         dtmf_input_timeout: float = 4.0,
         dtmf_stop_event: DtmfEvent = DtmfEvent.POUND,
-        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         extra_instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
@@ -51,7 +49,6 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
             ask_for_confirmation: Whether to ask for confirmation when agent has collected full digits.
             dtmf_input_timeout: The per-digit timeout.
             dtmf_stop_event: The DTMF event to stop collecting inputs.
-            chat_ctx: The chat context to use.
             extra_instructions: Extra instructions to add to the task.
         """
         if num_digits <= 0:
@@ -68,14 +65,14 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
             user confirms they are correct, call this tool with the inputs.
 
             Do not use this tool to capture the initial digits."""
-            self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
+            self._complete(GetDtmfResult.from_dtmf_inputs(inputs))
 
         @function_tool
         async def record_inputs(inputs: list[DtmfEvent]) -> None:
             """Record the collected digit inputs without additional confirmation.
 
             Call this tool as soon as a valid sequence of digits has been provided by the user (via DTMF or spoken)."""
-            self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
+            self._complete(GetDtmfResult.from_dtmf_inputs(inputs))
 
         instructions = (
             "You are a single step in a broader system, responsible solely for gathering digits input from the user. "
@@ -93,7 +90,6 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
 
         super().__init__(
             instructions=instructions,
-            chat_ctx=chat_ctx,
             tools=[confirm_inputs] if ask_for_confirmation else [record_inputs],
         )
 
@@ -129,12 +125,12 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                         f"Digits input not fully received. "
                         f"Expect {num_digits} digits, got {len(self._curr_dtmf_inputs)}"
                     )
-                    self.complete(ToolError(error_msg))
+                    self._complete(ToolError(error_msg))
                     return
 
                 # if not asking for confirmation, return the DTMF inputs
                 if not ask_for_confirmation:
-                    self.complete(GetDtmfResult.from_dtmf_inputs(self._curr_dtmf_inputs))
+                    self._complete(GetDtmfResult.from_dtmf_inputs(self._curr_dtmf_inputs))
                     return
 
                 instructions = (

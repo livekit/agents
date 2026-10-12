@@ -72,7 +72,7 @@ TEvent = TypeVar("TEvent")
 class DuplexModel(ABC):
     """A speech model that listens and speaks at the same time, handling interruptions itself.
 
-    Run one inside an ``AgentSession`` with :class:`~livekit.agents.llm.DuplexRealtimeAdapter`.
+    Run one inside an ``LiveSession`` with :class:`~livekit.agents.llm.DuplexRealtimeAdapter`.
     """
 
     def __init__(self, *, capabilities: DuplexCapabilities) -> None:

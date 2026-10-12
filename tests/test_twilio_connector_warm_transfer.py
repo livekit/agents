@@ -443,7 +443,7 @@ async def test_consultation_setup_releases_resources_on_failure(
     parent = SimpleNamespace(vad=None, llm=None, stt=None, tts=None, turn_detection=None)
     monkeypatch.setattr(warm_transfer.AgentTask, "session", property(lambda _: parent))
     session = Mock(start=AsyncMock())
-    monkeypatch.setattr(warm_transfer, "AgentSession", Mock(return_value=session))
+    monkeypatch.setattr(warm_transfer, "LiveSession", Mock(return_value=session))
     monkeypatch.setattr(warm_transfer, "Agent", Mock())
     originate = AsyncMock()
     monkeypatch.setattr(task, "_originate_human_agent", originate)

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, LiveSession
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.generation import _audio_forwarding_task, _AudioOutput
 from livekit.agents.voice.speech_handle import SpeechHandle
@@ -18,7 +18,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 async def activity() -> AsyncIterator[tuple[AgentActivity, FakeAudioOutput]]:
-    session = AgentSession(
+    session = LiveSession(
         turn_handling={
             "interruption": {
                 "resume_false_interruption": True,

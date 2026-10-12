@@ -18,7 +18,7 @@ from openai.types.realtime import (
 from openai.types.realtime.audio_transcription import AudioTranscription
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
-from livekit.agents import AgentSession, llm
+from livekit.agents import LiveSession, llm
 from livekit.agents._exceptions import APIError
 from livekit.agents.llm._realtime.openai_types import RealtimeModels as CoreRealtimeModels
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
@@ -636,7 +636,7 @@ def test_transcription_metrics_use_session_model_after_update(
 
 def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
     realtime_session, _ = _transcription_metrics_session()
-    agent_session = AgentSession()
+    agent_session = LiveSession()
     activity = AgentActivity.__new__(AgentActivity)
     activity._session = agent_session
     realtime_session.on("metrics_collected", activity._on_metrics_collected)
@@ -679,23 +679,25 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
 
 
 async def _start_function_call_server(
-    arguments: str, *, drop_on_output: bool = False
-) -> tuple[Any, list[tuple[Any, list[dict]]]]:
-    """A realtime server whose response calls `weather`, recording each connection's creates.
+    arguments: str, *, drop_on_output: bool = False, drop_on_response_create: bool = False
+) -> tuple[Any, list[tuple[Any, list[dict], list[dict]]]]:
+    """A realtime server whose response calls `weather`, recording each connection's item
+    creates and response.create events.
 
     With `drop_on_output`, the first connection closes on the function call output before it
-    confirms it.
+    confirms it; with `drop_on_response_create`, on the response.create before it answers it.
     """
     from aiohttp import WSMsgType, web
     from aiohttp.test_utils import TestServer
 
-    connections: list[tuple[web.WebSocketResponse, list[dict]]] = []
+    connections: list[tuple[web.WebSocketResponse, list[dict], list[dict]]] = []
 
     async def realtime(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         created: list[dict] = []
-        connections.append((ws, created))
+        responses: list[dict] = []
+        connections.append((ws, created, responses))
         await ws.send_json({"type": "session.created", "event_id": "ev_session", "session": {}})
         previous_item_id = None
         async for msg in ws:
@@ -722,6 +724,10 @@ async def _start_function_call_server(
                 )
                 previous_item_id = item["id"]
             elif event["type"] == "response.create":
+                responses.append(event)
+                if drop_on_response_create and len(connections) == 1:
+                    await ws.close()
+                    break
                 # like the real API, the call is added with empty arguments and only
                 # completed by response.output_item.done
                 response = {
@@ -822,6 +828,37 @@ async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
         replayed = connections[1][1]
         assert [(item["type"], item.get("call_id")) for item in replayed] == _REPLAYED_CALL
         assert replayed[1]["arguments"] == arguments
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+async def test_reconnect_re_sends_a_response_create_the_lost_connection_never_answered() -> None:
+    # a reply asked for just before the connection dropped (a tool's result waiting to be
+    # phrased, say) is asked for again once the conversation is replayed, rather than
+    # discarded with the connection; the one future resolves with the new connection's response
+    arguments = '{"city": "Tokyo"}'
+    server, connections = await _start_function_call_server(arguments, drop_on_response_create=True)
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    try:
+        chat_ctx = llm.ChatContext.empty()
+        chat_ctx.add_message(role="user", content="what's the weather in Tokyo?", id="item_user")
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+        generation = await asyncio.wait_for(session.generate_reply(), 20)
+        calls = [call async for call in generation.function_stream]
+        assert [call.arguments for call in calls] == [arguments]
+
+        assert len(connections) == 2
+        first, second = connections[0][2], connections[1][2]
+        assert len(first) == 1 and len(second) == 1
+        # the same request, by its client event id, on the replayed conversation
+        assert second[0]["response"]["metadata"] == first[0]["response"]["metadata"]
+        assert [(item["type"], item.get("call_id")) for item in connections[1][1]] == [
+            ("message", None)
+        ]
     finally:
         await session.aclose()
         await model.aclose()

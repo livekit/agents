@@ -966,10 +966,10 @@ async def test_a_reply_the_model_never_gives_does_not_strand_the_caller(monkeypa
 
 async def test_a_duplex_model_is_wrapped_when_handed_to_a_session() -> None:
     """Callers pass the model itself; the adapter is the framework's business, not theirs."""
-    from livekit.agents import Agent, AgentSession
+    from livekit.agents import Agent, LiveSession
 
     model = _FakeDuplexModel()
-    session = AgentSession(llm=model)
+    session = LiveSession(llm=model)
     assert isinstance(session.llm, llm.DuplexRealtimeAdapter)
     assert session.llm.duplex_model is model
 
@@ -979,22 +979,22 @@ async def test_a_duplex_model_is_wrapped_when_handed_to_a_session() -> None:
 
 async def test_duplex_session_reaches_the_plugin_past_the_adapter() -> None:
     """Provider-specific APIs live on the plugin's session, so apps must not stop at the adapter."""
-    from livekit.agents import Agent, AgentSession
+    from livekit.agents import Agent, LiveSession
 
     model = _FakeDuplexModel()
     agent = Agent(instructions="")
-    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+    async with LiveSession(llm=model, aec_warmup_duration=None) as session:
         await session.start(agent)
         assert agent.duplex_session is model.session_obj
 
 
 async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:
-    from livekit.agents import Agent, AgentSession
+    from livekit.agents import Agent, LiveSession
 
     from .fake_realtime import FakeRealtimeModel
 
     agent = Agent(instructions="")
-    async with AgentSession(llm=FakeRealtimeModel(), aec_warmup_duration=None) as session:
+    async with LiveSession(llm=FakeRealtimeModel(), aec_warmup_duration=None) as session:
         await session.start(agent)
         with pytest.raises(RuntimeError, match="not running a DuplexModel"):
             _ = agent.duplex_session
@@ -1033,17 +1033,17 @@ async def test_a_failed_audio_stream_reports_an_unrecoverable_error(duplex) -> N
 
 
 async def test_a_duplex_model_refuses_a_text_simulation(monkeypatch: pytest.MonkeyPatch) -> None:
-    from livekit.agents.voice import Agent, AgentSession
+    from livekit.agents.voice import Agent, LiveSession
 
-    monkeypatch.setattr(AgentSession, "_text_only", property(lambda self: True))
-    session = AgentSession(llm=_FakeDuplexModel())
+    monkeypatch.setattr(LiveSession, "_text_only", property(lambda self: True))
+    session = LiveSession(llm=_FakeDuplexModel())
     with pytest.raises(RuntimeError, match="text simulation"):
         await session.start(Agent(instructions="hi"))
 
 
 async def test_a_duplex_model_starts_outside_a_text_simulation() -> None:
-    from livekit.agents.voice import Agent, AgentSession
+    from livekit.agents.voice import Agent, LiveSession
 
-    session = AgentSession(llm=_FakeDuplexModel())
+    session = LiveSession(llm=_FakeDuplexModel())
     await session.start(Agent(instructions="hi"))
     await session.aclose()

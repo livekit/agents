@@ -134,7 +134,7 @@ class TTS(tts.TTS):
         max_text_length: Client-side character limit, not a claimed provider limit.
         max_audio_bytes: Maximum complete WAV response size in bytes.
 
-    AgentSession wraps this nonstreaming provider in its existing sentence
+    LiveSession wraps this nonstreaming provider in its existing sentence
     StreamAdapter. Native text/audio streaming and JSON/base64 responses are unsupported.
     """
 

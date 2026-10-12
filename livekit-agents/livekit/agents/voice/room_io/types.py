@@ -12,7 +12,7 @@ from ...utils import is_given
 from ..io import TextOutput
 
 if TYPE_CHECKING:
-    from ..agent_session import AgentSession
+    from ..agent_session import LiveSession
 
 DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
     rtc.DisconnectReason.CLIENT_INITIATED,
@@ -28,7 +28,7 @@ class TextInputEvent:
     participant: rtc.RemoteParticipant | None = None
 
 
-TextInputCallback = Callable[["AgentSession", TextInputEvent], Coroutine[None, None, None] | None]
+TextInputCallback = Callable[["LiveSession", TextInputEvent], Coroutine[None, None, None] | None]
 
 
 @dataclass
@@ -43,7 +43,7 @@ NoiseCancellationSelector: TypeAlias = Callable[
 ]
 
 
-async def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
+async def _default_text_input_cb(sess: LiveSession, ev: TextInputEvent) -> None:
     async with sess._claim_user_turn():
         await sess.interrupt()
         sess.generate_reply(user_input=ev.text)
@@ -126,10 +126,10 @@ class RoomOptions:
     """The participant to link to. If not provided, link to the first participant.
     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
     close_on_disconnect: bool = True
-    """Close the AgentSession if the linked participant disconnects with reasons in
+    """Close the LiveSession if the linked participant disconnects with reasons in
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
     delete_room_on_close: bool = False
-    """Delete the room when the AgentSession is closed, default to False"""
+    """Delete the room when the LiveSession is closed, default to False"""
 
     def get_text_input_options(self) -> TextInputOptions | None:
         if isinstance(self.text_input, TextInputOptions):
@@ -265,10 +265,10 @@ class RoomInputOptions:
     pre_connect_audio_timeout: float = 3.0
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
     close_on_disconnect: bool = True
-    """Close the AgentSession if the linked participant disconnects with reasons in
+    """Close the LiveSession if the linked participant disconnects with reasons in
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
     delete_room_on_close: bool = False
-    """Delete the room when the AgentSession is closed, default to False"""
+    """Delete the room when the LiveSession is closed, default to False"""
 
 
 @dataclass

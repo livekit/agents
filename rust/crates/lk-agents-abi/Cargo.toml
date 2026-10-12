@@ -1,0 +1,83 @@
+[package]
+name = "lk-agents-abi"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# docs/CONTRACTS.md §4.7: "the Llm/Stt/Tts/Vad traits. No tokio-net, no pyo3."
+#
+# tokio *is* here, and only `sync`: `StreamAdapter` owns an unbounded text queue between its sink
+# and its source (§1.2d -- the text->TTS leg may not drop, so it cannot be `BoundedLossy`). No
+# `net`, no `fs`, no `process`, and nothing in this crate starts a runtime or a task (R13).
+#
+# Deliberately absent: pyo3. `ProviderError` reaches `FallbackChain` with `.retryable` readable
+# with no GIL held, which is the entire reason `lk-agents-errors` copies those scalars out.
+[lib]
+# The `///` docs on the `#[derive(Host)]` records are the reference's Python docstrings, verbatim,
+# because the generator emits them into the Python package. Their indented examples are Python,
+# which rustdoc would otherwise compile as Rust. The crate has no Rust doctests.
+doctest = false
+
+[dependencies]
+fancy-regex = "0.19.0"
+regex = "1.13.1"
+async-trait.workspace = true
+# Two reasons, both narrow. `RealtimeModelError.timestamp` is a `Ts`, the pure tier's monotonic
+# clock reading, and a realtime error is timestamped where an `Llm` error is not. And
+# `ChatItem::created_at` is a WALL clock stamp pinned to `Clock::wall()`, not `Clock::now()`,
+# because items are minted on both sides of the boundary and ordered against each other.
+# Expands to nothing. It exists so `#[host(..)]` is legal Rust; see `voice/mod.rs`.
+lk-agents-host-derive = { path = "../lk-agents-host-derive" }
+# `extra` is JSON, not an opaque host payload (§1.11): the reference reads it for control flow and
+# `_provider_format` serialises it onto the wire.
+#
+# `preserve_order` is required, not an optimisation: `to_dict` reproduces pydantic's *declaration*
+# order and `extra` round-trips the host's dict order, and without this feature `Map` is a
+# `BTreeMap` that silently sorts both. Named here rather than inherited from whichever crates
+# happen to be in the build graph, because `cargo test -p lk-agents-abi` resolves features on its
+# own -- the same trap `lk-agents-py`'s manifest writes down.
+#
+# Still deliberately *not* a dependency: `serde` itself. `to_dict` is a hand-written projection that
+# reproduces pydantic's declaration order and `exclude_none` rules -- a `#[derive(Serialize)]` on
+# `ChatItem` would produce a *different*, plausible-looking JSON that nothing gates, which is the
+# whole hazard §1.11 named. `serde_json::Value` is the output type; the derive is not wanted.
+serde_json = { workspace = true, features = ["preserve_order"] }
+# Optional, off by default, and never on a `to_dict` type: the `serde` feature below derives
+# `Serialize`/`Deserialize` on the plain enums a stored test case carries (`CloseReason`, in
+# `lk-agents-voice`'s `Action::Close`; `tests/corpus/*.ron` there). `lk-agents-voice`'s `testkit`
+# feature turns it on; the shipped library never does.
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+# One warning today: a repaired tool-arguments payload (`llm::tool_arguments::parse_logged`), which
+# the binding forwards to the host logger.
+log.workspace = true
+# `sync` for the monotone cells and the clock's `Notify`; `time` for the ONE real sleep in the
+# workspace, `RealClock::wait_until`.
+tokio = { workspace = true, features = ["sync", "time"] }
+# `python` only: the runtime the in-place bindings expand against (`src/python.rs`). Without the
+# feature this crate has no pyo3, which is what the note at the top of this file is about.
+pyo3 = { workspace = true, optional = true }
+inventory = { workspace = true, optional = true }
+# `python` only: the host bridge (`src/python/bridge.rs`) awaits host coroutines on their own loop
+# (`TaskLocals`, `into_future_with_locals`) and hands the chain the tokio runtime `future_into_py`
+# resolves against. Literal version: pyo3's own companion, not advertised in the workspace table.
+pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"], optional = true }
+# `llm::provider_format::image::b64_encode`, and under `python` a `{"$lk_bytes_b64": ..}` leaf
+# decoded back.
+base64.workspace = true
+# `utils::dates`: `datetime.date`/`time` validation, `strftime` and the civil calendar. Already in
+# the build graph (pbjson-types, rmcp); no `clock`, the wall clock is `Clock::wall()`.
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+
+[features]
+# The Python runtime (`lk_agents_abi::python`): the registration table, the fork guard, the error
+# dispatch. Enabled through a core crate's own `python` feature, by `lk-agents-py` only.
+# `multiple-pymethods`: a class's generated `#[pymethods]` block (`#[host(object)]`) and the
+# hand-written methods beside it that no declaration expresses (a getter building host objects).
+python = ["dep:pyo3", "pyo3/multiple-pymethods", "dep:inventory", "dep:pyo3-async-runtimes"]
+# See the `serde` dependency's note: the derive on the plain enums a stored test case carries.
+serde = ["dep:serde"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync", "test-util"] }

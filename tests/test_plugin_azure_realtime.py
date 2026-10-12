@@ -23,7 +23,7 @@ from azure.ai.voicelive.models import (
 from azure.core.credentials import AccessToken
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, APIConnectOptions, function_tool, llm
+from livekit.agents import Agent, APIConnectOptions, LiveSession, function_tool, llm
 from livekit.plugins import azure as azure_plugin
 from livekit.plugins.azure.realtime import RealtimeModel, RealtimeSession, realtime_model
 
@@ -1152,7 +1152,7 @@ async def test_agent_session_answers_after_a_tool_call(voice_live: _FakeVoiceLiv
         await _done(conn, response_id)
 
     voice_live.on_response = on_response
-    async with AgentSession(llm=_model(voice_live)) as session:
+    async with LiveSession(llm=_model(voice_live)) as session:
         errors: list[Any] = []
         session.on("error", errors.append)
         session.output.audio = FakeAudioOutput()

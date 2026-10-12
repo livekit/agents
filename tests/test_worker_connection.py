@@ -45,7 +45,8 @@ async def test_run_raises_when_connection_exhausts_retries() -> None:
 
     with patch("livekit.agents.ipc.proc_pool.ProcPool", return_value=fake_pool):
         try:
-            with pytest.raises(RuntimeError, match="failed to connect"):
+            # the Rust worker's RetriesExhausted, surfaced as the RuntimeError of run()
+            with pytest.raises(RuntimeError, match=r"connection failed after 0 retries"):
                 await asyncio.wait_for(server.run(devmode=True), timeout=10)
         finally:
             await server.aclose()

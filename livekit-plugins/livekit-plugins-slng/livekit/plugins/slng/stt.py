@@ -58,7 +58,7 @@ from .gateway_adapter import (
 from .log import logger
 
 if TYPE_CHECKING:
-    from livekit.agents import AgentSession, UserStateChangedEvent
+    from livekit.agents import LiveSession, UserStateChangedEvent
 
 # Only pcm_s16le is supported: LiveKit AudioFrames carry 16-bit PCM and the
 # plugin sends those bytes verbatim (no transcoding is performed).
@@ -440,10 +440,10 @@ class STT(stt.STT):
             except Exception:
                 logger.debug("Failed to notify STT stream of user_state change", exc_info=True)
 
-    def attach_to_session(self, session: AgentSession) -> None:
+    def attach_to_session(self, session: LiveSession) -> None:
         """Forward the session's user state changes to this STT instance.
 
-        Registers a ``user_state_changed`` handler on the given ``AgentSession`` so
+        Registers a ``user_state_changed`` handler on the given ``LiveSession`` so
         end-of-turn finalization works without manual wiring. Equivalent to calling
         ``notify_user_state(ev.new_state)`` from your own handler.
         """

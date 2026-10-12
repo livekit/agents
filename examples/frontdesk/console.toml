@@ -1,0 +1,6 @@
+name = "Pearl Dental"
+agent = "dentist"
+endpoint = "frontend"
+description = "A dental practice's appointment scheduling on a calendar."
+voice = true
+start = "FRONTDESK_NOW=2026-06-12T09:00 uv run python main.py dev"

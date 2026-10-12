@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, LiveSession
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import _EndOfTurnInfo, _EndOfTurnMetrics
 
@@ -29,7 +29,7 @@ def _end_of_turn(turn_number: int) -> _EndOfTurnInfo:
 
 @pytest.mark.asyncio
 async def test_cancelling_wait_for_idle_does_not_cancel_end_of_turn_task() -> None:
-    session = AgentSession()
+    session = LiveSession()
     activity = AgentActivity(Agent(instructions="test"), session)
 
     end_of_turn_task = asyncio.create_task(asyncio.Event().wait())
@@ -50,7 +50,7 @@ async def test_cancelling_wait_for_idle_does_not_cancel_end_of_turn_task() -> No
 
 @pytest.mark.asyncio
 async def test_cancelling_wait_for_idle_does_not_poison_user_turns() -> None:
-    session = AgentSession()
+    session = LiveSession()
     activity = AgentActivity(Agent(instructions="test"), session)
     activity._scheduling_paused = False
     activity._new_turns_blocked = False
@@ -80,7 +80,7 @@ async def test_cancelling_wait_for_idle_does_not_poison_user_turns() -> None:
 
 @pytest.mark.asyncio
 async def test_cancelling_latest_user_turn_does_not_cancel_predecessor() -> None:
-    session = AgentSession()
+    session = LiveSession()
     activity = AgentActivity(Agent(instructions="test"), session)
 
     predecessor = asyncio.create_task(asyncio.Event().wait())

@@ -12,7 +12,7 @@ from livekit import api, rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    AgentSession,
+    LiveSession,
     APIConnectOptions,
     NotGivenOr,
     get_job_context,
@@ -69,7 +69,7 @@ class AvatarSession(BaseAvatarSession):
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
 
         self._session_id: str | None = None
-        self._agent_session: AgentSession | None = None
+        self._agent_session: LiveSession | None = None
 
         # Cached from start() for join_meeting() token minting.
         self._livekit_url: str | None = None
@@ -93,7 +93,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def start(  # type: ignore[override]
         self,
-        agent_session: AgentSession,
+        agent_session: LiveSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,
@@ -204,7 +204,7 @@ class AvatarSession(BaseAvatarSession):
         """Send this avatar into an external video meeting.
 
         Supports Zoom, Google Meet, Microsoft Teams, and Webex. Call after start() and
-        before room_options() / AgentSession.start().
+        before room_options() / LiveSession.start().
 
         Args:
             meeting_url: URL of the external meeting to join.
@@ -303,7 +303,7 @@ class AvatarSession(BaseAvatarSession):
             self._meeting_relay_stop = None
 
     def room_options(self, **kwargs: Any) -> room_io.RoomOptions:
-        """Return room I/O options for AgentSession.start.
+        """Return room I/O options for LiveSession.start.
 
         When join_meeting() has been called, disables LiveKit room audio input.
         Meeting audio is fed directly into STT instead.

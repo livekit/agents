@@ -15,7 +15,7 @@ from pydantic import Field
 
 from ... import FunctionTool, llm
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
-from ...types import NOT_GIVEN, NotGivenOr
+from ...types import NOT_GIVEN
 from ...voice.agent import AgentTask
 
 
@@ -49,7 +49,6 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         *,
         summarize_chat_ctx: bool = True,
         return_exceptions: bool = False,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         on_task_completed: Callable[[TaskCompletedEvent], Coroutine[None, None, None]]
         | None = None,
     ):
@@ -60,9 +59,8 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             return_exceptions (bool): Whether or not to directly propagate an error. When set to True, the exception is added to the results dictionary and the sequence continues. Defaults to False.
             on_task_completed (Callable[]): A callable that executes upon each task completion. The callback takes in a single argument of a TaskCompletedEvent.
         """
-        super().__init__(
-            instructions="*empty*", chat_ctx=chat_ctx, llm=NOT_GIVEN
-        )  # the LLM is set as NOT_GIVEN to allow session reusage if supported
+        # the LLM is set as NOT_GIVEN to allow session reusage if supported
+        super().__init__(instructions="*empty*", llm=NOT_GIVEN)
 
         self._summarize_chat_ctx = summarize_chat_ctx
         self._return_exceptions = return_exceptions
@@ -97,15 +95,12 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             task_id = task_stack.pop(0)
             factory_info = self._registered_factories[task_id]
 
+            # awaited, the sub-task continues this task's history on its own
             self._current_task = factory_info.task_factory()
 
-            shared_chat_ctx = self.chat_ctx.copy()
-            await self._current_task.update_chat_ctx(shared_chat_ctx)
-
             if out_of_scope_tool := self._build_out_of_scope_tool(active_task_id=task_id):
-                current_tools = self._current_task.tools
-                current_tools.append(out_of_scope_tool)
-                await self._current_task.update_tools(current_tools)
+                # not started yet: registering on the per-use instance is still allowed
+                self._current_task.tool(out_of_scope_tool)
 
             try:
                 self._visited_tasks.add(task_id)
@@ -113,10 +108,11 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
                 # AgentTask handoff merges omit function calls. Re-merge the completed
                 # task context so task-group summarization can incorporate tool results.
-                self._chat_ctx.merge(
-                    self._current_task.chat_ctx.copy(),
-                    exclude_instructions=True,
-                )
+                if (task_activity := self._current_task._task_activity) is not None:
+                    self._get_activity_or_raise()._chat_ctx.merge(
+                        task_activity._chat_ctx.copy(),
+                        exclude_instructions=True,
+                    )
 
                 task_results[task_id] = res
 
@@ -136,7 +132,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     task_results[task_id] = e
                     continue
                 else:
-                    self.complete(e)
+                    self._complete(e)
                     return
 
         if self._summarize_chat_ctx:
@@ -156,12 +152,12 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     exclude_function_call=False,
                 )._summarize(llm_v=self.session.llm, keep_last_turns=0)
 
-                await self.update_chat_ctx(summarized_chat_ctx)
+                await self._get_activity_or_raise().update_chat_ctx(summarized_chat_ctx)
             except Exception as e:
-                self.complete(e)
+                self._complete(e)
                 return
 
-        self.complete(TaskGroupResult(task_results=task_results))
+        self._complete(TaskGroupResult(task_results=task_results))
 
     def _build_out_of_scope_tool(self, *, active_task_id: str) -> FunctionTool | None:
         if not self._visited_tasks:
@@ -196,6 +192,6 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     raise ToolError(f"unable to regress, invalid task id {task_id}")
 
             if not self._current_task.done():
-                self._current_task.complete(_OutOfScopeError(target_task_ids=task_ids))
+                self._current_task._complete(_OutOfScopeError(target_task_ids=task_ids))
 
         return out_of_scope

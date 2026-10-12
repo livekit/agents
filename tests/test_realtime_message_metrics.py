@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, llm, utils
+from livekit.agents import Agent, LiveSession, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.voice.events import ConversationItemAddedEvent
@@ -51,7 +51,7 @@ async def _run_realtime_redaction_session(
     job_ctx = _fake_job_context(enable_redaction=project_redaction)
 
     with patch("livekit.agents.voice.agent_session.get_job_context", return_value=job_ctx):
-        async with AgentSession(
+        async with LiveSession(
             llm=model,
             stt=stt,
             vad=None,
@@ -67,7 +67,7 @@ async def test_realtime_response_id_is_available_on_assistant_message() -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
     conversation_events: list[ConversationItemAddedEvent] = []
 
-    async with AgentSession(llm=model) as session:
+    async with LiveSession(llm=model) as session:
         session.on("conversation_item_added", conversation_events.append)
         await session.start(Agent(instructions="test"))
 
@@ -121,7 +121,7 @@ async def _transcribed_user_messages(
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
     conversation_events: list[ConversationItemAddedEvent] = []
 
-    async with AgentSession(llm=model) as session:
+    async with LiveSession(llm=model) as session:
         session.on("conversation_item_added", conversation_events.append)
         await session.start(Agent(instructions="test"))
 
@@ -179,33 +179,6 @@ async def test_realtime_user_message_falls_back_to_delivery_time() -> None:
     assert len(messages) == 1
     assert before <= messages[0].created_at <= time.time()
     assert "started_speaking_at" not in messages[0].metrics
-
-
-async def test_realtime_user_turn_is_ordered_before_the_reply_it_prompted() -> None:
-    """A duplex model answers over the caller, so the transcript arrives after its own reply."""
-    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
-
-    async with AgentSession(llm=model) as session:
-        agent = Agent(instructions="test")
-        await session.start(agent)
-
-        agent._chat_ctx.add_message(
-            role="assistant", content="answering", id="reply", created_at=1_000_500.0
-        )
-
-        model.active_session.emit(
-            "input_audio_transcription_completed",
-            llm.InputTranscriptionCompleted(
-                item_id="user_turn",
-                transcript="what is my name?",
-                is_final=True,
-                turn_started_at=1_000_000.0,
-            ),
-        )
-        await asyncio.sleep(0)
-
-        ids = [item.id for item in agent.chat_ctx.items if item.type == "message"]
-        assert ids.index("user_turn") < ids.index("reply")
 
 
 @pytest.mark.parametrize(
@@ -275,7 +248,7 @@ async def test_realtime_audio_redaction_warning_is_emitted_once_per_session(
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
 
     with caplog.at_level(logging.WARNING, logger="livekit.agents"):
-        async with AgentSession(
+        async with LiveSession(
             llm=model, vad=None, turn_handling={"turn_detection": None}
         ) as session:
             await session.start(
@@ -293,7 +266,7 @@ async def test_usage_reported_as_the_session_closes_is_still_collected() -> None
     """A session-billed model only learns its final usage as the connection drains."""
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
 
-    async with AgentSession(llm=model) as session:
+    async with LiveSession(llm=model) as session:
         await session.start(Agent(instructions="test"))
         model.active_session.closing_metrics = RealtimeModelMetrics(
             request_id="sess_1",

@@ -1,0 +1,20 @@
+[package]
+name = "lk-agents-host-derive"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Makes `#[host(..)]` legal Rust. The generator reads the attributes; this crate only lets rustc see them."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# `Vocabulary` (2026-09-06) is a real derive: it needs the enum's variant names. `Host` still
+# expands to nothing. `export` (2026-09-13) parses a whole item -- struct, fn, const, macro
+# invocation -- which is what `full` is for.
+syn = { version = "2", default-features = false, features = ["derive", "full", "parsing", "printing", "proc-macro"] }
+quote = "1"
+proc-macro2 = "1"
+# The in-place expansions (`#[host(object|export)]`, `#[class]`) for the crates on its `IN_PLACE`.
+lk-agents-bindgen = { path = "../lk-agents-bindgen" }

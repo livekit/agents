@@ -62,7 +62,6 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         self,
         extra_instructions: str = "",
         include_time: bool = False,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -112,7 +111,6 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                     extra_instructions=extra,
                 ),
             ),
-            chat_ctx=chat_ctx,
             turn_detection=turn_detection,
             tools=[*(tools or []), self._build_update_dob_tool()],
             stt=stt,
@@ -176,7 +174,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
 
         if not self._confirmation_required(ctx):
             if not self.done():
-                self.complete(
+                self._complete(
                     GetDOBResult(
                         date_of_birth=self._current_dob,
                         time_of_birth=self._current_time,
@@ -187,7 +185,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         confirm_tool = self._build_confirm_tool(dob=dob)
         current_tools = [t for t in self.tools if t.id != "confirm_dob"]
         current_tools.append(confirm_tool)
-        await self.update_tools(current_tools)
+        await self._update_tools(current_tools)
 
         formatted_date = dob.strftime("%B %d, %Y")
         response = f"The date of birth has been updated to {formatted_date}"
@@ -227,7 +225,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
 
             if not self._confirmation_required(ctx) and self._current_dob is not None:
                 if not self.done():
-                    self.complete(
+                    self._complete(
                         GetDOBResult(
                             date_of_birth=self._current_dob,
                             time_of_birth=self._current_time,
@@ -239,7 +237,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                 confirm_tool = self._build_confirm_tool(dob=self._current_dob)
                 current_tools = [t for t in self.tools if t.id != "confirm_dob"]
                 current_tools.append(confirm_tool)
-                await self.update_tools(current_tools)
+                await self._update_tools(current_tools)
 
             formatted_time = birth_time.strftime("%I:%M %p")
             response = f"The time of birth has been updated to {formatted_time}"
@@ -283,7 +281,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                 return "No date of birth was provided yet, ask the user to provide it."
 
             if not self.done():
-                self.complete(
+                self._complete(
                     GetDOBResult(
                         date_of_birth=self._current_dob,
                         time_of_birth=self._current_time,
@@ -301,7 +299,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             reason: A short explanation of why the user declined to provide the date of birth
         """
         if not self.done():
-            self.complete(ToolError(f"couldn't get the date of birth: {reason}"))
+            self._complete(ToolError(f"couldn't get the date of birth: {reason}"))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):

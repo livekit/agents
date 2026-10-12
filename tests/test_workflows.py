@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from livekit.agents import AgentSession, beta, inference, llm
+from livekit.agents import LiveSession, beta, inference, llm
 from livekit.agents.llm.tool_context import ToolError
 from livekit.agents.voice.run_result import RunResult
 from livekit.rtc import Room
@@ -18,7 +18,7 @@ def _llm_model() -> llm.LLM:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("input_modality", ["text", "audio"])
 async def test_collect_email(input_modality: Literal["text", "audio"]) -> None:
-    async with _llm_model() as llm, AgentSession(llm=llm) as sess:
+    async with _llm_model() as llm, LiveSession(llm=llm) as sess:
         await sess.start(beta.workflows.GetEmailTask())
 
         result = await sess.run(
@@ -39,7 +39,7 @@ async def test_collect_email(input_modality: Literal["text", "audio"]) -> None:
 
         assert result.final_output.email_address == "theo@livekit.io"
 
-    async with _llm_model() as llm, AgentSession(llm=llm) as sess:
+    async with _llm_model() as llm, LiveSession(llm=llm) as sess:
         await sess.start(beta.workflows.GetEmailTask())
 
         with pytest.raises(ToolError):
@@ -66,7 +66,7 @@ def get_dtmf_task(ask_for_confirmation: bool) -> beta.workflows.GetDtmfTask:
 @pytest.mark.asyncio
 async def test_get_dtmf_sip_event_without_confirmation() -> None:
     with patch("livekit.agents.beta.workflows.dtmf_inputs.get_job_context", get_mock_job_context):
-        async with _llm_model() as llm, AgentSession(llm=llm) as sess:
+        async with _llm_model() as llm, LiveSession(llm=llm) as sess:
             await sess.start(get_dtmf_task(ask_for_confirmation=False))
 
             result = await sess.run(
@@ -85,7 +85,7 @@ async def test_get_dtmf_sip_event_without_confirmation() -> None:
 @pytest.mark.asyncio
 async def test_get_dtmf_sip_event_with_confirmation() -> None:
     with patch("livekit.agents.beta.workflows.dtmf_inputs.get_job_context", get_mock_job_context):
-        async with _llm_model() as llm, AgentSession(llm=llm) as sess:
+        async with _llm_model() as llm, LiveSession(llm=llm) as sess:
             await sess.start(get_dtmf_task(ask_for_confirmation=True))
 
             initial_result: RunResult[None] = await sess.run(

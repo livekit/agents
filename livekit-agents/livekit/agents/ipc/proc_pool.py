@@ -7,11 +7,10 @@ from collections.abc import Awaitable, Callable
 from multiprocessing.context import BaseContext
 from typing import Any, Literal
 
-from .. import utils
+from .. import _core, utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
-from ..utils.hw.cpu import get_cpu_monitor
 from . import inference_executor, job_proc_executor, job_thread_executor
 from .job_executor import JobExecutor
 
@@ -23,7 +22,7 @@ EventTypes = Literal[
     "process_job_launched",
 ]
 
-MAX_CONCURRENT_INITIALIZATIONS = min(math.ceil(get_cpu_monitor().cpu_count()), 4)
+MAX_CONCURRENT_INITIALIZATIONS = min(math.ceil(_core.cpu_count()), 4)
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):

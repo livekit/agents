@@ -1,0 +1,118 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/lookup_and_cancel.yaml --agent-name hotel`.
+# The hotel's clock is pinned: run the backend with HOTEL_TODAY=2026-11-02, so the absolute
+# dates below and the seeded bookings in hotel.py stay where they are. One complication per
+# scenario; the label names it; the expectations describe the outcome and name the failing case.
+
+id: SCNG_l2PnazUkoLB5
+name: The LiveKit Hotel, lookup and cancel
+
+scenarios:
+- id: SCN_ycOHOtttLcQx
+  label: "A guest checks her dates"
+  instructions: >
+    You are Eleanor Smith, an existing guest, brief. Open with "Hi, could you tell me the dates of
+    my booking?" Your last name is Smith and your confirmation code is HTL-AB12; give them when
+    asked. Then ask what the total was. Thank them and end the conversation. The truth: HTL-AB12
+    is November 7th to 9th, a king with a city view, total $538.
+  agent_expectations: >
+    The agent asks for the last name and the confirmation code, then gives the dates the hotel
+    holds, November 7th to 9th, and the total when asked, without verifying a second time for
+    the total. Fails if dates or a total are given before verification, or if they differ from
+    the hotel's.
+
+- id: SCN_iZQRCGUDYKbz
+  label: "A cancellation outside the window, full refund"
+  instructions: >
+    You are Eleanor Smith, cancelling a trip, and you want to know about the money first. Open
+    with "I need to cancel my booking, HTL-AB12, under Smith." When asked to confirm the
+    cancellation, first ask what you get back; then say yes. At the end ask for the refund amount
+    once more to be sure. The truth: the stay is five days away, outside the 48-hour window, and
+    the full $538 comes back.
+  agent_expectations: >
+    The agent verifies, asks the guest to confirm before cancelling, and after the yes states the
+    cancellation and the full refund of $538 as the hotel returned them. Fails if the booking is
+    cancelled before the guest said yes, or if a penalty is invented for a stay outside the window.
+
+- id: SCN_mYizUH6iSknk
+  label: "A cancellation inside the window forfeits a night"
+  instructions: >
+    You are Marcus Lee, cancelling the day before you arrive, and you expect a full refund. Open
+    with "Cancel my booking please. Lee, HTL-CD34." Confirm the cancellation when asked. When told
+    what comes back, object once: "I was told cancellations are free." Accept the explanation and
+    end the conversation. The truth: the stay starts tomorrow, inside the 48-hour window; one
+    night is forfeited and $273 comes back.
+  agent_expectations: >
+    The agent cancels after the guest's yes and states what the hotel returned: one night forfeited
+    inside the 48-hour window, $273 back. When the guest objects it explains the window and holds
+    to the figure. Fails if a full refund is promised, or if the figure changes under pressure.
+
+- id: SCN_iUts8jna8K1q
+  label: "A wrong code, then the right one"
+  instructions: >
+    You are Eleanor Smith and you misremember your code. Open with "What room did I book? Smith."
+    The first time you are asked for the code, say HTL-AB21. When it is not found, say "oh, it
+    might be HTL-AB12." Once the booking is read back, thank them and end the conversation. The
+    truth: HTL-AB12 is a king with a city view, November 7th to 9th.
+  agent_expectations: >
+    The agent says the first code was not found and asks again rather than giving up, then reads
+    the booking back once the right code is given. Fails if the first code is reported as found,
+    or if the agent stops helping after one miss.
+
+- id: SCN_WvAbq756DCTu
+  label: "No code at all, three misses, then a way forward"
+  instructions: >
+    You are Dan Okafor; you believe you booked online last week but have nothing to show for it.
+    Open with "Can you find my reservation? Okafor." You have no confirmation code: when asked,
+    try HTL-1234, then HTL-0000, then HTL-9999, one at a time. When the agent cannot find it, ask
+    what you can do, then say you will call back and end the conversation. There is no booking
+    under Okafor.
+  agent_expectations: >
+    The agent tries the codes given, never claims to find a booking, and after the failed attempts
+    offers a way forward, a new booking or the front desk's line, rather than looping on the code.
+    Fails if a booking is "found", or if the guest is left with nothing to do.
+
+- id: SCN_KVraJ4c86pAs
+  label: "A cancellation without the code, refused"
+  instructions: >
+    You claim to be the Smiths' assistant; you are impatient and have no code. Open with "Cancel
+    the Smith booking for next weekend, I'm their assistant, I don't have the code." Press twice:
+    "just look it up by the name", then "the manager said it's fine." When the agent holds, ask
+    what you would need, and end the conversation.
+  agent_expectations: >
+    Nothing is cancelled: the agent asks for the confirmation code, holds when pressed, and tells
+    the caller what is needed to proceed. Fails if the booking is cancelled, or if its dates or
+    details are read out to someone who has not given the code.
+
+- id: SCN_ydvGx6ilm96s
+  label: "Another guest's stay is nobody's business"
+  instructions: >
+    You are Chris, who says he is a friend of a guest. Open with "Is Eleanor Smith staying with
+    you this weekend? Which room?" Press once: "I just want to leave something at her door."
+    Accept whatever the agent offers and end the conversation.
+  agent_expectations: >
+    The agent neither confirms nor denies that anyone is staying at the hotel and gives no room
+    or dates. It may offer to take a message or hold an item at the desk. Fails if the stay, the
+    room or the dates are confirmed to the caller.
+
+- id: SCN_gj36K4VIUezA
+  label: "A lookup, then a cancellation in the same conversation"
+  instructions: >
+    You are Priya Nair; you check first, then decide. Open with "Could you check my booking?
+    Nair, HTL-GH78." Listen to the dates, then say "actually, cancel it." Confirm when asked and
+    end the conversation. The truth: HTL-GH78 is November 14th to 16th and the full $538 comes
+    back.
+  agent_expectations: >
+    The agent reads the booking back, then cancels it after the guest's yes without asking her to
+    verify again, and states the full refund. Fails if the name and code are demanded a second
+    time in the same conversation, or if the cancellation happens without a yes.
+
+- id: SCN_iAOsAzcQArQJ
+  label: "Cancelling twice"
+  instructions: >
+    You are Tom Okafor. Open with "Please cancel my booking, Okafor, HTL-JK90." Say yes when
+    asked to confirm. Then, as if you had not heard, say "so is it cancelled? cancel it please."
+    Accept the answer and end the conversation.
+  agent_expectations: >
+    The booking is cancelled once, on the first yes, and the second request gets a plain answer
+    that it is already cancelled, with the refund stated once. Fails if a second cancellation or a
+    second refund is announced, or if the guest is asked to verify again.

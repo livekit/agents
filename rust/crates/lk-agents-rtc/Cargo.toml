@@ -1,0 +1,24 @@
+[package]
+name = "lk-agents-rtc"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Host-provided RTC capabilities and deterministic test implementations for LiveKit agents"
+
+[dependencies]
+lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+# `python` only. pyo3's attribute macros spell `::pyo3`, so the crate that expands them names it.
+pyo3 = { workspace = true, optional = true }
+
+[features]
+# The Python binding, expanded in place: every `#[host(..)]` item here becomes its pyo3 class,
+# function or proxy (`lk-agents-bindgen`), registered on `_core` through `lk_agents_abi::python`.
+# Enabled by `lk-agents-py` only; without it this crate has no pyo3.
+python = ["dep:pyo3", "lk-agents-abi/python"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

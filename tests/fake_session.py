@@ -8,9 +8,9 @@ from typing import Any
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
-    AgentSession,
     EndpointingOptions,
     InterruptionOptions,
+    LiveSession,
     NotGivenOr,
     RecordingOptions,
     TurnHandlingOptions,
@@ -37,7 +37,7 @@ def create_session(
     extra_kwargs: dict[str, Any] | None = None,
     can_pause_audio: bool = False,
     with_stt: bool = True,
-) -> AgentSession:
+) -> LiveSession:
     user_speeches = actions.get_user_speeches(speed_factor=speed_factor)
     llm_responses = actions.get_llm_responses(speed_factor=speed_factor)
     tts_responses = actions.get_tts_responses(speed_factor=speed_factor)
@@ -53,7 +53,7 @@ def create_session(
     )
     # allowing overriding default endpointing and interruption options
     turn_handling = turn_handling or {}
-    # Use VAD-based endpointing by default. The AgentSession default is the
+    # Use VAD-based endpointing by default. The LiveSession default is the
     # turn-detector-v1-mini model; it runs locally but predicts end-of-turn from
     # acoustic features, so it can't fire deterministically on synthetic test
     # audio. Model accuracy is covered by the audio_eot suite instead.
@@ -70,7 +70,7 @@ def create_session(
     if "aec_warmup_duration" not in extra:
         extra["aec_warmup_duration"] = None  # disable aec warmup by default
 
-    session = AgentSession[None](
+    session = LiveSession[None](
         vad=FakeVAD(
             fake_user_speeches=user_speeches,
             min_silence_duration=0.5 / speed_factor,
@@ -101,7 +101,7 @@ def create_session(
 
 
 async def run_session(
-    session: AgentSession,
+    session: LiveSession,
     agent: Agent,
     *,
     drain_delay: float = 5,

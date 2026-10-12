@@ -1,0 +1,91 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/booking.yaml --agent-name dentist`.
+# The practice's clock is pinned: run the backend with FRONTDESK_NOW=2026-06-12T09:00, a Friday,
+# so the openings seeded in calendar_api.py and the absolute dates below stay where they are. Each
+# scenario books a different slot, since the calendar is shared across a run. One complication
+# per scenario; the label names it; the expectations describe the outcome and name the failing case.
+
+id: SCNG_BU9qEbWPpIk4
+name: Pearl Dental, booking
+
+scenarios:
+- id: SCN_mUAMatGaV6Jx
+  label: "Flexible patient, hesitant to share an email"
+  instructions: >
+    You are Maya Chen, a freelance designer between client calls, due for a cleaning, easygoing
+    but a little wary of giving out personal information. Open with "I need a cleaning, what do
+    you have next Wednesday?" and accept the first Wednesday time offered. When asked for your email, hesitate once, "do you really
+    need that?", then give maya.chen@example.com. Say yes when the appointment is read back to
+    you, and end the conversation once it is confirmed.
+  agent_expectations: >
+    The agent offers the Wednesday June 17 openings, 11:00 and 14:30, holds the booking until the
+    email is given, says what it is for if the patient asks before giving it, reads the
+    appointment back with the email, and confirms exactly one appointment, the one the patient
+    picked. Fails if a time is offered that the practice did not list, or if the booking is
+    confirmed without the email or before the patient said yes.
+
+- id: SCN_UBd4NbrmZQgU
+  label: "Patient opens with a specific date"
+  instructions: >
+    You are Tom Okafor, planning a check-up around a trip, polite but with one date in mind.
+    Open with "Do you have any availability on July 16 for a check-up?" before hearing any
+    options. Pick the 1 PM slot from
+    what is offered. Give t.okafor@example.com when asked, say yes to the read-back, and end the
+    conversation once it is confirmed.
+  agent_expectations: >
+    The agent checks July 16 and offers its openings, 9:30 and 13:00, then books July 16 at 13:00
+    after collecting the email and the patient's yes. Fails if a time is offered that the
+    practice did not list, or if any other appointment is booked.
+
+- id: SCN_b9lHMNuObDsO
+  label: "Change of mind before confirming"
+  instructions: >
+    You are Sofia Ruiz, juggling a moving schedule and a chipped tooth; you think out loud and
+    correct yourself. Ask what is available next week for the chipped tooth and first choose
+    Wednesday June 17 at 2:30 PM. When asked for
+    your email, change your mind instead: "actually, make it Thursday at 2:30". Then give
+    sofia.ruiz@example.com, say yes to the read-back, and end the conversation once confirmed.
+  agent_expectations: >
+    The agent follows the change of mind and books only Thursday June 18 at 14:30, with the
+    email and after the patient's yes. Fails if Wednesday is booked, if both are booked, or if
+    the read-back names the wrong day.
+
+- id: SCN_MZxkvr9CayCh
+  label: "Earliest available appointment"
+  instructions: >
+    You are Amir Hassan, with a toothache since last night, direct. Ask for the soonest
+    appointment available, without naming a date, and take whatever the earliest offered time
+    is. Give amir.h@example.com when asked, say yes to the read-back, and end the
+    conversation once confirmed. Today is Friday June 12, 2026, in the morning.
+  agent_expectations: >
+    The agent offers the earliest opening, today June 12 at 15:30, and books it after collecting
+    the email and the patient's yes. Fails if a later slot is presented as the earliest, or if a
+    time is offered that the practice did not list.
+
+- id: SCN_qn0SI705xQ7R
+  label: "Booked slot disappears from later listings"
+  instructions: >
+    You are Leo Marsh, booking a cleaning for yourself now and scouting a time for your partner
+    to book separately later. Ask what is available next week and book Tuesday June 16 at 9 AM, giving
+    leo.marsh@example.com and saying yes to the read-back. Once it is confirmed, ask "what times
+    do you still have left next week?" and listen. If Tuesday at 9 is still offered, point out
+    that you just booked it. End the conversation without booking anything else.
+  agent_expectations: >
+    The agent books Tuesday June 16 at 09:00, and the openings it lists afterwards no longer
+    include it. Exactly one appointment is booked. Fails if Tuesday at 9 is offered again after
+    the booking, or if a second appointment is made.
+
+- id: SCN_a7Kq2mVx9RzL
+  label: "An email the front desk must not restate"
+  instructions: >
+    You are Rosalind O'Neil-Baptiste, booking a check-up; precise about your details because
+    people get them wrong. Ask for Monday June 22 at 1 PM. When asked for your email, give
+    exactly r.o-neil+checkup@example.co.uk, nothing else in that message. When the appointment
+    is read back, check the email in it character by character: if it differs in any way,
+    say so and correct it; if it matches, say yes. End the conversation once confirmed.
+  agent_expectations: >
+    The read-back of the appointment carries the email exactly as given,
+    r.o-neil+checkup@example.co.uk, with the hyphen, the plus and the co.uk domain, and the
+    requests sent to the back office with the email and with the patient's yes are the
+    patient's own words, not a restatement of them. The booking is Monday June 22 at 13:00.
+    Fails if the read-back shows a different address, if the patient has to correct it, or if
+    the back office is sent a paraphrase of the email or of the yes.

@@ -15,7 +15,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import Agent, AgentSession, APIConnectionError, llm
+from livekit.agents import Agent, APIConnectionError, LiveSession, llm
 from livekit.agents.llm import ChatContext, FallbackAdapter, LLMStream, Tool
 from livekit.agents.telemetry import (
     set_tracer_provider,
@@ -192,7 +192,7 @@ async def test_update_agent_records_failure_once(
     redacted: bool,
 ) -> None:
     monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redacted)
-    session = AgentSession()
+    session = LiveSession()
     failure = RuntimeError("private failure details")
     try:
         await session.start(_FirstAgent())

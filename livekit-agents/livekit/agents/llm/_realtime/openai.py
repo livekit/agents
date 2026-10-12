@@ -279,6 +279,10 @@ class _ResponseGeneration:
         self.message_ch.close()
 
 
+RESPONSE_CREATE_TIMEOUT = 10.0
+"""How long a generate_reply waits for its response.created before it gives up."""
+
+
 class _DiscardedGeneration:
     """Marks a response cancelled before it surfaced, so its trailing events are skipped."""
 
@@ -478,7 +482,7 @@ class RealtimeModel(llm.RealtimeModel):
                     interrupt_response=True,
                 ),
             )
-            session = AgentSession(llm=model)
+            session = LiveSession(llm=model)
             ```
         """
         api_version: str | None = kwargs.get("api_version") or os.getenv("OPENAI_API_VERSION")
@@ -929,6 +933,13 @@ class RealtimeSession(
         self.send_event(self._create_session_update_event())
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        # the response.create events whose response.created has not arrived, by event id, with
+        # the timer that gives up on each: a reconnection sends them again on the new
+        # connection, after the conversation is replayed, so a reply asked for just before the
+        # connection dropped (a tool's result, say) is not lost with it
+        self._pending_response_creates: dict[
+            str, tuple[ResponseCreateEvent, asyncio.TimerHandle]
+        ] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
@@ -1036,14 +1047,27 @@ class RealtimeSession(
                     ),
                 ) from e
 
-            for fut in self._response_created_futures.values():
-                if not fut.done():
-                    fut.set_exception(
-                        llm.RealtimeError("pending response discarded due to session reconnection")
-                    )
-            self._response_created_futures.clear()
+            # a response that had started is gone with the connection; one asked for and not
+            # yet created is asked for again, now that the conversation it answers is back
             self._discarded_event_ids.clear()
             self._close_current_generation("session reconnection")
+            for event_id, (create_ev, handle) in list(self._pending_response_creates.items()):
+                fut = self._response_created_futures.get(event_id)
+                if fut is None or fut.done():
+                    self._pending_response_creates.pop(event_id, None)
+                    continue
+                handle.cancel()
+                self._pending_response_creates[event_id] = (
+                    create_ev,
+                    asyncio.get_event_loop().call_later(
+                        RESPONSE_CREATE_TIMEOUT, self._on_response_create_timeout, event_id
+                    ),
+                )
+                logger.debug(
+                    "re-sending a response.create the lost connection never answered",
+                    extra={"event_id": event_id},
+                )
+                self.send_event(create_ev)
 
             logger.debug(f"reconnected to {self._realtime_model._provider_label}")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
@@ -1094,6 +1118,9 @@ class RealtimeSession(
                 if not fut.done():
                     fut.set_exception(llm.RealtimeError("realtime session closed"))
             self._response_created_futures.clear()
+            for _, handle in self._pending_response_creates.values():
+                handle.cancel()
+            self._pending_response_creates.clear()
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         url, headers = self._create_ws_url_and_headers()
@@ -1751,21 +1778,18 @@ class RealtimeSession(
         if is_given(tools):
             params.tools = self._convert_tools_to_oai(tools)  # type: ignore
 
-        self.send_event(
-            ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
+        create_ev = ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
+        self.send_event(create_ev)
+        self._pending_response_creates[event_id] = (
+            create_ev,
+            asyncio.get_event_loop().call_later(
+                RESPONSE_CREATE_TIMEOUT, self._on_response_create_timeout, event_id
+            ),
         )
 
-        def _on_timeout() -> None:
-            self._response_created_futures.pop(event_id, None)
-            if fut and not fut.done():
-                # discard the response if the server still creates it after the timeout
-                self._discarded_event_ids.add(event_id)
-                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
-
-        handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
-
         def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
-            handle.cancel()
+            if pending := self._pending_response_creates.pop(event_id, None):
+                pending[1].cancel()
             self._response_created_futures.pop(event_id, None)
             if f.cancelled():
                 # response.create was already sent; cancel the response server-side
@@ -1776,6 +1800,14 @@ class RealtimeSession(
 
         fut.add_done_callback(_on_fut_done)
         return fut
+
+    def _on_response_create_timeout(self, event_id: str) -> None:
+        self._pending_response_creates.pop(event_id, None)
+        fut = self._response_created_futures.pop(event_id, None)
+        if fut and not fut.done():
+            # discard the response if the server still creates it after the timeout
+            self._discarded_event_ids.add(event_id)
+            fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
     @property
     def has_active_generation(self) -> bool:

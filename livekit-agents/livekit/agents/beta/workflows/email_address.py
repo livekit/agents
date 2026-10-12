@@ -28,7 +28,6 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         self,
         *,
         instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -73,7 +72,6 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         super().__init__(
             instructions=instructions,
-            chat_ctx=chat_ctx,
             turn_detection=turn_detection,
             tools=[*(tools or []), self._build_update_email_tool()],
             stt=stt,
@@ -118,13 +116,13 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         if not self._confirmation_required(ctx):
             if not self.done():
-                self.complete(GetEmailResult(email_address=self._current_email))
+                self._complete(GetEmailResult(email_address=self._current_email))
             return None  # no need to continue the conversation
 
         confirm_tool = self._build_confirm_tool(email=email)
         current_tools = [t for t in self.tools if t.id != "confirm_email_address"]
         current_tools.append(confirm_tool)
-        await self.update_tools(current_tools)
+        await self._update_tools(current_tools)
 
         read_back = (
             f"Repeat the email character by character: {separated_email}"
@@ -151,7 +149,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 )
 
             if not self.done():
-                self.complete(GetEmailResult(email_address=email))
+                self._complete(GetEmailResult(email_address=email))
             return None
 
         return confirm_email_address
@@ -164,7 +162,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             reason: A short explanation of why the user declined to provide the email address
         """
         if not self.done():
-            self.complete(ToolError(f"couldn't get the email address: {reason}"))
+            self._complete(ToolError(f"couldn't get the email address: {reason}"))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if self._verify_spelling:

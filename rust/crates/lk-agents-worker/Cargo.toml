@@ -1,0 +1,36 @@
+[package]
+name = "lk-agents-worker"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+livekit-protocol.workspace = true
+prost.workspace = true
+lk-agents-abi = { path = "../lk-agents-abi" }
+serde_json = { workspace = true, features = ["preserve_order"] }
+tokio = { workspace = true, features = ["net"] }
+thiserror.workspace = true
+async-trait.workspace = true
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+# Use the same TLS crypto provider as the rest of the workspace.
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+sysinfo.workspace = true
+log.workspace = true
+web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
+url = "2"
+livekit-token.workspace = true
+# `python` only. pyo3's attribute macros spell `::pyo3`, so the crate that expands them names it.
+pyo3 = { workspace = true, optional = true }
+
+[features]
+# The Python binding, expanded in place: every `#[host(..)]` item here becomes its pyo3 class or
+# function (`lk-agents-bindgen`), registered on `_core` through `lk_agents_abi::python`. Enabled by
+# `lk-agents-py` only; without it this crate has no pyo3.
+python = ["dep:pyo3", "lk-agents-abi/python"]
+
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util"] }

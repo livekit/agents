@@ -1,0 +1,114 @@
+/*
+ * Tailwind's theme, mapped onto the Blender tokens.
+ *
+ * `@theme inline` means the utilities resolve to `var(--room)` and friends
+ * rather than copying their values, so `src/app/tokens.css` stays the single
+ * place a Blender value is written.
+ *
+ * Only tokens that earn a utility are here. Anything used once stays a plain
+ * `var()` in the rule that needs it.
+ */
+@theme inline {
+  /* Surfaces */
+  --color-room: var(--room);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-header-tertiary: var(--header-tertiary);
+  --color-header-quaternary: var(--header-quaternary);
+  --color-control: var(--control);
+
+  /* Line and ink */
+  --color-line: var(--line);
+  --color-line-weak: var(--line-weak);
+  --color-ink: var(--text);
+  --color-label: var(--text-label);
+  --color-strong: var(--text-strong);
+
+  /* State */
+  --color-accent: var(--accent);
+  --color-orb: var(--orb);
+  --color-accent-text: var(--accent-text);
+  --color-attention: var(--attention);
+  --color-failed: var(--failed);
+  --color-failed-text: var(--failed-text);
+
+  /* Blender's own metrics. Named, not numeric: `h-row` says what it is. */
+  --spacing-header: var(--h-header);
+  --spacing-row: var(--h-row);
+  --spacing-row-sm: var(--h-row-sm);
+  --spacing-checkbox: var(--sz-checkbox);
+  --spacing-measure: var(--w-measure);
+  --spacing-label: var(--w-label);
+  --spacing-orb: var(--sz-orb);
+  --spacing-mark: var(--sz-mark);
+  --spacing-mark-sm: var(--sz-mark-sm);
+  --spacing-mark-lg: var(--sz-mark-lg);
+  --spacing-composer: var(--h-composer);
+  --spacing-composer-btn: var(--sz-composer-btn);
+
+  --radius-blender: var(--radius);
+  --radius-blender-sm: var(--radius-sm);
+  --radius-bubble: var(--radius-bubble);
+
+  --font-ui: var(--font-ui);
+  --font-mono: var(--font-mono);
+
+  --text-window: var(--fs-window);
+  --text-micro: var(--fs-micro);
+  --text-ui: var(--fs-ui);
+  --text-state: var(--fs-state);
+  --text-tag: var(--fs-tag);
+  --text-title: var(--fs-title);
+
+  --ease-blender: var(--ease);
+  /* A `transition-*` utility without a `duration-*` beside it falls back to
+     this, so it must follow the token as well or reduced motion misses it. */
+  --default-transition-duration: var(--dur-fast);
+  --duration-fast: var(--dur-fast);
+  --duration-base: var(--dur);
+  --duration-slow: var(--dur-slow);
+}
+
+/*
+ * Blender's 2/4/8/12/16/24 ramp, as the numeric spacing scale. Tailwind's
+ * default `p-1` is 4px; Blender's smallest gap is 2px, so the scale is
+ * redefined rather than inherited to keep `p-1 ... p-6` meaning what the
+ * tokens mean.
+ */
+@theme inline {
+  --spacing-1: var(--pad-1);
+  --spacing-2: var(--pad-2);
+  --spacing-3: var(--pad-3);
+  --spacing-4: var(--pad-4);
+  --spacing-5: var(--pad-5);
+  --spacing-6: var(--pad-6);
+}
+
+/*
+ * Runs that repeat across the panels. Named, they say what they are rather
+ * than how they are drawn.
+ */
+
+/* A value, a count, a timestamp: dim, monospaced, small. */
+@utility meta {
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-label);
+}
+
+/* Blender's window headers: 8px, uppercase, tracked. */
+@utility window-label {
+  font-size: var(--fs-window);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+/* Scrolls, but the bar is not the position indicator here. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

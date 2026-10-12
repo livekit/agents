@@ -14,6 +14,11 @@ from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
 from livekit.agents.cli import log
 
 from . import concurrency
+from .agentdb_fixture import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
+    agentdb_storage,
+    agentdb_worker,
+    agentdb_workers,
+)
 from .toxic_proxy import Toxiproxy
 from .virtual_time import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
     _virtual_wall_clock,
@@ -27,7 +32,7 @@ TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_in
 # highest fd soft limit the room tests survive on macOS
 _MAX_OPEN_FILES = 8192
 
-# Category names are the pytest markers declared in pyproject.toml — the single
+# Category names are the pytest markers declared in pyproject.toml, the single
 # source of truth. They're read from the file rather than via config.getini()
 # because the --<category> options are registered in pytest_addoption, which runs
 # before pytest has parsed the ini file.
@@ -173,7 +178,7 @@ def pytest_configure(config: pytest.Config) -> None:
         lines.extend(f"             - {rel}" for rel in modules)
     if uncategorized:
         blocked = _plural(len(uncategorized), "module")
-        lines.append(f"\n  UNCATEGORIZED {blocked} — run is blocked:")
+        lines.append(f"\n  UNCATEGORIZED {blocked}, run is blocked:")
         lines.extend(f"             - {rel}" for rel in uncategorized)
     pytest.exit("\n".join(lines), returncode=0)
 

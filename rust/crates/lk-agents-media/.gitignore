@@ -1,0 +1,11 @@
+# DERIVED, not vendored-and-committed. `vendor/ffmpeg.pin` (a URL and a sha256) is the thing under
+# version control; `vendor/fetch.sh` turns it into these. The extracted tree is 100 MB across
+# 8,540 files, which would dominate the repository and make `git log` over it unreadable, and it
+# is reproducible from the pin by construction.
+#
+# READ THIS BEFORE ADDING TO IT: if you ever decide to commit the tree instead -- which is a
+# legitimate choice for a network-free build environment -- these two lines are what you delete.
+# Do not add a broader pattern here; an over-eager ignore is how a vendored dependency goes
+# missing from a clone and the failure shows up as a build error nobody can reproduce.
+/vendor/ffmpeg-*/
+/vendor/*.tar.xz

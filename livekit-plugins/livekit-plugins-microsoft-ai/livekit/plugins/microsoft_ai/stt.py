@@ -137,7 +137,7 @@ class STT(stt.STT):
             (e.g. LiveKit's Silero VAD). Idle audio is withheld; these public frames
             recover the onset even when the start notification is delayed.
             Required explicitly: pass None only when driving flush/end_input yourself.
-            AgentSession's separate VAD does not commit a native STT stream.
+            LiveSession's separate VAD does not commit a native STT stream.
         url: Full WebSocket URL, or MICROSOFT_AI_STT_URL. No paths/query parameters
             are added automatically.
         model: Deployment model ID, or MICROSOFT_AI_STT_MODEL. No model is assumed.

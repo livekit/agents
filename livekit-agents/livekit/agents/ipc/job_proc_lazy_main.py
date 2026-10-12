@@ -46,7 +46,7 @@ from .proto import (
     StartJobRequest,
 )
 
-# Defensive timeout for AgentSession.aclose() during job shutdown. Hardcoded for now
+# Defensive timeout for LiveSession.aclose() during job shutdown. Hardcoded for now
 # as a guardrail against close paths that hang indefinitely. If aclose() does not
 # return in this window, the rest of the shutdown sequence (on_session_end,
 # ShuttingDown ack, room.disconnect, shutdown callbacks) runs anyway so user-
@@ -367,7 +367,7 @@ class _JobProc:
             if not self._ctx_connect_called and not self._ctx_shutdown_called:
                 logger.warning(
                     "The room connection was not established within 10 seconds after calling job_entry. "  # noqa: E501
-                    "This might mean that job_ctx.connect() was never invoked, or that no AgentSession with an active RoomIO has been started."
+                    "This might mean that job_ctx.connect() was never invoked, or that no LiveSession with an active RoomIO has been started."
                 )
 
         warn_unconnected_task = asyncio.create_task(_warn_not_connected_task())
@@ -439,7 +439,7 @@ class _JobProc:
                 await asyncio.wait_for(session.aclose(), timeout=_SESSION_ACLOSE_TIMEOUT)
             except asyncio.TimeoutError:
                 logger.error(
-                    "AgentSession.aclose() timed out after %.1fs; "
+                    "LiveSession.aclose() timed out after %.1fs; "
                     "proceeding with shutdown so registered callbacks still run.",
                     _SESSION_ACLOSE_TIMEOUT,
                 )

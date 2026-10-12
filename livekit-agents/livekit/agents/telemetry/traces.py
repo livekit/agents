@@ -101,7 +101,7 @@ _OPTION_PRIMITIVES = (str, bool, int, float)
 
 @runtime_checkable
 class DescribesOptions(Protocol):
-    """An object that can appear in ``AgentSession`` options (a turn detector, a model) and
+    """An object that can appear in ``LiveSession`` options (a turn detector, a model) and
     wants the session report to show its configuration.
 
     Return the options worth reporting, keyed by name; values can be primitives, mappings

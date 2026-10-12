@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents import Agent, LiveSession, TurnHandlingOptions
 from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.agent_activity import AgentActivity
@@ -26,7 +26,7 @@ from .fake_vad import FakeVAD
 pytestmark = pytest.mark.unit
 
 
-def _make_activity(session: AgentSession) -> AgentActivity:
+def _make_activity(session: LiveSession) -> AgentActivity:
     return AgentActivity(Agent(instructions="test"), session)
 
 
@@ -198,8 +198,8 @@ def test_agent_speech_end_clears_confirmed_interruption_after_recognition_teardo
     assert not activity._interruption_detected
 
 
-def _realtime_barge_in_session() -> AgentSession:
-    return AgentSession(
+def _realtime_barge_in_session() -> LiveSession:
+    return LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(
@@ -231,7 +231,7 @@ async def test_adaptive_interruption_still_requires_stt_for_non_realtime(
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeLLM(fake_responses=[]),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(
@@ -254,7 +254,7 @@ async def test_adaptive_interruption_disabled_for_realtime_with_server_turn_dete
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(interruption={"mode": "adaptive"}),
@@ -331,7 +331,7 @@ async def test_backchannel_confirmed_clears_rt_audio_even_with_stt(
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False)),
         stt=FakeSTT(),
         vad=FakeVAD(fake_user_speeches=[]),

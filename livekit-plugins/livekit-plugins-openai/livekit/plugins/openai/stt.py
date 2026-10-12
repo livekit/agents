@@ -501,7 +501,7 @@ class STT(stt.STT):
             for stream in self._streams:
                 _validate_context(resolved_model, stream._opts.languages, user_keywords)
 
-        # the transport is fixed at construction: AgentSession wraps a non-streaming STT once
+        # the transport is fixed at construction: LiveSession wraps a non-streaming STT once
         if is_given(model) and _is_realtime_only(model):
             if not self.capabilities.streaming:
                 raise ValueError(

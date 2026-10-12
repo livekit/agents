@@ -1,0 +1,66 @@
+[package]
+name = "lk-agents-media"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# §10: audio decode for playout, ogg/opus encode for `RecorderIO`, and (in `images`) the image
+# encoder `to_provider_format` needs.
+#
+# BELOW the purity line, and the isolation is the point: by DEFAULT this crate is pure Rust and
+# builds in well under a second, because the only thing compiled in is the WAV fast path
+# (`utils/codecs/decoder.py:145-335`). Everything that needs a C toolchain sits behind the
+# non-default `ffmpeg`, `resample`, and `blingfire` features. The workspace never builds ffmpeg
+# unless it is asked to.
+#
+# Nothing in tiers 0/1 may depend on this crate. `lk_agents_voice::recorder` reaches the encoder
+# through its own `OggOpusEncoder` trait and `lk_agents_voice::generation` never sees a container at
+# all; both are deliberate (docs/CONTRACTS.md §4.7, §8b).
+[features]
+default = []
+# Vendored sentence and word tokenization, including the C++ wrapper and models.
+blingfire = []
+# Compiles the hand-written ffmpeg bindings and the demux/decode + encode/mux loops.
+# Cold build is MINUTES when it also builds the vendored source tree. See build.rs.
+ffmpeg = []
+# libsoxr, the resampler behind `rtc.AudioResampler`. Off: `new_resampler` hands out the pure-Rust
+# `LinearResampler` from `lk-agents-abi`, so the decision crate's test closure compiles no C.
+resample = ["dep:soxr-sys"]
+# The image encoder `to_provider_format` needs (`images/`). Off by default for the same reason.
+images = ["dep:image"]
+# The Python binding, expanded in place: every `#[host(..)]` item here becomes its pyo3 class or
+# function (`lk-agents-bindgen`), registered on `_core` through `lk_agents_abi::python`. Enabled by
+# `lk-agents-py` only; without it this crate has no pyo3.
+python = ["dep:pyo3", "lk-agents-abi/python"]
+
+[dependencies]
+thiserror = { workspace = true }
+
+# `soxr.rs`, merged in from `lk-agents-media` by PLAN.md F. The SAME library that backs
+# `rtc.AudioResampler`, so behaviour matches by construction rather than by testing -- a different
+# resampler would put a different filter response in front of the VAD and EOT models, which were
+# trained on audio that went through this one.
+#
+# From the REGISTRY, not the local rust-sdks checkout, and the reason is operational: an
+# out-of-workspace `path` dependency makes `cargo-mutants` unusable workspace-wide, because it
+# copies the source tree to a temp dir and a `../../../../` path dangles there. crates.io 0.1.3 is
+# the same version as the local checkout and is published by LiveKit.
+soxr-sys = { version = "0.1.3", optional = true }
+
+# `images/` only -- see that module's docs. `image` runs with default-features off: no rayon, no
+# HDR/TIFF/WebP/AVIF decoders, no `ImageReader` probing. JPEG and PNG are the only two formats
+# `EncodeOptions.format` admits, and both are encode-only -- nothing here decodes an image.
+#
+# The dependency on `lk-agents-format` is one-way and must stay that way: format owns the
+# `SerializedImage` *type* (plain data, no encoder), this crate produces values of it. If format
+# encoded images it would pull `image` into the `{serde, thiserror, smallvec, ordered-float}`
+# closure that keeps test tiers 0/1 at their targets.
+lk-agents-abi = { path = "../lk-agents-abi" }
+image = { workspace = true, optional = true }
+# `python` only. pyo3's attribute macros spell `::pyo3`, so the crate that expands them names it.
+pyo3 = { workspace = true, optional = true }
+
+[build-dependencies]
+# Compiles the native wrappers when `ffmpeg` or `blingfire` is enabled.
+cc = "1"
