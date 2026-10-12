@@ -158,14 +158,35 @@ class RecorderIO:
         *,
         agent_session: AgentSession,
         sample_rate: int = 48000,
+        bit_rate: int | None = None,
+        constant_bit_rate: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        """Records the session's audio to a stereo Ogg Opus file: the user left, the agent right.
+
+        Args:
+            agent_session (AgentSession): The session whose audio is recorded.
+            sample_rate (int, optional): Sample rate of the recording in Hz. Defaults to 48000.
+            bit_rate (int, optional): Opus bit rate in bits per second for both channels
+                together. Defaults to the encoder's (96 kb/s for stereo with libopus).
+            constant_bit_rate (bool, optional): Encode every packet at ``bit_rate`` instead of
+                letting silence shrink to a few bytes, so the file size reflects the length and
+                players that estimate a duration from the opening bit rate (AVFoundation) are
+                not misled. ``True`` with ``bit_rate=128_000`` matches LiveKit Egress. Defaults
+                to False.
+            loop (asyncio.AbstractEventLoop, optional): Defaults to the current event loop.
+        """
+        if bit_rate is not None and bit_rate <= 0:
+            raise ValueError(f"bit_rate must be positive, got {bit_rate}")
+
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
 
         self._q: queue.Queue[_Captured | _Flush | _EndRun | None] = queue.Queue()
         self._session = agent_session
         self._sample_rate = sample_rate
+        self._bit_rate = bit_rate
+        self._constant_bit_rate = constant_bit_rate
         self._started = False
         self._loop = loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
@@ -288,6 +309,11 @@ class RecorderIO:
         # native ffmpeg opus encoder is experimental
         if codec_name == "opus":
             stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
+
+        if self._bit_rate is not None:
+            stream.codec_context.bit_rate = self._bit_rate
+        if self._constant_bit_rate:
+            stream.codec_context.options["vbr"] = "off"
 
         tracks = [_Track(sample_rate=self._sample_rate, t0=self._t0) for _ in range(2)]
         cursor = 0
