@@ -24,38 +24,17 @@ from aiohttp.test_utils import TestServer
 import livekit.agents.inference.vad as inference_vad
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, APIConnectOptions
-from livekit.agents.inference.stt import STT, _keyterms_extra_for_model
+from livekit.agents.inference.stt import (
+    STT,
+    OpenaiOptions,
+    _keyterms_extra_for_model,
+)
 from livekit.agents.stt import RecognizeStream, SpeechEvent, SpeechEventType
 
 from .fake_stt import FakeUserSpeech
-from .fake_vad import FakeVAD, FakeVADStream
+from .fake_vad import FakeVAD
 
 pytestmark = pytest.mark.unit
-
-
-class _TrackingStream(FakeVADStream):
-    """FakeVAD stream that records when the STT retires it with aclose()."""
-
-    def __init__(self, vad: FakeVAD) -> None:
-        super().__init__(vad)
-        self.aclosed = False
-
-    async def aclose(self) -> None:
-        self.aclosed = True
-        await super().aclose()
-
-
-class _TrackingVAD(FakeVAD):
-    """FakeVAD whose streams report whether they were closed."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.streams: list[_TrackingStream] = []
-
-    def stream(self) -> FakeVADStream:
-        stream = _TrackingStream(self)
-        self.streams.append(stream)
-        return stream
 
 
 class _DefaultVAD(FakeVAD):
@@ -251,32 +230,22 @@ async def test_end_of_speech_finalizes_the_turn_while_input_is_open() -> None:
     assert 0 < audio_bytes <= 24000 * 2 // 10, "more than 100 ms of 24 kHz PCM was sent"
 
 
-async def _wait_until_stream_is_live(
-    stream: RecognizeStream, *, vad: bool = False, timeout: float = 5.0
-) -> None:
-    """Block until the stream's session is connected (and its VAD wired when asked)."""
-
-    async def live() -> bool:
-        return (
-            stream._ws is not None
-            and not stream._ws.closed
-            and (stream._vad_stream is not None if vad else True)
-        )
-
+async def _wait_until_stream_is_live(stream: RecognizeStream, *, timeout: float = 5.0) -> None:
+    """Block until the stream's session is connected."""
     for _ in range(int(timeout / 0.02)):
-        if await live():
+        if stream._ws is not None and not stream._ws.closed:
             return
         await asyncio.sleep(0.02)
     raise AssertionError("stream did not connect in time")
 
 
-async def test_live_switch_to_openai_wires_the_vad_and_finals_flow(
+async def test_live_switch_to_openai_keeps_client_finalization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A stream created for a server-endpointing model has no VAD; the in-band switch
-    to OpenAI must wire one so session.finalize still reaches the gateway."""
+    """The gateway does not switch a live session's provider, so a stream on a
+    server-endpointing model keeps that model and its server-side endpointing even after
+    the parent moves to OpenAI: it must not wire a VAD it did not have."""
     created: dict[str, Any] = {}
-    updates: list[dict[str, Any]] = []
 
     async def handler(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -285,67 +254,31 @@ async def test_live_switch_to_openai_wires_the_vad_and_finals_flow(
             event = json.loads(msg.data)
             if event["type"] == "session.create":
                 created.update(event)
-            elif event["type"] == "session.update":
-                updates.append(event)
-            elif event["type"] == "session.finalize":
-                await ws.send_json(
-                    {"type": "final_transcript", "transcript": "hello", "language": "en"}
-                )
-                await ws.send_json({"type": "session.finalized"})
         return ws
 
-    class _SpeechyVAD(FakeVAD):
-        """The default VAD inference.STT builds when none is passed, made to detect."""
-
-        def __init__(self) -> None:
-            super().__init__(
-                fake_user_speeches=[
-                    FakeUserSpeech(start_time=0.0, end_time=0.05, transcript="hello", stt_delay=0.0)
-                ],
-                min_speech_duration=0.01,
-                min_silence_duration=0.05,
-            )
-
-    monkeypatch.setattr(inference_vad, "VAD", _SpeechyVAD)
-
     async with _gateway(handler) as (base_url, session):
-        # 24 kHz so the live session can take the OpenAI model; Deepgram accepts it too
-        stt = _make_stt(
-            model="deepgram/nova-3",
-            sample_rate=24000,
-            base_url=base_url,
-            http_session=session,
-        )
+        stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
         stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
-
-        async def feed() -> None:
-            while True:
-                stream.push_frame(_silence(48000, 0.1))
-                await asyncio.sleep(0.02)
-
-        feeder = asyncio.create_task(feed())
-        vad_stream_before_close = None
         try:
             await _wait_until_stream_is_live(stream)
+            assert stream._vad is None
+
             stt.update_options(model="openai/gpt-live-transcribe")
-            final = await asyncio.wait_for(_first_final(stream), timeout=5.0)
-            vad_stream_before_close = stream._vad_stream
+            await asyncio.sleep(0.05)
         finally:
-            feeder.cancel()
             await stream.aclose()
 
-    assert final.alternatives[0].text == "hello"
     assert created["model"] == "deepgram/nova-3", "the session started on Deepgram"
-    assert [u["settings"]["model"] for u in updates] == ["openai/gpt-live-transcribe"]
-    assert isinstance(stream._vad, _SpeechyVAD)
-    assert vad_stream_before_close is not None
+    # the running session keeps Deepgram (and so no client endpointing), however the
+    # parent and streams created later move on
+    assert stream._vad is None
+    assert stt._opts.model == "openai/gpt-live-transcribe"
 
 
-async def test_live_switch_to_openai_at_the_wrong_rate_keeps_the_current_model(
-    caplog,
-) -> None:
+async def test_live_switch_at_the_wrong_rate_keeps_the_session_and_warns(caplog) -> None:
     """The stream's audio rate is fixed at creation; a 16 kHz session must not be
-    switched in-band to a model the gateway refuses at that rate."""
+    switched in-band to a model the gateway refuses at that rate, and its language from
+    the model string must not leak onto the running session either."""
     updates: list[dict[str, Any]] = []
 
     async def handler(request: web.Request) -> web.WebSocketResponse:
@@ -374,13 +307,12 @@ async def test_live_switch_to_openai_at_the_wrong_rate_keeps_the_current_model(
     assert stt._opts.sample_rate == 24000
     # the live session keeps the model (and rate) it was created with
     assert stream._opts.model == "deepgram/nova-3"
-    assert stream._vad is None
-    assert not updates, "no session.update may be sent for a refused model"
-    assert "live stream stays on" in caplog.text
+    assert "takes audio only at 24000 Hz" in caplog.text
 
 
-async def test_live_switch_off_openai_unwires_the_vad(caplog) -> None:
-    """Switching a live OpenAI session to a server-endpointing model drops the VAD."""
+async def test_a_model_suffix_language_reaches_the_stream_only_with_its_model() -> None:
+    """A ``:language`` suffix belongs to its model: a stream that keeps an earlier model
+    must not have the new model's language forced on it."""
     updates: list[dict[str, Any]] = []
 
     async def handler(request: web.Request) -> web.WebSocketResponse:
@@ -392,93 +324,27 @@ async def test_live_switch_off_openai_unwires_the_vad(caplog) -> None:
                 updates.append(event)
         return ws
 
-    with caplog.at_level(logging.WARNING):
-        async with _gateway(handler) as (base_url, session):
-            stt = _make_stt(base_url=base_url, http_session=session)
-            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
-            try:
-                await _wait_until_stream_is_live(stream, vad=True)
-                assert stream._vad_stream is not None
-
-                stt.update_options(model="deepgram/nova-3")
-                await asyncio.sleep(0.05)
-            finally:
-                await stream.aclose()
-
-    assert stream._vad is None
-    assert stream._vad_stream is None
-    assert [u["settings"]["model"] for u in updates] == ["deepgram/nova-3"]
-    assert "`vad` will be ignored" in caplog.text
-
-
-async def test_switching_off_openai_acloses_the_retired_vad_stream(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Dropping the VAD on a model switch must aclose the old stream so its dedicated
-    executor is released and it cannot finalize the model that replaced it."""
-    vad = _TrackingVAD()
-    monkeypatch.setattr(inference_vad, "VAD", lambda: vad)
-
-    async def handler(request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        async for _ in ws:
-            pass
-        return ws
-
     async with _gateway(handler) as (base_url, session):
-        stt = _make_stt(base_url=base_url, http_session=session)
+        stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
         stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
         try:
-            await _wait_until_stream_is_live(stream, vad=True)
-            retired = stream._vad_stream
-            assert isinstance(retired, _TrackingStream)
-
-            stt.update_options(model="deepgram/nova-3")
+            await _wait_until_stream_is_live(stream)
+            stream.push_frame(_silence(16000, 0.1))
+            stt.update_options(model="openai/gpt-live-transcribe:fr")
             await asyncio.sleep(0.1)
         finally:
             await stream.aclose()
 
-    assert stream._vad_stream is None
-    assert retired.aclosed, "the retired VAD stream must be closed, not just dropped"
-
-
-async def test_a_refused_switch_does_not_change_the_language(caplog) -> None:
-    """A model refused for its sample rate must not apply its ``:language`` suffix to the
-    session that is still running on the previous model."""
-    updates: list[dict[str, Any]] = []
-
-    async def handler(request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        async for msg in ws:
-            event = json.loads(msg.data)
-            if event["type"] == "session.update":
-                updates.append(event)
-        return ws
-
-    with caplog.at_level(logging.WARNING):
-        async with _gateway(handler) as (base_url, session):
-            stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
-            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
-            try:
-                await _wait_until_stream_is_live(stream)
-                stream.push_frame(_silence(16000, 0.1))
-                stt.update_options(model="openai/gpt-live-transcribe:fr")
-                await asyncio.sleep(0.1)
-            finally:
-                await stream.aclose()
-
-    assert stream._opts.model == "deepgram/nova-3"
+    assert stt._opts.language == "fr", "the parent's new model carries the language"
     assert stream._opts.language is NOT_GIVEN or stream._opts.language is None
     assert all("language" not in u["settings"] for u in updates), (
-        "the refused model's implied language must not reach the running session"
+        "a language implied by the new model must not reach the session on the old one"
     )
 
 
-async def test_a_refused_switch_keeps_keyterms_on_the_running_model(caplog) -> None:
-    """Framework keyterms must reach the session under the running model's key, not the
-    refused model's key (deepgram ``keyterm`` rather than openai ``keywords``)."""
+async def test_an_explicit_language_still_reaches_a_live_stream() -> None:
+    """A language passed alongside the model is the caller's, so a live stream gets it
+    even when the model it is on does not change."""
     updates: list[dict[str, Any]] = []
 
     async def handler(request: web.Request) -> web.WebSocketResponse:
@@ -490,20 +356,122 @@ async def test_a_refused_switch_keeps_keyterms_on_the_running_model(caplog) -> N
                 updates.append(event)
         return ws
 
-    with caplog.at_level(logging.WARNING):
-        async with _gateway(handler) as (base_url, session):
-            stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
-            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
-            try:
-                await _wait_until_stream_is_live(stream)
-                stream.push_frame(_silence(16000, 0.1))
-                # parent moves to openai, but the live 16 kHz stream refuses the switch
-                stt.update_options(model="openai/gpt-live-transcribe")
-                stt._update_session_keyterms(["Acme"])
-                await asyncio.sleep(0.1)
-            finally:
-                await stream.aclose()
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream)
+            stt.update_options(model="deepgram/nova-3", language="fr")
+            await asyncio.sleep(0.1)
+        finally:
+            await stream.aclose()
+
+    assert any(u["settings"].get("language") == "fr" for u in updates)
+
+
+async def test_live_switch_keeps_keyterms_on_the_running_model() -> None:
+    """Framework keyterms must reach the session under the running model's key, not the
+    model the parent moved to (deepgram ``keyterm`` rather than openai ``keywords``)."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream)
+            stream.push_frame(_silence(16000, 0.1))
+            # the parent moves to openai, but the live session stays on deepgram
+            stt.update_options(model="openai/gpt-live-transcribe")
+            stt._update_session_keyterms(["Acme"])
+            await asyncio.sleep(0.1)
+        finally:
+            await stream.aclose()
 
     extras = [u["settings"]["extra"] for u in updates if "extra" in u["settings"]]
     assert not any("keywords" in e for e in extras), "openai key must not reach deepgram"
     assert {"keyterm": ["Acme"]} in extras, "deepgram must still get its keyterms"
+
+
+async def test_a_cleared_keyterm_list_reaches_the_live_session() -> None:
+    """A keyterm update must be formatted fresh: clearing the terms has to remove them
+    from the running session, not resend an earlier list."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream)
+            stt._update_session_keyterms(["Acme"])
+            await asyncio.sleep(0.05)
+            stt._update_session_keyterms([])
+            await asyncio.sleep(0.05)
+        finally:
+            await stream.aclose()
+
+    keyterm_updates = [
+        u["settings"]["extra"]["keyterm"]
+        for u in updates
+        if "keyterm" in u["settings"].get("extra", {})
+    ]
+    assert keyterm_updates == [["Acme"], []], "the clear must reach the live session"
+
+
+async def test_a_live_user_keyword_update_is_not_dropped_for_a_keyterm_model() -> None:
+    """Deepgram's weighted ``keywords`` is a user option distinct from its framework
+    ``keyterm``; a live update of it must reach the gateway, not be filtered out."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream)
+            stt.update_options(extra={"keywords": [("LiveKit", 2.0)]})
+            await asyncio.sleep(0.05)
+        finally:
+            await stream.aclose()
+
+    assert any(
+        u["settings"].get("extra", {}).get("keywords") == [["LiveKit", 2.0]] for u in updates
+    ), "the provider's own keywords option must reach the live session"
+
+
+def test_openai_options_are_accepted_by_the_typed_constructor() -> None:
+    """`OpenaiOptions` is exposed through the overload, not only the implementation."""
+    opts: OpenaiOptions = {"keywords": ["LiveKit"], "delay": "low"}
+    stt = STT(
+        model="openai/gpt-live-transcribe",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+        extra_kwargs=opts,
+    )
+    assert stt._opts.extra_kwargs == opts

@@ -229,9 +229,6 @@ def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
     return False
 
 
-_KEYTERM_KEYS = frozenset({"keyterm", "keyterms_prompt", "keywords", "additional_vocab"})
-
-
 def _keyterms_key_for_model(model: NotGivenOr[str]) -> str | None:
     """The ``extra`` key a model takes its keyterms under, or None if it has no keyterm
     prompting. Also serves as the capability check."""
@@ -610,6 +607,24 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: OpenAIModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[OpenaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -822,6 +837,9 @@ class STT(stt.STT):
         extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """Update STT configuration options."""
+        # a ":language" suffix belongs to the model that carries it, so it is applied to
+        # this STT but not forced onto a live stream that keeps an earlier model
+        explicit_language = language
         if is_given(model):
             # Mirror __init__: strip ":language" suffix and apply if not overridden.
             if isinstance(model, str):
@@ -851,22 +869,16 @@ class STT(stt.STT):
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
+            # keep this a pure user baseline: framework session keyterms are merged in
+            # per stream at forward time, so a later clear can actually remove them
             self._opts.extra_kwargs.update(extra)
             self._capabilities = replace(
                 self._capabilities,
                 diarization=_diarization_enabled(self._opts.extra_kwargs),
             )
-            # re-merge the active session keyterms so a user extra update doesn't drop them
-            keyterm_extra = _keyterms_extra_for_model(
-                self._opts.model,
-                extra_kwargs=self._opts.extra_kwargs,
-                session_keyterms=self._session_keyterms,
-            )
-            if keyterm_extra is not None:
-                extra = {**extra, **keyterm_extra}
 
         for stream in self._streams:
-            stream.update_options(model=model, language=language, extra=extra)
+            stream.update_options(model=model, language=explicit_language, extra=extra)
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if keyterms == self._session_keyterms:
@@ -879,13 +891,12 @@ class STT(stt.STT):
             return
 
         self._session_keyterms = list(keyterms)
-        # inference applies extra live via session.update; defer to END_OF_SPEECH since the
-        # gateway may reconnect upstream when the keyterms change
+        # Each stream formats the terms for the model it is actually running (a refused
+        # switch can leave it on a different provider than the parent). inference applies
+        # extra live via session.update, so a speaking stream defers to END_OF_SPEECH
+        # because the gateway may reconnect upstream when the keyterms change.
         for stream in self._streams:
-            if stream._speaking:
-                stream._pending_extra = keyterm_extra
-            else:
-                stream.update_options(extra=keyterm_extra)
+            stream._on_session_keyterms_changed()
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
         if (
@@ -927,9 +938,6 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._stt: STT = stt
         self._opts = opts
-        # the model this session actually runs on the gateway: a refused in-band model
-        # switch leaves it behind while the parent moves on
-        self._model: NotGivenOr[STTModels | str] = opts.model
         self._request_id = str(utils.shortuuid("stt_request_"))
 
         self._speaking = False
@@ -939,13 +947,6 @@ class SpeechStream(stt.SpeechStream):
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._vad: vad.VAD | None = vad_instance
-        # the live VAD stream and its finalize forwarder; rewired in place when a model
-        # update switches the session in or out of client endpointing
-        self._vad_stream: vad.VADStream | None = None
-        self._vad_tasks: set[asyncio.Task[None]] = set()
-        # aclose tasks for streams retired by a model switch; awaited (not cancelled) so
-        # the inference VAD's dedicated executor is always shut down
-        self._vad_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._session_update_tasks: set[asyncio.Task[None]] = set()
 
     def update_options(
@@ -961,128 +962,116 @@ class SpeechStream(stt.SpeechStream):
         that support it (e.g. AssemblyAI, Deepgram Flux) can apply changes without
         reconnecting. Unsupported providers ignore the message.
 
-        A model that requires an audio rate this stream was not created with is not
-        applied live: the stream's rate is fixed at creation, so the session keeps the
-        model it was created with (new streams pick up the switch). Switching in or
-        out of client endpointing rewires the session's VAD so `session.finalize`
-        matches the model in use.
+        A live session's provider, audio rate, and client endpointing are fixed when it is
+        created: the gateway does not switch them through session.update. This stream
+        therefore keeps the model it was created with, so its VAD (and the `session.finalize`
+        it sends) still matches the running model, and framework keyterms are formatted for
+        that model. Streams created after a parent switch start on the new model. The
+        requested model is still forwarded, as the other session settings are.
         """
         if is_given(model):
-            # Mirror __init__/STT.update_options: strip ":language" suffix and apply
-            # if not overridden.
+            # Mirror __init__/STT.update_options: strip ":language" suffix and apply if
+            # not overridden.
             if isinstance(model, str):
                 parsed_model, parsed_language = _parse_model_string(model)
                 model = parsed_model
                 if is_given(parsed_language) and not is_given(language):
                     language = parsed_language
+            self._warn_if_rate_refused(model)
 
-            required = _required_sample_rate(model)
-            if required is not None and required != self._opts.sample_rate:
-                # this stream's audio rate is fixed at creation, so a model that refuses
-                # it cannot run here; the live session keeps the model it was created
-                # with, and streams created after the parent switch carry the new rate.
-                # Drop the whole switch: any language or keyterms derived from the
-                # refused model must not leak into the session that is still running.
-                logger.warning(
-                    "live stream stays on %r: %r takes audio only at %d Hz, this "
-                    "stream was created at %d Hz",
-                    self._model,
-                    model,
-                    required,
-                    self._opts.sample_rate,
-                )
-                model = NOT_GIVEN
-                language = NOT_GIVEN
-                extra = NOT_GIVEN
-            else:
-                self._model = model
-                self._opts.model = model
-                # endpointing needs can change with the model; re-resolve the VAD and
-                # rewire the live stream so session.finalize tracks the new model
-                self._vad = _resolve_vad_for_model(model, self._vad)
-                if self._vad is not None and self._vad_stream is None:
-                    self._start_vad_stream()
-                elif self._vad is None and self._vad_stream is not None:
-                    self._retire_vad_stream()
-        model_key = _keyterms_key_for_model(self._model)
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
-            # never store a keyterm key another model owns; a keyterm update formatted for
-            # the model the parent moved to must not leak into this session's config
-            self._opts.extra_kwargs.update(
-                {k: v for k, v in extra.items() if k not in _KEYTERM_KEYS or k == model_key}
-            )
-            self._pending_extra = None
+            # a pure user baseline: framework keyterms are merged in at forward time, so a
+            # later clear can actually remove them
+            self._opts.extra_kwargs.update(extra)
 
-        # keyterms always go to the gateway under the key the model actually running
-        # uses: a switch from deepgram (keyterm) to openai (keywords) must move them
-        # across, and a refused switch must keep formatting for the running model.
-        forward_extra: NotGivenOr[dict[str, Any]] = extra
-        if is_given(model) or is_given(extra):
-            merged: dict[str, Any] = (
-                {k: v for k, v in extra.items() if k not in _KEYTERM_KEYS or k == model_key}
-                if is_given(extra)
-                else {}
-            )
-            keyterm_extra = _keyterms_extra_for_model(
-                self._model,
-                extra_kwargs=self._opts.extra_kwargs,
-                session_keyterms=self._stt._session_keyterms,
-            )
-            if keyterm_extra is not None:
-                merged = {**merged, **keyterm_extra}
-            forward_extra = merged if merged else NOT_GIVEN
-
-        has_update = is_given(model) or is_given(language) or is_given(forward_extra)
-        if has_update and self._ws is not None and not self._ws.closed:
-            settings: dict[str, Any] = {}
-            if is_given(model):
-                settings["model"] = model
-            if is_given(language):
-                settings["language"] = str(LanguageCode(language))
-            if is_given(forward_extra):
-                settings["extra"] = forward_extra
-            update_msg = {
-                "type": "session.update",
-                "settings": settings,
-            }
-            # Hold the task: the loop only weakly references it, and a collected one
-            # means self._opts moved on while the server was never told.
-            task = asyncio.create_task(self._send_session_update(update_msg))
-            self._session_update_tasks.add(task)
-            task.add_done_callback(self._session_update_tasks.discard)
-
-    def _start_vad_stream(self) -> None:
-        """Open a VAD stream and its finalize forwarder for the live session."""
-        if self._ws is None or self._ws.closed or self._vad is None:
+        if not (is_given(model) or is_given(language) or is_given(extra)):
             return
-        self._vad_stream = self._vad.stream()
-        task = asyncio.create_task(self._vad_finalize_task(self._ws, self._vad_stream))
-        self._vad_tasks.add(task)
-        task.add_done_callback(self._vad_tasks.discard)
+        # a live update supersedes any keyterms payload deferred to end of speech
+        self._pending_extra = None
+        self._send_live_update(
+            model=model,
+            language=language,
+            extra=self._forward_extra(extra if is_given(extra) else None),
+        )
 
-    def _retire_vad_stream(self) -> None:
-        """Stop feeding the current VAD stream and close it, so its executor is released
-        even though this synchronous call cannot await the cleanup.
+    def _warn_if_rate_refused(self, model: STTModels | str) -> None:
+        """A live session's rate is fixed at creation, so a model needing another leaves
+        the session on the model it is running and only future streams get the switch."""
+        required = _required_sample_rate(model)
+        if required is not None and required != self._opts.sample_rate:
+            logger.warning(
+                "live stream stays on %r: %r takes audio only at %d Hz, this stream was "
+                "created at %d Hz",
+                self._opts.model,
+                model,
+                required,
+                self._opts.sample_rate,
+            )
 
-        A model switch can leave a stale VAD finalize task running; closing the stream
-        ends its event channel, which tells the forwarder to exit before it can send a
-        `session.finalize` for the model that is no longer in use.
-        """
-        stream = self._vad_stream
-        if stream is None:
+    def _forward_extra(self, extra: dict[str, Any] | None) -> NotGivenOr[dict[str, Any]]:
+        """User extra (a sparse delta, or None) merged with the framework keyterms formatted
+        for the model this session is actually running. None becomes the running model's
+        keyterms alone, so a model update keeps them without resending a stale key from a
+        provider this session is not on."""
+        merged: dict[str, Any] = dict(extra) if extra else {}
+        keyterm_extra = _keyterms_extra_for_model(
+            self._opts.model,
+            extra_kwargs=self._opts.extra_kwargs,
+            session_keyterms=self._stt._session_keyterms,
+        )
+        if keyterm_extra is not None:
+            merged.update(keyterm_extra)
+        return merged if merged else NOT_GIVEN
+
+    def _send_live_update(
+        self,
+        *,
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
+        language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> None:
+        """Send a sparse session.update for the current session, if one is live."""
+        if self._ws is None or self._ws.closed:
             return
-        self._vad_stream = None
-        with contextlib.suppress(RuntimeError):
-            stream.end_input()
-        task = asyncio.create_task(stream.aclose())
-        self._vad_cleanup_tasks.add(task)
-        task.add_done_callback(self._vad_cleanup_tasks.discard)
+        settings: dict[str, Any] = {}
+        if is_given(model):
+            settings["model"] = model
+        if is_given(language):
+            settings["language"] = str(LanguageCode(language))
+        if is_given(extra):
+            settings["extra"] = extra
+        if not settings:
+            return
+        update_msg = {
+            "type": "session.update",
+            "settings": settings,
+        }
+        # Hold the task: the loop only weakly references it, and a collected one
+        # means self._opts moved on while the server was never told.
+        task = asyncio.create_task(self._send_session_update(update_msg))
+        self._session_update_tasks.add(task)
+        task.add_done_callback(self._session_update_tasks.discard)
+
+    def _on_session_keyterms_changed(self) -> None:
+        """Re-send this stream's keyterms under its own model's key, formatted fresh so a
+        cleared list is actually removed from the live session."""
+        extra = self._forward_extra(None)
+        if not is_given(extra):
+            return
+        # inference applies extra live via session.update; defer to END_OF_SPEECH since
+        # the gateway may reconnect upstream when the keyterms change
+        if self._speaking:
+            self._pending_extra = extra
+        else:
+            self._send_live_update(extra=extra)
 
     def _on_end_of_speech(self) -> None:
         if self._pending_extra is not None:
-            self.update_options(extra=self._pending_extra)
+            # send directly: the deferred payload is already formatted and must not be
+            # stored as user baseline, or a later clear could not remove it
+            self._send_live_update(extra=self._pending_extra)
             self._pending_extra = None
 
     async def _send_session_update(self, msg: dict[str, Any]) -> None:
@@ -1099,8 +1088,7 @@ class SpeechStream(stt.SpeechStream):
         async for ev in stream:
             if ev.type != vad.VADEventType.END_OF_SPEECH:
                 continue
-            # a retired stream must not finalize the model that replaced it
-            if ws.closed or self._vad_stream is not stream:
+            if ws.closed:
                 return
             try:
                 await ws.send_str(json.dumps({"type": "session.finalize"}))
@@ -1114,6 +1102,9 @@ class SpeechStream(stt.SpeechStream):
         transcript_timeout = utils.aio.sleep(FINALIZATION_TIMEOUT)
         session_closed = False
         http_session = self._stt._ensure_session()
+        # one VAD stream per session: the session's model (and so whether it needs
+        # client endpointing) is fixed for its lifetime
+        vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
 
         async def wait_for_inactivity() -> None:
             await input_ended.wait()
@@ -1131,8 +1122,8 @@ class SpeechStream(stt.SpeechStream):
                 async for ev in self._input_ch:
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(ev, rtc.AudioFrame):
-                        if self._vad_stream is not None:
-                            self._vad_stream.push_frame(ev)
+                        if vad_stream is not None:
+                            vad_stream.push_frame(ev)
                         frames.extend(audio_bstream.push(ev.data))
                     elif isinstance(ev, self._FlushSentinel):
                         frames.extend(audio_bstream.flush())
@@ -1147,9 +1138,8 @@ class SpeechStream(stt.SpeechStream):
                         }
                         await ws.send_str(json.dumps(audio_msg))
 
-                if self._vad_stream is not None:
-                    with contextlib.suppress(RuntimeError):
-                        self._vad_stream.end_input()
+                if vad_stream is not None:
+                    vad_stream.end_input()
 
                 input_ended.set()
                 finalize_msg = {
@@ -1233,7 +1223,6 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await self._connect_ws(http_session)
             self._ws = ws
-            self._vad_stream = self._vad.stream() if self._vad is not None else None
             receiver = asyncio.create_task(recv_task(ws))
             inactivity = asyncio.create_task(wait_for_inactivity())
             tasks = [
@@ -1241,8 +1230,8 @@ class SpeechStream(stt.SpeechStream):
                 receiver,
                 inactivity,
             ]
-            if self._vad_stream is not None:
-                tasks.append(asyncio.create_task(self._vad_finalize_task(ws, self._vad_stream)))
+            if vad_stream is not None:
+                tasks.append(asyncio.create_task(self._vad_finalize_task(ws, vad_stream)))
             try:
                 pending = set(tasks)
                 while True:
@@ -1259,14 +1248,6 @@ class SpeechStream(stt.SpeechStream):
             if self._session_update_tasks:
                 await utils.aio.gracefully_cancel(*self._session_update_tasks)
                 self._session_update_tasks.clear()
-            if self._vad_tasks:
-                await utils.aio.gracefully_cancel(*self._vad_tasks)
-                self._vad_tasks.clear()
-            if self._vad_cleanup_tasks:
-                # streams retired during a model switch; awaiting their aclose releases
-                # the inference VAD's dedicated executor
-                await utils.aio.gracefully_cancel(*self._vad_cleanup_tasks)
-                self._vad_cleanup_tasks.clear()
             if ws is not None:
                 try:
                     if not session_closed and not ws.closed:
@@ -1274,9 +1255,8 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.debug("failed to send session.close, ws may be closing")
                 await ws.close()
-            if self._vad_stream is not None:
-                await self._vad_stream.aclose()
-                self._vad_stream = None
+            if vad_stream is not None:
+                await vad_stream.aclose()
 
     async def _connect_ws(
         self, http_session: aiohttp.ClientSession
