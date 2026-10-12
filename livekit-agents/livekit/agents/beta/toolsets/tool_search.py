@@ -196,6 +196,10 @@ def _get_tool_params(tool: FunctionTool | RawFunctionTool) -> dict[str, str]:
     }
 
 
+def _words(text: str) -> list[str]:
+    return re.findall(r"[^\W_]+", text.lower())
+
+
 class KeywordSearchStrategy:
     """Keyword search using regex matching.
 
@@ -211,7 +215,7 @@ class KeywordSearchStrategy:
             }
 
     def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:
-        keywords = list(set(query.lower().split()))
+        keywords = list(set(_words(query)))
         if not keywords:
             return []
 
@@ -304,7 +308,7 @@ class BM25SearchStrategy:
             self._idf[term] = math.log((n - freq + 0.5) / (freq + 0.5) + 1.0)
 
     def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:
-        query_terms = query.lower().replace("_", " ").split()
+        query_terms = _words(query)
         if not query_terms:
             return []
 
@@ -323,12 +327,12 @@ class BM25SearchStrategy:
 
     def _tokenize(self, item: SearchItem) -> list[str]:
         """Tokenize with field weighting: name 3x, description 2x, parameters 1x."""
-        name_tokens = item.name.lower().replace("_", " ").split()
-        desc_tokens = item.description.lower().replace("_", " ").split()
+        name_tokens = _words(item.name)
+        desc_tokens = _words(item.description)
         param_tokens = []
         for k, v in item.parameters.items():
-            param_tokens.extend(k.lower().replace("_", " ").split())
-            param_tokens.extend(v.lower().replace("_", " ").split())
+            param_tokens.extend(_words(k))
+            param_tokens.extend(_words(v))
 
         # weight by repeating tokens
         return name_tokens * 3 + desc_tokens * 2 + param_tokens

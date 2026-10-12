@@ -186,6 +186,126 @@ class TestSearchStrategies:
         assert results[0].name == "get_records"
 
     @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["balance", "ledger"])
+    def test_match_by_punctuation_in_description(self, strategy: SearchStrategy, query: str):
+        """Punctuation attached to description words (commas, trailing period)
+        must not prevent matches, like the query normalization applied by
+        search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch the ledger, then the balance.",
+                parameters={"record_type": "Which records to fetch"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_match_by_mid_sentence_punctuation_in_description(self, strategy: SearchStrategy):
+        """A comma attached to a mid-sentence description word must not prevent
+        matches, like the query normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Track ledger, journal and receipts",
+                parameters={"record_type": "Which records to track"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search("ledger", items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["real", "time"])
+    def test_match_by_hyphenated_word_in_description(self, strategy: SearchStrategy, query: str):
+        """Hyphenated description words must match their parts, like the query
+        normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Get real-time balance updates",
+                parameters={"metric": "Which metric to report"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["the balance.", "balance?"])
+    def test_match_by_punctuation_in_query(self, strategy: SearchStrategy, query: str):
+        """Punctuation attached to query words must not prevent matches against
+        clean description words, like the index normalization applied by
+        build_index()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch account balance",
+                parameters={"account": "Account identifier"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_stock_price",
+                description="Get stock price for a symbol",
+                parameters={"symbol": "Stock ticker symbol"},
+                source=stock_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_match_by_period_terminated_param_description(self, strategy: SearchStrategy):
+        """A trailing period on a parameter description must not prevent
+        matches, like the query normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch ledger records",
+                parameters={"filter": "Only include settled refunds."},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search("refunds", items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
     def test_max_results_limit(self, strategy: SearchStrategy):
         items = _make_items()
         strategy.build_index(items)
