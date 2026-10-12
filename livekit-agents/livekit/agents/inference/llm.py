@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-import httpx
+import httpx2 as httpx
 import openai
 from openai.types.chat import (
     ChatCompletionChunk,

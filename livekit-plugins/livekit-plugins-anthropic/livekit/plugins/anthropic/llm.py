@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-import httpx
+import httpx2 as httpx
 
 import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
@@ -92,11 +92,11 @@ class LLM(llm.LLM):
         client (anthropic.AsyncClient | None): The Anthropic client to use. Defaults to None.
         max_retries (int, optional): Vendor client retries. Defaults to 0 because the framework
             owns retries via ``conn_options``.
-        timeout (httpx.Timeout | None): HTTP timeout configuration for the underlying httpx client.
-            Defaults to ``httpx.Timeout(5.0, read=30.0)``, which keeps a tight connect timeout
+        timeout (httpx2.Timeout | None): HTTP timeout configuration for the underlying httpx2 client.
+            Defaults to ``httpx2.Timeout(5.0, read=30.0)``, which keeps a tight connect timeout
             while allowing up to 30 s between streamed chunks — long enough for Claude's
             adaptive-thinking phases without masking genuine network stalls.
-            Pass a custom ``httpx.Timeout`` to override (e.g. ``httpx.Timeout(5.0, read=60.0)``
+            Pass a custom ``httpx2.Timeout`` to override (e.g. ``httpx2.Timeout(5.0, read=60.0)``
             for very large contexts or extended thinking budgets).
         temperature (float, optional): The temperature for the Anthropic API. Defaults to None.
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
@@ -168,11 +168,17 @@ class LLM(llm.LLM):
         if is_given(self._opts.user):
             extra["user"] = self._opts.user
 
+        # SDK 1.x dropped temperature/top_k from messages.create(). Older models
+        # still honor them when they are merged into the request JSON.
+        sampling: dict[str, Any] = {}
         if is_given(self._opts.temperature):
-            extra["temperature"] = self._opts.temperature
-
+            sampling["temperature"] = self._opts.temperature
         if is_given(self._opts.top_k):
-            extra["top_k"] = self._opts.top_k
+            sampling["top_k"] = self._opts.top_k
+        if sampling:
+            extra_body = dict(extra.get("extra_body") or {})
+            extra_body.update(sampling)
+            extra["extra_body"] = extra_body
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 

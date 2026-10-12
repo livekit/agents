@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 from yarl import URL
 
 import openai
