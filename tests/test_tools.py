@@ -1965,16 +1965,18 @@ class TestDuplicateScopeThroughExecute:
 
             # identical args with the confirm flag present-but-false is still a
             # duplicate. wait_for so a regression fails instead of hanging on the gate.
+            refused_ctx = _make_run_context(call_id="c2", name="check_order")
             blocked = await _asyncio.wait_for(
                 executor.execute(
                     tool=check_order,
-                    run_ctx=_make_run_context(call_id="c2", name="check_order"),
+                    run_ctx=refused_ctx,
                     raw_arguments={"order_id": "5", CONFIRM_DUPLICATE_PARAM: False},
                 ),
                 timeout=5,
             )
             assert isinstance(blocked, str) and "already running" in blocked
             assert "c2" not in executor._running_tasks
+            assert _emitted_items(refused_ctx.session) == []
         finally:
             gate.set()
             await _asyncio.gather(first, return_exceptions=True)

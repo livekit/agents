@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, Callable, Sequence
 from typing import Literal
 
 from livekit import rtc
@@ -194,6 +194,54 @@ class FakeRealtimeModel(RealtimeModel):
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+def generation(
+    *,
+    response_id: str,
+    text: str,
+    audio_duration: float,
+    function_calls: Sequence[FunctionCall] = (),
+) -> GenerationCreatedEvent:
+    """Build one generation with silence and optional function calls."""
+    message_ch = utils.aio.Chan[MessageGeneration]()
+    function_ch = utils.aio.Chan[FunctionCall]()
+    text_ch = utils.aio.Chan[str]()
+    audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+    modalities = asyncio.Future[list[str]]()
+    modalities.set_result(["audio", "text"])
+
+    message_ch.send_nowait(
+        MessageGeneration(
+            message_id=f"{response_id}-message",
+            text_stream=text_ch,
+            audio_stream=audio_ch,
+            modalities=modalities,
+        )
+    )
+    message_ch.close()
+    text_ch.send_nowait(text)
+    text_ch.close()
+    samples = int(_SAMPLE_RATE * audio_duration)
+    audio_ch.send_nowait(
+        rtc.AudioFrame(
+            data=b"\x00\x01" * samples,
+            sample_rate=_SAMPLE_RATE,
+            num_channels=1,
+            samples_per_channel=samples,
+        )
+    )
+    audio_ch.close()
+    for function_call in function_calls:
+        function_ch.send_nowait(function_call)
+    function_ch.close()
+
+    return GenerationCreatedEvent(
+        message_stream=message_ch,
+        function_stream=function_ch,
+        user_initiated=True,
+        response_id=response_id,
+    )
 
 
 _SAMPLE_RATE = 24000
