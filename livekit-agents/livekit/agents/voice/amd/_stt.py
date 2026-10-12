@@ -1,4 +1,4 @@
-"""Attribute racing STT transcripts to committed turns without access to AgentSession."""
+"""Attribute session and AMD STT transcripts to committed turns without access to AgentSession."""
 
 from __future__ import annotations
 
@@ -14,13 +14,13 @@ from ._chat_context import AMDTranscript, AMDTranscriptSource
 
 
 class AMDTurnTranscriptAccumulator:
-    """Buffer a turn's session and AMD transcripts so either source can be selected later."""
+    """Buffer a turn's session and AMD transcripts."""
 
     def __init__(self) -> None:
-        self._transcripts: dict[AMDTranscriptSource | None, str] = {"session": "", "amd": ""}
+        self._transcripts: dict[AMDTranscriptSource, str] = {"session": "", "amd": ""}
 
-    def snapshot(self, source: AMDTranscriptSource | None) -> AMDTranscript:
-        return AMDTranscript(self._transcripts.get(source, ""), source)
+    def get(self, source: AMDTranscriptSource) -> str:
+        return self._transcripts[source]
 
     def add(self, source: AMDTranscriptSource, transcript: str, *, replace: bool = False) -> None:
         transcript = transcript.strip()
@@ -31,21 +31,25 @@ class AMDTurnTranscriptAccumulator:
         )
 
 
-class AMDRacingSTT:
-    """Select the fastest STT or fall back to session STT when AMD STT fails."""
+class AMDTranscriber:
+    """Collect each turn's session transcript and, with an AMD STT, its own transcript too.
+
+    Neither source wins: the classifier sees both, so a late or missing transcript from
+    one STT does not empty the turn. Without session STT, AMD uses its own transcript
+    alone. If the AMD stream fails, turns fall back to the session transcript alone.
+    """
 
     def __init__(
         self,
         model: stt.STT | None,
         conn_options: APIConnectOptions,
         *,
-        race_session: bool = True,
+        session_stt: bool = True,
     ) -> None:
         self._model = model
         self._conn_options = conn_options
-        self._source: AMDTranscriptSource | None = "session" if model is None else None
-        if model is not None and not race_session:
-            self._source = "amd"
+        self._session_enabled = session_stt or model is None
+        self._amd_enabled = model is not None
         self._current = AMDTurnTranscriptAccumulator()
         self._stream: stt.RecognizeStream | None = None
 
@@ -56,7 +60,7 @@ class AMDRacingSTT:
     @property
     def amd_stt_active(self) -> bool:
         """Whether the optional AMD stream can still receive audio."""
-        return self._source != "session"  # already implies self._model is not None
+        return self._amd_enabled
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self.amd_stt_active:
@@ -84,28 +88,18 @@ class AMDRacingSTT:
     def push_transcript(
         self, transcript: str, *, replace: bool = False, source: AMDTranscriptSource = "session"
     ) -> None:
-        if not transcript.strip():
-            return
-
-        if source == "session":
-            self._current.add("session", transcript, replace=replace)
-            if self._source is None:
-                self.close_stream()
-            return
-
-        if self._source == "session":
-            return
-
-        self._current.add("amd", transcript, replace=replace)
-        self._source = "amd"
+        self._current.add(source, transcript, replace=replace)
 
     def end_turn(self, session_transcript: str) -> AMDTranscript:
         self.push_transcript(session_transcript, replace=True, source="session")
         turn, self._current = self._current, AMDTurnTranscriptAccumulator()
-        return turn.snapshot(self._source)
+        return AMDTranscript(
+            session=turn.get("session") if self._session_enabled else None,
+            amd=turn.get("amd") if self._amd_enabled else None,
+        )
 
     def close_stream(self) -> None:
-        self._source = "session"
+        self._amd_enabled = False
         if self._stream is None:
             return
         stream, self._stream = self._stream, None
@@ -125,10 +119,11 @@ class AMDRacingSTT:
             await asyncio.shield(self._stream_close_task)
 
     def fail(self, exc: Exception) -> None:
-        """Use the buffered session transcript for the open turn and subsequent turns."""
+        """Use the session transcript alone for the open turn and subsequent turns."""
         if not self.amd_stt_active:
             return
         logger.warning(
             "amd stt failed, falling back to session stt", extra={"error_type": type(exc).__name__}
         )
+        self._session_enabled = True
         self.close_stream()

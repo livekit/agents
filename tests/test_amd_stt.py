@@ -1,4 +1,4 @@
-"""Transcript attribution and failure handling in AMDRacingSTT, without a session."""
+"""Transcript attribution and failure handling in AMDTranscriber, without a session."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ import pytest
 
 from livekit import rtc
 from livekit.agents.types import APIConnectOptions
-from livekit.agents.voice.amd._stt import AMDRacingSTT
+from livekit.agents.voice.amd._chat_context import AMDTranscript
+from livekit.agents.voice.amd._stt import AMDTranscriber
 
 from .fake_stt import DrainingStream, DrainingSTT
 
@@ -19,11 +20,11 @@ pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent, pytest.mark.virtual_t
 
 
 @pytest.fixture
-async def racing_stt() -> AsyncIterator[tuple[AMDRacingSTT, DrainingStream]]:
+async def transcriber() -> AsyncIterator[tuple[AMDTranscriber, DrainingStream]]:
     model = DrainingSTT()
-    async with aclosing(AMDRacingSTT(model, APIConnectOptions(max_retry=0))) as racing:
-        racing.push_audio(rtc.AudioFrame.create(16000, 1, 320))
-        yield racing, model.streams[0]
+    async with aclosing(AMDTranscriber(model, APIConnectOptions(max_retry=0))) as transcriber:
+        transcriber.push_audio(rtc.AudioFrame.create(16000, 1, 320))
+        yield transcriber, model.streams[0]
     await model.aclose()
 
 
@@ -35,109 +36,101 @@ async def wait_for_transcript(predicate: Callable[[], bool]) -> None:
     await asyncio.wait_for(wait(), 1)
 
 
+async def amd_heard(transcriber: AMDTranscriber, stream: DrainingStream, text: str) -> None:
+    before = transcriber._current.get("amd")
+    stream.send_fake_transcript(text)
+    await wait_for_transcript(lambda: transcriber._current.get("amd") != before)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("winner", ["session", "amd"])
-async def test_first_transcript_selects_source_for_the_run(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream], winner: str
+@pytest.mark.parametrize("session_first", [True, False])
+async def test_each_turn_keeps_both_transcripts_whichever_arrives_first(
+    transcriber: tuple[AMDTranscriber, DrainingStream], session_first: bool
 ) -> None:
-    racing, stream = racing_stt
-    if winner == "session":
-        racing.push_transcript("session transcript")
-    stream.send_fake_transcript("amd transcript")
-    await asyncio.sleep(0.001)
-    turn = racing.end_turn("session transcript")
-    assert turn.source == winner
-    assert turn.transcript == f"{winner} transcript"
+    amd, stream = transcriber
+    if session_first:
+        amd.push_transcript("session transcript")
+    await amd_heard(amd, stream, "amd transcript")
+    first = amd.end_turn("session transcript")
+    assert first == AMDTranscript(session="session transcript", amd="amd transcript")
 
-    if winner == "amd":
-        racing.push_transcript("session is faster this time")
-        stream.send_fake_transcript("amd next turn")
-    await asyncio.sleep(0.001)
-    second = racing.end_turn("session next turn")
-    assert second.source == winner
-    assert second.transcript == f"{winner} next turn"
+    await amd_heard(amd, stream, "amd next turn")
+    second = amd.end_turn("session next turn")
+    assert second == AMDTranscript(session="session next turn", amd="amd next turn")
+    assert amd.amd_stt_active
 
 
-async def test_dedicated_stt_uses_session_transcripts_only_after_failure() -> None:
+@pytest.mark.asyncio
+async def test_a_late_amd_transcript_leaves_the_session_transcript(
+    transcriber: tuple[AMDTranscriber, DrainingStream],
+) -> None:
+    amd, stream = transcriber
+    await amd_heard(amd, stream, "Hi, you've reached Sam.")
+    first = amd.end_turn("Hi, you've reached Sam.")
+    second = amd.end_turn("Leave your name and number.")
+    assert first.amd == "Hi, you've reached Sam."
+    assert second == AMDTranscript(session="Leave your name and number.", amd="")
+    assert second.transcript == "Leave your name and number."
+
+    # the late words belong to the next turn
+    await amd_heard(amd, stream, "Leave your name and number.")
+    assert amd.end_turn("").amd == "Leave your name and number."
+
+
+def test_the_classifier_sees_both_transcripts_only_with_an_amd_stt() -> None:
+    assert AMDTranscript(session="Hi.").for_classifier() == "Hi."
+    assert AMDTranscript(session=None, amd="Hi.").for_classifier() == "Hi."
+    assert (
+        AMDTranscript(session="Hi.", amd="Hi.").for_classifier()
+        == '{"transcript_1": "Hi.", "transcript_2": "Hi."}'
+    )
+    assert (
+        AMDTranscript(session="Hi.", amd="").for_classifier()
+        == '{"transcript_1": "Hi.", "transcript_2": ""}'
+    )
+    assert AMDTranscript(session="", amd="Hi.").transcript == "Hi."
+
+
+async def test_without_session_stt_amd_uses_its_own_transcript_until_it_fails() -> None:
     model = DrainingSTT()
     async with aclosing(
-        AMDRacingSTT(model, APIConnectOptions(max_retry=0), race_session=False)
-    ) as transcriber:
-        transcriber.push_audio(rtc.AudioFrame.create(16000, 1, 320))
-        transcriber.push_transcript("Session transcript.")
-        assert transcriber.amd_stt_active
-        assert transcriber.end_turn("Session transcript.").transcript == ""
+        AMDTranscriber(model, APIConnectOptions(max_retry=0), session_stt=False)
+    ) as amd:
+        amd.push_audio(rtc.AudioFrame.create(16000, 1, 320))
+        amd.push_transcript("Session transcript.")
+        assert amd.end_turn("Session transcript.") == AMDTranscript(session=None, amd="")
 
-        model.streams[0].send_fake_transcript("AMD transcript.")
-        await wait_for_transcript(
-            lambda: transcriber._current.snapshot("amd").transcript == "AMD transcript."
+        await amd_heard(amd, model.streams[0], "AMD transcript.")
+        assert amd.end_turn("Session transcript.") == AMDTranscript(
+            session=None, amd="AMD transcript."
         )
-        turn = transcriber.end_turn("Session transcript.")
-        assert turn.source == "amd"
-        assert turn.transcript == "AMD transcript."
 
-        transcriber.push_transcript("Fallback transcript.")
-        transcriber.fail(RuntimeError("connection lost"))
-        turn = transcriber.end_turn("")
-        assert turn.source == "session"
-        assert turn.transcript == "Fallback transcript."
+        amd.push_transcript("Fallback transcript.")
+        amd.fail(RuntimeError("connection lost"))
+        assert amd.end_turn("") == AMDTranscript(session="Fallback transcript.", amd=None)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("started", ["no_audio", "reader_pending", "reader_running"])
-async def test_session_winner_stops_amd_stream_and_prevents_more_audio(started: str) -> None:
-    model = DrainingSTT()
-    model.aclose = Mock(wraps=model.aclose)
-    frame = rtc.AudioFrame.create(16000, 1, 320)
-    async with aclosing(AMDRacingSTT(model, APIConnectOptions(max_retry=0))) as racing:
-        if started != "no_audio":
-            racing.push_audio(frame)
-            stream = model.streams[0]
-            stream.push_frame = Mock(wraps=stream.push_frame)
-            if started == "reader_running":
-                await wait_for_transcript(lambda: bool(stream.frames))
-
-        racing.push_transcript("Hello from session.")
-        racing.push_audio(frame)
-
-        if started != "no_audio":
-            await wait_for_transcript(lambda: stream._task.done() and stream._metrics_task.done())
-            stream.push_frame.assert_not_called()
-            assert len(model.streams) == 1
-        else:
-            assert model.streams == []
-
-        assert racing.end_turn("").transcript == "Hello from session."
-        assert racing.end_turn("Next turn.").source == "session"
-        racing.push_audio(frame)
-        assert len(model.streams) == (0 if started == "no_audio" else 1)
-    model.aclose.assert_not_called()
-    await model.aclose()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "started", ["no_audio", "reader_pending", "reader_running", "amd_selected"]
-)
+@pytest.mark.parametrize("started", ["no_audio", "reader_pending", "reader_running", "amd_heard"])
 async def test_close_stops_stream_and_prevents_more_audio(started: str) -> None:
     model = DrainingSTT()
     model.aclose = AsyncMock(wraps=model.aclose)
     frame = rtc.AudioFrame.create(16000, 1, 320)
-    async with aclosing(AMDRacingSTT(model, APIConnectOptions(max_retry=0))) as racing:
+    async with aclosing(AMDTranscriber(model, APIConnectOptions(max_retry=0))) as amd:
         if started != "no_audio":
-            racing.push_audio(frame)
+            amd.push_audio(frame)
             stream = model.streams[0]
             stream.aclose = AsyncMock(wraps=stream.aclose)
             stream.push_frame = Mock(wraps=stream.push_frame)
-            if started in {"reader_running", "amd_selected"}:
+            if started in {"reader_running", "amd_heard"}:
                 await wait_for_transcript(lambda: bool(stream.frames))
-            if started == "amd_selected":
-                racing.push_transcript("Hello from AMD.", source="amd")
+            if started == "amd_heard":
+                amd.push_transcript("Hello from AMD.", source="amd")
 
-        await racing.aclose()
-        racing.push_audio(frame)
-        await racing.aclose()
-        racing.push_audio(frame)
+        await amd.aclose()
+        amd.push_audio(frame)
+        await amd.aclose()
+        amd.push_audio(frame)
 
         if started != "no_audio":
             stream.aclose.assert_awaited_once()
@@ -151,195 +144,90 @@ async def test_close_stops_stream_and_prevents_more_audio(started: str) -> None:
 
 @pytest.mark.asyncio
 async def test_turns_commit_immediately_without_flushing_stt(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream],
+    transcriber: tuple[AMDTranscriber, DrainingStream],
 ) -> None:
-    racing, stream = racing_stt
+    amd, stream = transcriber
     stream.flush = Mock(wraps=stream.flush)
-    empty = racing.end_turn("")
-    assert empty.transcript == ""
-    assert empty.source is None
+    assert amd.end_turn("") == AMDTranscript(session="", amd="")
 
-    stream.send_fake_transcript("Hello.")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "Hello."
+    await amd_heard(amd, stream, "Hello.")
+    assert amd.end_turn("Hello from session.") == AMDTranscript(
+        session="Hello from session.", amd="Hello."
     )
-    turn = racing.end_turn("Hello from session.")
-    assert turn.transcript == "Hello."
-    assert turn.source == "amd"
     stream.flush.assert_not_called()
     assert not stream.input_ended.is_set()
 
 
 @pytest.mark.asyncio
 async def test_late_final_after_empty_turns_belongs_to_the_next_turn(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream],
+    transcriber: tuple[AMDTranscriber, DrainingStream],
 ) -> None:
-    racing, stream = racing_stt
-    earlier = [racing.end_turn("") for _ in range(3)]
-    stream.send_fake_transcript("Hello.")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "Hello."
-    )
-    following = racing.end_turn("")
-    assert following.transcript == "Hello."
-    assert following.source == "amd"
-    assert all(turn.transcript == "" and turn.source is None for turn in earlier)
+    amd, stream = transcriber
+    earlier = [amd.end_turn("") for _ in range(3)]
+    await amd_heard(amd, stream, "Hello.")
+    assert amd.end_turn("").amd == "Hello."
+    assert all(turn.transcript == "" for turn in earlier)
 
 
 @pytest.mark.asyncio
 async def test_final_segments_accumulate_and_ignore_interim_transcript(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream],
+    transcriber: tuple[AMDTranscriber, DrainingStream],
 ) -> None:
-    racing, stream = racing_stt
+    amd, stream = transcriber
     stream.send_fake_transcript("partial", is_final=False)
     stream.send_fake_transcript("")
     stream.send_fake_transcript("Please leave")
     stream.send_fake_transcript("a message.")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "Please leave a message."
+    await wait_for_transcript(lambda: amd._current.get("amd") == "Please leave a message.")
+    assert amd.end_turn("Leave a message.") == AMDTranscript(
+        session="Leave a message.", amd="Please leave a message."
     )
-    turn = racing.end_turn("Leave a message.")
-    assert turn.transcript == "Please leave a message."
-    assert turn.source == "amd"
 
 
 @pytest.mark.asyncio
-async def test_final_after_commit_belongs_to_next_turn(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream],
+async def test_amd_failure_leaves_the_session_transcript_for_the_open_turn_on(
+    transcriber: tuple[AMDTranscriber, DrainingStream],
 ) -> None:
-    racing, stream = racing_stt
-    stream.send_fake_transcript("Hello.")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "Hello."
-    )
-    first = racing.end_turn("Hello.")
-    racing.push_transcript("Yes.")
-    stream.send_fake_transcript("Late words.")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "Late words."
-    )
-    second = racing.end_turn("Yes.")
-    assert first.transcript == "Hello."
-    assert second.transcript == "Late words."
-    assert second.source == "amd"
-
-
-@pytest.mark.asyncio
-async def test_empty_selected_source_commits_without_switching_to_session(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream],
-) -> None:
-    racing, stream = racing_stt
-    stream.send_fake_transcript("Please leave")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "Please leave"
-    )
-    first = racing.end_turn("Please leave a message.")
-    assert first.transcript == "Please leave"
-    second = racing.end_turn("at the tone.")
-    assert second.transcript == ""
-
-    stream.send_fake_transcript("a message at the tone.")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "a message at the tone."
-    )
-    third = racing.end_turn("Goodbye.")
-    assert third.transcript == "a message at the tone."
-    assert third.source == "amd"
-    assert second.transcript == ""
-
-
-@pytest.mark.asyncio
-async def test_selected_amd_failure_uses_session_transcript_only_for_the_open_turn(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream],
-) -> None:
-    racing, stream = racing_stt
-    stream.send_fake_transcript("Hello.")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "Hello."
-    )
-    first = racing.end_turn("Hello from session.")
-    second = racing.end_turn("Session turn two.")
-    racing.push_transcript("Session turn three.")
+    amd, stream = transcriber
+    await amd_heard(amd, stream, "Hello.")
+    first = amd.end_turn("Hello from session.")
+    amd.push_transcript("Session turn two.")
 
     stream.error = RuntimeError("connection lost")
-    racing.push_audio(rtc.AudioFrame.create(16000, 1, 320))
-    await wait_for_transcript(lambda: not racing.amd_stt_active)
-    third = racing.end_turn("")
-    assert first.transcript == "Hello."
-    assert first.source == "amd"
-    assert second.transcript == ""
-    assert third.transcript == "Session turn three."
-    assert third.source == "session"
-
-
-@pytest.mark.asyncio
-async def test_push_failure_uses_session_transcript_without_splicing_sources(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream],
-) -> None:
-    racing, stream = racing_stt
-    stream.send_fake_transcript("Please leave")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "Please leave"
-    )
-    racing.push_transcript("Please leave a message.")
-    stream.push_frame = Mock(side_effect=RuntimeError("failed to push"))
-    racing.push_audio(rtc.AudioFrame.create(16000, 1, 320))
-    turn = racing.end_turn("Please leave a message.")
-    assert turn.transcript == "Please leave a message."
-    assert turn.source == "session"
+    amd.push_audio(rtc.AudioFrame.create(16000, 1, 320))
+    await wait_for_transcript(lambda: not amd.amd_stt_active)
+    second = amd.end_turn("")
+    assert first == AMDTranscript(session="Hello from session.", amd="Hello.")
+    assert second == AMDTranscript(session="Session turn two.", amd=None)
+    assert amd.end_turn("Session turn three.").amd is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["push", "read"])
-async def test_failure_uses_session_even_when_its_transcript_is_empty(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream], failure: str
+async def test_failure_drops_the_amd_transcript_even_when_the_session_is_empty(
+    transcriber: tuple[AMDTranscriber, DrainingStream], failure: str
 ) -> None:
-    racing, stream = racing_stt
-    stream.send_fake_transcript("Please leave a message.")
-    await wait_for_transcript(
-        lambda: racing._current.snapshot(racing._source).transcript == "Please leave a message."
-    )
+    amd, stream = transcriber
+    await amd_heard(amd, stream, "Please leave a message.")
     if failure == "push":
         stream.push_frame = Mock(side_effect=RuntimeError("failed to push"))
     else:
         stream.error = RuntimeError("connection lost")
-    racing.push_audio(rtc.AudioFrame.create(16000, 1, 320))
-    await wait_for_transcript(lambda: not racing.amd_stt_active)
-    turn = racing.end_turn("")
-    assert turn.transcript == ""
-    assert turn.source == "session"
-
-    following = racing.end_turn("Session transcript.")
-    assert following.transcript == "Session transcript."
-    assert following.source == "session"
-
-
-@pytest.mark.asyncio
-async def test_failure_before_any_transcript_falls_back_to_session(
-    racing_stt: tuple[AMDRacingSTT, DrainingStream],
-) -> None:
-    racing, stream = racing_stt
-    stream.error = RuntimeError("connection lost")
-    racing.push_audio(rtc.AudioFrame.create(16000, 1, 320))
-    await wait_for_transcript(lambda: not racing.amd_stt_active)
-    empty = racing.end_turn("")
-    assert empty.transcript == ""
-    assert empty.source == "session"
-
-    turn = racing.end_turn("Hello.")
-    assert turn.transcript == "Hello."
-    assert turn.source == "session"
+    amd.push_audio(rtc.AudioFrame.create(16000, 1, 320))
+    await wait_for_transcript(lambda: not amd.amd_stt_active)
+    assert amd.end_turn("") == AMDTranscript(session="", amd=None)
+    assert amd.end_turn("Session transcript.") == AMDTranscript(
+        session="Session transcript.", amd=None
+    )
 
 
 @pytest.mark.asyncio
 async def test_stream_open_failure_keeps_session_transcript() -> None:
     model = DrainingSTT()
     model.stream = Mock(side_effect=RuntimeError("failed to open"))
-    async with aclosing(AMDRacingSTT(model, APIConnectOptions(max_retry=0))) as racing:
-        racing.push_audio(rtc.AudioFrame.create(16000, 1, 320))
-        racing.push_audio(rtc.AudioFrame.create(16000, 1, 320))
+    async with aclosing(AMDTranscriber(model, APIConnectOptions(max_retry=0))) as amd:
+        amd.push_audio(rtc.AudioFrame.create(16000, 1, 320))
+        amd.push_audio(rtc.AudioFrame.create(16000, 1, 320))
         model.stream.assert_called_once()
-        turn = racing.end_turn("Hello.")
-        assert turn.transcript == "Hello."
-        assert turn.source == "session"
+        assert amd.end_turn("Hello.") == AMDTranscript(session="Hello.", amd=None)
     await model.aclose()

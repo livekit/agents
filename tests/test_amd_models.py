@@ -81,9 +81,7 @@ async def test_default_models_are_auto_selected_and_closed(
             stream = push_audio(detector, stt)
             if finish:
                 stream.send_fake_transcript("hello")
-                await eventually(
-                    lambda: detector._resources.stt._current.snapshot("amd").transcript == "hello"
-                )
+                await eventually(lambda: detector._resources.stt._current.get("amd") == "hello")
                 await commit(detector, session, model)
                 model.prediction(1, AMDCategory.HUMAN)
                 assert (await detector.execute()).category == AMDCategory.HUMAN
@@ -431,9 +429,7 @@ async def test_cleanup_closes_the_run_stream_and_does_not_close_supplied_stt() -
     async with running(stt=stt) as (detector, session, classifier, _):
         stream = push_audio(detector, stt)
         stream.send_fake_transcript("hello")
-        await eventually(
-            lambda: detector._resources.stt._current.snapshot("amd").transcript == "hello"
-        )
+        await eventually(lambda: detector._resources.stt._current.get("amd") == "hello")
         await commit(detector, session, classifier)
         assert push_audio(detector, stt) is stream
         await asyncio.sleep(0)
@@ -457,9 +453,7 @@ async def test_owned_model_cleanup_failure_still_detaches_and_releases_turn_hook
     async with running(stt="cartesia/ink-2") as (detector, session, classifier, _):
         stream = push_audio(detector, stt)
         stream.send_fake_transcript("hello")
-        await eventually(
-            lambda: detector._resources.stt._current.snapshot("amd").transcript == "hello"
-        )
+        await eventually(lambda: detector._resources.stt._current.get("amd") == "hello")
         await commit(detector, session, classifier)
         await asyncio.wait_for(detector.aclose(), 2)
         assert (await detector.execute()).reason == "cancelled"
@@ -575,9 +569,7 @@ async def test_slow_resource_close_does_not_keep_amd_attached(
                 await original_close()
 
             stream.send_fake_transcript("hello")
-            await eventually(
-                lambda: detector._resources.stt._current.snapshot("amd").transcript == "hello"
-            )
+            await eventually(lambda: detector._resources.stt._current.get("amd") == "hello")
             hooks = await commit(detector, session, classifier)
             classifier.prediction(1, AMDCategory.MACHINE_VM)
             assert await hooks.should_reply(llm.ChatContext())
@@ -603,9 +595,7 @@ async def test_slow_resource_close_does_not_keep_amd_attached(
             try:
                 monkeypatch.setattr(target, "aclose", AsyncMock(side_effect=slow_close))
                 stream.send_fake_transcript("hello")
-                await eventually(
-                    lambda: detector._resources.stt._current.snapshot("amd").transcript == "hello"
-                )
+                await eventually(lambda: detector._resources.stt._current.get("amd") == "hello")
                 await commit(detector, session, classifier)
                 classifier.prediction(2, category)
                 await asyncio.wait_for(close_started.wait(), 2)

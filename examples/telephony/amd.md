@@ -115,7 +115,7 @@ the session. A participant or room disconnect during setup completes with
 `participant_disconnected`. Set the SIP answer timeout when placing the call.
 The detection `timeout` starts when listening begins.
 
-## Model selection and transcript race
+## Model selection and transcripts
 
 - `llm` accepts `str | LLM | None | NotGiven`. If omitted, AMD auto-selects
   `google/gemma-4-31b-it`. Pass `None` to use the active Agent's pipeline
@@ -139,16 +139,15 @@ The LLM must support required function calls. AMD uses a `record_result` tool
 for each prediction or menu result. It validates the tool arguments against the
 result schema. This tool is not added to the active Agent.
 
-When session STT is configured, the first non-empty final transcript selects the
-source for the whole AMD run. Without session STT, AMD uses its own STT directly.
-Empty and interim results cannot win. AMD keeps using the selected source across
-turns, so a change in relative STT latency cannot discard trailing transcript segments.
-If session STT wins, AMD closes its optional STT stream and stops sending audio to it.
-The Agent's transcript, history, hooks, and EOT stay unchanged. A faster AMD
-transcript does not make the Agent's EOT arrive earlier.
+When session STT is configured, AMD keeps both transcripts of each turn, and the
+classifier sees both as JSON: `transcript_1` (session) and `transcript_2` (AMD STT).
+Neither source has to win a race, so a late or missing transcript from one STT does
+not empty the turn. Without session STT, AMD uses its own STT alone. Interim results
+are ignored. The Agent's transcript, history, hooks, and EOT stay unchanged, and
+events and the Agent use the session transcript when it is not empty.
 
-At EOT, AMD commits the selected source's available transcript immediately, even if
-it is empty. Finals received after EOT accumulate for the next turn. The AMD STT
+At EOT, AMD commits each source's available transcript immediately, even if it is
+empty. Finals received after EOT accumulate for the next turn. The AMD STT
 must support streaming. It uses a single stream without flushing at EOT,
 matching session STT. AMD receives the unsuppressed participant audio during AEC
 warmup, while session STT receives silence. AgentSession disables AEC warmup by
@@ -156,15 +155,14 @@ default for outbound SIP calls; an explicit `aec_warmup_duration` takes preceden
 The classifier prompt treats the transcript as untrusted evidence, so echoed
 agent speech cannot instruct it.
 
-If the AMD stream fails, the open turn uses its buffered session transcript, even if
-it is empty. Subsequent turns also use the session transcript. The sources are never
-combined, and committed turns stay unchanged.
+If the AMD stream fails, the open turn and subsequent turns use the session
+transcript alone, even if it is empty. Committed turns stay unchanged.
 
 Each classification uses up to 20 recent chat items, including tool calls and results.
 Late transcripts become part of the next committed turn. They do not change an
 in-flight request or a reply that already started.
 A new turn can cancel classification work without discarding its transcript.
-AMD keeps its selected transcripts in an independent chat context. The next request
+AMD keeps its transcripts in an independent chat context. The next request
 includes those transcripts and successful DTMF tool calls and results.
 An empty EOT keeps useful pending classification for the latest turn. Older AMD
 reply waits exit immediately. Reusing a prediction emits an `amd_prediction`
@@ -188,8 +186,8 @@ Realtime input transcription alone arrives after the audio commit, too late for
 AMD's current turn. STT supplies the transcript; EOT commits the turn. The realtime
 model still receives audio for its replies.
 
-AMD races its STT against session transcripts only when session STT is configured.
-Pass `stt=None` to AMD to reuse session STT instead.
+With session STT configured, AMD's classifier sees both its own STT's transcript
+and the session's. Pass `stt=None` to AMD to use session STT alone.
 
 ```python
 from livekit.agents import AMD, Agent, AgentSession

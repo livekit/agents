@@ -29,12 +29,13 @@ class AMDReason(str, Enum):
     REUSED = "reused"
     """An empty turn reused the latest prediction without a new request."""
     INFERENCE_TIMEOUT = "inference_timeout"
-    """The turn's inference deadline passed, so the prediction uses the current stage.
+    """The turn's inference deadline passed, so the prediction is uncertain in the current stage.
 
     Repeated inference timeouts can also complete the run.
     """
     INFERENCE_ERROR = "inference_error"
-    """Classification failed or returned unusable output; the prediction uses the current stage."""
+    """Classification failed or returned unusable output; the prediction is uncertain in the
+    current stage."""
     INTERNAL_ERROR = "internal_error"
     """An internal task or prediction handler failed, ending the run."""
     FINISHED = "finished"

@@ -486,7 +486,7 @@ async def test_cancel_pending_speech_includes_preemptive_and_queued_speech() -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reason", ["reused", "inference_error", "inference_timeout"])
-async def test_fallback_prediction_has_the_current_previous_category(reason: str) -> None:
+async def test_a_fallback_is_uncertain_and_a_reuse_repeats_the_prediction(reason: str) -> None:
     async with running(inference_timeout=0.02) as (detector, session, classifier, _):
         events = []
         detector.on("amd_prediction", events.append)
@@ -507,7 +507,10 @@ async def test_fallback_prediction_has_the_current_previous_category(reason: str
         assert fallback is not None
         assert len(events) == 2
         assert fallback.reason == reason
-        assert fallback.category == fallback.prev_turn_category == AMDCategory.MACHINE_VM
+        # a turn with no prediction is unknown; an empty turn repeats the last one
+        expected = AMDCategory.MACHINE_VM if reason == "reused" else AMDCategory.UNCERTAIN
+        assert fallback.category == expected
+        assert fallback.prev_turn_category == AMDCategory.MACHINE_VM
         assert fallback.prev_stage_category == AMDCategory.UNCERTAIN
         assert not fallback.state_changed
         assert fallback.model_dump()["state_changed"] is False
@@ -1820,10 +1823,9 @@ async def test_dtmf_tool_propagates_cancelled_publish() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("winner", ["session", "amd"])
 @pytest.mark.parametrize("session_stt", [False, True])
-async def test_first_final_wins_for_amd_without_changing_agent_transcript(
-    winner: str, session_stt: bool
+async def test_classifier_sees_both_transcripts_without_changing_agent_transcript(
+    session_stt: bool,
 ) -> None:
     stt = DrainingSTT()
     async with running(stt=stt, session_options={"stt": FakeSTT() if session_stt else None}) as (
@@ -1836,34 +1838,24 @@ async def test_first_final_wins_for_amd_without_changing_agent_transcript(
             input="session transcript", content="Hello.", ttft=0, duration=0
         )
         stream = push_audio(detector, stt)
-        if winner == "session":
-            transcribe(detector, "session transcript")
+        transcribe(detector, "session transcript")
         stream.send_fake_transcript("AMD transcript")
-        if winner == "amd" or not session_stt:
-            await eventually(
-                lambda: (
-                    detector._resources.stt._current.snapshot(
-                        detector._resources.stt._source
-                    ).transcript
-                    == "AMD transcript"
-                )
-            )
-            transcribe(detector, "session transcript")
+        await eventually(lambda: detector._resources.stt._current.get("amd") == "AMD transcript")
 
         info = end_of_turn("session transcript")
         session._activity.on_end_of_turn(info)
         request = await classifier.request()
-        expected_source = winner if session_stt else "amd"
         assert request.current_turn.text_content == (
-            "session transcript" if expected_source == "session" else "AMD transcript"
+            '{"transcript_1": "session transcript", "transcript_2": "AMD transcript"}'
+            if session_stt
+            else "AMD transcript"
         )
-        assert request.current_turn.extra["transcript_source"] == expected_source
         assert not stream.flushed.is_set()
         classifier.prediction(1, AMDCategory.UNCERTAIN)
         reply = await asyncio.wait_for(reply_model.calls.get(), 2)
         message_contents = [m.text_content for m in reply["chat_ctx"].items if m.type == "message"]
         assert "session transcript" in message_contents
-        assert "AMD transcript" not in message_contents
+        assert not any("AMD transcript" in (text or "") for text in message_contents)
         assert info.new_transcript == "session transcript"
         await session._activity._user_turn_completed_atask
         await eventually(lambda: session._activity._no_pending_speech)
@@ -1871,6 +1863,30 @@ async def test_first_final_wins_for_amd_without_changing_agent_transcript(
             m.type == "message" and m.text_content == "session transcript"
             for m in session.current_agent.chat_ctx.items
         )
+
+
+@pytest.mark.asyncio
+async def test_a_late_amd_transcript_does_not_empty_the_turn() -> None:
+    # the session committed the turn before AMD's STT delivered its words
+    stt = DrainingSTT()
+    async with running(stt=stt, session_options={"stt": FakeSTT()}) as (detector, _, classifier, _):
+        stream = push_audio(detector, stt)
+        stream.send_fake_transcript("Hi, you've reached Sam.")
+        await eventually(
+            lambda: detector._resources.stt._current.get("amd") == "Hi, you've reached Sam."
+        )
+        commit_turn(detector, end_of_turn("Hi, you've reached Sam."))
+        first = await classifier.request()
+        classifier.prediction(1, AMDCategory.UNCERTAIN)
+
+        commit_turn(detector, end_of_turn("Leave your name and number."))
+        second = await classifier.request()
+        assert second.current_turn.extra["turn_id"] == 2
+        assert (
+            second.current_turn.text_content
+            == '{"transcript_1": "Leave your name and number.", "transcript_2": ""}'
+        )
+        assert second.earlier_turns == [first.current_turn]
 
 
 @pytest.mark.asyncio
@@ -1882,12 +1898,7 @@ async def test_transcript_received_after_eot_is_kept_in_next_request() -> None:
         assert detector._turns[1].prediction.transcript == ""
         stream.send_fake_transcript("Please state your name.")
         await eventually(
-            lambda: (
-                detector._resources.stt._current.snapshot(
-                    detector._resources.stt._source
-                ).transcript
-                == "Please state your name."
-            )
+            lambda: detector._resources.stt._current.get("amd") == "Please state your name."
         )
         assert classifier.requests.empty()
         assert detector._turns[1].prediction.transcript == ""
@@ -1902,24 +1913,13 @@ async def test_transcript_received_after_eot_is_kept_in_next_request() -> None:
 
         stream.send_fake_transcript("Okay, connecting you.")
         await eventually(
-            lambda: (
-                detector._resources.stt._current.snapshot(
-                    detector._resources.stt._source
-                ).transcript
-                == "Okay, connecting you."
-            )
+            lambda: detector._resources.stt._current.get("amd") == "Okay, connecting you."
         )
         commit_turn(detector, end_of_turn("Okay."))
         second = await classifier.request()
         assert second.current_turn.extra["turn_id"] == 3
         assert second.current_turn.text_content == "Okay, connecting you."
-        assert second.current_turn.extra["transcript_source"] == "amd"
         assert second.earlier_turns == [first.current_turn]
-        assert (
-            second.earlier_turns[0].extra["transcript_source"]
-            == first.current_turn.extra["transcript_source"]
-            == "amd"
-        )
 
 
 @pytest.mark.asyncio
@@ -1935,12 +1935,7 @@ async def test_late_final_after_many_empty_turns_is_committed_at_the_next_eot() 
         assert all(detector._turns[turn_id].prediction is not None for turn_id in range(1, 22))
         stream.send_fake_transcript("Hello, can you hear me?")
         await eventually(
-            lambda: (
-                detector._resources.stt._current.snapshot(
-                    detector._resources.stt._source
-                ).transcript
-                == "Hello, can you hear me?"
-            )
+            lambda: detector._resources.stt._current.get("amd") == "Hello, can you hear me?"
         )
         assert classifier.requests.empty()
         commit_turn(detector, end_of_turn(""))
@@ -1965,7 +1960,7 @@ async def test_superseded_inference_keeps_the_classification_context() -> None:
         request = await classifier.request()
         assert request.earlier_turns == [previous.current_turn]
         assert request.earlier_turns[0].text_content == "Hello, can you hear me?"
-        assert request.earlier_turns[0].extra == {"turn_id": 1, "transcript_source": "session"}
+        assert request.earlier_turns[0].extra == {"turn_id": 1}
         assert [json.loads(call.arguments) for call in dtmf_calls(request.chat_ctx)] == [
             {"events": ["1"]}
         ]
@@ -2075,15 +2070,9 @@ async def test_inference_error_falls_back_and_uncertain_keeps_the_stage() -> Non
             assert not events[-1].state_changed
             # the stage instructions still apply while the stage is kept
             assert ctx.items[-1].text_content == _DEFAULT_VOICEMAIL_INSTRUCTIONS
-            if turn_id == 2:
-                assert events[-1].category is AMDCategory.MACHINE_VM
-            elif turn_id == 3:
-                assert events[-1].category is AMDCategory.UNCERTAIN
-                assert events[-1].prev_turn_category is AMDCategory.MACHINE_VM
+            assert events[-1].category is AMDCategory.UNCERTAIN
+            if turn_id == 3:
                 assert classifier.requests.empty()
-            else:
-                # a fallback keeps the latest accepted prediction
-                assert events[-1].category is AMDCategory.UNCERTAIN
 
 
 @pytest.mark.asyncio
@@ -2637,7 +2626,9 @@ async def test_fallback_and_reuse_leave_fsm_unchanged(
             hooks = await commit(detector, session, classifier)
             if reason == "inference_error":
                 classifier.respond(2, "invalid JSON")
-        assert await hooks.should_reply(llm.ChatContext()) == (category is not AMDCategory.WAIT)
+        # only an empty turn repeats a wait; a turn without a prediction may be a person
+        allowed = category is not AMDCategory.WAIT or reason != "reused"
+        assert await hooks.should_reply(llm.ChatContext()) == allowed
         assert detector._turns[2].prediction.reason == reason
         assert detector._state is state
         transition.assert_not_called()
@@ -2835,5 +2826,6 @@ async def test_wait_resets_inference_timeout_and_uncertain_turn_budgets(prior: s
         following = await commit(detector, session, classifier)
         if prior == "uncertain":
             classifier.prediction(3, AMDCategory.UNCERTAIN)
-        assert await following.should_reply(llm.ChatContext()) == (prior == "uncertain")
+        # a timeout after a wait is uncertain, so it does not block the reply
+        assert await following.should_reply(llm.ChatContext())
         assert detector.lifecycle is AMDLifecycle.ACTIVE

@@ -163,9 +163,10 @@ async def test_machine_fallbacks_and_uncertain_keep_the_silence_wait(reason: str
         assert prediction is not None
         assert len(events) == 1
         assert prediction.reason == reason
-        # uncertain keeps the screening stage, so its reply waits for silence too
+        # uncertain keeps the screening stage, so its reply waits for silence too;
+        # a turn without a prediction is uncertain, and an empty turn repeats the last
         assert prediction.category == (
-            AMDCategory.UNCERTAIN if reason == "prediction" else AMDCategory.MACHINE_SCREENING
+            AMDCategory.MACHINE_SCREENING if reason == "reused" else AMDCategory.UNCERTAIN
         )
         assert prediction.stage == AMDCategory.MACHINE_SCREENING
         assert not prediction.state_changed
@@ -348,7 +349,7 @@ async def test_late_human_cannot_replace_a_held_timeout(monkeypatch: pytest.Monk
             await asyncio.sleep(1.31)
             assert detector.lifecycle is AMDLifecycle.ACTIVE
             assert detector._state == AMDCategory.MACHINE_VM
-            assert [event.category for event in events] == [AMDCategory.MACHINE_VM]
+            assert [event.category for event in events] == [AMDCategory.UNCERTAIN]
             assert events[0].reason == "inference_timeout"
         finally:
             if not response.done():
@@ -515,9 +516,7 @@ async def test_empty_turn_does_not_delay_the_next_prediction() -> None:
         speech_started(detector)
         transcript = "Please state your name and why you are calling."
         stream.send_fake_transcript(transcript)
-        await eventually(
-            lambda: detector._resources.stt._current.snapshot("amd").transcript == transcript
-        )
+        await eventually(lambda: detector._resources.stt._current.get("amd") == transcript)
         speech_ended(detector, 0)
         info = end_of_turn(transcript)
         hooks = commit_turn(detector, info)

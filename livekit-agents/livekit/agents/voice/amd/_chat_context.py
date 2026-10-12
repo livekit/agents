@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Literal
 
@@ -15,8 +16,25 @@ AGENT_REPLY = "(the agent spoke)"
 
 @dataclass(frozen=True)
 class AMDTranscript:
-    transcript: str
-    source: AMDTranscriptSource | None
+    """A turn's transcript from each STT; None for an STT that is not in use."""
+
+    session: str | None
+    amd: str | None = None
+
+    @property
+    def transcript(self) -> str:
+        """The one transcript for events and the Agent: the session's, else AMD's."""
+        return self.session or self.amd or ""
+
+    def for_classifier(self) -> str:
+        """Both transcripts when AMD has its own STT, so neither has to win a race.
+
+        Encoded as JSON: as bare labeled lines, the classifier stopped reading a
+        lone "Hi." as only a greeting word.
+        """
+        if self.session is None or self.amd is None:
+            return self.transcript
+        return json.dumps({"transcript_1": self.session, "transcript_2": self.amd})
 
 
 @dataclass
@@ -46,8 +64,8 @@ class AMDChatContext(llm.ChatContext):
     def add_transcript(self, turn: Turn) -> None:
         self.add_message(
             role="user",
-            content=turn.transcript.transcript,
-            extra={"turn_id": turn.turn_id, "transcript_source": turn.transcript.source},
+            content=turn.transcript.for_classifier(),
+            extra={"turn_id": turn.turn_id},
         )
 
     def add_agent_reply(self) -> None:

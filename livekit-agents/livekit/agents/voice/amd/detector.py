@@ -20,7 +20,7 @@ from ...utils.misc import is_cloud
 from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
 from . import _fsm, _inference
 from ._chat_context import AMDChatContext, AMDRequest, Turn
-from ._stt import AMDRacingSTT
+from ._stt import AMDTranscriber
 from .events import (
     AMDCategory,
     AMDCompletedEvent,
@@ -106,7 +106,7 @@ class _AMDResources:
     agent: Agent
     llm: llm.LLM
     completion: asyncio.Future[AMDCompletedEvent]
-    stt: AMDRacingSTT
+    stt: AMDTranscriber
     session_allow_interruptions: bool
     agent_allow_interruptions: NotGivenOr[bool]
 
@@ -180,8 +180,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         stt: Optional streaming STT model for AMD. When omitted, use
             ``cartesia/ink-whisper`` if LiveKit Cloud credentials are available;
             otherwise use only the session transcript. Pass None to always use
-            only the session transcript. AMD races this STT against the session
-            transcript only when session STT is configured. A string selects a
+            only the session transcript. With session STT configured, the
+            classifier sees both transcripts of each turn. A string selects a
             LiveKit Inference model.
         participant_identity: Select the participant before placing an outbound call.
         wait_until_answered: Discard pre-answer audio from AMD and AgentSession
@@ -226,7 +226,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         idle_timeout: float = 10.0,
         voicemail_idle_timeout: float = 60.0,
         timeout: float = 120.0,
-        inference_timeout: float = 1.5,
+        inference_timeout: float = 2.0,
         machine_silence_threshold: float = _MACHINE_SILENCE_THRESHOLD,
         max_uncertain_turns: int = 3,
         max_inference_timeouts: int = _DEFAULT_MAX_INFERENCE_TIMEOUTS,
@@ -292,7 +292,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._previous_stage: AMDCategory | None = None
         self._had_machine_stage = False
         self._state = AMDCategory.UNCERTAIN
-        self._category = AMDCategory.UNCERTAIN  # latest accepted prediction, may be wait
+        self._category = AMDCategory.UNCERTAIN  # latest prediction, may be wait
         self._should_wait = False
         self._chat_ctx = AMDChatContext()
         self._turns: dict[int, Turn] = {}
@@ -382,10 +382,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 agent=activity.agent,
                 llm=model,
                 completion=asyncio.get_running_loop().create_future(),
-                stt=AMDRacingSTT(
+                stt=AMDTranscriber(
                     self._stt,
                     self._session.conn_options.stt_conn_options,
-                    race_session=activity.stt is not None,
+                    session_stt=activity.stt is not None,
                 ),
                 session_allow_interruptions=self._session.options.interruption["enabled"],
                 agent_allow_interruptions=activity.agent.allow_interruptions,
@@ -757,6 +757,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             return
         self._cancel_classification()
         if response is None:
+            self._forget_category()
             self._record_prediction(turn, AMDReason.INFERENCE_ERROR)
         else:
 
@@ -997,7 +998,14 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._cancel_classification()
         if turn is not None:
             self._inference_timeouts += 1
+            self._forget_category()
             self._record_prediction(turn, AMDReason.INFERENCE_TIMEOUT)
+
+    def _forget_category(self) -> None:
+        # A turn without a prediction is unknown, not a repeat of the previous one: a
+        # carried-over wait would block every reply, even to a person who picks up.
+        self._category = AMDCategory.UNCERTAIN
+        self._should_wait = False
 
     def _update_idle(self) -> None:
         if self.lifecycle is not AMDLifecycle.ACTIVE or self._check_hard_timeout():

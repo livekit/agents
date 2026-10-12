@@ -364,18 +364,22 @@ async def test_external_stt_preserves_history_without_native_transcription(
         if amd_stt is not None and source == "amd":
             amd_stt.streams[0].send_fake_transcript("AMD transcript.")
             await eventually(
-                lambda: (
-                    detector._resources.stt._current.snapshot("amd").transcript == "AMD transcript."
-                )
+                lambda: detector._resources.stt._current.get("amd") == "AMD transcript."
             )
 
         await session.commit_user_turn()
         request = await classifier.request()
-        assert request.current_turn.text_content == (
-            "AMD transcript." if source == "amd" else "Session transcript."
+        assert (
+            request.current_turn.text_content
+            == {
+                "amd": "AMD transcript.",
+                "session": "Session transcript.",
+                "both": '{"transcript_1": "Session transcript.", "transcript_2": ""}',
+            }[source]
         )
         if source == "both":
-            assert not detector._resources.stt.amd_stt_active
+            # no race to lose: AMD's stream keeps listening alongside the session's
+            assert detector._resources.stt.amd_stt_active
         assert rt.generate_reply_calls == 0
         classifier.prediction(1, category)
         await asyncio.wait_for(activity._user_turn_completed_atask, 2)
@@ -512,10 +516,7 @@ async def test_amd_stt_supplies_transcripts_at_eot(
             )
         stream.send_fake_transcript("Please state your name.")
         await eventually(
-            lambda: (
-                detector._resources.stt._current.snapshot("amd").transcript
-                == "Please state your name."
-            )
+            lambda: detector._resources.stt._current.get("amd") == "Please state your name."
         )
         assert rt.generate_reply_calls == 0
         assert classifier.requests.empty()
@@ -534,8 +535,11 @@ async def test_amd_stt_supplies_transcripts_at_eot(
                 )
             )
         request = await classifier.request()
-        assert request.current_turn.text_content == "Please state your name."
-        assert request.current_turn.extra["transcript_source"] == "amd"
+        assert request.current_turn.text_content == (
+            '{"transcript_1": "Session transcript.", "transcript_2": "Please state your name."}'
+            if session_stt
+            else "Please state your name."
+        )
         assert rt.generate_reply_calls == 0
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await eventually(lambda: rt.generate_reply_calls == 1)
