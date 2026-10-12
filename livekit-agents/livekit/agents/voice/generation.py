@@ -35,7 +35,7 @@ from ..utils import aio
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
-from .tool_executor import _build_executor_map
+from .tool_executor import _build_executor_map, _RunningTasks
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
@@ -68,6 +68,13 @@ class _LLMGenerationData:
 _RUNNING_TOOL_PLACEHOLDER = "The tool call is still in progress."
 # extra flag marking an injected pair so it can be stripped before the ctx is forwarded.
 _RUNNING_PLACEHOLDER_KEY = "__lk_running_placeholder__"
+# first update of a tool an interrupted turn stopped waiting for; a model that can still call
+# tools, such as GPT-Live's backend, otherwise calls the tool again
+_RELEASED_TOOL_TEMPLATE = (
+    "{message} It keeps running in the background, and its result will be delivered to you "
+    "automatically when it finishes. Do not call `{function_name}` again, and do not guess its "
+    "result."
+)
 
 
 def _inject_running_tool_calls(
@@ -1243,6 +1250,31 @@ def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput
 
     fnc_call_out.reply_required = False
     return fnc_call_out
+
+
+async def _release_running_tools(
+    session: AgentSession, started_calls: list[llm.FunctionCall], speech_handle: SpeechHandle
+) -> None:
+    """Hand the tools an interrupted turn stopped waiting for to their executor.
+
+    Each one answers with the running placeholder as its first ``ctx.update()``, so its final
+    result arrives later as a deferred reply, like any async tool's.
+    """
+    running = _RunningTasks.get(session, {})
+    released: list[str] = []
+    for fnc_call in started_calls:
+        task = running.get(fnc_call.call_id)
+        if task is None or task.ctx._first_update_fut is None or task.ctx._first_update_fut.done():
+            continue
+        await task.ctx.update(_RUNNING_TOOL_PLACEHOLDER, template=_RELEASED_TOOL_TEMPLATE)
+        released.append(fnc_call.name)
+
+    if released:
+        logger.warning(
+            "tools still running when the interrupted speech timed out, their results will "
+            "arrive as a deferred reply; a long-running tool should call `ctx.update()`",
+            extra={"functions": released, "speech_id": speech_handle.id},
+        )
 
 
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
