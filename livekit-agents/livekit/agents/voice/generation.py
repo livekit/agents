@@ -1245,6 +1245,38 @@ def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput
     return fnc_call_out
 
 
+def _unfinished_tool_outputs(
+    started_calls: list[llm.FunctionCall],
+    tool_output: _ToolOutput,
+    speech_handle: SpeechHandle,
+) -> list[ToolExecutionOutput]:
+    """Error outputs for the calls an interrupted turn gave up on while their tools still ran."""
+    answered = {out.fnc_call.call_id for out in tool_output.output}
+    unfinished = [fnc_call for fnc_call in started_calls if fnc_call.call_id not in answered]
+    if not unfinished:
+        return []
+
+    logger.warning(
+        "tools still running when the interrupted speech timed out, their results are "
+        "discarded; a long-running tool should call `ctx.update()` to return early",
+        extra={
+            "functions": [fnc_call.name for fnc_call in unfinished],
+            "speech_id": speech_handle.id,
+        },
+    )
+    # the tool keeps running, so the output must not claim it was cancelled
+    return [
+        make_tool_output(
+            fnc_call=fnc_call,
+            output=None,
+            exception=ToolError(
+                "the tool did not finish before the interrupted turn ended, its result is unknown"
+            ),
+        )
+        for fnc_call in unfinished
+    ]
+
+
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
 """
 The ID of the instructions message in the chat context. (only for stateless LLMs)
