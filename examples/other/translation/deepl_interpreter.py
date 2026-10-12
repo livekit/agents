@@ -5,6 +5,10 @@ Run locally with headphones, so the microphone does not pick up the translation:
     DEEPL_API_KEY=... python deepl_interpreter.py console
 
 Languages default to English -> German; override with SOURCE_LANGUAGE / TARGET_LANGUAGE.
+
+Without an agent name it joins every new room of the LiveKit project, and each one opens a DeepL
+session. That suits trying it out; in production, give it an `agent_name` and dispatch it
+explicitly, as deepl_meeting.py does.
 """
 
 import logging
@@ -46,12 +50,12 @@ async def entrypoint(ctx: JobContext) -> None:
     @session.on("user_input_transcribed")
     def _on_heard(ev: UserInputTranscribedEvent) -> None:
         if ev.is_final:
-            logger.info(f"heard: {ev.transcript}")
+            logger.info("heard", extra={"lk.pii.transcript": ev.transcript})
 
     @session.on("conversation_item_added")
     def _on_said(ev: ConversationItemAddedEvent) -> None:
         if isinstance(ev.item, llm.ChatMessage) and ev.item.role == "assistant":
-            logger.info(f"said:  {ev.item.text_content}")
+            logger.info("said", extra={"lk.pii.transcript": ev.item.text_content})
 
     # DeepL takes no instructions: it translates what it hears
     await session.start(agent=Agent(instructions=""), room=ctx.room)

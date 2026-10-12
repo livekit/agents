@@ -1,12 +1,19 @@
 """A meeting interpreter on DeepL Voice: everyone speaks their own language and hears the others
 in theirs.
 
-Each participant's language is the `language` attribute of their access token, for example
-`api.AccessToken().with_attributes({"language": "de"})`. For every speaker and every other
-language in the room, one DeepL Voice session interprets that speaker into that language and
-publishes it as an audio track named "<speaker>-<language>". Track permissions give each track only
-to the listeners of its language, so any LiveKit client plays just the interpretation meant for it.
-Listeners still hear the speaker's own voice, as with a human interpreter.
+The agent registers as "deepl-meeting" and joins only the rooms that dispatch it. Each
+participant's language is the `language` attribute of their access token, which can dispatch the
+agent as well:
+
+    api.AccessToken().with_attributes({"language": "de"}).with_room_config(
+        api.RoomConfiguration(agents=[api.RoomAgentDispatch(agent_name="deepl-meeting")])
+    )
+
+For every speaker and every other language in the room, one DeepL Voice session interprets that
+speaker into that language and publishes it as an audio track named "<speaker>-<language>". Track
+permissions give each track only to the listeners of its language, so any LiveKit client plays just
+the interpretation meant for it. Listeners still hear the speaker's own voice, as with a human
+interpreter.
 
     DEEPL_API_KEY=... python deepl_meeting.py dev
 
@@ -40,6 +47,7 @@ logger = logging.getLogger("deepl-meeting")
 
 load_dotenv()
 
+AGENT_NAME = "deepl-meeting"
 LANGUAGE_ATTRIBUTE = "language"
 PRIVATE_TRACKS = os.getenv("PRIVATE_TRACKS", "1") != "0"
 
@@ -124,14 +132,24 @@ class Interpreters:
     async def _reconcile(self) -> None:
         async with self._lock:
             wanted = self._wanted()
-            for route in [route for route in self._sessions if route not in wanted]:
+            stale = [route for route in self._sessions if route not in wanted]
+            new = list(wanted - self._sessions.keys())
+
+            # closing waits for DeepL to flush, so sessions close together, then start together:
+            # a replacement can reuse its predecessor's track name, so the two must not overlap
+            for route in stale:
                 logger.info(f"stopping {route}")
-                await self._sessions.pop(route).aclose()
-            for route in wanted - self._sessions.keys():
-                try:
-                    self._sessions[route] = await self._start(route)
-                except Exception:
-                    logger.exception(f"failed to start {route}")
+            await asyncio.gather(
+                *(self._sessions.pop(route).aclose() for route in stale), return_exceptions=True
+            )
+            started = await asyncio.gather(
+                *(self._start(route) for route in new), return_exceptions=True
+            )
+            for route, result in zip(new, started, strict=True):
+                if isinstance(result, BaseException):
+                    logger.error(f"failed to start {route}", exc_info=result)
+                else:
+                    self._sessions[route] = result
             self._update_permissions()
 
     async def _start(self, route: _Route) -> AgentSession[None]:
@@ -146,12 +164,12 @@ class Interpreters:
         @session.on("user_input_transcribed")
         def _on_heard(ev: UserInputTranscribedEvent) -> None:
             if ev.is_final:
-                logger.info(f"[{route}] heard: {ev.transcript}")
+                logger.info(f"[{route}] heard", extra={"lk.pii.transcript": ev.transcript})
 
         @session.on("conversation_item_added")
         def _on_said(ev: ConversationItemAddedEvent) -> None:
             if isinstance(ev.item, llm.ChatMessage) and ev.item.role == "assistant":
-                logger.info(f"[{route}] said:  {ev.item.text_content}")
+                logger.info(f"[{route}] said", extra={"lk.pii.transcript": ev.item.text_content})
 
         @session.on("close")
         def _on_close(ev: CloseEvent) -> None:
@@ -204,7 +222,7 @@ class Interpreters:
 server = AgentServer()
 
 
-@server.rtc_session()
+@server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     interpreters = Interpreters(ctx.room)

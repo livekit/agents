@@ -26,6 +26,7 @@ from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -94,7 +95,7 @@ class _VoiceOptions:
     voice: Voice | None
     formality: Formality | None
     glossary_ids: list[str] | None
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str
     conn_options: APIConnectOptions
 
@@ -308,7 +309,7 @@ class VoiceSession(llm.DuplexSession[Literal["deepl_server_event_received"]]):
                 self._opts.conn_options.timeout,
             )
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("DeepL Voice connection error") from e
+            raise APIConnectionError(f"DeepL Voice connection error ({_safe_reason(e)})") from None
         self._connected = True
         self._report_connection_acquired(time.perf_counter() - t0)
         return ws
@@ -359,7 +360,9 @@ class VoiceSession(llm.DuplexSession[Literal["deepl_server_event_received"]]):
                     )
                 data = await resp.json()
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("DeepL Voice session request failed") from e
+            raise APIConnectionError(
+                f"DeepL Voice session request failed ({_safe_reason(e)})"
+            ) from None
 
         try:
             streaming_url, new_token = data["streaming_url"], data["token"]
@@ -429,7 +432,9 @@ class VoiceSession(llm.DuplexSession[Literal["deepl_server_event_received"]]):
             try:
                 msg = await ws.receive()
             except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError) as e:
-                raise APIConnectionError("DeepL Voice receive failed") from e
+                raise APIConnectionError(
+                    f"DeepL Voice receive failed ({_safe_reason(e)})"
+                ) from None
             if msg.type in _WS_CLOSED:
                 if self._closing:
                     return
@@ -458,7 +463,7 @@ class VoiceSession(llm.DuplexSession[Literal["deepl_server_event_received"]]):
         try:
             await ws.send_str(json.dumps(msg))
         except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("DeepL Voice send failed") from e
+            raise APIConnectionError(f"DeepL Voice send failed ({_safe_reason(e)})") from None
 
     # DeepL messages
 
@@ -832,6 +837,13 @@ class _OutputPacer:
         return (time.monotonic() - self._t0) * 1000
 
 
+def _safe_reason(error: BaseException) -> str:
+    """The error's type and HTTP status: aiohttp errors quote the url, which carries the token."""
+    if isinstance(error, aiohttp.ClientResponseError):
+        return f"{type(error).__name__} {error.status}"
+    return type(error).__name__
+
+
 def _joined(segments: list[dict[str, Any]] | None) -> str:
     return "".join(segment.get("text") or "" for segment in segments or [])
 
@@ -851,9 +863,12 @@ def _resolve_api_key(api_key: NotGivenOr[str]) -> str:
 
 
 def _resolve_base_url(base_url: NotGivenOr[str], api_key: str) -> str:
-    if is_given(base_url):
-        return base_url
-    if env_url := os.environ.get("DEEPL_BASE_URL"):
-        return env_url
-    # DeepL API Free keys end in ":fx"
-    return DEEPL_FREE_API_URL if api_key.endswith(":fx") else DEEPL_API_URL
+    url = base_url if is_given(base_url) else os.environ.get("DEEPL_BASE_URL")
+    if not url:
+        # DeepL API Free keys end in ":fx"
+        return DEEPL_FREE_API_URL if api_key.endswith(":fx") else DEEPL_API_URL
+
+    parsed = urlparse(url)
+    if parsed.scheme != "https" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        logger.warning("DeepL Voice base_url is not https, so the API key is sent unencrypted")
+    return url

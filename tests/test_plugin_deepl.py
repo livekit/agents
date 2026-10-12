@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,6 +61,8 @@ class _FakeDeepL:
         self.new_conn: asyncio.Queue[_Conn] = asyncio.Queue()
         # statuses to answer the next requests of each method with, in order
         self.fail: dict[str, list[int]] = {"POST": [], "GET": []}
+        # stream connections to refuse before accepting one
+        self.reject_streams = 0
         self._issued = 0
 
     async def _session(self, request: web.Request) -> web.Response:
@@ -87,7 +90,10 @@ class _FakeDeepL:
             }
         )
 
-    async def _stream(self, request: web.Request) -> web.WebSocketResponse:
+    async def _stream(self, request: web.Request) -> web.StreamResponse:
+        if self.reject_streams:
+            self.reject_streams -= 1
+            return web.Response(status=403)
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         conn = _Conn(token=request.query.get("token", ""), ws=ws)
@@ -186,6 +192,13 @@ async def _collect(stream: Any, out: list[tuple[float, llm.DuplexAudioFrame]]) -
         out.append((time.monotonic(), f))
 
 
+def _chain(error: BaseException | None) -> Iterator[BaseException]:
+    """An exception and every exception it was raised from, as a traceback would print them."""
+    while error is not None:
+        yield error
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+
+
 def _played_s(frames: list[tuple[float, llm.DuplexAudioFrame]]) -> float:
     return sum(f.frame.duration for _, f in frames)
 
@@ -216,6 +229,20 @@ def test_the_endpoint_can_come_from_the_environment(monkeypatch: pytest.MonkeyPa
         VoiceModel(target_language="de", api_key="k", base_url="http://x")._opts.base_url
         == "http://x"
     )
+
+
+@pytest.mark.usefixtures("_no_deepl_env")
+def test_an_unencrypted_endpoint_is_warned_about(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.deepl"):
+        VoiceModel(target_language="de", api_key="k", base_url="http://staging.example")
+        VoiceModel(target_language="de", api_key="k", base_url="http://127.0.0.1:8080")
+        VoiceModel(target_language="de", api_key="k", base_url="https://staging.example")
+    assert ["not https" in r.getMessage() for r in caplog.records] == [True]
+
+
+def test_the_api_key_stays_out_of_reprs() -> None:
+    model = VoiceModel(target_language="de", api_key="secret-key")
+    assert "secret-key" not in repr(model._opts)
 
 
 @pytest.mark.usefixtures("_no_deepl_env")
@@ -624,6 +651,26 @@ async def test_a_client_error_message_ends_the_session(server: _FakeDeepL) -> No
         await asyncio.sleep(0.2)
         assert [e.recoverable for e in errors] == [False]
         assert len(server.requests) == 1
+    finally:
+        await _close(model, session)
+
+
+async def test_errors_and_logs_never_carry_the_session_token(
+    server: _FakeDeepL, caplog: pytest.LogCaptureFixture
+) -> None:
+    # aiohttp quotes the url in its errors, and the streaming url carries the session token
+    server.reject_streams = 99
+    caplog.set_level(logging.DEBUG)
+    model = _model(server)
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    try:
+        await _until(lambda: any(not e.recoverable for e in errors), timeout=5)
+        assert any("WSServerHandshakeError 403" in str(e.error) for e in errors)
+        for e in errors:
+            assert all("token=" not in str(link) for link in _chain(e.error))
+        assert "token=" not in caplog.text
     finally:
         await _close(model, session)
 
