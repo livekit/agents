@@ -21,6 +21,7 @@ import base64
 import contextlib
 import json
 import os
+import re
 import time
 from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterator
@@ -79,6 +80,8 @@ _STABLE_CONNECTION_S = 10.0
 _FATAL_STATUS = frozenset({401, 403, 456})
 
 _WS_CLOSED = (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING)
+# DeepL's machine-readable error codes, the only part of an error body an exception carries
+_ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _IGNORED_MESSAGES = (
     "target_transcript_update",
     "end_of_source_transcript",
@@ -350,13 +353,22 @@ class VoiceSession(llm.DuplexSession[Literal["deepl_server_event_received"]]):
             ) as resp:
                 trace_id = resp.headers.get("X-Trace-ID")
                 if resp.status != 200:
+                    # the body can echo the request, token included, so it is logged as pii
                     detail = await resp.text()
+                    logger.warning(
+                        "DeepL Voice session request failed",
+                        extra={
+                            "status_code": resp.status,
+                            "trace_id": trace_id,
+                            "lk.pii.body": detail,
+                        },
+                    )
+                    code = _error_code(detail)
+                    reason = f"{resp.status}, {code}" if code else str(resp.status)
                     raise APIStatusError(
-                        f"DeepL Voice session request failed ({resp.status}, "
-                        f"trace id {trace_id}): {detail}",
+                        f"DeepL Voice session request failed ({reason})",
                         status_code=resp.status,
                         request_id=trace_id,
-                        body=detail,
                     )
                 data = await resp.json()
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
@@ -489,11 +501,13 @@ class VoiceSession(llm.DuplexSession[Literal["deepl_server_event_received"]]):
     def _handle_error(self, error: dict[str, Any]) -> None:
         # DeepL ends the session after any error, so only a new session can continue
         self._token = None
-        code = error.get("error_code")
+        logger.error("DeepL Voice returned an error", extra={"lk.pii.error": error})
+        code, reason = error.get("error_code"), error.get("reason_code")
         raise APIStatusError(
-            f"DeepL Voice error: {error.get('error_message') or 'unknown error'}",
+            f"DeepL Voice error (reason {reason})"
+            if isinstance(reason, int)
+            else "DeepL Voice error",
             status_code=code if isinstance(code, int) else -1,
-            body=error,
         )
 
     def _handle_target_media(self, chunk: dict[str, Any]) -> None:
@@ -557,6 +571,7 @@ class VoiceSession(llm.DuplexSession[Literal["deepl_server_event_received"]]):
     async def aclose(self) -> None:
         await super().aclose()
         self._input.close()
+        self._turns.close()
         if self._connected:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(asyncio.shield(self._main_atask), _CLOSE_TIMEOUT_S + 0.5)
@@ -689,6 +704,7 @@ class _SpeakerTurns:
     def __init__(self, emit: Callable[..., None]) -> None:
         self._emit = emit
         self._turn: _Turn | None = None
+        self._timeout: asyncio.TimerHandle | None = None
 
     def update(self, concluded: str, tentative: str) -> None:
         """Apply a transcript update: concluded text arrives once, tentative text is replaced."""
@@ -704,6 +720,11 @@ class _SpeakerTurns:
         turn.concluded += concluded
         turn.tentative = tentative
         turn.quiet_ms = 0.0
+        # a muted speaker sends no audio to count, so the turn also ends on the wall clock
+        self._cancel_timeout()
+        self._timeout = asyncio.get_running_loop().call_later(
+            _TURN_MAX_SILENCE_MS / 1000, self._on_timeout
+        )
         if turn.transcript:
             self._emit_transcript(turn, is_final=False)
 
@@ -719,6 +740,7 @@ class _SpeakerTurns:
             self.end()
 
     def end(self) -> None:
+        self._cancel_timeout()
         if (turn := self._turn) is None:
             return
         self._turn = None
@@ -727,6 +749,21 @@ class _SpeakerTurns:
         self._emit(
             "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
         )
+
+    def close(self) -> None:
+        """Stop the wall-clock timeout without ending the turn."""
+        self._cancel_timeout()
+
+    def _on_timeout(self) -> None:
+        self._timeout = None
+        if self._turn is not None:
+            self._turn.tentative = ""
+            self.end()
+
+    def _cancel_timeout(self) -> None:
+        if self._timeout is not None:
+            self._timeout.cancel()
+            self._timeout = None
 
     def _emit_transcript(self, turn: _Turn, *, is_final: bool) -> None:
         self._emit(
@@ -842,6 +879,15 @@ def _safe_reason(error: BaseException) -> str:
     if isinstance(error, aiohttp.ClientResponseError):
         return f"{type(error).__name__} {error.status}"
     return type(error).__name__
+
+
+def _error_code(body: str) -> str | None:
+    """The machine-readable ``code`` of a DeepL error body, if it has a plain one."""
+    try:
+        code = json.loads(body).get("code")
+    except (ValueError, AttributeError):
+        return None
+    return code if isinstance(code, str) and _ERROR_CODE.fullmatch(code) else None
 
 
 def _joined(segments: list[dict[str, Any]] | None) -> str:

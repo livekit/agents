@@ -63,6 +63,7 @@ class _FakeDeepL:
         self.fail: dict[str, list[int]] = {"POST": [], "GET": []}
         # stream connections to refuse before accepting one
         self.reject_streams = 0
+        self.fail_body: dict[str, Any] = {"message": "rejected", "code": "test"}
         self._issued = 0
 
     async def _session(self, request: web.Request) -> web.Response:
@@ -77,7 +78,7 @@ class _FakeDeepL:
         )
         if self.fail[request.method]:
             return web.json_response(
-                {"message": "rejected", "code": "test"},
+                self.fail_body,
                 status=self.fail[request.method].pop(0),
                 headers={"X-Trace-ID": "trace-1"},
             )
@@ -413,6 +414,28 @@ async def test_source_transcripts_make_speaker_turns(server: _FakeDeepL) -> None
         await _close(model, session)
 
 
+async def test_a_muted_speaker_turn_ends_on_the_wall_clock(
+    server: _FakeDeepL, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # a muted track sends no frames, so there is no audio to count the silence with
+    monkeypatch.setattr(voice_model, "_TURN_MAX_SILENCE_MS", 200.0)
+    model, session, conn = await _open(server)
+    events: list[tuple[str, str]] = []
+    session.on("input_speech_stopped", lambda _: events.append(("stopped", "")))
+    session.on(
+        "input_audio_transcription_completed",
+        lambda ev: events.append(("final" if ev.is_final else "interim", ev.transcript)),
+    )
+    try:
+        await conn.ws.send_json(
+            {"source_transcript_update": {"concluded": _segments("Hello."), "tentative": []}}
+        )
+        await _until(lambda: ("stopped", "") in events, timeout=2)
+        assert events == [("interim", "Hello."), ("final", "Hello."), ("stopped", "")]
+    finally:
+        await _close(model, session)
+
+
 async def test_a_turn_deepl_never_concludes_ends_on_long_silence(server: _FakeDeepL) -> None:
     model, session, conn = await _open(server)
     events: list[str] = []
@@ -632,7 +655,10 @@ async def test_a_server_error_message_starts_a_new_session(server: _FakeDeepL) -
         await _close(model, session)
 
 
-async def test_a_client_error_message_ends_the_session(server: _FakeDeepL) -> None:
+async def test_a_client_error_message_ends_the_session(
+    server: _FakeDeepL, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
     model, session, conn = await _open(server)
     errors: list[llm.RealtimeModelError] = []
     session.on("error", errors.append)
@@ -651,6 +677,33 @@ async def test_a_client_error_message_ends_the_session(server: _FakeDeepL) -> No
         await asyncio.sleep(0.2)
         assert [e.recoverable for e in errors] == [False]
         assert len(server.requests) == 1
+        # DeepL's own text stays out of the exception, and is logged as pii
+        assert "reason 4000403" in str(errors[0].error)
+        assert "Audio format not supported" not in str(errors[0].error)
+        assert "Audio format not supported" not in caplog.text
+        assert any(getattr(r, "lk.pii.error", None) for r in caplog.records)
+    finally:
+        await _close(model, session)
+
+
+async def test_a_session_error_body_stays_out_of_errors_and_logs(
+    server: _FakeDeepL, caplog: pytest.LogCaptureFixture
+) -> None:
+    # a provider body can echo the request, so only its error code may reach an exception
+    server.fail["POST"] = [403]
+    server.fail_body = {"message": "token t-secret-echo is invalid", "code": "invalid_token"}
+    caplog.set_level(logging.DEBUG)
+    model = _model(server)
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    try:
+        await _until(lambda: bool(errors))
+        assert "invalid_token" in str(errors[0].error)
+        for e in errors:
+            assert all("t-secret-echo" not in str(link) for link in _chain(e.error))
+        assert "t-secret-echo" not in caplog.text
+        assert any("t-secret-echo" in str(getattr(r, "lk.pii.body", "")) for r in caplog.records)
     finally:
         await _close(model, session)
 

@@ -80,6 +80,7 @@ class Interpreters:
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task[None]] = set()
         self._warned: set[str] = set()
+        self._closed = False
 
     def start(self) -> None:
         self._room.on("participant_connected", self._on_room_changed)
@@ -91,10 +92,14 @@ class Interpreters:
         self._on_room_changed()
 
     async def aclose(self) -> None:
+        self._closed = True
         self._room.off("participant_connected", self._on_room_changed)
         self._room.off("participant_disconnected", self._on_room_changed)
         self._room.off("participant_attributes_changed", self._on_room_changed)
         self._room.off("local_track_published", self._on_track_published)
+        # reconciles already queued run first: they start nothing now, and what one had already
+        # started is closed below with the rest
+        await asyncio.gather(*self._tasks, return_exceptions=True)
         async with self._lock:
             sessions, self._sessions = list(self._sessions.values()), {}
         await asyncio.gather(*(session.aclose() for session in sessions), return_exceptions=True)
@@ -131,6 +136,8 @@ class Interpreters:
 
     async def _reconcile(self) -> None:
         async with self._lock:
+            if self._closed:
+                return
             wanted = self._wanted()
             stale = [route for route in self._sessions if route not in wanted]
             new = list(wanted - self._sessions.keys())
@@ -200,19 +207,21 @@ class Interpreters:
             local.set_track_subscription_permissions(allow_all_participants=True)
             return
 
+        # granted by the routes wanted, not the sessions started: a track publishes while its
+        # session is still starting
         sids = {publication.name: sid for sid, publication in local.track_publications.items()}
-        languages = self._languages()
+        wanted = self._wanted()
         permissions = [
             rtc.ParticipantTrackPermission(
                 participant_identity=identity,
                 allow_all=False,
                 allowed_track_sids=[
                     sids[route.track_name]
-                    for route in self._sessions
+                    for route in wanted
                     if route.target == language and route.track_name in sids
                 ],
             )
-            for identity, language in languages.items()
+            for identity, language in self._languages().items()
         ]
         local.set_track_subscription_permissions(
             allow_all_participants=False, participant_permissions=permissions
