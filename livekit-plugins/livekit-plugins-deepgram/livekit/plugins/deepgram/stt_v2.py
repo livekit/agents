@@ -54,7 +54,7 @@ class STTOptions:
     sample_rate: int
     keyterm: str | Sequence[str]
     endpoint_url: str
-    chunk_size_ms: int = 50
+    audio_chunk_duration_ms: int = 50
     language: str = "en"
     eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN
     eot_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -73,7 +73,7 @@ class STTv2(stt.STT):
         *,
         model: V2Models | str = "flux-general-en",
         sample_rate: int = 16000,
-        chunk_size_ms: int = 50,
+        audio_chunk_duration_ms: int = 50,
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -95,7 +95,7 @@ class STTv2(stt.STT):
         Args:
             model: The Deepgram model to use for speech recognition. Defaults to "flux-general-en".
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
-            chunk_size_ms: Duration of outgoing PCM audio chunks in milliseconds. Defaults to 50.
+            audio_chunk_duration_ms: Duration of outgoing PCM audio chunks in milliseconds. Defaults to 50.
                 Deepgram recommends 80 ms for Flux. This controls WebSocket audio batching,
                 independently of incoming RTC frame size and endpointing delay. Set at creation time.
                 See https://developers.deepgram.com/docs/flux/quickstart.
@@ -115,7 +115,7 @@ class STTv2(stt.STT):
 
         Raises:
             ValueError: If no API key is provided or found in environment variables, or
-                chunk_size_ms is not a positive integer that yields at least one audio sample.
+                audio_chunk_duration_ms is not a positive integer that yields at least one audio sample.
 
         Note:
             The api_key must be set either through the constructor argument or by setting
@@ -133,13 +133,13 @@ class STTv2(stt.STT):
         )
 
         if (
-            isinstance(chunk_size_ms, bool)
-            or not isinstance(chunk_size_ms, int)
-            or chunk_size_ms <= 0
-            or sample_rate * chunk_size_ms // 1000 < 1
+            isinstance(audio_chunk_duration_ms, bool)
+            or not isinstance(audio_chunk_duration_ms, int)
+            or audio_chunk_duration_ms <= 0
+            or sample_rate * audio_chunk_duration_ms // 1000 < 1
         ):
             raise ValueError(
-                "chunk_size_ms must be a positive integer yielding at least one sample"
+                "audio_chunk_duration_ms must be a positive integer yielding at least one sample"
             )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
@@ -169,7 +169,7 @@ class STTv2(stt.STT):
         self._opts = STTOptions(
             model=model,
             sample_rate=sample_rate,
-            chunk_size_ms=chunk_size_ms,
+            audio_chunk_duration_ms=audio_chunk_duration_ms,
             keyterm=([keyterm] if isinstance(keyterm, str) else list(keyterm))
             if is_given(keyterm)
             else [],
@@ -481,7 +481,7 @@ class SpeechStreamv2(stt.SpeechStream):
             nonlocal closing_ws
 
             # Repack incoming frames into the configured outgoing PCM chunk duration.
-            chunk_samples = self._opts.sample_rate * self._opts.chunk_size_ms // 1000
+            chunk_samples = self._opts.sample_rate * self._opts.audio_chunk_duration_ms // 1000
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
