@@ -828,10 +828,17 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     raise
 
             closing_ws = True
+            if ws.closed:
+                return
             msg = InterruptionWSSessionCloseMessage(
                 type=InterruptionWSMessageType.SESSION_CLOSE,
             )
-            await ws.send_str(msg.model_dump_json())
+            try:
+                await ws.send_str(msg.model_dump_json())
+            except ConnectionResetError:
+                # aiohttp raises ConnectionResetError (ClientConnectionResetError on newer
+                # versions) if the peer wins the close race. session.close is best-effort.
+                return
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
@@ -995,15 +1002,15 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     self._reconnect_event.clear()
                 finally:
                     closing_ws = True
-                    if ws is not None and not ws.closed:
-                        await ws.close()
-                        ws = None
                     await aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
                     try:
                         tasks_group.exception()
                     except asyncio.CancelledError:
                         pass
+                    if ws is not None and not ws.closed:
+                        await ws.close()
+                        ws = None
             finally:
                 closing_ws = True
                 if ws is not None and not ws.closed:
