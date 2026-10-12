@@ -11,14 +11,17 @@ Idle-timeout tests use ``virtual_time`` so timers advance deterministically.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from livekit.agents import APIStatusError
 from livekit.agents.tts import AudioEmitter
 from livekit.plugins import soniox
+from livekit.plugins.soniox.tts import _Connection
 
 pytestmark = [
     pytest.mark.plugin("soniox"),
@@ -171,3 +174,49 @@ async def test_invalid_stream_idle_timeout_rejected() -> None:
         soniox.TTS(api_key="fake-key", stream_idle_timeout=0)
     with pytest.raises(ValueError):
         soniox.TTS(api_key="fake-key", stream_idle_timeout=-1.0)
+
+
+async def test_connection_sends_api_key_on_the_handshake() -> None:
+    tts = soniox.TTS(api_key="fake-key")
+    sent: list[dict[str, Any]] = []
+    config_sent = asyncio.Event()
+
+    class FakeWebSocket:
+        closed = False
+        close_code = None
+
+        async def send_str(self, message: str) -> None:
+            msg = json.loads(message)
+            sent.append(msg)
+            if "model" in msg:
+                config_sent.set()
+
+        async def receive(self) -> Any:
+            await asyncio.Future()  # parked until aclose cancels the recv loop
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, Any] = {}
+
+        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+            self.kwargs = kwargs
+            return FakeWebSocket()
+
+    session = FakeSession()
+    conn = _Connection(tts._opts, session)  # type: ignore[arg-type]
+    await conn.connect()
+    conn.register_stream(
+        "s1", MagicMock(), asyncio.get_running_loop().create_future(), opts=tts._opts
+    )
+    conn.send_text("s1", "Hello.")
+    await asyncio.wait_for(config_sent.wait(), timeout=1.0)
+    conn.unregister_stream("s1")
+    await conn.aclose()
+
+    assert session.kwargs["headers"] == {"Authorization": "Bearer fake-key"}
+    config = next(m for m in sent if "model" in m)
+    # The handshake is the only carrier; the config message no longer repeats the key.
+    assert "api_key" not in config
