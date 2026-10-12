@@ -406,13 +406,30 @@ DEFAULT_SAMPLE_RATE: int = 16000
 _SAMPLE_RATE_BY_MODEL_PREFIX: tuple[tuple[str, int], ...] = (("openai/", 24000),)
 
 
-def _default_sample_rate_for_model(model: NotGivenOr[STTModels | str]) -> int:
-    """Sample rate to use when the caller did not pin one, keyed off the model prefix."""
+def _required_sample_rate(model: NotGivenOr[STTModels | str]) -> int | None:
+    """The only input rate a model's gateway session accepts, or None when the gateway
+    resamples and any rate works."""
     if is_given(model) and isinstance(model, str):
         for prefix, rate in _SAMPLE_RATE_BY_MODEL_PREFIX:
             if model.startswith(prefix):
                 return rate
-    return DEFAULT_SAMPLE_RATE
+    return None
+
+
+def _default_sample_rate_for_model(model: NotGivenOr[STTModels | str]) -> int:
+    """Sample rate to use when the caller did not pin one, keyed off the model prefix."""
+    return _required_sample_rate(model) or DEFAULT_SAMPLE_RATE
+
+
+def _warn_if_sample_rate_refused(model: NotGivenOr[STTModels | str], sample_rate: int) -> None:
+    required = _required_sample_rate(model)
+    if required is not None and sample_rate != required:
+        logger.warning(
+            "model %r takes audio only at %d Hz; the gateway will refuse %d Hz",
+            model,
+            required,
+            sample_rate,
+        )
 
 
 @dataclass
@@ -708,6 +725,10 @@ class STT(stt.STT):
 
         self._session = http_session
         self._vad = vad
+        # an implicit default follows the model on update_options; an explicit rate is
+        # the caller's choice and is never recomputed
+        self._explicit_sample_rate = is_given(sample_rate)
+        _warn_if_sample_rate_refused(model, self._opts.sample_rate)
         self._session_keyterms: list[str] = []  # framework-managed; merged into extra_kwargs
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -783,6 +804,11 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
+            if not self._explicit_sample_rate:
+                # the default rate follows the model; a live stream keeps the rate it was
+                # created with, but streams created from now on must work
+                self._opts.sample_rate = _default_sample_rate_for_model(model)
+            _warn_if_sample_rate_refused(model, self._opts.sample_rate)
             models = [self._opts.model]
             if is_given(self._opts.fallback):
                 models.extend(item["model"] for item in self._opts.fallback)
@@ -896,9 +922,30 @@ class SpeechStream(stt.SpeechStream):
         When the WebSocket is live, a mid-stream session.update is sent so providers
         that support it (e.g. AssemblyAI, Deepgram Flux) can apply changes without
         reconnecting. Unsupported providers ignore the message.
+
+        A model that requires an audio rate this stream was not created with is not
+        applied live: the stream's rate is fixed at creation, so the session keeps the
+        model it was created with (new streams pick up the switch).
         """
         if is_given(model):
-            self._opts.model = model
+            required = _required_sample_rate(model)
+            if required is not None and required != self._opts.sample_rate:
+                # this stream's audio rate is fixed at creation, so a model that refuses
+                # it cannot run here; the live session keeps the model it was created
+                # with, and streams created after the parent switch carry the new rate.
+                logger.warning(
+                    "live stream stays on %r: %r takes audio only at %d Hz, this "
+                    "stream was created at %d Hz",
+                    self._opts.model,
+                    model,
+                    required,
+                    self._opts.sample_rate,
+                )
+                model = NOT_GIVEN
+                language = NOT_GIVEN
+                extra = NOT_GIVEN
+            else:
+                self._opts.model = model
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
