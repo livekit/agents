@@ -142,6 +142,16 @@ class RecordingOptions(TypedDict, total=False):
     """Upload the conversation transcript (chat history). Defaults to ``True``."""
     redaction: bool
     """Enable redaction. ``False`` does not disable project redaction."""
+    input_delta: bool
+    """Record only what changed in LLM inputs on trace spans. Defaults to ``False``.
+    The model always receives the full input; this only affects telemetry.
+
+    Each span continues the input recorded for the last committed generation: its
+    ``gen_ai.input.messages`` / ``lk.pii.chat_ctx`` hold what follows the longest prefix
+    they share (usually the previous agent turn and the new user turn), and
+    ``gen_ai.system_instructions`` is left out while unchanged. Such spans carry
+    ``lk.input.*`` attributes pointing at the span that holds the rest.
+    """
 
 
 _RECORDING_ALL_ON: RecordingOptions = {
@@ -472,7 +482,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
-                Default ``3``.
+                Not enforced for realtime models that generate the tool reply
+                server-side. Default ``3``.
             video_sampler (_VideoSampler, optional): Uses
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
                 captures video at ~1 fps while the user is speaking and ~0.3 fps
@@ -2098,14 +2109,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._aec_warmup_duration_explicit:
             return
 
+        from ..job import current_simulation
+
         is_outbound_sip = (
             participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
             and not participant.attributes.get(_SIP_RULE_ID_ATTR)
         )
-        self._opts.aec_warmup_duration = None if is_outbound_sip else _DEFAULT_AEC_WARMUP_DURATION
+        # a simulator publishes synthesized audio, so the agent's speech never echoes back
+        no_warmup = is_outbound_sip or current_simulation() is not None
+        self._opts.aec_warmup_duration = None if no_warmup else _DEFAULT_AEC_WARMUP_DURATION
         self._aec_warmup_remaining = self._opts.aec_warmup_duration or 0.0
 
-        if is_outbound_sip and self._aec_warmup_timer is not None:
+        if no_warmup and self._aec_warmup_timer is not None:
             self._aec_warmup_timer.cancel()
             self._aec_warmup_timer = None
 

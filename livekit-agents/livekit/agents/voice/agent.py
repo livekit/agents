@@ -1071,7 +1071,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 # re-watch the suspended handles so the resumed parent activity
                 # is tracked by the current RunResult again
                 if run_state and not run_state.done():
-                    for handle in suspended_handles:
+                    for handle in [*suspended_handles, current_task]:
                         run_state._watch_handle(handle)
 
                 if pending_on_enter_task:

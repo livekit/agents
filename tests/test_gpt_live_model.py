@@ -385,6 +385,92 @@ async def test_reconnect_discards_partial_input_audio(
         await model.aclose()
 
 
+async def test_the_mute_state_survives_a_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await session._session_started_fut
+
+        session.mute_input()
+        await asyncio.sleep(0.05)
+        assert [event["type"] for event in sockets[0].sent] == [
+            "session.start",
+            "session.input_audio.mute",
+        ]
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        # the replacement session starts unmuted, so the mute has to be sent again, and before
+        # anything the app queued while the old connection was going away
+        assert [event["type"] for event in sockets[1].sent] == [
+            "session.start",
+            "session.input_audio.mute",
+        ]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_unmuted_session_is_not_muted_again_on_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await session._session_started_fut
+
+        session.mute_input()
+        session.unmute_input()
+        await asyncio.sleep(0.05)
+        assert [event["type"] for event in sockets[0].sent] == [
+            "session.start",
+            "session.input_audio.mute",
+            "session.input_audio.unmute",
+        ]
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        # what the app asked for last wins: the reconnect must not resurrect a stale mute
+        assert [event["type"] for event in sockets[1].sent] == ["session.start"]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_provider_content_is_only_logged_under_pii_fields(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

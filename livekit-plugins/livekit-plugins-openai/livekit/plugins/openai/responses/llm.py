@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 from yarl import URL
 
 import openai
@@ -80,6 +80,7 @@ class _ResponsesWebsocket:
             connect_cb=self._create_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,
+            connect_timeout=self._timeout,
         )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -316,7 +317,14 @@ class LLM(llm.LLM):
                 ),
             )
 
+    async def _prewarm_impl(self) -> None:
+        if self._ws is not None:
+            self._ws._pool.prewarm()
+        elif self._client is not None:
+            await self._client.models.list()
+
     async def aclose(self) -> None:
+        await super().aclose()
         if self._ws:
             await self._ws.aclose()
         if self._owns_client and self._client:

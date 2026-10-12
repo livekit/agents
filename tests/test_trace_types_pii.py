@@ -58,6 +58,10 @@ SAFE_KEYS = frozenset(
         "lk.agent_name",
         "lk.cloud_agent_id",
         "lk.deployment_id",
+        # input delta markers: a flag, a count and span ids
+        "lk.input.delta",
+        "lk.input.base_span_id",
+        "lk.input.dropped_from_base",
         "lk.generation_id",
         "lk.generation_count",
         "lk.parent_generation_id",
@@ -155,6 +159,9 @@ SAFE_KEYS = frozenset(
         "gen_ai.usage.text.input_tokens",
         "gen_ai.usage.text.output_tokens",
         "gen_ai.workflow.name",
+        # a judge's name and its verdict enum (the reasoning is content, registered as PII)
+        "gen_ai.evaluation.name",
+        "gen_ai.evaluation.score.label",
         # GenAI event and metric names (not attribute keys)
         "gen_ai.client.inference.operation.details",
         "gen_ai.client.operation.duration",
@@ -168,6 +175,7 @@ SAFE_KEYS = frozenset(
         "lk.previous_agent_label",
         "lk.fallback.label",
         "lk.fallback.index",
+        "lk.fallback.recovery",
         # rpc (semconv names, ids, sizes, codes; identities and payload are tagged)
         "rpc.method",
         "lk.rpc.request_id",
