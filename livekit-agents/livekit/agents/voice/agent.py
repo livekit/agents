@@ -1,25 +1,58 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import inspect
+import sys
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Generator,
+    Sequence,
+)
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    Literal,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+    overload,
+)
+
+from pydantic import TypeAdapter
+from typing_extensions import ParamSpec, TypeVar
 
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     LLM,
-    ChatContext,
     DuplexModel,
     DuplexRealtimeAdapter,
     RealtimeModel,
     ToolError,
     find_function_tools,
 )
-from ..llm.chat_context import Instructions, _ReadOnlyChatContext
+from ..llm.chat_context import Instructions
 from ..llm.duplex_adapter import _DuplexRealtimeSession
+from ..llm.tool_context import (
+    DuplicateMode,
+    DuplicateScope,
+    FunctionTool,
+    RawFunctionDescription,
+    RawFunctionTool,
+    ReadBack,
+    ToolFlag,
+    function_tool,
+)
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
@@ -32,10 +65,58 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession, ExpressiveOptions
+    from .agent_run import AgentRun
+    from .agent_session import ExpressiveOptions, LiveSession
     from .audio_recognition import AudioRecognition
+    from .events import RunContext
     from .io import TimedString
+    from .run_result import RunResult, RunUsage
     from .turn import TurnDetectionMode
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R", bound=Awaitable[Any])
+_InstructionsFn = Callable[["RunContext"], str | Awaitable[str]]
+_InstructionsFnT = TypeVar("_InstructionsFnT", bound=Callable[..., str | Awaitable[str]])
+_OnEnterFn = Callable[["LiveSession"], Any]
+_OutputValidatorFn = Callable[["RunContext", Any], Any]
+
+DEFAULT_AGENT_ID = "default_agent"
+
+
+class _OnEnterHook:
+    """``Agent.on_enter``: the hook to await, or the decorator registering it.
+
+    A descriptor so a subclass still overrides ``async def on_enter(self) -> None``; the
+    bound form is untyped on purpose, both uses go through it.
+    """
+
+    def __get__(self, agent: Agent | None, owner: type[Agent]) -> Any:
+        if agent is None:
+            return self
+        return _BoundOnEnter(agent)
+
+
+class _BoundOnEnter:
+    def __init__(self, agent: Agent) -> None:
+        self._agent = agent
+
+    def __call__(self, f: _OnEnterFn | None = None, /) -> Any:
+        if f is not None:
+            return self._agent._register_on_enter(f)
+        return self._agent._run_on_enter()
+
+
+def _assignment_namespace(frame: Any) -> dict[str, Any] | None:
+    """The namespace a module-level ``Agent(...)`` is assigned into, or ``None``.
+
+    Only a module (or an ``exec``) frame has a live namespace to scan later; a function frame's
+    locals are a snapshot, and holding its proxy would keep the frame alive.
+    """
+    if frame is None or frame.f_locals is not frame.f_globals:
+        return None
+    namespace: dict[str, Any] = frame.f_locals
+    return namespace
 
 
 @dataclass
@@ -49,9 +130,12 @@ class Agent:
         self,
         *,
         instructions: str | Instructions,
+        name: str | None = None,
         id: str | None = None,
-        chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
+        deps_type: type[Any] | None = None,
+        state_type: type[Any] | None = None,
+        output_type: type[Any] | None = None,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -71,10 +155,15 @@ class Agent:
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
-        if type(self) is Agent:
-            self._id = "default_agent"
-        else:
-            self._id = id or misc.camel_to_snake_case(type(self).__name__)
+        # a plain Agent is named after the variable it is assigned to: the assigning frame's
+        # namespace is kept and scanned the first time the name is read, since the assignment completes only after the constructor returns
+        self._id: str | None = name or id
+        self._defining_namespace: dict[str, Any] | None = None
+        if self._id is None:
+            if type(self) is Agent:
+                self._defining_namespace = _assignment_namespace(sys._getframe(1))
+            else:
+                self._id = misc.camel_to_snake_case(type(self).__name__)
 
         turn_handling = (
             _migrate_turn_handling(
@@ -89,8 +178,19 @@ class Agent:
 
         self._instructions = instructions
         self._tools = [*tools, *find_function_tools(self)]
-        self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
+        # registered at import by the decorators below; frozen once the agent is first bound
+        self._instruction_fns: list[_InstructionsFn] = []
+        self._instructions_view: _InstructionsView | None = None
+        self._on_enter_fn: _OnEnterFn | None = None
+        self._output_validators: list[_OutputValidatorFn] = []
+        self._frozen = False
         self._turn_detection = turn_handling.get("turn_detection", NOT_GIVEN)
+
+        # the three type parameters of Agent[Deps, State, Output]; declared for the type
+        # checker and the output parser, the values travel with the run
+        self._deps_type = deps_type
+        self._state_type = state_type
+        self._output_type: type[Any] = output_type if output_type is not None else str
 
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -135,26 +235,40 @@ class Agent:
         self._mcp_servers = mcp_servers
         if self._mcp_servers:
             logger.warning(
-                "passing MCP servers to AgentSession or Agent is deprecated "
+                "passing MCP servers to LiveSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
-        self._activity: AgentActivity | None = None
 
     @property
     def id(self) -> str:
-        return self._id
+        if self._id is None and self._defining_namespace is not None:
+            for var_name, value in self._defining_namespace.items():
+                if value is self:
+                    self._id = var_name
+                    self._defining_namespace = None
+                    break
+        return self._id or DEFAULT_AGENT_ID
 
     @property
     def label(self) -> str:
         return self.id
 
     @property
-    def instructions(self) -> str | Instructions:
+    def instructions(self) -> _InstructionsView:
+        """The static instructions, also the decorator registering dynamic ones.
+
+        Reads as the ``str`` or ``Instructions`` the agent was built with. Used as
+        ``@agent.instructions`` it registers a function rendered into the instructions on every
+        turn, which receives the ``RunContext`` and returns a string, sync or async::
+
+            @scheduler.instructions
+            def known_appointment(ctx: RunContext) -> str: ...
         """
-        Returns:
-            str: The core instructions that guide the agent's behavior.
-        """
-        return self._instructions
+        if self._instructions_view is None or self._instructions_view._source is not (
+            self._instructions
+        ):
+            self._instructions_view = _wrap_instructions(self._instructions, self)
+        return self._instructions_view
 
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:
@@ -167,16 +281,15 @@ class Agent:
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        """
-        Provides a read-only view of the agent's current chat context.
+        """A read-only view of the history the running activity works on.
 
-        Returns:
-            llm.ChatContext: A read-only version of the agent's conversation history.
+        The history belongs to the session; this resolves through the activity bound in the
+        current context, so it is only available inside the agent's hooks and tools.
 
-        See Also:
-            update_chat_ctx: Method to update the internal chat context.
+        Raises:
+            RuntimeError: If the agent is not running in this context.
         """
-        return _ReadOnlyChatContext(self._chat_ctx.items)
+        return self._get_binding_or_raise().chat_ctx
 
     @property
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
@@ -195,85 +308,6 @@ class Agent:
         activity = self._get_activity_or_raise()
         assert activity._audio_recognition is not None
         return activity._audio_recognition
-
-    async def update_instructions(self, instructions: str) -> None:
-        """
-        Updates the agent's instructions.
-
-        If the agent is running in realtime mode, this method also updates
-        the instructions for the ongoing realtime session.
-
-        Args:
-            instructions (str):
-                The new instructions to set for the agent.
-
-        Raises:
-            llm.RealtimeError: If updating the realtime session instructions fails.
-        """
-        if self._activity is None:
-            self._instructions = instructions
-            return
-
-        await self._activity.update_instructions(instructions)
-
-    async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
-        """
-        Updates the agent's available function tools.
-
-        If the agent is running in realtime mode, this method also updates
-        the tools for the ongoing realtime session.
-
-        Args:
-            tools (list[llm.Tool | llm.ToolSet]):
-                The new list of function tools available to the agent.
-
-        Raises:
-            llm.RealtimeError: If updating the realtime session tools fails.
-        """
-        valid_tools: list[llm.Tool | llm.Toolset] = []
-        for tool in tools:
-            if isinstance(tool, (llm.Tool, llm.Toolset)):
-                valid_tools.append(tool)
-            elif resolved_tool := llm.tool_context._resolve_wrapped_tool(tool):
-                valid_tools.append(resolved_tool)
-            else:
-                raise TypeError(f"Invalid tool type: {type(tool)}. Expected Tool or ToolSet.")
-
-        tools = valid_tools
-        if self._activity is None:
-            self._tools = list({tool.id: tool for tool in tools}.values())
-            self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
-            return
-
-        await self._activity.update_tools(tools)
-
-    async def update_chat_ctx(
-        self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
-    ) -> None:
-        """
-        Updates the agent's chat context.
-
-        If the agent is running in realtime mode, this method also updates
-        the chat context for the ongoing realtime session.
-
-        Args:
-            chat_ctx (llm.ChatContext):
-                The new or updated chat context for the agent.
-            exclude_invalid_function_calls (bool): Whether to exclude function calls
-                and outputs not from the agent's tools.
-
-        Raises:
-            llm.RealtimeError: If updating the realtime session chat context fails.
-        """
-        if self._activity is None:
-            self._chat_ctx = chat_ctx.copy(
-                tools=self._tools if exclude_invalid_function_calls else NOT_GIVEN
-            )
-            return
-
-        await self._activity.update_chat_ctx(
-            chat_ctx, exclude_invalid_function_calls=exclude_invalid_function_calls
-        )
 
     def update_options(
         self,
@@ -295,9 +329,12 @@ class Agent:
         the swap applies to the live pipeline. ``expressive`` overrides the session value and
         takes effect on the next reply; pass ``False`` to force it off for this agent.
 
+        The live swap applies to the activity bound in the current context, so it must be
+        called from the agent's hooks or tools; elsewhere only the stored configuration changes.
+
         Raises:
             RuntimeError: When swapping to or from a ``RealtimeModel`` while the agent is
-                running; use ``AgentSession.update_agent`` instead.
+                running; use ``LiveSession.update_agent`` instead.
         """
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -309,8 +346,9 @@ class Agent:
         if isinstance(llm, DuplexModel):
             llm = DuplexRealtimeAdapter(llm)
 
-        if self._activity is None:
-            # not running: replace stored config, applied on the next start
+        activity = self._bound_activity()
+        if activity is None:
+            # not running in this context: replace stored config, applied on the next start
             if is_given(stt):
                 self._stt = stt
             if is_given(vad):
@@ -323,19 +361,230 @@ class Agent:
                 self._expressive = expressive
             return
 
-        self._activity._update_models(new_stt=stt, new_vad=vad, new_llm=llm, new_tts=tts)
+        activity._update_models(new_stt=stt, new_vad=vad, new_llm=llm, new_tts=tts)
         if is_given(expressive):
             # after _update_models so a rejected model swap leaves expressive untouched;
             # resolved per turn (agent value over session), no live plumbing needed
             self._expressive = expressive
 
+    @property
+    def deps_type(self) -> type[Any] | None:
+        return self._deps_type
+
+    @property
+    def state_type(self) -> type[Any] | None:
+        return self._state_type
+
+    @property
+    def output_type(self) -> type[Any]:
+        """What ``run()`` returns as ``result.output``: ``str`` unless declared."""
+        return self._output_type
+
+    async def run(
+        self,
+        message: str | llm.ChatMessage,
+        *,
+        message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
+        state: Any = None,
+        deps: Any = None,
+        usage: RunUsage | None = None,
+        max_steps: int | None = None,
+    ) -> RunResult[Any]:
+        """One turn on the given history: the model and tool loop until the answer.
+
+        Pure: a message in, a typed ``RunResult`` out, nothing kept after. The run stops at
+        an ``InputRequired`` from a tool, with ``result.input_required`` set and
+        ``result.output`` ``None``.
+
+        Args:
+            message: The user's message.
+            message_history: The conversation so far; omit for a fresh one.
+            state: The session's typed state, mutated in place by the tools.
+            deps: What the tools need for this run, read as ``ctx.deps``.
+            usage: A ``RunUsage`` to add this run's usage to, for a delegated run.
+            max_steps: The most model requests one turn may make.
+        """
+        from .agent_run import AgentRun
+
+        run = AgentRun[Any](
+            self,
+            message,
+            message_history=message_history,
+            state=state,
+            deps=deps,
+            usage=usage,
+            max_steps=max_steps,
+            output_type=self._output_type,
+        )
+        return await run._run()
+
+    def output_validator(self, f: _OutputValidatorFn) -> _OutputValidatorFn:
+        """Register a validator of the run's output, as a decorator.
+
+        It receives the ``RunContext`` and the output, returns the value or raises
+        ``ModelRetry`` to send the model back with the reason::
+
+            @fnol.output_validator
+            async def cites_real_jobs(ctx: RunContext, output: Claim) -> Claim: ...
+        """
+        self._check_not_frozen("an output validator")
+        self._output_validators.append(f)
+        return f
+
+    async def _validate_output(self, ctx: RunContext, output: Any) -> Any:
+        """The output through every validator; raises ``ModelRetry`` from the first that does."""
+        for fn in self._output_validators:
+            validated = fn(ctx, output)
+            if inspect.isawaitable(validated):
+                validated = await validated
+            output = validated
+        return output
+
+    # -- Registration at import --
+    # `@agent.tool`, `@agent.instructions` and `@agent.on_enter` register on a module-level
+    # instance; the lists freeze when the agent is first bound to a session
+
+    def _check_not_frozen(self, what: str) -> None:
+        if self._frozen:
+            raise RuntimeError(
+                f"cannot register {what} on agent `{self.id}`: it is already bound to a session"
+            )
+
+    @overload
+    def tool(self, f: Callable[_P, _R], /) -> FunctionTool[_P, _R]: ...
+
+    @overload
+    def tool(
+        self,
+        f: None = None,
+        /,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+        flags: ToolFlag = ToolFlag.NONE,
+        on_duplicate: DuplicateMode = "allow",
+        duplicate_scope: DuplicateScope = "name",
+        requires_approval: bool | ReadBack = False,
+    ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]: ...
+
+    def tool(
+        self,
+        f: Callable[_P, _R] | None = None,
+        /,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+        flags: ToolFlag = ToolFlag.NONE,
+        on_duplicate: DuplicateMode = "allow",
+        duplicate_scope: DuplicateScope = "name",
+        requires_approval: bool | ReadBack = False,
+    ) -> Any:
+        """Register a function tool on this agent, as a decorator.
+
+        The first parameter of the function is the ``RunContext``; the rest are the tool's
+        arguments and its docstring feeds the schema, as with ``@function_tool``::
+
+            @scheduler.tool
+            async def find_appointment(ctx: RunContext, last_name: str) -> str: ...
+        """
+
+        def register(func: Callable[_P, _R]) -> FunctionTool[_P, _R] | RawFunctionTool[_P, _R]:
+            self._check_not_frozen("a tool")
+            tool: FunctionTool[_P, _R] | RawFunctionTool[_P, _R]
+            if isinstance(func, (FunctionTool, RawFunctionTool)):
+                # an already built tool, registered as it is
+                tool = func
+            elif raw_schema is not None:
+                tool = function_tool(
+                    func,
+                    raw_schema=raw_schema,
+                    flags=flags,
+                    on_duplicate=on_duplicate,
+                    duplicate_scope=duplicate_scope,
+                )
+            else:
+                tool = function_tool(
+                    func,
+                    name=name,
+                    description=description,
+                    flags=flags,
+                    on_duplicate=on_duplicate,
+                    duplicate_scope=duplicate_scope,
+                    requires_approval=requires_approval,
+                )
+            self._tools.append(tool)
+            return tool
+
+        return register(f) if f is not None else register
+
+    def _register_instructions(self, f: _InstructionsFn) -> _InstructionsFn:
+        self._check_not_frozen("an instructions function")
+        self._instruction_fns.append(f)
+        return f
+
+    async def _render_dynamic_instructions(self, ctx: RunContext) -> str:
+        """The registered instruction functions, rendered for one turn and joined."""
+        parts: list[str] = []
+        for fn in self._instruction_fns:
+            rendered = fn(ctx)
+            if inspect.isawaitable(rendered):
+                rendered = await rendered
+            if rendered:
+                parts.append(str(rendered))
+        return "\n\n".join(parts)
+
+    async def _render_instructions(
+        self, ctx: RunContext, *, modality: Literal["audio", "text"] | None = None
+    ) -> str | Instructions:
+        """The static instructions with the dynamic ones appended, for one turn."""
+        dynamic = await self._render_dynamic_instructions(ctx)
+        if not dynamic:
+            return self._instructions
+
+        static = self._instructions
+        if isinstance(static, Instructions):
+            static = static.render(modality=modality)
+        return f"{static}\n\n{dynamic}" if static else dynamic
+
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
     # constructor of the VoiceAgent
 
-    async def on_enter(self) -> None:
-        """Called when the task is entered"""
-        pass
+    on_enter = _OnEnterHook()
+    """Called when the agent takes the conversation.
+
+    Subclasses override it as ``async def on_enter(self) -> None``. On a plain instance it is
+    a decorator registering the function to run then, which receives the session::
+
+        @scheduler.on_enter
+        async def greet(session: LiveSession) -> None:
+            session.generate_reply(instructions="Greet the caller.")
+    """
+
+    def _register_on_enter(self, f: _OnEnterFn) -> _OnEnterFn:
+        self._check_not_frozen("an on_enter function")
+        self._on_enter_fn = f
+        return f
+
+    async def _run_on_enter(self) -> Any:
+        if self._on_enter_fn is None:
+            return None
+        result = self._on_enter_fn(self.session)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    async def _enter(self, ctx: RunContext[Any, Any]) -> Any:
+        """``on_enter`` as it was written: an override takes the context when it declares one,
+        the decorator form takes the call's session and is nothing in text."""
+        hook = type(self).on_enter
+        if isinstance(hook, _OnEnterHook):
+            return await self._run_on_enter() if ctx._session is not None else None
+        if len(inspect.signature(hook).parameters) > 1:
+            return await hook(self, ctx)
+        return await hook(self)
 
     async def on_exit(self) -> None:
         """Called when the task is exited"""
@@ -493,12 +742,45 @@ class Agent:
         """A node processing the audio from the realtime LLM session before it is played out."""
         return Agent.default.realtime_audio_output_node(self, audio, model_settings)
 
-    def _get_activity_or_raise(self) -> AgentActivity:
-        """Get the current activity context for this task (internal)"""
-        if self._activity is None:
-            raise RuntimeError("no activity context found, the agent is not running")
+    def _bound_binding(self) -> AgentActivity | AgentRun[Any] | None:
+        """What runs this agent in the current context: a voice activity or a run (internal).
 
-        return self._activity
+        Resolved through the contextvar both set around every hook, tool and pipeline node,
+        so one shared instance serving several sessions reads the right one.
+        """
+        from .agent_activity import _AgentActivityContextVar
+
+        binding = _AgentActivityContextVar.get(None)
+        if binding is None or binding.agent is not self:
+            return None
+        return binding
+
+    def _bound_activity(self) -> AgentActivity | None:
+        """The voice activity running this agent in the current context, if any (internal)."""
+        from .agent_activity import AgentActivity
+
+        binding = self._bound_binding()
+        return binding if isinstance(binding, AgentActivity) else None
+
+    def _get_binding_or_raise(self) -> AgentActivity | AgentRun[Any]:
+        binding = self._bound_binding()
+        if binding is None:
+            raise RuntimeError(
+                f"agent `{self.id}` is not running in this context; its session and history "
+                "are only available inside its hooks and tools"
+            )
+        return binding
+
+    def _get_activity_or_raise(self) -> AgentActivity:
+        """Get the current voice activity for this agent (internal)"""
+        from .agent_activity import AgentActivity
+
+        binding = self._get_binding_or_raise()
+        if not isinstance(binding, AgentActivity):
+            raise RuntimeError(
+                f"agent `{self.id}` is running in agent.run(), which has no live session"
+            )
+        return binding
 
     class default:
         @staticmethod
@@ -563,16 +845,16 @@ class Agent:
             model_settings: ModelSettings,
         ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
             """Default implementation for `Agent.llm_node`"""
-            activity = agent._get_activity_or_raise()
-            assert activity.llm is not None, "llm_node called but no LLM node is available"
-            assert isinstance(activity.llm, llm.LLM), (
+            binding = agent._get_binding_or_raise()
+            assert binding.llm is not None, "llm_node called but no LLM node is available"
+            assert isinstance(binding.llm, llm.LLM), (
                 "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
             )
 
             tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
-            activity_llm = activity.llm
+            activity_llm = binding.llm
 
-            conn_options = activity.session.conn_options.llm_conn_options
+            conn_options = binding.llm_conn_options
             async with activity_llm.chat(
                 chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
             ) as stream:
@@ -691,7 +973,7 @@ class Agent:
         """
         Retrieves the turn detection mode for identifying conversational turns.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a turn detection,
+        If this property was not set at Agent creation, but an ``LiveSession`` provides a turn detection,
         the session's turn detection mode will be used at runtime instead.
 
         Returns:
@@ -703,15 +985,15 @@ class Agent:
     def turn_detection(self, value: TurnDetectionMode | None) -> None:
         self._turn_detection = value
 
-        if self._activity is not None:
-            self._activity.update_options(turn_detection=value)
+        if (activity := self._bound_activity()) is not None:
+            activity.update_options(turn_detection=value)
 
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:
         """
         Retrieves the Speech-To-Text component for the agent.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides an STT component,
+        If this property was not set at Agent creation, but an ``LiveSession`` provides an STT component,
         the session's STT will be used at runtime instead.
 
         Returns:
@@ -724,7 +1006,7 @@ class Agent:
         """
         Retrieves the Language Model or RealtimeModel used for text generation.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides an LLM or RealtimeModel,
+        If this property was not set at Agent creation, but an ``LiveSession`` provides an LLM or RealtimeModel,
         the session's model will be used at runtime instead.
 
         Returns:
@@ -737,7 +1019,7 @@ class Agent:
         """
         Retrieves the Text-To-Speech component for the agent.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a TTS component,
+        If this property was not set at Agent creation, but an ``LiveSession`` provides a TTS component,
         the session's TTS will be used at runtime instead.
 
         Returns:
@@ -750,7 +1032,7 @@ class Agent:
         """
         Retrieves the expressive TTS delivery setting for the agent.
 
-        If this property was not set at Agent creation, the ``AgentSession``'s ``expressive``
+        If this property was not set at Agent creation, the ``LiveSession``'s ``expressive``
         value will be used at runtime instead. When set, it overrides the session value for
         this agent's turns, matching how ``llm`` and ``tts`` overrides behave.
 
@@ -765,7 +1047,7 @@ class Agent:
         """
         Retrieves the list of Model Context Protocol (MCP) servers providing external tools.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides MCP servers,
+        If this property was not set at Agent creation, but an ``LiveSession`` provides MCP servers,
         the session's MCP servers will be used at runtime instead.
 
         Returns:
@@ -778,7 +1060,7 @@ class Agent:
         """
         Retrieves the Voice Activity Detection component for the agent.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a VAD component,
+        If this property was not set at Agent creation, but an ``LiveSession`` provides a VAD component,
         the session's VAD will be used at runtime instead.
 
         Returns:
@@ -791,7 +1073,7 @@ class Agent:
         """
         Indicates whether interruptions (e.g., stopping TTS playback) are allowed.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a value for
+        If this property was not set at Agent creation, but an ``LiveSession`` provides a value for
         allowing interruptions, the session's value will be used at runtime instead.
 
         Returns:
@@ -826,7 +1108,7 @@ class Agent:
         """
         Retrieves the minimum consecutive speech delay for the agent.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a value for
+        If this property was not set at Agent creation, but an ``LiveSession`` provides a value for
         the minimum consecutive speech delay, the session's value will be used at runtime instead.
 
         Returns:
@@ -840,7 +1122,7 @@ class Agent:
         Indicates whether to use TTS-aligned transcript as the input of
         the ``transcription_node``.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a value for
+        If this property was not set at Agent creation, but an ``LiveSession`` provides a value for
         the use of TTS-aligned transcript, the session's value will be used at runtime instead.
 
         Returns:
@@ -849,7 +1131,7 @@ class Agent:
         return self._use_tts_aligned_transcript
 
     @property
-    def session(self) -> AgentSession:
+    def session(self) -> LiveSession:
         """
         Retrieve the VoiceAgent associated with the current agent.
 
@@ -860,20 +1142,53 @@ class Agent:
 
 
 TaskResult_T = TypeVar("TaskResult_T")
+TaskState_T = TypeVar("TaskState_T", default=None)
 
 
-class AgentTask(Agent, Generic[TaskResult_T]):
+def _task_state_type(cls: type[Any]) -> type[Any] | None:
+    """The ``State`` of ``AgentTask[Output, State]`` as the class declares it, else ``None``."""
+    for klass in cls.__mro__:
+        for base in getattr(klass, "__orig_bases__", ()):
+            if get_origin(base) is not AgentTask:
+                continue
+            args = get_args(base)
+            if len(args) < 2 or isinstance(args[1], TypeVar) or args[1] is type(None):
+                return None
+            return args[1]  # type: ignore[no-any-return]
+    return None
+
+
+class TaskAwaited(Exception):
+    """Raised by ``await task`` inside ``agent.run()``: the run pushes the task on the lane's
+    agent stack and the call stays pending until the task completes (docs/agent-tasks.md)."""
+
+    def __init__(self, task: AgentTask[Any, Any]) -> None:
+        super().__init__(f"{type(task).__name__} takes the conversation")
+        self.task = task
+
+
+class AgentTask(Agent, Generic[TaskResult_T, TaskState_T]):
+    """An agent with a job that ends with a value: ``AgentTask[Output, State]``.
+
+    Its constructor arguments are its input, ``self.state`` its own typed state, and it is
+    awaited once. On a call the task takes the conversation in memory; in text the await is a
+    handoff plus a deferred call: the task rides the lane's agent stack with its arguments and
+    state, each message is a turn of the task, and ``Completed`` becomes the pending call's
+    output. A dataclass subclass makes the arguments JSON for the stack.
+    """
+
     def __init__(
         self,
         *,
-        instructions: str | Instructions,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        instructions: str | Instructions = "",
         tools: list[llm.Tool | llm.Toolset] | None = None,
-        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | RealtimeModels | str | None] = (
+            NOT_GIVEN
+        ),
+        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         preserve_function_call_history: bool = False,
         # deprecated
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
@@ -895,7 +1210,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         )
         super().__init__(
             instructions=instructions,
-            chat_ctx=chat_ctx,
             tools=tools,
             stt=stt,
             vad=vad,
@@ -911,19 +1225,78 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self.__inactive_ev.set()  # set when the agent is not awaited or activity is closed
         self._preserve_function_call_history = preserve_function_call_history
 
-        self._old_agent: Agent | None = None
+        # the activity this task paused, and its own; both bound in __await_impl
+        self._old_activity: AgentActivity | None = None
+        self._task_activity: AgentActivity | None = None
+
+        # the task's own state, and the call of the agent below that awaits it in text
+        state_type = _task_state_type(type(self))
+        self.state: TaskState_T = state_type() if state_type is not None else None  # type: ignore[assignment]
+        self._pending_call_id: str | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
 
+    # -- the stack entry, in text --
+
+    def _arguments(self) -> dict[str, Any]:
+        """The constructor arguments as JSON: a dataclass subclass's fields."""
+        if not dataclasses.is_dataclass(self):
+            return {}
+        hints = get_type_hints(type(self))
+        return {
+            f.name: TypeAdapter(hints[f.name]).dump_python(getattr(self, f.name), mode="json")
+            for f in dataclasses.fields(self)
+        }
+
+    @classmethod
+    def _rebuild(cls, args: Any) -> AgentTask[Any, Any]:
+        """The task from its stack entry's arguments: a dataclass's fields, else keywords."""
+        if dataclasses.is_dataclass(cls):
+            # the arguments are JSON; the fields' types make them objects again
+            task: AgentTask[Any, Any] = TypeAdapter(cls).validate_python(args or {})
+            return task
+        return cls(**(args or {}))
+
+    async def _take(self, message: llm.ChatMessage) -> llm.Transition | None:
+        """The person's message, answered by the task itself instead of its model (a graph's
+        waiting node); ``None`` leaves it to the model."""
+        return None
+
+    def _dump_state(self) -> Any:
+        state_type = _task_state_type(type(self))
+        if state_type is None:
+            return None
+        return TypeAdapter(state_type).dump_python(self.state, mode="json")
+
+    def _restore(self, state: Any, *, call_id: str | None) -> None:
+        """The task as it waited: its state and the call it answers, from the stack entry."""
+        state_type = _task_state_type(type(self))
+        if state_type is not None and state is not None:
+            self.state = TypeAdapter(state_type).validate_python(state)
+        self._pending_call_id = call_id
+
+    async def _update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
+        """Replace this instance's tools (internal): live when bound, stored otherwise.
+
+        A task is instantiated per use, so its tool list is its own; a shared ``Agent`` is
+        configuration and does not change after import.
+        """
+        activity = self._bound_activity()
+        if activity is None:
+            self._tools = list({tool.id: tool for tool in tools}.values())
+            return
+        await activity.update_tools(tools)
+
     def cancel(self) -> None:
-        if self._activity:
-            self._activity.interrupt(force=True)
+        if self._task_activity:
+            self._task_activity.interrupt(force=True)
         if self.__fut.done():
             return
-        self.complete(ToolError(f"AgentTask {self.id} is cancelled"))
+        self._complete(ToolError(f"AgentTask {self.id} is cancelled"))
 
-    def complete(self, result: TaskResult_T | Exception) -> None:
+    def _complete(self, result: TaskResult_T | Exception) -> None:
+        """End the task with its result (internal): a tool returns ``Completed(value)``."""
         if self.__fut.done():
             raise RuntimeError(f"{self.__class__.__name__} is already done")
 
@@ -956,20 +1329,26 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 f"{self.__class__.__name__} must be executed inside an async context"
             )
 
-        task_info = _get_activity_task_info(current_task)
-        if not task_info or not task_info.inline_task:
-            raise RuntimeError(
-                f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
-            )
-
         # imported at call time: agent_activity imports Agent at module scope, so the reverse can't
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
 
+        task_info = _get_activity_task_info(current_task)
+
         speech_handle = _SpeechHandleContextVar.get(None)
-        old_activity = _AgentActivityContextVar.get()
+        old_activity = _AgentActivityContextVar.get(None)
+        from .agent_activity import AgentActivity
+
+        if old_activity is not None and not isinstance(old_activity, AgentActivity):
+            # in text the run takes it from here: the call stays pending, the task is pushed on
+            # the lane's agent stack, and the value comes back on a later turn
+            raise TaskAwaited(self)
+        if old_activity is None or not task_info or not task_info.inline_task:
+            raise RuntimeError(
+                f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
+            )
         old_agent = old_activity.agent
         session = old_activity.session
-        self._old_agent = old_agent
+        self._old_activity = old_activity
 
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():
@@ -981,7 +1360,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 f"The asyncio.Task finished before {self.__class__.__name__} was completed."
             )
 
-            self.complete(
+            self._complete(
                 RuntimeError(
                     f"The asyncio.Task finished before {self.__class__.__name__} was completed."
                 )
@@ -1024,9 +1403,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                     blocked_tasks=blocked_tasks,
                     wait_on_enter=False,
                 )
+                self._task_activity = session._activity_of(self)
 
-                if not self._activity and not self.done():
-                    self.complete(
+                if not self._task_activity and not self.done():
+                    self._complete(
                         ToolError(
                             f"activity doesn't start for {self.id}, likely due to session closing"
                         )
@@ -1034,7 +1414,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
                 run_state = session._global_run_state
 
-                if self._activity and (on_enter_task := self._activity._on_enter_task):
+                if self._task_activity and (on_enter_task := self._task_activity._on_enter_task):
                     if run_state and not run_state.done():
                         # watch the on_enter task as a guard so RunResult won't complete
                         # before on_enter has registered its own speech handles
@@ -1080,24 +1460,28 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                     except BaseException:
                         logger.exception("error in on_enter task of agent %s", self.id)
 
-                if session._closing and self._activity is None:
+                task_activity = self._task_activity
+                if session._closing and task_activity is None:
                     # the activity never started (session closing), skip the handoff;
                     # the close path owns the previous activity
                     pass
                 elif session.current_agent != self:
                     logger.warning(
                         f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
-                        "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
+                        "Ignoring handoff to the previous agent, likely due to `LiveSession.update_agent` being invoked."
                     )
                     await old_activity.aclose()
                 else:
-                    merged_chat_ctx = old_agent.chat_ctx.copy().merge(
-                        self.chat_ctx,
-                        exclude_function_call=not self._preserve_function_call_history,
-                        exclude_instructions=True,
-                    )
-                    # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
-                    old_agent._chat_ctx.items[:] = merged_chat_ctx.items
+                    # the task worked on the session's history: what it added since the pause
+                    # stays, filtered of its function calls unless they are to be kept
+                    if task_activity is not None:
+                        merged_chat_ctx = old_activity._chat_ctx.copy().merge(
+                            task_activity._chat_ctx,
+                            exclude_function_call=not self._preserve_function_call_history,
+                            exclude_instructions=True,
+                        )
+                        # set directly, `session._update_activity` syncs it to the rt_session if needed
+                        old_activity._chat_ctx.items[:] = merged_chat_ctx.items
 
                     await session._update_activity(
                         old_agent, new_activity="resume", wait_on_enter=False
@@ -1147,3 +1531,52 @@ def _pass_through_activity_task_info(task: asyncio.Task[Any]) -> None:
     current_task = asyncio.current_task()
     if current_task and (info := _get_activity_task_info(current_task)):
         setattr(task, "__livekit_agents_activity_task", info)
+
+
+class _InstructionsText(str):
+    """``Agent.instructions`` for a ``str``: the value, callable as the decorator."""
+
+    __slots__ = ("_source", "_agent")
+    _source: str | Instructions
+    _agent: Agent
+
+    def __call__(self, f: _InstructionsFnT) -> _InstructionsFnT:
+        self._agent._register_instructions(f)
+        return f
+
+
+class _InstructionsObject(Instructions):
+    """``Agent.instructions`` for an ``Instructions``: the value, callable as the decorator."""
+
+    _source: str | Instructions
+    _agent: Agent
+
+    def __call__(self, f: _InstructionsFnT) -> _InstructionsFnT:
+        self._agent._register_instructions(f)
+        return f
+
+
+if TYPE_CHECKING:
+
+    class _InstructionsView(str, Instructions):
+        """What a type checker sees: the value, read as a ``str`` or an ``Instructions``, and
+        the decorator. One class, since a union of callables is an untyped decorator to mypy."""
+
+        _source: str | Instructions
+        _agent: Agent
+
+        def __call__(self, f: _InstructionsFnT) -> _InstructionsFnT: ...
+
+else:
+    _InstructionsView = _InstructionsText | _InstructionsObject
+
+
+def _wrap_instructions(source: str | Instructions, agent: Agent) -> _InstructionsView:
+    view: _InstructionsText | _InstructionsObject
+    if isinstance(source, Instructions):
+        view = _InstructionsObject(source.common, audio=source.audio, text=source.text)
+    else:
+        view = _InstructionsText(source)
+    view._source = source
+    view._agent = agent
+    return cast("_InstructionsView", view)

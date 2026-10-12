@@ -370,7 +370,7 @@ async def test_switching_to_a_client_commit_model_needs_a_vad() -> None:
 
 async def test_switching_to_a_realtime_only_model_needs_the_realtime_transport() -> None:
     # the transcriptions endpoint does not serve these models at all, and the transport cannot
-    # change once AgentSession has wrapped a non-streaming STT in a StreamAdapter
+    # change once LiveSession has wrapped a non-streaming STT in a StreamAdapter
     instance = stt.STT(api_key="test-key", model="gpt-transcribe", vad=None)
     assert instance.capabilities.streaming is False
 

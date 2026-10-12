@@ -137,7 +137,7 @@ async def decline_card_capture(context: RunContext, reason: str) -> None:
     """
     task = context.session.current_agent
     if isinstance(task, AgentTask) and not task.done():
-        task.complete(CardCaptureDeclinedError(reason))
+        task._complete(CardCaptureDeclinedError(reason))
 
 
 @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
@@ -149,14 +149,13 @@ async def restart_card_collection(context: RunContext, reason: str) -> None:
     """
     task = context.session.current_agent
     if isinstance(task, AgentTask) and not task.done():
-        task.complete(CardCollectionRestartError(reason))
+        task._complete(CardCollectionRestartError(reason))
 
 
 class GetCardNumberTask(AgentTask[GetCardNumberResult]):
     def __init__(
         self,
         *,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
         require_explicit_ask: bool = False,
         extra_instructions: str = "",
@@ -187,7 +186,6 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                 )
                 + extra_suffix,
             ),
-            chat_ctx=chat_ctx,
             tools=[
                 self._build_update_card_number_tool(),
                 decline_card_capture,
@@ -241,13 +239,15 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
 
                 issuer = CARD_ISSUERS_LOOKUP.get(self._card_number[0], "Other")
                 if not self.done():
-                    self.complete(GetCardNumberResult(issuer=issuer, card_number=self._card_number))
+                    self._complete(
+                        GetCardNumberResult(issuer=issuer, card_number=self._card_number)
+                    )
                 return None
 
             confirm_tool = self._build_confirm_tool(card_number=card_number)
             current_tools = [t for t in self.tools if t.id != "confirm_card_number"]
             current_tools.append(confirm_tool)
-            await self.update_tools(current_tools)
+            await self._update_tools(current_tools)
 
             return (
                 "The card number has been updated.\n"
@@ -274,7 +274,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
 
             issuer = CARD_ISSUERS_LOOKUP.get(card_number[0], "Other")
             if not self.done():
-                self.complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
+                self._complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
             return None
 
         return confirm_card_number
@@ -308,7 +308,6 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
     def __init__(
         self,
         *,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
         require_explicit_ask: bool = False,
         extra_instructions: str = "",
@@ -339,7 +338,6 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
                 )
                 + extra_suffix,
             ),
-            chat_ctx=chat_ctx,
             tools=[
                 self._build_update_security_code_tool(),
                 decline_card_capture,
@@ -386,13 +384,13 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
 
             if not self._confirmation_required(context):
                 if not self.done():
-                    self.complete(GetSecurityCodeResult(security_code=self._security_code))
+                    self._complete(GetSecurityCodeResult(security_code=self._security_code))
                 return None
 
             confirm_tool = self._build_confirm_tool(security_code=stripped)
             current_tools = [t for t in self.tools if t.id != "confirm_security_code"]
             current_tools.append(confirm_tool)
-            await self.update_tools(current_tools)
+            await self._update_tools(current_tools)
 
             return (
                 "The security code has been updated.\n"
@@ -412,7 +410,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
                 return "The repeated security code does not match, ask the user to try again."
 
             if not self.done():
-                self.complete(GetSecurityCodeResult(security_code=security_code))
+                self._complete(GetSecurityCodeResult(security_code=security_code))
             return None
 
         return confirm_security_code
@@ -427,7 +425,6 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
     def __init__(
         self,
         *,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
         require_explicit_ask: bool = False,
         extra_instructions: str = "",
@@ -458,7 +455,6 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                 )
                 + extra_suffix,
             ),
-            chat_ctx=chat_ctx,
             tools=[
                 self._build_update_expiration_date_tool(),
                 decline_card_capture,
@@ -513,7 +509,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
 
             if not self._confirmation_required(context):
                 if not self.done():
-                    self.complete(GetExpirationDateResult(date=self._expiration_date))
+                    self._complete(GetExpirationDateResult(date=self._expiration_date))
                 return None
 
             confirm_tool = self._build_confirm_tool(
@@ -521,7 +517,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             )
             current_tools = [t for t in self.tools if t.id != "confirm_expiration_date"]
             current_tools.append(confirm_tool)
-            await self.update_tools(current_tools)
+            await self._update_tools(current_tools)
 
             return (
                 "The expiration date has been updated.\n"
@@ -552,7 +548,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                 return "The repeated expiration date does not match, ask the user to try again."
 
             if not self.done():
-                self.complete(GetExpirationDateResult(date=expiration_date))
+                self._complete(GetExpirationDateResult(date=expiration_date))
             return None
 
         return confirm_expiration_date
@@ -571,7 +567,6 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
 class GetCreditCardTask(AgentTask[GetCreditCardResult]):
     def __init__(
         self,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -584,7 +579,6 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
     ) -> None:
         super().__init__(
             instructions="*none*",
-            chat_ctx=chat_ctx,
             turn_detection=turn_detection,
             tools=tools or [],
             stt=stt,
@@ -597,11 +591,7 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
         self._extra_instructions = extra_instructions
 
     async def on_enter(self) -> None:
-        # Pass chat_ctx into both the TaskGroup AND every sub-task. The
-        # TaskGroup overwrites each sub-task's chat_ctx with its own (see
-        # TaskGroup.on_enter) - without seeding the TaskGroup, sub-tasks
-        # would run with empty context.
-        ctx = self.chat_ctx
+        # the TaskGroup and every sub-task continue this task's history on their own
         # Role hint for the cardholder sub-task. With IGNORE_ON_ENTER on
         # update_name (via require_explicit_ask=True), the model is
         # structurally forced to ask before recording. The extra text
@@ -624,10 +614,9 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             # leaving it for the end avoids the failure mode where the
             # caller's first response (typically the digits) gets crammed
             # into update_name.
-            task_group = TaskGroup(chat_ctx=ctx)
+            task_group = TaskGroup()
             task_group.add(
                 lambda: GetCardNumberTask(
-                    chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
                     extra_instructions=self._extra_instructions,
                 ),
@@ -636,7 +625,6 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             )
             task_group.add(
                 lambda: GetExpirationDateTask(
-                    chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
                     extra_instructions=self._extra_instructions,
                 ),
@@ -645,7 +633,6 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             )
             task_group.add(
                 lambda: GetSecurityCodeTask(
-                    chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
                     extra_instructions=self._extra_instructions,
                 ),
@@ -655,7 +642,6 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             task_group.add(
                 lambda: GetNameTask(
                     last_name=True,
-                    chat_ctx=ctx,
                     extra_instructions=cardholder_extra,
                     require_confirmation=self._require_confirmation,
                     # The cardholder may differ from the caller or any guest
@@ -677,8 +663,8 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
                     security_code=results.task_results["security_code_task"].security_code,
                     expiration_date=results.task_results["expiration_date_task"].date,
                 )
-                self.complete(result)
+                self._complete(result)
             except CardCollectionRestartError:
                 continue
             except (CardCaptureDeclinedError, ToolError) as e:
-                self.complete(e)
+                self._complete(e)

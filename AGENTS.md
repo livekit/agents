@@ -62,11 +62,10 @@ pytest with the `--allow-uncategorized` option to temporarily disable this rule
 
 ### Running Agents
 ```bash
-python myagent.py console   # Terminal mode with local audio I/O (no server needed)
 python myagent.py dev       # Development mode with hot reload (connects to LiveKit)
 python myagent.py start     # Production mode
-python myagent.py connect --room <room> --identity <id>  # Connect to existing room
 ```
+These subcommands are the interface `lk agent dev|start|console` (the Go livekit-cli) invokes.
 
 ### Linking Local python-rtc (for SDK development)
 ```bash
@@ -79,32 +78,64 @@ make doctor           # Check development environment health
 
 ## Architecture Overview
 
+This is the `v2.0` branch: Agents 2.0, in beta. `docs/README.md` indexes the design, one feature
+per page; `planned-*.md` pages describe what is not built yet, and `docs/TODO.md` lists where the
+code still differs from a built page.
+
 ### Core Concepts
-- **AgentServer** (formerly known as **Worker**) (`worker.py`): Main process coordinating job scheduling, launches agents for user sessions
-- **JobContext** (`job.py`): Context provided to entrypoint functions for connecting to LiveKit rooms
-- **Agent** (`voice/agent.py`): LLM-based application with instructions, tools, and model integrations
-- **AgentSession** (`voice/agent_session.py`): Container managing interactions between agents and end users
+- **Fast brain / slow brain**: the pattern every example follows. A frontend agent talks to the
+  person (persona, pacing, voice) and its one tool is an `A2ADelegate` to a backend agent that
+  holds the tools, the state and the systems of record.
+- **Agent** (`voice/agent.py`): configuration (instructions, models, tools, `deps_type`,
+  `state_type`, `output_type`), built once at import and shared. `await agent.run(message,
+  message_history=, state=, deps=)` is one turn and returns a `RunResult`.
+- **RunContext[Deps, State]**: what tools and `@agent.instructions` receive: `ctx.deps` (per run,
+  never saved), `ctx.state` (saved on the thread), `ctx.thread`, `ctx.live_session`, `ctx.update()`.
+- **Transitions** (`InputRequired`, `Completed`, `Failed`, `Rejected`, `Working`): what a tool
+  returns to say what happens next; `InputRequired` waits for the person.
+- **AgentTask[Output, State]**: a multi-turn flow awaited from a tool, on a call and in text.
+- **Thread**: one durable conversation (`AT_...` id, the A2A `contextId`), with one lane per
+  agent holding its history, state, agent stack and tasks; stored in agent-db.
+- **AgentHandler / AgentServer** (`worker.py`): a module declares an agent's doors on an
+  `AgentHandler(lane=)`: `rtc_session()` (a call, run on a `LiveSession`) and
+  `a2a_session(endpoint=)` (an A2A text endpoint). The entrypoint's `AgentServer` serves them
+  with `server.add(...)`; the examples' `main.py` adds a front desk and a back office.
+- **Approval and verbatim**: `requires_approval=` holds approval in the framework (the body runs
+  only on a repeat of the call after the person answered its read-back). The agent facing the
+  person words questions and results unless they are `verbatim=True`.
+- **LiveSession** (`voice/agent_session.py`): the runtime a call's room attaches to: models, turn
+  detection, audio. `AgentSession` is a deprecated alias kept one release.
 
 ### Key Directories
 ```
 livekit-agents/livekit/agents/
-├── voice/              # Core voice agent: AgentSession, Agent, room I/O, transcription
-├── llm/                # LLM and realtime engines: chat context, tools, MCP, provider protocols
-├── stt/                # Speech-to-text with fallback and stream adapters
-├── tts/                # Text-to-speech with fallback and stream pacing
-├── ipc/                # Inter-process communication for distributed job execution
-├── cli/                # CLI commands (console, dev, start, connect)
+├── voice/              # Agent, LiveSession, AgentTask, room I/O, transcription
+├── a2a/                # The text door: A2A endpoint, codec, LiveKit extension, AgentClient, tokens
+├── delegation/         # Delegate, A2ADelegate (the delegate toolset), record_delegation
+├── storage/            # AgentDBStorage, thread resolution, the call's lane (live.py)
+├── graph.py            # BaseNode, End, Graph
+├── llm/                # Chat context, tools and toolsets, MCP, LLM and realtime engines
+├── beta/workflows/     # Prebuilt AgentTasks (email, phone, address, credit card, DOB, TaskGroup)
+├── stt/, tts/          # Speech-to-text and text-to-speech, fallback and stream adapters
 ├── inference/          # Hosted model inference (LLM, STT, TTS, realtime)
+├── ipc/                # Process pool, job processes, the ASGI app endpoint streams are served into
+├── cli/                # dev / start subcommands invoked by `lk agent`
+├── simulation.py       # Scenarios for `lk agent simulate`
 ├── telemetry/          # OpenTelemetry traces and Prometheus metrics
-└── utils/              # Audio processing, codecs, HTTP, async utilities
+└── _core.pyi           # Stubs of the Rust core extension
 
-livekit-plugins/        # 50+ provider plugins (openai, anthropic, google, deepgram, etc.)
-tests/                  # Test suite with mock implementations (fake_stt.py, fake_vad.py)
-examples/               # Example agents and use cases
+rust/crates/            # The Rust core (worker control plane, agent-db client, voice driver,
+                        # inference clients, media), built into livekit.agents._core; see docs/rust-core.md
+livekit-plugins/        # Provider plugins (openai, anthropic, google, deepgram, etc.)
+examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
+docs/                   # The 2.0 design, one feature per page; docs/examples/use-cases/ one agent per idea
+console/                # Next.js web console: chat, call, and a live view of the thread
+skills/                 # Agent skills shipped with the repo (migrate-to-v2)
+tests/                  # Test suite with fakes (fake_stt.py, fake_vad.py)
 ```
 
 ### Plugin System
-Plugins in `livekit-plugins/` provide STT, TTS, LLM, and specialized services. Each plugin is a separate package following the pattern `livekit-plugins-<provider>`. Plugins register via the `Plugin` base class in `plugin.py`.
+Plugins in `livekit-plugins/` provide STT, TTS, LLM, and specialized services. Each plugin is a separate package following the pattern `livekit-plugins-<provider>`. Plugins register via the `Plugin` base class in `plugin.py`. Plugins stay Python; the Rust core reaches them through host proxies.
 
 ### Model Interface Pattern
 STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
@@ -112,18 +143,19 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Fallback adapters for resilience
 - Stream adapters for different streaming patterns
 
-### Job Execution Flow
-1. Worker receives job request from LiveKit server
-2. Job is dispatched to process/thread pool (`ipc/proc_pool.py`)
-3. Entrypoint function receives `JobContext`
-4. Agent connects to room via `ctx.connect()`
-5. `AgentSession` manages the conversation lifecycle
+### Request Flow
+1. A text message reaches `/agents/<agent>/<deployment>/<endpoint>` as A2A; a call is a job dispatch.
+2. The platform resolves the thread (the `contextId`, or `thread_id` in the dispatch metadata) or creates one.
+3. The worker loads the agent's lane from agent-db and takes its lease.
+4. The handler runs `agent.run(...)` (text) or the `LiveSession` runs the agent (call).
+5. The framework commits the lane (history, state, agent stack) and releases the lease.
 
 ## Environment Variables
 - `LIVEKIT_URL`: WebSocket URL of LiveKit server
 - `LIVEKIT_API_KEY`: API key for authentication
 - `LIVEKIT_API_SECRET`: API secret for authentication
-- `LIVEKIT_AGENT_NAME`: Agent name for explicit dispatch (optional)
+- `LIVEKIT_AGENT_NAME`: The agent's name: its lane in a thread and the first segment of its endpoints
+- `LIVEKIT_AGENTDB_URL`, `LIVEKIT_AGENTDB_STREAMS_URL`, `LIVEKIT_AGENTDB_MANAGEMENT_URL`, `LIVEKIT_AGENT_THREADS_URL`: agent-db and the threads service, for a stack that does not provide them
 - Provider-specific keys: `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
 ## Code Style

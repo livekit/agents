@@ -22,7 +22,7 @@ from .traces import tracer
 
 if TYPE_CHECKING:
     from ..job import JobContext
-    from ..voice.agent_session import AgentSession
+    from ..voice.agent_session import LiveSession
 
 
 def _current_job(job_ctx: JobContext | None) -> JobContext | None:
@@ -33,7 +33,7 @@ def _current_job(job_ctx: JobContext | None) -> JobContext | None:
     return get_job_context(required=False)
 
 
-def primary_session(job_ctx: JobContext | None = None) -> AgentSession | None:
+def primary_session(job_ctx: JobContext | None = None) -> LiveSession | None:
     job_ctx = _current_job(job_ctx)
     return job_ctx._primary_agent_session if job_ctx is not None else None
 

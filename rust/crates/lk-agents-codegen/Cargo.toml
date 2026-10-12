@@ -1,0 +1,23 @@
+[package]
+name = "lk-agents-codegen"
+default-run = "lk-agents-codegen"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Reads the `#[derive(Host)]` declarations and writes every host's view of them."
+
+[[bin]]
+name = "lk-agents-codegen"
+path = "src/main.rs"
+
+[[bin]]
+name = "check-layout"
+path = "src/check_layout.rs"
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits", "parsing", "printing", "visit", "visit-mut"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+# The attribute reader: one parse of the language, shared with the expansions.
+lk-agents-bindgen = { path = "../lk-agents-bindgen" }

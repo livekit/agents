@@ -1,0 +1,48 @@
+[package]
+name = "lk-agents-py"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# `extension-module` is deliberately NOT on by default: with it enabled pyo3 does not link
+# libpython, so `cargo test` cannot resolve Python symbols and the test binary fails to link on
+# macOS (§1.3). maturin turns it on via `features = ["pyo3/extension-module"]` in the pyproject.
+pyo3 = { workspace = true }
+# Forwards every Rust `log` record -- target, level, message and key-values -- to Python's `logging`.
+# Installed once per process by `_core.init`.
+pyo3-log.workspace = true
+# The core crates whose `#[host(..)]` items expand in place under their `python` feature and
+# register on `_core` themselves. This crate is the only one that turns those features on
+# (`scripts/check_layout.py`); `lk-agents-abi`'s carries the registration table and the fork guard.
+lk-agents-abi = { path = "../lk-agents-abi", features = ["python"] }
+lk-agents-rtc = { path = "../lk-agents-rtc", features = ["python"] }
+# `resample`/`images`/`blingfire`: the extension's media set. `ffmpeg` is NOT turned on here -- a
+# dependency feature unifies across the workspace, and it made every workspace test build compile
+# ffmpeg (897 s of a 15 min cold build, measured 2026-09-06). It is this crate's feature below,
+# enabled by maturin from pyproject.toml.
+lk-agents-media = { path = "../lk-agents-media", features = ["resample", "images", "blingfire", "python"] }
+lk-agents-voice = { path = "../lk-agents-voice", features = ["native-audio", "python"] }
+lk-agents-inference = { path = "../lk-agents-inference", features = ["native-audio", "python"] }
+lk-agents-worker = { path = "../lk-agents-worker", features = ["python"] }
+# The session storage client (plan 13.4). Host-neutral: its Python face is `src/storage.rs` here,
+# hand-written pyo3 over its typed methods, registered on `_core` like every other class.
+lk-agents-storage = { path = "../lk-agents-storage" }
+# `TurnHost` is an async trait; `src/turn.rs` implements it over a Python object.
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[dev-dependencies]
+
+[features]
+extension-module = ["pyo3/extension-module"]
+# The audio decoder's ffmpeg path and the ogg/opus recorder. Enabled by maturin (pyproject.toml
+# `features`), never by the workspace build.
+ffmpeg = ["lk-agents-media/ffmpeg"]

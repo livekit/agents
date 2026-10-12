@@ -1,0 +1,5 @@
+# The pinned ffmpeg. Changing either line is a deliberate act: the whole reason §10 vendors
+# rather than links the system's is that every machine must get byte-identical behaviour.
+version=7.1
+url=https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
+sha256=40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6

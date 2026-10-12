@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions, inference
+from livekit.agents import Agent, LiveSession, TurnHandlingOptions, inference
 from livekit.agents.llm import RealtimeModelFallbackAdapter
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.turn import TurnDetectionMode
@@ -23,7 +23,7 @@ def _livekit_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
 
-def _activity(session: AgentSession) -> AgentActivity:
+def _activity(session: LiveSession) -> AgentActivity:
     return AgentActivity(Agent(instructions="test"), session)
 
 
@@ -34,7 +34,7 @@ def _activity(session: AgentSession) -> AgentActivity:
 
 def test_turn_detector_disables_server_side_td() -> None:
     # explicit client-side EoT + a model that defaulted to (and can disable) server VAD
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(turn_detection=inference.TurnDetector()),
@@ -45,7 +45,7 @@ def test_turn_detector_disables_server_side_td() -> None:
 
 
 def test_vad_mode_disables_server_side_td() -> None:
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(turn_detection="vad"),
@@ -57,7 +57,7 @@ def test_vad_mode_disables_server_side_td() -> None:
 
 def test_adaptive_interruption_alone_disables_server_side_td() -> None:
     # no explicit turn_detection, but adaptive interruption is the explicit trigger
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(interruption={"mode": "adaptive"}),
@@ -69,7 +69,7 @@ def test_adaptive_interruption_alone_disables_server_side_td() -> None:
 
 def test_manual_disables_server_side_td_without_vad() -> None:
     # manual turn commit drives turns on the client and needs no VAD
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=None,
         turn_handling=TurnHandlingOptions(turn_detection="manual"),
@@ -81,7 +81,7 @@ def test_manual_disables_server_side_td_without_vad() -> None:
 
 def test_vad_interruption_disables_server_side_td() -> None:
     # any explicit interruption mode (not just adaptive) hands interruption to the client
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(interruption={"mode": "vad"}),
@@ -93,7 +93,7 @@ def test_vad_interruption_disables_server_side_td() -> None:
 
 def test_stt_mode_keeps_server_side_td() -> None:
     # "stt" turn detection is rejected for realtime models, so it never disables server-side TD
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(turn_detection="stt"),
@@ -105,7 +105,7 @@ def test_stt_mode_keeps_server_side_td() -> None:
 
 def test_conflict_keeps_server_side_td() -> None:
     # user pinned turn_detection on the model (can_disable=False) AND set client-side -> server wins
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(
             capabilities=fake_capabilities(turn_detection=True, can_disable_turn_detection=False)
         ),
@@ -119,7 +119,7 @@ def test_conflict_keeps_server_side_td() -> None:
 
 def test_explicit_none_on_model_is_already_off() -> None:
     # model turn_detection explicitly None: nothing to disable, ours is honored, no server TD
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(
             capabilities=fake_capabilities(turn_detection=False, can_disable_turn_detection=False)
         ),
@@ -133,7 +133,7 @@ def test_explicit_none_on_model_is_already_off() -> None:
 
 def test_no_client_trigger_keeps_server_side_td() -> None:
     # nothing client-side configured (NOT_GIVEN) -> server-side TD wins, unchanged
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
     )
@@ -151,7 +151,7 @@ def _rt_resync_warned(caplog: pytest.LogCaptureFixture) -> bool:
 
 
 def _change_turn_detection(
-    session: AgentSession, activity: AgentActivity, turn_detection: TurnDetectionMode | None
+    session: LiveSession, activity: AgentActivity, turn_detection: TurnDetectionMode | None
 ) -> None:
     # drive the real entry point: session.update_options updates the session-owned turn detection
     # state, then notifies the activity (which re-resolves)
@@ -164,7 +164,7 @@ def test_update_options_warns_when_runtime_change_would_disable_server_td(
 ) -> None:
     # server-side TD is on at start; switching to a client-side mode would turn it off, but the
     # realtime session is resolved at session start and won't re-sync — warn (PR #6495)
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
     )
@@ -182,7 +182,7 @@ def test_update_options_warns_when_runtime_change_would_enable_server_td(
 ) -> None:
     # server-side TD is off at start (client-side VAD); switching to realtime_llm would turn it
     # back on, which also won't re-sync at runtime — warn (PR #6495)
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(turn_detection="vad"),
@@ -201,7 +201,7 @@ def test_update_options_no_warn_when_reverting_to_automatic(
 ) -> None:
     # reverting to None re-selects automatically rather than pinning an explicit client mode; even
     # though automatic could re-enable server-side TD, we don't warn for it (PR #6495)
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(turn_detection="vad"),
@@ -220,7 +220,7 @@ def test_update_options_no_warn_when_server_td_state_unchanged(
 ) -> None:
     # server-side TD is off at start; switching between two client-side modes keeps it off, so
     # there's nothing to re-sync — no warning
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(turn_detection="vad"),
@@ -236,7 +236,7 @@ def test_update_options_no_warn_when_server_td_state_unchanged(
 
 def test_realtime_llm_mode_is_not_a_trigger() -> None:
     # turn_detection="realtime_llm" explicitly wants server-side turn-taking
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(turn_detection="realtime_llm"),
@@ -248,7 +248,7 @@ def test_realtime_llm_mode_is_not_a_trigger() -> None:
 
 def test_no_vad_does_not_disable() -> None:
     # with VAD explicitly off, we must not disable into a no-turn-detection state
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=None,
         turn_handling=TurnHandlingOptions(turn_detection="vad"),
@@ -259,7 +259,7 @@ def test_no_vad_does_not_disable() -> None:
 
 
 def test_non_realtime_llm_reports_no_server_side_td() -> None:
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeLLM(),
         vad=FakeVAD(fake_user_speeches=[]),
         turn_handling=TurnHandlingOptions(turn_detection="vad"),
@@ -283,7 +283,7 @@ def _td_ignored_warned(caplog: pytest.LogCaptureFixture) -> bool:
 
 def test_default_turn_detector_is_superseded_silently(caplog: pytest.LogCaptureFixture) -> None:
     # nothing configured client-side: the eager TurnDetector() default is not user intent
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
         vad=FakeVAD(fake_user_speeches=[]),
     )
@@ -299,7 +299,7 @@ def test_session_turn_detector_warns_when_model_keeps_server_td(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # can_disable=False: the user's TurnDetector really is dropped, so say so
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(
             capabilities=fake_capabilities(turn_detection=True, can_disable_turn_detection=False)
         ),
@@ -317,7 +317,7 @@ def test_agent_turn_detector_warns_when_model_keeps_server_td(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # an agent-level override is user intent as well, even on a default session
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(
             capabilities=fake_capabilities(turn_detection=True, can_disable_turn_detection=False)
         ),
@@ -363,7 +363,7 @@ async def test_rt_session_reuse_respects_turn_detection_resolution() -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True))
 
     def _act(**handling: object) -> AgentActivity:
-        session = AgentSession(
+        session = LiveSession(
             llm=model,
             vad=FakeVAD(fake_user_speeches=[]),
             turn_handling=TurnHandlingOptions(**handling),  # type: ignore[typeddict-item]

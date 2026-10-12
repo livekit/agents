@@ -63,7 +63,6 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
     def __init__(
         self,
         extra_instructions: str = "",
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -101,7 +100,6 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
                     extra_instructions=extra,
                 ),
             ),
-            chat_ctx=chat_ctx,
             turn_detection=turn_detection,
             tools=[*(tools or []), self._build_update_phone_number_tool()],
             stt=stt,
@@ -145,13 +143,13 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
 
         if not self._confirmation_required(ctx):
             if not self.done():
-                self.complete(GetPhoneNumberResult(phone_number=self._current_phone_number))
+                self._complete(GetPhoneNumberResult(phone_number=self._current_phone_number))
             return None  # no need to continue the conversation
 
         confirm_tool = self._build_confirm_tool(phone_number=cleaned)
         current_tools = [t for t in self.tools if t.id != "confirm_phone_number"]
         current_tools.append(confirm_tool)
-        await self.update_tools(current_tools)
+        await self._update_tools(current_tools)
 
         read_back = (
             f"Read the number back digit by digit: {' '.join(cleaned)}"
@@ -178,7 +176,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
                 )
 
             if not self.done():
-                self.complete(GetPhoneNumberResult(phone_number=phone_number))
+                self._complete(GetPhoneNumberResult(phone_number=phone_number))
             return None
 
         return confirm_phone_number
@@ -191,7 +189,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
             reason: A short explanation of why the user declined to provide the phone number
         """
         if not self.done():
-            self.complete(ToolError(f"couldn't get the phone number: {reason}"))
+            self._complete(ToolError(f"couldn't get the phone number: {reason}"))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):

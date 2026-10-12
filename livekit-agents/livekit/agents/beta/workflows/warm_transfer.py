@@ -20,7 +20,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice import room_io
 from ...voice.agent import Agent, AgentTask
-from ...voice.agent_session import AgentSession
+from ...voice.agent_session import LiveSession
 from ...voice.background_audio import (
     AudioConfig,
     AudioSource,
@@ -108,7 +108,6 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         assert isinstance(instructions, (str, Instructions))  # for type checking
         super().__init__(
             instructions=instructions,
-            chat_ctx=NOT_GIVEN,  # don't pass the chat_ctx
             turn_detection=turn_detection,
             tools=tools or [],
             stt=stt,
@@ -119,7 +118,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         )
 
         self._caller_room: rtc.Room | None = None
-        self._human_agent_sess: AgentSession | None = None
+        self._human_agent_sess: LiveSession | None = None
         self._human_agent_failed_fut: asyncio.Future[None] = asyncio.Future()
         self._human_agent_identity = "human-agent-sip"
 
@@ -290,9 +289,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             self._hold_audio_handle = None
 
         self._set_io_enabled(True)
-        self.complete(result)
+        self._complete(result)
 
-    async def _dial_human_agent(self) -> AgentSession:
+    async def _dial_human_agent(self) -> LiveSession:
         assert self._caller_room is not None
 
         job_ctx = get_job_context()
@@ -320,7 +319,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             "connecting to human agent room",
             extra={"ws_url": ws_url, "human_agent_room_name": human_agent_room_name},
         )
-        human_agent_sess: AgentSession = AgentSession(
+        human_agent_sess: LiveSession = LiveSession(
             vad=self.session.vad or NOT_GIVEN,
             llm=self.session.llm or NOT_GIVEN,
             stt=self.session.stt or NOT_GIVEN,
@@ -336,9 +335,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             llm=self.llm,
             tts=self.tts,
             tools=self.tools,
-            chat_ctx=self.chat_ctx,
             allow_interruptions=self.allow_interruptions,
         )
+        human_agent_chat_ctx = self.chat_ctx.copy()
         try:
             await room.connect(ws_url, token)
             # Resume the caller conversation if the human agent hangs up.
@@ -346,6 +345,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
             await human_agent_sess.start(
                 agent=human_agent_agent,
+                chat_ctx=human_agent_chat_ctx,
                 room=room,
                 room_options=room_io.RoomOptions(
                     close_on_disconnect=True,

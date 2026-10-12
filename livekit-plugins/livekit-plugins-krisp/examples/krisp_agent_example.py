@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
     AgentServer,
-    AgentSession,
+    LiveSession,
     JobContext,
     cli,
     inference,
@@ -72,7 +72,7 @@ async def entrypoint(ctx: JobContext):
     """Main entrypoint for the agent session."""
 
     # Configure the agent session
-    session = AgentSession(
+    session = LiveSession(
         vad=inference.VAD(),
         stt=openai.STT(model="whisper-1"),
         llm=openai.LLM(model="gpt-4o-mini"),

@@ -1,0 +1,47 @@
+[package]
+name = "lk-agents-voice"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Voice policy and runtime. The previous test suite is archived outside the workspace.
+[lib]
+# `///` docs on `#[derive(Host)]` records are the reference's Python docstrings, emitted verbatim by
+# the generator; their indented examples are Python, not Rust doctests. The crate's Rust examples
+# are `ignore`d text.
+doctest = false
+
+[dependencies]
+lk-agents-rtc = { path = "../lk-agents-rtc" }
+serde = { workspace = true }
+# Unused since the warm transfer's dial path left (the host mints the join token); kept only so
+# feature unification, and so the shared build cache, is unchanged. Remove with a clean target.
+jsonwebtoken = { version = "9", default-features = false }
+lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
+# BlingFire supplies sentence boundaries for the TTS leg's batching.
+lk-agents-media = { path = "../lk-agents-media", features = ["blingfire"] }
+async-trait.workspace = true
+log.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "test-util"] }
+# `src/remote/` (`voice/remote_session.py`, moved here from `lk-agents-worker` on 2026-09-09 -- it
+# drives *a session* from out of process and has nothing to do with the worker loop): the
+# `livekit.agent` package's `AgentSessionEvent`/`SessionRequest`, its prost, and the well-known
+# types as that crate spells them. Acting side, like `rtc` and `io`.
+livekit-protocol.workspace = true
+prost.workspace = true
+pbjson-types.workspace = true
+pyo3 = { workspace = true, optional = true }
+
+[features]
+# libsoxr behind the driver's, the input leg's and the pre-connect buffer's rate conversions
+# (`lk_agents_media::new_resampler`). Off, every conversion is `lk-agents-abi`'s linear one and the
+# crate's check closure compiles no resampler C: `cargo check -p lk-agents-voice --no-default-features`
+# (blingfire's C++ stays: the TTS leg's sentence batching is not optional).
+# Native resampling is enabled by default.
+default = ["native-audio"]
+native-audio = ["lk-agents-media/resample"]
+# The Python binding, expanded in place: only `lk-agents-py` enables it.
+python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-rtc/python", "lk-agents-media/python"]

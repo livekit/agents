@@ -1,0 +1,6 @@
+name = "The LiveKit Hotel"
+agent = "hotel"
+endpoint = "frontend"
+description = "A hotel's bookings, lookups and cancellations."
+voice = true
+start = "HOTEL_TODAY=2026-11-02 uv run python main.py dev"

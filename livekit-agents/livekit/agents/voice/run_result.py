@@ -23,6 +23,7 @@ from opentelemetry import trace
 from typing_extensions import TypedDict
 
 from .. import llm
+from .._generated.storage_run import Ref
 from ..llm import function_tool, utils as llm_utils
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
@@ -30,8 +31,9 @@ from ..utils import is_given
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from ..metrics import AgentSessionUsage
     from .agent import Agent
-    from .agent_session import AgentSession
+    from .agent_session import LiveSession
 
 
 lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
@@ -43,7 +45,7 @@ _OUTPUT_RETRY_PROMPT = (
 
 
 class RunOutputOptions(TypedDict, total=False):
-    """Structured-output behavior for :meth:`AgentSession.run`.
+    """Structured-output behavior for :meth:`LiveSession.run`.
 
     Can be passed as a plain dict::
 
@@ -64,6 +66,36 @@ class RunOutputOptions(TypedDict, total=False):
 
 
 Run_T = TypeVar("Run_T")
+
+
+@dataclass
+class RunUsage:
+    """Token usage of one or more runs; pass one to ``run(usage=)`` to keep adding to it."""
+
+    requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def _add_completion(self, usage: llm.CompletionUsage | None) -> None:
+        self.requests += 1
+        if usage is not None:
+            self.input_tokens += usage.prompt_tokens
+            self.output_tokens += usage.completion_tokens
+
+    @classmethod
+    def from_session_usage(cls, usage: AgentSessionUsage) -> RunUsage:
+        result = cls()
+        for model_usage in usage.model_usage:
+            if model_usage.type != "llm_usage":
+                continue
+            result.input_tokens += model_usage.input_tokens
+            result.output_tokens += model_usage.output_tokens
+        return result
 
 
 @dataclass
@@ -102,7 +134,7 @@ class RunResult(Generic[Run_T]):
         user_input: str | None = None,
         output_type: type[Run_T] | None,
         output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
-        session: AgentSession | None = None,
+        session: LiveSession | None = None,
     ) -> None:
         self._handles: set[SpeechHandle | asyncio.Future[Any]] = set()
 
@@ -122,7 +154,81 @@ class RunResult(Generic[Run_T]):
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
 
+        # set by AgentRun, derived from the session for a live run
+        self._run_output: Any = None
+        self._run_messages: list[llm.ChatItem] | None = None
+        self._run_history: list[llm.ChatItem] | None = None
+        self._run_usage: RunUsage | None = None
+        self._input_required: str | None = None
+        self._interrupted: bool = False
+        self._pending_call: llm.FunctionCall | None = None
+        self._answer_tool: str | None = None  # the tool the answer is handed to, if named
+        self._verbatim: str | None = None
+        self._agent_stack: list[Ref] | None = None
+
         self.__last_speech_handle: SpeechHandle | None = None
+
+    @property
+    def output(self) -> Run_T | None:
+        """The run's result, typed by ``output_type``; ``None`` while ``input_required``.
+
+        For a live run it is the ``AgentTask`` result when there is one, else the last
+        assistant message's text.
+        """
+        if self._run_messages is not None:
+            return self._run_output  # type: ignore[no-any-return]
+        if self._final_output is not None:
+            return self._final_output
+        if self._input_required is not None:
+            return None
+        for event in reversed(self._recorded_items):
+            if isinstance(event, ChatMessageEvent) and event.item.role == "assistant":
+                return event.item.text_content  # type: ignore[return-value]
+        return None
+
+    @property
+    def input_required(self) -> str | None:
+        """The question a tool returned ``InputRequired`` with, when the turn waits on it."""
+        return self._input_required
+
+    @property
+    def verbatim(self) -> str | None:
+        """The part of the answer, or of the question, that reaches the person exactly as
+        written: what verbatim results and questions delivered, in order; ``None`` when none
+        did. The rest is the agent's own, for the one facing the person to phrase."""
+        return self._verbatim
+
+    @property
+    def interrupted(self) -> bool:
+        """The run yielded at a boundary to a newer message: no output, what ran is kept."""
+        return self._interrupted
+
+    @property
+    def pending_call(self) -> llm.FunctionCall | None:
+        """The call whose ``InputRequired`` the turn waits on: the next message is its output."""
+        return self._pending_call
+
+    def new_messages(self) -> list[llm.ChatItem]:
+        """What this run added to the history."""
+        if self._run_messages is not None:
+            return list(self._run_messages)
+        return [event.item for event in self._recorded_items]
+
+    def all_messages(self) -> list[llm.ChatItem]:
+        """The history after the run, without the instructions."""
+        if self._run_history is not None:
+            return list(self._run_history)
+        if self._session is not None:
+            return list(self._session.history.items)
+        return self.new_messages()
+
+    @property
+    def usage(self) -> RunUsage:
+        if self._run_usage is not None:
+            return self._run_usage
+        if self._session is not None:
+            return RunUsage.from_session_usage(self._session.usage)
+        return RunUsage()
 
     @property
     def events(self) -> list[RunEvent]:
@@ -1114,7 +1220,7 @@ class AgentHandoffAssert:
 if TYPE_CHECKING:
     MockTools = dict[type[Agent], dict[str, Callable]]
 _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
-_SessionMockTools: weakref.WeakKeyDictionary[AgentSession, MockTools] = weakref.WeakKeyDictionary()
+_SessionMockTools: weakref.WeakKeyDictionary[LiveSession, MockTools] = weakref.WeakKeyDictionary()
 
 
 @overload
@@ -1124,13 +1230,11 @@ def mock_tools(
 
 
 @overload
-def mock_tools(
-    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession
-) -> None: ...
+def mock_tools(agent: type[Agent], mocks: dict[str, Callable], *, session: LiveSession) -> None: ...
 
 
 def mock_tools(
-    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession | None = None
+    agent: type[Agent], mocks: dict[str, Callable], *, session: LiveSession | None = None
 ) -> contextlib.AbstractContextManager[None] | None:
     """Assign a set of mock tool callables to a specific Agent type.
 

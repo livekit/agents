@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from ..job import JobExecutorType
 from ..log import logger
 from ..telemetry import loop_monitor
-from ..voice import AgentSession, io
+from ..voice import LiveSession, io
 from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, WorkerOptions
 from . import proto
@@ -75,7 +75,7 @@ class AgentsConsole:
             f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
         )
 
-    def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession) -> None:
+    def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: LiveSession) -> None:
         with self._lock:
             if self._io_acquired:
                 raise RuntimeError("the ConsoleIO was already acquired by another session")
@@ -137,7 +137,7 @@ class AgentsConsole:
             return self._io_acquired
 
     @property
-    def io_session(self) -> AgentSession:
+    def io_session(self) -> LiveSession:
         if not self._io_acquired:
             raise RuntimeError("AgentsConsole is not acquired")
         return self._io_session
@@ -180,7 +180,7 @@ class AgentsConsole:
 
     def _update_sess_io(
         self,
-        sess: AgentSession,
+        sess: LiveSession,
         mode: ConsoleMode,
         audio_input: io.AudioInput,
         audio_output: io.AudioOutput,

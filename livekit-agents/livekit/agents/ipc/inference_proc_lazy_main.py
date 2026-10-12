@@ -21,9 +21,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+from .. import _core
 from ..inference_runner import _RunnersDict
 from ..log import logger
-from ..utils import aio, hw, log_exceptions
+from ..utils import aio, log_exceptions
 from . import proto
 from .channel import Message
 from .proc_client import _dump_stack_traces_impl, _ProcClient
@@ -54,7 +55,7 @@ class _InferenceProc:
     def __init__(self, runners: _RunnersDict) -> None:
         # create an instance of each runner (the ctor must not requires any argument)
         self._runners = {name: runner() for name, runner in runners.items()}
-        self._executor = ThreadPoolExecutor(max_workers=math.ceil(hw.get_cpu_monitor().cpu_count()))
+        self._executor = ThreadPoolExecutor(max_workers=math.ceil(_core.cpu_count()))
 
     def initialize(self, init_req: proto.InitializeRequest, client: _ProcClient) -> None:
         self._client = client

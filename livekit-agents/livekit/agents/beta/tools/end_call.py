@@ -115,7 +115,7 @@ class EndCallTool(Toolset):
             ctx.session.shutdown()
 
     def _on_session_close(self, ev: CloseEvent) -> None:
-        """Close the job process when AgentSession is closed"""
+        """Close the job process when LiveSession is closed"""
         if self._shutdown_session_task:
             # cleanup
             self._shutdown_session_task.cancel()

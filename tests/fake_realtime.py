@@ -6,7 +6,7 @@ from collections.abc import AsyncIterable, Callable
 from typing import Literal
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, Agent, AgentSession, NotGivenOr, utils
+from livekit.agents import NOT_GIVEN, Agent, LiveSession, NotGivenOr, utils
 from livekit.agents.llm import (
     ChatContext,
     FunctionCall,
@@ -214,15 +214,15 @@ async def run_realtime_tool_turn(
     *,
     tool_executed: asyncio.Event,
     interrupt: bool = False,
-    on_session: Callable[[AgentSession], None] | None = None,
-) -> tuple[AgentSession, FakeRealtimeModel]:
+    on_session: Callable[[LiveSession], None] | None = None,
+) -> tuple[LiveSession, FakeRealtimeModel]:
     """Drive one realtime turn that speaks a second of audio and calls the agent's first tool.
 
     With ``interrupt`` the turn is cut short as soon as the tool returns; otherwise it plays out.
     """
     model = FakeRealtimeModel(capabilities=fake_capabilities())
 
-    async with AgentSession(llm=model) as session:
+    async with LiveSession(llm=model) as session:
         session.output.audio = FakeAudioOutput()
         if on_session is not None:
             on_session(session)

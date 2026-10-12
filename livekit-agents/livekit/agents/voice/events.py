@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from enum import Enum, unique
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
-from typing_extensions import Self
+from typing_extensions import Self, TypeVar
 
 from ..inference.interruption import (
     AdaptiveInterruptionDetector,
@@ -30,34 +32,48 @@ from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
+from ..utils import shortuuid
 from .filler_scheduler import _FillerScheduler, _FillerSource
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession
+    from .agent_run import AgentRun
+    from .agent_session import LiveSession
+    from .run_result import RunUsage
     from .tool_executor import UpdatePromptArgs, _ToolExecutor
 
 
-Userdata_T = TypeVar("Userdata_T")
+Deps_T = TypeVar("Deps_T", default=Any)
+State_T = TypeVar("State_T", default=Any)
+Userdata_T = TypeVar("Userdata_T", default=Any)
 
 
-class RunContext(Generic[Userdata_T]):
+class RunContext(Generic[Deps_T, State_T]):
+    """What a tool, an instructions function or an output validator receives.
+
+    ``RunContext[Deps, State]``: ``ctx.deps`` is what the door passed for this run and
+    ``ctx.state`` the session's typed state. On a call the context also carries the session
+    and the speech handle; in ``agent.run()`` it carries the run.
+    """
+
     # private ctor
     def __init__(
         self,
         *,
-        session: AgentSession[Userdata_T],
-        speech_handle: SpeechHandle,
-        function_call: FunctionCall,
+        function_call: FunctionCall | None,
+        session: LiveSession[Any] | None = None,
+        speech_handle: SpeechHandle | None = None,
         activity: AgentActivity | None = None,
+        run: AgentRun[Any] | None = None,
     ) -> None:
         self._activity = activity
         self._session = session
         self._speech_handle = speech_handle
         self._function_call = function_call
+        self._run = run
 
-        self._initial_step_idx = speech_handle.num_steps - 1
+        self._initial_step_idx = speech_handle.num_steps - 1 if speech_handle is not None else 0
         self._filler_schedulers: list[_FillerScheduler] = []
 
         # synthesized progress-update pairs, populated whether or not an executor is attached
@@ -69,23 +85,80 @@ class RunContext(Generic[Userdata_T]):
 
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
-        self._run_state = session._global_run_state
+        self._run_state = session._global_run_state if session is not None else None
 
     @property
-    def session(self) -> AgentSession[Userdata_T]:
+    def session(self) -> LiveSession[Any]:
+        """The live session, on a call.
+
+        Raises:
+            RuntimeError: in ``agent.run()``, which has no live session.
+        """
+        if self._session is None:
+            raise RuntimeError("no live session: this RunContext belongs to agent.run()")
         return self._session
 
     @property
     def speech_handle(self) -> SpeechHandle:
+        if self._speech_handle is None:
+            raise RuntimeError("no speech handle: this RunContext belongs to agent.run()")
         return self._speech_handle
 
     @property
+    def deps(self) -> Deps_T:
+        """What the door passed for this run: ``run(deps=)`` or ``LiveSession(deps=)``."""
+        if self._run is not None:
+            return self._run.deps  # type: ignore[no-any-return]
+        return self.session.deps  # type: ignore[no-any-return]
+
+    @property
+    def state(self) -> State_T:
+        """The session's typed state, loaded; mutate it in place."""
+        if self._run is not None:
+            return self._run.state  # type: ignore[no-any-return]
+        return self.session.state  # type: ignore[no-any-return]
+
+    @property
+    def usage(self) -> RunUsage:
+        """Token usage so far; pass it to a delegated ``run(usage=ctx.usage)``."""
+        if self._run is not None:
+            return self._run.usage
+        from .run_result import RunUsage
+
+        return RunUsage.from_session_usage(self.session.usage)
+
+    @property
+    def task_id(self) -> str:
+        """The id of this run, also the idempotency key for outside calls.
+
+        TODO(agents-2.0): the A2A task id once the turn is a task row (plan 5.5); a fresh id
+        per run, and per speech on a call, until then.
+        """
+        if self._run is not None:
+            return self._run.id
+        if self._speech_handle is not None:
+            return self._speech_handle.id
+        return self._fallback_task_id
+
+    @functools.cached_property
+    def _fallback_task_id(self) -> str:
+        return shortuuid("task_")
+
+    @property
     def function_call(self) -> FunctionCall:
+        """The call being executed, inside a tool.
+
+        Raises:
+            RuntimeError: outside a tool, such as in an instructions function.
+        """
+        if self._function_call is None:
+            raise RuntimeError("no function call: this RunContext is not running a tool")
         return self._function_call
 
     @property
-    def userdata(self) -> Userdata_T:
-        return self.session.userdata
+    def userdata(self) -> Deps_T:
+        """The session's ``userdata``, the pre 2.0 name for what ``deps`` carries now."""
+        return self.session.userdata  # type: ignore[no-any-return]
 
     def disallow_interruptions(self) -> None:
         """Disable interruptions for this FunctionCall.
@@ -138,8 +211,8 @@ class RunContext(Generic[Userdata_T]):
                 ``None`` = no limit.
         """
         scheduler = _FillerScheduler(
-            session=self._session,
-            speech_handle=self._speech_handle,
+            session=self.session,
+            speech_handle=self.speech_handle,
             source=source,
             delay=delay,
             interval=interval,
@@ -167,7 +240,7 @@ class RunContext(Generic[Userdata_T]):
         plays before the floor is held — keeps chat order matching code order.
         """
         await self._drain_pending_reply()
-        async with self._session._wait_for_idle_and_hold(run_state=self._run_state) as activity:
+        async with self.session._wait_for_idle_and_hold(run_state=self._run_state) as activity:
             yield activity
 
     async def update(
@@ -224,9 +297,18 @@ class RunContext(Generic[Userdata_T]):
         self._updates.append(pair)
 
         if self._executor is None:
-            return  # standalone — no executor, so no tool lifecycle to report
+            # agent.run(): no tool lifecycle to report; the door that runs the turn forwards the
+            # text as progress when it installed a hook for it
+            from .agent_run import current_run_hooks
 
-        self._session._tool_execution_updated(
+            hooks = current_run_hooks()
+            if hooks is not None and hooks.on_update is not None:
+                out = hooks.on_update(raw_message)
+                if inspect.isawaitable(out):
+                    await out
+            return
+
+        self.session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolCallUpdated(
                     id=pair[0].call_id,
@@ -239,7 +321,7 @@ class RunContext(Generic[Userdata_T]):
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
             self._first_update_fut.set_result(message)
-            self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
+            self.function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
         await self._executor._enqueue_reply(self, [pair[0], pair[1]])
@@ -359,7 +441,7 @@ class EotPredictionEvent(BaseModel):
 class _AgentBackchannelOpportunityEvent(BaseModel):
     """Internal: a window in which the agent could backchannel (a short
     acknowledgment such as "mm-hmm"), as predicted by the turn detector. Passed to
-    ``AgentActivity`` only — not surfaced as a public ``AgentSession`` event yet.
+    ``AgentActivity`` only — not surfaced as a public ``LiveSession`` event yet.
 
     ``AgentActivity`` owns the decision of what to do with it. The end-of-turn margin
     (``end_of_turn_threshold - end_of_turn_probability``) gives a progressive risk axis:

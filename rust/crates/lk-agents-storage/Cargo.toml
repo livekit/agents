@@ -1,0 +1,59 @@
+[package]
+name = "lk-agents-storage"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The session storage client (plan 13.2, 13.5): the `wsdb` data-plane client, the session schema
+# as `#[derive(Host)]` records, every SQL statement a session database sees, the `/v1/streams`
+# client and the gRPC clients of the threads and management services. Host-neutral: no pyo3 here; `lk-agents-py/src/storage.rs`
+# is the Python face. Below the purity line by design (tokio, TLS, prost, reqwest).
+
+[lib]
+# The `///` docs on the records are the generated pydantic models' docstrings; no Rust doctests.
+doctest = false
+
+[dependencies]
+# `Host` for the row records, so their pydantic twins come from `lk-agents-codegen`, and their
+# `COLUMNS`/`SELECT` from `#[table]` (host-derive `table.rs`).
+lk-agents-host-derive = { path = "../lk-agents-host-derive" }
+# The wire, management and thread messages: `livekit.AgentDB` and `livekit.agent.AgentThread`.
+livekit-protocol.workspace = true
+pbjson-types.workspace = true
+prost.workspace = true
+# The gRPC channel for the management and threads services; the codec is written here over the
+# workspace's prost, so no `prost` feature and nothing generated.
+tonic = { version = "0.14", default-features = false, features = ["channel", "tls-ring", "tls-webpki-roots"] }
+http = "1"
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
+thiserror.workspace = true
+log.workspace = true
+tokio = { workspace = true, features = ["net", "sync", "time", "macros", "rt"] }
+# The same WebSocket and TLS set as `lk-agents-worker` and `lk-agents-inference`: one crypto
+# provider (`ring`) across the workspace.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+bytes = "1"
+# The agent-db token is HS256 over claims `livekit-token` does not model (`agent.databaseAdmin`),
+# so it is signed here: hmac + sha2 are already in the graph through `livekit-token`.
+hmac = "0.12"
+sha2 = "0.10"
+base64.workspace = true
+url = "2"
+# `shortuuid` for lease tokens, task, message and artifact ids: six random bytes as hex.
+rand = "0.9"
+# `TurnHost` is an object-safe async trait: the host (Python through `_core`, Node) runs the handler.
+async-trait.workspace = true
+
+# `#[derive(Host)]` on a unit enum expands its pyo3 conversions under `cfg(feature = "python")`,
+# a feature this crate does not have (it is host-neutral): name the value so check-cfg does not
+# warn on every such enum.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("python"))'] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net"] }

@@ -16,30 +16,31 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import datetime
 import inspect
+import json
 import math
 import multiprocessing as mp
 import os
 import sys
-import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Generic, Literal, TypeVar, overload
-from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
 from aiohttp import web
-from google.protobuf.json_format import MessageToDict, MessageToJson
+from google.protobuf.json_format import MessageToJson
+from starlette.types import ASGIApp
 
 from livekit import api, rtc
 from livekit.protocol import agent, agent_worker, models
 
-from . import ipc, telemetry, utils
-from ._exceptions import APIStatusError, AssignmentTimeoutError
+from . import _core, ipc, telemetry, utils
+from .http import AgentHttp
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -52,17 +53,56 @@ from .job import (
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
-from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
+from .storage.agentdb import AgentDBStorage
+from .storage.protocol import StorageError
+from .storage.resolve import AgentRegistry, Thread, resolve_thread
+from .types import NOT_GIVEN, NotGivenOr
 from .utils import http_context, http_server, is_given
-from .utils.hw import get_cpu_monitor
 from .version import __version__
 
-ASSIGNMENT_TIMEOUT = 7.5
-UPDATE_STATUS_INTERVAL = 2.5
+# The control plane (registration, availability, assignment, status, drain) and the endpoint data
+# plane are the Rust worker's, `_core.Worker`; this module owns the process pool, the health
+# listener and `AgentServer.http`. Timing constants live in the core.
 UPDATE_LOAD_INTERVAL = 0.5
-HEARTBEAT_INTERVAL = 30
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
+
+
+@dataclass(frozen=True)
+class _CallThreadEntrypoint:
+    """The ``rtc_session`` entrypoint of a server with storage: the call's thread is resolved
+    first, the ``thread_id`` of the dispatch metadata, else a new thread, as ``ctx.thread``.
+    A storage failure is logged and the call runs with no thread."""
+
+    entrypoint: Callable[[JobContext], Awaitable[None]]
+    storage: AgentDBStorage
+
+    async def __call__(self, ctx: JobContext) -> None:
+        if not self.storage.holder:
+            self.storage.holder = ctx.worker_id
+        try:
+            metadata = json.loads(ctx.job.metadata or "{}")
+        except ValueError:
+            metadata = None
+        thread_id = metadata.get("thread_id") if isinstance(metadata, dict) else None
+        try:
+            if not isinstance(thread_id, str) or not thread_id:
+                thread_id = (await resolve_thread(self.storage.threads)).id
+            ctx._thread = Thread(self.storage, thread_id, agent_name=ctx.job.agent_name)
+        except StorageError as e:
+            logger.warning(
+                "the call's thread could not be resolved; the call is kept in memory",
+                extra={"threadId": thread_id, "error": str(e)},
+            )
+        await self.entrypoint(ctx)
+
+
+async def _text_only_entrypoint(ctx: JobContext) -> None:
+    """The entrypoint of a server with text doors and no voice door: a job is not expected."""
+    logger.warning(
+        "a job reached a server with no rtc_session; nothing joins the room",
+        extra={"room": ctx.room.name},
+    )
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -79,39 +119,6 @@ class ServerType(Enum):
 
 
 WorkerType = ServerType
-
-
-class _DefaultLoadCalc:
-    _instance = None
-    _instance_lock = threading.Lock()
-
-    def __init__(self) -> None:
-        self._m_avg = utils.MovingAverage(5)  # avg over 2.5
-        self._cpu_monitor = get_cpu_monitor()
-        self._thread = threading.Thread(
-            target=self._calc_load, daemon=True, name="worker_cpu_load_monitor"
-        )
-        self._lock = threading.Lock()
-        self._thread.start()
-
-    def _calc_load(self) -> None:
-        while True:
-            cpu_p = self._cpu_monitor.cpu_percent(interval=0.5)
-            with self._lock:
-                self._m_avg.add_sample(cpu_p)
-
-    def _get_avg(self) -> float:
-        with self._lock:
-            return self._m_avg.get_avg()
-
-    @classmethod
-    def get_load(cls, worker: AgentServer) -> float:
-        if cls._instance is None:
-            with cls._instance_lock:
-                if cls._instance is None:
-                    cls._instance = _DefaultLoadCalc()
-
-        return cls._instance._get_avg()
 
 
 @dataclass
@@ -186,8 +193,9 @@ class ServerOptions:
     When left empty, all jobs are accepted."""
     prewarm_fnc: Callable[[JobProcess], Any] = _default_setup_fnc
     """A function to perform any necessary initialization before the job starts."""
-    load_fnc: Callable[[AgentServer], float] | Callable[[], float] = _DefaultLoadCalc.get_load
-    """Called to determine the current load of the worker. Should return a value between 0 and 1."""
+    load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None
+    """Called to determine the current load of the worker. Should return a value between 0 and 1.
+    Left ``None``, the worker samples the CPU itself (in the Rust core)."""
     job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
     load_threshold: float | ServerEnvOption[float] = _default_load_threshold
@@ -206,7 +214,7 @@ class ServerOptions:
     drain_timeout: int = DRAIN_TIMEOUT
     """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
-        dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
+        dev_default=0, prod_default=min(math.ceil(_core.cpu_count()), 4)
     )
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 10.0
@@ -295,9 +303,157 @@ class WorkerInfo:
 EventTypes = Literal["worker_started", "worker_registered"]
 
 
+@dataclass(frozen=True)
+class RtcDoor:
+    """The voice door as an object: what ``rtc_session`` returns and ``AgentServer.add`` serves."""
+
+    entrypoint: Callable[[JobContext], Awaitable[None]]
+    endpoint: str = ""
+    type: ServerType = ServerType.ROOM
+    on_request: Callable[[JobRequest], Any] | None = None
+    on_session_end: Callable[[JobContext], Any] | None = None
+    on_simulation_end: Callable[[SimulationContext], Any] | None = None
+
+
+def rtc_session(
+    *,
+    endpoint: str = "",
+    type: ServerType = ServerType.ROOM,
+    on_request: Callable[[JobRequest], Any] | None = None,
+    on_session_end: Callable[[JobContext], Any] | None = None,
+    on_simulation_end: Callable[[SimulationContext], Any] | None = None,
+) -> Callable[[Callable[[JobContext], Awaitable[None]]], RtcDoor]:
+    """The voice door as a decorator with no server: a module defines it, ``AgentServer.add()``
+    serves it (``server.rtc_session()`` does both)."""
+
+    def decorator(f: Callable[[JobContext], Awaitable[None]]) -> RtcDoor:
+        return RtcDoor(
+            f,
+            endpoint=endpoint,
+            type=type,
+            on_request=on_request,
+            on_session_end=on_session_end,
+            on_simulation_end=on_simulation_end,
+        )
+
+    return decorator
+
+
+_RtcEntrypointT = TypeVar("_RtcEntrypointT", bound=Callable[[JobContext], Awaitable[None]])
+
+
+class AgentHandler:
+    """An agent's doors on one lane: what a module defines and ``AgentServer.add`` serves.
+
+    ::
+
+        back_office = AgentHandler(lane="backend")
+
+        @back_office.a2a_session(endpoint="backend", description="The back office.", public=False)
+        async def text(ctx: A2ASessionContext) -> str: ...
+
+    ``lane`` names the lane the doors write (docs/lanes.md); the worker's own when left out.
+    The voice door writes the worker's lane, so a handler with a lane of its own has text
+    doors only.
+    """
+
+    def __init__(self, *, lane: str | None = None) -> None:
+        self.lane = lane
+        self.doors: list[Any] = []
+
+    @overload
+    def rtc_session(
+        self,
+        func: _RtcEntrypointT,
+        *,
+        endpoint: str = "",
+        type: ServerType = ServerType.ROOM,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
+        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
+    ) -> _RtcEntrypointT: ...
+
+    @overload
+    def rtc_session(
+        self,
+        func: None = None,
+        *,
+        endpoint: str = "",
+        type: ServerType = ServerType.ROOM,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
+        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
+    ) -> Callable[[_RtcEntrypointT], _RtcEntrypointT]: ...
+
+    def rtc_session(
+        self,
+        func: Callable[[JobContext], Awaitable[None]] | None = None,
+        *,
+        endpoint: str = "",
+        type: ServerType = ServerType.ROOM,
+        on_request: Callable[[JobRequest], Any] | None = None,
+        on_session_end: Callable[[JobContext], Any] | None = None,
+        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
+    ) -> Any:
+        """The voice door, as ``AgentServer.rtc_session``."""
+        door = rtc_session(
+            endpoint=endpoint,
+            type=type,
+            on_request=on_request,
+            on_session_end=on_session_end,
+            on_simulation_end=on_simulation_end,
+        )
+
+        def decorator(f: Callable[[JobContext], Awaitable[None]]) -> Any:
+            if self.lane:
+                raise ValueError(
+                    "the voice door writes the worker's lane: AgentHandler() without lane="
+                )
+            self.doors.append(door(f))
+            return f
+
+        return decorator(func) if func is not None else decorator
+
+    def a2a_session(
+        self,
+        *,
+        endpoint: str,
+        description: str,
+        state: type[Any] | None = None,
+        public: bool = True,
+        auth: Callable[..., Any] | None = None,
+        inbox: Any = None,
+        debounce: Any = None,
+        storage: Any | None = None,
+        version: str | None = None,
+    ) -> Callable[[Callable[..., Awaitable[Any]]], Any]:
+        """The text door, as ``AgentServer.a2a_session``, on this handler's lane."""
+        from .a2a.endpoint import a2a_session
+
+        door = a2a_session(
+            endpoint=endpoint,
+            description=description,
+            state=state,
+            public=public,
+            auth=auth,
+            inbox=inbox,
+            debounce=debounce,
+            storage=storage,
+            version=version,
+            lane=self.lane,
+        )
+
+        def decorator(handler: Callable[..., Awaitable[Any]]) -> Any:
+            ep = door(handler)
+            self.doors.append(ep)
+            return ep
+
+        return decorator
+
+
 class AgentServer(utils.EventEmitter[EventTypes]):
     _default_num_idle_processes = ServerEnvOption(
-        dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
+        dev_default=0, prod_default=math.ceil(_core.cpu_count())
     )
     _default_port = ServerEnvOption(dev_default=0, prod_default=8081)
 
@@ -329,8 +485,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
         log_level: str | ServerEnvOption[str] = _default_log_level,
+        storage: Any | None = None,
+        agent_name: str = "",
     ) -> None:
         super().__init__()
+        # the session storage every door of this server opens its lane with (plan 5.7), and
+        # the agents a stored session may name (plan 5.3 rule 9)
+        self._storage = storage
+        self._agents = AgentRegistry()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
         self._api_key = api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
@@ -364,7 +526,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # Set by the CLI (--simulation) when the worker runs under an agent
         # simulation: load shedding is disabled so runs can saturate the agent.
         self._simulation = False
-        self._agent_name = ""
+        # the agent this server is: jobs are dispatched to it, and its doors are reached at
+        # /agents/{agent_name}/{deployment}/{endpoint}. A launcher's LIVEKIT_AGENT_NAME_OVERRIDE
+        # wins, then the argument, then LIVEKIT_AGENT_NAME.
+        self._agent_name = (
+            os.environ.get("LIVEKIT_AGENT_NAME_OVERRIDE")
+            or agent_name
+            or os.environ.get("LIVEKIT_AGENT_NAME", "")
+        )
+        self._rtc_endpoint = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -378,15 +548,181 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
         self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
-        self._closed, self._draining, self._connecting, self._connection_failed = (
-            True,
-            False,
-            False,
-            False,
-        )
+        self._closed, self._draining, self._connection_failed = True, False, False
         self._http_server: http_server.HttpServer | None = None
+        # built here and not in run(): the @server.http decorators run at import time
+        self._http = AgentHttp()
+        self._a2a_endpoints: dict[str, Any] = {}
+        self._conn: _core.Worker | None = None  # once run() has started the Rust worker
 
         self._lock = asyncio.Lock()
+
+    @property
+    def storage(self) -> Any | None:
+        """The session storage every door of this server opens its lane with (plan 5.7)."""
+        return self._storage
+
+    @property
+    def agents(self) -> AgentRegistry:
+        """The registered agents and task classes: what a stored ``Ref`` rebuilds (plan 5.3)."""
+        return self._agents
+
+    def register(self, *agents: Any) -> None:
+        """Register ``Agent`` instances or ``AgentTask`` classes a stored session may name.
+
+        Every agent reachable from the server's endpoints is registered when they are; this
+        adds the rest, such as the targets of handoffs made inside tools.
+        """
+        self._agents.register_all(agents)
+
+    @property
+    def http(self) -> AgentHttp:
+        """HTTP routes served alongside the agent, as a Starlette application::
+
+            @server.http.get("/token")
+            async def token(request: Request) -> Response:
+                return JSONResponse({"ok": True})
+
+        Routes are served through the LiveKit server at
+        ``/agents/{agent_name}/{deployment}/{path}``, over the agent endpoint data plane; no
+        local listener exposes them. Serving them requires an ``agent_name``. The handler reads
+        the request's preamble as ``request.state.lk_request``.
+        """
+        return self._http
+
+    def mount(self, path: str, app: ASGIApp, *, name: str | None = None) -> None:
+        """Serve an ASGI application (FastAPI, another Starlette app, ...) under ``path``."""
+        self._http.mount(path, app, name=name)
+
+    def a2a_session(
+        self,
+        *,
+        endpoint: str,
+        description: str,
+        state: type[Any] | None = None,
+        public: bool = True,
+        auth: Callable[..., Any] | None = None,
+        inbox: Any = None,
+        debounce: Any = None,
+        storage: Any | None = None,
+        version: str | None = None,
+        lane: str | None = None,
+    ) -> Callable[[Callable[..., Awaitable[Any]]], Any]:
+        """The text door (plan 7.3): one A2A endpoint served as an ASGI app under ``/<endpoint>``.
+
+        ::
+
+            @server.a2a_session(endpoint="scheduling", description="Book or move an appointment.", state=Patient)
+            async def scheduling(ctx: A2ASessionContext[Patient]) -> str:
+                result = await scheduler.run(ctx.message, message_history=ctx.message_history, state=ctx.state)
+                return str(result.output)
+
+        The endpoint publishes its card at ``/<endpoint>/.well-known/agent-card.json`` and
+        serves JSON-RPC over HTTP+SSE and over WebSocket at ``/<endpoint>/v1``. The route is
+        a session route: the node resolves the thread and hands it over in the preamble.
+        ``livekit.agents.a2a_session`` is the same decorator with no server, for a door a
+        module defines and ``add()`` serves.
+
+        Args:
+            endpoint: The last path segment of the endpoint's URL.
+            description: What the card says the agent does.
+            state: The door's state type, loaded per thread.
+            public: Whether a caller needs no token.
+            auth: A callable deciding who may call.
+            inbox: The turn policy for a message that arrives while one runs.
+            debounce: How long to wait for more of a burst.
+            storage: This endpoint's storage when it is not the server's.
+            version: The card's version; the deployment's by default.
+            lane: The lane the door writes, when not the worker's own.
+        """
+        from .a2a.endpoint import a2a_session
+
+        door = a2a_session(
+            endpoint=endpoint,
+            description=description,
+            state=state,
+            public=public,
+            auth=auth,
+            inbox=inbox,
+            debounce=debounce,
+            storage=storage,
+            version=version,
+            lane=lane,
+        )
+
+        def decorator(handler: Callable[..., Awaitable[Any]]) -> Any:
+            return self.add(door(handler))[0]
+
+        return decorator
+
+    def add(self, *doors: Any) -> tuple[Any, ...]:
+        """Serve what a module defined: ``AgentHandler``s, and doors from ``rtc_session`` and
+        ``a2a_session``, the one voice door of the worker and text doors under ``/<endpoint>``.
+        Returns them."""
+        from .a2a.auth import Credentials
+        from .a2a.endpoint import A2AEndpoint
+
+        for door in doors:
+            if isinstance(door, AgentHandler):
+                self.add(*door.doors)
+            elif isinstance(door, RtcDoor):
+                if self._entrypoint_fnc is not None:
+                    raise RuntimeError("an AgentServer has one rtc_session")
+                self._entrypoint_fnc = door.entrypoint
+                self._request_fnc = door.on_request
+                self._session_end_fnc = door.on_session_end
+                self._simulation_end_fnc = door.on_simulation_end
+                self._rtc_endpoint = door.endpoint or self._agent_name
+                self._server_type = door.type
+            elif isinstance(door, A2AEndpoint):
+                if door.name in self._a2a_endpoints:
+                    raise ValueError(f"a2a_session(endpoint={door.name!r}) is already served")
+                credentials = (
+                    Credentials(self._api_key, self._api_secret)
+                    if self._api_key and self._api_secret
+                    else None
+                )
+                door.bind(
+                    storage=self._storage,
+                    agent_name=lambda: self._agent_name,
+                    credentials=credentials,
+                    url_base=self._endpoint_url_base,
+                    agents=self._agents,
+                )
+                # the worker bridge's documented hook: the route registers as AEK_TEXT so the
+                # node resolves the session and hands it over in the preamble (http.py, plan 3.3.6)
+                self._http.mount(f"/{door.name}", door.app, name=door.name)
+                self._http.configure_endpoint(f"/{door.name}", public=door.public, session=True)
+                self._a2a_endpoints[door.name] = door
+            else:
+                raise TypeError(f"not a door: {door!r}")
+        return doors
+
+    @property
+    def a2a_endpoints(self) -> dict[str, Any]:
+        """The text doors registered on this server, by endpoint name."""
+        return dict(self._a2a_endpoints)
+
+    def _endpoint_url_base(self) -> str | None:
+        """``https://<project>.livekit.cloud/agents/<agent>/<deployment>`` when known (plan 7.2)."""
+        if not self._ws_url or not self._agent_name:
+            return None
+        base = self._ws_url.rstrip("/")
+        if base.startswith("wss://"):
+            base = "https://" + base[len("wss://") :]
+        elif base.startswith("ws://"):
+            base = "http://" + base[len("ws://") :]
+        # a worker registered without a deployment is addressed as "default" by the node
+        return f"{base}/agents/{self._agent_name}/{self._deployment or 'default'}"
+
+    def configure_endpoint(self, path: str, *, public: bool = False, session: bool = False) -> None:
+        """Set routing policy for one ``server.http`` route.
+
+        ``public`` routes are reachable without a project token. ``session`` marks a session
+        endpoint: the route registers with the text kind and the node may resolve the thread
+        for a request and hand it to the handler as ``request.state.lk_request.thread_id``.
+        """
+        self._http.configure_endpoint(path, public=public, session=session)
 
     @property
     def log_level(self) -> str | ServerEnvOption[str]:
@@ -438,10 +774,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
             log_level=options.log_level,
+            agent_name=options.agent_name,
         )
         server.rtc_session(
             options.entrypoint_fnc,
-            agent_name=options.agent_name,
             type=options.worker_type,
             on_request=options.request_fnc,
         )
@@ -452,7 +788,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self,
         func: Callable[[JobContext], Awaitable[None]],
         *,
-        agent_name: str = "",
+        endpoint: str = "",
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
@@ -463,7 +799,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     def rtc_session(
         self,
         *,
-        agent_name: str = "",
+        endpoint: str = "",
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
@@ -476,7 +812,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self,
         func: Callable[[JobContext], Awaitable[None]] | None = None,
         *,
-        agent_name: str = "",
+        endpoint: str = "",
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
@@ -487,45 +823,42 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
         ]
     ):
-        """
-        Decorator or direct registrar for the RTC session entrypoint.
+        """The voice door: the entrypoint a job runs. ``endpoint`` is the door's name under the
+        agent, ``{agent_name}/{endpoint}``; the agent's name when left empty.
+        ``livekit.agents.rtc_session`` is the same decorator with no server, for a door a
+        module defines and ``add()`` serves.
 
         Usage:
-            @server.rtc_session(agent_name="survey_agent")
+            @server.rtc_session()
             async def my_agent(job_ctx: JobContext): ...
 
-            server.rtc_session(my_agent, agent_name="survey_agent")
+            server.rtc_session(my_agent)
         """
 
         def decorator(
             f: Callable[[JobContext], Awaitable[None]],
         ) -> Callable[[JobContext], Awaitable[None]]:
-            if self._entrypoint_fnc is not None:
-                raise RuntimeError(
-                    "The AgentServer currently only supports registering only one rtc_session"
+            self.add(
+                RtcDoor(
+                    f,
+                    endpoint=endpoint,
+                    type=type,
+                    on_request=on_request,
+                    on_session_end=on_session_end,
+                    on_simulation_end=on_simulation_end,
                 )
-            self._entrypoint_fnc = f
-            self._request_fnc = on_request
-            self._session_end_fnc = on_session_end
-            self._simulation_end_fnc = on_simulation_end
-            # precedence: the LIVEKIT_AGENT_NAME_OVERRIDE env var (a platform-injected
-            # force, e.g. from the lk simulation launcher) takes priority, then the
-            # explicit agent_name arg, then the LIVEKIT_AGENT_NAME env default.
-            if os.environ.get("LIVEKIT_AGENT_NAME_OVERRIDE"):
-                self._agent_name = os.environ["LIVEKIT_AGENT_NAME_OVERRIDE"]
-            elif agent_name:
-                self._agent_name = agent_name
-            elif os.environ.get("LIVEKIT_AGENT_NAME"):
-                self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]
-            else:
-                self._agent_name = ""
-            self._server_type = type
+            )
             return f
 
         if func is not None:
             return decorator(func)
 
         return decorator
+
+    @property
+    def rtc_endpoint(self) -> str:
+        """The voice door's name under the agent, ``{agent_name}/{endpoint}``."""
+        return self._rtc_endpoint
 
     @property
     def worker_info(self) -> WorkerInfo:
@@ -555,18 +888,23 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 Useful for local testing, isolated jobs, or running without being
                 assigned new jobs.
         """
+        _core.init(_core.Role.Worker)
+
         async with self._lock:
             if not self._closed:
                 raise Exception("worker is already running")
 
             if self._entrypoint_fnc is None:
-                raise RuntimeError(
-                    "No RTC session entrypoint has been registered.\n"
-                    "Define one using the @server.rtc_session() decorator, for example:\n"
-                    '    @server.rtc_session(agent_name="my_agent")\n'
-                    "    async def my_agent(ctx: JobContext):\n"
-                    "        ...\n"
-                )
+                if not self._a2a_endpoints:
+                    raise RuntimeError(
+                        "No RTC session entrypoint has been registered.\n"
+                        "Define one using the @server.rtc_session() decorator, for example:\n"
+                        "    @server.rtc_session()\n"
+                        "    async def my_agent(ctx: JobContext):\n"
+                        "        ...\n"
+                    )
+                # a text-only server: an expert with nothing but a2a_session doors (plan 7.3)
+                self._entrypoint_fnc = _text_only_entrypoint
 
             if self._request_fnc is None:
                 self._request_fnc = _default_request_fnc
@@ -574,15 +912,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._setup_fnc is None:
                 self._setup_fnc = _default_setup_fnc
 
-            if self._load_fnc is None:
-                self._load_fnc = _DefaultLoadCalc.get_load
-
             if self.worker_info.cloud_agents:
-                if self._load_fnc != _DefaultLoadCalc.get_load:
+                if self._load_fnc is not None:
                     logger.warning(
                         "custom load_fnc is not supported when hosting on Cloud, reverting to default"
                     )
-                    self._load_fnc = _DefaultLoadCalc.get_load
+                    self._load_fnc = None
                 if self._load_threshold != _default_load_threshold:
                     logger.warning(
                         "custom load_threshold is not supported when hosting on Cloud, reverting to default"
@@ -595,9 +930,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._loop = asyncio.get_event_loop()
             self._devmode = devmode
             self._job_lifecycle_tasks = set[asyncio.Task[Any]]()
-            self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
             self._close_future: asyncio.Future[None] | None = None
-            self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
             self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = (
                 None
@@ -619,7 +952,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._proc_pool = ipc.proc_pool.ProcPool(
                 initialize_process_fnc=self._setup_fnc,
-                job_entrypoint_fnc=self._entrypoint_fnc,
+                job_entrypoint_fnc=(
+                    _CallThreadEntrypoint(self._entrypoint_fnc, self._storage)
+                    if self._storage is not None
+                    and self._entrypoint_fnc is not _text_only_entrypoint
+                    else self._entrypoint_fnc
+                ),
                 session_end_fnc=self._session_end_fnc,
                 simulation_end_fnc=self._simulation_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
@@ -635,12 +973,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 http_proxy=self._http_proxy or None,
             )
 
-            self._previous_status = agent.WorkerStatus.WS_AVAILABLE
-
             self._api: api.LiveKitAPI | None = None
             self._http_session: aiohttp.ClientSession | None = None
             self._worker_load: float = 0.0
-            self._reserved_slots: int = 0  # jobs we said "available" to but not yet launched
 
             # simulations run ephemeral workers side by side; a health
             # endpoint on a fixed port would make concurrent runs collide
@@ -688,6 +1023,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 if not self._api_secret:
                     raise ValueError(
                         "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
+                    )
+
+                if self._http.manifest() and not self._agent_name:
+                    raise ValueError(
+                        "server.http routes are served at /agents/{agent_name}/..., "
+                        "so they require an agent_name (AgentServer(agent_name=) or LIVEKIT_AGENT_NAME)"
                     )
 
             self._prometheus_server: telemetry.http_server.HttpServer | None = None
@@ -764,9 +1105,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._closed = False
 
             def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
-                t = self._loop.create_task(self._update_job_status(proc))
-                self._job_lifecycle_tasks.add(t)
-                t.add_done_callback(self._job_lifecycle_tasks.discard)
+                job_info = proc.running_job
+                if job_info is None or self._conn is None:
+                    return
+                status = agent.JobStatus.JS_RUNNING
+                if proc.status == ipc.job_executor.JobStatus.FAILED:
+                    status = agent.JobStatus.JS_FAILED
+                elif proc.status == ipc.job_executor.JobStatus.SUCCESS:
+                    status = agent.JobStatus.JS_SUCCESS
+                with contextlib.suppress(RuntimeError):  # the worker stopped
+                    self._conn.job_status(job_info.job.id, int(status))
 
             if self._http_server is not None:
                 await self._http_server.start()
@@ -805,31 +1153,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 while True:
                     await interval.tick()
 
-                    self._worker_load = await self._invoke_load_fnc()
+                    # the load and the idle-process target are the Rust worker's; an
+                    # unregistered worker has neither
+                    if self._conn is not None:
+                        snapshot = self._conn.snapshot()
+                        self._worker_load = snapshot["worker_load"]
+                        # None leaves the pool unchanged; 0 means keep no idle process
+                        if (target := snapshot["target_idle_processes"]) is not None:
+                            self._proc_pool.set_target_idle_processes(target)
 
                     telemetry.metrics._update_worker_load(self._worker_load)
                     if self._prometheus_multiproc_dir:
                         await asyncio.get_event_loop().run_in_executor(
                             None, telemetry.metrics._update_child_proc_count
                         )
-
-                    load_threshold = ServerEnvOption.getvalue(self._load_threshold, devmode)
-                    default_num_idle_processes = ServerEnvOption.getvalue(
-                        self._num_idle_processes, devmode
-                    )
-
-                    if not math.isinf(load_threshold):
-                        active_jobs = len(self.active_jobs)
-                        if active_jobs > 0:
-                            job_load = self._worker_load / len(self.active_jobs)
-                            if job_load > 0.0:
-                                available_load = max(load_threshold - self._worker_load, 0.0)
-                                available_job = min(
-                                    math.ceil(available_load / job_load), default_num_idle_processes
-                                )
-                                self._proc_pool.set_target_idle_processes(available_job)
-                        else:
-                            self._proc_pool.set_target_idle_processes(default_num_idle_processes)
 
             tasks = []
             self._load_task = asyncio.create_task(_load_task(), name="load_task")
@@ -936,7 +1273,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             logger.info("draining worker", extra={"id": self.id, "timeout": timeout})
             self._draining = True
-            await self._update_worker_status()
+            # clients of an open WebSocket get a close frame and reconnect to another worker
+            await self._http.close_websockets()
+            if self._conn is not None:
+                # Rust marks the worker full and waits for its pending requests and jobs
+                await self._conn.drain(timeout or None)
+                return
 
             async def _drain() -> None:
                 # wait for in-flight availability tasks to finish launching their jobs
@@ -1031,6 +1373,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             logger.info("shutting down worker", extra={"id": self.id})
 
+            if self._conn is not None:
+                with contextlib.suppress(RuntimeError):
+                    self._conn.close()
+
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
 
@@ -1058,196 +1404,85 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._api is not None:
                 await self._api.aclose()  # type: ignore[no-untyped-call, unused-ignore]
 
-            # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
-            self._msg_chan.close()
-
             if not self._close_future.done():
                 self._close_future.set_result(None)
 
-    async def _queue_msg(self, msg: agent.WorkerMessage) -> None:
-        """_queue_msg raises aio.ChanClosed when the worker is closing/closed"""
-        if self._connecting:
-            which = msg.WhichOneof("message")
-            if which == "update_worker":
-                return
-            elif which == "ping":
-                return
-
-        await self._msg_chan.send(msg)
-
     @utils.log_exceptions(logger=logger)
     async def _connection_task(self) -> None:
-        assert self._http_session is not None
+        manifest = self._http.manifest()
+        options: dict[str, Any] = {
+            "ws_url": self._ws_url,
+            # the /agent address when it is not LIVEKIT_URL, such as the WebTransport port of a
+            # development livekit-server (webtransport.port in its config); jobs still join rooms
+            # at ws_url
+            "worker_url": os.environ.get("LIVEKIT_WORKER_URL") or None,
+            "agent_name": self._agent_name,
+            "deployment": self._deployment,
+            "version": __version__,
+            "publisher": self._server_type == ServerType.PUBLISHER,
+            "devmode": self._devmode,
+            "simulation": self._simulation,
+            "load_threshold": ServerEnvOption.getvalue(self._load_threshold, self._devmode),
+            "num_idle_processes": ServerEnvOption.getvalue(self._num_idle_processes, self._devmode),
+            "drain_timeout": self._drain_timeout,
+            "worker_token": self._worker_token or None,
+            "max_retry": self._max_retry,
+            "permissions": dataclasses.asdict(self._permissions),
+            "api_key": self._api_key,
+            "api_secret": self._api_secret,
+            "endpoints": manifest,
+            # the endpoint data plane rides the WebTransport session; without routes the
+            # WebSocket control connection suffices
+            "webtransport": bool(manifest) or _env_flag("LIVEKIT_WORKER_WEBTRANSPORT"),
+            "insecure": _env_flag("LIVEKIT_WORKER_INSECURE"),
+        }
+        conn = _core.Worker(options, _WorkerHost(self))
+        self._conn = conn
+        if manifest:
+            logger.info(
+                "serving agent endpoints",
+                extra={"routes": [f"{','.join(e['methods'])} {e['path']}" for e in manifest]},
+            )
 
-        retry_count = 0
-        ws: aiohttp.ClientWebSocketResponse | None = None
-        while not self._closed:
-            try:
-                self._connecting = True
-                join_jwt = (
-                    api.AccessToken(self._api_key, self._api_secret)
-                    .with_grants(api.VideoGrants(agent=True))
-                    .to_jwt()
-                )
-
-                headers = {"Authorization": f"Bearer {join_jwt}"}
-
-                parse = urlparse(self._ws_url)
-                scheme = parse.scheme
-                if scheme.startswith("http"):
-                    scheme = scheme.replace("http", "ws")
-
-                base = f"{scheme}://{parse.netloc}{parse.path}".rstrip("/") + "/"
-                agent_url = urljoin(base, "agent")
-
-                params = {}
-                if self._worker_token:
-                    params["worker_token"] = self._worker_token
-
-                ws = await self._http_session.ws_connect(
-                    agent_url,
-                    headers=headers,
-                    params=params,
-                    autoping=True,
-                    proxy=self._http_proxy or None,
-                    heartbeat=HEARTBEAT_INTERVAL,
-                )
-
-                retry_count = 0
-
-                # register the worker
-                req = agent.WorkerMessage()
-                req.register.type = self._server_type.value
-                req.register.allowed_permissions.CopyFrom(
-                    models.ParticipantPermission(
-                        can_publish=self._permissions.can_publish,
-                        can_subscribe=self._permissions.can_subscribe,
-                        can_publish_data=self._permissions.can_publish_data,
-                        can_update_metadata=self._permissions.can_update_metadata,
-                        can_publish_sources=self._permissions.can_publish_sources,
-                        hidden=self._permissions.hidden,
-                        agent=True,
+        async def notifications() -> None:
+            while True:
+                event = await conn.next_notification()
+                if event["kind"] == "registered":
+                    self._id = event["worker_id"]
+                    if self._storage is not None and not self._storage.holder:
+                        self._storage.holder = self._id
+                    self.emit(
+                        "worker_registered",
+                        self._id,
+                        models.ServerInfo(region=event["region"], protocol=event["protocol"]),
                     )
-                )
-                req.register.agent_name = self._agent_name
-                req.register.deployment = self._deployment
-                req.register.version = __version__
-                await ws.send_bytes(req.SerializeToString())
-
-                # wait for the register response before running this connection
-                first_msg_b = await ws.receive_bytes()
-                msg = agent.ServerMessage()
-                msg.ParseFromString(first_msg_b)
-
-                if not msg.HasField("register"):
-                    raise Exception("expected register response as first message")
-
-                self._handle_register(msg.register)
-                self._connecting = False
-
-                # report all active jobs to the server after registration
-                await self._report_active_jobs()
-
-                await self._run_ws(ws)
-            except Exception as e:
-                if self._closed:
-                    break
-
-                if retry_count >= self._max_retry:
-                    self._connection_failed = True
-                    raise RuntimeError(
-                        f"failed to connect to livekit after {retry_count} attempts",
-                    ) from None
-
-                retry_delay = min(retry_count * 2, 10)
-                retry_count += 1
-
-                logger.warning(
-                    f"failed to connect to livekit, retrying in {retry_delay}s",
-                    extra={"retry_count": retry_count, "max_retry": self._max_retry, "error": e},
-                )
-                await asyncio.sleep(retry_delay)
-            finally:
-                if ws is not None:
-                    await ws.close()
-
-    async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        closing_ws = False
-
-        async def _load_task() -> None:
-            """periodically update worker status"""
-            interval = utils.aio.interval(UPDATE_STATUS_INTERVAL)
-            while True:
-                await interval.tick()
-                await self._update_worker_status()
-
-        async def _send_task() -> None:
-            nonlocal closing_ws
-            while True:
-                try:
-                    msg = await self._msg_chan.recv()
-                    await ws.send_bytes(msg.SerializeToString())
-                except utils.aio.ChanClosed:
-                    closing_ws = True
+                elif event["kind"] == "stopped":
                     return
 
-        async def _recv_task() -> None:
-            nonlocal closing_ws
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    if closing_ws:
-                        return
-
-                    raise APIStatusError(
-                        message="worker connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
-
-                if msg.type != aiohttp.WSMsgType.BINARY:
-                    ws_data = str(msg.data)
-                    if len(ws_data) > 128:
-                        ws_data = ws_data[:128] + f"...(+{len(ws_data) - 128} more)"
-                    logger.warning(
-                        "unexpected message type: %s",
-                        msg.type,
-                        extra={
-                            "type": msg.type.name,
-                            "ws_data": ws_data,
-                        },
-                    )
-                    continue
-
-                data = msg.data
-                server_msg = agent.ServerMessage()
-                server_msg.ParseFromString(data)
-                which = server_msg.WhichOneof("message")
-                if which == "availability":
-                    self._handle_availability(server_msg.availability)
-                elif which == "assignment":
-                    self._handle_assignment(server_msg.assignment)
-                elif which == "termination":
-                    user_task = self._loop.create_task(
-                        self._handle_termination(server_msg.termination),
-                        name="agent_job_termination",
-                    )
-                    self._job_lifecycle_tasks.add(user_task)
-                    user_task.add_done_callback(self._job_lifecycle_tasks.discard)
-
-        tasks = [
-            asyncio.create_task(_load_task()),
-            asyncio.create_task(_send_task()),
-            asyncio.create_task(_recv_task()),
-        ]
+        notification_task = asyncio.create_task(notifications(), name="worker_notifications")
+        runtime_task = asyncio.ensure_future(conn.run())
         try:
-            await asyncio.gather(*tasks)
+            await asyncio.gather(runtime_task, notification_task)
+        except Exception:
+            self._connection_failed = True
+            raise
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
+            with contextlib.suppress(RuntimeError):
+                conn.close()
+            await utils.aio.cancel_and_wait(runtime_task, notification_task)
+
+    async def _invoke_load_fnc(self) -> float:
+        """Run load_fnc in executor. Uses signature to call with or without self."""
+
+        def load_fnc() -> float:
+            assert self._load_fnc is not None
+            signature = inspect.signature(self._load_fnc)
+            parameters = list(signature.parameters.values())
+            if len(parameters) == 0:
+                return self._load_fnc()  # type: ignore
+            return self._load_fnc(self)  # type: ignore
+
+        return await asyncio.get_event_loop().run_in_executor(None, load_fnc)
 
     async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
         if not self._api_secret:
@@ -1275,287 +1510,108 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             )
             await self._proc_pool.launch_job(running_info)
 
-    def _handle_register(self, reg: agent.RegisterWorkerResponse) -> None:
-        self._id = reg.worker_id
-        logger.info(
-            "registered worker",
-            extra={
-                "agent_name": self._agent_name,
-                "deployment": self._deployment,
-                "id": reg.worker_id,
-                "url": self._ws_url,
-                "region": reg.server_info.region,
-                "protocol": reg.server_info.protocol,
-            },
-        )
-        self.emit("worker_registered", reg.worker_id, reg.server_info)
 
-    def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
-        # receipt is now, not when the task gets to run: that delay is dispatch latency
-        task = self._loop.create_task(self._answer_availability(msg, received_at=time.time()))
-        self._job_lifecycle_tasks.add(task)
-        task.add_done_callback(self._job_lifecycle_tasks.discard)
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in ("1", "true", "yes")
 
-    async def _invoke_load_fnc(self) -> float:
-        """Run load_fnc in executor. Uses signature to call with or without self."""
 
-        def load_fnc() -> float:
-            assert self._load_fnc is not None
-            signature = inspect.signature(self._load_fnc)
-            parameters = list(signature.parameters.values())
-            if len(parameters) == 0:
-                return self._load_fnc()  # type: ignore
-            return self._load_fnc(self)  # type: ignore
+class _WorkerHost:
+    """Host operations the Rust worker opens, in the generator's ``open(kind, args)`` shape."""
 
-        return await asyncio.get_event_loop().run_in_executor(None, load_fnc)
+    def __init__(self, server: AgentServer) -> None:
+        self._server = server
+        # (received_at, accepted_at) per accepted job, read back when the assignment launches it
+        self._accept_times: dict[str, tuple[float, float]] = {}
 
-    async def _refresh_worker_load(self) -> None:
-        """Refresh _worker_load by running load_fnc. Used before availability checks
-        so concurrent job requests see up-to-date load (fixes race with periodic interval).
-        """
-        if self._load_fnc is None:
-            return
+    def open(self, kind: str, args: dict[str, Any]) -> Awaitable[Any]:
+        if kind == "job_request":
+            return self._job_request(args)
+        if kind == "launch_job":
+            return self._launch_job(args)
+        if kind == "terminate_job":
+            return self._terminate_job(args["job_id"])
+        if kind == "load":
+            return self._load()
+        if kind == "endpoint":
+            return self._server._http.serve(args)
+        raise ValueError(f"unknown host operation {kind!r}")
 
-        self._worker_load = await self._invoke_load_fnc()
-        telemetry.metrics._update_worker_load(self._worker_load)
-
-    def _get_effective_load(self) -> float:
-        """Current load including reserved slots (accepted but not yet launched)."""
-        active_jobs = self.active_jobs
-        load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
-        if active_jobs:
-            job_load_estimate = self._worker_load / len(active_jobs)
-        elif math.isinf(load_threshold):
-            job_load_estimate = 0.0
-        else:
-            default_idle = ServerEnvOption.getvalue(self._num_idle_processes, self._devmode)
-            job_load_estimate = load_threshold / max(default_idle, 1)
-        return self._worker_load + self._reserved_slots * job_load_estimate
-
-    def _is_available(self) -> bool:
-        if self._draining:
-            return False
-
-        if self._simulation:
-            return True
-
-        load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
-        if math.isinf(load_threshold):
-            return True
-
-        # Use effective load so we don't over-accept when two requests arrive
-        # before either job appears in active_jobs.
-        return self._get_effective_load() < load_threshold
-
-    async def _answer_availability(
-        self, msg: agent.AvailabilityRequest, *, received_at: float | None = None
-    ) -> None:
-        """Ask the user if they want to accept this job and forward the answer to the server.
-        If we get the job assigned, we start a new process."""
-
-        if received_at is None:
-            received_at = time.time()
-        await self._refresh_worker_load()
-        if not self._is_available():
-            availability_resp = agent.WorkerMessage()
-            availability_resp.availability.job_id = msg.job.id
-            availability_resp.availability.available = False
-            await self._queue_msg(availability_resp)
-            return
-
-        # Reserve a slot immediately so concurrent availability checks see updated
-        # load before the user's request_fnc runs or calls accept().
-        self._reserved_slots += 1
-        answered = False
+    async def _job_request(self, req: dict[str, Any]) -> dict[str, Any]:
+        server = self._server
+        job = agent.Job()
+        job.ParseFromString(req["job"]["proto"])
+        received_at = time.time()
+        answer: dict[str, Any] = {"decision": "unanswered"}
 
         async def _on_reject(terminate: bool) -> None:
-            nonlocal answered
-            answered = True
-
-            availability_resp = agent.WorkerMessage()
-            availability_resp.availability.job_id = msg.job.id
-            availability_resp.availability.available = False
-            availability_resp.availability.terminate = terminate
-            await self._queue_msg(availability_resp)
+            answer.clear()
+            answer["decision"] = "terminate" if terminate else "reject"
 
         async def _on_accept(args: JobAcceptArguments) -> None:
-            nonlocal answered
-            answered = True
-            accepted_at = time.time()
-
-            availability_resp = agent.WorkerMessage()
-            availability_resp.availability.job_id = msg.job.id
-            availability_resp.availability.available = True
-            availability_resp.availability.participant_identity = args.identity
-            availability_resp.availability.participant_name = args.name
-            availability_resp.availability.participant_metadata = args.metadata
-            availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_NAME] = (
-                self._agent_name
+            answer.clear()
+            answer.update(
+                decision="accept",
+                name=args.name,
+                identity=args.identity,
+                metadata=args.metadata,
+                attributes=list((args.attributes or {}).items()),
             )
-            if args.attributes:
-                availability_resp.availability.participant_attributes.update(args.attributes)
+            self._accept_times[job.id] = (received_at, time.time())
 
-            wait_assignment = asyncio.Future[agent.JobAssignment]()
-            self._pending_assignments[job_req.id] = wait_assignment
-            await self._queue_msg(availability_resp)
-
-            # the job was accepted by the user, wait for the server assignment
-            try:
-                await asyncio.wait_for(wait_assignment, ASSIGNMENT_TIMEOUT)
-            except asyncio.TimeoutError:
-                self._pending_assignments.pop(job_req.id, None)
-                logger.warning(
-                    f"assignment for job {job_req.id} timed out",
-                    extra={"job_request": job_req, "agent_name": self._agent_name},
-                )
-                raise AssignmentTimeoutError() from None
-
-            job_assign = wait_assignment.result()
-            running_info = RunningJobInfo(
-                accept_arguments=args,
-                job=msg.job,
-                url=job_assign.url or self._ws_url,
-                token=job_assign.token,
-                worker_id=self._id,
-                fake_job=False,
-                received_at=received_at,
-                accepted_at=accepted_at,
-                assigned_at=time.time(),
+        # the core logs the request as it arrives (job, dispatch, room, resuming)
+        job_req = JobRequest(job=job, on_reject=_on_reject, on_accept=_on_accept)
+        assert server._request_fnc is not None
+        try:
+            await server._request_fnc(job_req)
+        except Exception as e:
+            logger.exception(
+                "job_request_fnc failed",
+                extra={"job_request": job_req, "agent_name": server._agent_name},
             )
-
-            await self._proc_pool.launch_job(running_info)
-
-        job_req = JobRequest(job=msg.job, on_reject=_on_reject, on_accept=_on_accept)
-
-        logger.info(
-            "received job request",
-            extra={
-                "job_id": msg.job.id,
-                "dispatch_id": msg.job.dispatch_id,
-                "room": msg.job.room.name,
-                "room_id": msg.job.room.sid,
-                "agent_name": self._agent_name,
-                "resuming": msg.resuming,
-                "enable_recording": msg.job.enable_recording,
-            },
-        )
-
-        @utils.log_exceptions(logger=logger)
-        async def _job_request_task() -> None:
-            assert self._request_fnc is not None
-            try:
-                await self._request_fnc(job_req)
-            except Exception:
-                logger.exception(
-                    "job_request_fnc failed",
-                    extra={"job_request": job_req, "agent_name": self._agent_name},
-                )
-
-            if not answered:
-                logger.warning(
-                    "no answer was given inside the job_request_fnc, automatically rejecting the job",  # noqa: E501
-                    extra={"job_request": job_req, "agent_name": self._agent_name},
-                )
-                await _on_reject(terminate=False)
-
-        def _on_job_request_done(task: asyncio.Task[Any]) -> None:
-            self._reserved_slots -= 1
-            self._job_lifecycle_tasks.discard(task)
-
-        user_task = self._loop.create_task(_job_request_task(), name="job_request")
-        self._job_lifecycle_tasks.add(user_task)
-        user_task.add_done_callback(_on_job_request_done)
-
-    def _handle_assignment(self, assignment: agent.JobAssignment) -> None:
-        logger.debug(
-            "received assignment",
-            extra={
-                "agent_name": self._agent_name,
-                "room_id": assignment.job.room.sid,
-                "room": assignment.job.room.name,
-                "job_id": assignment.job.id,
-                "dispatch_id": assignment.job.dispatch_id,
-                "enable_recording": assignment.job.enable_recording,
-            },
-        )
-        if assignment.job.id in self._pending_assignments:
-            with contextlib.suppress(asyncio.InvalidStateError):
-                fut = self._pending_assignments.pop(assignment.job.id)
-                fut.set_result(assignment)
-        else:
+            # `failed`, unlike `reject`, lets the server re-dispatch the job
+            return {"decision": "failed", "error": f"{type(e).__name__}: {e}"}
+        if answer["decision"] == "unanswered":
             logger.warning(
-                "received assignment for an unknown job",
-                extra={"job": MessageToDict(assignment.job), "agent_name": self._agent_name},
+                "no answer was given inside the job_request_fnc, automatically rejecting the job",
+                extra={"job_request": job_req, "agent_name": server._agent_name},
             )
+        return answer
 
-    async def _handle_termination(self, msg: agent.JobTermination) -> None:
-        proc = self._proc_pool.get_by_job_id(msg.job_id)
-        if not proc:
-            # safe to ignore
-            return
-        await proc.aclose()
-
-    async def _update_worker_status(self) -> None:
-        job_cnt = len(self.active_jobs)
-
-        if self._draining:
-            update = agent.UpdateWorkerStatus(status=agent.WorkerStatus.WS_FULL, job_count=job_cnt)
-            msg = agent.WorkerMessage(update_worker=update)
-            await self._queue_msg(msg)
-            return
-
-        load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
-        effective_load = self._get_effective_load()
-        is_full = not self._simulation and effective_load >= load_threshold
-        currently_available = not is_full and not self._draining
-
-        status = (
-            agent.WorkerStatus.WS_AVAILABLE if currently_available else agent.WorkerStatus.WS_FULL
+    async def _launch_job(self, info: dict[str, Any]) -> str:
+        job = agent.Job()
+        job.ParseFromString(info["job"]["proto"])
+        a = info["accept_arguments"]
+        received_at, accepted_at = self._accept_times.pop(job.id, (0.0, 0.0))
+        running = RunningJobInfo(
+            accept_arguments=JobAcceptArguments(
+                name=a["name"],
+                identity=a["identity"],
+                metadata=a["metadata"],
+                attributes=dict(a["attributes"]),
+            ),
+            job=job,
+            url=info["url"],
+            token=info["token"],
+            worker_id=info["worker_id"],
+            fake_job=info["fake_job"],
+            received_at=received_at,
+            accepted_at=accepted_at,
+            assigned_at=time.time() if received_at else 0.0,
         )
+        await self._server._proc_pool.launch_job(running)
+        return job.id  # `job_status` is keyed on the LiveKit job id
 
-        update = agent.UpdateWorkerStatus(load=self._worker_load, status=status, job_count=job_cnt)
+    async def _terminate_job(self, job_id: str) -> None:
+        proc = self._server._proc_pool.get_by_job_id(job_id)
+        if proc:
+            await proc.aclose()
 
-        # only log if status has changed
-        if self._previous_status != status and not self._draining:
-            self._previous_status = status
-            extra = {"load": effective_load, "threshold": load_threshold}
-            if is_full:
-                logger.info("worker is at full capacity, marking as unavailable", extra=extra)
-            else:
-                logger.info("worker is below capacity, marking as available", extra=extra)
-
-        msg = agent.WorkerMessage(update_worker=update)
-        with contextlib.suppress(utils.aio.ChanClosed):
-            await self._queue_msg(msg)
-
-    async def _update_job_status(self, proc: ipc.job_executor.JobExecutor) -> None:
-        job_info = proc.running_job
-        if job_info is None:
-            return
-
-        status: agent.JobStatus = agent.JobStatus.JS_RUNNING
-        if proc.status == ipc.job_executor.JobStatus.FAILED:
-            status = agent.JobStatus.JS_FAILED
-        elif proc.status == ipc.job_executor.JobStatus.SUCCESS:
-            status = agent.JobStatus.JS_SUCCESS
-        elif proc.status == ipc.job_executor.JobStatus.RUNNING:
-            status = agent.JobStatus.JS_RUNNING
-
-        update = agent.UpdateJobStatus(job_id=job_info.job.id, status=status, error="")
-        msg = agent.WorkerMessage(update_job=update)
-        await self._queue_msg(msg)
-
-    async def _report_active_jobs(self) -> None:
-        active_jobs = self.active_jobs
-        if not active_jobs:
-            return
-
-        job_ids = [job_info.job.id for job_info in active_jobs]
-        migrate_req = agent.MigrateJobRequest(job_ids=job_ids)
-        msg = agent.WorkerMessage(migrate_job=migrate_req)
-        await self._queue_msg(msg)
-
-        logger.debug(
-            "reported active jobs after registration",
-            extra={"job_count": len(active_jobs), "job_ids": job_ids},
-        )
+    async def _load(self) -> float | None:
+        """The user's load, or None to let Rust sample the CPU."""
+        server = self._server
+        if server._load_fnc is None:
+            return None
+        load = await server._invoke_load_fnc()
+        server._worker_load = load
+        telemetry.metrics._update_worker_load(load)
+        return load

@@ -22,7 +22,7 @@ import os
 from typing import TypeGuard
 
 from livekit import api, rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, AgentSession, get_job_context
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, LiveSession, get_job_context
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 
@@ -66,7 +66,7 @@ class AvatarSession(BaseAvatarSession):
     """A Synthesia interactive avatar for a LiveKit voice agent.
 
     Construct with up to five gallery ``avatar_ids`` and call ``start()`` before
-    ``AgentSession.start()``. The first id is the active avatar and the rest are
+    ``LiveSession.start()``. The first id is the active avatar and the rest are
     precomputed for a future mid-session swap. Credentials fall back to the
     ``SYNTHESIA_API_KEY`` and ``SYNTHESIA_API_URL`` environment variables.
 
@@ -121,7 +121,7 @@ class AvatarSession(BaseAvatarSession):
         self._session_id: str | None = None
         self._teardown_task: asyncio.Task[None] | None = None
         # The exact sink this session installed, tracked by identity rather than
-        # type or chain position: AgentSession.start() can wrap it in
+        # type or chain position: LiveSession.start() can wrap it in
         # TranscriptSynchronizer/RecorderAudioOutput, and a caller may already
         # have their own DataStreamAudioOutput installed before start() runs.
         self._audio_output: DataStreamAudioOutput | None = None
@@ -136,7 +136,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def start(
         self,
-        agent_session: AgentSession,
+        agent_session: LiveSession,
         room: rtc.Room,
         *,
         livekit_url: str | None = None,
@@ -204,7 +204,7 @@ class AvatarSession(BaseAvatarSession):
                     destination_identity=self.avatar_identity,
                     wait_remote_track=rtc.TrackKind.KIND_VIDEO,
                 )
-                # replace_audio_tail keeps any wrapper AgentSession.start() adds
+                # replace_audio_tail keeps any wrapper LiveSession.start() adds
                 # later (TranscriptSynchronizer, RecorderAudioOutput) attached.
                 agent_session.output.replace_audio_tail(audio_output)
                 self._audio_output = audio_output
@@ -240,7 +240,7 @@ class AvatarSession(BaseAvatarSession):
         # start cleans them up itself, closing the audio output's background
         # tasks rather than just dropping the reference. Only the sink this
         # session installed is touched: it may now be wrapped by
-        # AgentSession.start() (TranscriptSynchronizer, RecorderAudioOutput), and
+        # LiveSession.start() (TranscriptSynchronizer, RecorderAudioOutput), and
         # the caller may have had their own DataStreamAudioOutput before this
         # session ever ran, so neither the current chain head nor its type says
         # what to close.
@@ -385,7 +385,7 @@ class AvatarSession(BaseAvatarSession):
 
         try:
             # Only the sink this session installed is closed, by identity: it may
-            # now be wrapped by AgentSession.start() (TranscriptSynchronizer,
+            # now be wrapped by LiveSession.start() (TranscriptSynchronizer,
             # RecorderAudioOutput), and the caller may have had their own
             # DataStreamAudioOutput before this session ever ran, so neither the
             # current chain head nor its type says what to close. The wrapper

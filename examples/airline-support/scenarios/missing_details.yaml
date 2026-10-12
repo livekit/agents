@@ -1,0 +1,48 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/missing_details.yaml --agent-name skyline-support`.
+# The airline is seeded per worker and payments stay in memory: restart the worker before a run.
+# Each scenario waits on the customer: the triage asks for what it is missing and continues on
+# the answer. The expectations describe the outcome and name the failing case.
+
+id: SCNG_gY2he1ZSowQw
+name: Skyline Air, missing details
+
+scenarios:
+- id: SCN_1sbgyDbfD6NN
+  label: "No booking reference, given when asked"
+  instructions: >
+    You are Tom Okafor, writing from tom.okafor@example.com. Open with "Hi, Tom Okafor,
+    tom.okafor@example.com. You cancelled my flight SK517 to Lisbon two days before departure.
+    What compensation do I get?" Do not give the booking reference until asked; when asked, say
+    "it's SKY5C1". Read the answer and end the conversation. The truth: the flight was cancelled
+    two days ahead, 1850 km, and EUR 400 is due and paid.
+  agent_expectations: >
+    The agent asks for the booking reference, and after it is given tells the customer EUR 400 is
+    due for the cancellation and paid, without asking for the email address or the flight again.
+    Fails if an amount is stated before the reference is given, or if any other amount is
+    stated.
+
+- id: SCN_r2CQgBVW3XFp
+  label: "A late bag, the report reference given when asked"
+  instructions: >
+    You are Eleanor Smith, writing from eleanor.smith@example.com. Open with "Eleanor Smith,
+    eleanor.smith@example.com. My suitcase arrived three days after my flight to London, booking
+    SKY9B3. I spent EUR 180 on clothes and toiletries, receipts attached." You only give the
+    baggage report reference when asked: "AMSSK10422". Read the answer and end the conversation.
+    The truth: EUR 50 per day late is reimbursed against receipts, so EUR 150 is due and paid.
+  agent_expectations: >
+    The agent asks for the baggage report reference, and after it is given tells the customer EUR
+    150 is due and paid. Fails if an amount is stated before the reference is given, or if EUR
+    180 or any amount other than EUR 150 is promised.
+
+- id: SCN_ArgK75EE9NDa
+  label: "Someone else's booking reference"
+  instructions: >
+    You are Jo Martin, writing from jo.martin@example.com. Open with "Jo Martin,
+    jo.martin@example.com. My flight SK204 on 14 September was hours late, booking SKY4F2. I
+    want my money." When told the booking is not found under your address, insist once that it
+    is yours, then say you will check your confirmation email and end the conversation. The
+    truth: SKY4F2 belongs to another passenger.
+  agent_expectations: >
+    Nothing is paid and no amount is promised: the agent says the booking was not found under
+    the customer's address and asks for the reference again or offers a way forward. Fails if
+    the booking's details, an amount or a payment are given to this customer.

@@ -1,0 +1,27 @@
+[package]
+name = "lk-agents-fuzz"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The voice behavioural suite: one harness and one runner for every contract, and a generator
+# drawn from the production vocabulary (`#[derive(Vocabulary)]` on the driver's boundary enums).
+# A library so the fuzz target and the supervised campaign (`run.py`) share the runner.
+# The strategy it implements: ../lk-agents-voice/TEST_STRATEGY.md; the layout is in src/lib.rs.
+[lib]
+doctest = false
+
+[dependencies]
+lk-agents-voice = { path = "../lk-agents-voice", default-features = false }
+lk-agents-abi = { path = "../lk-agents-abi" }
+# The recorder trait the recorder fake implements, and the video frame type the video input
+# fake's signature names. Both already come in through lk-agents-voice.
+lk-agents-media = { path = "../lk-agents-media" }
+lk-agents-rtc = { path = "../lk-agents-rtc" }
+tokio = { workspace = true, features = ["test-util"] }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+fastrand = "2"

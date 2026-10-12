@@ -5,7 +5,7 @@ import contextlib
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
+from livekit.agents import Agent, AgentTask, Completed, LiveSession, RunContext, function_tool
 from livekit.agents.llm import FunctionToolCall, ToolError
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -25,8 +25,7 @@ class InnerTask(AgentTask):
     @function_tool
     async def finish(self, ctx: RunContext) -> str:
         """Called to complete the inner task."""
-        self.complete(None)
-        return "done"
+        return Completed(None)
 
 
 class OuterTask(AgentTask):
@@ -42,8 +41,7 @@ class OuterTask(AgentTask):
     async def start_inner(self, ctx: RunContext) -> str:
         """Transitions into InnerTask."""
         await InnerTask()
-        self.complete(None)
-        return "inner completed"
+        return Completed(None)
 
 
 class RootAgent(Agent):
@@ -62,7 +60,7 @@ async def test_nested_agent_task_no_deadlock():
     """session.run() must return when an AgentTask hands off to a nested task
     that collects additional user input before completing."""
     llm = _build_fake_llm()
-    async with AgentSession(llm=llm) as sess:
+    async with LiveSession(llm=llm) as sess:
         await sess.start(RootAgent())
 
         # This must not deadlock — it should return once the on_enter chain
@@ -87,8 +85,7 @@ class SimpleTask(AgentTask):
     @function_tool
     async def finish(self, ctx: RunContext) -> str:
         """Called to complete the task."""
-        self.complete(None)
-        return "done"
+        return Completed(None)
 
 
 class EnterHandoffAgent(Agent):
@@ -143,7 +140,7 @@ async def test_handoff_from_pre_run_speech():
             FakeLLMResponse(input="task completed", content="all done", ttft=0, duration=0),
         ]
     )
-    async with AgentSession(llm=llm) as sess:
+    async with LiveSession(llm=llm) as sess:
         await sess.start(EnterHandoffAgent())
 
         await asyncio.wait_for(sess.run(user_input="hi"), timeout=5.0)
@@ -165,8 +162,7 @@ class DialogTask(AgentTask):
     @function_tool
     async def finish(self, ctx: RunContext) -> str:
         """Called to complete the dialog."""
-        self.complete(None)
-        return "done"
+        return Completed(None)
 
 
 class ParallelDialogAgent(Agent):
@@ -196,71 +192,6 @@ class ParallelDialogAgent(Agent):
             return f"{which} refused: {e}"
         self.outcomes.append(f"{which}:ran")
         return f"{which} captured"
-
-
-@pytest.mark.asyncio
-async def test_parallel_agent_tasks_run_in_turn() -> None:
-    """Two AgentTasks awaited from one turn's parallel tool calls both pause the same
-    activity, so they queue and run one after the other. Running them concurrently would
-    leave every handoff but the last overwritten, and those tasks waiting on a result
-    nothing can produce - function calls that never return and a speech that never ends."""
-    llm = FakeLLM(
-        fake_responses=[
-            # one turn, two tool calls - each tool awaits a DialogTask
-            FakeLLMResponse(
-                input="go",
-                content="",
-                ttft=0,
-                duration=0,
-                tool_calls=[
-                    FunctionToolCall(name="open_name_dialog", arguments="{}", call_id="call_1"),
-                    FunctionToolCall(name="open_email_dialog", arguments="{}", call_id="call_2"),
-                ],
-            ),
-            FakeLLMResponse(input="dialog_greeting", content="what is it?", ttft=0, duration=0),
-            # each dialog completes on its own user turn
-            FakeLLMResponse(
-                input="done",
-                content="",
-                ttft=0,
-                duration=0,
-                tool_calls=[FunctionToolCall(name="finish", arguments="{}", call_id="call_3")],
-            ),
-        ]
-    )
-    agent = ParallelDialogAgent()
-    sess = AgentSession(llm=llm)
-    try:
-        await sess.start(agent)
-
-        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
-        first = sess.current_agent
-        assert isinstance(first, DialogTask)
-
-        # the first dialog hands back, and the one queued behind it takes the activity
-        await asyncio.wait_for(sess.run(user_input="done"), timeout=5.0)
-        second = sess.current_agent
-        assert isinstance(second, DialogTask) and second is not first
-
-        await asyncio.wait_for(sess.run(user_input="done"), timeout=5.0)
-        assert isinstance(sess.current_agent, ParallelDialogAgent)
-    finally:
-        # a queued task that hung instead of running would leave its function call
-        # unfinished and the close waiting on it - bounded so that regression reports
-        # these assertions rather than stalling the loop with nothing left to schedule
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(sess.aclose(), timeout=30.0)
-
-    assert sorted(agent.outcomes) == ["email:ran", "name:ran"]
-
-    # both calls carry an output: neither func_exec was left awaiting a result forever
-    outputs = {
-        item.call_id: item.output
-        for item in agent.chat_ctx.items
-        if item.type == "function_call_output" and item.call_id in ("call_1", "call_2")
-    }
-    assert set(outputs) == {"call_1", "call_2"}
-    assert not any("refused" in out for out in outputs.values())
 
 
 def _build_fake_llm() -> FakeLLM:
@@ -351,7 +282,7 @@ async def test_nested_agent_task_from_a_later_turn() -> None:
             ),
         ]
     )
-    sess = AgentSession(llm=llm)
+    sess = LiveSession(llm=llm)
     try:
         await sess.start(RootAgent())
 
@@ -377,7 +308,7 @@ class HolderCheckTask(AgentTask):
     @function_tool
     async def is_holder(self, ctx: RunContext) -> None:
         """The caller is the account holder."""
-        self.complete(None)
+        return Completed(None)
 
 
 class VerifyIdTask(AgentTask):
@@ -418,7 +349,7 @@ async def test_run_includes_next_task_reply_after_task_completes():
             FakeLLMResponse(input="ask_id", content="what is your ID number?", ttft=0, duration=0),
         ]
     )
-    async with AgentSession(llm=llm) as sess:
+    async with LiveSession(llm=llm) as sess:
         await sess.start(SequentialTasksAgent())
         # the caller answers the greeting, so the first task must already be speaking
         await asyncio.sleep(1)

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from livekit.agents.job import get_job_context
 from livekit.agents.types import NOT_GIVEN
-from livekit.agents.voice.agent_session import AgentSession
+from livekit.agents.voice.agent_session import LiveSession
 from livekit.agents.voice.events import CloseEvent
 
 from ._payload import (
@@ -153,7 +153,7 @@ class ExternalLinkInput(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class RecordingResolutionContext:
-    session: AgentSession[Any]
+    session: LiveSession[Any]
     report: SessionReportLike
     job_ctx: JobContext | None
     close_event: CloseEvent | None
@@ -247,7 +247,7 @@ class _SessionMonitor:
         self,
         *,
         runtime: HammingRuntime,
-        session: AgentSession[Any],
+        session: LiveSession[Any],
         participant_identity: str | None,
         participant_metadata: str | None,
         external_agent_id: str,
@@ -978,7 +978,7 @@ class HammingRuntime:
 
     def attach_session(
         self,
-        session: AgentSession[Any],
+        session: LiveSession[Any],
         *,
         job_ctx: JobContext | None = None,
         participant_identity: str | None = None,
@@ -1039,7 +1039,7 @@ class HammingRuntime:
 
     def build_report(
         self,
-        session: AgentSession[Any],
+        session: LiveSession[Any],
         job_ctx: JobContext | None,
     ) -> SessionReportLike:
         active_job_ctx = job_ctx or _safe_get_job_context()
@@ -1076,7 +1076,7 @@ def configure_runtime(config: HammingConfig) -> HammingRuntime:
 
 
 def attach_session(
-    session: AgentSession[Any],
+    session: LiveSession[Any],
     *,
     job_ctx: JobContext | None = None,
     participant_identity: str | None = None,
@@ -1558,13 +1558,13 @@ def _build_sampling_config(*, rate: float, key: str) -> ResolvedSamplingConfig:
     return ResolvedSamplingConfig(rate=rate, key=normalized_key)
 
 
-def _wrap_session_start_for_recording(session: AgentSession[Any]) -> None:
+def _wrap_session_start_for_recording(session: LiveSession[Any]) -> None:
     if getattr(session, "_hamming_auto_record_wrapped", False):
         return
 
     original_start = session.start
 
-    async def _wrapped_start(self: AgentSession[Any], *args: Any, **kwargs: Any) -> Any:
+    async def _wrapped_start(self: LiveSession[Any], *args: Any, **kwargs: Any) -> Any:
         record = kwargs.get("record", NOT_GIVEN)
         if record is NOT_GIVEN or record is None:
             kwargs["record"] = _default_auto_recording_options()

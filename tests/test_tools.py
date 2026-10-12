@@ -1108,6 +1108,34 @@ class TestExecuteFunctionCallToolResult:
         assert result.raw_output is tool_result
         assert result.raw_exception is None
 
+    async def test_models_and_dataclasses_reach_the_model_as_json(self) -> None:
+        from dataclasses import dataclass
+
+        from pydantic import BaseModel
+
+        from livekit.agents.llm import FunctionToolCall, execute_function_call
+
+        class Seat(BaseModel):
+            row: int
+
+        @dataclass
+        class Flight:
+            number: str
+            seats: list[Seat]
+
+        @function_tool
+        async def flights() -> list[Flight]:
+            """The flights."""
+            return [Flight("SK204", [Seat(row=3)])]
+
+        result = await execute_function_call(
+            FunctionToolCall(name="flights", arguments="{}", call_id="f-1"),
+            ToolContext([flights]),
+        )
+
+        assert not result.fnc_call_out.is_error
+        assert result.fnc_call_out.output == '[{"number":"SK204","seats":[{"row":3}]}]'
+
     async def test_invalid_wrapped_output_still_reports_an_error(self) -> None:
         from livekit.agents.llm import FunctionToolCall, execute_function_call
 
@@ -1435,9 +1463,9 @@ class TestAsyncToolOptions:
         # session-level options are resolved and stored at __init__; the actual
         # wiring onto toolset executors happens later at activity start (so
         # toolsets added after session.__init__ are picked up).
-        from livekit.agents.voice.agent_session import AgentSession
+        from livekit.agents.voice.agent_session import LiveSession
 
-        session = AgentSession(tool_handling={"async_options": {"update_template": "from-session"}})
+        session = LiveSession(tool_handling={"async_options": {"update_template": "from-session"}})
         assert session._async_tool_options["update_template"] == "from-session"
         # other keys fall back to defaults, not to anything else
         assert "{function_name}" in session._async_tool_options["duplicate_reject_template"]
@@ -2112,9 +2140,9 @@ class TestAgentSessionWaitForIdle:
         """wait_for_idle raises instead of spinning when no activity has started."""
         import asyncio as _asyncio
 
-        from livekit.agents.voice.agent_session import AgentSession
+        from livekit.agents.voice.agent_session import LiveSession
 
-        session = AgentSession()
+        session = LiveSession()
         with pytest.raises(RuntimeError, match="no active AgentActivity"):
             _asyncio.get_event_loop().run_until_complete(session.wait_for_idle())
 
@@ -2166,12 +2194,17 @@ def _make_reply_session(speech: Any) -> Any:
 
     session = MagicMock()
     agent = MagicMock()
-    agent.chat_ctx = ChatContext.empty()
-    agent.update_chat_ctx = AsyncMock()
     session.current_agent = agent
     session._global_run_state = None
     activity = MagicMock()
     activity.agent = agent
+    activity._chat_ctx = ChatContext.empty()
+
+    async def _update_chat_ctx(chat_ctx: ChatContext) -> None:
+        activity._chat_ctx = chat_ctx
+
+    activity.update_chat_ctx = AsyncMock(side_effect=_update_chat_ctx)
+    session._current_activity_or_raise = MagicMock(return_value=activity)
     session.wait_for_idle = AsyncMock(return_value=activity)
     session.generate_reply = MagicMock(return_value=speech)
     return session
@@ -2433,7 +2466,7 @@ class TestToolCallEvents:
             if executor._reply_task is not None:
                 await executor._reply_task
 
-            for chat_ctx in (agent.chat_ctx, session.history):
+            for chat_ctx in (activity._chat_ctx, session.history):
                 calls = [item.call_id for item in chat_ctx.items if item.type == "function_call"]
                 assert set(calls) == {f"{index}_final" for index in range(len(reply_flags))}
                 outputs = {

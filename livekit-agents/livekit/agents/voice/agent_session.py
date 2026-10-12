@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import copy
 import time
+import warnings
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from contextvars import Token
@@ -25,7 +26,7 @@ from google.protobuf.json_format import ParseDict
 from google.protobuf.struct_pb2 import Struct
 from opentelemetry import context as otel_context, trace
 from opentelemetry.sdk.trace import ReadableSpan
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, TypeVar as TypeVar_
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
@@ -74,6 +75,7 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    SpeechCreatedEvent,
     ToolCallEnded,
     ToolExecutionUpdatedEvent,
     UserInputTranscribedEvent,
@@ -110,6 +112,8 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
+    from ..storage.live import LiveLane
+    from ..storage.resolve import Thread
     from .transcription.text_transforms import TextTransforms
 
 
@@ -124,7 +128,7 @@ class RecordingOptions(TypedDict, total=False):
     means "record everything except logs." Redaction defaults to the project setting;
     ``False`` is ignored when redaction is enabled globally for the project.
 
-    Can be passed directly to :pymethod:`AgentSession.start(record=...)`:
+    Can be passed directly to :pymethod:`LiveSession.start(record=...)`:
 
     * ``record=True``  → all on (backward compatible)
     * ``record=False`` → all off (backward compatible)
@@ -236,7 +240,7 @@ DEFAULT_SPEECH_STEERING_OPTIONS: SpeechSteeringOptions = SpeechSteeringOptions(d
 
 
 class ExpressiveOptions(TypedDict, total=False):
-    """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``
+    """Configuration for the expressive pipeline, passed as ``LiveSession(expressive=...)``
     or ``Agent(expressive=...)`` (the agent value overrides the session's).
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
@@ -337,7 +341,7 @@ class AgentSessionOptions:
         return self.turn_handling["preemptive_generation"]
 
 
-Userdata_T = TypeVar("Userdata_T")
+Userdata_T = TypeVar_("Userdata_T", default=Any)  # LiveSession(...) with no userdata
 Run_T = TypeVar("Run_T")
 
 # _RunContextVar = contextvars.ContextVar[RunResult]("agents_run_state")
@@ -345,7 +349,7 @@ Run_T = TypeVar("Run_T")
 
 @runtime_checkable
 class _VideoSampler(Protocol):
-    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool: ...
+    def __call__(self, frame: rtc.VideoFrame, session: LiveSession) -> bool: ...
 
 
 # TODO(theomonnom): Should this be moved to another file?
@@ -355,7 +359,7 @@ class VoiceActivityVideoSampler:
         self.silent_fps = silent_fps
         self._last_sampled_time: float | None = None
 
-    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool:
+    def __call__(self, frame: rtc.VideoFrame, session: LiveSession) -> bool:
         now = time.time()
         is_speaking = session.user_state == "speaking"
         target_fps = self.speaking_fps if is_speaking else self.silent_fps
@@ -377,7 +381,7 @@ class VoiceActivityVideoSampler:
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
 
-class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @deprecate_params(
         {
             "min_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
@@ -416,6 +420,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_consecutive_speech_delay: float = 0.0,
         expressive: bool | ExpressiveOptions = False,
         # Misc settings
+        state: Any = None,
+        deps: Any = None,
+        thread: Thread | None = None,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         aec_warmup_duration: NotGivenOr[float | None] = NOT_GIVEN,
@@ -441,7 +448,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         keyterms_options: NotGivenOr[KeytermsOptions] = NOT_GIVEN,
     ) -> None:
-        """`AgentSession` is the LiveKit Agents runtime that glues together
+        """`LiveSession` is the LiveKit Agents runtime that glues together
         media streams, speech/LLM components, and tool orchestration into a
         single real-time voice agent.
 
@@ -470,6 +477,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can be overridden per-``Agent`` or per-``AsyncToolset``.
             mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
                 providing external tools for the agent to use.
+            state: The state instance for this session, read as ``ctx.state`` by the tools
+                and mutated in place; a job may start with what the dispatch knew.
+            deps: What the tools need for this call, read as ``ctx.deps``; never saved.
+            thread: The call's durable thread, ``ctx.thread`` in an ``rtc_session``: the
+                agent's lane is loaded at ``start()`` and each reply committed to it. Omitted,
+                the history is kept in memory and not saved. When a text moved the lane during
+                the call, the history and state are reloaded before the next voice turn.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
             turn_handling (TurnHandlingOptions, optional): Configuration for turn handling.
             stt_context_options (STTContextOptions, optional): Conversation-aware context for the
@@ -661,7 +675,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._mcp_servers = mcp_servers or None
         if self._mcp_servers:
             logger.warning(
-                "passing MCP servers to AgentSession or Agent is deprecated "
+                "passing MCP servers to LiveSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._tools = tools if is_given(tools) else []
@@ -707,11 +721,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
         self._next_activity: AgentActivity | None = None
+        # the agent to activity map: an agent holds no runtime state, the session knows which
+        # of its activities runs (or has paused) which agent
+        self._activities: dict[int, AgentActivity] = {}
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
+        self._deps: Any = deps
+        self._state: Any = state
+        self._thread = thread
+        # the agent's lane on the storage, opened at start() (storage/live.py)
+        self._live_lane: LiveLane | None = None
         self._closing_task: asyncio.Task[None] | None = None
         self._closing: bool = False
         self._job_context_cb_registered: bool = False
@@ -780,13 +802,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
-            raise ValueError("AgentSession userdata is not set")
+            raise ValueError("LiveSession userdata is not set")
 
         return self._userdata
 
     @userdata.setter
     def userdata(self, value: Userdata_T) -> None:
         self._userdata = value
+
+    @property
+    def deps(self) -> Any:
+        """What the tools need for this call, read as ``ctx.deps``."""
+        return self._deps
+
+    @property
+    def state(self) -> Any:
+        """The session's typed state, read as ``ctx.state``."""
+        return self._state
+
+    @property
+    def thread(self) -> Thread | None:
+        """The durable thread this call writes to, ``None`` when kept in memory."""
+        return self._thread
 
     @property
     def turn_detection(self) -> TurnDetectionMode | None:
@@ -876,6 +913,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         agent: Agent,
         *,
         capture_run: Literal[True],
+        chat_ctx: llm.ChatContext | None = None,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
@@ -891,6 +929,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         agent: Agent,
         *,
         capture_run: Literal[False] = False,
+        chat_ctx: llm.ChatContext | None = None,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
@@ -905,6 +944,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         agent: Agent,
         *,
         capture_run: bool = False,
+        chat_ctx: llm.ChatContext | None = None,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
@@ -920,6 +960,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Args:
             capture_run: Whether to return a RunResult and capture the run result during session start.
+            chat_ctx: The history the agent starts from. Without it the session's own history
+                continues, empty on a fresh session.
             room: The room to use for input and output
             session_host: Whether a `RemoteSession` can drive and observe this session
                 over the room. Defaults to True, or False when another session in the
@@ -958,7 +1000,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     if recording_enabled(self._opts.recording_options):
                         if record_is_given:
                             raise RuntimeError(
-                                "Only one `AgentSession` can be the primary at a time. "
+                                "Only one `LiveSession` can be the primary at a time. "
                                 "If you want to ignore primary designation, "
                                 "use session.start(record=False)."
                             )
@@ -1014,6 +1056,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._agent = agent
             self._update_agent_state("initializing")
+
+            if self._thread is not None:
+                await self._open_live_lane(self._thread, agent)
 
             tasks: list[asyncio.Task[None]] = []
 
@@ -1138,7 +1183,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # _update_activity_task also watches on_enter on the run state: without it
             # the run completes as soon as the first speech does, dropping whatever
             # on_enter produces next — and never completes when on_enter says nothing.
-            tasks.append(asyncio.create_task(self._update_activity_task(None, self._agent)))
+            tasks.append(
+                asyncio.create_task(
+                    self._update_activity_task(None, self._agent, chat_ctx=chat_ctx)
+                )
+            )
 
             try:
                 try:
@@ -1196,7 +1245,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             transcript_output = _collect_chain(self.output.transcription)
 
             logger.debug(
-                "using audio io: %s -> `AgentSession` -> %s",
+                "using audio io: %s -> `LiveSession` -> %s",
                 " -> ".join([f"`{out.label}`" for out in audio_input]) or "(none)",
                 " -> ".join([f"`{out.label}`" for out in audio_output]) or "(none)",
             )
@@ -1211,13 +1260,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
             logger.debug(
-                "using transcript io: `AgentSession` -> %s",
+                "using transcript io: `LiveSession` -> %s",
                 " -> ".join([f"`{out.label}`" for out in transcript_output]) or "(none)",
             )
 
             if video_input or video_output:
                 logger.debug(
-                    "using video io: %s > `AgentSession` > %s",
+                    "using video io: %s > `LiveSession` > %s",
                     " -> ".join([f"`{out.label}`" for out in video_input]) or "(none)",
                     " -> ".join([f"`{out.label}`" for out in video_output]) or "(none)",
                 )
@@ -1229,7 +1278,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     async def drain(self) -> None:
         if self._activity is None:
-            raise RuntimeError("AgentSession isn't running")
+            raise RuntimeError("LiveSession isn't running")
 
         await self._activity.drain()
 
@@ -1237,7 +1286,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def room_io(self) -> room_io.RoomIO:
         if not self._room_io:
             raise RuntimeError(
-                "Cannot access room_io: the AgentSession was not started with a room."
+                "Cannot access room_io: the LiveSession was not started with a room."
             )
 
         return self._room_io
@@ -1324,6 +1373,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._started = False
 
+                if self._live_lane is not None:
+                    await self._live_lane.close()
+                    self._live_lane = None
+
                 self.emit("close", CloseEvent(error=error, reason=reason))
 
                 if self._session_host:
@@ -1374,8 +1427,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             agent_task.cancel()
             await agent_task._wait_for_inactive()
 
-            if old_agent := agent_task._old_agent:
-                activity = old_agent._activity
+            if old_activity := agent_task._old_activity:
+                activity = old_activity
             else:
                 break
 
@@ -1547,15 +1600,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise RuntimeError("AgentSession isn't running")
+            raise RuntimeError("LiveSession isn't running")
 
         run_state = self._global_run_state
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
         if activity is None:
-            raise RuntimeError("AgentSession is closing, cannot use say()")
+            raise RuntimeError("LiveSession is closing, cannot use say()")
 
-        # attach to the session span if called outside of the AgentSession
+        # attach to the session span if called outside of the LiveSession
         use_span: AbstractContextManager[trace.Span | None] = nullcontext()
         if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
             use_span = tracer.use_span(self._session_span, end_on_exit=False)
@@ -1608,7 +1661,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ``handle.exception()`` for the failure instead.
         """  # noqa: E501
         if self._activity is None:
-            raise RuntimeError("AgentSession isn't running")
+            raise RuntimeError("LiveSession isn't running")
 
         user_message = (
             llm.ChatMessage(role="user", content=[user_input])
@@ -1620,9 +1673,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
         if activity is None:
-            raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+            raise RuntimeError("LiveSession is closing, cannot use generate_reply()")
 
-        # attach to the session span if called outside of the AgentSession
+        # attach to the session span if called outside of the LiveSession
         use_span: AbstractContextManager[trace.Span | None] = nullcontext()
         if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
             use_span = tracer.use_span(self._session_span, end_on_exit=False)
@@ -1657,7 +1710,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 playing disallows interruptions and ``force`` is False.
         """
         if self._activity is None:
-            raise RuntimeError("AgentSession isn't running")
+            raise RuntimeError("LiveSession isn't running")
 
         return self._activity.interrupt(force=force)
 
@@ -1711,7 +1764,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn
         if self._activity is None:
-            raise RuntimeError("AgentSession isn't running")
+            raise RuntimeError("LiveSession isn't running")
 
         self._activity.clear_user_turn()
 
@@ -1740,10 +1793,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             asyncio.Future[str]: A future that resolves with the audio transcript.
 
         Raises:
-            RuntimeError: If the AgentSession isn't running.
+            RuntimeError: If the LiveSession isn't running.
         """
         if self._activity is None:
-            raise RuntimeError("AgentSession isn't running")
+            raise RuntimeError("LiveSession isn't running")
 
         return self._activity.commit_user_turn(
             transcript_timeout=transcript_timeout,
@@ -1751,7 +1804,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             skip_reply=skip_reply,
         )
 
-    def update_agent(self, agent: Agent) -> None:
+    def update_agent(self, agent: Agent, *, chat_ctx: llm.ChatContext | None = None) -> None:
+        """Hand the conversation to ``agent``.
+
+        Args:
+            agent: The agent that takes over.
+            chat_ctx: A different history for it to work on. Without it the current history
+                continues, as it does on a handoff returned from a tool.
+        """
         self._agent = agent
 
         if self._started:
@@ -1761,7 +1821,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._activity._new_turns_blocked = True
 
             self._update_activity_atask = task = asyncio.create_task(
-                self._update_activity_task(self._update_activity_atask, self._agent),
+                self._update_activity_task(
+                    self._update_activity_atask, self._agent, chat_ctx=chat_ctx
+                ),
                 name="_update_activity_task",
             )
             run_state = self._global_run_state
@@ -1784,7 +1846,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             activity = self._activity
             if activity is None:
-                raise RuntimeError("AgentSession has no active AgentActivity")
+                raise RuntimeError("LiveSession has no active AgentActivity")
 
             try:
                 await activity.wait_for_idle()
@@ -1835,6 +1897,52 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # the way out of the inner block covers a floor that never arrives
                 guard.set_result(None)
 
+    def _current_activity_or_raise(self) -> AgentActivity:
+        if self._activity is None:
+            raise RuntimeError("LiveSession isn't running")
+        return self._activity
+
+    def _activity_of(self, agent: Agent) -> AgentActivity | None:
+        """The activity running or holding ``agent`` in this session, if any."""
+        return self._activities.get(id(agent))
+
+    def _bind_activity(self, activity: AgentActivity) -> None:
+        self._activities[id(activity.agent)] = activity
+
+    def _unbind_activity(self, activity: AgentActivity) -> None:
+        if self._activities.get(id(activity.agent)) is activity:
+            del self._activities[id(activity.agent)]
+
+    async def _open_live_lane(self, thread: Thread, agent: Agent) -> None:
+        """Plan 3.3.7: the agent's lane on the thread, loaded before the first activity."""
+        from ..storage.live import LiveLane
+
+        self._live_lane = LiveLane(
+            thread.storage,
+            thread.id,
+            agent_name=thread.agent_name or agent.id,
+            history=self._chat_ctx,
+            state=self._state,
+        )
+        self._state = await self._live_lane.open()
+
+        def on_speech_created(ev: SpeechCreatedEvent) -> None:
+            lane = self._live_lane
+            if lane is not None:
+                ev.speech_handle.add_done_callback(lambda _: lane.turn_ended())
+
+        self.on("speech_created", on_speech_created)
+
+    def _continued_chat_ctx(self) -> llm.ChatContext:
+        """The history a new activity continues: the current activity's, or the session's.
+
+        After a close and restart there is no activity, so the session's own history serves,
+        without the handoff and configuration records that only the journal keeps.
+        """
+        if self._activity is not None:
+            return self._activity._chat_ctx
+        return self._chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
+
     async def _update_activity(
         self,
         agent: Agent,
@@ -1843,6 +1951,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         new_activity: Literal["start", "resume"] = "start",
         blocked_tasks: list[asyncio.Task] | None = None,
         wait_on_enter: bool = True,
+        chat_ctx: llm.ChatContext | None = None,
     ) -> None:
         async with self._activity_lock:
             if self._closing and new_activity == "start":
@@ -1857,18 +1966,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if new_activity == "start":
                 previous_agent = self._activity.agent if self._activity else None
-                if agent._activity is not None and (
+                if self._activity_of(agent) is not None and (
                     # allow updating the same agent that is running
                     agent is not previous_agent or previous_activity != "close"
                 ):
                     raise RuntimeError("cannot start agent: an activity is already running")
 
-                self._next_activity = AgentActivity(agent, self)
+                self._next_activity = AgentActivity(
+                    agent, self, chat_ctx=chat_ctx or self._continued_chat_ctx()
+                )
             elif new_activity == "resume":
-                if agent._activity is None:
+                resumed = self._activity_of(agent)
+                if resumed is None:
                     raise RuntimeError("cannot resume agent: no existing active activity to resume")
 
-                self._next_activity = agent._activity
+                self._next_activity = resumed
 
             if self._root_span_context is not None:
                 # restore the root span context so on_exit, on_enter, and future turns
@@ -1976,12 +2088,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(
-        self, old_task: asyncio.Task[None] | None, agent: Agent
+        self,
+        old_task: asyncio.Task[None] | None,
+        agent: Agent,
+        *,
+        chat_ctx: llm.ChatContext | None = None,
     ) -> None:
         if old_task is not None:
             await old_task
 
-        await self._update_activity(agent, wait_on_enter=False)
+        await self._update_activity(agent, wait_on_enter=False, chat_ctx=chat_ctx)
 
         # watch on_enter so the run captures its output without awaiting it
         if (activity := self._activity) is not None and activity._on_enter_task is not None:
@@ -1992,7 +2108,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """:meta private: internal — emit a debug/trace payload to the debugger/recorder."""
         st = Struct()
         ParseDict(payload, st)
-        # super().emit bypasses AgentSession.emit's narrowed AgentEvent type;
+        # super().emit bypasses LiveSession.emit's narrowed AgentEvent type;
         # debug messages ride the proto, not the Pydantic event union.
         super().emit("debug_message", agent_pb.DebugMessage(payload=st))
 
@@ -2016,10 +2132,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return
 
         if isinstance(error.error, APIError):
-            logger.error(f"AgentSession is closing due to unrecoverable error: {error.error}")
+            logger.error(f"LiveSession is closing due to unrecoverable error: {error.error}")
         else:
             logger.error(
-                "AgentSession is closing due to unrecoverable error",
+                "LiveSession is closing due to unrecoverable error",
                 exc_info=error.error,
             )
 
@@ -2304,6 +2420,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
+        if message.role == "user" and self._live_lane is not None:
+            # the person's turn ended: the lane is held until the reply is committed
+            self._live_lane.turn_started()
         if text := message.raw_text_content:
             logger.debug(
                 "conversation_item_added",
@@ -2405,7 +2524,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     # ---
 
-    async def __aenter__(self) -> AgentSession:
+    async def __aenter__(self) -> LiveSession:
         return self
 
     async def __aexit__(
@@ -2415,3 +2534,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+
+def __getattr__(name: str) -> Any:
+    if name == "AgentSession":
+        warnings.warn(
+            "AgentSession is deprecated and will be removed in the next release, "
+            "use LiveSession instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return LiveSession
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

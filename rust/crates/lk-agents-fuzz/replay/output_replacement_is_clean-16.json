@@ -1,0 +1,471 @@
+{
+  "case": {
+    "setup": {
+      "stt": false,
+      "turn": "Default",
+      "preemptive": false,
+      "tools": [
+        "lookup"
+      ],
+      "max_tool_steps": null,
+      "instructions": "You are a test agent.",
+      "max_unrecoverable_errors": 3,
+      "hook_bound_ms": null
+    },
+    "inputs": [
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "Words",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "SetAudioInput": {
+          "attach": true
+        }
+      },
+      {
+        "UpdateTools": {
+          "tools": [
+            "lookup_order",
+            "billing_agent",
+            "agent-2"
+          ]
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Yes... no, wait -- actually, let me check that again.",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "my number is five five five, oh one four seven",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "uh let me think... okay so it was last tuesday I think? maybe wednesday",
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "PushVideo": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "allow": null
+        }
+      },
+      {
+        "Say": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "UpdateChatCtx": {
+          "items": [
+            "User"
+          ],
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?"
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Yes... no, wait -- actually, let me check that again.",
+          "allow": null
+        }
+      },
+      {
+        "Say": {
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "allow": true
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "Llm"
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 120
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": false
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "billing_agent",
+          "args": "{}"
+        }
+      },
+      {
+        "Run": {
+          "user_input": null,
+          "expects_output": false,
+          "retries": 2
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "caller",
+          "args": "{}"
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "LlmAndTts"
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Ivr": {
+          "input": "Start",
+          "silence": 20,
+          "text": "my number is five five five, oh one four seven"
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 4,
+          "name": "agent-2",
+          "args": "{}"
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 1000,
+          "stt_flush": 5000,
+          "skip_reply": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "InterruptSpeech": {
+          "speech": 6,
+          "force": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 2,
+          "name": "sip_1",
+          "args": "{}"
+        }
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "FeedText": {
+          "stream": 1,
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text."
+        }
+      },
+      {
+        "Handoff": {
+          "agent": "transfer",
+          "instructions": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "tools": [],
+          "pause_previous": false,
+          "resume": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 2,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 5,
+          "name": "agent-2",
+          "args": "{}"
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "InterruptSpeech": {
+          "speech": 5,
+          "force": false
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 1,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 5,
+          "name": "sip_1",
+          "args": "{}"
+        }
+      },
+      {
+        "Handoff": {
+          "agent": "transfer",
+          "instructions": "Let me pull up your account -- one moment.",
+          "tools": [
+            "transfer",
+            "agent-2"
+          ],
+          "pause_previous": true,
+          "resume": true
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 4,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "Close": {
+          "drain": true
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 1,
+          "name": "agent-2",
+          "args": "{}"
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "SetAudioOutput": {
+          "attach": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 2,
+          "name": "billing_agent",
+          "args": "{}"
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "agent-2",
+          "args": "{}"
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioOutput",
+          "enabled": true
+        }
+      },
+      {
+        "SetAllowInterruptions": {
+          "speech": 0,
+          "allow": true
+        }
+      },
+      {
+        "LlmFail": {
+          "chat": 3
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 4,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "LlmText": {
+          "chat": 1,
+          "text": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14."
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": false
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 5,
+          "name": "billing_agent",
+          "args": "{}"
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 4,
+          "name": "caller",
+          "args": "{}"
+        }
+      },
+      {
+        "FeedAudio": {
+          "stream": 0,
+          "chunks": 3
+        }
+      },
+      {
+        "LlmFail": {
+          "chat": 2
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 4,
+          "name": "caller",
+          "args": "{}"
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "WaitForIdle": {
+          "hold": null
+        }
+      },
+      {
+        "AwaitAnswer": {
+          "answer": 21
+        }
+      }
+    ]
+  },
+  "expect": {
+    "Fails": {
+      "contract": "output_replacement_is_clean",
+      "subject": {
+        "Resource": [
+          "Output",
+          0
+        ]
+      }
+    }
+  }
+}

@@ -33,7 +33,7 @@ from ._utils import (
 )
 
 if TYPE_CHECKING:
-    from ..voice import AgentSession
+    from ..voice import LiveSession
 
 # Fallback audio sample rate when the gateway response omits one. The gateway
 # is authoritative (it returns the per-provider rate) so this is only a
@@ -236,7 +236,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def start(
         self,
-        agent_session: AgentSession,
+        agent_session: LiveSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, stt
+from livekit.agents import Agent, LiveSession, stt
 
 from .fake_llm import FakeLLM
 from .fake_stt import FakeSTT
@@ -34,7 +34,7 @@ async def test_temporary_stream_adapter_is_closed_with_session() -> None:
         stt=stt_impl,
         vad=FakeVAD(),
     )
-    session = AgentSession(
+    session = LiveSession(
         vad=None,
         turn_handling={"turn_detection": None},
         session_close_transcript_timeout=0.0,

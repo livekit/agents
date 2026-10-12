@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import AgentSession, inference
+from livekit.agents import LiveSession, inference
 from livekit.agents.telemetry.traces import (
     _describe_option_object,
     _serialize_option_value,
@@ -40,7 +40,7 @@ def _assert_report_safe(value: Any) -> None:
 
 
 def test_default_turn_detector_is_described_not_reprd() -> None:
-    session = AgentSession()  # eager inference.TurnDetector() default
+    session = LiveSession()  # eager inference.TurnDetector() default
     serialized = _serialize_session_options(session.options)
 
     td = _turn_detection(serialized)
@@ -83,10 +83,10 @@ def test_turn_detector_description_leaks_no_credentials() -> None:
 
 
 def test_mode_strings_pass_through() -> None:
-    session = AgentSession(turn_handling={"turn_detection": "vad"})
+    session = LiveSession(turn_handling={"turn_detection": "vad"})
     assert _turn_detection(_serialize_session_options(session.options)) == "vad"
 
-    session = AgentSession(turn_handling={"turn_detection": "manual"})
+    session = LiveSession(turn_handling={"turn_detection": "manual"})
     assert _turn_detection(_serialize_session_options(session.options)) == "manual"
 
 
@@ -158,7 +158,7 @@ def test_custom_sequence_and_set_values_keep_their_elements() -> None:
 def test_customer_prompt_text_is_omitted() -> None:
     # a keyterm-detection prompt override is customer-authored text; it never reaches the
     # report, at any nesting depth
-    session = AgentSession(
+    session = LiveSession(
         stt_context_options={
             "keyterms": ["Acme"],
             "keyterm_detection": {

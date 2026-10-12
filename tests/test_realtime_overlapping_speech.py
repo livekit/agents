@@ -10,7 +10,7 @@ import time
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions, llm, utils
+from livekit.agents import Agent, LiveSession, TurnHandlingOptions, llm, utils
 
 from .fake_io import FakeAudioOutput
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
@@ -37,7 +37,7 @@ class _TracingAudioOutput(FakeAudioOutput):
 
 
 async def _start_speech(
-    session: AgentSession, model: FakeRealtimeModel
+    session: LiveSession, model: FakeRealtimeModel
 ) -> tuple[utils.aio.Chan[rtc.AudioFrame], utils.aio.Chan[str]]:
     """Drive one assistant generation and leave it mid-playout."""
     session.generate_reply()
@@ -88,7 +88,7 @@ async def test_speech_started_leaves_an_overlapping_model_alone() -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities(supports_overlapping_speech=True))
     audio_out = _TracingAudioOutput()
 
-    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+    async with LiveSession(llm=model, aec_warmup_duration=None) as session:
         session.output.audio = audio_out
         await session.start(Agent(instructions="be concise"))
         audio_ch, text_ch = await _start_speech(session, model)
@@ -115,7 +115,7 @@ async def test_speech_started_clears_buffered_playout() -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities(supports_overlapping_speech=False))
     audio_out = _TracingAudioOutput()
 
-    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+    async with LiveSession(llm=model, aec_warmup_duration=None) as session:
         session.output.audio = audio_out
         await session.start(Agent(instructions="be concise"))
         audio_ch, text_ch = await _start_speech(session, model)
@@ -143,7 +143,7 @@ async def test_audio_activity_interruption_stays_off_under_server_turn_detection
     )
     audio_out = _TracingAudioOutput()
 
-    async with AgentSession(llm=model, vad=FakeVAD(), aec_warmup_duration=None) as session:
+    async with LiveSession(llm=model, vad=FakeVAD(), aec_warmup_duration=None) as session:
         session.output.audio = audio_out
         await session.start(Agent(instructions="be concise"))
         audio_ch, text_ch = await _start_speech(session, model)
@@ -170,7 +170,7 @@ async def test_allow_interruptions_false_is_rejected_under_server_turn_detection
     model = FakeRealtimeModel(
         capabilities=fake_capabilities(supports_overlapping_speech=overlapping)
     )
-    async with AgentSession(
+    async with LiveSession(
         llm=model,
         turn_handling=TurnHandlingOptions(interruption={"enabled": False}),
         aec_warmup_duration=None,
@@ -185,7 +185,7 @@ async def test_the_model_speaks_over_a_caller_who_is_still_talking() -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities(supports_overlapping_speech=True))
     audio_out = _TracingAudioOutput(can_pause=True)
 
-    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+    async with LiveSession(llm=model, aec_warmup_duration=None) as session:
         session.output.audio = audio_out
         await session.start(Agent(instructions="be concise"))
         assert (activity := session._activity) is not None
@@ -208,7 +208,7 @@ async def test_a_model_that_cannot_overlap_still_waits_the_caller_out() -> None:
     # regression guard: the caller's turn keeps gating every other realtime model
     model = FakeRealtimeModel(capabilities=fake_capabilities(supports_overlapping_speech=False))
 
-    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+    async with LiveSession(llm=model, aec_warmup_duration=None) as session:
         session.output.audio = _TracingAudioOutput(can_pause=True)
         await session.start(Agent(instructions="be concise"))
         assert (activity := session._activity) is not None
@@ -232,7 +232,7 @@ async def test_client_side_turn_taking_takes_the_floor_back() -> None:
         )
     )
 
-    async with AgentSession(
+    async with LiveSession(
         llm=model,
         vad=FakeVAD(),
         turn_handling=TurnHandlingOptions(turn_detection="vad"),

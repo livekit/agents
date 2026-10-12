@@ -1,0 +1,209 @@
+/*
+ * The single source of truth for every color, size, radius and duration.
+ * Nothing else in this codebase may contain a raw color or a font stack.
+ * `pnpm guard` (scripts/check-tokens.mjs) fails the build if that happens.
+ *
+ * Values come from the Blender Design System 1.0 "Blender Dark" token set,
+ * extracted from the Penpot library, by way of memdata's tokens.css. The
+ * sections memdata needs for its documents (paper, page sheets, the carousel,
+ * document kinds, speaker hues) are not here: this app has no paper.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Room: the three-grey ramp, Blender Dark ---------------------- */
+  --room: #181818; /* editor base, the ground everything sits on */
+  --panel: #303030; /* panel base, dock windows, cards of chrome */
+  --raised: #3d3d3d; /* panel headers, buttons, raised affordances */
+  --sunken: #1d1d1d; /* text fields, tab strip, wells */
+  --header-tertiary: #363636;
+  --header-quaternary: #2f2f2f;
+  --control: #545454; /* button and number-field fill */
+
+  /* ---- Hairlines --------------------------------------------------- */
+  --line: #4a4a4a;
+  --line-weak: #262626;
+  --line-width: 1px;
+
+  /* ---- Ink --------------------------------------------------------- */
+  --text: #d8d8d8;
+  --text-label: #afafaf; /* dim label, secondary */
+  --text-strong: #ffffff;
+
+  /* ---- Accent -----------------------------------------------------
+   * Blender's selection blue. Every selected row, checked box, active
+   * toggle, slider fill and focus ring follows it.
+   * The accent is a state signal only. Never decoration.
+   */
+  --accent: #4772b3;
+  --accent-text: #ffffff;
+  /* The orb: the one colour on the stage. */
+  --orb: #4772b3;
+  /* The accent swatches (chrome/swatches.tsx), agents-playground's list: the swatch, then the
+     accent (fills, selection) and the orb it sets. */
+  /* Blender lightens the accent on hover. Deliberately not a colour token:
+     a `color-mix(... var(--accent) ...)` declared here resolves against the
+     value of --accent *at this element*, so a derived hover colour came out
+     wrong wherever --accent was overridden. A filter has no such problem. */
+  --accent-lift: brightness(1.16);
+
+  /* ---- Code: muted syntax, no green ------------------------------- */
+  --code-keyword: #7f9fc4;
+  --code-string: #c0a06a;
+  --code-number: #c08a8a;
+  --code-type: #a89ac4;
+  --code-comment: #7a7a7a;
+
+
+  /* ---- Status: attention only. Silence is good. No green. ---------- */
+  --attention: #ac8737; /* needs attention */
+  --failed: #771111; /* failed */
+  --failed-text: #d98080;
+
+  /* ---- Radius & stroke --------------------------------------------- */
+  --radius: 4px;
+  --radius-sm: 2px;
+  /* A message bubble: a pill, which is the one place the radius grows. */
+  --radius-bubble: 14px;
+
+  /* ---- Density: Blender's own metrics ------------------------------ */
+  --h-header: 25px; /* panel / window header */
+  --h-row: 20px; /* standard control row */
+  --h-row-sm: 18px; /* compact row */
+  --sz-checkbox: 14px;
+  /* A table's index gutter: wide enough for a two-digit number. */
+  --w-index: 1.4em;
+  /* The widest a conversation column gets: a measure, not a viewport. */
+  --w-measure: 720px;
+  /* The column a label takes in a key/value block. */
+  --w-label: 6.5em;
+  /* A relative time ("15m ago") and an offset from a call's start ("+12.4 s"). */
+  --w-time: 4.2em;
+  --w-offset: 4.5em;
+  /* The widest a device name gets in the call bar before it is cut. */
+  --w-device: 14em;
+  /* The conversation list on the left. */
+  /* A conversation chip's title before it truncates, and the chip's height. */
+  --w-chip: 220px;
+  --h-chip: 28px;
+  /* A column of the Info view before the two wrap. */
+  --w-info: 320px;
+  /* The mark over the conversation: large on the empty stage, then beside the
+     name, compact once the thread is longer than the stage. */
+  --sz-mark-lg: 176px;
+  --sz-mark: 48px;
+  --sz-mark-sm: 32px;
+  /* The orb beside the agent's latest message and in the call bar. */
+  --sz-orb: 28px;
+  /* The composer: the one control with more air than Blender's row. */
+  --h-composer: 36px;
+  --sz-composer-btn: 28px;
+
+  --gap-row: 2px;
+  --pad-1: 2px;
+  --pad-2: 4px;
+  --pad-3: 8px;
+  --pad-4: 12px;
+  --pad-5: 16px;
+  --pad-6: 24px;
+
+  /* ---- Type -------------------------------------------------------- */
+  --font-ui: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "SF Mono", monospace;
+
+  --fs-window: 8px; /* window header, uppercase tracked */
+  --fs-micro: 11px;
+  --fs-ui: 12px; /* the chrome: a point over Blender's, for a chat */
+  /* The conversation itself: what people read at length. */
+  --fs-chat: 14px;
+  --lh-chat: 1.5;
+  /* The one large type on the page: the agent's name on the empty stage. */
+  --fs-title: 20px;
+  /* A side panel's title: a step over the body, under the stage's. */
+  --fs-title-sm: 14px;
+  /* The state line under the mark: a touch over the chrome size. */
+  --fs-state: 12px;
+  /* An inline tag at the end of a line ("interrupted"). */
+  --fs-tag: 10px;
+  --lh-ui: 1.35;
+  --tracking-label: 0.06em;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast: 150ms;
+  --dur: 170ms;
+  --dur-slow: 190ms;
+  /* One breath of the thinking dots. */
+  --dur-pulse: 1100ms;
+  /* A tooltip waits this long before it shows. */
+  --dur-tip: 400ms;
+
+  /* ---- Elevation ---------------------------------------------------
+   * Chrome keeps Blender's hard 1px offset.
+   */
+  --shadow: 0 1px 0 0 #000000;
+  --scrim: #00000099;
+}
+
+/* Reduced motion zeroes the tokens rather than shortening every transition
+   from `*`. A kill switch that set `transition-duration: 1ms !important` on
+   everything left `transition-property` at `all`, so every style write on
+   every element became a transition, including the ones flexlayout makes and
+   reads back in the same tick while a splitter is dragged. WebKit answered
+   those reads with the transition's start value, and the panes stopped
+   following the cursor for anyone with "Reduce motion" on. Every transition
+   in the app takes its duration from these tokens (the guard keeps it so),
+   and a 0s duration starts no transition at all. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0s;
+    --dur: 0s;
+    --dur-slow: 0s;
+    --dur-pulse: 0s;
+    --dur-tip: 0s;
+  }
+}
+
+/* The accent the person picked (chrome/swatches.tsx). */
+:root {
+  --swatch-cyan: #06b6d4;
+  --swatch-green: #22c55e;
+  --swatch-amber: #f59e0b;
+  --swatch-blue: #4772b3;
+  --swatch-violet: #8b5cf6;
+  --swatch-rose: #f43f5e;
+  --swatch-pink: #ec4899;
+  --swatch-teal: #14b8a6;
+}
+:root[data-accent="cyan"] {
+  --accent: #0891b2;
+  --orb: #22d3ee;
+}
+:root[data-accent="green"] {
+  --accent: #16a34a;
+  --orb: #4ade80;
+}
+:root[data-accent="amber"] {
+  --accent: #d97706;
+  --orb: #fbbf24;
+}
+:root[data-accent="blue"] {
+  --accent: #4772b3;
+  --orb: #4772b3;
+}
+:root[data-accent="violet"] {
+  --accent: #7c3aed;
+  --orb: #a78bfa;
+}
+:root[data-accent="rose"] {
+  --accent: #e11d48;
+  --orb: #fb7185;
+}
+:root[data-accent="pink"] {
+  --accent: #db2777;
+  --orb: #f472b6;
+}
+:root[data-accent="teal"] {
+  --accent: #0d9488;
+  --orb: #2dd4bf;
+}

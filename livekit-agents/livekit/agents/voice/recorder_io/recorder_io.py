@@ -20,7 +20,7 @@ from ...log import logger
 from .. import io
 
 if TYPE_CHECKING:
-    from ..agent_session import AgentSession
+    from ..agent_session import LiveSession
 
 # Both channels sit on one absolute timeline: the user's audio where it arrived, the agent's
 # where the device reports it played. Silence is whatever nothing was written over.
@@ -156,7 +156,7 @@ class RecorderIO:
     def __init__(
         self,
         *,
-        agent_session: AgentSession,
+        agent_session: LiveSession,
         sample_rate: int = 48000,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:

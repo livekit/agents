@@ -2160,7 +2160,7 @@ class RealtimeSession(  # noqa: F811
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the model.
 
-        This method is called by the LiveKit framework's AgentSession.generate_reply() and
+        This method is called by the LiveKit framework's LiveSession.generate_reply() and
         AgentActivity._realtime_reply_task(). The framework handles user_input by adding it
         to the chat context via update_chat_ctx() before calling this method.
 
@@ -2197,7 +2197,7 @@ class RealtimeSession(  # noqa: F811
                 Raises RealtimeError on timeout (default: 10s).
 
         Note:
-            User messages flow through AgentSession.generate_reply(user_input=...) →
+            User messages flow through LiveSession.generate_reply(user_input=...) →
             update_chat_ctx() which sends interactive text to Nova Sonic.
             This method handles the instructions parameter for system-level prompts.
         """

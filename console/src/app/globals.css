@@ -1,0 +1,12 @@
+/*
+ * The one stylesheet the app imports.
+ *
+ * Layers are load-bearing here: Tailwind v4 emits its utilities inside
+ * `@layer`, and unlayered CSS beats layered CSS whatever the specificity. A
+ * plain `button { color: inherit }` in base.css silently overrides every
+ * `text-*` utility in the app unless base.css sits in a layer.
+ */
+@import "tailwindcss";
+@import "./tokens.css";
+@import "./theme.css";
+@import "./base.css" layer(base);

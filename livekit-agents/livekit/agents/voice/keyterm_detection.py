@@ -19,7 +19,7 @@ from ..utils import aio
 
 if TYPE_CHECKING:
     from ..metrics import LLMMetrics
-    from .agent_session import AgentSession
+    from .agent_session import LiveSession
     from .events import ConversationItemAddedEvent
 
 
@@ -27,7 +27,7 @@ class KeytermsOptions(TypedDict, total=False):
     """Keyterm biasing for STTs that accept a term list.
 
     .. deprecated:: v2.0
-        Use :class:`STTContextOptions` (``AgentSession(stt_context_options=...)``) instead;
+        Use :class:`STTContextOptions` (``LiveSession(stt_context_options=...)``) instead;
         its ``keyterms`` and ``keyterm_detection`` keys are identical.
     """
 
@@ -66,7 +66,7 @@ class STTContextOptions(TypedDict, total=False):
 
     Can be passed as a plain dict::
 
-        AgentSession(
+        LiveSession(
             stt_context_options={
                 "keyterms": ["LiveKit", "Acme Corp"],
                 "keyterm_detection": {"enabled": True, "turn_interval": 1},
@@ -202,7 +202,7 @@ async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[
 class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     """Maintains the STT keyterm set and, when enabled, auto-detects keyterms during a call.
 
-    Owned by the :class:`AgentSession` so keyterm state survives agent handoffs. Each agent
+    Owned by the :class:`LiveSession` so keyterm state survives agent handoffs. Each agent
     activity binds it to that activity's STT via :meth:`start` and releases it via
     :meth:`aclose`. When detection is on, an LLM extracts distinctive spellings from the
     conversation; only confirmed terms are pushed to the STT, while pending terms are tracked
@@ -231,7 +231,7 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         # bound per agent activity (see start/aclose)
         self._stt: STT | None = None
         self._llm: LLM | None = options["llm"] if isinstance(options["llm"], LLM) else None
-        self._session: AgentSession | None = None
+        self._session: LiveSession | None = None
         self._turn_count = 0
         self._detect_task: asyncio.Task[None] | None = None
 
@@ -249,7 +249,7 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         if self._stt is not None:
             self._stt._update_session_keyterms(self.keyterms)
 
-    def start(self, session: AgentSession, stt: STT) -> None:
+    def start(self, session: LiveSession, stt: STT) -> None:
         """Bind this activity's STT (always) and start detection (if enabled)."""
         # static keyterms must reach the recognizer even with detection disabled
         if stt is not self._stt:
@@ -336,7 +336,7 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._detect_task = asyncio.create_task(self._run_once(self._snapshot(session), parent))
 
     @staticmethod
-    def _snapshot(session: AgentSession) -> ChatContext:
+    def _snapshot(session: LiveSession) -> ChatContext:
         return session.history.copy(
             exclude_config_update=True,
             exclude_function_call=True,

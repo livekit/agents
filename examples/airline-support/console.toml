@@ -1,0 +1,6 @@
+name = "Skyline Air"
+agent = "skyline-support"
+endpoint = "triage"
+description = "An airline's support desk: a triage graph that asks for what is missing, EU261 in code, payment only after a reviewed reply."
+voice = false
+start = "uv run python support_agent.py dev"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, utils
+from livekit.agents import NOT_GIVEN, LiveSession, NotGivenOr, utils
 
 from .codec import deserialize_chat
 
@@ -28,11 +28,11 @@ def format_chat_user_input(*, sender: str, text: str) -> str:
 
 
 class MeetingChatRelay:
-    """Relay external meeting chat messages into an AgentSession."""
+    """Relay external meeting chat messages into an LiveSession."""
 
     def __init__(
         self,
-        session: AgentSession,
+        session: LiveSession,
         *,
         bot_name: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:

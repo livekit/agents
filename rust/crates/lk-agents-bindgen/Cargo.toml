@@ -1,0 +1,16 @@
+[package]
+name = "lk-agents-bindgen"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The `#[host(..)]` vocabulary read into an IR, and the pyo3 code each item expands to in its own crate."
+
+# A plain library, not a proc-macro: `lk-agents-host-derive` calls it at expansion time, and the
+# codegen binary reads the attribute language through its reader (`meta`), so the two cannot read
+# one attribute two ways. A proc-macro crate can export nothing but macros, so the shared half has
+# to live here.
+[dependencies]
+syn = { version = "2", default-features = false, features = ["derive", "full", "parsing", "printing", "clone-impls", "visit-mut"] }
+quote = "1"
+proc-macro2 = "1"

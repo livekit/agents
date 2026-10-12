@@ -1,0 +1,11 @@
+# Deterministic simulation for the voice suite.
+#
+# Tokio randomises the branch order of an unbiased `select!`, seeding it per runtime from the OS,
+# so two runs of one saved case interleave concurrent work differently and a finding lands on a
+# different subject each time. `tokio_unstable` exposes `Builder::rng_seed`, which pins that RNG;
+# `lk_agents_fuzz::drive::simulate` builds every test runtime with a fixed seed.
+#
+# It has to live here because rustflags are workspace-wide: there is no per-crate equivalent. The
+# cfg only unlocks tokio APIs, it does not change behaviour on its own.
+[build]
+rustflags = ["--cfg", "tokio_unstable"]

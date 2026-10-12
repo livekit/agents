@@ -1,122 +1,95 @@
-# LiveKit Agents Examples
+# Fast brain, slow brain
 
-> **Looking for examples and guides?** Most examples now live in the [LiveKit docs](https://docs.livekit.io/agents/). Browse the full collection of runnable examples and recipes on the [Recipes page](https://docs.livekit.io/reference/recipes).
+Three examples of the pattern: a front desk that talks to the person, by text and on the
+phone, and knows nothing but whom to ask; a back office that holds the system and does the
+work, reached over A2A as the front desk's only tool.
 
-This directory contains various examples demonstrating different capabilities and use cases for LiveKit agents. Each example showcases specific features, integrations, or workflows that can be built with the LiveKit Agents framework.
+| Example                       | What                                                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------- |
+| [`frontdesk/`](frontdesk/README.md) | A dental practice's appointment scheduling on a calendar: the pattern at its smallest, two tools and a booking that asks for what it is missing. |
+| [`hotel-receptionist/`](hotel-receptionist/README.md) | A hotel's bookings, lookups and cancellations: guided flows as tasks awaited in text, verification, approval on the writes. |
+| [`airline-support/`](airline-support/README.md) | An airline's customer care: one agent whose tool awaits a graph that asks for what is missing and continues on the answer, EU261 in code, a reviewed reply, payment only after approval. |
 
-## Model Configuration
+Both write their own lane of one session: the back office keeps the person's details on its
+lane, so the front desk carries no state, and the conversation's history shows the back
+office's tasks beside the front desk's turns. The two run on one worker: each agent file
+defines an `AgentHandler` with its doors, the back office's on a lane of its own, and
+`main.py` makes the server and adds both. A deployment of its own is the same `backend_agent.py` behind its own `main.py`. The console (`../console`) lists them all and
+talks to whichever is running.
 
-Most examples use **LiveKit Inference** by default for STT, LLM, and TTS models. This provides a unified API for accessing multiple model providers through LiveKit Cloud.
+## Environment
 
-```python
-from livekit.agents import inference
+The workers need a LiveKit project, the agent store that holds the threads, and the models:
 
-session = AgentSession(
-    stt=inference.STT("deepgram/nova-3"),
-    llm=inference.LLM("google/gemma-4-31b-it"),  # low-latency gemma, hosted on LiveKit
-    tts=inference.TTS("cartesia/sonic-3"),
-)
+```sh
+export LIVEKIT_URL=<project URL>                 # wss://<project>.staging.livekit.cloud
+export LIVEKIT_API_KEY=<key>
+export LIVEKIT_API_SECRET=<secret>
+export LIVEKIT_AGENTDB_URL=<agent store data plane>      # ws://.../v1/db
+export LIVEKIT_AGENT_THREADS_URL=<threads service>        # the AgentThreads gRPC service
+export OPENAI_API_KEY=<key>                      # the phone door's realtime model
+export LIVEKIT_INFERENCE_API_KEY=<key>           # the text agents' model, through LiveKit inference
+export LIVEKIT_INFERENCE_API_SECRET=<secret>
 ```
 
-**Note:** OpenAI Realtime models are available through `inference.RealtimeModel`; use provider plugin classes for direct credentials. See the [Real-time Models](#-real-time-models) examples in `voice_agents/`.
+The agent store takes the LiveKit key pair unless `LIVEKIT_AGENTDB_API_KEY` and
+`LIVEKIT_AGENTDB_API_SECRET` name its own. Once, from the repository root: `uv sync --all-packages`.
 
-## 📁 Example Categories
+<details>
+<summary>A local stack, for LiveKit engineers</summary>
 
-### 🏠 [Homepage](./homepage/)
+- livekit-server at `ws://127.0.0.1:7880` (key `devkey`), WebTransport on `:7883`; endpoints
+  are at `http://127.0.0.1:7880/agents/<agent>/default/<endpoint>`
+- agent-db: data plane `ws://localhost:7781/v1/db`, streams `http://localhost:7780`, management
+  gRPC `http://localhost:7783`, threads gRPC `http://localhost:7793`; the livekit-server's key
+  pair, so the workers' one credential reaches every service
 
-A product knowledge agent demonstrating progressive disclosure with a Markdown-backed
-knowledge base, generated tool schemas, centralized prompt templates, session behaviors,
-streaming TTS filters, and a split unit/eval test suite.
+The configs are agent-db's, in its `dev/stack/`, beside the `dev/docker-compose.yaml` that
+brings up the Scylla and MinIO it wants; the server build must carry the agent endpoints and
+`agents.endpoints.threads_address`.
 
-### 🎙️ [Voice Agents](./voice_agents/)
-
-A collection of voice-based agent examples, including basic voice interactions, tool integrations, RAG implementations, real-time models, and tracing.
-
-### 🔄 [Warm Transfer](./warm-transfer/)
-
-Demonstrates supervisor escalation workflows for call centers, showing how to implement warm transfers where agents can brief supervisors before connecting them to customers.
-
-### 🚗 [Drive-Thru](./drive_thru/)
-
-A complete drive-thru ordering system example that showcases interactive voice agents for food ordering with database integration and order management.
-
-### 🎭 [Expressive Agent](./expressive_agent/)
-
-A free-form companion agent running Expressive Mode. Tell it good news or bad news and hear the delivery change: emotion, pacing, and non-verbal sounds, all chosen from context.
-
-### 🏢 [Front Desk](./frontdesk/)
-
-A front desk agent example demonstrating how to build customer service agents with calendar integration and appointment management capabilities.
-
-### 🔧 [Primitives](./primitives/)
-
-Basic building blocks and fundamental examples showing core LiveKit concepts like room connections, participant management, and basic audio/video handling.
-
-### 🛠️ [Other](./other/)
-
-Additional examples including text-only agents, various TTS providers, transcription services, and translation utilities.
-
-## Running Examples
-
-To run the examples, you'll need:
-
-- A [LiveKit Cloud](https://cloud.livekit.io) account or a local [LiveKit server](https://github.com/livekit/livekit)
-- API keys for the model providers you want to use in a `.env` file
-- Python 3.10 or higher
-- [uv](https://docs.astral.sh/uv/)
-
-### Environment file
-
-Create a `.env` file in the `examples` directory and add your API keys (see `examples/.env.example`):
-
-```bash
-LIVEKIT_URL="wss://your-project.livekit.cloud"
-LIVEKIT_API_KEY="your_api_key"
-LIVEKIT_API_SECRET="your_api_secret"
+```sh
+docker compose -f <agent-db>/dev/docker-compose.yaml up -d --wait
+<agent-db>/bin/agentstore --config <agent-db>/dev/stack/agentstore.yaml db
+<agent-db>/bin/agentstore --config <agent-db>/dev/stack/agentstore.yaml threads
+livekit-server --config <agent-db>/dev/stack/livekit.yaml
 ```
 
-When using LiveKit Inference (default for most examples), your LiveKit API key/secret is used for authentication. For examples that use provider plugins directly (e.g., realtime models), you'll also need the provider-specific API keys:
-
-```bash
-OPENAI_API_KEY="sk-xxx"  # For realtime models and provider-specific features
-# ... other model provider API keys as needed
+```sh
+export LIVEKIT_URL=ws://127.0.0.1:7880
+export LIVEKIT_API_KEY=devkey
+export LIVEKIT_API_SECRET=secretsecretsecretsecretsecretsecret
+export LIVEKIT_WORKER_URL=https://127.0.0.1:7883
+export LIVEKIT_WORKER_INSECURE=1
+export LIVEKIT_AGENTDB_URL=ws://localhost:7781/v1/db
+export LIVEKIT_AGENTDB_STREAMS_URL=http://localhost:7780
+export LIVEKIT_AGENTDB_MANAGEMENT_URL=http://localhost:7783
+export LIVEKIT_AGENT_THREADS_URL=http://localhost:7793
 ```
 
-### Install dependencies
+</details>
 
-From the repository root, run the following command:
+## Run
 
-```bash
-uv sync --all-extras --dev
+The console (`../console`) is the way in: its API and web app, then pick an example in it;
+one that is not running shows its start command and connects once it is up. From an example's
+directory, `main.py` runs both agents on one worker:
+
+```sh
+(cd ../../console && uv run python console_api.py)           # the console's API on :7795
+(cd ../../console && pnpm install && pnpm dev)               # http://localhost:3000/
+uv run python main.py dev
 ```
 
-### Running an individual example
+Pick the example in the console, type a request, or press the speech button to call the front
+desk into the same conversation. Each delegation shows as a card in the thread, and the debug
+drawer under it shows the thread's lanes, tasks, journal and inbox as they change.
 
-Run an example agent:
+## Tests
 
-```bash
-uv run examples/voice_agents/basic_agent.py console
+`tests/test_v0_checks.py` runs the plan's text checks against this stack (it skips when the
+stack is down); the console's e2e makes the call.
+
+```sh
+V0_STACK=1 uv run pytest tests/test_v0_checks.py -v
 ```
-
-Your agent is now running in the console.
-
-### Taking an example with you
-
-Each example directory stands on its own: copy it anywhere, and
-
-```bash
-uv sync
-uv run agent.py console
-```
-
-installs from PyPI without the rest of the repo. `lk agent deploy .` works the
-same way, off the `Dockerfile` in the directory. Inside this repo the same
-directories are uv workspace members, so they run against your local SDK
-changes instead.
-
-For frontend support, use the [Agents playground](https://agents-playground.livekit.io) or the [starter apps](https://docs.livekit.io/agents/start/frontend/#starter-apps).
-
-## 📖 Additional Resources
-
-- [LiveKit Documentation](https://docs.livekit.io/)
-- [LiveKit Agents Documentation](https://docs.livekit.io/agents/)

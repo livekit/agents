@@ -1,0 +1,27 @@
+# §4 / R12: a hung FFI test must fail the run, not hang it.
+# Eight of §1.6's nine hazards fail as silent hangs.
+#
+# THIS FILE MUST LIVE AT `rust/.config/nextest.toml` -- next to the workspace
+# `Cargo.toml`, NOT at the repository root. nextest resolves its config relative to the CARGO
+# WORKSPACE root, and the only workspace manifest in this repo is `rust/Cargo.toml`; the repo root
+# has none. It sat at the root from the initial commit (5ced14b2) until it was moved here, and for
+# that entire time nextest silently read NOTHING -- no warning, because a missing config is not an
+# error. Verified rather than assumed: `test-threads = 1` placed here serialises
+# `-p lk-agents-core` from 0.039s to 0.408s, while the identical line at the repo root changed
+# nothing at all (0.033s). So for that whole period the two settings below were both inert -- the
+# R12 kill-at-60s promise above was never enforced, and `fail-fast` was nextest's default (stop on
+# first failure) rather than the `false` this file asks for.
+[profile.default]
+slow-timeout = { period = "10s", terminate-after = 6 }   # kill any test at 60s
+fail-fast = false
+
+# TESTING.md §9's second profile: the case counts the mutation run and the firing-rate audit use.
+# The count itself is read by the tests (`tests/voice/common/mod.rs::cases`) from `LK_TEST_PROFILE`,
+# which nextest cannot set for us, so the invocation names both:
+#   LK_TEST_PROFILE=nightly cargo nextest run -p lk-agents-voice --profile nightly
+# Forty times the default per target (a 128-case gate runs 5,120), so the kill-at-60s promise above
+# would kill every gate; the cap is raised to 20 minutes and the finding a timeout represents is
+# then a genuinely unbounded await, as in the default profile.
+[profile.nightly]
+slow-timeout = { period = "60s", terminate-after = 20 }
+fail-fast = false

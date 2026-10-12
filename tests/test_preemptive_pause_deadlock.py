@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, LiveSession
 from livekit.agents.llm import LLM, ChatChunk, ChatContext, ChoiceDelta, LLMStream
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -99,9 +99,9 @@ def _end_of_turn(transcript: str) -> _EndOfTurnInfo:
     )
 
 
-async def _start_session() -> tuple[_GatedLLM, AgentSession[None]]:
+async def _start_session() -> tuple[_GatedLLM, LiveSession[None]]:
     llm = _GatedLLM()
-    session: AgentSession[None] = AgentSession(llm=llm)
+    session: LiveSession[None] = LiveSession(llm=llm)
     await session.start(agent=Agent(instructions="qualify the caller"))
     return llm, session
 
@@ -197,7 +197,7 @@ async def test_reply_parked_while_pausing_does_not_block_the_handoff() -> None:
     nothing will schedule. ``on_exit`` is the widest such window.
     """
     llm = _GatedLLM()
-    session: AgentSession[None] = AgentSession(llm=llm)
+    session: LiveSession[None] = LiveSession(llm=llm)
 
     class _TalkingExit(Agent):
         async def on_exit(self) -> None:

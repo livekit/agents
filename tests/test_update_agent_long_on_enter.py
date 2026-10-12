@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
+from livekit.agents import Agent, AgentTask, Completed, LiveSession, RunContext, function_tool
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -24,8 +24,7 @@ class AskNameTask(AgentTask):
     @function_tool
     async def record_name(self, ctx: RunContext, name: str) -> str:
         """Called when the user provides their name."""
-        self.complete(None)
-        return "recorded"
+        return Completed(None)
 
 
 class SurveyAgent(Agent):
@@ -117,7 +116,7 @@ async def test_update_agent_on_enter_output_captured():
             FakeLLMResponse(input="delayed_greeting", content="hello!", ttft=0.1, duration=0.1),
         ]
     )
-    async with AgentSession(llm=llm) as sess:
+    async with LiveSession(llm=llm) as sess:
         await sess.start(GreeterToGreeting())
 
         result = await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
@@ -135,7 +134,7 @@ async def test_update_agent_long_on_enter_no_deadlock():
     a circular wait, since run() must return before the next turn can be sent.
     """
     llm = _build_fake_llm()
-    async with AgentSession(llm=llm) as sess:
+    async with LiveSession(llm=llm) as sess:
         await sess.start(Greeter())
 
         # must not deadlock: returns once the handoff is done and the

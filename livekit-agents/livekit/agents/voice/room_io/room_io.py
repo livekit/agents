@@ -25,7 +25,7 @@ from ..transcription import TranscriptSynchronizer
 from ._pre_connect_audio import PreConnectAudioHandler
 
 if TYPE_CHECKING:
-    from ..agent_session import AgentSession
+    from ..agent_session import LiveSession
 
 
 from ...job import DEFAULT_PARTICIPANT_KINDS
@@ -44,7 +44,7 @@ from .types import (
 class RoomIO:
     def __init__(
         self,
-        agent_session: AgentSession,
+        agent_session: LiveSession,
         room: rtc.Room,
         *,
         participant: rtc.RemoteParticipant | str | None = None,

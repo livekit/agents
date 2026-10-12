@@ -4,8 +4,8 @@ import base64
 import datetime
 import hashlib
 import logging
-import random
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
@@ -14,241 +14,171 @@ import aiohttp
 
 from livekit.agents.utils import http_context
 
+TIMEZONE = ZoneInfo("UTC")
+SLOT_MINUTES = 30
+# FRONTDESK_NOW pins the clock, so the scenarios' absolute dates stay where they are
+NOW = (
+    datetime.datetime.fromisoformat(os.environ["FRONTDESK_NOW"]).replace(tzinfo=TIMEZONE)
+    if os.environ.get("FRONTDESK_NOW")
+    else None
+)
 
-class SlotUnavailableError(Exception):
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
+
+class SlotUnavailable(Exception):
+    """The slot was taken between the listing and the booking."""
 
 
-@dataclass
-class AvailableSlot:
-    start_time: datetime.datetime
-    duration_min: int
+@dataclass(frozen=True)
+class Slot:
+    start: datetime.datetime
 
     @property
-    def unique_hash(self) -> str:
-        # unique id based on the start_time & duration_min
-        raw = f"{self.start_time.isoformat()}|{self.duration_min}".encode()
-        digest = hashlib.blake2s(raw, digest_size=5).digest()
-        return f"ST_{base64.b32encode(digest).decode().rstrip('=').lower()}"
+    def id(self) -> str:
+        """A short id the model can repeat without mangling a datetime."""
+        digest = hashlib.blake2s(self.start.isoformat().encode(), digest_size=5).digest()
+        return "ST_" + base64.b32encode(digest).decode().rstrip("=").lower()
 
 
 @dataclass
-class BookedAppointment:
-    slot: AvailableSlot
-    attendee_email: str
+class Appointment:
+    slot: Slot
+    email: str
 
 
 class Calendar(Protocol):
-    # The bookings made this session. The calendar is the single system of
-    # record, so callers never keep a parallel list that could drift.
-    scheduled_appointments: list[BookedAppointment]
+    appointments: list[Appointment]
 
-    def now(self) -> datetime.datetime:
-        """The calendar's current time (tz-aware). Wall-clock in production;
-        a fixed value under simulation so scenario dates stay deterministic."""
-        ...
-
-    async def initialize(self) -> None: ...
-    async def schedule_appointment(
-        self,
-        *,
-        start_time: datetime.datetime,
-        attendee_email: str,
-    ) -> None: ...
-    async def list_available_slots(
-        self, *, start_time: datetime.datetime, end_time: datetime.datetime
-    ) -> list[AvailableSlot]: ...
+    def now(self) -> datetime.datetime: ...
+    async def available(self, start: datetime.datetime, end: datetime.datetime) -> list[Slot]: ...
+    async def schedule(self, slot: Slot, email: str) -> None: ...
 
 
-class FakeCalendar(Calendar):
-    def __init__(
-        self,
-        *,
-        timezone: str,
-        slots: list[AvailableSlot] | None = None,
-        seed: int | None = None,
-        now: datetime.datetime | None = None,
-    ) -> None:
-        self.tz = ZoneInfo(timezone)
-        # A fixed clock keeps simulation scenarios deterministic; None means
-        # follow the wall clock.
-        self._now = now
-        self._slots: list[AvailableSlot] = []
-        self.scheduled_appointments: list[BookedAppointment] = []
+@dataclass
+class FakeCalendar:
+    slots: list[Slot]
+    appointments: list[Appointment] = field(default_factory=list)
 
-        if slots is not None:
-            self._slots.extend(slots)
-            return
+    @classmethod
+    def seeded(cls) -> FakeCalendar:
+        """Openings over the next five weeks, as days from today and an hour: a known week the
+        scenarios are written against, pinned with FRONTDESK_NOW=2026-06-12T09:00, a Friday."""
+        today = datetime.datetime.combine(cls.now().date(), datetime.time(), tzinfo=TIMEZONE)
+        openings = [
+            (0, 15.5),
+            (3, 14), (3, 16.5),
+            (4, 9), (4, 15),
+            (5, 11), (5, 14.5),
+            (6, 11), (6, 14.5),
+            (7, 10),
+            (10, 13),
+            (12, 15),
+            (34, 9.5), (34, 13),
+            (35, 10),
+        ]  # fmt: skip
+        return cls([Slot(today + datetime.timedelta(days=d, hours=h)) for d, h in openings])
 
-        rng = random.Random(seed)
-        today = self.now().date()
-        for day_offset in range(1, 90):  # generate slots for the next 90 days
-            current_day = today + datetime.timedelta(days=day_offset)
-            if current_day.weekday() >= 5:
-                continue
+    @staticmethod
+    def now() -> datetime.datetime:
+        return NOW or datetime.datetime.now(TIMEZONE)
 
-            # build all possible 30-min slots between 09:00 and 17:00
-            day_start = datetime.datetime.combine(current_day, datetime.time(9, 0), tzinfo=self.tz)
-            slots_in_day = [
-                day_start + datetime.timedelta(minutes=30 * i)
-                for i in range(int((17 - 9) * 2))  # (17-9)=8 hours => 16 slots
-            ]
+    async def available(self, start: datetime.datetime, end: datetime.datetime) -> list[Slot]:
+        return [s for s in self.slots if start <= s.start < end]
 
-            num_slots = rng.randint(3, 6)
-            chosen = rng.sample(slots_in_day, num_slots)
-
-            for slot_start in sorted(chosen):
-                self._slots.append(AvailableSlot(start_time=slot_start, duration_min=30))
-
-    def now(self) -> datetime.datetime:
-        if self._now is not None:
-            return self._now.astimezone(self.tz)
-        return datetime.datetime.now(self.tz)
-
-    async def initialize(self) -> None:
-        pass
-
-    async def schedule_appointment(
-        self, *, start_time: datetime.datetime, attendee_email: str
-    ) -> None:
-        slot = next((s for s in self._slots if s.start_time == start_time), None)
-        if slot is None:
-            raise SlotUnavailableError(f"no available slot at {start_time.isoformat()}")
-
-        self._slots.remove(slot)
-        self.scheduled_appointments.append(
-            BookedAppointment(slot=slot, attendee_email=attendee_email)
-        )
-
-    async def list_available_slots(
-        self, *, start_time: datetime.datetime, end_time: datetime.datetime
-    ) -> list[AvailableSlot]:
-        return [slot for slot in self._slots if start_time <= slot.start_time < end_time]
+    async def schedule(self, slot: Slot, email: str) -> None:
+        if slot not in self.slots:
+            raise SlotUnavailable
+        self.slots.remove(slot)
+        self.appointments.append(Appointment(slot, email))
 
 
-# --- cal.com impl ---
-
-CAL_COM_EVENT_TYPE = "livekit-front-desk"
-EVENT_DURATION_MIN = 30
-BASE_URL = "https://api.cal.com/v2/"
+CAL_COM = "https://api.cal.com/v2/"
+EVENT_SLUG = "livekit-front-desk"
 
 
-class CalComCalendar(Calendar):
-    def __init__(self, *, api_key: str, timezone: str) -> None:
-        self.tz = ZoneInfo(timezone)
+class CalComCalendar:
+    def __init__(self, api_key: str) -> None:
         self._api_key = api_key
-        self.scheduled_appointments: list[BookedAppointment] = []
-
+        self._event_id: int | None = None
+        self.appointments: list[Appointment] = []
         try:
-            self._http_session = http_context.http_session()
+            self._http = http_context.http_session()
         except RuntimeError:
-            self._http_session = aiohttp.ClientSession()
-
-        self._logger = logging.getLogger("cal.com")
+            self._http = aiohttp.ClientSession()
 
     def now(self) -> datetime.datetime:
-        return datetime.datetime.now(self.tz)
+        return datetime.datetime.now(TIMEZONE)
 
-    async def initialize(self) -> None:
-        async with self._http_session.get(
-            headers=self._build_headers(api_version="2024-06-14"), url=f"{BASE_URL}me/"
-        ) as resp:
+    def _headers(self, version: str) -> dict[str, str]:
+        return {"cal-api-version": version, "Authorization": f"Bearer {self._api_key}"}
+
+    async def _event(self) -> int:
+        """The id of the front desk's event type, created the first time."""
+        if self._event_id is not None:
+            return self._event_id
+        async with self._http.get(CAL_COM + "me/", headers=self._headers("2024-06-14")) as resp:
             resp.raise_for_status()
             username = (await resp.json())["data"]["username"]
-            self._logger.info(f"using cal.com username: {username}")
-
         query = urlencode({"username": username})
-        async with self._http_session.get(
-            headers=self._build_headers(api_version="2024-06-14"),
-            url=f"{BASE_URL}event-types/?{query}",
+        async with self._http.get(
+            CAL_COM + f"event-types/?{query}", headers=self._headers("2024-06-14")
         ) as resp:
             resp.raise_for_status()
-            data = (await resp.json())["data"]
-            lk_event_type = next(
-                (event for event in data if event.get("slug") == CAL_COM_EVENT_TYPE), None
+            found = next(
+                (e for e in (await resp.json())["data"] if e.get("slug") == EVENT_SLUG), None
             )
-
-            if lk_event_type:
-                self._lk_event_id = lk_event_type["id"]
-            else:
-                async with self._http_session.post(
-                    headers=self._build_headers(api_version="2024-06-14"),
-                    url=f"{BASE_URL}event-types",
-                    json={
-                        "lengthInMinutes": EVENT_DURATION_MIN,
-                        "title": "LiveKit Front-Desk",
-                        "slug": CAL_COM_EVENT_TYPE,
-                    },
-                ) as resp:
-                    resp.raise_for_status()
-                    self._logger.info(f"successfully added {CAL_COM_EVENT_TYPE} event type")
-                    data = (await resp.json())["data"]
-                    self._lk_event_id = data["id"]
-
-            self._logger.info(f"event type id: {self._lk_event_id}")
-
-    async def schedule_appointment(
-        self, *, start_time: datetime.datetime, attendee_email: str
-    ) -> None:
-        slot = AvailableSlot(start_time=start_time, duration_min=EVENT_DURATION_MIN)
-        start_time = start_time.astimezone(datetime.timezone.utc)
-
-        async with self._http_session.post(
-            headers=self._build_headers(api_version="2024-08-13"),
-            url=f"{BASE_URL}bookings",
-            json={
-                "start": start_time.isoformat(),
-                "attendee": {
-                    "name": attendee_email,  # TODO(theomonnom): add name prompt
-                    "email": attendee_email,
-                    "timeZone": self.tz.tzname(None),
+        if found is None:
+            async with self._http.post(
+                CAL_COM + "event-types",
+                headers=self._headers("2024-06-14"),
+                json={
+                    "lengthInMinutes": SLOT_MINUTES,
+                    "title": "LiveKit Front-Desk",
+                    "slug": EVENT_SLUG,
                 },
-                "eventTypeId": self._lk_event_id,
+            ) as resp:
+                resp.raise_for_status()
+                found = (await resp.json())["data"]
+            logging.getLogger("cal.com").info("created the %s event type", EVENT_SLUG)
+        self._event_id = int(found["id"])
+        return self._event_id
+
+    async def available(self, start: datetime.datetime, end: datetime.datetime) -> list[Slot]:
+        query = urlencode(
+            {
+                "eventTypeId": await self._event(),
+                "start": start.astimezone(datetime.timezone.utc).isoformat(),
+                "end": end.astimezone(datetime.timezone.utc).isoformat(),
+            }
+        )
+        async with self._http.get(
+            CAL_COM + f"slots/?{query}", headers=self._headers("2024-09-04")
+        ) as resp:
+            resp.raise_for_status()
+            days = (await resp.json())["data"]
+        return [
+            Slot(datetime.datetime.fromisoformat(s["start"]).astimezone(TIMEZONE))
+            for slots in days.values()
+            for s in slots
+        ]
+
+    async def schedule(self, slot: Slot, email: str) -> None:
+        async with self._http.post(
+            CAL_COM + "bookings",
+            headers=self._headers("2024-08-13"),
+            json={
+                "start": slot.start.astimezone(datetime.timezone.utc).isoformat(),
+                "attendee": {"name": email, "email": email, "timeZone": str(TIMEZONE)},
+                "eventTypeId": await self._event(),
             },
         ) as resp:
             data = await resp.json()
-            if error := data.get("error"):
-                message = error["message"]
-                if "User either already has booking at this time or is not available" in message:
-                    raise SlotUnavailableError(error["message"])
-
+            if "already has booking" in str(data.get("error", {}).get("message", "")):
+                raise SlotUnavailable
             resp.raise_for_status()
+        self.appointments.append(Appointment(slot, email))
 
-        self.scheduled_appointments.append(
-            BookedAppointment(slot=slot, attendee_email=attendee_email)
-        )
 
-    async def list_available_slots(
-        self, *, start_time: datetime.datetime, end_time: datetime.datetime
-    ) -> list[AvailableSlot]:
-        start_time = start_time.astimezone(datetime.timezone.utc)
-        end_time = end_time.astimezone(datetime.timezone.utc)
-        query = urlencode(
-            {
-                "eventTypeId": self._lk_event_id,
-                "start": start_time.isoformat(),
-                "end": end_time.isoformat(),
-            }
-        )
-        async with self._http_session.get(
-            headers=self._build_headers(api_version="2024-09-04"), url=f"{BASE_URL}slots/?{query}"
-        ) as resp:
-            resp.raise_for_status()
-            raw_data = (await resp.json())["data"]
-
-            available_slots = []
-            for _, slots in raw_data.items():
-                for slot in slots:
-                    start_dt = datetime.datetime.fromisoformat(slot["start"].replace("Z", "+00:00"))
-                    available_slots.append(
-                        AvailableSlot(start_time=start_dt, duration_min=EVENT_DURATION_MIN)
-                    )
-
-        return available_slots
-
-    def _build_headers(self, *, api_version: str | None = None) -> dict[str, str]:
-        h = {"Authorization": f"Bearer {self._api_key}"}
-        if api_version:
-            h["cal-api-version"] = api_version
-        return h
+def calendar() -> Calendar:
+    if key := os.environ.get("CAL_API_KEY"):
+        return CalComCalendar(key)
+    return FakeCalendar.seeded()

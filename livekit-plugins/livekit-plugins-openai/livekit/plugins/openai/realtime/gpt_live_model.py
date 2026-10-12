@@ -149,7 +149,7 @@ class _LiveOptions:
 
 
 class GPTLiveModel(llm.DuplexModel):
-    """OpenAI GPT-Live full-duplex voice model, ready to pass to ``AgentSession(llm=)``."""
+    """OpenAI GPT-Live full-duplex voice model, ready to pass to ``LiveSession(llm=)``."""
 
     def __init__(
         self,

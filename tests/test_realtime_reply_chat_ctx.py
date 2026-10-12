@@ -49,7 +49,8 @@ class _FakeActivity(SimpleNamespace):
             tools=[],
             _on_enter_ignored_tools=lambda tool_ctx: [],
             _tool_choice=None,
-            _agent=SimpleNamespace(_chat_ctx=llm.ChatContext.empty()),
+            _agent=SimpleNamespace(),
+            _chat_ctx=llm.ChatContext.empty(),
             _session=SimpleNamespace(
                 _conversation_item_added=lambda msg: None,
                 _update_agent_state=lambda state: None,
@@ -115,9 +116,7 @@ async def test_update_chat_ctx_realtime_error_still_generates_reply() -> None:
     assert len(activity.generation_calls) == 1
     assert not handle.done()
     # the user message is still recorded locally
-    assert any(
-        item.type == "message" and item.role == "user" for item in activity._agent._chat_ctx.items
-    )
+    assert any(item.type == "message" and item.role == "user" for item in activity._chat_ctx.items)
 
 
 async def test_update_chat_ctx_unexpected_error_fails_speech_handle() -> None:
