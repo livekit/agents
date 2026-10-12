@@ -124,7 +124,7 @@ class _STTOptions:
     redact_pii: bool
     redact_pci: bool
     endpointing: bool  # server VAD finalizes the open segment on trailing silence
-    endpointing_timeout_ms: int | None  # the VAD silence window; None = server default (600)
+    endpointing_timeout: int | None  # the VAD silence window; None = server default (600)
     eou_timeout_ms: int | None  # blank-token endpoint; None = server default (800)
     vad_events: bool  # speech_started / speech_ended messages -> START/END_OF_SPEECH
     finalize_on_flush: bool  # {"type":"finalize"} when the framework flushes the stream
@@ -153,7 +153,7 @@ class STT(stt.STT):
         redact_pii: bool = False,
         redact_pci: bool = False,
         endpointing: bool = True,
-        endpointing_timeout_ms: int | None = 300,
+        endpointing_timeout: int | None = 300,
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_events: bool = True,
         finalize_on_flush: bool = True,
@@ -197,10 +197,10 @@ class STT(stt.STT):
             redact_pci: Mask card numbers, CVVs, ZIP codes and account numbers.
                 Reliable for ``language="en"`` and ``"hi"``. Defaults to False.
             endpointing: Let the server's VAD finalize the open segment once
-                ``endpointing_timeout_ms`` of trailing silence has passed, so the
+                ``endpointing_timeout`` of trailing silence has passed, so the
                 last words of a turn arrive as a final without waiting for the
                 blank-token endpoint at the next decode boundary. Defaults to True.
-            endpointing_timeout_ms: The server VAD silence window in ms, shared by
+            endpointing_timeout: The server VAD silence window in ms, shared by
                 ``endpointing`` and ``vad_events``. Defaults to 300 so the server's final
                 lands before a VAD-driven agent commits the turn (LiveKit commits about
                 0.55 s after speech with its default VAD): measured against 600 on 19 call
@@ -265,8 +265,8 @@ class STT(stt.STT):
             redact_pii=redact_pii,
             redact_pci=redact_pci,
             endpointing=endpointing,
-            endpointing_timeout_ms=endpointing_timeout_ms
-            if is_given(endpointing_timeout_ms)
+            endpointing_timeout=endpointing_timeout
+            if is_given(endpointing_timeout)
             else None,
             eou_timeout_ms=eou_timeout_ms if is_given(eou_timeout_ms) else None,
             vad_events=vad_events,
@@ -375,7 +375,7 @@ class STT(stt.STT):
         redact_pii: NotGivenOr[bool] = NOT_GIVEN,
         redact_pci: NotGivenOr[bool] = NOT_GIVEN,
         endpointing: NotGivenOr[bool] = NOT_GIVEN,
-        endpointing_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        endpointing_timeout: NotGivenOr[int] = NOT_GIVEN,
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         finalize_on_flush: NotGivenOr[bool] = NOT_GIVEN,
@@ -396,7 +396,7 @@ class STT(stt.STT):
             redact_pii=redact_pii,
             redact_pci=redact_pci,
             endpointing=endpointing,
-            endpointing_timeout_ms=endpointing_timeout_ms,
+            endpointing_timeout=endpointing_timeout,
             eou_timeout_ms=eou_timeout_ms,
             vad_events=vad_events,
             finalize_on_flush=finalize_on_flush,
@@ -414,7 +414,7 @@ class STT(stt.STT):
                 redact_pii=redact_pii,
                 redact_pci=redact_pci,
                 endpointing=endpointing,
-                endpointing_timeout_ms=endpointing_timeout_ms,
+                endpointing_timeout=endpointing_timeout,
                 eou_timeout_ms=eou_timeout_ms,
                 vad_events=vad_events,
                 finalize_on_flush=finalize_on_flush,
@@ -473,7 +473,7 @@ class SpeechStream(stt.SpeechStream):
         redact_pii: NotGivenOr[bool] = NOT_GIVEN,
         redact_pci: NotGivenOr[bool] = NOT_GIVEN,
         endpointing: NotGivenOr[bool] = NOT_GIVEN,
-        endpointing_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        endpointing_timeout: NotGivenOr[int] = NOT_GIVEN,
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         finalize_on_flush: NotGivenOr[bool] = NOT_GIVEN,
@@ -491,7 +491,7 @@ class SpeechStream(stt.SpeechStream):
             redact_pii=redact_pii,
             redact_pci=redact_pci,
             endpointing=endpointing,
-            endpointing_timeout_ms=endpointing_timeout_ms,
+            endpointing_timeout=endpointing_timeout,
             eou_timeout_ms=eou_timeout_ms,
             vad_events=vad_events,
             finalize_on_flush=finalize_on_flush,
@@ -681,8 +681,8 @@ class SpeechStream(stt.SpeechStream):
         }
         if o.numerals is not None:
             params["numerals"] = str(o.numerals).lower()
-        if o.endpointing_timeout_ms is not None:
-            params["endpointing_timeout"] = o.endpointing_timeout_ms
+        if o.endpointing_timeout is not None:
+            params["endpointing_timeout"] = o.endpointing_timeout
         if o.eou_timeout_ms is not None:
             params["eou_timeout_ms"] = o.eou_timeout_ms
         if o.finalize_on_words is not None:
