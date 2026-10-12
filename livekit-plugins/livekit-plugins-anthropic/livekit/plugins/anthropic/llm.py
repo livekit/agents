@@ -34,7 +34,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .models import ChatModels
+from .models import ChatModels, default_thinking_for_model
 from .utils import CACHE_CONTROL_EPHEMERAL
 
 # Claude 4.6+ no longer supports prefilling (trailing assistant messages).
@@ -56,6 +56,7 @@ class _LLMOptions:
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
+    thinking: NotGivenOr[anthropic.types.ThinkingConfigParam | None]
     strict_tool_schema: bool
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
@@ -77,6 +78,7 @@ class LLM(llm.LLM):
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
         timeout: NotGivenOr[httpx.Timeout] = NOT_GIVEN,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
+        thinking: NotGivenOr[anthropic.types.ThinkingConfigParam | None] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
         """
@@ -102,6 +104,13 @@ class LLM(llm.LLM):
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
         tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
         caching (Literal["ephemeral"], optional): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
+        thinking (ThinkingConfigParam | None, optional): The ``thinking`` setting sent with every
+            request, e.g. ``{"type": "disabled"}`` or ``{"type": "adaptive"}``. When not given,
+            the plugin applies a per-model default: thinking is turned off on the models that
+            otherwise think inside the default ``max_tokens`` budget and return no text
+            (currently Sonnet 5 and Haiku 5.5), and every other model gets the API default.
+            Pass ``None`` to always send no ``thinking`` field. Not every model accepts every
+            value: Sonnet 5.5 and Opus 5.5 reject ``{"type": "disabled"}``.
         """  # noqa: E501
 
         super().__init__()
@@ -115,6 +124,7 @@ class LLM(llm.LLM):
             caching=caching,
             top_k=top_k,
             max_tokens=max_tokens,
+            thinking=thinking,
             strict_tool_schema=_strict_tool_schema,
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
@@ -181,6 +191,17 @@ class LLM(llm.LLM):
             extra["extra_body"] = extra_body
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
+
+        # A ``thinking`` passed through ``extra_kwargs`` wins over the constructor option, which
+        # in turn wins over the per-model default.
+        if "thinking" not in extra:
+            thinking = (
+                self._opts.thinking
+                if is_given(self._opts.thinking)
+                else default_thinking_for_model(self._opts.model)
+            )
+            if thinking is not None:
+                extra["thinking"] = thinking
 
         beta_flag: str | None = None
         if tools:
