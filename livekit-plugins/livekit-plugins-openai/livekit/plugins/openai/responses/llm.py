@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections import Counter
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -240,6 +241,14 @@ def _response_output_keys(output: list[ResponseOutputItem]) -> list[_OutputKey]:
     return keys
 
 
+def _chat_item_key(item: ChatItem) -> _OutputKey | None:
+    if item.type == "message" and item.role == "assistant":
+        return ("message", item.raw_text_content or "")
+    if item.type == "function_call":
+        return ("function_call", item.call_id)
+    return None
+
+
 class LLM(llm.LLM):
     # the plugin's ProviderTool subclass; subclasses (e.g. xAI) override this so server-side
     # provider tools are recognized when serializing the request. See to_responses_fnc_ctx.
@@ -453,6 +462,7 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         input_chat_ctx = chat_ctx
+        omit_call_ids: set[str] = set()
         if (
             self._opts.store is not False
             and self._active_streams == 0
@@ -460,11 +470,27 @@ class LLM(llm.LLM):
             and self._prev_resp_id
         ):
             n = len(self._prev_chat_ctx.items)
-            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(
-                self._prev_chat_ctx
-            ) and self._pending_tool_calls_completed(chat_ctx.items[n:]):
-                # send only the new items appended since the last response
-                input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
+            if (
+                ChatContext(items=chat_ctx.items[:n]).is_equivalent(self._prev_chat_ctx)
+                and self._pending_tool_calls_completed(chat_ctx.items[n:])
+                and (prev_output := self._match_prev_response_output(chat_ctx.items[n:]))
+                is not None
+            ):
+                # send only the new items appended since the last response. The server holds
+                # the previous response's own output, so it is left out too. Its function
+                # calls stay in the context until serialization, which drops tool outputs
+                # whose call is missing.
+                prev_output_ids = {id(item) for item in prev_output}
+                input_chat_ctx = ChatContext(
+                    items=[
+                        item
+                        for item in chat_ctx.items[n:]
+                        if item.type == "function_call" or id(item) not in prev_output_ids
+                    ]
+                )
+                omit_call_ids = {
+                    item.call_id for item in prev_output if item.type == "function_call"
+                }
                 extra["previous_response_id"] = self._prev_resp_id
             # if the context was modified otherwise, resend the whole context and omit previous response id
         return LLMStream(
@@ -477,8 +503,29 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
             full_chat_ctx=chat_ctx,
+            omit_call_ids=omit_call_ids,
             prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
         )
+
+    def _match_prev_response_output(self, items: list[ChatItem]) -> list[ChatItem] | None:
+        """Find the items in ``items`` that the previous response produced.
+
+        The server already holds that output under ``previous_response_id``, so resending
+        it would add it to the conversation a second time. Returns None when part of the
+        output is missing or differs, e.g. a reply truncated by an interruption, since
+        chaining would then show the model text the user never heard.
+        """
+        remaining = Counter(self._prev_resp_output)
+        matched: list[ChatItem] = []
+        for item in items:
+            key = _chat_item_key(item)
+            if key is not None and remaining[key] > 0:
+                remaining[key] -= 1
+                matched.append(item)
+
+        if any(remaining.values()):
+            return None
+        return matched
 
     def _resolve_prompt_cache_breakpoints(self) -> bool:
         setting = self._opts.prompt_cache_breakpoints
@@ -523,6 +570,7 @@ class LLMStream(llm.LLMStream):
         extra_kwargs: dict[str, Any],
         full_chat_ctx: llm.ChatContext,
         prompt_cache_breakpoints: bool,
+        omit_call_ids: set[str] | None = None,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._prompt_cache_breakpoints = prompt_cache_breakpoints
@@ -536,6 +584,8 @@ class LLMStream(llm.LLMStream):
         self._llm: LLM = llm
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
         self._full_chat_ctx = full_chat_ctx.copy()
+        # function calls the server already holds under previous_response_id
+        self._omit_call_ids = omit_call_ids or set()
 
     async def _run(self) -> None:
         if self._llm._active_streams > 0:
@@ -555,6 +605,15 @@ class LLMStream(llm.LLMStream):
         chat_ctx, _ = self._chat_ctx.to_provider_format(
             format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
         )
+        if self._omit_call_ids:
+            chat_ctx = [
+                item
+                for item in chat_ctx
+                if not (
+                    item.get("type") == "function_call"
+                    and item.get("call_id") in self._omit_call_ids
+                )
+            ]
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
