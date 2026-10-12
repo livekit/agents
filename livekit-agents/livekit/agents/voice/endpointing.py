@@ -203,6 +203,7 @@ class DynamicEndpointing(BaseEndpointing):
                 (0 < interruption_delay <= self.min_delay)
                 and (0 < turn_delay <= self.max_delay)
                 and (pause := self.between_utterance_delay) > 0
+                and pause <= self.max_delay
             ):
                 prev_val = self.min_delay
                 self._utterance_pause.apply(1.0, pause)
