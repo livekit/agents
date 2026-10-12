@@ -8,7 +8,7 @@ build-backend = "maturin"
 
 [project]
 name = "livekit-agents"
-version = "2.0.0.dev0"
+version = "2.0.0b1"
 description = "A powerful framework for building realtime voice AI agents"
 readme = "README.md"
 license = "Apache-2.0"
