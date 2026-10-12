@@ -63,6 +63,30 @@ class _Parent(Agent):
         return "collected"
 
 
+class _AskTask(AgentTask[None]):
+    def __init__(self) -> None:
+        super().__init__(instructions="ask task")
+
+    async def on_enter(self) -> None:
+        await asyncio.sleep(TOOL_WORK * 2)  # keeps the first run open past send_link's work
+
+    @function_tool
+    async def finish(self) -> None:
+        """Finish the task."""
+        self.complete(None)
+
+
+class _Asker(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="asker agent", tools=[send_link])
+
+    @function_tool
+    async def ask(self) -> str:
+        """Ask the user."""
+        await _AskTask()
+        return "asked"
+
+
 def _outputs(agent: Agent) -> list[str]:
     return [i.output for i in agent.chat_ctx.items if i.type == "function_call_output"]
 
@@ -128,6 +152,47 @@ async def test_reply_during_agent_task_waits_for_resume(
     assert speakers == ["_Parent", "_Parent"]  # the user turn, then the deferred reply
     assert current is parent
     assert "link sent" in _outputs(parent)
+
+
+async def test_reply_under_agent_task_does_not_block_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A reply waiting for an AgentTask that needs another user turn must not hold the
+    current run open, or the next run can never start."""
+    calls = [
+        FunctionToolCall(name=name, arguments="{}", call_id=f"call_{name}")
+        for name in ("send_link", "ask")
+    ]
+    finish = [FunctionToolCall(name="finish", arguments="{}", call_id="call_finish")]
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go", content="one moment", ttft=0.1, duration=0.1, tool_calls=calls
+            ),
+            FakeLLMResponse(input="done", content="", ttft=0.1, duration=0.1, tool_calls=finish),
+        ]
+    )
+    asker = _Asker()
+    async with AgentSession(llm=llm) as sess:
+        speakers: list[str] = []
+
+        def _on_speech_created(ev: SpeechCreatedEvent) -> None:
+            if ev.source == "generate_reply":
+                speakers.append(type(sess.current_agent).__name__)
+
+        sess.on("speech_created", _on_speech_created)
+        await sess.start(asker)
+
+        with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+            await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+            assert isinstance(sess.current_agent, _AskTask)
+            await asyncio.wait_for(sess.run(user_input="done"), timeout=5.0)
+
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert not errors, errors
+        assert sess.current_agent is asker
+        assert speakers[-1] == "_Asker"  # the deferred reply, after the task returns
+        assert "link sent" in _outputs(asker)
 
 
 async def test_session_scoped_reply_follows_handoff(caplog: pytest.LogCaptureFixture) -> None:

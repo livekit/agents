@@ -560,8 +560,22 @@ class _ToolExecutor:
                 if not activity.scheduling_paused:
                     break
 
-                # idle but paused: it resumes once an AgentTask returns, or closes at a handoff
+                # idle but paused: it resumes once an AgentTask returns, or closes at a handoff.
+                # the AgentTask may need another run to return, so release the current one
+                reply_task = asyncio.current_task()
+                run_state = session._global_run_state
+                suspended = False
+                if reply_task and run_state and run_state._unwatch_handle(reply_task):
+                    suspended = True
+                    run_state._mark_done_if_needed(None)
+
                 await activity._scheduling_resumed.wait()
+
+                # rejoin whichever run is active on resume, as AgentTask does with its parent
+                run_state = session._global_run_state
+                if suspended and reply_task and run_state and not run_state.done():
+                    run_state._watch_handle(reply_task)
+
                 if activity._closed:
                     raise ActivityClosedError(f"activity {activity.agent.label} is closing")
             except ActivityClosedError:
