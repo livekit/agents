@@ -817,7 +817,26 @@ class _NonNullableEnumModel(BaseModel):
     status: Literal["active", "inactive"] = Field(...)
 
 
+class _Color(str, enum.Enum):
+    RED = "red"
+    GREEN = "green"
+
+
+class _SharedEnumModel(BaseModel):
+    required: _Color
+    first: Annotated[_Color, Field(description="first")] | None
+    second: Annotated[_Color, Field(description="second")] | None
+
+
 class TestStrictJsonSchema:
+    def test_nullable_enum_does_not_add_null_to_the_shared_definition(self):
+        # each nullable use expands the same `$defs` entry; the null it adds must not
+        # reach that entry, the required field that refs it, or the other nullable use
+        schema = to_strict_json_schema(_SharedEnumModel)
+        assert schema["$defs"]["_Color"]["enum"] == ["red", "green"]
+        assert schema["properties"]["first"]["enum"] == ["red", "green", None]
+        assert schema["properties"]["second"]["enum"] == ["red", "green", None]
+
     def test_nullable_enum_includes_null_in_enum(self):
         schema = to_strict_json_schema(_NullableEnumModel)
         status = schema["properties"]["status"]
