@@ -162,6 +162,23 @@ class TestDynamicEndpointing:
 
         assert ep.max_delay == pytest.approx(1.0, rel=1e-5)
 
+    def test_interruption_with_combined_pause_exceeding_max_delay_is_ignored(self) -> None:
+        """Immediate interruption whose total pause exceeds max_delay should not inflate min_delay."""
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
+
+        # Previous utterance ends at 100.0
+        ep.on_end_of_speech(ended_at=100.0)
+        # Agent starts speaking after 0.9s (turn_delay=0.9, within max_delay)
+        ep.on_start_of_agent_speech(started_at=100.9)
+        # User interrupts 0.2s later (interruption_delay=0.2, within min_delay)
+        ep.on_start_of_speech(started_at=101.1, overlapping=True)
+        ep.on_end_of_speech(ended_at=101.5)
+
+        # Total pause (between_utterance_delay) = 101.1 - 100.0 = 1.1s > max_delay (1.0s)
+        # Even though turn_delay (0.9) and interruption_delay (0.2) pass their individual
+        # checks, the combined pause should be rejected to prevent inflation.
+        assert ep.min_delay == pytest.approx(0.3, rel=1e-5)
+
     def test_interruption_updates_min_delay(self) -> None:
         """Test that immediate interruptions (case 2) update min_delay."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
