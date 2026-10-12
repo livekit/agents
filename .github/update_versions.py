@@ -50,6 +50,15 @@ def write_new_version(f: pathlib.Path, new_version: str) -> None:
     )
     f.write_text(new_text)
 
+def write_agents_version(f: pathlib.Path, new_version: str) -> None:
+    """livekit-agents' version.py, and its pyproject.toml, whose static version maturin builds."""
+    write_new_version(f, new_version)
+    pyproject = pathlib.Path("livekit-agents/pyproject.toml")
+    text = pyproject.read_text()
+    new_text, n = re.subn(r'(?m)^version\s*=\s*"[^"]*"', f'version = "{new_version}"', text, count=1)
+    if n:
+        pyproject.write_text(new_text)
+
 def bump_version(cur: str, bump_type: str) -> str:
     v = Version(cur)
     if bump_type == "release":
@@ -134,7 +143,7 @@ def update_versions(bump_type: str) -> None:
         cur = read_version(agents_ver)
         new = bump_version(cur, bump_type)
         print(f"livekit-agents: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
-        write_new_version(agents_ver, new)
+        write_agents_version(agents_ver, new)
         new_agents_version = new
     else:
         print("Warning: No version.py found for livekit-agents.")
@@ -168,7 +177,7 @@ def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
         cur = read_version(agents_ver)
         new = bump_prerelease(cur, prerelease_type)
         print(f"livekit-agents: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
-        write_new_version(agents_ver, new)
+        write_agents_version(agents_ver, new)
         new_agents_version = new
     else:
         print("Warning: No version.py for livekit-agents.")
