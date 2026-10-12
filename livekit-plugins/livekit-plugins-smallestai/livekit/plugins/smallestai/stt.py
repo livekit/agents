@@ -265,9 +265,7 @@ class STT(stt.STT):
             redact_pii=redact_pii,
             redact_pci=redact_pci,
             endpointing=endpointing,
-            endpointing_timeout=endpointing_timeout
-            if is_given(endpointing_timeout)
-            else None,
+            endpointing_timeout=endpointing_timeout if is_given(endpointing_timeout) else None,
             eou_timeout_ms=eou_timeout_ms if is_given(eou_timeout_ms) else None,
             vad_events=vad_events,
             finalize_on_flush=finalize_on_flush,
