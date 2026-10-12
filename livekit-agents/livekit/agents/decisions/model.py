@@ -114,12 +114,7 @@ class DecisionsCompletedEvent(BaseModel):
     type: Literal["decisions_completed"] = "decisions_completed"
     results: dict[str, DecisionResult]
     errors: dict[str, str] = Field(default_factory=dict)
-    model: str = ""
-    provider: str = ""
     source_message_id: str
-    agent_id: str
-    activity_id: str
-    request_id: str = ""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -142,23 +137,20 @@ class DecisionOptions(TypedDict, total=False):
     Default: False. Instructions are always excluded, and images are included only when
     the decision model accepts image input.
     """
-    allow_partial: bool
-    """Emit valid results and per-decision errors when some answers fail validation.
-    Default: False, which rejects the whole batch.
-    """
     timeout: float
     """Maximum seconds per background evaluation, including retries. Default: 10."""
 
 
+_DEFAULT_DECISION_OPTIONS: DecisionOptions = {
+    "turn_interval": 1,
+    "max_context_turns": 6,
+    "include_context_events": False,
+    "timeout": 10.0,
+}
+
+
 def _resolve_options(options: DecisionOptions | None) -> DecisionOptions:
-    resolved = DecisionOptions(
-        turn_interval=1,
-        max_context_turns=6,
-        timeout=10.0,
-        include_context_events=False,
-        allow_partial=False,
-    )
-    resolved.update(options or {})
+    resolved = DecisionOptions(**{**_DEFAULT_DECISION_OPTIONS, **(options or {})})
     for name in ("turn_interval", "max_context_turns"):
         value = resolved[name]
         if type(value) is not int or value < 1:
@@ -275,14 +267,13 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         *,
         chat_ctx: ChatContext,
         decisions: Mapping[str, Decision],
-        allow_partial: bool = False,
         include_context_events: bool = False,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> DecisionResponse:
-        """Evaluate a batch, rejecting invalid answers unless ``allow_partial`` is set.
+        """Evaluate a batch of decisions.
 
-        With partial results, each requested name appears in either ``results`` or
-        ``errors``. Request failures still raise. ``include_context_events`` includes
+        Each requested name appears in either ``results`` or ``errors``. Request failures
+        still raise. ``include_context_events`` includes
         tools, handoffs, and interruption metadata in the provider input.
         """
         span = trace.get_current_span()
@@ -347,12 +338,6 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
             )
             _validate_response(response, definitions)
             span.set_attribute("lk.decision_error_count", len(response.errors))
-            if response.errors and not allow_partial:
-                raise APIError(
-                    "invalid decision answers: "
-                    + "; ".join(f"{name}: {error}" for name, error in response.errors.items()),
-                    retryable=False,
-                )
             return response
         raise RuntimeError("unreachable")
 

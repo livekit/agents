@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from .. import utils
 from ..decisions import Decision, DecisionModel, DecisionResponse, DecisionsCompletedEvent
 from ..llm import ChatContent, ChatContext, ChatItem, ChatMessage, ImageContent
 from ..log import logger
@@ -64,7 +63,6 @@ class _DecisionRunner:
         self._model = model
         self._definitions = activity.agent._decisions
         self._options = self._session.options.decision_options
-        self._activity_id = utils.shortuuid("decision_activity_")
         self._turn_count = 0
         self._pending: tuple[ChatContext, str] | None = None
         self._task: asyncio.Task[None] | None = None
@@ -154,7 +152,6 @@ class _DecisionRunner:
                         self._model.evaluate(
                             chat_ctx=chat_ctx,
                             decisions=self._definitions,
-                            allow_partial=self._options["allow_partial"],
                             include_context_events=self._options["include_context_events"],
                         ),
                         timeout=self._options["timeout"],
@@ -170,12 +167,7 @@ class _DecisionRunner:
                     DecisionsCompletedEvent(
                         results=response.results,
                         errors=response.errors,
-                        model=response.model,
-                        provider=response.provider,
                         source_message_id=source_id,
-                        agent_id=self._activity.agent.id,
-                        activity_id=self._activity_id,
-                        request_id=response.request_id,
                     ),
                 )
 

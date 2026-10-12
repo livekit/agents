@@ -384,7 +384,6 @@ async def test_overlap_keeps_running_and_latest_pending_snapshot() -> None:
         last_answer.set_result(0.2)
         last_event = await asyncio.wait_for(events.get(), 2)
         assert last_event.source_message_id == third.id
-        assert first_event.activity_id == last_event.activity_id
         assert model.calls.empty()
         usage = session.usage.model_usage
         assert len(usage) == 1 and usage[0].type == "decision_usage"
@@ -515,11 +514,9 @@ async def test_background_context_events_respect_window_and_snapshot_isolation(
 
 
 @pytest.mark.parametrize("failure", [None, "unknown decisions", "both a result and an error"])
-@pytest.mark.parametrize("allow_partial", [False, True])
 async def test_completed_batch_records_usage_once_even_when_rejected(
     monkeypatch,
     failure,
-    allow_partial: bool,
 ) -> None:
     response = DecisionResponse(
         results={"handoff": ProbabilityResult(value=0.9)},
@@ -544,7 +541,6 @@ async def test_completed_batch_records_usage_once_even_when_rejected(
             await session.decision_model.evaluate(
                 chat_ctx=ChatContext.empty(),
                 decisions={"handoff": decisions.Probability("Wants a human?")},
-                allow_partial=allow_partial,
             )
         evaluate.assert_awaited_once()
         [metrics] = collected
@@ -554,10 +550,7 @@ async def test_completed_batch_records_usage_once_even_when_rejected(
         assert (usage.input_tokens, usage.output_tokens, usage.total_requests) == (50, 5, 1)
 
 
-@pytest.mark.parametrize("allow_partial", [False, True])
-async def test_background_partial_results_and_model_identity(
-    monkeypatch, allow_partial: bool
-) -> None:
+async def test_background_partial_results_and_model_identity(monkeypatch) -> None:
     model = ControlledModel()
     evaluate = AsyncMock(
         return_value=DecisionResponse(
@@ -570,7 +563,7 @@ async def test_background_partial_results_and_model_identity(
         )
     )
     monkeypatch.setattr(model, "_evaluate_impl", evaluate)
-    async with session_for(model, allow_partial=allow_partial) as session:
+    async with session_for(model) as session:
         events = []
         session.on("decisions_completed", events.append)
         await session.start(
@@ -584,14 +577,11 @@ async def test_background_partial_results_and_model_identity(
         )
         source = add_user(session, "Please call me back.")
         await session._activity._decision_runner._task
-        assert len(events) == int(allow_partial)
-        if allow_partial:
-            [event] = events
-            assert set(event.results) == {"handoff"}
-            assert event.errors == {"tag": "invalid answer"}
-            assert (event.model, event.provider) == ("resolved-model", "test-provider")
-            assert event.source_message_id == source.id
-            assert TypeAdapter(AgentEvent).validate_json(event.model_dump_json()) == event
+        [event] = events
+        assert set(event.results) == {"handoff"}
+        assert event.errors == {"tag": "invalid answer"}
+        assert event.source_message_id == source.id
+        assert TypeAdapter(AgentEvent).validate_json(event.model_dump_json()) == event
         [usage] = session.usage.model_usage
         assert usage.input_tokens == 10
         assert usage.total_requests == 1
@@ -664,7 +654,6 @@ async def test_handoff_suppresses_late_result_and_discards_pending_snapshot() ->
         _, _, answer = await next_call(model)
         answer.set_result(0.4)
         event = await asyncio.wait_for(events.get(), 2)
-        assert event.agent_id == "second_agent"
         assert event.source_message_id == latest.id
 
 
