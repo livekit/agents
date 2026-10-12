@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping
 from contextlib import AsyncExitStack, nullcontext
 from types import SimpleNamespace
@@ -9,7 +10,15 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from livekit.agents import Agent, AgentSession, APIError, APITimeoutError, decisions, utils
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    decisions,
+    utils,
+)
 from livekit.agents.decisions import DecisionResponse, ProbabilityResult
 from livekit.agents.llm import (
     AgentHandoff,
@@ -585,6 +594,27 @@ async def test_background_partial_results_and_model_identity(monkeypatch) -> Non
         [usage] = session.usage.model_usage
         assert usage.input_tokens == 10
         assert usage.total_requests == 1
+
+
+async def test_background_failure_keeps_provider_error_out_of_log_message(
+    monkeypatch, caplog
+) -> None:
+    model = ControlledModel()
+    error = APIStatusError(
+        "bad request", status_code=400, body={"echo": "my card is 4242"}, retryable=False
+    )
+    monkeypatch.setattr(model, "_evaluate_impl", AsyncMock(side_effect=error))
+    async with session_for(model) as session:
+        await session.start(agent())
+        with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+            source = add_user(session, "my card is 4242")
+            await session._activity._decision_runner._task
+    [record] = [r for r in caplog.records if r.message == "background decision evaluation failed"]
+    assert record.exc_info is None
+    assert "4242" not in record.getMessage()
+    assert "4242" in getattr(record, "lk.pii.error")
+    assert record.error_type == "APIStatusError"
+    assert record.source_message_id == source.id
 
 
 @pytest.mark.parametrize("max_retry", [0, 1])

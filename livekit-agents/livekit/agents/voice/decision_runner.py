@@ -156,9 +156,14 @@ class _DecisionRunner:
                         ),
                         timeout=self._options["timeout"],
                     )
-            except Exception:
-                logger.exception(
-                    "background decision evaluation failed", extra={"source_message_id": source_id}
+            except Exception as e:
+                logger.error(
+                    "background decision evaluation failed",
+                    extra={
+                        "source_message_id": source_id,
+                        "error_type": type(e).__name__,
+                        "lk.pii.error": str(e),
+                    },
                 )
                 continue
             if self._active():
