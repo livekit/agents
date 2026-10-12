@@ -163,7 +163,8 @@ Source = "https://github.com/livekit/agents"
 module-name = "livekit.agents._core"
 python-source = "."
 manifest-path = "../rust/crates/lk-agents-py/Cargo.toml"
-features = ["pyo3/extension-module"]
+# abi3: one wheel per platform for every Python from 3.10
+features = ["pyo3/extension-module", "pyo3/abi3-py310"]
 include = [
     { path = "livekit/agents/resources/*", format = "wheel" },
     { path = "livekit/agents/debug/index.html", format = "wheel" },

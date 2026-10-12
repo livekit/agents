@@ -69,6 +69,9 @@ def bump_prerelease(cur: str, bump_type: str) -> str:
     if bump_type == "dev":
         next_dev = (v.dev + 1) if v.dev is not None else 0
         return f"{base}.dev{next_dev}"
+    elif bump_type == "b":
+        next_b = v.pre[1] + 1 if v.pre and v.pre[0] == "b" else 1
+        return f"{base}b{next_b}"
     elif bump_type == "rc":
         if v.pre and v.pre[0] == "rc":
             next_rc = v.pre[1] + 1
@@ -154,7 +157,7 @@ def update_versions(bump_type: str) -> None:
     if plugin_versions:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
-def update_prerelease(prerelease_type: str) -> None:
+def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
     agents_ver = pathlib.Path("livekit-agents/livekit/agents/version.py")
     plugins_root = pathlib.Path("livekit-plugins")
 
@@ -169,6 +172,9 @@ def update_prerelease(prerelease_type: str) -> None:
         new_agents_version = new
     else:
         print("Warning: No version.py for livekit-agents.")
+
+    if agents_only:
+        return
 
     for pdir in _iter_plugin_dirs(plugins_root):
         vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
@@ -191,9 +197,14 @@ def update_prerelease(prerelease_type: str) -> None:
 @click.command("bump")
 @click.option(
     "--pre", 
-    type=click.Choice(["rc", "dev", "none"]), 
+    type=click.Choice(["rc", "b", "dev", "none"]), 
     default="none", 
-    help="Pre-release type. Use 'none' for normal bump, or 'rc'/'dev' for pre-release."
+    help="Pre-release type. Use 'none' for normal bump, or 'rc'/'b'/'dev' for pre-release."
+)
+@click.option(
+    "--agents-only",
+    is_flag=True,
+    help="Pre-release livekit-agents alone; the plugins and their livekit-agents floor stay as they are.",
 )
 @click.option(
     "--bump-type",
@@ -201,7 +212,7 @@ def update_prerelease(prerelease_type: str) -> None:
     default="patch",
     help="Type of version bump to apply to every package. Use 'release' to strip pre-release suffixes. Defaults to patch."
 )
-def bump(pre: str, bump_type: str) -> None:
+def bump(pre: str, bump_type: str, agents_only: bool) -> None:
     """
     Single command to do either normal or pre-release bumps.
 
@@ -213,7 +224,7 @@ def bump(pre: str, bump_type: str) -> None:
     if pre == "none":
         update_versions(bump_type)
     else:
-        update_prerelease(pre)
+        update_prerelease(pre, agents_only)
 
 if __name__ == "__main__":
     bump()

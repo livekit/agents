@@ -27,7 +27,7 @@ on:
 jobs:
   build_plugins:
     runs-on: ubuntu-latest
-    if: inputs.package != 'livekit-blockguard' && inputs.package != 'livekit-durable'
+    if: inputs.package != 'livekit-blockguard' && inputs.package != 'livekit-durable' && inputs.package != 'livekit-agents'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -53,6 +53,64 @@ jobs:
         with:
           name: ${{ inputs.artifact_name }}
           path: dist/
+
+  # livekit-agents carries the Rust core: one abi3 wheel per platform (cp310-abi3, every
+  # Python from 3.10), checked by importing the core on 3.10 and 3.14 where the runner can run it
+  build_agents:
+    if: inputs.package == 'livekit-agents'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-latest, target: x86_64, manylinux: "2_28", test: true }
+          - { name: linux-aarch64, os: namespace-profile-default-arm64, target: aarch64, manylinux: "2_28", test: true }
+          - { name: musllinux-x86_64, os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2, test: false }
+          - { name: musllinux-aarch64, os: namespace-profile-default-arm64, target: aarch64, manylinux: musllinux_1_2, test: false }
+          - { name: macos-arm64, os: macos-latest, target: aarch64, manylinux: "", test: true }
+          - { name: macos-x86_64, os: macos-latest, target: x86_64, manylinux: "", test: false }
+          - { name: windows-x64, os: windows-latest, target: x64, manylinux: "", test: true }
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          submodules: true
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.10"
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: livekit-agents
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+          sccache: true
+
+      - name: Install uv
+        if: matrix.test
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Import the core on Python 3.10 and 3.14
+        if: matrix.test
+        shell: bash
+        run: |
+          wheel=$(ls livekit-agents/dist/*.whl)
+          for v in 3.10 3.14; do
+            uv venv -p "$v" "venv-$v"
+            VIRTUAL_ENV="$PWD/venv-$v" uv pip install "$wheel"
+            py="venv-$v/bin/python"; [ -f "venv-$v/Scripts/python.exe" ] && py="venv-$v/Scripts/python.exe"
+            "$py" -c "import sys, livekit.agents, livekit.agents._core as c; print(sys.version, c.__file__)"
+          done
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ inputs.artifact_name }}-${{ matrix.name }}
+          path: livekit-agents/dist/
 
   build_durable:
     if: inputs.package == 'livekit-durable'
@@ -141,9 +199,9 @@ jobs:
           path: livekit-plugins/livekit-blockguard/dist/
 
   merge_artifacts:
-    if: ${{ always() && (inputs.package == 'livekit-blockguard' || inputs.package == 'livekit-durable') }}
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (inputs.package == 'livekit-blockguard' || inputs.package == 'livekit-durable' || inputs.package == 'livekit-agents') }}
     runs-on: ubuntu-latest
-    needs: [build_blockguard, build_durable]
+    needs: [build_agents, build_blockguard, build_durable]
     steps:
       - name: Download all platform wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

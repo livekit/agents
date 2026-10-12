@@ -423,8 +423,10 @@ fn pcm_arg(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     if let Ok(b) = obj.cast::<PyByteArray>() {
         return Ok(b.to_vec());
     }
-    let buf = pyo3::buffer::PyBuffer::<u8>::get(obj)?;
-    buf.to_vec(obj.py())
+    // any other buffer (memoryview, array): `memoryview(obj).tobytes()`, since the buffer API is
+    // not in the stable ABI before 3.11
+    let view = obj.py().import("builtins")?.getattr("memoryview")?.call1((obj,))?;
+    Ok(view.call_method0("tobytes")?.cast::<PyBytes>()?.as_bytes().to_vec())
 }
 
 
@@ -438,6 +440,22 @@ mod tests {
     fn attach<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         Python::initialize();
         Python::attach(f)
+    }
+
+    #[test]
+    fn pcm_arg_takes_any_buffer() {
+        attach(|py| {
+            for expr in [
+                "b'\\x01\\x02'",
+                "bytearray(b'\\x01\\x02')",
+                "memoryview(b'\\x01\\x02')",
+                "__import__('array').array('B', [1, 2])",
+            ] {
+                let obj = py.eval(&std::ffi::CString::new(expr).unwrap(), None, None).unwrap();
+                assert_eq!(pcm_arg(&obj).unwrap(), vec![1, 2], "{expr}");
+            }
+            assert!(pcm_arg(&py.eval(c"3", None, None).unwrap()).is_err());
+        });
     }
 
     // ---------------------------------------------------------------------------- the emitter
