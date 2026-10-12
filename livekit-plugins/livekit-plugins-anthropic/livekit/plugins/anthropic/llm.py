@@ -131,6 +131,11 @@ class LLM(llm.LLM):
             value: Sonnet 5.5 and Opus 5.5 reject ``{"type": "disabled"}``. With
             ``{"type": "enabled", "budget_tokens": N}`` the default ``max_tokens`` becomes
             ``N + 1024``, and an explicit ``max_tokens`` must be greater than ``N``.
+            With thinking off, Sonnet 5 and Haiku 5.5 answer faster and tool calls stay as
+            accurate, but on questions that need working out without a tool they sometimes
+            say the answer first and correct it afterwards. Agents that mostly reason without
+            tools may prefer ``{"type": "adaptive"}`` with a larger ``max_tokens``, such as
+            4096, since thinking counts against it.
         """  # noqa: E501
 
         super().__init__()
