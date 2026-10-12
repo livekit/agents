@@ -88,9 +88,9 @@ class Customer(BaseModel):
 
 backend = Agent(
     instructions=(
-        "You are the back office of ... You never talk to the customer yourself: the front "
-        "desk relays what you say and asks your questions. Answer from your tools, in one or two "
-        "plain sentences. Nothing is done until a tool says so: report only what a tool did, "
+        "You are the back office of ... You answer the customer's questions; the front desk "
+        "passes them on and words your answers, so answer them yourself and never refer the "
+        "customer to someone else. Answer from your tools, in one or two plain sentences. Nothing is done until a tool says so: report only what a tool did, "
         "and when a detail is missing, ask for that one thing without saying anything was "
         "added. <business rules from v1 here; keep routing short and put the rest in the tools' "
         "docstrings>"
@@ -127,7 +127,8 @@ async def place_order(ctx: RunContext[Shop, Customer], item_id: str) -> str:
         item_id: the item's id, as list_items returned it
     """
     item = ctx.deps.find(item_id)
-    assert item is not None and ctx.state.name is not None  # the read-back checked both
+    if item is None or ctx.state.name is None:  # checked by the read-back, but time passed
+        raise ToolError("the order changed; read it back again")
     try:
         order_id = await ctx.deps.order(item, ctx.state.name)
     except OutOfStock:
@@ -171,12 +172,14 @@ BACKEND = os.environ.get("BACKEND_URL", "http://127.0.0.1:7880/agents/shop/defau
 PERSONA = (
     "You are the front desk of ... <persona, tone, brand from v1>. You know nothing about the "
     "business yourself. Hand every request about <domain> to the back office at once, before "
-    "asking anything, as the customer's own words in quotes, with only context they gave "
-    "earlier: 'Customer: \"two cheeseburgers and a medium fries\"', never 'the customer wants "
-    "to order'. "
+    "asking anything, in the customer's own words as they said them, never retold ('the "
+    "customer wants...'), with only context they gave earlier. Never repeat to the customer "
+    "what you sent the back office. "
     "Tell the customer what it answered, in your own words, without adding facts: confirm only "
     "what it says was done, and if it says something is not on offer, say exactly that. Only "
-    "pleasantries and the conversation itself are yours."
+    "pleasantries and the conversation itself are yours. Never say something is booked, "
+    "added or done unless the back office's answer says so."
+    # no example confirmation ("Alright, one Big Mac!"): a small model says it before anything is done
 )
 
 back_office = A2ADelegate(BACKEND)  # one tool, "ask", described from the backend's card
@@ -248,6 +251,7 @@ then the backend door's `endpoint`. Update the Dockerfile to run `python main.py
 | `AgentSession(preemptive_generation=..., turn_detection=..., min_endpointing_delay=...)` | `turn_handling={"preemptive_generation": {"enabled": True}, ...}` on `LiveSession` (the old keywords are deprecated) |
 | `AgentSession(max_tool_steps=N)` | `backend.run(..., max_steps=N + 1)`: it counts model requests, the last one being the answer (default 12) |
 | `AgentSession(user_away_timeout=)`, `"user_state_changed"` idle nudges, `ctx.add_shutdown_callback`, `RoomOptions` | unchanged, in the frontend's `phone()` door |
+| `@server.rtc_session(on_session_end=..., on_simulation_end=...)` | the same keywords on `@front_desk.rtc_session(...)`; they see the frontend's lane only, so a hook that graded the per-call database becomes an offline check |
 | `Instructions(audio=..., text=...)` per modality | the frontend's two agents: `voice` and `chat`, the persona plus a suffix each |
 | `session.userdata`, `RunContext[Userdata]`, `context.userdata` | `state_type=` (saved, JSON) and `deps_type=` (clients, DBs); tools take `RunContext[Deps, State]` |
 | `@server.rtc_session()` + `ctx.connect()` + `session.start(agent=MyAgent(), room=ctx.room)` | `@front_desk.rtc_session()` on an `AgentHandler`, `session.start(agent=voice, room=ctx.room)`; no `ctx.connect()` |
@@ -304,11 +308,22 @@ answered. There is no `approved` parameter the model could set, so it cannot ski
   for a detail that is still missing.
 - A read-back may `raise ToolError(...)` to refuse ("already cancelled"), or `return await
   VerifyTask()` for a precondition (see "Verify, then act").
+- Every amount in a read-back comes from the same domain call the write makes (a quote or peek
+  helper), never from arithmetic in the agent: the read-back is what the person agrees to pay.
+- The body runs after the person answered, maybe much later: re-check what the read-back
+  checked and raise `ToolError` (or return the guard) when it no longer holds; never `assert`.
 - Inside a task whose `record_*` tools collect the details, a read-back with a step missing
   raises `ToolError("choose the doctor first")`: an `InputRequired` there turns the write tool
   into a shortcut for asking, and the person gets a question with no options. Return
   `InputRequired` for a missing detail only from a standalone tool.
 - It is for any yes the person must give, a write or a detail to confirm (an email read back).
+- A write whose outcome depends on the person accepting an offer (v1's
+  `dispute_charge(accepts_offered_resolution: bool)`) becomes two tools: one whose read-back
+  offers the resolution and applies it on a yes, and one for the other path (escalate).
+- The door carries a verbatim read-back to the frontend by itself (`livekit/verbatim`), though
+  the handler returns a string. Write read-backs plainly, as both a caller and a reader take
+  them: "$873.60", "HTL-AB12", "Friday, October 16 at 7:30 PM", "212-555-0147"; never spaced
+  digits for speech, since a text conversation shows them as written.
 - Put "a yes means calling the tool again exactly the same way" in the instructions of the
   agent or task that owns the tool, not only in its docstring: a small model ignores a rule
   that lives only in a docstring, and the approved write never happens.
@@ -326,6 +341,8 @@ For a task method, define the read-back as a method above it in the class:
 
 ## Porting tools
 
+- Keep v1's docstring hints on argument formats ("YYYY-MM-DD, e.g. 2026-01-20"): without them
+  the model guesses, and each wrong guess costs a step.
 - Arguments: anything pydantic validates. Keep v1 enums as `Literal[...]` or ids the tool
   listed; constrain numbers with `Annotated[int, Field(ge=1)]`. A free-form `datetime` the model
   fills is risky: give it today's date in `@backend.instructions`, or take ids from a listing.
@@ -338,8 +355,12 @@ For a task method, define the read-back as a method above it in the class:
   tool added it is the most common failure of a migrated backend.
 - Keep the backend's routing instructions short and put each tool's rules in its docstring: a
   long v1 prompt on a small model stops it starting flows at once.
+- Every figure the person asks for (a total, a balance, a count) comes from a tool's return,
+  never from the model's arithmetic: give the listing tool the total.
 - Name the single next thing to ask in a tool's return and in dynamic instructions ("next: the
-  email"), never a list: the model asks what it is told, all at once.
+  email"), never a list: the model asks what it is told, all at once. Tell the model to record
+  everything the person already said, with every tool that applies, before it asks that next
+  thing.
 - A conversation tool that returns `InputRequired` never runs again with the answer; the model
   reads the answer and calls the tool again with it. Design parameters for that.
 - `await ctx.update("...")` before slow work.
@@ -349,7 +370,8 @@ For a task method, define the read-back as a method above it in the class:
 - `state_type` is JSON, defaulted, < 64 KiB, saved after every turn. `deps` are clients and
   databases, never saved.
 - v1 built domain objects per room (`FakeDatabase()` in the session). In 2.0 a module-level
-  deps object is shared by every thread of the worker: data that must survive a conversation
+  deps object is shared by every thread of the worker process, and a call's job may run in
+  another process, so never rely on memory shared between the doors: data that must survive a conversation
   lives there or in a real store; data about one conversation lives in `state`.
 - The thread's history is durable: whatever the person types (a full card number) stays in it.
   Keep only what you need in state (the last four digits), and say so in `MIGRATION.md`.
@@ -427,7 +449,10 @@ async def start_pizza_order(ctx: RunContext[Shop, Customer], size: str | None = 
 
 - A task is a module-level `@dataclass` subclass of `AgentTask[Output, State]`, rebuilt by
   class name and fields on the next message, maybe on another worker. Fields are JSON-shaped.
-- Give it its own `llm=`: a task never inherits the routing agent's model.
+- Give it its own `llm=`: a task never inherits the routing agent's model. Its model sees the
+  conversation so far.
+- Every field of the task's state model has a default: the framework builds it empty before
+  `__post_init__`, which then fills it from the task's fields (a draft copied from a booking).
 - Inside a task tool, `ctx.state` is the lane's state (it outlives the task) and `self.state`
   the task's own.
 - Don't name a field or a tool after an `Agent` attribute: `done`, `instructions`, `tools`, `id`,
@@ -449,7 +474,10 @@ async def start_pizza_order(ctx: RunContext[Shop, Customer], size: str | None = 
 ### Verify, then act
 
 v1's common "verify the caller, then do the thing" (two tasks in one tool) becomes **guard and
-re-call**. Guard every tool that needs it the same way, in its body or in its read-back; a
+re-call**. `Verify` completes with a plain fact ("verified"), never an instruction such as
+"call the tool again": every later task reads it in the history. The routing agent's
+instructions carry the rule: "when a verification completes, call the tool that started it
+again". Guard every tool that needs it the same way, in its body or in its read-back; a
 `ToolError("verify first")` instead leaves the model to ask the person itself, or to push the
 questions onto the frontend: the guarded tool returns `await Verify()` when the state says the person is not
 verified, `Verify` records the verification in the lane's state and completes with "verified;
@@ -461,7 +489,7 @@ guard:
 async def lookup_booking(ctx: RunContext[Hotel, Caller]) -> str:
     booking = verified(ctx)  # reads ctx.state.verified_code
     if booking is None:
-        return await VerifyBooking()  # completes with "verified; call the tool again"
+        return await VerifyBooking()  # completes with "verified"
     return describe(booking)
 
 
@@ -477,7 +505,9 @@ async def cancellation(ctx: RunContext[Hotel, Caller]) -> str:
 async def cancel_booking(ctx: RunContext[Hotel, Caller]) -> str: ...
 ```
 
-Give `Verify` optional fields for the credentials the person already gave. Verification now
+Give the guarded tools optional parameters for the credentials the person may already have
+said (`last_name`, `code`), and pass them into `Verify`'s fields. Type `Verify` as
+`AgentTask[str, ...]`, so `return await Verify()` type-checks inside a read-back too. Verification now
 lasts as long as the thread, across calls and days, not one call: decide whether that is right
 (add a `sign_out` tool, or keep the time it was verified in state and re-verify after a while)
 and write the decision in `MIGRATION.md`.
@@ -510,9 +540,13 @@ reply = await client.send("pepperoni")  # continues the same thread
   on a real model; assert on `result.output`, `result.input_required`, the state, and the
   `FunctionCall` items of `result.new_messages()`. v1's `result.expect`, `judge()` and
   `mock_tools` do not apply to `agent.run()`: judge with a small `Agent(output_type=Verdict)`,
-  and inject failures and per-test data through `deps` (a menu with an item unavailable).
+  and inject failures and per-test data through `deps` (a menu with an item unavailable). A
+  judge passes an answer that meets the intent in substance; "be strict" fails correct ones.
 - Importing the backend needs the env (its model strings): set dummy `LIVEKIT_API_KEY` and
   `LIVEKIT_API_SECRET` in the test, or keep pure models and validators in the domain module.
+- A task can be tested directly: `await MyTask(...).run("...", state=..., deps=...)` runs it as
+  the root; its `Completed` value is `result.output`. Construct it inside an async test: a task
+  needs a running event loop.
 - A multi-turn flow (a task, an approval) needs the door: it continues across messages only
   through the A2A endpoint. Test it against a running worker with `AgentClient` (see "Running
   it"; the backend door is `public=False`, so use the project token), or keep it as a
@@ -522,10 +556,11 @@ reply = await client.send("pepperoni")  # continues the same thread
 
 ## Verify
 
-1. `LIVEKIT_API_KEY=x LIVEKIT_API_SECRET=x LIVEKIT_AGENTDB_URL=ws://x python -c "import main"`:
+1. `LIVEKIT_URL=wss://x.staging.livekit.cloud LIVEKIT_API_KEY=x LIVEKIT_API_SECRET=x python -c "import main"`:
    model strings and storage need these at import; dummy values are enough.
 2. `mypy --strict --follow-imports=silent` on every new module (all of them, if you split the
-   backend), and `ruff check --line-length 100`: every error in the new code fixed. Untouched
+   backend), and `ruff check --line-length 100 --select E,F,W,I` (the default rules skip line
+   length): every error in the new code fixed. Untouched
    domain modules are out of scope; a call into an untyped one may take
    `# type: ignore[no-untyped-call]`.
 3. Walk the inventory: every v1 tool, flow, rule, voice feature and test has a row saying where

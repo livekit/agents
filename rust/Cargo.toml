@@ -47,22 +47,23 @@ smallvec     = "1"
 ordered-float = "5"
 # --- below the purity line ---
 tokio        = { version = "1", features = ["rt", "sync", "macros", "time"] }
-# The LiveKit protocol, from the sibling checkout of `livekit/rust-sdks` (branch
-# `theo/protocol-agent-package`, livekit/rust-sdks#1379, commit f717458e or later): `livekit_protocol::agent` is the
+# The LiveKit protocol, from `livekit/rust-sdks` `main` on GitHub (Cargo.lock pins the commit): `livekit_protocol::agent` is the
 # generated `livekit.agent` package -- `AgentSessionEvent`, `SessionRequest`, the EOT inference
 # messages -- and `livekit_protocol::{WorkerMessage, ServerMessage}` the worker's own wire. One
 # source for every proto in the workspace; nothing generates or vendors a `.rs` from a `.proto`
 # here any more (2026-09-09; `lk-agents-voice/src/remote/proto.rs` and
 # `lk-agents-inference/src/eot/proto.rs` were the two copies).
 #
-# A *path* dependency, because that branch is not released. cargo-mutants rewrites relative path
-# dependencies to absolute ones in the tree it copies (`fix_manifest`), so the nightly is unaffected.
-livekit-protocol = { path = "../../rust-sdks/livekit-protocol" }
-# The access token, from the same checkout: `AccessToken`/`TokenVerifier`/`Claims` over HS256.
+# A git dependency, because rust-sdks `main` is not released yet.
+livekit-protocol = { git = "https://github.com/livekit/rust-sdks", branch = "main" }
+# The access token, from the same repository: `AccessToken`/`TokenVerifier`/`Claims` over HS256.
 # The worker's `/agent` credential and a simulated job's participant token need `VideoGrants.agent`
-# and `Claims.kind`, added upstream in livekit/rust-sdks#1419 (cherry-picked onto the branch above
-# until it merges).
-livekit-token = { path = "../../rust-sdks/livekit-token" }
+# and `Claims.kind`.
+livekit-token = { git = "https://github.com/livekit/rust-sdks", branch = "main" }
+# `livekit-api`, from the same repository: its `ThreadClient` and `DatabaseClient` are the only way
+# to agentstore's threads and databases. Its rustls is
+# pinned to `ring`, the workspace's one crypto provider.
+livekit-api = { git = "https://github.com/livekit/rust-sdks", branch = "main", default-features = false, features = ["services", "rustls-tls-native-roots"] }
 # `livekit-protocol`'s prost, and therefore the workspace's: prost-derive emits `::prost::` paths,
 # so every crate that names a `Message` from that package must see the same major, 0.14 since
 # livekit/rust-sdks#1447.

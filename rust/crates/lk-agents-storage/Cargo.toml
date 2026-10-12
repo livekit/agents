@@ -7,7 +7,7 @@ license.workspace = true
 
 # The session storage client (plan 13.2, 13.5): the `wsdb` data-plane client, the session schema
 # as `#[derive(Host)]` records, every SQL statement a session database sees, the `/v1/streams`
-# client and the gRPC clients of the threads and management services. Host-neutral: no pyo3 here; `lk-agents-py/src/storage.rs`
+# client and the Public API's threads and databases. Host-neutral: no pyo3 here; `lk-agents-py/src/storage.rs`
 # is the Python face. Below the purity line by design (tokio, TLS, prost, reqwest).
 
 [lib]
@@ -18,14 +18,12 @@ doctest = false
 # `Host` for the row records, so their pydantic twins come from `lk-agents-codegen`, and their
 # `COLUMNS`/`SELECT` from `#[table]` (host-derive `table.rs`).
 lk-agents-host-derive = { path = "../lk-agents-host-derive" }
-# The wire, management and thread messages: `livekit.AgentDB` and `livekit.agent.AgentThread`.
+# The wire and thread messages: `livekit.AgentDB` and `livekit.agent.AgentThread`.
 livekit-protocol.workspace = true
 pbjson-types.workspace = true
 prost.workspace = true
-# The gRPC channel for the management and threads services; the codec is written here over the
-# workspace's prost, so no `prost` feature and nothing generated.
-tonic = { version = "0.14", default-features = false, features = ["channel", "tls-ring", "tls-webpki-roots"] }
-http = "1"
+# Threads and databases through public-api-server, the one way to agentstore.
+livekit-api.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
 thiserror.workspace = true

@@ -87,8 +87,6 @@ Point the workers at your LiveKit Staging project and its agent store, which hol
 export LIVEKIT_URL=<your staging project URL>
 export LIVEKIT_API_KEY=<key>
 export LIVEKIT_API_SECRET=<secret>
-export LIVEKIT_AGENTDB_URL=<agent store data plane>
-export LIVEKIT_AGENT_THREADS_URL=<threads service>
 ```
 
 The models: `OPENAI_API_KEY` for the phone door's realtime model, and the LiveKit inference

@@ -22,10 +22,7 @@ use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py, value
 use lk_agents_storage::statements::{
     AcquireRequest, CommitRequest, Receive, ReceiveRequest, RunEndedRequest, SubmittedTask,
 };
-use lk_agents_storage::threads::{
-    CreateRequest, GetItemsRequest, GetTasksRequest, ListRequest, ThreadInfo, ThreadItemPage,
-    ThreadPage, ThreadTask, UpdateRequest, attributes_from_json, duration_of, task_status,
-};
+use lk_agents_storage::threads::{ThreadInfo, ThreadTask, attributes_from_json, task_status};
 use lk_agents_storage::{StorageError as CoreError, StorageOptions, TokenMinter};
 use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -196,8 +193,8 @@ macro_rules! awaitable {
     };
 }
 
-/// The root: credentials and URLs (plan 13.4). `url` is `LIVEKIT_AGENTDB_URL`, `ws://host:port/db`;
-/// the streams API defaults to that host over HTTP and the two gRPC services to the streams base.
+/// The root: credentials and the agentstore URL (plan 13.4), the public API every request goes
+/// through, derived from `LIVEKIT_URL`.
 #[pyclass(name = "Storage", module = "livekit.agents._core", frozen)]
 pub struct PyStorage {
     inner: lk_agents_storage::Storage,
@@ -207,22 +204,15 @@ pub struct PyStorage {
 impl PyStorage {
     /// `api_key` and `api_secret` default to `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
     #[new]
-    #[pyo3(signature = (url, *, streams_url=None, management_url=None, threads_url=None, api_key=None, api_secret=None, lease_ttl=None, renew_interval=None))]
+    #[pyo3(signature = (*, api_key=None, api_secret=None, lease_ttl=None, renew_interval=None))]
     fn new(
-        url: &str,
-        streams_url: Option<String>,
-        management_url: Option<String>,
-        threads_url: Option<String>,
         api_key: Option<String>,
         api_secret: Option<String>,
         lease_ttl: Option<f64>,
         renew_interval: Option<f64>,
     ) -> PyResult<Self> {
         check_pid()?;
-        let mut opts = StorageOptions::new(url);
-        opts.streams_url = streams_url;
-        opts.management_url = management_url;
-        opts.threads_url = threads_url;
+        let mut opts = StorageOptions::from_env().map_err(to_py_err)?;
         if let Some(seconds) = lease_ttl {
             opts.lease_ttl = Duration::try_from_secs_f64(seconds)
                 .map_err(|e| PyValueError::new_err(format!("lease_ttl: {e}")))?;
@@ -241,6 +231,12 @@ impl PyStorage {
         Ok(Self { inner })
     }
 
+    /// The public API agentstore is reached through.
+    #[getter]
+    fn url(&self) -> String {
+        self.inner.options().url.clone()
+    }
+
     /// One connection to the session's database, with its schema version read. Awaitable.
     fn open<'py>(&self, py: Python<'py>, database_id: String) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
@@ -257,13 +253,13 @@ impl PyStorage {
         PyStreams { inner: self.inner.streams().clone() }
     }
 
-    /// The `AgentThreads` client.
+    /// The threads client.
     #[getter]
     fn threads(&self) -> PyThreads {
         PyThreads { inner: self.inner.threads().clone() }
     }
 
-    /// `AgentDB.CreateDatabase`, for development and tests: a `DatabaseInfo`.
+    /// `DatabaseService.CreateDatabase`, for development and tests: a `DatabaseInfo`.
     #[pyo3(signature = (ttl_seconds=0))]
     fn create_database<'py>(
         &self,
@@ -271,8 +267,8 @@ impl PyStorage {
         ttl_seconds: i64,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let admin = self.inner.admin().map_err(to_py_err)?;
-        awaitable!(py, admin.create_database(ttl_seconds), |py, out| model(
+        let databases = self.inner.databases().clone();
+        awaitable!(py, databases.create_database(ttl_seconds), |py, out| model(
             py,
             "storage",
             "DatabaseInfo",
@@ -280,15 +276,15 @@ impl PyStorage {
         ))
     }
 
-    /// `AgentDBService.DeleteDatabase`.
+    /// `DatabaseService.DeleteDatabase`.
     fn delete_database<'py>(
         &self,
         py: Python<'py>,
         database_id: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let admin = self.inner.admin().map_err(to_py_err)?;
-        awaitable!(py, admin.delete_database(&database_id))
+        let databases = self.inner.databases().clone();
+        awaitable!(py, databases.delete_database(&database_id))
     }
 }
 
@@ -734,7 +730,7 @@ impl PyStreamReader {
     }
 }
 
-/// The threads service's gRPC client (plan 4.3). Threads come back as `ThreadInfo`, the proto's
+/// The threads service's client (plan 4.3). Threads come back as `ThreadInfo`, the proto's
 /// fields.
 #[pyclass(name = "Threads", module = "livekit.agents._core", frozen)]
 pub struct PyThreads {
@@ -754,15 +750,14 @@ impl PyThreads {
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let attributes = attributes.map(|a| value_from_py(a, "attributes")).transpose()?;
-        let req = CreateRequest {
-            scope: scope.to_owned(),
-            attributes: attributes_from_json(attributes.as_ref()).map_err(to_py_err)?,
-            idle_ttl: duration_of(idle_ttl_seconds),
-        };
-        let threads = self.inner.clone();
+        let attributes = attributes_from_json(attributes.as_ref()).map_err(to_py_err)?;
+        let (threads, scope) = (self.inner.clone(), scope.to_owned());
         awaitable!(
             py,
-            async move { threads.create_thread(req).await.map(ThreadInfo::from) },
+            async move {
+                let thread = threads.create_thread(&scope, attributes, idle_ttl_seconds).await;
+                thread.map(ThreadInfo::from)
+            },
             thread_model
         )
     }
@@ -788,11 +783,10 @@ impl PyThreads {
         limit: i32,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let req = ListRequest { scope: scope.to_owned(), page_token: before.to_owned(), limit };
-        let threads = self.inner.clone();
+        let (threads, scope, before) = (self.inner.clone(), scope.to_owned(), before.to_owned());
         awaitable!(
             py,
-            async move { threads.list_threads(req).await.map(ThreadPage::from) },
+            async move { threads.list_threads(&scope, &before, limit).await },
             |py, out| model(py, "storage_threads", "ThreadPage", &out)
         )
     }
@@ -808,15 +802,14 @@ impl PyThreads {
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let attributes = attributes.map(|a| value_from_py(a, "attributes")).transpose()?;
-        let req = UpdateRequest {
-            thread_id: thread_id.to_owned(),
-            attributes: attributes_from_json(attributes.as_ref()).map_err(to_py_err)?,
-            idle_ttl: idle_ttl_seconds.and_then(duration_of),
-        };
-        let threads = self.inner.clone();
+        let attributes = attributes_from_json(attributes.as_ref()).map_err(to_py_err)?;
+        let (threads, thread_id) = (self.inner.clone(), thread_id.to_owned());
         awaitable!(
             py,
-            async move { threads.update_thread(req).await.map(ThreadInfo::from) },
+            async move {
+                let thread = threads.update_thread(&thread_id, attributes, idle_ttl_seconds).await;
+                thread.map(ThreadInfo::from)
+            },
             thread_model
         )
     }
@@ -843,17 +836,11 @@ impl PyThreads {
         limit: i32,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let req = GetItemsRequest {
-            thread_id: thread_id.to_owned(),
-            agent: agent.to_owned(),
-            page_token: after.to_owned(),
-            limit,
-            ..Default::default()
-        };
         let threads = self.inner.clone();
+        let (thread_id, agent, after) = (thread_id.to_owned(), agent.to_owned(), after.to_owned());
         awaitable!(
             py,
-            async move { ThreadItemPage::try_from(threads.get_thread_items(req).await?) },
+            async move { threads.get_thread_items(&thread_id, &agent, &after, limit).await },
             |py, out| model(py, "storage_threads", "ThreadItemPage", &out)
         )
     }
@@ -867,17 +854,13 @@ impl PyThreads {
         status: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let req = GetTasksRequest {
-            thread_id: thread_id.to_owned(),
-            status: task_status(status).map_err(to_py_err)?,
-            ..Default::default()
-        };
-        let threads = self.inner.clone();
+        let status = task_status(status).map_err(to_py_err)?;
+        let (threads, thread_id) = (self.inner.clone(), thread_id.to_owned());
         awaitable!(
             py,
             async move {
-                let r = threads.get_thread_tasks(req).await?;
-                Ok::<_, CoreError>(r.tasks.into_iter().map(ThreadTask::from).collect::<Vec<_>>())
+                let tasks = threads.get_thread_tasks(&thread_id, status).await?;
+                Ok::<_, CoreError>(tasks.into_iter().map(ThreadTask::from).collect::<Vec<_>>())
             },
             |py, out| models(py, "storage_threads", "ThreadTask", out)
         )

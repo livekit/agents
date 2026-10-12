@@ -689,10 +689,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     url_base=self._endpoint_url_base,
                     agents=self._agents,
                 )
-                # the worker bridge's documented hook: the route registers as AEK_TEXT so the
-                # node resolves the session and hands it over in the preamble (http.py, plan 3.3.6)
                 self._http.mount(f"/{door.name}", door.app, name=door.name)
-                self._http.configure_endpoint(f"/{door.name}", public=door.public, session=True)
+                self._http.configure_endpoint(f"/{door.name}", public=door.public)
                 self._a2a_endpoints[door.name] = door
             else:
                 raise TypeError(f"not a door: {door!r}")
@@ -715,14 +713,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # a worker registered without a deployment is addressed as "default" by the node
         return f"{base}/agents/{self._agent_name}/{self._deployment or 'default'}"
 
-    def configure_endpoint(self, path: str, *, public: bool = False, session: bool = False) -> None:
-        """Set routing policy for one ``server.http`` route.
-
-        ``public`` routes are reachable without a project token. ``session`` marks a session
-        endpoint: the route registers with the text kind and the node may resolve the thread
-        for a request and hand it to the handler as ``request.state.lk_request.thread_id``.
-        """
-        self._http.configure_endpoint(path, public=public, session=session)
+    def configure_endpoint(self, path: str, *, public: bool = False) -> None:
+        """Set routing policy for one ``server.http`` route: ``public`` routes are reachable
+        without a project token."""
+        self._http.configure_endpoint(path, public=public)
 
     @property
     def log_level(self) -> str | ServerEnvOption[str]:

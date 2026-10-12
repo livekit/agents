@@ -1,95 +1,141 @@
-//! The threads service's client: `AgentThreads` of cloud-protocol, the durable conversation
-//! (`AT_`) and the database created with it. The message types are `AgentThread.*` of
-//! `livekit-protocol`'s `livekit.agent` package. A thread belongs to a project, not an agent:
-//! any agent of the project picks it up, and a listing is by scope. Times cross the host as
-//! unix seconds and TTLs as seconds; `0` is never.
+//! The threads service's client: `ThreadService` of the Public API, the durable conversation
+//! (`AT_`) and the database created with it. The thread, item and task messages are
+//! `livekit-protocol`'s `livekit.agent` package. A thread belongs to a project, not an agent: any
+//! agent of the project picks it up, and a listing is by scope. Times cross the host as unix
+//! seconds and TTLs as seconds; `0` is never. The client is `livekit-api`'s `ThreadClient`.
 //!
-//! Errors keep gRPC's code names: `invalid_argument` for an oversized field,
-//! `permission_denied` for a grant out of scope, `not_found` otherwise, which is
-//! [`StorageError::ThreadNotFound`] here.
+//! A thread the service does not know is [`StorageError::ThreadNotFound`].
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-pub use livekit_protocol::agent::agent_task::{
-    GetTasksRequest, GetTasksResponse, Status as TaskStatus, Task,
-};
+pub use livekit_protocol::agent::agent_task::{GetTasksRequest, Status as TaskStatus, Task};
 pub use livekit_protocol::agent::agent_thread::{
-    CreateRequest, DeleteRequest, DeleteResponse, GetItemsRequest, GetItemsResponse, GetRequest,
-    Item, ListRequest, ListResponse, Thread, UpdateRequest,
+    CreateRequest, GetItemsRequest, Item, ListRequest, Thread, UpdateRequest,
 };
+use livekit_api::services::threads::ThreadClient;
 use lk_agents_host_derive::Host;
-use prost::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::StorageError;
-use crate::grpc::Client;
-use crate::token::TokenMinter;
+use crate::agentstore::error;
 
 #[derive(Clone)]
 pub struct Threads {
-    client: Client,
+    client: Arc<ThreadClient>,
+}
+
+/// A `livekit-api` failure, with a missing thread as [`StorageError::ThreadNotFound`].
+fn thread_error(e: livekit_api::services::ServiceError) -> StorageError {
+    match error(e) {
+        StorageError::NotFound(m) => StorageError::ThreadNotFound(m),
+        other => other,
+    }
 }
 
 impl Threads {
-    pub fn new(url: &str, minter: TokenMinter) -> Result<Self, StorageError> {
-        Ok(Self { client: Client::new(url, minter)? })
-    }
-
-    async fn call<Req: Message + 'static, Resp: Message + Default + 'static>(
-        &self,
-        method: &'static str,
-        req: Req,
-    ) -> Result<Resp, StorageError> {
-        self.client.unary(method, req).await.map_err(|e| match e {
-            StorageError::NotFound(m) => StorageError::ThreadNotFound(m),
-            other => other,
-        })
+    pub(crate) fn new(client: ThreadClient) -> Self {
+        Self { client: Arc::new(client) }
     }
 
     /// A new thread with its database.
-    pub async fn create_thread(&self, req: CreateRequest) -> Result<Thread, StorageError> {
-        self.call("/cloud_protocol.AgentThreads/CreateThread", req).await
+    pub async fn create_thread(
+        &self,
+        scope: &str,
+        attributes: HashMap<String, String>,
+        idle_ttl_seconds: i64,
+    ) -> Result<Thread, StorageError> {
+        let req = CreateRequest {
+            scope: scope.to_owned(),
+            attributes,
+            idle_ttl: duration_of(idle_ttl_seconds),
+        };
+        self.client.create(req).await.map_err(thread_error)
     }
 
     pub async fn get_thread(&self, thread_id: &str) -> Result<Thread, StorageError> {
-        self.call(
-            "/cloud_protocol.AgentThreads/GetThread",
-            GetRequest { thread_id: thread_id.to_owned() },
-        )
-        .await
+        self.client.get(thread_id).await.map_err(thread_error)
     }
 
-    pub async fn list_threads(&self, req: ListRequest) -> Result<ListResponse, StorageError> {
-        self.call("/cloud_protocol.AgentThreads/ListThreads", req).await
+    /// One page of a scope's threads, newest first; `before` is the cursor, `limit` 0 the
+    /// server's default.
+    pub async fn list_threads(
+        &self,
+        scope: &str,
+        before: &str,
+        limit: i32,
+    ) -> Result<ThreadPage, StorageError> {
+        let req = ListRequest { scope: scope.to_owned(), page_token: before.to_owned(), limit };
+        let r = self.client.list(req).await.map_err(thread_error)?;
+        Ok(ThreadPage {
+            threads: r.threads.into_iter().map(ThreadInfo::from).collect(),
+            before: r.next_page_token,
+        })
     }
 
-    pub async fn update_thread(&self, req: UpdateRequest) -> Result<Thread, StorageError> {
-        self.call("/cloud_protocol.AgentThreads/UpdateThread", req).await
+    /// Merges `attributes` (an empty value deletes the entry) and sets the idle TTL when given.
+    pub async fn update_thread(
+        &self,
+        thread_id: &str,
+        attributes: HashMap<String, String>,
+        idle_ttl_seconds: Option<i64>,
+    ) -> Result<Thread, StorageError> {
+        let req = UpdateRequest {
+            thread_id: thread_id.to_owned(),
+            attributes,
+            idle_ttl: idle_ttl_seconds.and_then(duration_of),
+        };
+        self.client.update(req).await.map_err(thread_error)
     }
 
     pub async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError> {
-        self.call::<_, DeleteResponse>(
-            "/cloud_protocol.AgentThreads/DeleteThread",
-            DeleteRequest { thread_id: thread_id.to_owned() },
-        )
-        .await
-        .map(|_| ())
+        self.client.delete(thread_id).await.map_err(thread_error)
     }
 
+    /// One page of the thread's chat items, oldest first; `agent` keeps one agent's.
     pub async fn get_thread_items(
         &self,
-        req: GetItemsRequest,
-    ) -> Result<GetItemsResponse, StorageError> {
-        self.call("/cloud_protocol.AgentThreads/GetThreadItems", req).await
+        thread_id: &str,
+        agent: &str,
+        after: &str,
+        limit: i32,
+    ) -> Result<ThreadItemPage, StorageError> {
+        let req = GetItemsRequest {
+            thread_id: thread_id.to_owned(),
+            agent: agent.to_owned(),
+            page_token: after.to_owned(),
+            limit,
+            ..Default::default()
+        };
+        let r = self.client.items(req).await.map_err(thread_error)?;
+        let items = r.items.into_iter().map(ThreadItem::try_from).collect::<Result<_, _>>()?;
+        Ok(ThreadItemPage { items, after: r.next_page_token })
     }
 
+    /// Every background task of the thread, of one status when given.
     pub async fn get_thread_tasks(
         &self,
-        req: GetTasksRequest,
-    ) -> Result<GetTasksResponse, StorageError> {
-        self.call("/cloud_protocol.AgentThreads/GetThreadTasks", req).await
+        thread_id: &str,
+        status: Option<TaskStatus>,
+    ) -> Result<Vec<Task>, StorageError> {
+        let mut tasks = Vec::new();
+        let mut page_token = String::new();
+        loop {
+            let req = GetTasksRequest {
+                thread_id: thread_id.to_owned(),
+                status: status.map(i32::from),
+                page_token,
+                ..Default::default()
+            };
+            let r = self.client.tasks(req).await.map_err(thread_error)?;
+            tasks.extend(r.tasks);
+            if r.next_page_token.is_empty() {
+                return Ok(tasks);
+            }
+            page_token = r.next_page_token;
+        }
     }
 }
 
@@ -149,15 +195,6 @@ pub struct ThreadPage {
     pub before: String,
 }
 
-impl From<ListResponse> for ThreadPage {
-    fn from(r: ListResponse) -> Self {
-        Self {
-            threads: r.threads.into_iter().map(ThreadInfo::from).collect(),
-            before: r.next_page_token,
-        }
-    }
-}
-
 /// One chat item of a thread as the host reads it; `item` is the `ChatContext.ChatItem` as
 /// protobuf JSON.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
@@ -188,15 +225,6 @@ pub struct ThreadItemPage {
     pub after: String,
 }
 
-impl TryFrom<GetItemsResponse> for ThreadItemPage {
-    type Error = StorageError;
-
-    fn try_from(r: GetItemsResponse) -> Result<Self, StorageError> {
-        let items = r.items.into_iter().map(ThreadItem::try_from).collect::<Result<_, _>>()?;
-        Ok(Self { items, after: r.next_page_token })
-    }
-}
-
 /// One background task of a thread, as `GetThreadTasks` answers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Host)]
 #[python(pydantic, module = "storage_threads", config = "frozen=True")]
@@ -223,11 +251,10 @@ impl From<Task> for ThreadTask {
 }
 
 /// A task status from the host, `running` and so on; `None` for every status.
-pub fn task_status(status: Option<&str>) -> Result<Option<i32>, StorageError> {
+pub fn task_status(status: Option<&str>) -> Result<Option<TaskStatus>, StorageError> {
     status
         .map(|s| {
             TaskStatus::from_str_name(&s.to_uppercase())
-                .map(i32::from)
                 .ok_or_else(|| StorageError::Invalid(format!("unknown task status {s}")))
         })
         .transpose()
@@ -266,7 +293,7 @@ mod tests {
         assert!(attributes_from_json(Some(&serde_json::json!({"a": 1}))).is_err());
         let task = Task { status: TaskStatus::Running.into(), ..Default::default() };
         assert_eq!(ThreadTask::from(task).status, "running");
-        assert_eq!(task_status(Some("completed")).unwrap(), Some(TaskStatus::Completed.into()));
+        assert_eq!(task_status(Some("completed")).unwrap(), Some(TaskStatus::Completed));
         assert!(task_status(Some("nope")).is_err());
     }
 

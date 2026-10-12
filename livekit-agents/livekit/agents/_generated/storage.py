@@ -4,7 +4,6 @@
 #     rust/crates/lk-agents-storage/src/schema.rs
 #     rust/crates/lk-agents-storage/src/statements.rs
 #     rust/crates/lk-agents-storage/src/streams.rs
-#     rust/crates/lk-agents-storage/src/grpc.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -321,13 +320,3 @@ class StreamInfo(BaseModel):
     model_config = ConfigDict(frozen=True)
     stream_id: str
     expires_at: int
-
-
-class DatabaseInfo(BaseModel):
-    """A created database: `AgentDB.CreateDatabase`'s answer."""
-
-    model_config = ConfigDict(frozen=True)
-    database_id: str
-    """`DB_..`."""
-    expires_at: int
-    """Unix seconds; `0` for never."""

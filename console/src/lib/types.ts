@@ -9,9 +9,7 @@
 export type Json = unknown;
 
 export type ConsoleConfig = {
-  registryUrl: string;
-  mgmtUrl: string;
-  wsUrl: string;
+  agentstoreUrl: string;
   streamsUrl: string;
   streams: { url: string; available: boolean; error?: string };
   grant: { subs: string[] };

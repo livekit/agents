@@ -7,15 +7,14 @@ endpoint. The wire underneath is [a2a.md](a2a.md).
 
 ## Threads
 
-A thread (`AT_`) is a record of the platform's threads service, the
-`AgentThreads` gRPC service: in-cluster for a LiveKit Cloud worker, the
-public API server for anyone else. Its client comes with the storage,
+A thread (`AT_`) is a record of the platform's threads service, reached
+through LiveKit's public API like the rest of agentstore. Its client comes with the storage,
 under the project credential:
 
 ```python
 from livekit.agents.storage import AgentDBStorage, ThreadNotFound
 
-storage = AgentDBStorage()   # LIVEKIT_AGENTDB_URL, and the project's key and secret
+storage = AgentDBStorage()   # LIVEKIT_URL, and the project's key and secret
 threads = storage.threads
 
 info = await threads.create_thread(scope=user_id, attributes={"title": "New chat"})

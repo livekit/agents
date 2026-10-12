@@ -238,7 +238,6 @@ pub fn event_name(event: &proto::agent_session_event::Event) -> &'static str {
         Event::DebugMessage(_) => "debug_message",
         Event::ToolExecutionUpdated(_) => "tool_execution_updated",
         Event::AgentFalseInterruption(_) => "agent_false_interruption",
-        // M1 (livekit/protocol `theo/protocol-m1`): the run boundaries of a persisted session.
     }
 }
 

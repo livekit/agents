@@ -1,7 +1,7 @@
 //! The worker's agentstore credentials (plan 13.6): HS256 JWTs signed with the project's API key
-//! and secret, a one hour lifetime, minted per dial so a token never expires mid-outage. agent-db
-//! takes `agent.databaseAdmin`; the threads service takes only an `agentThread` grant, here one
-//! covering every thread of the project.
+//! and secret, a one hour lifetime, minted per dial so a token never expires mid-outage. The data
+//! plane and the streams take `agent.databaseAdmin`; the threads and databases services get their
+//! tokens from `livekit-api`'s clients, which mint them from the same pair.
 //!
 //! Signed here rather than with `livekit-token`, whose `Claims` model `video`/`sip` and not the
 //! `agent` container (`protocol/auth/grants.go`'s `ClaimGrants.Agent`).
@@ -23,7 +23,6 @@ pub const TOKEN_TTL: Duration = Duration::from_secs(3600);
 pub struct TokenMinter {
     api_key: String,
     api_secret: String,
-    threads: bool,
 }
 
 impl std::fmt::Debug for TokenMinter {
@@ -43,7 +42,7 @@ impl TokenMinter {
                 "LIVEKIT_API_KEY and LIVEKIT_API_SECRET are required".into(),
             ));
         }
-        Ok(Self { api_key, api_secret, threads: false })
+        Ok(Self { api_key, api_secret })
     }
 
     /// `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
@@ -58,9 +57,22 @@ impl TokenMinter {
         &self.api_key
     }
 
-    /// The same key, minting the threads service's grant instead of agent-db's.
-    pub fn for_threads(&self) -> Self {
-        Self { threads: true, ..self.clone() }
+    /// The threads service at `url`, signed with this key pair, addressing its project.
+    pub(crate) fn threads(&self, url: &str) -> livekit_api::services::threads::ThreadClient {
+        livekit_api::services::threads::ThreadClient::with_api_key(
+            url,
+            &self.api_key,
+            &self.api_secret,
+        )
+    }
+
+    /// The databases service at `url`, signed with this key pair.
+    pub(crate) fn databases(&self, url: &str) -> livekit_api::services::databases::DatabaseClient {
+        livekit_api::services::databases::DatabaseClient::with_api_key(
+            url,
+            &self.api_key,
+            &self.api_secret,
+        )
     }
 
     /// A fresh token: `iss` the key, `nbf` now, `exp` now + [`TOKEN_TTL`], and the grant.
@@ -73,18 +85,12 @@ impl TokenMinter {
     }
 
     fn mint_at(&self, now: u64) -> Result<String, StorageError> {
-        let mut claims = serde_json::json!({
+        let claims = serde_json::json!({
             "iss": self.api_key,
             "nbf": now,
             "exp": now + TOKEN_TTL.as_secs(),
+            "agent": {"databaseAdmin": true},
         });
-        if self.threads {
-            claims["agentThread"] = serde_json::json!({
-                "all": true, "list": true, "create": true, "read": true, "write": true, "delete": true,
-            });
-        } else {
-            claims["agent"] = serde_json::json!({"databaseAdmin": true});
-        }
         let head = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
         let body = URL_SAFE_NO_PAD.encode(claims.to_string());
         let signing_input = format!("{head}.{body}");
@@ -118,17 +124,6 @@ mod tests {
         let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
         mac.update(format!("{}.{}", parts[0], parts[1]).as_bytes());
         mac.verify_slice(&URL_SAFE_NO_PAD.decode(parts[2]).unwrap()).unwrap();
-    }
-
-    #[test]
-    fn the_threads_token_carries_only_a_project_wide_thread_grant() {
-        let minter = TokenMinter::new("devkey", "secret").unwrap().for_threads();
-        let token = minter.mint_at(1_700_000_000).unwrap();
-        let body = token.split('.').nth(1).unwrap();
-        let claims: serde_json::Value =
-            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(body).unwrap()).unwrap();
-        assert_eq!(claims["agentThread"]["all"], true);
-        assert!(claims.get("agent").is_none());
     }
 
     #[test]

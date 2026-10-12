@@ -1,9 +1,12 @@
+import os
+
 from livekit.agents import Agent, AgentHandler, JobContext, LiveSession
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.delegation import A2ADelegate
 from livekit.plugins import openai
 
-BACKEND = "http://127.0.0.1:7880/agents/dentist/default/backend"
+# the back office on the project's own host, which the worker connects to
+BACKEND = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/dentist/default/backend"
 
 PERSONA = (
     "You are the front desk of Pearl Dental, a small dental practice. You speak English. Warm "

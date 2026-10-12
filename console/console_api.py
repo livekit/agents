@@ -48,17 +48,13 @@ WATCH_INTERVAL = 1.0
 storage = AgentDBStorage()
 credentials = Credentials(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
 
-# where the storage reads from, for the console's info panel and the stream relay
-WS_URL = os.environ.get("LIVEKIT_AGENTDB_URL", "ws://localhost:7781/v1/db")
-STREAMS_URL = os.environ.get("LIVEKIT_AGENTDB_STREAMS_URL", "http://localhost:7780")
-MANAGEMENT_URL = os.environ.get("LIVEKIT_AGENTDB_MANAGEMENT_URL", "http://localhost:7783")
-THREADS_URL = os.environ.get("LIVEKIT_AGENT_THREADS_URL", "http://localhost:7793")
+# the streams the relay reads, through the public API the storage uses
+STREAMS_URL = f"{storage.url}/v0/agentstore/streams"
 
 
 def storage_token() -> str:
     """The worker's credential on agent-db, ``agent.databaseAdmin``, for the stream relay."""
-    key = os.environ.get("LIVEKIT_AGENTDB_API_KEY") or os.environ["LIVEKIT_API_KEY"]
-    secret = os.environ.get("LIVEKIT_AGENTDB_API_SECRET") or os.environ["LIVEKIT_API_SECRET"]
+    key, secret = os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"]
     now = int(time.time())
     claims = {"iss": key, "nbf": now - 5, "exp": now + TOKEN_TTL, "agent": {"databaseAdmin": True}}
     return jwt.encode(claims, secret, algorithm="HS256")
@@ -131,9 +127,7 @@ async def session_dump(thread_id: str) -> dict[str, Any]:
 async def config(request: Request) -> Response:
     return JSONResponse(
         {
-            "registryUrl": THREADS_URL,
-            "mgmtUrl": MANAGEMENT_URL,
-            "wsUrl": WS_URL,
+            "agentstoreUrl": storage.url,
             "streamsUrl": STREAMS_URL,
             "streams": {"url": STREAMS_URL, "available": True},
             "grant": {"subs": SUBS},
@@ -319,7 +313,7 @@ async def watch(request: Request) -> Response:
 async def stream(request: Request) -> Response:
     """``/v1/streams/{id}`` relayed as is, under the project token."""
     stream_id = request.path_params["id"]
-    url = f"{STREAMS_URL}/v1/streams/{stream_id}"
+    url = f"{STREAMS_URL}/{stream_id}"
     headers = {"Authorization": f"Bearer {storage_token()}"}
     if accept := request.headers.get("accept"):
         headers["Accept"] = accept

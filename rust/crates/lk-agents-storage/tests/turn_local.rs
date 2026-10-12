@@ -1,7 +1,7 @@
-//! The turn state machine (`turn` module) against a local agent-db, the same way `run_local.rs`
-//! drives the run: `LK_AGENTDB_TEST_URL` (default `ws://localhost:7781/v1/db`) and
-//! `LK_AGENTDB_TEST_MGMT` (default `http://localhost:7783`, the `AgentDB` gRPC service); skipped when nothing listens there or
-//! when what listens cannot create a database. The host is a scripted fake: a handler that returns
+//! The turn state machine (`turn` module) against agentstore, the same way `run_local.rs` drives
+//! the run: through public-api-server with a staging project's `LIVEKIT_URL` and
+//! key pair; skipped when they are not set or when the project cannot
+//! create a database. The host is a scripted fake: a handler that returns
 //! a text, raises, asks input-required with a pending call, or sleeps until told, and records what
 //! it was handed. The cases are those of `tests/test_storage.py`, with its assertions.
 
@@ -21,47 +21,34 @@ use tokio::sync::watch;
 
 const LANE: &str = "front-desk";
 
-/// The dev pair, or `LK_AGENTDB_TEST_SECRET` when the local agent-db runs on another key.
+/// agentstore through public-api-server, derived from `LIVEKIT_URL`, and the project's `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`. `None`, and the
+/// test skips, when they are not set.
+fn storage_options() -> Option<StorageOptions> {
+    match (StorageOptions::from_env(), TokenMinter::from_env()) {
+        (Ok(opts), Ok(_)) => Some(opts),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("skipped: no agentstore project in the environment ({e})");
+            None
+        }
+    }
+}
+
 fn minter() -> TokenMinter {
-    let secret = std::env::var("LK_AGENTDB_TEST_SECRET").unwrap_or_else(|_| "secret".into());
-    TokenMinter::new("devkey", &secret).unwrap()
-}
-
-fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_owned())
-}
-
-async fn reachable(url: &str) -> bool {
-    let u = url::Url::parse(url).expect("a url");
-    let addr = format!(
-        "{}:{}",
-        u.host_str().unwrap_or("localhost"),
-        u.port_or_known_default().unwrap_or(80)
-    );
-    tokio::time::timeout(Duration::from_millis(500), tokio::net::TcpStream::connect(addr))
-        .await
-        .is_ok_and(|r| r.is_ok())
+    TokenMinter::from_env().unwrap()
 }
 
 /// The storage and a fresh database, or `None` when there is no agent-db to test against.
 async fn fresh_database_with(lease: Option<(Duration, Duration)>) -> Option<(Storage, String)> {
-    let url = env_or("LK_AGENTDB_TEST_URL", "ws://localhost:7781/v1/db");
-    let mgmt = env_or("LK_AGENTDB_TEST_MGMT", "http://localhost:7783");
-    if !reachable(&url).await {
-        eprintln!("skipped: no agent-db at {url}");
-        return None;
-    }
-    let mut opts = StorageOptions::new(&url);
-    opts.management_url = Some(mgmt.clone());
+    let mut opts = storage_options()?;
     if let Some((ttl, interval)) = lease {
         opts.lease_ttl = ttl;
         opts.renew_interval = interval;
     }
     let storage = Storage::new(opts, minter()).unwrap();
-    let database_id = match storage.admin().unwrap().create_database(3600).await {
+    let database_id = match storage.databases().create_database(3600).await {
         Ok(c) => c.database_id,
         Err(e) => {
-            eprintln!("skipped: agent-db at {mgmt} cannot create a database: {e}");
+            eprintln!("skipped: the project cannot create a database: {e}");
             return None;
         }
     };
@@ -87,7 +74,7 @@ async fn cleanup(storage: &Storage, database_id: &str, sessions: &[&Thread]) {
     for s in sessions {
         s.close();
     }
-    storage.admin().unwrap().delete_database(database_id).await.unwrap();
+    storage.databases().delete_database(database_id).await.unwrap();
 }
 
 fn now_secs() -> f64 {

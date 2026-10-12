@@ -13,6 +13,8 @@ required-environments = [
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
+# python-sdks main has the agent grants, not yet released to PyPI; an archive, since git clones fail on LFS
+livekit-api = { url = "https://github.com/livekit/python-sdks/archive/bdeadbacc75ece1274c55e02d3da9a34c8bde5b8.tar.gz", subdirectory = "livekit-api" }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }

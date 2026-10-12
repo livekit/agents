@@ -9,7 +9,7 @@ multiplexed in Python.
 
 The handler sees the preamble through ``request.state.lk_request`` (:class:`EndpointRequest`):
 the request id, whether the caller holds the call permission, the manifest route that matched,
-and whether the route registered with the text kind (``configure_endpoint(path, session=True)``).
+and whether the route is public (``configure_endpoint(path, public=True)``).
 The project credential never reaches the worker: the node strips it and asserts ``authorized``
 here; a thread grant reaches a public route as its bearer, for the handler to verify.
 """
@@ -83,10 +83,6 @@ class EndpointOptions:
 
     public: bool = False
     """Reachable without a project token."""
-    session: bool = False
-    """A session endpoint: registered with the text kind (``AEK_TEXT``), so the node may resolve the
-    agent session from the request and pass it in the preamble as ``thread_id``. Refused by a
-    LiveKit server that does not serve the text kind yet."""
 
 
 class AgentHttp:
@@ -168,9 +164,9 @@ class AgentHttp:
         """Serve an ASGI application (FastAPI, another Starlette app, ...) under ``path``."""
         self._add(Mount(path, app=app, name=name))
 
-    def configure_endpoint(self, path: str, *, public: bool = False, session: bool = False) -> None:
+    def configure_endpoint(self, path: str, *, public: bool = False) -> None:
         """Set routing policy for one route, by its registered path."""
-        self._options[path] = EndpointOptions(public=public, session=session)
+        self._options[path] = EndpointOptions(public=public)
 
     def _add(self, route: BaseRoute) -> None:
         if self._app is not None:
@@ -212,7 +208,7 @@ class AgentHttp:
                 {
                     "path": path,
                     "methods": methods,
-                    "kind": "text" if opts.session else "http",
+                    "kind": "http",
                     "public": opts.public,
                 }
             )

@@ -182,12 +182,12 @@ determinism check and the saved corpus; the search campaign is behind
 search design are in `rust/crates/lk-agents-voice/TEST_STRATEGY.md`.
 
 **Storage.** `lk-agents-storage/tests/{agentdb_local,run_local,turn_local}.rs`
-run against a local agent-db (`LK_AGENTDB_TEST_URL`, default
-`ws://localhost:7781/v1/db`, and `LK_AGENTDB_TEST_MGMT`, default
-`http://localhost:7780`), each test on a fresh database. The host of a turn
+run against agentstore through the public API of a staging project
+(`LIVEKIT_URL`, with `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET`), each test on a fresh database. The host of a turn
 is a scripted fake: a handler that returns, raises, asks, or sleeps until
-told. The Python storage and A2A tests use the same local agent-db through
-`tests/agentdb_fixture.py`. Both skip when no agent-db answers.
+told. The Python storage and A2A tests use the same project through
+`tests/agentdb_fixture.py`. Both skip when no project is set.
 
 ## Build and test
 

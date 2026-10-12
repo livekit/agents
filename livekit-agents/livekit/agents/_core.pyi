@@ -89,23 +89,22 @@ class Worker:
 # that constructed the object and is cancelled when Rust drops the operation.
 
 class Storage:
-    """The root: credentials and URLs (plan 13.4). ``url`` is ``LIVEKIT_AGENTDB_URL``; the
-    management API and the registry default to that host over HTTP; ``api_key`` and
-    ``api_secret`` default to ``LIVEKIT_API_KEY`` and ``LIVEKIT_API_SECRET``. Lease timing is in
-    seconds, ``None`` for the Rust defaults."""
+    """The root: credentials and the agentstore URL (plan 13.4), the public API every request
+    goes through, derived from ``LIVEKIT_URL``; ``api_key`` and ``api_secret`` default to ``LIVEKIT_API_KEY`` and
+    ``LIVEKIT_API_SECRET``. Lease timing is in seconds, ``None`` for the Rust defaults."""
 
     def __init__(
         self,
-        url: str,
         *,
-        streams_url: str | None = None,
-        management_url: str | None = None,
-        threads_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
         lease_ttl: float | None = None,
         renew_interval: float | None = None,
     ) -> None: ...
+    @property
+    def url(self) -> str:
+        """The public API agentstore is reached through."""
+
     def open(self, database_id: str) -> Awaitable[ThreadDb]:
         """One connection to the session's database, with its schema version read."""
 
@@ -114,7 +113,7 @@ class Storage:
     @property
     def threads(self) -> Threads: ...
     def create_database(self, ttl_seconds: int = 0) -> Awaitable[DatabaseInfo]:
-        """``AgentDB.CreateDatabase``, for development and tests."""
+        """``DatabaseService.CreateDatabase``, for development and tests."""
 
     def delete_database(self, database_id: str) -> Awaitable[None]: ...
 
@@ -220,7 +219,7 @@ class StreamReader:
     def is_closed(self) -> Awaitable[bool]: ...
 
 class Threads:
-    """The threads service's gRPC client (plan 4.3)."""
+    """The threads service's client (plan 4.3)."""
 
     def create_thread(
         self,

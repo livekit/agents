@@ -155,7 +155,6 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - `LIVEKIT_API_KEY`: API key for authentication
 - `LIVEKIT_API_SECRET`: API secret for authentication
 - `LIVEKIT_AGENT_NAME`: The agent's name: its lane in a thread and the first segment of its endpoints
-- `LIVEKIT_AGENTDB_URL`, `LIVEKIT_AGENTDB_STREAMS_URL`, `LIVEKIT_AGENTDB_MANAGEMENT_URL`, `LIVEKIT_AGENT_THREADS_URL`: agent-db and the threads service, for a stack that does not provide them
 - Provider-specific keys: `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
 ## Code Style

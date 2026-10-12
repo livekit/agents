@@ -68,7 +68,6 @@ const SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-storage/src/schema.rs", "lk_agents_storage::schema"),
     ("rust/crates/lk-agents-storage/src/statements.rs", "lk_agents_storage::statements"),
     ("rust/crates/lk-agents-storage/src/streams.rs", "lk_agents_storage::streams"),
-    ("rust/crates/lk-agents-storage/src/grpc.rs", "lk_agents_storage::grpc"),
     ("rust/crates/lk-agents-storage/src/run/records.rs", "lk_agents_storage::run"),
     ("rust/crates/lk-agents-storage/src/run.rs", "lk_agents_storage::run"),
     ("rust/crates/lk-agents-storage/src/turn/message.rs", "lk_agents_storage::turn"),

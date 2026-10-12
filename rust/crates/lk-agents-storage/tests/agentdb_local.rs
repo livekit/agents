@@ -1,9 +1,6 @@
-//! Against a local agent-db (`mage devLocal` in agents-private/agent-db: streams on :7780, data
-//! plane on :7781, the `AgentDB` gRPC service on :7783). Skipped when nothing listens there, or
-//! when what listens cannot create a database. `LK_AGENTDB_TEST_URL`, `LK_AGENTDB_TEST_STREAMS`
-//! and `LK_AGENTDB_TEST_MGMT` point it elsewhere; `LK_AGENTDB_TEST_THREADS` names an
-//! `AgentThreads` service (`agentdb threads`, :7793), and its section is skipped without it.
-//! Credentials are the dev pair, `devkey` / `secret`.
+//! Against agentstore through public-api-server: a staging project's `LIVEKIT_URL` and its key
+//! pair. Skipped when they are not set, or when the project
+//! cannot create a database.
 
 use std::time::Duration;
 
@@ -12,36 +9,27 @@ use lk_agents_storage::statements::*;
 use lk_agents_storage::{Storage, StorageError, StorageOptions, TokenMinter};
 use serde_json::json;
 
-/// The dev pair, or `LK_AGENTDB_TEST_SECRET` when the local agent-db runs on another key.
+/// agentstore through public-api-server, derived from `LIVEKIT_URL`, and the project's `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`. `None`, and the
+/// test skips, when they are not set.
+fn options() -> Option<StorageOptions> {
+    match (StorageOptions::from_env(), TokenMinter::from_env()) {
+        (Ok(opts), Ok(_)) => Some(opts),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("skipped: no agentstore project in the environment ({e})");
+            None
+        }
+    }
+}
+
 fn minter() -> TokenMinter {
-    let secret = std::env::var("LK_AGENTDB_TEST_SECRET").unwrap_or_else(|_| "secret".into());
-    TokenMinter::new("devkey", &secret).unwrap()
+    TokenMinter::from_env().unwrap()
 }
 
-fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_owned())
-}
-
-async fn reachable(url: &str) -> bool {
-    let u = url::Url::parse(url).expect("a url");
-    let addr = format!(
-        "{}:{}",
-        u.host_str().unwrap_or("localhost"),
-        u.port_or_known_default().unwrap_or(80)
-    );
-    tokio::time::timeout(Duration::from_millis(500), tokio::net::TcpStream::connect(addr))
-        .await
-        .is_ok_and(|r| r.is_ok())
-}
-
-fn storage(url: &str, streams: &str) -> Storage {
-    let mut opts = StorageOptions::new(url);
-    opts.streams_url = Some(streams.to_owned());
-    opts.management_url = Some(env_or("LK_AGENTDB_TEST_MGMT", "http://localhost:7783"));
-    opts.threads_url = std::env::var("LK_AGENTDB_TEST_THREADS").ok();
+fn storage() -> Option<Storage> {
+    let mut opts = options()?;
     opts.lease_ttl = Duration::from_secs(5);
     opts.renew_interval = Duration::from_millis(100);
-    Storage::new(opts, minter()).unwrap()
+    Some(Storage::new(opts, minter()).unwrap())
 }
 
 fn event(ty: &str, payload: serde_json::Value) -> EventWrite {
@@ -63,14 +51,8 @@ fn acquire(lane: &str, holder: &str, token: &str, run_id: &str) -> AcquireReques
 
 #[tokio::test]
 async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted() {
-    let url = env_or("LK_AGENTDB_TEST_URL", "ws://localhost:7781/v1/db");
-    let streams = env_or("LK_AGENTDB_TEST_STREAMS", "http://localhost:7780");
-    if !reachable(&url).await {
-        eprintln!("skipped: no agent-db at {url}");
-        return;
-    }
-    let storage = storage(&url, &streams);
-    let created = storage.admin().unwrap().create_database(3600).await.unwrap();
+    let Some(storage) = storage() else { return };
+    let created = storage.databases().create_database(3600).await.unwrap();
     let db = storage.open(&created.database_id).await.unwrap();
     let lane = "ordered";
     // the lane exists before any row does
@@ -91,7 +73,7 @@ async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted() {
     // the first row is working now: the second is the oldest waiter and takes the lane
     assert!(db.acquire(&second).await.unwrap().is_some());
     db.close();
-    storage.admin().unwrap().delete_database(&created.database_id).await.unwrap();
+    storage.databases().delete_database(&created.database_id).await.unwrap();
 }
 
 fn submitted(lane: &str, task_id: &str, message_id: &str) -> SubmittedTask {
@@ -121,19 +103,11 @@ async fn assert_lease_ttl(db: &ThreadDb, lane: &str, ttl: Duration) {
 
 #[tokio::test]
 async fn a_second_holder_acquires_after_a_short_lease_expires_without_renewal() {
-    let url = env_or("LK_AGENTDB_TEST_URL", "ws://localhost:7781/v1/db");
-    let streams = env_or("LK_AGENTDB_TEST_STREAMS", "http://localhost:7780");
-    if !reachable(&url).await {
-        eprintln!("skipped: no agent-db at {url}");
-        return;
-    }
-    let mut opts = StorageOptions::new(&url);
-    opts.streams_url = Some(streams);
-    opts.management_url = Some(env_or("LK_AGENTDB_TEST_MGMT", "http://localhost:7783"));
+    let Some(mut opts) = options() else { return };
     opts.lease_ttl = Duration::from_secs(1);
     let ttl = opts.lease_ttl;
     let storage = Storage::new(opts, minter()).unwrap();
-    let created = storage.admin().unwrap().create_database(3600).await.unwrap();
+    let created = storage.databases().create_database(3600).await.unwrap();
     let first = storage.open(&created.database_id).await.unwrap();
     let lane = "short-lease";
     let started = tokio::time::Instant::now();
@@ -159,23 +133,15 @@ async fn a_second_holder_acquires_after_a_short_lease_expires_without_renewal() 
     assert!(!first.renew(lane, "w1", "t1").await.unwrap());
     first.close();
     second.close();
-    storage.admin().unwrap().delete_database(&created.database_id).await.unwrap();
+    storage.databases().delete_database(&created.database_id).await.unwrap();
 }
 
 #[tokio::test]
 async fn a_lapsed_lease_nobody_took_renews_and_a_released_one_does_not() {
-    let url = env_or("LK_AGENTDB_TEST_URL", "ws://localhost:7781/v1/db");
-    let streams = env_or("LK_AGENTDB_TEST_STREAMS", "http://localhost:7780");
-    if !reachable(&url).await {
-        eprintln!("skipped: no agent-db at {url}");
-        return;
-    }
-    let mut opts = StorageOptions::new(&url);
-    opts.streams_url = Some(streams);
-    opts.management_url = Some(env_or("LK_AGENTDB_TEST_MGMT", "http://localhost:7783"));
+    let Some(mut opts) = options() else { return };
     opts.lease_ttl = Duration::from_secs(1);
     let storage = Storage::new(opts, minter()).unwrap();
-    let created = storage.admin().unwrap().create_database(3600).await.unwrap();
+    let created = storage.databases().create_database(3600).await.unwrap();
     let db = storage.open(&created.database_id).await.unwrap();
     let lane = "stalled-holder";
     db.acquire(&acquire(lane, "w1", "t1", "r1")).await.unwrap().expect("acquired");
@@ -194,7 +160,7 @@ async fn a_lapsed_lease_nobody_took_renews_and_a_released_one_does_not() {
     assert!(!db.renew(lane, "w1", "t1").await.unwrap());
     assert_eq!(db.lane(lane).await.unwrap().unwrap().lease_token, None);
     db.close();
-    storage.admin().unwrap().delete_database(&created.database_id).await.unwrap();
+    storage.databases().delete_database(&created.database_id).await.unwrap();
 }
 
 fn unix_now() -> i64 {
@@ -206,19 +172,13 @@ fn unix_now() -> i64 {
 
 #[tokio::test]
 async fn a_lane_runs_through_the_lease_the_commit_and_the_inbox() {
-    let url = env_or("LK_AGENTDB_TEST_URL", "ws://localhost:7781/v1/db");
-    let streams = env_or("LK_AGENTDB_TEST_STREAMS", "http://localhost:7780");
-    if !reachable(&url).await {
-        eprintln!("skipped: no agent-db at {url}");
-        return;
-    }
-    let storage = storage(&url, &streams);
+    let Some(storage) = storage() else { return };
     // A server that cannot hand out a database (a stale dev instance whose Scylla session died)
     // is not the agent-db this test is for; say so and skip rather than fail.
-    let created = match storage.admin().unwrap().create_database(3600).await {
+    let created = match storage.databases().create_database(3600).await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("skipped: agent-db at {url} cannot create a database: {e}");
+            eprintln!("skipped: the project cannot create a database: {e}");
             return;
         }
     };
@@ -447,20 +407,12 @@ async fn a_lane_runs_through_the_lease_the_commit_and_the_inbox() {
     again.close();
     assert!(matches!(again.history(lane).await, Err(StorageError::Unavailable(_))));
     db.close();
-    storage.admin().unwrap().delete_database(&created.database_id).await.unwrap();
+    storage.databases().delete_database(&created.database_id).await.unwrap();
 }
 
 #[tokio::test]
 async fn a_stream_is_created_appended_read_and_closed() {
-    let Ok(base) = std::env::var("LK_AGENTDB_TEST_STREAMS") else {
-        eprintln!("skipped: LK_AGENTDB_TEST_STREAMS not set");
-        return;
-    };
-    if !reachable(&base).await {
-        eprintln!("skipped: no agent-db at {base}");
-        return;
-    }
-    let storage = storage("ws://unused/db", &base);
+    let Some(storage) = storage() else { return };
     let streams = storage.streams();
     let info = streams.create(None, None).await.unwrap();
     assert!(info.stream_id.contains("ST_"), "{}", info.stream_id);
@@ -506,17 +458,9 @@ async fn a_stream_is_created_appended_read_and_closed() {
 
 #[tokio::test]
 async fn the_threads_service_creates_and_deletes_a_thread() {
-    let Ok(base) = std::env::var("LK_AGENTDB_TEST_THREADS") else {
-        eprintln!("skipped: LK_AGENTDB_TEST_THREADS not set");
-        return;
-    };
-    if !reachable(&base).await {
-        eprintln!("skipped: no threads service at {base}");
-        return;
-    }
-    let storage = storage("ws://unused/db", "http://unused");
+    let Some(storage) = storage() else { return };
     let threads = storage.threads();
-    let thread = threads.create_thread(Default::default()).await.unwrap();
+    let thread = threads.create_thread("", Default::default(), 0).await.unwrap();
     assert!(thread.thread_id.starts_with("AT_"));
     assert!(thread.database_id.starts_with("DB_"));
     let again = threads.get_thread(&thread.thread_id).await.unwrap();
@@ -530,14 +474,8 @@ async fn the_threads_service_creates_and_deletes_a_thread() {
 
 #[tokio::test]
 async fn two_handles_opened_on_a_fresh_database_before_any_write_both_commit() {
-    let url = env_or("LK_AGENTDB_TEST_URL", "ws://localhost:7781/v1/db");
-    let streams = env_or("LK_AGENTDB_TEST_STREAMS", "http://localhost:7780");
-    if !reachable(&url).await {
-        eprintln!("skipped: no agent-db at {url}");
-        return;
-    }
-    let storage = storage(&url, &streams);
-    let created = storage.admin().unwrap().create_database(3600).await.unwrap();
+    let Some(storage) = storage() else { return };
+    let created = storage.databases().create_database(3600).await.unwrap();
     // both connections open before either writes: both find no schema
     let first = storage.open(&created.database_id).await.unwrap();
     let second = storage.open(&created.database_id).await.unwrap();

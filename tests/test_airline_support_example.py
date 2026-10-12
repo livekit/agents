@@ -7,6 +7,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 from pydantic import BaseModel
@@ -20,16 +21,18 @@ from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
 pytestmark = pytest.mark.unit
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "airline-support"
-for key, value in {
-    "LIVEKIT_API_KEY": "devkey",
-    "LIVEKIT_API_SECRET": "secretsecretsecretsecretsecretsecret",
-    "LIVEKIT_AGENTDB_URL": "ws://localhost:7781/v1/db",
-}.items():
-    os.environ.setdefault(key, value)
 sys.path.insert(0, str(EXAMPLE))
 
-import support_agent as sa  # noqa: E402
-from skyline import Skyline  # noqa: E402
+# the example builds its storage at import; a placeholder project, so the storage tests that run
+# later in the session still skip when no real one is configured
+_PLACEHOLDER = {
+    "LIVEKIT_API_KEY": "devkey",
+    "LIVEKIT_API_SECRET": "secretsecretsecretsecretsecretsecret",
+    "LIVEKIT_URL": "ws://localhost:9000",
+}
+with mock.patch.dict(os.environ, {k: os.environ.get(k, v) for k, v in _PLACEHOLDER.items()}):
+    import support_agent as sa  # noqa: E402
+    from skyline import Skyline  # noqa: E402
 
 APPROVED = sa.Verdict(approved=True)
 DELAY = sa.Email(sender="ana.garcia@example.com", subject="SK204 late", body="Booking SKY4F2.")

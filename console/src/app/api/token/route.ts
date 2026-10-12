@@ -61,7 +61,15 @@ export async function POST(request: Request) {
   const grant: VideoGrant = { room: roomName, roomJoin: true, canPublish: true, canPublishData: true, canSubscribe: true, canUpdateOwnMetadata: true };
   token.addGrant(grant);
   token.roomConfig = RoomConfiguration.fromJson(
-    { agents: [{ agentName, metadata: JSON.stringify({ thread_id: sessionId }) }] },
+    {
+      agents: [
+        {
+          agentName,
+          deployment: process.env.LIVEKIT_AGENT_DEPLOYMENT ?? "",
+          metadata: JSON.stringify({ thread_id: sessionId }),
+        },
+      ],
+    },
     { ignoreUnknownFields: true },
   );
 

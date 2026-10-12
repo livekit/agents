@@ -363,12 +363,11 @@ async def test_drain_sends_an_open_websocket_a_close_frame() -> None:
 
 def test_the_manifest_carries_methods_kinds_and_public() -> None:
     http = app_with_routes()
-    http.configure_endpoint("/hello", session=True)
     by_path = {e["path"]: e for e in http.manifest()}
     assert by_path["/hello"] == {
         "path": "/hello",
         "methods": ["GET", "HEAD"],
-        "kind": "text",
+        "kind": "http",
         "public": False,
     }
     assert by_path["/echo-size"]["methods"] == ["POST"] and by_path["/echo-size"]["public"]

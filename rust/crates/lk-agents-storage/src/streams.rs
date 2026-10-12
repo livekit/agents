@@ -1,12 +1,12 @@
-//! The answer streams (plan 6) over agent-db's `/v1/streams` (the handler package `stream/http.go`
-//! in the `agentdb-streams` worktree, docs/durable-streams-plan.md section 5):
+//! The answer streams (plan 6) over agentstore's streams API, reached through public-api-server
+//! at `/v0/agentstore/streams` (agent-db's `/v1/streams`, docs/durable-streams-plan.md section 5):
 //!
-//! * `POST /v1/streams` creates with `{content_type, ttl_seconds, region}` and answers the `AST_`
+//! * `POST /v0/agentstore/streams` creates with `{content_type, ttl_seconds, region}` and answers the `AST_`
 //!   id; the TTL is a fixed day, the stream's own, independent of the thread.
-//! * `POST /v1/streams/{id}` appends a body; `Stream-Closed: true` closes. Appends are queued per
+//! * `POST .../streams/{id}` appends a body; `Stream-Closed: true` closes. Appends are queued per
 //!   stream and sent in order by a task; a failed append is logged and does not fail the turn,
 //!   since the live response already carried the frame.
-//! * `GET /v1/streams/{id}?offset=` reads from an offset (`-1` the beginning, else a token the
+//! * `GET .../streams/{id}?offset=` reads from an offset (`-1` the beginning, else a token the
 //!   server minted, carried in `Stream-Next-Offset`); `&live=sse` follows the tail as
 //!   `text/event-stream` with `data` and `control` events, and rotates about every minute, so the
 //!   reader reconnects from its offset until the stream closes.
@@ -65,7 +65,7 @@ impl Streams {
     }
 
     fn url(&self, id: &str) -> String {
-        format!("{}/v1/streams/{id}", self.base)
+        format!("{}/{id}", self.base)
     }
 
     fn token(&self) -> Result<String, StorageError> {
@@ -85,7 +85,7 @@ impl Streams {
         });
         let resp = self
             .http
-            .post(format!("{}/v1/streams", self.base))
+            .post(&self.base)
             .bearer_auth(self.token()?)
             .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
             .body(body.to_string())

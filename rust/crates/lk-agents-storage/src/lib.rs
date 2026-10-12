@@ -18,14 +18,15 @@
 //! * [`turn`]: the turn state machine over a run (plan 3.3.4, 13.8): [`turn::Turn::run`] takes one
 //!   A2A message through its policy, and [`turn::TurnHost`] is the one trait the host implements
 //!   to run the handler and report progress.
-//! * [`streams`]: the answer streams over `/v1/streams` (plan 6).
-//! * [`threads`]: the `AgentThreads` gRPC client (plan 4.3), and [`grpc`] the channel under it
-//!   with the management `AgentDB` service.
-//! * [`token`]: the worker's credentials, `agent.databaseAdmin` for agent-db and a project-wide
-//!   `agentThread` grant for the threads service, minted per dial (plan 13.6).
+//! * [`streams`]: the answer streams over `/v0/agentstore/streams` (plan 6).
+//! * [`threads`]: the Public API's `ThreadService` (plan 4.3), and [`agentstore`] the base URL,
+//!   its error mapping and the databases client.
+//! * [`token`]: the worker's data plane credentials, `agent.databaseAdmin`, minted per dial
+//!   (plan 13.6).
 //!
-//! [`Storage`] is the root: the URLs and the key pair, from which a thread database is opened
-//! and the streams and threads clients are made. Host-neutral by design: no pyo3 here;
+//! Every request goes to agentstore through public-api-server, under one base URL
+//! ([`agentstore::agentstore_url_from_env`]). [`Storage`] is the root: that URL and the project's
+//! key pair, from which a thread database is opened and the streams and threads clients are made. Host-neutral by design: no pyo3 here;
 //! `lk-agents-py/src/storage.rs` is the Python face.
 //!
 //! Errors are [`StorageError`], the list of plan 5.2 and 13.5: `ThreadNotFound`,
@@ -35,7 +36,7 @@
 use std::time::Duration;
 
 pub mod chat_item;
-pub mod grpc;
+pub mod agentstore;
 pub mod run;
 pub mod schema;
 pub mod statements;
@@ -46,6 +47,7 @@ pub mod turn;
 pub mod wire;
 pub mod wsdb;
 
+pub use agentstore::Databases;
 pub use run::{Lane, Run, RunOptions, Thread, Tasks};
 pub use statements::{Lease, ThreadDb};
 pub use streams::{StreamReader, Streams};
@@ -119,20 +121,12 @@ impl StorageError {
     }
 }
 
-/// Where everything is. The data plane is `LIVEKIT_AGENTDB_URL` (`ws://host:port/db`); the
-/// streams API defaults to that host over HTTP, and the two gRPC services to the streams base.
-/// Beside a local agent-db every one is its own port (7781, 7780, 7783, 7793); in-cluster each is
-/// a service name.
+/// Where agentstore is: the public API's base URL, `https://host`. The data plane is
+/// `wss://host/v0/agentstore/db`, the streams `https://host/v0/agentstore/streams`.
 #[derive(Debug, Clone)]
 pub struct StorageOptions {
-    /// The `wsdb` endpoint, `ws://host:port/db`.
+    /// The public API, derived from `LIVEKIT_URL`.
     pub url: String,
-    /// The `/v1/streams` base, `http://host:port`. Default: the data plane's host.
-    pub streams_url: Option<String>,
-    /// The management `AgentDB` gRPC service, `http://host:port`. Default: the streams base.
-    pub management_url: Option<String>,
-    /// The `AgentThreads` gRPC service, `http://host:port`. Default: `management_url`.
-    pub threads_url: Option<String>,
     pub reconnect: wsdb::Reconnect,
     /// Lease lifetime on the database clock, rounded up to whole seconds.
     pub lease_ttl: Duration,
@@ -143,60 +137,52 @@ pub struct StorageOptions {
 impl StorageOptions {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
-            url: url.into(),
-            streams_url: None,
-            management_url: None,
-            threads_url: None,
+            url: url.into().trim_end_matches('/').to_owned(),
             reconnect: wsdb::Reconnect::default(),
             lease_ttl: statements::DEFAULT_LEASE_TTL,
             renew_interval: statements::DEFAULT_RENEW_INTERVAL,
         }
     }
 
-    /// `ws://h:p/db` becomes `http://h:p`, `wss` becomes `https`; an `http(s)` URL is kept whole.
-    pub fn streams(&self) -> Result<String, StorageError> {
-        if let Some(m) = &self.streams_url {
-            return Ok(m.trim_end_matches('/').to_owned());
-        }
+    /// The public API of `LIVEKIT_URL`'s project.
+    pub fn from_env() -> Result<Self, StorageError> {
+        Ok(Self::new(agentstore::agentstore_url_from_env()?))
+    }
+
+    fn base(&self) -> Result<url::Url, StorageError> {
         let u = url::Url::parse(&self.url)
-            .map_err(|e| StorageError::Invalid(format!("agentdb url {}: {e}", self.url)))?;
-        let scheme = match u.scheme() {
-            "ws" | "http" => "http",
-            "wss" | "https" => "https",
-            s => return Err(StorageError::Invalid(format!("agentdb url scheme {s}"))),
-        };
-        let host = u.host_str().ok_or_else(|| {
-            StorageError::Invalid(format!("agentdb url {} has no host", self.url))
-        })?;
-        Ok(match u.port() {
-            Some(p) => format!("{scheme}://{host}:{p}"),
-            None => format!("{scheme}://{host}"),
-        })
+            .map_err(|e| StorageError::Invalid(format!("agentstore url {}: {e}", self.url)))?;
+        if !matches!(u.scheme(), "http" | "https") || u.host_str().is_none() {
+            return Err(StorageError::Invalid(format!("agentstore url {} is not http(s)", self.url)));
+        }
+        Ok(u)
     }
 
-    pub fn management(&self) -> Result<String, StorageError> {
-        match &self.management_url {
-            Some(m) => Ok(m.trim_end_matches('/').to_owned()),
-            None => self.streams(),
-        }
+    /// The data plane, the base with `ws`/`wss` for `http`/`https`.
+    pub fn data_plane(&self) -> Result<String, StorageError> {
+        let u = self.base()?;
+        let scheme = if u.scheme() == "https" { "wss" } else { "ws" };
+        let rest = &self.url[u.scheme().len()..];
+        Ok(format!("{scheme}{rest}{}", agentstore::DB_PATH))
     }
 
-    pub fn threads(&self) -> Result<String, StorageError> {
-        match &self.threads_url {
-            Some(t) => Ok(t.trim_end_matches('/').to_owned()),
-            None => self.management(),
-        }
+    /// The streams root.
+    pub fn streams(&self) -> Result<String, StorageError> {
+        self.base()?;
+        Ok(format!("{}{}", self.url, agentstore::STREAMS_PATH))
     }
 }
 
 /// The root a worker holds: credentials and URLs. One [`ThreadDb`] per open thread, one
-/// [`Streams`] and one [`Threads`] shared by all of them.
+/// [`Streams`], one [`Threads`] and one [`Databases`] shared by all of them.
 #[derive(Clone)]
 pub struct Storage {
     opts: StorageOptions,
+    data_plane: String,
     minter: TokenMinter,
     streams: Streams,
     threads: Threads,
+    databases: Databases,
 }
 
 /// Make `ring` the process TLS provider, once: `reqwest` and `tokio-tungstenite` use
@@ -224,13 +210,14 @@ impl Storage {
             .build()
             .map_err(|e| StorageError::Invalid(format!("http client: {e}")))?;
         let streams = Streams::new(http, opts.streams()?, minter.clone());
-        let threads = Threads::new(&opts.threads()?, minter.for_threads())?;
-        Ok(Self { opts, minter, streams, threads })
+        let threads = Threads::new(minter.threads(&opts.url));
+        let databases = Databases::new(minter.databases(&opts.url));
+        Ok(Self { data_plane: opts.data_plane()?, opts, minter, streams, threads, databases })
     }
 
-    /// From `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
-    pub fn from_env(opts: StorageOptions) -> Result<Self, StorageError> {
-        Self::new(opts, TokenMinter::from_env()?)
+    /// [`StorageOptions::from_env`], `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
+    pub fn from_env() -> Result<Self, StorageError> {
+        Self::new(StorageOptions::from_env()?, TokenMinter::from_env()?)
     }
 
     pub fn options(&self) -> &StorageOptions {
@@ -244,7 +231,7 @@ impl Storage {
     /// Dials one connection to `database_id` and reads its schema version (plan 13.4: one
     /// connection per open thread, closed at run end with [`ThreadDb::close`]).
     pub async fn open(&self, database_id: &str) -> Result<ThreadDb, StorageError> {
-        let mut opts = ConnOptions::new(self.opts.url.clone(), database_id);
+        let mut opts = ConnOptions::new(self.data_plane.clone(), database_id);
         opts.reconnect = self.opts.reconnect.clone();
         let conn = Conn::dial(opts, self.minter.clone()).await?;
         ThreadDb::open_with_timing(conn, self.opts.lease_ttl, self.opts.renew_interval).await
@@ -258,9 +245,9 @@ impl Storage {
         &self.threads
     }
 
-    /// The management API's database lifecycle, for development and tests.
-    pub fn admin(&self) -> Result<grpc::AgentDbAdmin, StorageError> {
-        grpc::AgentDbAdmin::new(&self.opts.management()?, self.minter.clone())
+    /// The database lifecycle, for development and tests.
+    pub fn databases(&self) -> &Databases {
+        &self.databases
     }
 }
 
@@ -269,25 +256,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_service_urls_follow_the_data_plane_host() {
-        let o = StorageOptions::new("ws://localhost:7781/v1/db");
-        assert_eq!(o.streams().unwrap(), "http://localhost:7781");
-        assert_eq!(o.threads().unwrap(), "http://localhost:7781");
-        let mut o = StorageOptions::new("wss://agentdb.example.com/db");
-        assert_eq!(o.streams().unwrap(), "https://agentdb.example.com");
-        o.streams_url = Some("http://localhost:7780/".into());
-        assert_eq!(o.streams().unwrap(), "http://localhost:7780");
-        assert_eq!(o.management().unwrap(), "http://localhost:7780");
-        o.management_url = Some("http://localhost:7783".into());
-        assert_eq!(o.threads().unwrap(), "http://localhost:7783");
-        o.threads_url = Some("http://threads:7793".into());
-        assert_eq!(o.threads().unwrap(), "http://threads:7793");
+    fn the_data_plane_and_streams_sit_under_the_public_api() {
+        let o = StorageOptions::new("https://beta-api.staging.livekit.cloud/");
+        assert_eq!(o.data_plane().unwrap(), "wss://beta-api.staging.livekit.cloud/v0/agentstore/db");
+        assert_eq!(
+            o.streams().unwrap(),
+            "https://beta-api.staging.livekit.cloud/v0/agentstore/streams"
+        );
+        let o = StorageOptions::new("http://localhost:9000");
+        assert_eq!(o.data_plane().unwrap(), "ws://localhost:9000/v0/agentstore/db");
+        assert!(StorageOptions::new("ws://x").data_plane().is_err());
         assert!(StorageOptions::new("ftp://x").streams().is_err());
     }
 
     #[test]
     fn lease_timing_defaults_and_invalid_durations() {
-        let defaults = StorageOptions::new("ws://localhost:7781/v1/db");
+        let defaults = StorageOptions::new("https://beta-api.staging.livekit.cloud");
         assert_eq!(defaults.lease_ttl, statements::DEFAULT_LEASE_TTL);
         assert_eq!(defaults.renew_interval, statements::DEFAULT_RENEW_INTERVAL);
         for (ttl, interval) in [

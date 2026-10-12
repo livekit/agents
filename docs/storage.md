@@ -72,9 +72,8 @@ server = AgentServer(storage=AgentDBStorage())
 
 `AgentDBStorage` keeps threads on the platform's agentstore: agent-db for
 the thread's database and the answer streams, and the threads service that
-mints thread ids (`AT_`). There is one backend. Local development runs agent-db
-locally, and the tests run against a real agent-db spawned for the test
-run; nothing stands in for it. `a2a_session(storage=)` overrides the
+mints thread ids (`AT_`). There is one backend. Local development and the
+tests use the developer's own staging project; nothing stands in for it. `a2a_session(storage=)` overrides the
 server's choice for one text door. A call uses the server's storage and
 receives its thread as `ctx.thread`.
 
@@ -85,30 +84,30 @@ with the process.
 
 | Argument                 | Environment variable when omitted                                         |
 | ------------------------ | ------------------------------------------------------------------------- |
-| `url`                    | `LIVEKIT_AGENTDB_URL`, the data plane; required                           |
-| `streams_url`            | `LIVEKIT_AGENTDB_STREAMS_URL`, else the data plane's host over HTTP       |
-| `management_url`         | `LIVEKIT_AGENTDB_MANAGEMENT_URL`, the `AgentDB` gRPC service, else the streams URL |
-| `threads_url`            | `LIVEKIT_AGENT_THREADS_URL`, the `AgentThreads` gRPC service, else the management URL |
-| `api_key`, `api_secret`  | `LIVEKIT_AGENTDB_API_KEY`, `LIVEKIT_AGENTDB_API_SECRET`, else `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
+| `api_key`, `api_secret`  | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`                                    |
 | `lease_ttl`              | `LIVEKIT_AGENTDB_LEASE_TTL` in seconds, else 10 seconds                    |
 | `renew_interval`         | `LIVEKIT_AGENTDB_RENEW_INTERVAL` in seconds, else 3 seconds                |
 | `holder`                 | this worker's lease holder id, `<hostname>-<pid>` by default               |
 
 ## Where it connects
 
-| Service | LiveKit Cloud worker | Self-hosted worker |
-| --- | --- | --- |
-| the data plane, agent-db's `/v1/db` WebSocket | in-cluster | the public API server's `/v1/agentstore/db` proxy |
-| the answer streams | in-cluster | the public API server's `/v1/agentstore/streams` proxy |
-| `AgentDB`, gRPC: databases | in-cluster | the public API server |
-| `AgentThreads`, gRPC: threads | in-cluster | the public API server |
+Every worker, LiveKit Cloud's included, reaches agentstore only through
+LiveKit's public API, at one base URL derived from `LIVEKIT_URL`
+(`wss://<project>.staging.livekit.cloud` uses
+`https://beta-api.staging.livekit.cloud`, `wss://<project>.livekit.cloud`
+`https://beta-api.livekit.cloud`).
 
-Beside a local agent-db the four are ports 7781, 7780, 7783 and 7793.
+| Service | Under the base URL |
+| --- | --- |
+| the data plane, a WebSocket | `/v0/agentstore/db` |
+| the answer streams | `/v0/agentstore/streams` |
+| threads, `ThreadService` | `/v0/projects/p_/threads` |
+| databases, `DatabaseService` | `/v0/projects/p_/databases` |
 
-The worker mints its own tokens from the project's key and secret, one
-hour each, minted per dial: agent-db takes an `agent.databaseAdmin`
-token, the threads service an `agentThread` grant covering every thread
-of the project. The gRPC calls and the streams carry it as
+`p_` is the project of the request's token. The worker mints its own tokens
+from the project's key and secret: the data plane and the streams take an
+`agent.databaseAdmin` token, one hour, minted per dial; the threads and
+databases services a short-lived one per request. HTTP requests carry it as
 `Authorization: Bearer`; the data plane carries it as `access_token` on
 the WebSocket upgrade, so a proxy admits the connection before the first
 frame, and again in its `Hello`.
