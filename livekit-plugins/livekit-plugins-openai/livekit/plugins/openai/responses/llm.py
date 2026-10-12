@@ -219,7 +219,17 @@ class _LLMOptions:
 
 
 # identifies an item the agent copies from a response into its chat context
-_OutputKey = tuple[Literal["message", "function_call"], str]
+_OutputKey = tuple[str, ...]
+
+
+def _function_call_key(call_id: str, name: str, arguments: str) -> _OutputKey:
+    # the agent rewrites arguments as canonical JSON before running a tool, so compare
+    # them by value: formatting may differ from the response, an edited value may not
+    try:
+        args = json.dumps(json.loads(arguments or "{}"), sort_keys=True)
+    except ValueError:
+        args = arguments
+    return ("function_call", call_id, name, args)
 
 
 def _response_output_keys(output: list[ResponseOutputItem]) -> list[_OutputKey]:
@@ -237,7 +247,11 @@ def _response_output_keys(output: list[ResponseOutputItem]) -> list[_OutputKey]:
     if text:
         keys.append(("message", text))
     # reasoning and provider-executed tools stay server-side
-    keys.extend(("function_call", item.call_id) for item in output if item.type == "function_call")
+    keys.extend(
+        _function_call_key(item.call_id, item.name, item.arguments)
+        for item in output
+        if item.type == "function_call"
+    )
     return keys
 
 
@@ -245,7 +259,7 @@ def _chat_item_key(item: ChatItem) -> _OutputKey | None:
     if item.type == "message" and item.role == "assistant":
         return ("message", item.raw_text_content or "")
     if item.type == "function_call":
-        return ("function_call", item.call_id)
+        return _function_call_key(item.call_id, item.name, item.arguments)
     return None
 
 
