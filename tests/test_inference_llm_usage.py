@@ -140,3 +140,83 @@ async def test_reasoning_tokens_default_to_zero_without_details() -> None:
         await model.aclose()
 
     assert usage_chunks[0].reasoning_tokens == 0
+
+
+# OpenAI (and the LiveKit inference gateway in front of it) report the prompt-cache
+# write on ``prompt_tokens_details.cache_write_tokens``. It is a subset of
+# ``prompt_tokens``, never an addition, so it rides alongside ``cached_tokens`` on the
+# same details object rather than adjusting any total.
+_STREAM_WITH_CACHE_WRITE_USAGE = b"""data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"ok","role":"assistant"},"finish_reason":null,"index":0}],"created":0,"model":"m","object":"chat.completion.chunk"}
+
+data: {"id":"chatcmpl-test","choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":0,"model":"m","object":"chat.completion.chunk"}
+
+data: {"id":"chatcmpl-test","choices":[],"created":0,"model":"m","object":"chat.completion.chunk","usage":{"completion_tokens":40,"prompt_tokens":2596,"total_tokens":2636,"prompt_tokens_details":{"cached_tokens":1024,"cache_write_tokens":1536}}}
+
+data: [DONE]
+
+"""
+
+
+class _CacheWriteUsageTransport(httpx.AsyncBaseTransport):
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_WITH_CACHE_WRITE_USAGE,
+            request=request,
+        )
+
+
+async def test_cache_write_tokens_are_reported_from_prompt_tokens_details() -> None:
+    client = openai_sdk.AsyncClient(
+        api_key="test-key",
+        http_client=httpx.AsyncClient(transport=_CacheWriteUsageTransport()),
+    )
+    model = openai.LLM(model="m", client=client)
+
+    chat_ctx = llm.ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+
+    usage_chunks: list[llm.CompletionUsage] = []
+    stream = model.chat(chat_ctx=chat_ctx)
+    try:
+        async for chunk in stream:
+            if chunk.usage is not None:
+                usage_chunks.append(chunk.usage)
+    finally:
+        await stream.aclose()
+        await model.aclose()
+
+    assert len(usage_chunks) == 1
+    usage = usage_chunks[0]
+    assert usage.cache_creation_tokens == 1536
+    # The cache write is inside prompt_tokens, so totals stay untouched.
+    assert usage.prompt_cached_tokens == 1024
+    assert usage.prompt_tokens == 2596
+    assert usage.total_tokens == 2636
+
+
+async def test_cache_write_tokens_default_to_zero_without_details() -> None:
+    # A provider that reports no ``prompt_tokens_details`` at all leaves the count at 0,
+    # which is what keeps the metrics aggregation honest for everyone else.
+    client = openai_sdk.AsyncClient(
+        api_key="test-key",
+        http_client=httpx.AsyncClient(transport=_NullUsageTransport()),
+    )
+    model = openai.LLM(model="m", client=client)
+
+    chat_ctx = llm.ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+
+    usage_chunks: list[llm.CompletionUsage] = []
+    stream = model.chat(chat_ctx=chat_ctx)
+    try:
+        async for chunk in stream:
+            if chunk.usage is not None:
+                usage_chunks.append(chunk.usage)
+    finally:
+        await stream.aclose()
+        await model.aclose()
+
+    assert usage_chunks[0].cache_creation_tokens == 0

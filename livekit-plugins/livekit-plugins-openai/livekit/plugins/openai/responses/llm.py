@@ -676,6 +676,9 @@ class LLMStream(llm.LLMStream):
                     prompt_cached_tokens=usage.input_tokens_details.cached_tokens
                     if usage.input_tokens_details
                     else 0,
+                    cache_creation_tokens=usage.input_tokens_details.cache_write_tokens
+                    if usage.input_tokens_details
+                    else 0,
                     total_tokens=usage.total_tokens,
                     service_tier=getattr(event.response, "service_tier", None),
                 ),
