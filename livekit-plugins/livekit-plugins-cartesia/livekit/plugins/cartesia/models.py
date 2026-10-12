@@ -58,6 +58,7 @@ TTSLanguages = Literal[
     "mr",
     "or",
     "pa",
+    "ur",
 ]
 """See [the docs](https://docs.cartesia.ai/build-with-cartesia/tts-models/latest) for all options."""
 
