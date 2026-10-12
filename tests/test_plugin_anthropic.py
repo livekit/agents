@@ -172,6 +172,53 @@ class TestThinkingDefaults:
         assert kwargs["thinking"] == adaptive
 
 
+class TestThinkingBudgetAndMaxTokens:
+    """An enabled thinking budget is spent inside ``max_tokens``, and Anthropic rejects a
+    request whose budget is not below ``max_tokens``. The plugin's 1024 default would
+    collide with any valid budget (the minimum is 1024)."""
+
+    @pytest.mark.asyncio
+    async def test_default_max_tokens_leaves_room_above_the_budget(self) -> None:
+        enabled = {"type": "enabled", "budget_tokens": 2048}
+        kwargs = await _request_kwargs(_make_llm(model="claude-haiku-4-5", thinking=enabled))
+        assert kwargs["thinking"] == enabled
+        assert kwargs["max_tokens"] == 2048 + 1024
+
+    @pytest.mark.asyncio
+    async def test_default_max_tokens_unchanged_without_a_budget(self) -> None:
+        kwargs = await _request_kwargs(_make_llm(model="claude-sonnet-5"))
+        assert kwargs["max_tokens"] == 1024
+
+        adaptive = {"type": "adaptive"}
+        kwargs = await _request_kwargs(_make_llm(model="claude-sonnet-5-5", thinking=adaptive))
+        assert kwargs["max_tokens"] == 1024
+
+    @pytest.mark.asyncio
+    async def test_explicit_max_tokens_above_the_budget_is_kept(self) -> None:
+        enabled = {"type": "enabled", "budget_tokens": 2048}
+        kwargs = await _request_kwargs(
+            _make_llm(model="claude-haiku-4-5", thinking=enabled, max_tokens=4096)
+        )
+        assert kwargs["max_tokens"] == 4096
+
+    @pytest.mark.parametrize("max_tokens", [1024, 2048])
+    def test_explicit_max_tokens_not_above_the_budget_is_rejected(self, max_tokens: int) -> None:
+        with pytest.raises(ValueError, match="must be greater than thinking budget_tokens"):
+            _make_llm(
+                model="claude-haiku-4-5",
+                thinking={"type": "enabled", "budget_tokens": 2048},
+                max_tokens=max_tokens,
+            )
+
+    @pytest.mark.asyncio
+    async def test_budget_from_extra_kwargs_also_raises_the_default(self) -> None:
+        enabled = {"type": "enabled", "budget_tokens": 1024}
+        kwargs = await _request_kwargs(
+            _make_llm(model="claude-haiku-4-5"), extra_kwargs={"thinking": enabled}
+        )
+        assert kwargs["max_tokens"] == 2048
+
+
 class TestAnthropicStreamRetry:
     @pytest.mark.asyncio
     async def test_retry_creates_a_fresh_stream_awaitable(self) -> None:

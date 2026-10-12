@@ -40,6 +40,24 @@ from .utils import CACHE_CONTROL_EPHEMERAL
 # Claude 4.6+ no longer supports prefilling (trailing assistant messages).
 _NO_PREFILL_PATTERNS = ("claude-sonnet-4-6", "claude-opus-4-6")
 
+_DEFAULT_MAX_TOKENS = 1024
+
+
+def _thinking_budget(thinking: Any) -> int | None:
+    """Return ``budget_tokens`` of an ``{"type": "enabled", ...}`` thinking config, else None."""
+    if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+        budget = thinking.get("budget_tokens")
+        if isinstance(budget, int):
+            return budget
+    return None
+
+
+def _default_max_tokens(thinking: Any) -> int:
+    # Anthropic requires ``max_tokens`` to exceed an enabled thinking budget, since the
+    # budget is spent inside it. Leave the usual room for the reply on top of the budget.
+    budget = _thinking_budget(thinking)
+    return budget + _DEFAULT_MAX_TOKENS if budget is not None else _DEFAULT_MAX_TOKENS
+
 
 def _model_disables_prefill(model: str) -> bool:
     """Return True if the model does not support assistant message prefilling."""
@@ -110,10 +128,19 @@ class LLM(llm.LLM):
             otherwise think inside the default ``max_tokens`` budget and return no text
             (currently Sonnet 5 and Haiku 5.5), and every other model gets the API default.
             Pass ``None`` to always send no ``thinking`` field. Not every model accepts every
-            value: Sonnet 5.5 and Opus 5.5 reject ``{"type": "disabled"}``.
+            value: Sonnet 5.5 and Opus 5.5 reject ``{"type": "disabled"}``. With
+            ``{"type": "enabled", "budget_tokens": N}`` the default ``max_tokens`` becomes
+            ``N + 1024``, and an explicit ``max_tokens`` must be greater than ``N``.
         """  # noqa: E501
 
         super().__init__()
+
+        budget = _thinking_budget(thinking) if is_given(thinking) else None
+        if budget is not None and is_given(max_tokens) and max_tokens <= budget:
+            raise ValueError(
+                f"max_tokens ({max_tokens}) must be greater than thinking budget_tokens "
+                f"({budget}): the thinking budget is spent inside max_tokens"
+            )
 
         self._opts = _LLMOptions(
             model=model,
@@ -190,8 +217,6 @@ class LLM(llm.LLM):
             extra_body.update(sampling)
             extra["extra_body"] = extra_body
 
-        extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
-
         # A ``thinking`` passed through ``extra_kwargs`` wins over the constructor option, which
         # in turn wins over the per-model default.
         if "thinking" not in extra:
@@ -202,6 +227,12 @@ class LLM(llm.LLM):
             )
             if thinking is not None:
                 extra["thinking"] = thinking
+
+        extra["max_tokens"] = (
+            self._opts.max_tokens
+            if is_given(self._opts.max_tokens)
+            else _default_max_tokens(extra.get("thinking"))
+        )
 
         beta_flag: str | None = None
         if tools:
