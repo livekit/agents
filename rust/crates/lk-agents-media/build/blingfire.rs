@@ -1,6 +1,6 @@
 //! Compiles the vendored BlingFire client library, tokeniser (models compiled in as C arrays), our
-//! C++ wrapper and the C shim with `cc`: no CMake, no network. The defines are upstream's UNIX
-//! `CMakeLists.txt` ones; without them the client reaches for `windows.h` and SAL annotations.
+//! C++ wrapper and the C shim with `cc`: no CMake, no network. The defines are upstream's
+//! `CMakeLists.txt` ones for the target: UNIX, or Windows (no `BLING_FIRE_NOWINDOWS`).
 
 use std::path::{Path, PathBuf};
 
@@ -47,15 +47,20 @@ pub fn build() {
         .include(&compile_inc)
         .include(&vendor)
         .include(manifest.join("csrc/blingfire"))
-        // Upstream's UNIX defines, verbatim.
+        // Upstream's defines, verbatim: Windows is the UNIX set without BLING_FIRE_NOWINDOWS.
         .define("NDEBUG", None)
         .define("HAVE_NO_SPECSTRINGS", None)
         .define("_VERBOSE", None)
-        .define("BLING_FIRE_NOAP", None)
-        .define("BLING_FIRE_NOWINDOWS", None);
+        .define("BLING_FIRE_NOAP", None);
 
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        build.define("BLING_FIRE_MAC", None);
+    match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("windows") => {}
+        Ok("macos") => {
+            build.define("BLING_FIRE_NOWINDOWS", None).define("BLING_FIRE_MAC", None);
+        }
+        _ => {
+            build.define("BLING_FIRE_NOWINDOWS", None);
+        }
     }
 
     // Upstream compiles as C++11, a strict subset, so one standard covers both.
