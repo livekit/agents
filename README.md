@@ -26,11 +26,13 @@ done behind it.
 
 ## Getting started
 
-You need a LiveKit **staging** project: its URL, API key and secret from the dashboard.
+You need a LiveKit **staging** project (its URL, API key and secret from the dashboard) and
+Python 3.11+.
 
 ```sh
-git clone --recurse-submodules -b agents-2.0 https://github.com/livekit/agents && cd agents
-uv sync --all-packages
+git clone -b agents-2.0 https://github.com/livekit/agents && cd agents   # the examples
+uv venv -p 3.12 && source .venv/bin/activate
+uv pip install "livekit-agents==2.0.0b1" livekit-plugins-openai uvicorn
 
 export LIVEKIT_URL=wss://<project>.staging.livekit.cloud
 export LIVEKIT_API_KEY=<key>
@@ -39,14 +41,17 @@ export OPENAI_API_KEY=<key>                  # for calls
 export LIVEKIT_WORKER_INSECURE=1             # temporary, staging only
 export LIVEKIT_AGENT_DEPLOYMENT=default      # temporary, staging only
 
-cd examples/frontdesk && uv run python main.py dev
+cd examples/frontdesk && python main.py dev
 ```
+
+Pin the beta's exact version rather than allowing pre-releases, which would also take
+pre-releases of its dependencies.
 
 Then talk to it by text or by call in the console, from two more terminals with the same
 environment:
 
 ```sh
-cd console && uv run python console_api.py
+cd console && python console_api.py
 cd console && pnpm install && pnpm dev       # http://localhost:3000
 ```
 
@@ -61,7 +66,8 @@ cd console && pnpm install && pnpm dev       # http://localhost:3000
 
 - [Docs](docs/README.md), one feature per page
 - [Migrating from v1](skills/migrate-to-v2/SKILL.md): `npx skills add livekit/agents --skill migrate-to-v2`
-- Development: `make install`, `make check`, `uv run pytest --unit`
+- From source: `git clone --recurse-submodules`, then `uv sync --all-packages` (needs Rust);
+  `make check`, `uv run pytest --unit`
 - Issues with the `v2` label; licensed [Apache-2.0](LICENSE)
 
 <!--BEGIN_REPO_NAV-->
