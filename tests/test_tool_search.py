@@ -350,6 +350,35 @@ class TestSearchStrategies:
         assert results[0].index_data is not None
 
 
+class TestKeywordSpecific:
+    """Tests specific to keyword (regex) behavior."""
+
+    def test_regex_query_keeps_matching_rules(self):
+        """Regex syntax in a keyword query must keep its matching rules: the
+        anchored query matches only the exact name, not every tool containing
+        the same words. The forecast tool is indexed first so an anchor-stripping
+        regression that ties both tools returns the wrong one."""
+        items = [
+            SearchItem(
+                name="get_weather_forecast",
+                description="Get the weather forecast for a city",
+                parameters={"city": "City name"},
+                source=forecast_tool,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy = KeywordSearchStrategy()
+        strategy.build_index(items)
+        results = strategy.search("^get_weather$", items, 1)
+        assert len(results) == 1
+        assert results[0].name == "get_weather"
+
+
 class TestBM25Specific:
     """Tests specific to BM25 behavior."""
 
@@ -362,6 +391,34 @@ class TestBM25Specific:
         results = strategy.search("academic papers arxiv", items, 5)
         assert len(results) >= 1
         assert results[0].name == "search_papers"
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [("c++", "compile_cpp"), ("c#", "compile_csharp")],
+    )
+    def test_programming_language_terms_stay_distinct(self, query: str, expected: str):
+        """Punctuation-bearing terms like c++ and c# must not collapse to the
+        same token, or the wrong-language tool can be returned. The C# tool is
+        indexed first so a token collision returns it for both queries."""
+        items = [
+            SearchItem(
+                name="compile_csharp",
+                description="Compile C# code",
+                parameters={"source": "C# source file"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="compile_cpp",
+                description="Compile C++ code",
+                parameters={"source": "C++ source file"},
+                source=stock_tool,
+            ),
+        ]
+        strategy = BM25SearchStrategy()
+        strategy.build_index(items)
+        results = strategy.search(query, items, 1)
+        assert len(results) == 1
+        assert results[0].name == expected
 
     def test_cleanup_clears_state(self):
         strategy = BM25SearchStrategy()
