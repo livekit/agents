@@ -369,6 +369,13 @@ def _is_openai_model(model: str) -> bool:
     return model == "openai" or model.startswith("openai/")
 
 
+def _provider_for_model(model: NotGivenOr[STTModels | str]) -> str | None:
+    """The provider a model name belongs to (the part before "/"), or None if unknown."""
+    if not (is_given(model) and isinstance(model, str)):
+        return None
+    return model.split("/", 1)[0] or None
+
+
 def _needs_client_endpointing(model: NotGivenOr[STTModels | str]) -> bool:
     """True for models that finalize a turn only when the client sends session.finalize.
 
@@ -967,38 +974,40 @@ class SpeechStream(stt.SpeechStream):
         therefore keeps the model it was created with, so its VAD (and the `session.finalize`
         it sends) still matches the running model, and framework keyterms are formatted for
         that model. Streams created after a parent switch start on the new model. The
-        requested model is still forwarded, as the other session settings are.
+        requested model is still forwarded, as the other session settings are, but a
+        language or extra written for a different provider is left to those new streams.
         """
+        changed_provider = False
         if is_given(model):
-            # Mirror __init__/STT.update_options: strip ":language" suffix and apply if
-            # not overridden.
+            refused = self._warn_if_rate_refused(model)
+            # Mirror __init__/STT.update_options: strip ":language" suffix. It belongs to the
+            # model carrying it, so it is not applied when this stream cannot run that model.
             if isinstance(model, str):
                 parsed_model, parsed_language = _parse_model_string(model)
                 model = parsed_model
-                if is_given(parsed_language) and not is_given(language):
+                if is_given(parsed_language) and not is_given(language) and not refused:
                     language = parsed_language
-            self._warn_if_rate_refused(model)
+            changed_provider = _provider_for_model(model) != _provider_for_model(self._opts.model)
 
         if is_given(language):
             self._opts.language = LanguageCode(language)
-        if is_given(extra):
+
+        forward_extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN
+        if is_given(extra) and not changed_provider:
             # a pure user baseline: framework keyterms are merged in at forward time, so a
-            # later clear can actually remove them
+            # later clear can actually remove them. An extra written alongside another
+            # provider's model is for that model, not for the one this session is running.
             self._opts.extra_kwargs.update(extra)
+            forward_extra = self._forward_extra(extra)
 
-        if not (is_given(model) or is_given(language) or is_given(extra)):
+        if not (is_given(model) or is_given(language) or is_given(forward_extra)):
             return
-        # a live update supersedes any keyterms payload deferred to end of speech
-        self._pending_extra = None
-        self._send_live_update(
-            model=model,
-            language=language,
-            extra=self._forward_extra(extra if is_given(extra) else None),
-        )
+        self._send_live_update(model=model, language=language, extra=forward_extra)
 
-    def _warn_if_rate_refused(self, model: STTModels | str) -> None:
+    def _warn_if_rate_refused(self, model: STTModels | str) -> bool:
         """A live session's rate is fixed at creation, so a model needing another leaves
-        the session on the model it is running and only future streams get the switch."""
+        the session on the model it is running and only future streams get the switch.
+        Returns whether this stream refused the model."""
         required = _required_sample_rate(model)
         if required is not None and required != self._opts.sample_rate:
             logger.warning(
@@ -1009,21 +1018,31 @@ class SpeechStream(stt.SpeechStream):
                 required,
                 self._opts.sample_rate,
             )
+            return True
+        return False
 
-    def _forward_extra(self, extra: dict[str, Any] | None) -> NotGivenOr[dict[str, Any]]:
-        """User extra (a sparse delta, or None) merged with the framework keyterms formatted
-        for the model this session is actually running. None becomes the running model's
-        keyterms alone, so a model update keeps them without resending a stale key from a
-        provider this session is not on."""
-        merged: dict[str, Any] = dict(extra) if extra else {}
-        keyterm_extra = _keyterms_extra_for_model(
-            self._opts.model,
-            extra_kwargs=self._opts.extra_kwargs,
-            session_keyterms=self._stt._session_keyterms,
+    def _forward_extra(self, extra: dict[str, Any]) -> NotGivenOr[dict[str, Any]]:
+        """The user's extra delta, with the running model's framework keyterms folded in when
+        the delta sets that model's own keyterm key, so the merge cannot shorten them. Any
+        payload deferred to end of speech is left alone so the change is not applied mid-turn."""
+        keyterm_key = _keyterms_key_for_model(self._opts.model)
+        if keyterm_key is not None and keyterm_key in extra:
+            # the user edited this session's keyterms explicitly: send the whole value and
+            # supersede anything deferred to end of speech
+            self._pending_extra = None
+            return {**extra, **self._keyterm_payload()}
+        return dict(extra)
+
+    def _keyterm_payload(self) -> dict[str, Any]:
+        """This stream's keyterms under its own running model's key, formatted fresh."""
+        return (
+            _keyterms_extra_for_model(
+                self._opts.model,
+                extra_kwargs=self._opts.extra_kwargs,
+                session_keyterms=self._stt._session_keyterms,
+            )
+            or {}
         )
-        if keyterm_extra is not None:
-            merged.update(keyterm_extra)
-        return merged if merged else NOT_GIVEN
 
     def _send_live_update(
         self,
@@ -1057,8 +1076,8 @@ class SpeechStream(stt.SpeechStream):
     def _on_session_keyterms_changed(self) -> None:
         """Re-send this stream's keyterms under its own model's key, formatted fresh so a
         cleared list is actually removed from the live session."""
-        extra = self._forward_extra(None)
-        if not is_given(extra):
+        extra = self._keyterm_payload()
+        if not extra:
             return
         # inference applies extra live via session.update; defer to END_OF_SPEECH since
         # the gateway may reconnect upstream when the keyterms change
@@ -1139,7 +1158,10 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_str(json.dumps(audio_msg))
 
                 if vad_stream is not None:
-                    vad_stream.end_input()
+                    # the VAD may have ended on its own already (e.g. it closed its stream
+                    # early); that must not stop session.finalize from going out
+                    with contextlib.suppress(RuntimeError):
+                        vad_stream.end_input()
 
                 input_ended.set()
                 finalize_msg = {

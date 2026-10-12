@@ -239,6 +239,72 @@ async def _wait_until_stream_is_live(stream: RecognizeStream, *, timeout: float 
     raise AssertionError("stream did not connect in time")
 
 
+async def test_live_switch_off_client_endpointing_keeps_finalizing_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Speechmatics detects no turns, so the client VAD finalizes them. Switching the
+    parent to a server-endpointing model must not tear that VAD down while Speechmatics
+    is still the running session, or later turns stop producing finals."""
+    finals: list[str] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hello", "language": "en"}
+                )
+                await ws.send_json({"type": "session.finalized"})
+        return ws
+
+    class _SpeechyVAD(FakeVAD):
+        """The default VAD inference.STT builds, made to detect speech."""
+
+        def __init__(self) -> None:
+            super().__init__(
+                fake_user_speeches=[
+                    FakeUserSpeech(start_time=0.0, end_time=0.05, transcript="hello", stt_delay=0.0)
+                ],
+                min_speech_duration=0.01,
+                min_silence_duration=0.05,
+            )
+
+    monkeypatch.setattr(inference_vad, "VAD", _SpeechyVAD)
+
+    async with _gateway(handler) as (base_url, session):
+        # 24 kHz so the Deepgram switch is not refused for its rate
+        stt = _make_stt(
+            model="speechmatics/enhanced",
+            sample_rate=24000,
+            base_url=base_url,
+            http_session=session,
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+
+        async def feed() -> None:
+            while True:
+                stream.push_frame(_silence(48000, 0.1))
+                await asyncio.sleep(0.02)
+
+        feeder = asyncio.create_task(feed())
+        try:
+            await _wait_until_stream_is_live(stream)
+            assert stream._vad is not None
+
+            # the parent moves on, but the live session stays on Speechmatics
+            stt.update_options(model="deepgram/nova-3")
+            final = await asyncio.wait_for(_first_final(stream), timeout=5.0)
+            finals.append(final.alternatives[0].text)
+        finally:
+            feeder.cancel()
+            await stream.aclose()
+
+    assert finals == ["hello"], "a VAD-driven final must still reach the running session"
+    assert stream._vad is not None, "the running session keeps its client endpointing"
+
+
 async def test_live_switch_to_openai_keeps_client_finalization() -> None:
     """The gateway does not switch a live session's provider, so a stream on a
     server-endpointing model keeps that model and its server-side endpointing even after
@@ -473,3 +539,145 @@ def test_openai_options_are_accepted_by_the_typed_constructor() -> None:
         extra_kwargs=opts,
     )
     assert stt._opts.extra_kwargs == opts
+
+
+async def test_a_closed_vad_still_lets_input_end_finalize() -> None:
+    """A VAD that ended on its own closes its stream; that must not abort the send task
+    before it commits the audio with session.finalize, or the turn is lost."""
+    message_types: list[str] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            message_types.append(event["type"])
+            if event["type"] == "session.finalize":
+                # only the client's commit can produce this final
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hello", "language": "en"}
+                )
+                await ws.send_json({"type": "session.finalized"})
+        return ws
+
+    # a VAD with nothing to report returns from its stream's main task at once, so its
+    # stream is already closed by the time input ends
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(base_url=base_url, http_session=session, vad=FakeVAD())
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream)
+            await asyncio.sleep(0.05)  # let the VAD stream finish and close
+            stream.end_input()
+            final = await asyncio.wait_for(_first_final(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert "session.finalize" in message_types, "input ending must still commit the audio"
+    assert final.alternatives[0].text == "hello"
+
+
+async def test_an_update_during_speech_does_not_flush_deferred_keyterms() -> None:
+    """Keyterms that change mid-utterance wait for a calm moment; an unrelated update
+    (here a language) must not push them out early and make the gateway reconnect."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    def keyterm_updates() -> list[Any]:
+        return [
+            u["settings"]["extra"]["keyterm"]
+            for u in updates
+            if "keyterm" in u["settings"].get("extra", {})
+        ]
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream)
+            stream._speaking = True
+            stt._update_session_keyterms(["Acme"])  # deferred to end of speech
+            stt.update_options(language="fr")  # unrelated: must not flush them
+            await asyncio.sleep(0.05)
+
+            assert keyterm_updates() == [], "keyterms must wait for a calm moment"
+            assert any(u["settings"].get("language") == "fr" for u in updates)
+
+            stream._speaking = False
+            stream._on_end_of_speech()  # the calm moment arrives
+            await asyncio.sleep(0.05)
+        finally:
+            await stream.aclose()
+
+    assert keyterm_updates() == [["Acme"]], "the deferred terms must still arrive"
+
+
+async def test_a_direct_stream_suffix_language_is_not_applied_to_a_refused_model() -> None:
+    """A ``:language`` suffix belongs to the model carrying it. A direct stream update
+    naming a model this stream's rate refuses must not apply that model's language."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream)
+            stream.push_frame(_silence(16000, 0.1))
+            stream.update_options(model="openai/gpt-live-transcribe:fr")
+            await asyncio.sleep(0.1)
+        finally:
+            await stream.aclose()
+
+    assert stream._opts.model == "deepgram/nova-3"
+    assert stream._opts.language is NOT_GIVEN or stream._opts.language is None
+    assert all("language" not in u["settings"] for u in updates), (
+        "a refused model must not impose its language on the running session"
+    )
+
+
+async def test_a_model_switch_does_not_send_the_new_providers_extra() -> None:
+    """An extra written alongside a model switch is for that model. A live Deepgram stream
+    must not be handed OpenAI's string ``keywords``, which it reads as weighted tuples."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream)
+            # 24 kHz only for the parent's default; the live session stays on Deepgram
+            stt.update_options(model="openai/gpt-live-transcribe", extra={"keywords": ["Acme"]})
+            await asyncio.sleep(0.1)
+        finally:
+            await stream.aclose()
+
+    assert not any("keywords" in u["settings"].get("extra", {}) for u in updates), (
+        "another provider's option must not reach the running session"
+    )
+    assert stt._opts.extra_kwargs == {"keywords": ["Acme"]}, "future streams still get it"
