@@ -29,6 +29,7 @@ done behind it.
 You need a LiveKit **staging** project: its URL, API key and secret from the dashboard.
 
 ```sh
+git clone --recurse-submodules -b agents-2.0 https://github.com/livekit/agents && cd agents
 uv sync --all-packages
 
 export LIVEKIT_URL=wss://<project>.staging.livekit.cloud

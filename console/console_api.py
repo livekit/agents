@@ -35,9 +35,7 @@ from livekit.agents._generated.storage_threads import ThreadInfo, ThreadItem
 from livekit.agents.a2a import Credentials
 from livekit.agents.storage import AgentDBStorage, ThreadNotFound
 
-SERVER_URL = re.sub(r"^ws", "http", os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880")).rstrip(
-    "/"
-)
+SERVER_URL = re.sub(r"^ws", "http", os.environ["LIVEKIT_URL"]).rstrip("/")
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 CARD_TIMEOUT = 2.0
 SUBS = ["demo-user", "demo-user-2"]
