@@ -239,9 +239,7 @@ async def _wait_until_stream_is_live(stream: RecognizeStream, *, timeout: float 
     raise AssertionError("stream did not connect in time")
 
 
-async def test_live_switch_to_openai_keeps_client_finalization(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_live_switch_to_openai_keeps_client_finalization() -> None:
     """The gateway does not switch a live session's provider, so a stream on a
     server-endpointing model keeps that model and its server-side endpointing even after
     the parent moves to OpenAI: it must not wire a VAD it did not have."""
