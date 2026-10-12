@@ -275,13 +275,25 @@ class TurnDetectorStream:
                 )
             )
         except Exception:
-            # predict() on a closed stream answers 1.0, so turns commit on the min delay
             logger.exception("failed to load the Krisp TT models; turn detection is disabled")
-            self._ch.close()
-            if self._request is not None and not self._request.fut.done():
-                self._request.fut.set_result(_event(1.0))
+            self._disable()
             return
 
+        try:
+            await self._process_input()
+        except Exception:
+            logger.exception("Krisp TT processing failed; turn detection is disabled")
+            self._disable()
+
+    def _disable(self) -> None:
+        # predict() on a closed stream answers 1.0 immediately, so turns commit on the min delay
+        self._ch.close()
+        self._armed = None
+        request, self._request = self._request, None
+        if request is not None and not request.fut.done():
+            request.fut.set_result(_event(1.0))
+
+    async def _process_input(self) -> None:
         async for item in self._ch:
             if isinstance(item, _ResetSentinel):
                 self._reset_next = True

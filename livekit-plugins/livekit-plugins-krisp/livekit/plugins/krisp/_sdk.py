@@ -182,7 +182,9 @@ class _SessionPair:
     ``frame_duration_ms`` at :data:`KRISP_SAMPLE_RATE`.
 
     ``process`` is blocking (the binding releases the GIL), so callers run it
-    in a worker thread.
+    in a worker thread. ``close`` waits for an in-flight ``process`` call to return
+    before freeing the sessions, and ``process`` after ``close`` is a no-op, so a
+    stream may close while its worker thread is still running.
     """
 
     def __init__(
@@ -197,6 +199,7 @@ class _SessionPair:
     ) -> None:
         self._vad_threshold = vad_threshold
         self.frame_samples = frame_samples(frame_duration_ms)
+        self._lock = Lock()  # serializes process() against close()
 
         module = _KrispLicenseSDKManager.acquire(license_key)
         self._released = False
@@ -230,20 +233,27 @@ class _SessionPair:
             raise
 
     def process(self, frame: np.ndarray, bot_speaking: bool) -> tuple[bool, float]:
-        """Run one frame through the VAD and the detector; returns (voice, probability)."""
-        voice = bool(self._vad.process(frame) >= self._vad_threshold)
-        return voice, float(self._session.process(frame, voice, bot_speaking))
+        """Run one frame through the VAD and the detector; returns (voice, probability).
+
+        Returns ``(False, 0.0)`` once the pair is closed.
+        """
+        with self._lock:
+            if self._released:
+                return False, 0.0
+            voice = bool(self._vad.process(frame) >= self._vad_threshold)
+            return voice, float(self._session.process(frame, voice, bot_speaking))
 
     def close(self) -> None:
-        if self._released:
-            return
-        self._released = True
-        # drop every krisp_audio object: a closed pair can stay referenced (e.g. by a job
-        # thread still alive at interpreter exit) and would otherwise outlive the SDK
-        self._session = None
-        self._vad = None
-        self._model_info = None
-        self._vad_model_info = None
+        with self._lock:  # waits for an in-flight process() call
+            if self._released:
+                return
+            self._released = True
+            # drop every krisp_audio object: a closed pair can stay referenced (e.g. by a
+            # job thread still alive at interpreter exit) and would otherwise outlive the SDK
+            self._session = None
+            self._vad = None
+            self._model_info = None
+            self._vad_model_info = None
         _KrispLicenseSDKManager.release()
 
 
@@ -287,6 +297,8 @@ class _FrameChunker:
             return []
 
         if frame.sample_rate != self._input_rate:
+            # samples buffered at the previous rate must not be glued to the new audio
+            self._buf = np.empty(0, dtype=np.float32)
             self._input_rate = frame.sample_rate
             self._resampler = (
                 rtc.AudioResampler(

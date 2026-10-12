@@ -199,28 +199,27 @@ class InterruptionDetectorStream:
                 )
             )
         except Exception as e:
-            # an unrecoverable error makes the session fall back to VAD interruptions
             logger.exception("failed to load the Krisp IP models")
-            self._detector.emit(
-                "error",
-                InterruptionDetectionError(label=self._detector.label, error=e, recoverable=False),
-            )
-            async for _ in self._input_ch:
-                pass  # keep accepting frames until the session detaches the stream
+            await self._fail(e)
             return
 
+        try:
+            await self._process_input()
+        except Exception as e:
+            logger.exception("Krisp IP processing failed")
+            await self._fail(e)
+
+    async def _process_input(self) -> None:
         async for item in self._input_ch:
-            if isinstance(item, _AgentSpeechStartedSentinel):
-                self._bot_speaking = True
+            if isinstance(item, _AgentSpeechStartedSentinel | _AgentSpeechEndedSentinel):
+                # on the end transition the SDK also resets IP's own state
+                self._bot_speaking = isinstance(item, _AgentSpeechStartedSentinel)
                 self._overlap_started_at = None
-            elif isinstance(item, _AgentSpeechEndedSentinel):
-                self._bot_speaking = False  # the SDK resets IP's state on this transition
-                self._overlap_started_at = None
+                self._last_probability = 0.0
             elif isinstance(item, _OverlapSpeechStartedSentinel):
                 if self._bot_speaking:
+                    # judged on the next scored frame: _last_probability may predate this overlap
                     self._overlap_started_at = item._started_at
-                    if self._last_probability >= self._opts.threshold:
-                        self._emit(is_interruption=True)
             elif isinstance(item, _OverlapSpeechEndedSentinel):
                 if self._overlap_started_at is not None:
                     self._emit(
@@ -239,6 +238,15 @@ class InterruptionDetectorStream:
                     self._last_probability = probability
                     if self._overlap_started_at is not None and probability >= self._opts.threshold:
                         self._emit(is_interruption=True)
+
+    async def _fail(self, error: Exception) -> None:
+        # an unrecoverable error makes the session fall back to VAD interruptions
+        self._detector.emit(
+            "error",
+            InterruptionDetectionError(label=self._detector.label, error=error, recoverable=False),
+        )
+        async for _ in self._input_ch:
+            pass  # keep accepting frames until the session detaches the stream
 
     def _process(self, frames: list[np.ndarray], bot_speaking: bool) -> list[float]:
         assert self._pair is not None

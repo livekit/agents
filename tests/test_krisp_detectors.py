@@ -23,7 +23,7 @@ from livekit.agents.inference.interruption import (
     _OverlapSpeechEndedSentinel,
     _OverlapSpeechStartedSentinel,
 )
-from livekit.plugins.krisp import interruption, turn_detector
+from livekit.plugins.krisp import _sdk, interruption, turn_detector
 
 pytestmark = pytest.mark.unit
 
@@ -265,6 +265,30 @@ async def test_tt_load_failure_commits_turns(models: Path, monkeypatch: pytest.M
     await stream.aclose()
 
 
+async def test_tt_processing_failure_answers_immediately(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def script(i: int, bot_speaking: bool) -> tuple[bool, float]:
+        if i >= 3:
+            raise RuntimeError("native failure")
+        return True, 0.0
+
+    _install(monkeypatch, turn_detector, script)
+    stream = turn_detector.TurnDetector().stream()
+
+    stream.push_audio(_frames(2))
+    pending = stream.predict()
+    stream.push_audio(_frames(2))  # the 4th frame fails
+    await _drain()
+
+    # the request in flight and every later one answer at once, instead of timing out
+    assert pending.result().end_of_turn_probability == 1.0
+    later = stream.predict()
+    assert later.result().end_of_turn_probability == 1.0
+    stream.push_audio(_frames(1))  # ignored, no error
+    await stream.aclose()
+
+
 async def test_detector_satisfies_streaming_protocol(
     models: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -392,6 +416,127 @@ async def test_ip_load_failure_emits_unrecoverable_error(
     assert len(errors) == 1
     assert errors[0].recoverable is False
     await stream.aclose()
+
+
+async def test_new_overlap_does_not_reuse_previous_score(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install(monkeypatch, interruption, _ip_script([0.8, 0.8, 0.1, 0.1]))
+    stream = interruption.InterruptionDetector().stream()
+
+    stream.push_frame(_AgentSpeechStartedSentinel())
+    stream.push_frame(_OverlapSpeechStartedSentinel(speech_duration=0.0, started_at=1.0))
+    stream.push_frame(_frames(2))  # 0.8: interruption
+    stream.push_frame(_OverlapSpeechEndedSentinel(ended_at=1.5))
+    # a second overlap must not be judged on the first one's 0.8
+    stream.push_frame(_OverlapSpeechStartedSentinel(speech_duration=0.0, started_at=2.0))
+    stream.push_frame(_frames(2))  # 0.1
+    stream.push_frame(_OverlapSpeechEndedSentinel(ended_at=2.5))
+    events = await _collect(stream)
+
+    assert [ev.is_interruption for ev in events] == [True, False]
+    await stream.aclose()
+
+
+async def test_ip_processing_failure_emits_unrecoverable_error(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def script(i: int, bot_speaking: bool) -> tuple[bool, float]:
+        if i >= 1:
+            raise RuntimeError("native failure")
+        return True, 0.1
+
+    _install(monkeypatch, interruption, script)
+    detector = interruption.InterruptionDetector()
+    errors: list[InterruptionDetectionError] = []
+    detector.on("error", errors.append)
+    stream = detector.stream()
+
+    stream.push_frame(_AgentSpeechStartedSentinel())
+    stream.push_frame(_frames(2))  # the 2nd frame fails
+    await _drain()
+    stream.push_frame(_frames(1))  # still accepted until the session detaches the stream
+    await _drain()
+
+    assert len(errors) == 1
+    assert errors[0].recoverable is False
+    await stream.aclose()
+
+
+# endregion
+
+# region: shared runtime
+
+
+class _BlockingSession:
+    """Krisp session whose process() blocks until released, to hold a call in flight."""
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def process(self, frame: np.ndarray, voice: bool, bot_speaking: bool) -> float:
+        self.entered.set()
+        self.release.wait(5)
+        return 0.5
+
+
+class _ConstantVad:
+    def process(self, frame: np.ndarray) -> float:
+        return 1.0
+
+
+def test_close_waits_for_in_flight_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    released: list[bool] = []
+    monkeypatch.setattr(_sdk._KrispLicenseSDKManager, "release", lambda: released.append(True))
+    session = _BlockingSession()
+    pair = object.__new__(_sdk._SessionPair)
+    pair._lock = threading.Lock()
+    pair._released = False
+    pair._vad_threshold = 0.5
+    pair._vad = _ConstantVad()
+    pair._session = session
+    frame = np.zeros(FRAME_SAMPLES, dtype=np.float32)
+
+    worker = threading.Thread(target=pair.process, args=(frame, True))
+    worker.start()
+    assert session.entered.wait(5)
+
+    closer = threading.Thread(target=pair.close)
+    closer.start()
+    closer.join(0.2)
+    assert closer.is_alive()  # close() waits while process() is inside the SDK
+    assert released == []
+
+    session.release.set()
+    worker.join(5)
+    closer.join(5)
+    assert not closer.is_alive()
+    assert released == [True]  # the SDK reference is released only afterwards
+    assert pair.process(frame, True) == (False, 0.0)  # a late call is a no-op
+
+
+def test_chunker_drops_buffered_samples_on_rate_change() -> None:
+    chunker = _sdk._FrameChunker(FRAME_SAMPLES)
+    n48 = 480  # 10 ms at 48 kHz, resampled to fewer than FRAME_SAMPLES samples
+    chunker.push(
+        rtc.AudioFrame(
+            data=np.full(n48, 1000, dtype=np.int16).tobytes(),
+            sample_rate=48000,
+            num_channels=1,
+            samples_per_channel=n48,
+        )
+    )
+    frames = chunker.push(
+        rtc.AudioFrame(
+            data=np.full(FRAME_SAMPLES, 3000, dtype=np.int16).tobytes(),
+            sample_rate=16000,
+            num_channels=1,
+            samples_per_channel=FRAME_SAMPLES,
+        )
+    )
+    assert len(frames) == 1
+    np.testing.assert_allclose(frames[0], 3000 / 32768.0)  # no 48 kHz leftovers mixed in
 
 
 # endregion
