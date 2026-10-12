@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from livekit.agents import Agent, LiveSession, RunContext, function_tool, llm

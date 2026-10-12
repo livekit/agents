@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 
 import openai
 from livekit.agents import llm

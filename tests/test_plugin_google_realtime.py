@@ -12,6 +12,7 @@ from google.auth.credentials import AnonymousCredentials
 from google.genai import types
 
 from livekit.agents import llm, utils
+from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins.google.realtime.api_proto import ClientEvents
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 from livekit.plugins.google.utils import create_function_response
@@ -248,6 +249,38 @@ async def _drain_generation(
     return text, audio_frames, function_calls
 
 
+@pytest.mark.parametrize("vertexai", [False, True])
+@pytest.mark.parametrize("with_input_transcript", [False, True])
+async def test_ttft_is_unavailable_without_a_response_start_event(
+    monkeypatch: pytest.MonkeyPatch, vertexai: bool, with_input_transcript: bool
+) -> None:
+    async with _make_configured_session(
+        monkeypatch,
+        model="gemini-3.8-live",
+        vertexai=vertexai,
+        project="test-project",
+        location="us",
+        credentials=AnonymousCredentials() if vertexai else None,
+    ) as session:
+        collected: list[RealtimeModelMetrics] = []
+        session.on("metrics_collected", collected.append)
+        session._start_new_generation()
+        if with_input_transcript:
+            session._handle_server_content(
+                types.LiveServerContent(input_transcription=types.Transcription(text="Hello"))
+            )
+        session._handle_server_content(_audio_content())
+        session._handle_usage_metadata(
+            types.UsageMetadata(prompt_token_count=10, response_token_count=5, total_token_count=15)
+        )
+
+        assert len(collected) == 1
+        assert collected[0].ttft == -1
+        assert collected[0].input_tokens == 10
+        assert collected[0].output_tokens == 5
+        assert collected[0].duration >= 0
+
+
 async def test_unspoken_model_text_is_omitted_in_audio_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -417,7 +450,7 @@ async def test_output_streams_close_on_generation_complete(
         )
 
         # audio and text were consumed and both segments ended immediately
-        assert gen._first_token_timestamp is not None
+        assert bytes(gen.audio_ch.recv_nowait().data) == _PCM_FRAME
         assert gen.output_text == "hello"
         assert gen.audio_ch.closed
         assert gen.text_ch.closed

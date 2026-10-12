@@ -22,9 +22,9 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.8.4",
-    "anthropic>=0.41,<1",  # 1.0 switched to httpx2 and dropped temperature/top_k (#7235)
-    "httpx",
+    "livekit-agents>=1.8.6",
+    "anthropic>=1.8,<2",
+    "httpx2",
 ]
 
 [project.urls]
