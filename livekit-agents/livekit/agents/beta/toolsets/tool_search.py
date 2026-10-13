@@ -196,11 +196,6 @@ def _get_tool_params(tool: FunctionTool | RawFunctionTool) -> dict[str, str]:
     }
 
 
-def _words(text: str) -> list[str]:
-    """Lowercase word tokens, dropping punctuation and splitting underscores."""
-    return re.findall(r"[^\W_]+", text.lower())
-
-
 # a plain word, optionally followed by sentence punctuation; anything else may
 # carry regex syntax (^get_weather$) or term-identifying punctuation (c++, c#)
 # and must be kept verbatim when tokenizing keyword queries
@@ -221,10 +216,11 @@ def _keywords(query: str) -> list[str]:
 
 
 def _bm25_tokens(text: str) -> list[str]:
-    """Lowercase word tokens plus punctuation-bearing terms (c++, c#) kept
-    verbatim so distinct terms stay distinct."""
+    """Lowercase word tokens (punctuation dropped, underscores split) plus
+    punctuation-bearing terms (c++, c#) kept verbatim so distinct terms stay
+    distinct."""
     lowered = text.lower()
-    return _words(lowered) + _SPECIAL_TERM.findall(lowered)
+    return re.findall(r"[^\W_]+", lowered) + _SPECIAL_TERM.findall(lowered)
 
 
 class KeywordSearchStrategy:
