@@ -170,8 +170,6 @@ _OutboundMessage = _CreateContextMsg | _SendTextMsg | _FlushContextMsg | _CloseC
 class _InworldConnection:
     """A WebSocket connection to Inworld TTS, multiplexing up to 5 concurrent contexts."""
 
-    MAX_CONTEXTS = 5
-
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -196,11 +194,6 @@ class _InworldConnection:
         self._send_task: asyncio.Task[None] | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
-
-    @property
-    def has_capacity(self) -> bool:
-        # contexts count until the server confirms contextClosed
-        return not self._closed and len(self._contexts) < self.MAX_CONTEXTS
 
     async def connect(self) -> None:
         """Establish WebSocket connection and start background loops.
@@ -242,11 +235,7 @@ class _InworldConnection:
     def create_context(
         self, emitter: tts.AudioEmitter, opts: _TTSOptions
     ) -> tuple[str, asyncio.Future[None]]:
-        """Register a new context and queue its create message.
-
-        Synchronous so the capacity check and registration can't interleave with other callers.
-        Messages are queued until connect() completes.
-        """
+        """Register a new context and queue its create message, sent once connected."""
         ctx_id = utils.shortuuid()
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         self._contexts[ctx_id] = _ContextInfo(
@@ -620,8 +609,7 @@ class TTS(tts.TTS):
                 Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             retain_format (bool, optional): Whether to retain the format of the text when tokenizing.
                 Defaults to True.
-            max_connections (int, optional): Deprecated, has no effect. A new connection is
-                opened whenever all existing connections have 5 active streams.
+            max_connections (int, optional): Deprecated, has no effect.
             idle_connection_timeout (float, optional): Deprecated, has no effect.
         """
         if not is_given(sample_rate):
@@ -691,7 +679,7 @@ class TTS(tts.TTS):
             else DEFAULT_MAX_BUFFER_DELAY_MS,
         )
 
-        self._connections: list[_InworldConnection] = []
+        self._connection: _InworldConnection | None = None
         self._prewarm_task: asyncio.Task[None] | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
@@ -718,20 +706,14 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Inworld"
 
-    def _connection_with_capacity(self) -> _InworldConnection:
-        """Return an open connection with a free context slot, opening a new one if all are full."""
-        self._connections = [c for c in self._connections if not c._closed]
-        for conn in self._connections:
-            if conn.has_capacity:
-                return conn
-
-        conn = _InworldConnection(
-            session=self._ensure_session(),
-            ws_url=self._ws_url,
-            authorization=self._authorization,
-        )
-        self._connections.append(conn)
-        return conn
+    def _get_connection(self) -> _InworldConnection:
+        if self._connection is None or self._connection._closed:
+            self._connection = _InworldConnection(
+                session=self._ensure_session(),
+                ws_url=self._ws_url,
+                authorization=self._authorization,
+            )
+        return self._connection
 
     def update_options(
         self,
@@ -827,7 +809,7 @@ class TTS(tts.TTS):
             self._prewarm_task = asyncio.create_task(self._prewarm_impl())
 
     async def _prewarm_impl(self) -> None:
-        await self._connection_with_capacity().connect()
+        await self._get_connection().connect()
 
     def synthesize(
         self,
@@ -846,7 +828,7 @@ class TTS(tts.TTS):
 
     async def aclose(self) -> None:
         # Cancel first: a prewarm still in flight here would otherwise open a
-        # connection after the others were closed, leaving one nothing owns.
+        # connection after this one was closed, leaving one nothing owns.
         if self._prewarm_task is not None:
             await aio.cancel_and_wait(self._prewarm_task)
             self._prewarm_task = None
@@ -855,9 +837,9 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
-        connections, self._connections = self._connections, []
-        for conn in connections:
-            await conn.aclose()
+        if self._connection:
+            await self._connection.aclose()
+            self._connection = None
 
     async def list_voices(self, language: str | None = None) -> list[dict[str, Any]]:
         """
@@ -1007,7 +989,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        connection = self._tts._connection_with_capacity()
+        connection = self._tts._get_connection()
         context_id, waiter = connection.create_context(output_emitter, self._opts)
 
         async def _input_task() -> None:
