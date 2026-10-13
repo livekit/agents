@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from aiobotocore.session import AioSession
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import Agent, AgentSession, APIConnectOptions
 from livekit.agents.llm import ChatContext
 from livekit.plugins.aws import LLM
 
@@ -134,6 +134,52 @@ async def test_completed_turns_reuse_client_until_model_close(
     assert backend.closed == 0
     assert all(response.closed for response in backend.responses)
     await model.aclose()
+    await model.aclose()
+    assert backend.closed == 1
+
+
+async def test_agent_session_close_closes_bedrock_client(
+    bedrock: tuple[LLM, _Bedrock],
+) -> None:
+    model, backend = bedrock
+    session = AgentSession(llm=model, turn_handling={"turn_detection": None})
+    await session.start(Agent(instructions="you are helpful"))
+    result = await session.run(user_input="hello")
+    result.expect.next_event().is_message(role="assistant")
+
+    await session.aclose()
+    await session.aclose()
+
+    assert backend.opened == backend.closed == 1
+    assert all(response.closed for response in backend.responses)
+
+
+async def test_session_close_preserves_explicitly_shared_model(
+    bedrock: tuple[LLM, _Bedrock],
+) -> None:
+    model, backend = bedrock
+    sessions = [
+        AgentSession(
+            llm=model,
+            close_llm_on_session_close=False,
+            turn_handling={"turn_detection": None},
+        )
+        for _ in range(2)
+    ]
+    try:
+        for session in sessions:
+            await session.start(Agent(instructions="you are helpful"))
+        await sessions[0].run(user_input="hello")
+        await sessions[0].aclose()
+        assert backend.closed == 0
+        result = await sessions[1].run(user_input="hello")
+        result.expect.next_event().is_message(role="assistant")
+        assert backend.opened == 1
+    finally:
+        for session in sessions:
+            await session.aclose()
+    assert backend.closed == 0
+    assert all(response.closed for response in backend.responses)
     await model.aclose()
     assert backend.closed == 1
 
