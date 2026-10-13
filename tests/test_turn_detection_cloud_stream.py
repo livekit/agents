@@ -15,7 +15,9 @@ from __future__ import annotations
 import pytest
 
 from livekit import rtc
+from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError
+from livekit.protocol.agent_pb.agent_session import ChatRole
 
 from .fake_turn_detector_ws import (
     drain_send_queue,
@@ -88,9 +90,12 @@ class TestCloudStreamSendOrdering:
         stream, fake_ws, transport = make_stream(connect_script=[None])
         try:
             await wait_until_connected(transport)
-            stream.predict()
+            chat_ctx = llm.ChatContext()
+            chat_ctx.add_message(role="assistant", content="First question")
+            stream.predict(chat_ctx)
             first_id = stream._request_id
-            stream.predict()
+            chat_ctx.add_message(role="assistant", content="Second question")
+            stream.predict(chat_ctx)
             second_id = stream._request_id
             await drain_send_queue(transport)
 
@@ -100,5 +105,83 @@ class TestCloudStreamSendOrdering:
                 if m.WhichOneof("message") == "inference_start"
             ]
             assert start_ids == [first_id, second_id]
+            assert [m.WhichOneof("message") for m in fake_ws.sent] == [
+                "eot_input_chat_context",
+                "inference_start",
+                "eot_input_chat_context",
+                "inference_start",
+            ]
+            assert [
+                m.eot_input_chat_context.messages[0].content[0].text
+                for m in fake_ws.sent
+                if m.WhichOneof("message") == "eot_input_chat_context"
+            ] == ["First question", "Second question"]
+        finally:
+            await stream.aclose()
+
+
+class TestCloudStreamChatContext:
+    async def test_sends_only_last_assistant_text(self) -> None:
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(role="system", content="System instructions")
+        chat_ctx.add_message(role="assistant", content="Earlier question")
+        chat_ctx.add_message(role="user", content="Earlier answer")
+        chat_ctx.add_message(
+            role="assistant", content=["Which city?", "<expr value='curious'/>どちらですか？"]
+        )
+        chat_ctx.items.append(llm.FunctionCall(call_id="call", name="lookup", arguments="{}"))
+        chat_ctx.items.append(
+            llm.FunctionCallOutput(
+                call_id="call", name="lookup", output="Tool result", is_error=False
+            )
+        )
+        chat_ctx.add_message(role="user", content="Current answer")
+
+        stream, fake_ws, transport = make_stream(connect_script=[None])
+        try:
+            await wait_until_connected(transport)
+            stream.predict(chat_ctx)
+            await drain_send_queue(transport)
+
+            assert [m.WhichOneof("message") for m in fake_ws.sent] == [
+                "eot_input_chat_context",
+                "inference_start",
+            ]
+            messages = fake_ws.sent[0].eot_input_chat_context.messages
+            assert len(messages) == 1
+            assert messages[0].role == ChatRole.ASSISTANT
+            assert [part.text for part in messages[0].content] == ["Which city?\nどちらですか？"]
+            assert len(chat_ctx.items) == 7
+        finally:
+            await stream.aclose()
+
+    @pytest.mark.parametrize(
+        "chat_ctx",
+        [
+            None,
+            llm.ChatContext(),
+            llm.ChatContext([llm.ChatMessage(role="user", content=["Hello"])]),
+            llm.ChatContext(
+                [
+                    llm.ChatMessage(role="assistant", content=["Earlier question"]),
+                    llm.ChatMessage(role="assistant", content=[]),
+                ]
+            ),
+        ],
+        ids=["omitted", "empty", "no-assistant", "empty-last-assistant"],
+    )
+    async def test_clears_previous_assistant_text(self, chat_ctx: llm.ChatContext | None) -> None:
+        stream, fake_ws, transport = make_stream(connect_script=[None])
+        try:
+            await wait_until_connected(transport)
+            stream.predict(
+                llm.ChatContext([llm.ChatMessage(role="assistant", content=["Old question"])])
+            )
+            stream.predict(chat_ctx)
+            await drain_send_queue(transport)
+
+            assert fake_ws.sent[-2].WhichOneof("message") == "eot_input_chat_context"
+            assert list(fake_ws.sent[-2].eot_input_chat_context.messages) == []
+            assert fake_ws.sent[-1].WhichOneof("message") == "inference_start"
         finally:
             await stream.aclose()
