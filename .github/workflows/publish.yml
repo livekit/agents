@@ -157,12 +157,6 @@ jobs:
               echo "<!-- release-notes:start -->"
               cat "$RUNNER_TEMP/release_notes.md" 2>/dev/null || true
               echo "<!-- release-notes:end -->"
-              if [ -s "$RUNNER_TEMP/release_notes.md" ]; then
-                # four backticks, so the python blocks in the notes cannot close the fence
-                printf '\n<details>\n<summary>Markdown of the first draft, to copy</summary>\n\n````markdown\n'
-                cat "$RUNNER_TEMP/release_notes.md"
-                printf '````\n</details>\n'
-              fi
             fi
           } > "$RUNNER_TEMP/pr_body.md"
 

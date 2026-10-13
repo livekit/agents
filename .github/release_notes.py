@@ -10,12 +10,11 @@ import openai
 MODEL = "gpt-5.5"
 
 SYSTEM_PROMPT = """\
-You write the notes at the top of a GitHub release for LiveKit Agents, the Python framework for realtime voice agents (`livekit-agents` and the `livekit-plugins-*` plugins). GitHub appends the full list of merged PRs under your notes, so be selective the way a maintainer is: most releases deserve a few lines, and only a headline change deserves a section.
+You write the notes at the top of a GitHub release for LiveKit Agents, the Python framework for realtime voice AI agents (the `livekit-agents` package and the `livekit-plugins-*` provider plugins). GitHub appends the full list of merged PRs under your notes, so be selective the way a maintainer is: most releases deserve a few lines, and only a headline change deserves a section.
 
 Match the house style of past releases, in this order:
 - At most three `## <Feature name>` sections, only for headline features most users would adopt, never for a new option on one plugin. Each has one or two short paragraphs, addressed to the developer as "you", on the problem it solves and what it does, then a short Python block showing how to enable or call it, then a "Read more in [our docs](<url>)." line. Write the code block and the link only when a PR body shows that call or links a docs.livekit.io page.
 - `## New providers and models`: new plugins and new models only, as "**<Name>**: <what it adds, in one clause>".
-- `## Security`: fixes that close a hole in shipped code or raise a dependency floor past a vulnerable version, such as an API key leaked into logs, each saying what was exposed. A bump that only touches `uv.lock` ships to no user, so leave it out.
 - `## Breaking changes`: only changes after which code or config that worked on the previous release fails or silently does something else, such as a removed or renamed public API or a renamed telemetry attribute, each saying what to update. Raised dependency floors, new defaults and corrected behavior go instead in `## Behavior changes`, stated softly as what the release now does, like "`livekit-agents` now requires `pydantic>=2.5`."
 - One closing sentence naming the areas that got more reliable, when the release has fixes.
 
