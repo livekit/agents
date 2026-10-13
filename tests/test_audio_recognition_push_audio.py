@@ -25,8 +25,6 @@ def _make_recognition() -> AudioRecognition:
     ar = object.__new__(AudioRecognition)
     ar._sample_rate = None  # type: ignore[attr-defined]
     ar._stt_pipeline = MagicMock()  # type: ignore[attr-defined]
-    # the input anchor lives on the pipeline (see _STTPipeline.input_started_at)
-    ar._stt_pipeline.input_started_at = None  # type: ignore[attr-defined]
     ar._vad_ch = MagicMock()  # type: ignore[attr-defined]
     ar._interruption_ch = MagicMock()  # type: ignore[attr-defined]
     ar._session = MagicMock()  # type: ignore[attr-defined]
@@ -71,11 +69,10 @@ def test_push_audio_skips_optional_consumers_when_unset() -> None:
     ar._push_audio(_make_frame())
 
 
-def test_push_audio_records_sample_rate_and_input_start() -> None:
+def test_push_audio_records_sample_rate() -> None:
     ar = _make_recognition()
     frame = _make_frame(sample_rate=24000)
 
     ar._push_audio(frame)
 
     assert ar._sample_rate == 24000  # type: ignore[attr-defined]
-    assert ar._input_started_at is not None  # type: ignore[attr-defined]

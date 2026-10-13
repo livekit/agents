@@ -400,9 +400,10 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
-                    # update main_stream start time offset so transcript timestamps are properly adjusted
-                    main_stream.start_time_offset = self.start_time_offset + (
-                        time.time() - self._start_time
+                    # the inner stream continues this stream's timeline from its own creation;
+                    # it then adds the delay to its own first frame like any stream
+                    main_stream.start_time_offset = self._declared_start_time_offset + (
+                        time.time() - self._created_at
                     )
 
                     if forward_input_task is None or forward_input_task.done():
