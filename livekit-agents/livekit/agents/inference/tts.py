@@ -756,11 +756,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                             for c in chars
                         ]
                     if aligned:
-                        # the provider aligned the *converted* text, so when markers were
-                        # lowered it carries native cues that were never spoken
+                        # the provider aligned the *converted* text, so under expressive it
+                        # carries native cues that were never spoken
                         output_emitter.push_timed_transcript(
                             drop_bracket_cues(aligned, self._held_tokens)
-                            if self._markup_input
+                            if self._expressive
                             else aligned
                         )
                 elif data.get("type") == "done":

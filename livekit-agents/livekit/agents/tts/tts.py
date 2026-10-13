@@ -175,8 +175,8 @@ class TTS(
         # default) means per-sentence chunking. See `_set_expressive`.
         self._expressive: bool = False
         # Whether markers can appear in this synthesis's input: expressive is active, or
-        # a say() carries markup. Lowering and xml-aware chunking key on this, so a plain
-        # turn never pays for them. See `_set_markup_input`.
+        # a say() carries markup. Input chunking keeps a marker in one chunk while this is
+        # set, so a plain turn never stalls on a stray "<". See `_set_markup_input`.
         self._markup_input: bool = False
 
     @property
@@ -197,8 +197,8 @@ class TTS(
         """Framework-internal: mark whether markers can appear in this synthesis's input.
 
         Set by the voice pipeline before each synthesis, next to `_set_expressive`. TTS
-        implementations that lower markers themselves read it to lower and to keep a
-        marker in one chunk.
+        implementations that lower markers themselves read it to keep a marker in one
+        chunk.
         """
         self._markup_input = enabled
 

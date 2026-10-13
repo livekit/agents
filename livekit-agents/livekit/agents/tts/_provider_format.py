@@ -44,6 +44,8 @@ class ExpressiveTag(TypedDict):
 
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterable
+
     from .. import tokenize
     from ..voice.agent_session import SpeechSteeringOptions
 
@@ -1175,7 +1177,7 @@ def _convert_expr(provider: str, text: str) -> str:
                 return f'<expression value="{label}"/>'
             return ""  # xAI has no free-form delivery descriptions
         if marker_type == "sound":
-            if provider in ("cartesia", "ssml", "elevenlabs", "bracket_pauses"):
+            if provider in ("cartesia", "ssml", "elevenlabs", "google_markup"):
                 return ""  # no non-verbal sound support
             if provider == "xai":
                 label = _XAI_SOUND_ALIASES.get(label.lower(), label)
@@ -1183,8 +1185,12 @@ def _convert_expr(provider: str, text: str) -> str:
                 label = _FISHAUDIO_SOUND_ALIASES.get(label.lower(), label)
             return f'<sound value="{label}"/>'
         if marker_type == "break":
-            if provider in _SSML_MAX_BREAK:
+            if provider in ("ssml", "elevenlabs"):
                 return _ssml_break(provider, label)
+            if provider == "eleven_v3":
+                return "..."  # no SSML and no pause tag; ElevenLabs advises an ellipsis
+            if provider == "google_markup":
+                return _google_pause(label)
             return f'<break time="{label}"/>'
         if marker_type == "prosody" and provider == "cartesia":
             # Cartesia prosody is a self-closing point control (speed/volume)
@@ -1288,23 +1294,20 @@ _SSML_TAGS = [
 #                    (https://elevenlabs.io/docs/overview/capabilities/text-to-speech/best-practices)
 #   eleven_v3      - ElevenLabs v3/v4 audio tags: [whispers], [laughs]. No SSML; a pause is
 #                    an ellipsis, as the same page advises
-#   bracket_pauses - bracket pauses only: [pause short], [pause], [pause long]
-#                    (https://docs.cloud.google.com/text-to-speech/docs/chirp3-hd markup)
+#   google_markup  - Google's markup input (Chirp 3 HD): pauses only, [pause short] /
+#                    [pause] / [pause long]
+#                    (https://docs.cloud.google.com/text-to-speech/docs/chirp3-hd)
 _SAY_ONLY_MARKUP: dict[str, list[str]] = {
     "ssml": _SSML_TAGS,
     "elevenlabs": ["break", "phoneme"],
     "eleven_v3": [],
-    "bracket_pauses": [],
+    "google_markup": [],
 }
 
-# the longest <break> each SSML dialect accepts: Polly's limit (Azure clamps at 20s, Google
-# documents none), and ElevenLabs' 3s
-_SSML_MAX_BREAK = {"ssml": 10.0, "elevenlabs": 3.0}
-
-# dialects whose native syntax includes square-bracket cues
-_BRACKET_NATIVE = {"inworld", "xai", "fishaudio", "eleven_v3", "bracket_pauses"}
-
-_BREAK_RE = re.compile(r'<break\s+time="([^"]*)"\s*/?>')
+# dialects that read square brackets as free-form cues, so a bracket in say() text is
+# markup, not prose. Google markup is left out: its only brackets are pauses, and
+# stripping every bracket would cut "Option [A]" from history.
+_BRACKET_NATIVE = {"inworld", "xai", "fishaudio", "eleven_v3"}
 
 
 def _break_seconds(raw: str) -> float | None:
@@ -1322,15 +1325,16 @@ def _ssml_break(provider: str, label: str) -> str:
     if secs is None:
         # every ssml target has a default pause; ElevenLabs documents only time="..."
         return "<break/>" if provider == "ssml" else ""
-    secs = min(secs, _SSML_MAX_BREAK[provider])
     if provider == "elevenlabs":
-        return f'<break time="{round(secs, 2):g}s"/>'  # ElevenLabs documents seconds
-    return f'<break time="{round(secs * 1000)}ms"/>'
+        # ElevenLabs documents seconds, up to 3
+        return f'<break time="{round(min(secs, 3.0), 2):g}s"/>'
+    # Polly's limit (Azure clamps at 20s, Google documents none)
+    return f'<break time="{round(min(secs, 10.0) * 1000)}ms"/>'
 
 
-def _break_to_bracket(match: re.Match[str]) -> str:
-    # Chirp 3 HD has three pause levels with no fixed lengths; these cut-offs are ours
-    secs = _break_seconds(match.group(1)) or 0.0
+def _google_pause(label: str) -> str:
+    # three pause levels with no fixed lengths; these cut-offs are ours
+    secs = _break_seconds(label) or 0.0
     if secs < 0.5:
         return "[pause short]"
     return "[pause long]" if secs >= 1.5 else "[pause]"
@@ -1600,6 +1604,42 @@ _BRACKET_SPAN_RE = re.compile(r"\[[^\]]*\]")
 _MAX_HELD_CHARS = 256
 
 
+async def strip_markup_stream(
+    text: AsyncIterable[str], stripper: TranscriptMarkupStripper
+) -> AsyncGenerator[str, None]:
+    """Run streamed *text* through *stripper*.
+
+    An aligned chunk keeps its timing. The stripper holds a tag split inside itself
+    across chunks and then emits the held words together; they span from the first held
+    chunk to the latest one.
+    """
+    first: TimedString | None = None
+    last: TimedString | None = None
+
+    def _timed(out: str) -> str:
+        if first is None or last is None:
+            return out
+        return TimedString(
+            out,
+            start_time=first.start_time,
+            end_time=last.end_time,
+            confidence=last.confidence,
+            start_time_offset=first.start_time_offset,
+            speaker_id=first.speaker_id,
+        )
+
+    async for chunk in text:
+        if isinstance(chunk, TimedString):
+            if first is None:
+                first = chunk
+            last = chunk
+        if out := stripper.push(chunk):
+            yield _timed(out)
+            first = None
+    if out := stripper.flush():
+        yield _timed(out)
+
+
 def _retext(token: TimedString, text: str) -> TimedString:
     """A copy of *token* carrying *text*, keeping the alignment metadata."""
     return TimedString(
@@ -1700,9 +1740,6 @@ def convert_markup(provider: str, text: str) -> str:
         text = _convert_expr(provider, text)
         if provider == "eleven_v3":
             text = convert_expression_tags(text)
-            text = _BREAK_RE.sub("...", text)
-        elif provider == "bracket_pauses":
-            text = _BREAK_RE.sub(_break_to_bracket, text)
         return text
     if provider not in _PROVIDER_MARKUP:
         return strip_expr_markup(text)

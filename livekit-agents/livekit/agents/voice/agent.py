@@ -46,19 +46,6 @@ class ModelSettings:
     # framework-internal: a say() whose text may carry markup, so tts_node lowers it
 
 
-async def _strip_expr(text: AsyncIterable[str]) -> AsyncGenerator[str, None]:
-    """Drop ``<expr/>`` markers from streamed TTS input, holding a marker split across
-    chunks until it closes."""
-    from ..tts._provider_format import TranscriptMarkupStripper
-
-    stripper = TranscriptMarkupStripper(xml_tags=[])
-    async for chunk in text:
-        if out := stripper.push(chunk):
-            yield out
-    if out := stripper.flush():
-        yield out
-
-
 class Agent:
     def __init__(
         self,
@@ -618,7 +605,9 @@ class Agent:
             if markup_input and not activity._tts_can_lower():
                 # a natively streaming plugin sends its input as-is, so a marker would be
                 # read aloud; drop the markers (their words stay)
-                text = _strip_expr(text)
+                from ..tts._provider_format import TranscriptMarkupStripper, strip_markup_stream
+
+                text = strip_markup_stream(text, TranscriptMarkupStripper(xml_tags=[]))
 
             if not activity.tts.capabilities.streaming:
                 temporary_adapter = tts.StreamAdapter(

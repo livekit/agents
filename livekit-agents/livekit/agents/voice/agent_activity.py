@@ -3059,7 +3059,7 @@ class AgentActivity(RecognitionHooks):
             or isinstance(self.tts, (inference.TTS, tts.StreamAdapter))
         )
 
-    async def _strip_say_markup(self, text: AsyncIterable[str]) -> AsyncGenerator[str, None]:
+    def _strip_say_markup(self, text: AsyncIterable[str]) -> AsyncIterable[str]:
         """The plain text of a ``say()`` for its transcript and chat history.
 
         The TTS's native markup (SSML, bracket cues) always goes: the LLM is never taught
@@ -3067,8 +3067,7 @@ class AgentActivity(RecognitionHooks):
         is active, as in an LLM reply — the sinks strip them from the transcript, and
         history keeps them as examples for the LLM. Otherwise they go too.
         """
-        from ..tts._provider_format import TranscriptMarkupStripper
-        from ..types import TimedString
+        from ..tts._provider_format import TranscriptMarkupStripper, strip_markup_stream
 
         xml_tags, brackets = self.tts.markup._native_markup() if self.tts else ([], False)
         stripper = TranscriptMarkupStripper(
@@ -3076,33 +3075,7 @@ class AgentActivity(RecognitionHooks):
             brackets=brackets,
             strip_expr=self._resolve_expressive_options() is None,
         )
-        # the stripper holds a tag split across aligned chunks and then emits the held
-        # words together; they span from the first held chunk to the latest one
-        first: TimedString | None = None
-        last: TimedString | None = None
-
-        def _timed(out: str) -> str:
-            if first is None or last is None:
-                return out
-            return TimedString(
-                out,
-                start_time=first.start_time,
-                end_time=last.end_time,
-                confidence=last.confidence,
-                start_time_offset=first.start_time_offset,
-                speaker_id=first.speaker_id,
-            )
-
-        async for chunk in text:
-            if isinstance(chunk, TimedString):
-                if first is None:
-                    first = chunk
-                last = chunk
-            if out := stripper.push(chunk):
-                yield _timed(out)
-                first = None
-        if out := stripper.flush():
-            yield _timed(out)
+        return strip_markup_stream(text, stripper)
 
     def _resolve_expressive_options(self) -> ExpressiveOptions | None:
         """Resolve the effective expressive setting. Returns None if disabled.

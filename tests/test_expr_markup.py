@@ -674,9 +674,9 @@ def test_convert_expr_eleven_v3() -> None:
     )
 
 
-def test_convert_expr_bracket_pauses_keeps_only_pauses() -> None:
+def test_convert_expr_google_markup_keeps_only_pauses() -> None:
     assert (
-        convert_markup("bracket_pauses", SAY_TURN) == "Hi [pause] there. Secret ok. Code A7X. Now."
+        convert_markup("google_markup", SAY_TURN) == "Hi [pause] there. Secret ok. Code A7X. Now."
     )
 
 
@@ -684,8 +684,8 @@ def test_convert_expr_bracket_pauses_keeps_only_pauses() -> None:
     ("label", "pause"),
     [("200ms", "[pause short]"), ("1s", "[pause]"), ("2s", "[pause long]")],
 )
-def test_convert_expr_bracket_break_levels(label: str, pause: str) -> None:
-    assert convert_markup("bracket_pauses", f'<expr type="break" label="{label}"/>') == pause
+def test_convert_expr_google_pause_levels(label: str, pause: str) -> None:
+    assert convert_markup("google_markup", f'<expr type="break" label="{label}"/>') == pause
 
 
 @pytest.mark.parametrize("provider", ["", "deepgram"])
@@ -713,6 +713,8 @@ def test_native_markup_per_dialect() -> None:
     assert native_markup("ssml") == (_SSML_TAGS, False)
     assert native_markup("elevenlabs") == (["break", "phoneme"], False)
     assert native_markup("eleven_v3") == ([], True)
+    # Google markup's only brackets are pauses; "Option [A]" is prose
+    assert native_markup("google_markup") == ([], False)
     assert native_markup("inworld")[1] is True
     assert "emotion" in native_markup("cartesia")[0]
     assert native_markup("") == ([], False)

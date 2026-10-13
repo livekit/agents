@@ -207,7 +207,7 @@ class TTS(tts.TTS):
             if self._tts._opts.enable_ssml:
                 return "ssml"
             if self._tts._opts.use_markup:
-                return "bracket_pauses"
+                return "google_markup"
             return ""
 
     @property

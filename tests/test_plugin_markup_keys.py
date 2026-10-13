@@ -23,7 +23,7 @@ def test_google_markup_key() -> None:
         == "ssml"
     )
     assert google.TTS(credentials_info=creds, use_markup=True).markup._provider_key() == (
-        "bracket_pauses"
+        "google_markup"
     )
 
 

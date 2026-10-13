@@ -253,7 +253,7 @@ async def test_stream_adapter_snapshots_markup_input_per_stream() -> None:
 
     The pipeline sets the flag synchronously before stream(); _run happens later in its
     own task, so another turn or session sharing the TTS could flip it in the gap and
-    send that turn's markers through unlowered.
+    let that turn's markers split across chunks.
     """
 
     class _NonStreaming(tts.TTS):
@@ -321,15 +321,15 @@ async def test_stream_adapter_tokenizes_xml_aware_while_lowering() -> None:
 
     adapter = tts.StreamAdapter(tts=_NonStreaming())
     try:
-        assert await tokens(adapter._tokenizer_for(lowering=True)) == [marked]
-        # the default splits it mid-tag, which is why lowering needs its own
-        assert await tokens(adapter._tokenizer_for(lowering=False)) != [marked]
+        assert await tokens(adapter._tokenizer_for(markup=True)) == [marked]
+        # the default splits it mid-tag, which is why markup needs its own
+        assert await tokens(adapter._tokenizer_for(markup=False)) != [marked]
         # one tokenizer, reused across syntheses
-        assert adapter._tokenizer_for(lowering=True) is adapter._tokenizer_for(lowering=True)
+        assert adapter._tokenizer_for(markup=True) is adapter._tokenizer_for(markup=True)
 
         mine = tokenize.blingfire.SentenceTokenizer(retain_format=True)
         explicit = tts.StreamAdapter(tts=_NonStreaming(), sentence_tokenizer=mine)
-        assert explicit._tokenizer_for(lowering=True) is mine  # never second-guessed
+        assert explicit._tokenizer_for(markup=True) is mine  # never second-guessed
         await explicit.aclose()
     finally:
         await adapter.aclose()

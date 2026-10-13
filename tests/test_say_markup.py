@@ -235,3 +235,18 @@ async def test_held_aligned_words_keep_their_start_time() -> None:
     assert isinstance(out[0], TimedString)
     assert (out[0].start_time, out[0].end_time) == (0.0, 2.5)
     assert isinstance(out[-1], TimedString) and out[-1].start_time == 3.0
+
+
+async def test_stream_adapter_converts_on_a_plain_turn() -> None:
+    # conversion doesn't wait for the markup flag (only xml-aware chunking does), so a
+    # marker on a plain turn is dropped for a TTS that can't speak it, never read aloud
+    tts_obj = _MarkupTTS("")
+    adapter = tts.StreamAdapter(tts=tts_obj)
+    async with adapter.stream() as stream:
+        stream.push_text(BREAK)
+        stream.end_input()
+        async for _ in stream:
+            pass
+    await adapter.aclose()
+
+    assert tts_obj.inputs == ["Hi there."]

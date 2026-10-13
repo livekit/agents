@@ -59,7 +59,7 @@ class StreamAdapter(TTS):
             assert isinstance(self._tts, StreamAdapter)
             return self._tts._wrapped_tts.markup._native_markup()
 
-    def _tokenizer_for(self, *, lowering: bool) -> tokenize.SentenceTokenizer:
+    def _tokenizer_for(self, *, markup: bool) -> tokenize.SentenceTokenizer:
         """The sentence tokenizer for one synthesis.
 
         A marker must never be split across two tokens -- the sentence-level lowering in
@@ -70,7 +70,7 @@ class StreamAdapter(TTS):
         one here, and only while markup is actually flowing, so a plain turn never pays
         the stray-``<`` stall.
         """
-        if not lowering or self._explicit_tokenizer:
+        if not markup or self._explicit_tokenizer:
             return self._sentence_tokenizer
         if self._markup_tokenizer is None:
             self._markup_tokenizer = tokenize.blingfire.SentenceTokenizer(
@@ -139,10 +139,9 @@ class StreamAdapterWrapper(SynthesizeStream):
         # the framework's input path for every non-streaming TTS, and the first place
         # whole sentences exist
         markup = self._tts._wrapped_tts.markup
-        # a TTS with no dialect still lowers: convert drops the markers it can't speak
-        lowering = self._markup_input
-
-        sent_stream = self._tts._tokenizer_for(lowering=lowering).stream()
+        # every sentence is lowered, as the gateway TTS does: on text without markers it
+        # changes nothing, and a TTS with no dialect drops markers it can't speak
+        sent_stream = self._tts._tokenizer_for(markup=self._markup_input).stream()
         if self._tts._stream_pacer:
             sent_stream = self._tts._stream_pacer.wrap(
                 sent_stream=sent_stream,
@@ -167,7 +166,7 @@ class StreamAdapterWrapper(SynthesizeStream):
                     sent_stream.flush()
                     continue
 
-                sent_stream.push_text(markup.normalize(data) if lowering else data)
+                sent_stream.push_text(markup.normalize(data))
 
             sent_stream.end_input()
 
@@ -183,11 +182,10 @@ class StreamAdapterWrapper(SynthesizeStream):
                 if not (text := ev.token.strip()):
                     continue
 
-                if lowering:
-                    # re-normalize: a marker split across two input chunks isn't caught
-                    # by the per-chunk pass above
-                    if not (text := markup.convert(markup.normalize(text)).strip()):
-                        continue
+                # re-normalize: a marker split across two input chunks isn't caught by the
+                # per-chunk pass above
+                if not (text := markup.convert(markup.normalize(text)).strip()):
+                    continue
 
                 self._mark_started()
                 async with self._tts._wrapped_tts.synthesize(
