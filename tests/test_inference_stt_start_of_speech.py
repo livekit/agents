@@ -20,6 +20,7 @@ from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.aio.channel import Chan, ChanEmpty
 from livekit.agents.voice import audio_recognition
 
+from .test_inference_stt_aligned_transcript_claim import GATEWAY_INK2_FINAL
 from .test_transcription_delay_anchor import _make_recognition
 
 pytestmark = [pytest.mark.unit]
@@ -124,7 +125,7 @@ def test_onset_resets_after_the_turn_ends() -> None:
     ("timing", "end_time"),
     [
         ({"start": 1.0, "duration": 2.0, "words": [{"word": "hello", "end": 2.4}]}, 10.9),
-        ({"start": 1.0, "duration": 1.4}, 10.9),
+        ({"start": 1.0, "duration": 1.4}, None),
         ({"words": [{"word": "hello", "end": 2.4}]}, 10.9),
         ({}, None),
         ({"words": [{"word": "hello"}]}, None),
@@ -178,6 +179,26 @@ async def test_eos_preserves_transcription_delay_in_stt_turn_detection(monkeypat
         now=now,
     )
     assert metrics.transcription_delay == pytest.approx(0.6)
+
+
+async def test_eos_without_utterance_timing_uses_arrival_time(monkeypatch):
+    now = 1_700_000_030.0
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
+    stream = _stream()
+    stream._start_time_offset = 8.5
+    stream._process_transcript(GATEWAY_INK2_FINAL, is_final=True)
+    assert stream._event_ch.recv_nowait().type == SpeechEventType.START_OF_SPEECH
+    recognition = _make_recognition(vad=None, input_started_at=now - 30.0, mode="stt")
+
+    while True:
+        try:
+            event = stream._event_ch.recv_nowait()
+        except ChanEmpty:
+            break
+        await recognition._on_stt_event(event)
+
+    assert recognition._user_turn_committed
+    assert recognition._last_speaking_time == now
 
 
 async def test_connection_session_id_becomes_fallback_request_id(
