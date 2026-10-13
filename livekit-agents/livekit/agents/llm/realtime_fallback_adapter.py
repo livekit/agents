@@ -26,7 +26,7 @@ from .realtime import (
 from .tool_context import Tool, ToolChoice, ToolContext
 
 if TYPE_CHECKING:
-    from ..voice.agent_session import AgentSession
+    from ..voice.agent_session import LiveSession
 
 
 @dataclass
@@ -194,7 +194,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._swap_task: asyncio.Task[None] | None = None
         self._swap_lock = asyncio.Lock()
         # bound by AgentActivity; used to read agent state and drive interrupt/generate_reply on swap
-        self._agent_session: AgentSession | None = None
+        self._agent_session: LiveSession | None = None
 
         # audio during a swap is dropped; replaying it would lag the model behind realtime
         self._swapping = False
@@ -288,7 +288,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._set_available(self._active_index, False)
         target = self._next_available_index()
         if target is None:
-            # exhausted: escalate so AgentSession can close
+            # exhausted: escalate so LiveSession can close
             self.emit("error", error)
             return
 
@@ -315,7 +315,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         the agent chat context) and re-issued on the new session afterwards.
         """
         async with self._swap_lock:
-            # interrupt through the AgentSession so playout/state stay coordinated and the heard
+            # interrupt through the LiveSession so playout/state stay coordinated and the heard
             # content is committed (best-effort: the provider may already be dead)
             if self._agent_session is not None:
                 try:
@@ -323,9 +323,11 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 except Exception:
                     logger.debug("failed to interrupt the agent before swap", exc_info=True)
 
-            # replay the agent chat context (what the user heard); fall back to the child's when unbound
-            if self._agent_session is not None:
-                chat_ctx = self._agent_session.current_agent.chat_ctx
+            # replay the activity's history (what the user heard); fall back to the child's
+            # when unbound
+            activity = self._agent_session._activity if self._agent_session is not None else None
+            if activity is not None:
+                chat_ctx = activity.chat_ctx
             else:
                 chat_ctx = self._active.chat_ctx
 
@@ -371,7 +373,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 self._swapping = False
 
             if error is not None:
-                # every model failed to start; escalate so AgentSession can close instead of
+                # every model failed to start; escalate so LiveSession can close instead of
                 # continuing on a broken session
                 self.emit(
                     "error",

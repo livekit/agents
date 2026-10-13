@@ -20,7 +20,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, JobContext
+from livekit.agents import Agent, JobContext, LiveSession
 from livekit.agents.ipc.job_proc_lazy_main import (
     _callback_name,
     _record_dispatch_timeline,
@@ -183,7 +183,7 @@ def test_framework_callbacks_are_not_user_callbacks() -> None:
     assert not _is_framework_callback(log_usage)
     assert not _is_framework_callback(lambda: None)
     assert _is_framework_callback(aio.cancel_and_wait)  # livekit.agents.utils.aio
-    assert _is_framework_callback(AgentSession.aclose)
+    assert _is_framework_callback(LiveSession.aclose)
 
 
 def test_job_span_is_back_dated_and_carries_the_join_keys(

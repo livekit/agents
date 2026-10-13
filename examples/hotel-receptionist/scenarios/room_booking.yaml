@@ -1,0 +1,103 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/room_booking.yaml --agent-name hotel`.
+# The hotel's clock is pinned: run the backend with HOTEL_TODAY=2026-11-02, so the absolute
+# dates below and the seeded bookings in hotel.py stay where they are. One complication per
+# scenario; the label names it; the expectations describe the outcome and name the failing case.
+
+id: SCNG_Jb5MW6dzJRQH
+name: The LiveKit Hotel, room booking
+
+scenarios:
+- id: SCN_pVCvO1sAndxf
+  label: "A straightforward booking, details given one at a time"
+  instructions: >
+    You are Maria Whitfield, a polite leisure traveller who answers only what she is asked. Open
+    with "Hi, I'd like to book a room for two in November." You are arriving November 14th 2026
+    and leaving the 17th, two adults; an ocean view matters to you, the room type does not. Your
+    email is maria.whitfield@example.com and your card is 4532 0000 0001 4471, expiry 12/29,
+    security code 321; you are fine giving the number. Give each detail only when asked, one per
+    turn. Somewhere mid-call ask what the total comes to with tax. When the booking is read back
+    correctly, say yes and let them finish.
+  agent_expectations: >
+    The booking is made: dates and party size collected first, the available rooms offered so the
+    guest picks rather than the agent picking for her, the total with tax quoted when asked, the
+    name, email and card taken, the whole booking read back and written only after her yes. The
+    guest ends with a confirmation code and a total that the hotel returned. Fails if a code or a
+    total is announced that no tool produced, or if the booking is written before she agreed.
+
+- id: SCN_PTcdOsMay7WH
+  label: "Everything in one breath, nothing asked twice"
+  instructions: >
+    You are Tom Alvarez, in a hurry, and you dislike repeating yourself. Open with "Book me a king
+    with a city view for two, November 3rd to the 5th 2026, Tom Alvarez, tom.alvarez@example.com,
+    card 4242 4242 4242 4242 expiry 09/28 code 123." If asked for anything you already said, point
+    out that you gave it, then repeat it once. When the booking is read back, say yes.
+  agent_expectations: >
+    The agent records what was given without asking for it again, still reads the booking back
+    before writing it, and confirms with the code and total. Fails if any detail already given is
+    asked for a second time, or if the booking is written without a read-back.
+
+- id: SCN_rifq2R0791yC
+  label: "A date corrected during the read-back"
+  instructions: >
+    You are Jun Park, precise, and you catch mistakes. Open with "I need a queen room for three
+    people, November 10th to the 12th." Three guests, any view, name Jun Park, email
+    jun.park@example.com, card 5555 5555 5555 4444, expiry 03/30, security code 777; give these
+    when asked. When the booking is read back, say "sorry, I meant the 11th to the 13th", whatever
+    the agent read. When it is read back again with November 11th to 13th, say yes.
+  agent_expectations: >
+    The agent takes the correction, checks the new dates, reads the booking back again with
+    November 11th to 13th and writes it only after the second yes. Fails if the booking is written
+    with the 10th to 12th, or if the correction is acknowledged but the read-back keeps the old
+    dates.
+
+- id: SCN_6ZnSW6tfHm5y
+  label: "A change of mind halfway through"
+  instructions: >
+    You are Rosa Ibarra, undecided. Open with "Can I get a room for two next week, the 9th to the
+    11th?" Pick a room when offered and give your name, Rosa Ibarra. When asked for your email or
+    your card, say "actually, let me check with my partner first, I'll call back", and end the
+    conversation.
+  agent_expectations: >
+    Nothing is booked. The agent accepts that the guest stopped, does not press for the card, and
+    leaves the door open to call back. Fails if a booking or a confirmation code is announced, or
+    if the agent keeps asking for the card after the guest said she would call back.
+
+- id: SCN_XdJMCipjevLY
+  label: "The suite is sold out, so an alternative is offered"
+  instructions: >
+    You are Priya Nair; you want a suite but you are flexible. Open with "Do you have a suite for
+    four, November 20th to the 24th?" There are four of you. The hotel has no suite for those
+    dates: when told, take a queen with an ocean view for the same dates instead. If the agent
+    offers a suite anyway, ask whether it is really available before accepting. Your name is Priya
+    Nair, email priya.nair@example.com, card 3782 822463 10005, expiry 05/29, code 1234; give
+    these when asked, and say yes to the read-back.
+  agent_expectations: >
+    The agent says plainly that no suite is available for those dates and offers what is, from the
+    hotel's availability, and completes the booking the guest agreed to. Fails if a suite is
+    offered or booked for those dates, or if an alternative is invented rather than taken from the
+    hotel's answer.
+
+- id: SCN_Hs2f0UPcjRJh
+  label: "A party of six, which no room sleeps"
+  instructions: >
+    You are Omar Haddad, booking for a family of six. Open with "I'd like one room for six people,
+    November 14th to the 16th." Insist on one room at first. If the agent explains the rooms
+    sleep at most four, ask what you could do instead, then say you will think about it and end
+    the conversation.
+  agent_expectations: >
+    The agent does not book a room for six: it says the rooms sleep up to four and suggests a way
+    forward, two rooms or a smaller party, without inventing a larger room. Fails if a room is
+    booked for six, or if the guest is left without any suggestion.
+
+- id: SCN_EXfWO4FQWyyx
+  label: "Availability first, then the booking in the same conversation"
+  instructions: >
+    You are Hana Sato. Open with "What's free for two, November 22nd to the 24th?" Listen to the
+    options, then say "the king with the ocean view, please." Your name is Hana Sato, email
+    hana.sato@example.com, card 4111 1111 1111 1111, expiry 01/30, code 456; give these when
+    asked. Say yes to the read-back, then ask the agent to repeat your confirmation code.
+  agent_expectations: >
+    The agent answers the availability question, then books the room the guest chose for the same
+    dates without asking for the dates or the party size again, and repeats the confirmation code
+    the hotel returned. Fails if the dates are asked for a second time, or if the code repeated
+    differs from the one given at confirmation.

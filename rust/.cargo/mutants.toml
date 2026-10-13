@@ -1,0 +1,19 @@
+# cargo-mutants configuration.
+#
+# Generated protobuf code is excluded from mutation. Mutating prost's derived encode/decode is
+# testing prost, not us: `lk-agents-remote` reported 43% caught with `proto.rs` in the denominator
+# and 60% without it, and all 50 of the difference were mutants in code nobody wrote and nobody
+# should hand-test. Both files carry a "Generated file -- do not edit" header.
+#
+# This matters beyond tidiness. §4 makes the nightly mutation run the main check on whether the
+# Rust tests pin behaviour, and a denominator padded with generated code makes the number mean
+# less exactly where it is being trusted most.
+exclude_globs = [
+    "**/src/proto.rs",
+]
+
+# The default 20s per-mutant cap is the right order of magnitude, but three separate crates tonight
+# scored genuine kills as TIMEOUT -- once because a test's own guard was 30s, i.e. longer than the
+# cap. A timeout here is a finding, not a flake (R12): treat one as an unbounded await, a guard
+# longer than this cap, or a non-yielding hot loop, in that order of likelihood.
+timeout_multiplier = 3.0

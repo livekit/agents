@@ -27,7 +27,6 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         self,
         *,
         instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -65,7 +64,6 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
         super().__init__(
             instructions=instructions,
-            chat_ctx=chat_ctx,
             turn_detection=turn_detection,
             tools=[*(tools or []), self._build_update_address_tool()],
             stt=stt,
@@ -128,13 +126,13 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
         if not self._confirmation_required(ctx):
             if not self.done():
-                self.complete(GetAddressResult(address=self._current_address))
+                self._complete(GetAddressResult(address=self._current_address))
             return None
 
         confirm_tool = self._build_confirm_tool(address=address)
         current_tools = [t for t in self.tools if t.id != "confirm_address"]
         current_tools.append(confirm_tool)
-        await self.update_tools(current_tools)
+        await self._update_tools(current_tools)
 
         read_back = (
             f"Repeat the address field by field, spelling the street name letter by "
@@ -164,7 +162,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
                 )
 
             if not self.done():
-                self.complete(GetAddressResult(address=address))
+                self._complete(GetAddressResult(address=address))
             return None
 
         return confirm_address
@@ -177,7 +175,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
             reason: A short explanation of why the user declined to provide the address
         """
         if not self.done():
-            self.complete(ToolError(f"couldn't get the address: {reason}"))
+            self._complete(ToolError(f"couldn't get the address: {reason}"))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):

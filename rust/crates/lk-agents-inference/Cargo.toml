@@ -1,0 +1,103 @@
+[package]
+name = "lk-agents-inference"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# BELOW the docs/CONTRACTS.md §4.7 purity line, and the furthest below it of any crate so far: this is the only place
+# in the workspace that opens a socket. §1.4's `Native*` column is exactly this crate -- the
+# inference gateway's LLM (HTTPS, OpenAI-compatible), STT/TTS/VAD (WS + JSON), and later EOT.
+#
+# Nothing in tiers 0/1 (§4) may depend on it. The rule that keeps that honest is the module split
+# described in `lib.rs`: every wire message, every error classification and every retry decision
+# lives in a `mod` that does not name `reqwest` or `tokio_tungstenite`, and the transport sits
+# behind a seam. The pure half is where the tests are.
+#
+# New dependencies are declared here rather than in `[workspace.dependencies]` on purpose: they are
+# all below the purity line, several crates are being written in parallel against that shared
+# manifest, and a version bump here must not be able to move a pure crate. See DECISIONS #4.
+[dependencies]
+# docs/CONTRACTS.md §4.7's home for the Llm/Stt/Tts/Vad traits. This crate is one of the two implementations of every
+# one of them (§1.0's table); it defines none of its own.
+lk-agents-abi = { path = "../lk-agents-abi" }
+# `build_strict_openai_schema`, which is what `ToolContext.parse_function_tools("openai",
+# strict=True)` returns and what the gateway's OpenAI-compatible body carries.
+# `AudioByteStream` (the 50 ms re-framing every STT send loop does) and nothing else. Reaching for
+# a local copy would be a second implementation of the one thing 23 plugin packages observe.
+# `openai::to_chat_ctx`, for `Llm::chat(chat_ctx, ...)`. One way, and it must stay that way: the
+# formatter knows nothing about a gateway.
+# `Spawner`, so this crate never builds a runtime (R13, §1.13) and the driver owns what starts.
+# `soxr` only. `fallback`: `tts/fallback_adapter.py:262-282` resamples a fallback TTS's output to
+# the rate the adapter chose, and doing that with a different resampler than the primary path uses
+# would make the fallback audibly different from the primary by construction; the VAD and the
+# realtime session resample their own input. The interruption window does **not** (DR-9): the
+# driver feeds it the session's one converted stream. Default features, so no ffmpeg -- `soxr.rs`
+# is not behind that gate.
+lk-agents-media = { path = "../lk-agents-media" }
+serde = { workspace = true }
+# `preserve_order` for the same reason `lk-agents-format` states it: gateway request bodies are
+# assembled as maps and the reference emits them in declaration order. Also unifies with the rest
+# of the workspace, so a mixed build cannot silently switch `Map` to a sorted BTreeMap.
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true }
+# `livekit-api` cannot express this token: its `Claims` carries no `kind` and no `inference`
+# (`livekit-api/src/access_token.rs`). That -- not the cost of the dependency -- is why the JWT is
+# minted here. `features = ["access-token"]` is three crates (`jsonwebtoken`, `hmac`, `signature`),
+# with no reqwest and no tokio. A PR adding both claims upstream is prepared
+# (DECISIONS-FOR-REVIEW N85); when it releases, PLAN.md A3 deletes this and the `jsonwebtoken`
+# dependency with it.
+# `default-features = false`, which turns off `use_pem` -- i.e. `pem` + `simple_asn1` +
+# `num-bigint`, the ASN.1/PEM reader for RSA and EC keys. This token is HS256 over
+# `EncodingKey::from_secret`, which never touches any of it.
+jsonwebtoken = { version = "9", default-features = false }
+# `shortuuid` is `uuid4().hex[:12]`, i.e. six random bytes hex-encoded; `rand` is the whole of it.
+rand = "0.9"
+base64 = { workspace = true }
+
+# --- the real transport ---
+#
+# **Not optional.** It used to be, off by default, to keep ~200 transitive crates out of a tier-2
+# build. Nothing ever turned it on except a live test -- so `lk-agents-py` linked this crate with
+# no transport at all, and the "native" gateway STT/TTS/LLM clients physically could not open a
+# socket from Python. A gate whose off-state silently disables the implementation is the same
+# mistake as leaving the work in the host: the build was green and the feature was absent.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
+# TLS crypto provider: `ring`, which the workspace already builds for `jsonwebtoken`. reqwest's plain
+# `rustls` feature would add `aws-lc-rs` (a 207 s cmake build, measured 2026-09-06) as a second
+# provider; `rustls-no-provider` plus this explicit `rustls` line keeps one.
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+bytes = "1"
+# `llm/mcp.py`'s session, over the official SDK (see the workspace entry). `sse-stream` parses the
+# legacy SSE transport rmcp does not ship, `url` joins its `endpoint` event onto the connection URL
+# and is pydantic's `AnyUrl` normalisation for rendering, `log` is the reference's three log lines.
+rmcp.workspace = true
+sse-stream = "0.2"
+url = "2"
+log.workspace = true
+
+# `eot`'s wire protocol -- `livekit.agent.{ClientMessage, ServerMessage}` -- is protobuf over the
+# same WebSocket seam this crate already owns, taken from the one protocol crate the workspace shares
+# (`livekit_protocol::agent`; the vendored `src/eot/proto.rs` went on 2026-09-09). `prost` is that
+# crate's and `pbjson-types` is how it spells `Timestamp`/`Duration`.
+livekit-protocol.workspace = true
+prost.workspace = true
+pbjson-types.workspace = true
+pyo3 = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util", "net", "io-util"] }
+
+[features]
+# libsoxr behind the fallback TTS's and the VAD machine's rate conversions
+# (`lk_agents_media::new_resampler`); off, `lk-agents-abi`'s linear one. On by default.
+default = ["native-audio"]
+native-audio = ["lk-agents-media/resample"]
+# The network-reaching, `#[ignore]`d live tests (`tests/inference/live_*.rs`).
+live = []
+# The Python binding, expanded in place: only `lk-agents-py` enables it.
+python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-media/python"]

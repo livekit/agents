@@ -1,0 +1,402 @@
+{
+  "case": {
+    "setup": {
+      "stt": false,
+      "turn": "Default",
+      "preemptive": false,
+      "tools": [
+        "lookup"
+      ],
+      "max_tool_steps": null,
+      "instructions": "You are a test agent.",
+      "max_unrecoverable_errors": 3,
+      "hook_bound_ms": null
+    },
+    "inputs": [
+      {
+        "Say": {
+          "text": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60).",
+          "input": "Words",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "WAIT stop stop stop",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "WaitForIdle": {
+          "hold": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "can you hear me",
+          "instructions": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60).",
+          "allow": true
+        }
+      },
+      {
+        "Say": {
+          "text": "",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "Configure": {
+          "knob": "MinInterruptionWords",
+          "mode": "Default",
+          "ms": 5000,
+          "on": false,
+          "words": 0
+        }
+      },
+      {
+        "Say": {
+          "text": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60).",
+          "input": "TextStream",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "AwaitExit": {}
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "caller",
+          "args": "{}"
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "caller",
+          "args": "{}"
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "FeedAudio": {
+          "stream": 0,
+          "chunks": 3
+        }
+      },
+      {
+        "Task": {
+          "agent": "lookup_order",
+          "speech": 9
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "Tts"
+        }
+      },
+      {
+        "LlmFail": {
+          "chat": 2
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "InterruptSpeech": {
+          "speech": 4,
+          "force": true
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 1,
+          "name": "billing_agent",
+          "args": "{}"
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "lookup_order",
+          "args": "{}"
+        }
+      },
+      {
+        "PlayoutFinished": {
+          "segment": 0
+        }
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "UpdateInstructions": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?"
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 1,
+          "name": "billing_agent",
+          "args": "{}"
+        }
+      },
+      {
+        "HostMetrics": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetVideoInput": {
+          "attach": true
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 3,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "Say": {
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "Interrupt": {
+          "force": false,
+          "wait": false
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "agent-2",
+          "args": "{}"
+        }
+      },
+      {
+        "UpdateTools": {
+          "tools": [
+            "lookup_order"
+          ]
+        }
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 4,
+          "name": "transfer",
+          "args": "{}"
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 5,
+          "name": "sip_1",
+          "args": "{}"
+        }
+      },
+      {
+        "SetAllowInterruptions": {
+          "speech": 9,
+          "allow": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Task": {
+          "agent": "agent-2",
+          "speech": null
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 4,
+          "name": "sip_1",
+          "args": "{}"
+        }
+      },
+      {
+        "LlmFail": {
+          "chat": 3
+        }
+      },
+      {
+        "Interrupt": {
+          "force": true,
+          "wait": false
+        }
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioOutput",
+          "enabled": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "LlmToolCall": {
+          "chat": 1,
+          "name": "agent-2",
+          "args": "{}"
+        }
+      },
+      {
+        "LlmFail": {
+          "chat": 1
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 5,
+          "name": "agent-2",
+          "args": "{}"
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 120,
+          "stt_flush": 200,
+          "skip_reply": false
+        }
+      },
+      {
+        "Configure": {
+          "knob": "MinEndpointing",
+          "mode": "Manual",
+          "ms": 0,
+          "on": false,
+          "words": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1000
+        }
+      }
+    ]
+  },
+  "expect": {
+    "Fails": {
+      "contract": "provider_failure_is_accounted",
+      "subject": {
+        "Speech": 12
+      }
+    }
+  }
+}

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, RunContext, function_tool
+from livekit.agents import Agent, LiveSession, RunContext, function_tool
 from livekit.agents.llm import ChatMessage, FunctionToolCall
 
 from .fake_session import FakeActions, create_session, run_session
@@ -40,7 +40,7 @@ class Router(Agent):
         return "saved"
 
 
-async def _messages(session: AgentSession, agent: Agent) -> list[ChatMessage]:
+async def _messages(session: LiveSession, agent: Agent) -> list[ChatMessage]:
     events: list = []
     session.on("conversation_item_added", events.append)
     await run_session(session, agent, drain_delay=3.0)

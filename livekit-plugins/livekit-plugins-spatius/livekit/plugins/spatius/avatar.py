@@ -24,7 +24,7 @@ from typing import Any
 from livekit import api, rtc
 from livekit.agents import (
     NOT_GIVEN,
-    AgentSession,
+    LiveSession,
     NotGivenOr,
     get_job_context,
     utils,
@@ -63,7 +63,7 @@ _LIVEKIT_AGENT_IDENTITY_ATTRIBUTE = "livekit_agent_identity"
 _RPC_PLAYBACK_STARTED = "lk.playback_started"
 _RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 # fall back to finishing the segment locally if the worker never confirms an
-# interrupt, so AgentSession.wait_for_playout() cannot hang
+# interrupt, so LiveSession.wait_for_playout() cannot hang
 _CLEAR_BUFFER_TIMEOUT = 2.0
 
 
@@ -171,7 +171,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def start(
         self,
-        agent_session: AgentSession,
+        agent_session: LiveSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,
@@ -417,7 +417,7 @@ class AvatarSession(BaseAvatarSession):
             return
         self._aclose_atask = asyncio.create_task(self.aclose())
 
-    def _resolve_sample_rate(self, agent_session: AgentSession) -> int:
+    def _resolve_sample_rate(self, agent_session: LiveSession) -> int:
         sample_rate = self._sample_rate
         if sample_rate is None:
             sample_rate = (
@@ -461,7 +461,7 @@ class AvatarSession(BaseAvatarSession):
             self._forward_atask = None
 
         # release any segment still awaiting a playback-finished RPC so that
-        # AgentSession.wait_for_playout() cannot hang during teardown
+        # LiveSession.wait_for_playout() cannot hang during teardown
         if self._audio is not None:
             for _ in range(self._audio._pending_playback_count):
                 self._audio.notify_playback_finished(playback_position=0.0, interrupted=True)

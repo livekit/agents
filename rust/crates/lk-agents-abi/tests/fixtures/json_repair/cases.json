@@ -1,0 +1,1780 @@
+[
+  {
+    "input": "stringbeforeobject {}",
+    "expected": {}
+  },
+  {
+    "input": "{'key': 'string', 'key2': false, \"key3\": null, \"key4\": unquoted}",
+    "expected": {
+      "key": "string",
+      "key2": false,
+      "key3": null,
+      "key4": "unquoted"
+    }
+  },
+  {
+    "input": "{\"name\": \"John\", \"age\": 30, \"city\": \"New York",
+    "expected": {
+      "name": "John",
+      "age": 30,
+      "city": "New York"
+    }
+  },
+  {
+    "input": "{\"name\": \"John\", \"age\": 30, city: \"New York\"}",
+    "expected": {
+      "name": "John",
+      "age": 30,
+      "city": "New York"
+    }
+  },
+  {
+    "input": "{\"name\": \"John\", \"age\": 30, \"city\": New York}",
+    "expected": {
+      "name": "John",
+      "age": 30,
+      "city": "New York"
+    }
+  },
+  {
+    "input": "{\"name\": John, \"age\": 30, \"city\": \"New York\"}",
+    "expected": {
+      "name": "John",
+      "age": 30,
+      "city": "New York"
+    }
+  },
+  {
+    "input": "{“slanted_delimiter”: \"value\"}",
+    "expected": {
+      "slanted_delimiter": "value"
+    }
+  },
+  {
+    "input": "{\"name\": \"John\", \"age\": 30, \"city\": \"New",
+    "expected": {
+      "name": "John",
+      "age": 30,
+      "city": "New"
+    }
+  },
+  {
+    "input": "{\"name\": \"John\", \"age\": 30, \"city\": \"New York, \"gender\": \"male\"}",
+    "expected": {
+      "name": "John",
+      "age": 30,
+      "city": "New York",
+      "gender": "male"
+    }
+  },
+  {
+    "input": "[{\"key\": \"value\", COMMENT \"notes\": \"lorem \"ipsum\", sic.\" }]",
+    "expected": [
+      {
+        "key": "value",
+        "notes": "lorem \"ipsum\", sic."
+      }
+    ]
+  },
+  {
+    "input": "{\"key\": \"\"value\"}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{\"key\": \"value\", 5: \"value\"}",
+    "expected": {
+      "key": "value",
+      "5": "value"
+    }
+  },
+  {
+    "input": "{\"foo\": \"\\\"bar\\\"\"",
+    "expected": {
+      "foo": "\"bar\""
+    }
+  },
+  {
+    "input": "{\"\" key\":\"val\"",
+    "expected": {
+      " key": "val"
+    }
+  },
+  {
+    "input": "{\"key\": value \"key2\" : \"value2\" ",
+    "expected": {
+      "key": "value",
+      "key2": "value2"
+    }
+  },
+  {
+    "input": "{\"key\": \"lorem ipsum ... \"sic \" tamet. ...}",
+    "expected": {
+      "key": "lorem ipsum ... \"sic \" tamet. ..."
+    }
+  },
+  {
+    "input": "{\"key\": value , }",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{\"comment\": \"lorem, \"ipsum\" sic \"tamet\". To improve\"}",
+    "expected": {
+      "comment": "lorem, \"ipsum\" sic \"tamet\". To improve"
+    }
+  },
+  {
+    "input": "{\"key\": \"v\"alu\"e\"} key:",
+    "expected": {
+      "key": "v\"alu\"e"
+    }
+  },
+  {
+    "input": "{\"key\": \"v\"alue\", \"key2\": \"value2\"}",
+    "expected": {
+      "key": "v\"alue",
+      "key2": "value2"
+    }
+  },
+  {
+    "input": "[{\"key\": \"v\"alu,e\", \"key2\": \"value2\"}]",
+    "expected": [
+      {
+        "key": "v\"alu,e",
+        "key2": "value2"
+      }
+    ]
+  },
+  {
+    "input": "{\"key\": 'string\"\n\t\\le'",
+    "expected": {
+      "key": "string\"\n\t\\le"
+    }
+  },
+  {
+    "input": "{\"real_content\": \"Some string: Some other string \\t Some string <a href=\\\"https://domain.com\\\">Some link</a>\"",
+    "expected": {
+      "real_content": "Some string: Some other string \t Some string <a href=\"https://domain.com\">Some link</a>"
+    }
+  },
+  {
+    "input": "{\"key_1\n\": \"value\"}",
+    "expected": {
+      "key_1": "value"
+    }
+  },
+  {
+    "input": "{\"key\t_\": \"value\"}",
+    "expected": {
+      "key\t_": "value"
+    }
+  },
+  {
+    "input": "{\"key\": 'value'}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{\"key\": \"\\u0076\\u0061\\u006C\\u0075\\u0065\"}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{\"key\": \"valu\\'e\"}",
+    "expected": {
+      "key": "valu'e"
+    }
+  },
+  {
+    "input": "{'key': \"{\\\"key\\\": 1, \\\"key2\\\": 1}\"}",
+    "expected": {
+      "key": "{\"key\": 1, \"key2\": 1}"
+    }
+  },
+  {
+    "input": "{ \"content\": \"[LINK](\"https://google.com\")\" }",
+    "expected": {
+      "content": "[LINK](\"https://google.com\")"
+    }
+  },
+  {
+    "input": "{ \"content\": \"[LINK](\" }",
+    "expected": {
+      "content": "[LINK]("
+    }
+  },
+  {
+    "input": "{ \"content\": \"[LINK](\", \"key\": true }",
+    "expected": {
+      "content": "[LINK](",
+      "key": true
+    }
+  },
+  {
+    "input": "````{ \"key\": \"value\" }```",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{    \"a\": \"\",    \"b\": [ { \"c\": 1} ] \n}```",
+    "expected": {
+      "a": "",
+      "b": [
+        {
+          "c": 1
+        }
+      ]
+    }
+  },
+  {
+    "input": "Based on the information extracted, here is the filled JSON output: ```json { 'a': 'b' } ```",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "input": "\n                       The next 64 elements are:\n                       ```json\n                       { \"key\": \"value\" }\n                       ```",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "\n    ```json\n    {\n    \"k\": [\n    {\n    \"b\":\"v2\",\n    \"b\":\"v2\"\n    }\n    ]\n    }\n    ```\n    ",
+    "expected": {
+      "k": [
+        {
+          "b": "v2"
+        }
+      ]
+    }
+  },
+  {
+    "input": "\n    {\n    \"k\": [\n    {\n    \"b\":\"v2\",\n    \"b\":\"v2\"\n    }\n    ]\n    }\n    ",
+    "expected": {
+      "k": [
+        {
+          "b": "v2"
+        }
+      ]
+    }
+  },
+  {
+    "input": "{\"key\": \"``\"",
+    "expected": {
+      "key": "``"
+    }
+  },
+  {
+    "input": "{\"key\": \"```json\"",
+    "expected": {
+      "key": "```json"
+    }
+  },
+  {
+    "input": "{\"key\": \"```json {\"key\": [{\"key1\": 1},{\"key2\": 2}]}```\"}",
+    "expected": {
+      "key": {
+        "key": [
+          {
+            "key1": 1
+          },
+          {
+            "key2": 2
+          }
+        ]
+      }
+    }
+  },
+  {
+    "input": "{\"response\": \"```json{}\"",
+    "expected": {
+      "response": "```json{}"
+    }
+  },
+  {
+    "input": "{\n\"a\": \"\n```{}```\n\",\n\"b\": \"x\",\n}",
+    "expected": {
+      "a": "\n```{}```",
+      "b": "x"
+    }
+  },
+  {
+    "input": "{\n\"a\": \"\n```{}```\n\"\n\",\n\"b\": \"x\",\n}",
+    "expected": {
+      "a": "\n```{}```\n\"",
+      "b": "x"
+    }
+  },
+  {
+    "input": "{\n\"a\": \"\n```{}```\n\"\n\",\n'b': \"x\",\n}",
+    "expected": {
+      "a": "\n```{}```\n\"",
+      "b": "x"
+    }
+  },
+  {
+    "input": "{\n\"a\": \"\n```{}```\n\"\n\", // c\n\"b\": \"x\",\n}",
+    "expected": {
+      "a": "\n```{}```\n\"",
+      "b": "x"
+    }
+  },
+  {
+    "input": "{\n\"a\": \"\n```{}```\n\"\n\",\n b: \"x\",\n}",
+    "expected": {
+      "a": "\n```{}```\n\"",
+      "b": "x"
+    }
+  },
+  {
+    "input": "{\"a\":\"```}```\"a\",\"b\":\"x\"}",
+    "expected": {
+      "a": "```}```\"a",
+      "b": "x"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` [1,2]\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` [1,2]",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` [http://x]\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` [http://x]",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` [foo[bar]\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` [foo[bar]",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` [{\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` [{",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` [foo, [bar]\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` [foo, [bar]",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` [1,\"z\"]\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` [1,\"z\"]",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` [1, [2]]\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` [1, [2]]",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` [1,[2],k:v]\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` [1,[2],k:v]",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` (1,(2),k:v)\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` (1,(2),k:v)",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` [1,2],\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` [1,2],",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` // c\n [1,2]\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` // c\n [1,2]",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\"a\":\"x}``` // c\n [1,2],\n\",\"b\":\"y\"}",
+    "expected": {
+      "a": "x}``` // c\n [1,2],",
+      "b": "y"
+    }
+  },
+  {
+    "input": "{\n\"a\": \"\n```c\nint main() {\n}\n```\nImplementation: \"xxx\", xxx\n\",\n\"b\": \"x\",\n}",
+    "expected": {
+      "a": "\n```c\nint main() {\n}\n```\nImplementation: \"xxx\", xxx",
+      "b": "x"
+    }
+  },
+  {
+    "input": "{\"a\": \"hello\n\"\n\",}",
+    "expected": {
+      "a": "hello"
+    }
+  },
+  {
+    "input": "{\"a\": \"hello\n\"\n\",",
+    "expected": {
+      "a": "hello"
+    }
+  },
+  {
+    "input": "{\"x\": \"a,\n “term”: explanation\", \"y\": 2}",
+    "expected": {
+      "x": "a,\n “term”: explanation",
+      "y": 2
+    }
+  },
+  {
+    "input": "{\"text\": \"despre „autocritică\" și autocompasiune\"}",
+    "expected": {
+      "text": "despre „autocritică\" și autocompasiune"
+    }
+  },
+  {
+    "input": "{\"text\": \"despre „autocritică” și autocompasiune\"}",
+    "expected": {
+      "text": "despre „autocritică” și autocompasiune"
+    }
+  },
+  {
+    "input": "{\"text\": \"aplicație „sham\\\"), a făcut\"}",
+    "expected": {
+      "text": "aplicație „sham\"), a făcut"
+    }
+  },
+  {
+    "input": "{\"text\": \"a \\„ b\", \"y\": 1}",
+    "expected": {
+      "text": "a „ b",
+      "y": 1
+    }
+  },
+  {
+    "input": "True",
+    "expected": ""
+  },
+  {
+    "input": "False",
+    "expected": ""
+  },
+  {
+    "input": "Null",
+    "expected": ""
+  },
+  {
+    "input": "true",
+    "expected": true
+  },
+  {
+    "input": "false",
+    "expected": false
+  },
+  {
+    "input": "null",
+    "expected": null
+  },
+  {
+    "input": "  {\"key\": true, \"key2\": false, \"key3\": null}",
+    "expected": {
+      "key": true,
+      "key2": false,
+      "key3": null
+    }
+  },
+  {
+    "input": "{\"key\": TRUE, \"key2\": FALSE, \"key3\": Null}   ",
+    "expected": {
+      "key": true,
+      "key2": false,
+      "key3": null
+    }
+  },
+  {
+    "input": "{\"x\": \"However, the provided user answer is {\"blank_1\": \"music\"}, which is not a plain string\"}",
+    "expected": {
+      "x": "However, the provided user answer is {\"blank_1\": \"music\"}, which is not a plain string"
+    }
+  },
+  {
+    "input": "{\"x\": \"a, {\"k\": 1}, \"y\": 2}",
+    "expected": {
+      "x": "a, {\"k\": 1}",
+      "y": 2
+    }
+  },
+  {
+    "input": "{\"x\": \"a, {\"k\": {\"n\": 1}}, \"y\": 2}",
+    "expected": {
+      "x": "a, {\"k\": {\"n\": 1}}",
+      "y": 2
+    }
+  },
+  {
+    "input": "{\"key\": \"value}\\\\\\\"more\"}",
+    "expected": {
+      "key": "value}\\\"more"
+    }
+  },
+  {
+    "input": "{\"key\": \"value} \"tail}",
+    "expected": {
+      "key": "value} "
+    }
+  },
+  {
+    "input": "{\"key\": \"value} \"tail\" more}",
+    "expected": {
+      "key": "value} \"tail\" more"
+    }
+  },
+  {
+    "input": "{\"key\": \"value} key2: value2}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{ \"key\": \"\\\\{1,2\\\\} \\\\{3\\\\}\" }",
+    "expected": {
+      "key": "\\{1,2\\} \\{3\\}"
+    }
+  },
+  {
+    "input": "{ \"key\": \"x [0,2] f(-\\\\frac{3}{4})\" }",
+    "expected": {
+      "key": "x [0,2] f(-\\frac{3}{4})"
+    }
+  },
+  {
+    "input": "{ \"llm_reason\": \"curve $C: \\\\frac{x^2}{m}$ answer is {\"blank_1\": \"5\"}, correct is 4.\", \"llm_answer\": \"4\" }",
+    "expected": {
+      "llm_reason": "curve $C: \\frac{x^2}{m}$ answer is {\"blank_1\": \"5\"}, correct is 4.",
+      "llm_answer": "4"
+    }
+  },
+  {
+    "input": "{0:a\"0\"",
+    "expected": {
+      "0": "a"
+    }
+  },
+  {
+    "input": "{'': 1}",
+    "expected": {
+      "": 1
+    }
+  },
+  {
+    "input": "{}",
+    "expected": {}
+  },
+  {
+    "input": "{ \"key\": \"value\", \"key2\": 1, \"key3\": True }",
+    "expected": {
+      "key": "value",
+      "key2": 1,
+      "key3": true
+    }
+  },
+  {
+    "input": "{",
+    "expected": {}
+  },
+  {
+    "input": "{ \"key\": value, \"key2\": 1 \"key3\": null }",
+    "expected": {
+      "key": "value",
+      "key2": 1,
+      "key3": null
+    }
+  },
+  {
+    "input": "   {  }   ",
+    "expected": {}
+  },
+  {
+    "input": "{\"",
+    "expected": {}
+  },
+  {
+    "input": "{foo: [}",
+    "expected": {
+      "foo": []
+    }
+  },
+  {
+    "input": "{\"\": \"value\"",
+    "expected": {
+      "": "value"
+    }
+  },
+  {
+    "input": "{\"key\": \"v\"alue\"}",
+    "expected": {
+      "key": "v\"alue\""
+    }
+  },
+  {
+    "input": "{\"value_1\": true, COMMENT \"value_2\": \"data\"}",
+    "expected": {
+      "value_1": true,
+      "value_2": "data"
+    }
+  },
+  {
+    "input": "{\"value_1\": true, SHOULD_NOT_EXIST \"value_2\": \"data\" AAAA }",
+    "expected": {
+      "value_1": true,
+      "value_2": "data"
+    }
+  },
+  {
+    "input": "{\"\" : true, \"key2\": \"value2\"}",
+    "expected": {
+      "": true,
+      "key2": "value2"
+    }
+  },
+  {
+    "input": "{\"\"answer\"\":[{\"\"traits\"\":''Female aged 60+'',\"\"answer1\"\":\"\"5\"\"}]}",
+    "expected": {
+      "answer": [
+        {
+          "traits": "Female aged 60+",
+          "answer1": "5"
+        }
+      ]
+    }
+  },
+  {
+    "input": "{ \"words\": abcdef\", \"numbers\": 12345\", \"words2\": ghijkl\" }",
+    "expected": {
+      "words": "abcdef",
+      "numbers": 12345,
+      "words2": "ghijkl"
+    }
+  },
+  {
+    "input": "{\"number\": 1,\"reason\": \"According...\"\"ans\": \"YES\"}",
+    "expected": {
+      "number": 1,
+      "reason": "According...",
+      "ans": "YES"
+    }
+  },
+  {
+    "input": "{ \"a\" : \"{ b\": {} }\" }",
+    "expected": {
+      "a": "{ b"
+    }
+  },
+  {
+    "input": "{\"b\": \"xxxxx\" true}",
+    "expected": {
+      "b": "xxxxx"
+    }
+  },
+  {
+    "input": "{\"key\": \"Lorem \"ipsum\" s,\"}",
+    "expected": {
+      "key": "Lorem \"ipsum\" s,"
+    }
+  },
+  {
+    "input": "{\"lorem\": ipsum, sic, datum.\",}",
+    "expected": {
+      "lorem": "ipsum, sic, datum."
+    }
+  },
+  {
+    "input": "{\"lorem\": sic tamet. \"ipsum\": sic tamet, quick brown fox. \"sic\": ipsum}",
+    "expected": {
+      "lorem": "sic tamet.",
+      "ipsum": "sic tamet",
+      "sic": "ipsum"
+    }
+  },
+  {
+    "input": "{\"lorem_ipsum\": \"sic tamet, quick brown fox. }",
+    "expected": {
+      "lorem_ipsum": "sic tamet, quick brown fox."
+    }
+  },
+  {
+    "input": "{\"key\":value, \" key2\":\"value2\" }",
+    "expected": {
+      "key": "value",
+      " key2": "value2"
+    }
+  },
+  {
+    "input": "{\"key\":value \"key2\":\"value2\" }",
+    "expected": {
+      "key": "value",
+      "key2": "value2"
+    }
+  },
+  {
+    "input": "{'text': 'words{words in brackets}more words'}",
+    "expected": {
+      "text": "words{words in brackets}more words"
+    }
+  },
+  {
+    "input": "{text:words{words in brackets}}",
+    "expected": {
+      "text": "words{words in brackets}"
+    }
+  },
+  {
+    "input": "{text:words{words in brackets}m}",
+    "expected": {
+      "text": "words{words in brackets}m"
+    }
+  },
+  {
+    "input": "{\"key\": \"value, value2\"```",
+    "expected": {
+      "key": "value, value2"
+    }
+  },
+  {
+    "input": "{\"key\": \"value}```",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{key:value,key2:value2}",
+    "expected": {
+      "key": "value",
+      "key2": "value2"
+    }
+  },
+  {
+    "input": "{\"key:\"value\"}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{\"key:value}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "[{\"lorem\": {\"ipsum\": \"sic\"}, \"\"\"\" \"lorem\": {\"ipsum\": \"sic\"}]",
+    "expected": [
+      {
+        "lorem": {
+          "ipsum": "sic"
+        }
+      },
+      {
+        "lorem": {
+          "ipsum": "sic"
+        }
+      }
+    ]
+  },
+  {
+    "input": "{ \"key\": [\"arrayvalue\"], [\"arrayvalue1\"], [\"arrayvalue2\"], \"key3\": \"value3\" }",
+    "expected": {
+      "key": [
+        "arrayvalue",
+        "arrayvalue1",
+        "arrayvalue2"
+      ],
+      "key3": "value3"
+    }
+  },
+  {
+    "input": "{ \"key\": [[1, 2, 3], \"a\", \"b\"], [[4, 5, 6], [7, 8, 9]] }",
+    "expected": {
+      "key": [
+        [
+          1,
+          2,
+          3
+        ],
+        "a",
+        "b",
+        [
+          4,
+          5,
+          6
+        ],
+        [
+          7,
+          8,
+          9
+        ]
+      ]
+    }
+  },
+  {
+    "input": "{ \"key\": [\"arrayvalue\"], \"key3\": \"value3\", [\"arrayvalue1\"] }",
+    "expected": {
+      "key": [
+        "arrayvalue"
+      ],
+      "key3": "value3",
+      "arrayvalue1": ""
+    }
+  },
+  {
+    "input": "{\"key\": \"{\\\\\"key\\\\\\\":[\\\"value\\\\\\\"],\\\"key2\\\":\"value2\"}\"}",
+    "expected": {
+      "key": "{\"key\":[\"value\"],\"key2\":\"value2\"}"
+    }
+  },
+  {
+    "input": "{\"key\": , \"key2\": \"value2\"}",
+    "expected": {
+      "key": "",
+      "key2": "value2"
+    }
+  },
+  {
+    "input": "{\"array\":[{\"key\": \"value\"], \"key2\": \"value2\"}",
+    "expected": {
+      "array": [
+        {
+          "key": "value"
+        }
+      ],
+      "key2": "value2"
+    }
+  },
+  {
+    "input": "[{\"key\":\"value\"}},{\"key\":\"value\"}]",
+    "expected": [
+      {
+        "key": "value"
+      },
+      {
+        "key": "value"
+      }
+    ]
+  },
+  {
+    "input": "{'key': ['a':{'duplicated_key': 'duplicated_value', 'duplicated_key': 'duplicated_value'}]}",
+    "expected": {
+      "key": [
+        {
+          "a": {
+            "duplicated_key": "duplicated_value"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "input": "[{\"b\":\"v2\",\"b\":\"v2\"}]",
+    "expected": [
+      {
+        "b": "v2"
+      }
+    ]
+  },
+  {
+    "input": "{'item1', 'item2', 'item3'}",
+    "expected": [
+      "item1",
+      "item2",
+      "item3"
+    ]
+  },
+  {
+    "input": "{\\\"key\\\": \\\"value\\\"}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "[{5}s ",
+    "expected": [
+      [
+        5
+      ]
+    ]
+  },
+  {
+    "input": "{\"key\": \"value\"}, \"key2\": \"value2\"}",
+    "expected": {
+      "key": "value",
+      "key2": "value2"
+    }
+  },
+  {
+    "input": "{\"key\": \"value\"}, \"key2\": }",
+    "expected": {
+      "key": "value",
+      "key2": ""
+    }
+  },
+  {
+    "input": "{\"key\": \"value\"}, []",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{\"key\": \"value\"}, [\"abc\"]",
+    "expected": [
+      {
+        "key": "value"
+      },
+      [
+        "abc"
+      ]
+    ]
+  },
+  {
+    "input": "{\"key\": \"value\"}, {}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{\"key\": \"value\"}, \"\" : \"value2\"}",
+    "expected": {
+      "key": "value",
+      "": "value2"
+    }
+  },
+  {
+    "input": "{\"key\": \"value\"}, \"key2\" \"value2\"}",
+    "expected": {
+      "key": "value",
+      "key2": "value2"
+    }
+  },
+  {
+    "input": "{\"key1\": \"value1\"}, \"key2\": \"value2\", \"key3\": \"value3\"}",
+    "expected": {
+      "key1": "value1",
+      "key2": "value2",
+      "key3": "value3"
+    }
+  },
+  {
+    "input": "[]",
+    "expected": []
+  },
+  {
+    "input": "[1, 2, 3, 4]",
+    "expected": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  {
+    "input": "[",
+    "expected": []
+  },
+  {
+    "input": "[[1\n\n]",
+    "expected": [
+      [
+        1
+      ]
+    ]
+  },
+  {
+    "input": "[{]",
+    "expected": []
+  },
+  {
+    "input": "[\"",
+    "expected": []
+  },
+  {
+    "input": "[1, 2, 3,",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "input": "[1, 2, 3, ...]",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "input": "[1, 2, ... , 3]",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "input": "[1, 2, '...', 3]",
+    "expected": [
+      1,
+      2,
+      "...",
+      3
+    ]
+  },
+  {
+    "input": "[true, false, null, ...]",
+    "expected": [
+      true,
+      false,
+      null
+    ]
+  },
+  {
+    "input": "[\"a\" \"b\" \"c\" 1",
+    "expected": [
+      "a",
+      "b",
+      "c",
+      1
+    ]
+  },
+  {
+    "input": "{\"employees\":[\"John\", \"Anna\",",
+    "expected": {
+      "employees": [
+        "John",
+        "Anna"
+      ]
+    }
+  },
+  {
+    "input": "{\"employees\":[\"John\", \"Anna\", \"Peter",
+    "expected": {
+      "employees": [
+        "John",
+        "Anna",
+        "Peter"
+      ]
+    }
+  },
+  {
+    "input": "{\"key1\": {\"key2\": [1, 2, 3",
+    "expected": {
+      "key1": {
+        "key2": [
+          1,
+          2,
+          3
+        ]
+      }
+    }
+  },
+  {
+    "input": "{\"key\": [\"value]}",
+    "expected": {
+      "key": [
+        "value"
+      ]
+    }
+  },
+  {
+    "input": "[\"lorem \"ipsum\" sic\"]",
+    "expected": [
+      "lorem \"ipsum\" sic"
+    ]
+  },
+  {
+    "input": "{\"key1\": [\"value1\", \"value2\"}, \"key2\": [\"value3\", \"value4\"]}",
+    "expected": {
+      "key1": [
+        "value1",
+        "value2"
+      ],
+      "key2": [
+        "value3",
+        "value4"
+      ]
+    }
+  },
+  {
+    "input": "{\"headers\": [\"A\", \"B\", \"C\"], \"rows\": [[\"r1a\", \"r1b\", \"r1c\"], [\"r2a\", \"r2b\", \"r2c\"], \"r3a\", \"r3b\", \"r3c\"], [\"r4a\", \"r4b\", \"r4c\"], [\"r5a\", \"r5b\", \"r5c\"]]}",
+    "expected": {
+      "headers": [
+        "A",
+        "B",
+        "C"
+      ],
+      "rows": [
+        [
+          "r1a",
+          "r1b",
+          "r1c"
+        ],
+        [
+          "r2a",
+          "r2b",
+          "r2c"
+        ],
+        [
+          "r3a",
+          "r3b",
+          "r3c"
+        ],
+        [
+          "r4a",
+          "r4b",
+          "r4c"
+        ],
+        [
+          "r5a",
+          "r5b",
+          "r5c"
+        ]
+      ]
+    }
+  },
+  {
+    "input": "{\"key\": [\"value\" \"value1\" \"value2\"]}",
+    "expected": {
+      "key": [
+        "value",
+        "value1",
+        "value2"
+      ]
+    }
+  },
+  {
+    "input": "{\"key\": [\"lorem \"ipsum\" dolor \"sit\" amet, \"consectetur\" \", \"lorem \"ipsum\" dolor\", \"lorem\"]}",
+    "expected": {
+      "key": [
+        "lorem \"ipsum\" dolor \"sit\" amet, \"consectetur\" ",
+        "lorem \"ipsum\" dolor",
+        "lorem"
+      ]
+    }
+  },
+  {
+    "input": "{\"k\"e\"y\": \"value\"}",
+    "expected": {
+      "k\"e\"y": "value"
+    }
+  },
+  {
+    "input": "[\"key\":\"value\"}]",
+    "expected": [
+      {
+        "key": "value"
+      }
+    ]
+  },
+  {
+    "input": "[\"key\":\"value\"]",
+    "expected": [
+      {
+        "key": "value"
+      }
+    ]
+  },
+  {
+    "input": "[ \"key\":\"value\"]",
+    "expected": [
+      {
+        "key": "value"
+      }
+    ]
+  },
+  {
+    "input": "[{\"key\": \"value\", \"key",
+    "expected": [
+      {
+        "key": "value"
+      },
+      [
+        "key"
+      ]
+    ]
+  },
+  {
+    "input": "{'key1', 'key2'}",
+    "expected": [
+      "key1",
+      "key2"
+    ]
+  },
+  {
+    "input": "(\"a\", \"b\", \"c\")",
+    "expected": [
+      "a",
+      "b",
+      "c"
+    ]
+  },
+  {
+    "input": "((1, 2), (3, 4))",
+    "expected": [
+      [
+        1,
+        2
+      ],
+      [
+        3,
+        4
+      ]
+    ]
+  },
+  {
+    "input": "{\"coords\": (1, 2), \"ok\": true}",
+    "expected": {
+      "coords": [
+        1,
+        2
+      ],
+      "ok": true
+    }
+  },
+  {
+    "input": "{\"empty\": ()}",
+    "expected": {
+      "empty": []
+    }
+  },
+  {
+    "input": "(1)",
+    "expected": 1
+  },
+  {
+    "input": "(\"x\")",
+    "expected": "x"
+  },
+  {
+    "input": "{\"scalar_group\": (1)}",
+    "expected": {
+      "scalar_group": 1
+    }
+  },
+  {
+    "input": "{\"string_group\": (\"x\")}",
+    "expected": {
+      "string_group": "x"
+    }
+  },
+  {
+    "input": "[\"value1\" value2\", \"value3\"]",
+    "expected": [
+      "value1",
+      "value2",
+      "value3"
+    ]
+  },
+  {
+    "input": "{\"bad_one\":[\"Lorem Ipsum\", \"consectetur\" comment\" ], \"good_one\":[ \"elit\", \"sed\", \"tempor\"]}",
+    "expected": {
+      "bad_one": [
+        "Lorem Ipsum",
+        "consectetur",
+        "comment"
+      ],
+      "good_one": [
+        "elit",
+        "sed",
+        "tempor"
+      ]
+    }
+  },
+  {
+    "input": "{\"bad_one\": [\"Lorem Ipsum\",\"consectetur\" comment],\"good_one\": [\"elit\",\"sed\",\"tempor\"]}",
+    "expected": {
+      "bad_one": [
+        "Lorem Ipsum",
+        "consectetur",
+        "comment"
+      ],
+      "good_one": [
+        "elit",
+        "sed",
+        "tempor"
+      ]
+    }
+  },
+  {
+    "input": "1",
+    "expected": 1
+  },
+  {
+    "input": "1.2",
+    "expected": 1.2
+  },
+  {
+    "input": "{\"value\": 82_461_110}",
+    "expected": {
+      "value": 82461110
+    }
+  },
+  {
+    "input": "{\"value\": 1_234.5_6}",
+    "expected": {
+      "value": 1234.56
+    }
+  },
+  {
+    "input": " - { \"test_key\": [\"test_value\", \"test_value2\"] }",
+    "expected": {
+      "test_key": [
+        "test_value",
+        "test_value2"
+      ]
+    }
+  },
+  {
+    "input": "{\"key\": 1/3}",
+    "expected": {
+      "key": "1/3"
+    }
+  },
+  {
+    "input": "{\"key\": .25}",
+    "expected": {
+      "key": 0.25
+    }
+  },
+  {
+    "input": "{\"here\": \"now\", \"key\": 1/3, \"foo\": \"bar\"}",
+    "expected": {
+      "here": "now",
+      "key": "1/3",
+      "foo": "bar"
+    }
+  },
+  {
+    "input": "{\"key\": 12345/67890}",
+    "expected": {
+      "key": "12345/67890"
+    }
+  },
+  {
+    "input": "[105,12",
+    "expected": [
+      105,
+      12
+    ]
+  },
+  {
+    "input": "{\"key\", 105,12,",
+    "expected": {
+      "key": "105,12"
+    }
+  },
+  {
+    "input": "{\"key\": 1/3, \"foo\": \"bar\"}",
+    "expected": {
+      "key": "1/3",
+      "foo": "bar"
+    }
+  },
+  {
+    "input": "{\"key\": 10-20}",
+    "expected": {
+      "key": "10-20"
+    }
+  },
+  {
+    "input": "{\"key\": 1.1.1}",
+    "expected": {
+      "key": "1.1.1"
+    }
+  },
+  {
+    "input": "[- ",
+    "expected": []
+  },
+  {
+    "input": "{\"key\": 1. }",
+    "expected": {
+      "key": 1.0
+    }
+  },
+  {
+    "input": "{\"key\": 1e10 }",
+    "expected": {
+      "key": 10000000000.0
+    }
+  },
+  {
+    "input": "{\"key\": 1e }",
+    "expected": {
+      "key": 1
+    }
+  },
+  {
+    "input": "{\"key\": 1notanumber }",
+    "expected": {
+      "key": "1notanumber"
+    }
+  },
+  {
+    "input": "{\"rowId\": 57eeeeb1-450b-482c-81b9-4be77e95dee2}",
+    "expected": {
+      "rowId": "57eeeeb1-450b-482c-81b9-4be77e95dee2"
+    }
+  },
+  {
+    "input": "[1, 2notanumber]",
+    "expected": [
+      1,
+      "2notanumber"
+    ]
+  },
+  {
+    "input": "/* comment */ {\"key\": \"value\"}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{ \"key\": { \"key2\": \"value2\" // comment }, \"key3\": \"value3\" }",
+    "expected": {
+      "key": {
+        "key2": "value2"
+      }
+    }
+  },
+  {
+    "input": "{ \"key\": { \"key2\": \"value2\" // comment\n}, \"key3\": \"value3\" }",
+    "expected": {
+      "key": {
+        "key2": "value2"
+      },
+      "key3": "value3"
+    }
+  },
+  {
+    "input": "{ \"key\": { \"key2\": \"value2\" # comment }, \"key3\": \"value3\" }",
+    "expected": {
+      "key": {
+        "key2": "value2"
+      },
+      "key3": "value3"
+    }
+  },
+  {
+    "input": "{ \"key\": { \"key2\": \"value2\" /* comment */ }, \"key3\": \"value3\" }",
+    "expected": {
+      "key": {
+        "key2": "value2"
+      },
+      "key3": "value3"
+    }
+  },
+  {
+    "input": "[ \"value\", /* comment */ \"value2\" ]",
+    "expected": [
+      "value",
+      "value2"
+    ]
+  },
+  {
+    "input": "{ \"key\": \"value\" /* comment",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "\n    {\n        \"Changes\": [\n            //object a\n            {\n                \"Action\": \"1\"\n            },\n            //object b ]\n            {\n                \"Action\": \"2\"\n            },\n            //object c ]\n            {\n                \"Action\": \"3\"\n            }\n        ]\n    }\n    ",
+    "expected": {
+      "Changes": [
+        {
+          "Action": "1"
+        },
+        {
+          "Action": "2"
+        },
+        {
+          "Action": "3"
+        }
+      ]
+    }
+  },
+  {
+    "input": "{\"name\": \"John\", \"age\": 30, \"city\": \"New York\"}",
+    "expected": {
+      "name": "John",
+      "age": 30,
+      "city": "New York"
+    }
+  },
+  {
+    "input": "{\"employees\":[\"John\", \"Anna\", \"Peter\"]} ",
+    "expected": {
+      "employees": [
+        "John",
+        "Anna",
+        "Peter"
+      ]
+    }
+  },
+  {
+    "input": "{\"key\": \"value:value\"}",
+    "expected": {
+      "key": "value:value"
+    }
+  },
+  {
+    "input": "{\"text\": \"The quick brown fox,\"}",
+    "expected": {
+      "text": "The quick brown fox,"
+    }
+  },
+  {
+    "input": "{\"text\": \"The quick brown fox won't jump\"}",
+    "expected": {
+      "text": "The quick brown fox won't jump"
+    }
+  },
+  {
+    "input": "{\"key\": \"\"",
+    "expected": {
+      "key": ""
+    }
+  },
+  {
+    "input": "{\"key1\": {\"key2\": [1, 2, 3]}}",
+    "expected": {
+      "key1": {
+        "key2": [
+          1,
+          2,
+          3
+        ]
+      }
+    }
+  },
+  {
+    "input": "{\"key\": 12345678901234567890}",
+    "expected": {
+      "key": 12345678901234567890
+    }
+  },
+  {
+    "input": "{\"key\": \"value☺\"}",
+    "expected": {
+      "key": "value☺"
+    }
+  },
+  {
+    "input": "{\"key\": \"value\\nvalue\"}",
+    "expected": {
+      "key": "value\nvalue"
+    }
+  },
+  {
+    "input": "{\"key\": \"value\"}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "[]{}",
+    "expected": []
+  },
+  {
+    "input": "[]{\"key\":\"value\"}",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "{\"key\":\"value\"}[1,2,3,True]",
+    "expected": [
+      {
+        "key": "value"
+      },
+      [
+        1,
+        2,
+        3,
+        true
+      ]
+    ]
+  },
+  {
+    "input": "{\"key\":\"value\"}, {\"key\":\"value_after\"}",
+    "expected": [
+      {
+        "key": "value"
+      },
+      {
+        "key": "value_after"
+      }
+    ]
+  },
+  {
+    "input": "lorem ```json {\"key\":\"value\"} ``` ipsum ```json [1,2,3,True] ``` 42",
+    "expected": [
+      {
+        "key": "value"
+      },
+      [
+        1,
+        2,
+        3,
+        true
+      ]
+    ]
+  },
+  {
+    "input": "[{\"key\":\"value\"}][{\"key\":\"value_after\"}]",
+    "expected": [
+      {
+        "key": "value_after"
+      }
+    ]
+  },
+  {
+    "input": "\n         **Decision**: bla, bla (some clarification):\n\n        ```json\n        {\n          \"key\": \"value\"\n        }\n        ```\n        ",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "\n        (1) Keep this note in the explanation.\n\n        ```json\n        {\n          \"key\": \"value\"\n        }\n        ```\n        ",
+    "expected": {
+      "key": "value"
+    }
+  },
+  {
+    "input": "\n        Here is the tuple payload:\n\n        ```json\n        (1, 2)\n        ```\n        ",
+    "expected": [
+      1,
+      2
+    ]
+  },
+  {
+    "input": "{\"key\": true, \"key2\": false, \"key3\": null}",
+    "expected": {
+      "key": true,
+      "key2": false,
+      "key3": null
+    }
+  },
+  {
+    "input": "\n{\n  \"resourceType\": \"Bundle\",\n  \"id\": \"1\",\n  \"type\": \"collection\",\n  \"entry\": [\n    {\n      \"resource\": {\n        \"resourceType\": \"Patient\",\n        \"id\": \"1\",\n        \"name\": [\n          {\"use\": \"official\", \"family\": \"Corwin\", \"given\": [\"Keisha\", \"Sunny\"], \"prefix\": [\"Mrs.\"},\n          {\"use\": \"maiden\", \"family\": \"Goodwin\", \"given\": [\"Keisha\", \"Sunny\"], \"prefix\": [\"Mrs.\"]}\n        ]\n      }\n    }\n  ]\n}\n",
+    "expected": {
+      "resourceType": "Bundle",
+      "id": "1",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "1",
+            "name": [
+              {
+                "use": "official",
+                "family": "Corwin",
+                "given": [
+                  "Keisha",
+                  "Sunny"
+                ],
+                "prefix": [
+                  "Mrs."
+                ]
+              },
+              {
+                "use": "maiden",
+                "family": "Goodwin",
+                "given": [
+                  "Keisha",
+                  "Sunny"
+                ],
+                "prefix": [
+                  "Mrs."
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "input": "{\n\"html\": \"<h3 id=\"aaa\">Waarom meer dan 200 Technical Experts - \"Passie voor techniek\"?</h3>\"}",
+    "expected": {
+      "html": "<h3 id=\"aaa\">Waarom meer dan 200 Technical Experts - \"Passie voor techniek\"?</h3>"
+    }
+  },
+  {
+    "input": "\n        [\n            {\n                \"foo\": \"Foo bar baz\",\n                \"tag\": \"#foo-bar-baz\"\n            },\n            {\n                \"foo\": \"foo bar \"foobar\" foo bar baz.\",\n                \"tag\": \"#foo-bar-foobar\"\n            }\n        ]\n        ",
+    "expected": [
+      {
+        "foo": "Foo bar baz",
+        "tag": "#foo-bar-baz"
+      },
+      {
+        "foo": "foo bar \"foobar\" foo bar baz.",
+        "tag": "#foo-bar-foobar"
+      }
+    ]
+  },
+  {
+    "input": "{\"key\": true, \"key2\": false, \"key3\": }",
+    "expected": {
+      "key": true,
+      "key2": false,
+      "key3": ""
+    }
+  },
+  {
+    "input": "{'test_中国人_ascii':'统一码'}",
+    "expected": {
+      "test_中国人_ascii": "统一码"
+    }
+  },
+  {
+    "input": "{\"key\": \"val\\",
+    "expected": {
+      "key": "val\\"
+    }
+  },
+  {
+    "input": "{\"key\": \"val\\n",
+    "expected": {
+      "key": "val"
+    }
+  },
+  {
+    "input": "{\"key\": \"val\\n123,`key2:value2",
+    "expected": {
+      "key": "val\n123",
+      "key2": "value2"
+    }
+  }
+]

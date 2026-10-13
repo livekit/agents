@@ -15,7 +15,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import Agent, AgentSession, RunContext, function_tool, llm
+from livekit.agents import Agent, LiveSession, RunContext, function_tool, llm
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.telemetry import gen_ai, input_delta, set_tracer_provider, trace_types, tracer
 
@@ -518,7 +518,7 @@ async def test_session_without_input_delta_records_full_input(
 async def test_fallback_records_input_on_the_provider_span_only(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    session: AgentSession = create_session(_two_turns_with_a_tool(), speed_factor=2.0)
+    session: LiveSession = create_session(_two_turns_with_a_tool(), speed_factor=2.0)
     assert isinstance(session.llm, llm.LLM)
     agent = _WeatherAgent(llm=llm.FallbackAdapter([session.llm]))
     await asyncio.wait_for(

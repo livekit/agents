@@ -1,0 +1,799 @@
+//! One input into what the product sees: a command, a stream's next piece, a fake's answer, or a
+//! wait.
+//!
+//! Every input is recorded, taken or refused. A reference that no longer resolves -- a speech the
+//! driver has forgotten, a hook already finished -- makes the input a refused attempt. Nothing is
+//! invented to stand in for it, because a command carrying an id the driver never issued is a
+//! different test from the one the case asked for.
+use super::start::{
+    Llm, Stt, Tts, frame, given, history, instructions, patch, speaker_filter, toolset, vad_metrics,
+};
+use super::*;
+
+impl Run {
+    /// Apply one input, then write down everything that became true because of it.
+    ///
+    /// Every input is recorded, taken or refused. A delivery to a receiver the product has already
+    /// closed is a fact about the run, not an error, and the case is never steered around one.
+    pub async fn apply(&mut self, input: &Input) {
+        // `VOICE_TRACE=1` narrates every input as it is applied, whichever phase sends it: the
+        // way to find the one a run stops answering on.
+        if std::env::var_os("VOICE_TRACE").is_some() {
+            eprintln!("> {input:?}");
+        }
+        let at = self.stamps.next();
+        // The synchroniser closes with the session, as the session layer closes its own: its
+        // pacing task must be gone before the driver's close is judged for what it left behind.
+        if let Input::Close { .. } = input
+            && let Some(sync) = self.sync.take()
+        {
+            sync.aclose().await;
+        }
+        let accepted = match input {
+            Input::Advance { ms } => {
+                tokio::time::sleep(Duration::from_millis(ms.0)).await;
+                true
+            }
+            Input::AwaitAnswer { answer } => self.await_answer(answer.nth).await,
+            Input::AwaitSpeech { speech } => self.await_speech(speech.nth).await,
+            Input::AwaitExit {} => self.await_exit().await,
+            Input::Release {} => self.phase(at, Phase::Releasing),
+            Input::Settle {} => self.phase(at, Phase::Settling),
+            Input::FeedText { .. } | Input::FeedAudio { .. } | Input::FeedEnd { .. } => {
+                self.feed(at, input)
+            }
+            Input::MicFrames { mic, chunks } => self.speak(mic.nth, chunks.0),
+            Input::TtsOutage { down } => {
+                self.registry.set_voice_down(*down);
+                true
+            }
+            Input::Room { event } => self.room_event(*event),
+            _ if fakes::boundary_of(input).is_some() => self.deliver(at, input),
+            _ => self.call(at, input),
+        };
+        self.record.record_applied(at, input.clone(), accepted);
+        self.collect();
+    }
+
+    /// Enter a phase. A progress deadline starts at `Settling` and not before, so both marks are
+    /// kept: releasing advances virtual time to let the driver's own timers fire, which is work
+    /// the run asked for rather than time the driver spent stuck.
+    fn phase(&mut self, at: Observed, phase: Phase) -> bool {
+        self.record.enter_phase(phase);
+        if phase >= Phase::Settling {
+            self.record.mark_settling(at);
+        } else {
+            self.record.mark_released(at);
+        }
+        true
+    }
+}
+
+// ==============================================================================================
+// Sending a command
+// ==============================================================================================
+
+/// An answer that arrived, plus the live handle it carried, which only this module keeps.
+pub(super) struct Settled {
+    pub(super) answer: Answer,
+    pub(super) handle: Option<Arc<SpeechHandle>>,
+}
+
+impl Settled {
+    fn of(answer: Answer) -> Self {
+        Settled { answer, handle: None }
+    }
+    /// The channel closed without an answer. Recorded as an outcome, because a caller left
+    /// waiting forever is exactly what several rules are looking for.
+    fn lost() -> Self {
+        Settled::of(Answer::Lost)
+    }
+}
+
+/// One real answer receiver per command that carries one, kept until it answers or closes. Which
+/// variant it is decides how the value is spelled in the recording, and nothing else -- so the
+/// table below is the whole of it, and both the polling and the awaiting form come from it.
+macro_rules! answers {
+    ($($variant:ident($carried:ty) $value:pat => $settled:expr;)*) => {
+        pub(super) enum Pending { $($variant(oneshot::Receiver<$carried>)),* }
+
+        impl Pending {
+            pub(super) fn try_recv(&mut self) -> Option<Settled> {
+                use oneshot::error::TryRecvError::*;
+                match self {$(
+                    Pending::$variant(rx) => match rx.try_recv() {
+                        Ok($value) => Some($settled),
+                        Err(Empty) => None,
+                        Err(Closed) => Some(Settled::lost()),
+                    },
+                )*}
+            }
+
+            pub(super) async fn recv(&mut self) -> Settled {
+                match self {$(
+                    Pending::$variant(rx) => match rx.await {
+                        Ok($value) => $settled,
+                        Err(_) => Settled::lost(),
+                    },
+                )*}
+            }
+        }
+    };
+}
+
+answers! {
+    Speech(Arc<SpeechHandle>) h => Settled { answer: Answer::Speech(h.id().0), handle: Some(h) };
+    Interrupt(Result<(), InterruptRefusal>) r =>
+        Settled::of(r.map_or_else(Answer::InterruptRefused, |()| Answer::InterruptOk));
+    Idle(Result<(), IdleRefused>) r =>
+        Settled::of(r.map_or_else(Answer::IdleRefused, |()| Answer::IdleOk));
+    Hold(Result<HoldId, IdleRefused>) r =>
+        Settled::of(r.map_or_else(Answer::IdleRefused, |hold| Answer::Hold(hold.0)));
+    Commit(String) text => Settled::of(Answer::Committed(text));
+    Handoff(Result<(), HandoffRefused>) r =>
+        Settled::of(r.map_or_else(Answer::HandoffRefused, |()| Answer::HandoffOk));
+    Drain(Result<(), DrainRefused>) r =>
+        Settled::of(r.map_or_else(Answer::DrainRefused, |()| Answer::DrainOk));
+    Dtmf(DtmfOutcome) outcome => Settled::of(Answer::Dtmf(outcome));
+}
+
+/// What a hook answers with, as the driver takes it.
+fn hook_outcome(answer: HookAnswer, text: String) -> HookOutcome {
+    match answer {
+        HookAnswer::Returned => HookOutcome::Returned,
+        HookAnswer::Failed => HookOutcome::Failed,
+        HookAnswer::TurnInstructions => HookOutcome::Turn(vec![TurnEdit::UpdateInstructions(text)]),
+        HookAnswer::TurnStop => HookOutcome::Turn(vec![TurnEdit::StopResponse]),
+        HookAnswer::Rendered => HookOutcome::Rendered(text),
+        HookAnswer::Filler => HookOutcome::Filler { text: Some(text), spoke: false },
+    }
+}
+
+/// A `Ref` is the n-th resource of its kind; the production identity is whatever the run
+macro_rules! resolvers {
+    ($($name:ident: $marker:ident -> $id:ident($ty:ty);)*) => {
+        impl Run {$(
+            fn $name(&self, reference: Ref<crate::input::$marker>) -> Option<$ty> {
+                match self.record.resource(Kind::$marker, reference.nth)?.id() {
+                    Id::$id(id) => Some(id),
+                    _ => None,
+                }
+            }
+        )*}
+    };
+}
+
+resolvers! {
+    speech_id: Speech -> Speech(SpeechId);
+    hold_id: Hold -> Hold(HoldId);
+    filler_id: Filler -> Filler(FillerId);
+    hook_id: Hook -> Hook(HookId);
+}
+
+impl Run {
+    /// One thing the room did, on whichever of its two channels reports it. Refused by a session
+    /// built without room legs: there is no room, so nothing happened in it.
+    fn room_event(&mut self, event: RoomIn) -> bool {
+        let who = || lk_agents_rtc::ParticipantIdentity::from("caller");
+        let reason = lk_agents_rtc::DisconnectReason::ClientInitiated;
+        match event {
+            RoomIn::Linked => self
+                .room_io
+                .send(RoomIoEvent::ParticipantLinked(ParticipantLinked { identity: who() }))
+                .is_ok(),
+            RoomIn::Unlinked => self
+                .room_io
+                .send(RoomIoEvent::ParticipantUnlinked(ParticipantUnlinked {
+                    identity: who(),
+                    reason,
+                }))
+                .is_ok(),
+            RoomIn::StateChanged => self
+                .room
+                .send(RoomEvent::ConnectionStateChanged {
+                    state: lk_agents_rtc::ConnectionState::Reconnecting,
+                })
+                .is_ok(),
+            RoomIn::Closed => self.room.send(RoomEvent::Close { reason }).is_ok(),
+        }
+    }
+
+    /// Turn one input into the production command it mirrors and enqueue it.
+    ///
+    /// A reference that no longer resolves -- a speech the driver has forgotten, a hook already
+    /// finished -- makes the input a refused attempt. Nothing is invented to stand in for it,
+    /// because a command carrying an id the driver never issued is a different test from the one
+    /// the case asked for.
+    fn call(&mut self, at: Observed, input: &Input) -> bool {
+        let mut waiting: Option<Pending> = None;
+        let mut stream: Option<(bool, Feeding)> = None;
+        let registry = self.registry.clone();
+
+        let command: Command = match input {
+            Input::Say { text: AgentText(text), input: say, allow, to_ctx } => {
+                let (handle, rx) = oneshot::channel();
+                waiting = Some(Pending::Speech(rx));
+                let text = match say {
+                    SayInput::Words => SayText::Text(text.clone()),
+                    SayInput::TextStream => {
+                        let (sender, receiver) = mpsc::channel(256);
+                        stream = Some((false, Feeding::Text(sender)));
+                        SayText::Stream(receiver)
+                    }
+                    SayInput::Audio => {
+                        let (sender, rx) = mpsc::channel(256);
+                        stream = Some((true, Feeding::Audio { sender, chunks: 0 }));
+                        SayText::Audio { text: text.clone(), rx }
+                    }
+                };
+                let (allow_interruptions, add_to_chat_ctx) = (*allow, *to_ctx);
+                SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, handle }.into()
+            }
+            Input::GenerateReply { user_input, instructions, allow } => {
+                let (handle, rx) = oneshot::channel();
+                waiting = Some(Pending::Speech(rx));
+                SpeechCommand::GenerateReply {
+                    user_input: user_input.clone().map(|UserText(t)| t),
+                    instructions: instructions.clone().map(|AgentText(t)| t),
+                    allow_interruptions: *allow,
+                    tool_choice: None,
+                    chat_ctx: None,
+                    toolset: None,
+                    on_enter: false,
+                    handle,
+                }
+                .into()
+            }
+            Input::Interrupt { force, wait } => {
+                let done = wait.then(|| {
+                    let (tx, rx) = oneshot::channel();
+                    waiting = Some(Pending::Interrupt(rx));
+                    tx
+                });
+                SpeechCommand::Interrupt { force: *force, done }.into()
+            }
+            Input::InterruptSpeech { speech, force } => {
+                let Some(speech) = self.speech_id(*speech) else { return false };
+                SpeechCommand::InterruptSpeech { speech, force: *force }.into()
+            }
+            Input::SetAllowInterruptions { speech, allow } => {
+                let Some(speech) = self.speech_id(*speech) else { return false };
+                SpeechCommand::SetAllowInterruptions { speech, allow: *allow }.into()
+            }
+            Input::CommitUserTurn { transcript_timeout, stt_flush, skip_reply } => {
+                let (done, rx) = oneshot::channel();
+                waiting = Some(Pending::Commit(rx));
+                SpeechCommand::CommitUserTurn {
+                    transcript_timeout: Duration::from_millis(transcript_timeout.0),
+                    stt_flush_duration: Duration::from_millis(stt_flush.0),
+                    skip_reply: *skip_reply,
+                    done,
+                }
+                .into()
+            }
+            Input::WaitForIdle { hold } => {
+                let hold = match hold.map(|r| self.hold_id(r)) {
+                    Some(None) => return false,
+                    given => given.flatten(),
+                };
+                let (done, rx) = oneshot::channel();
+                waiting = Some(Pending::Idle(rx));
+                SpeechCommand::WaitForIdle { hold, done }.into()
+            }
+            Input::HoldFloor {} => {
+                let (done, rx) = oneshot::channel();
+                waiting = Some(Pending::Hold(rx));
+                SpeechCommand::HoldFloor { done }.into()
+            }
+            Input::ReleaseFloor { hold } => {
+                let Some(hold) = self.hold_id(*hold) else { return false };
+                SpeechCommand::ReleaseFloor { hold }.into()
+            }
+            Input::ClaimUserTurn {} => SpeechCommand::ClaimUserTurn.into(),
+            Input::ReleaseUserTurn {} => SpeechCommand::ReleaseUserTurn.into(),
+            Input::SetRunOutput { speech, ok } => {
+                let Some(speech) = self.speech_id(*speech) else { return false };
+                let host = self.host_ref();
+                let output = if *ok { RunOutput::Value(host) } else { RunOutput::Error(host) };
+                SpeechCommand::SetRunOutput { speech, output }.into()
+            }
+            Input::ToolUpdate { tool, progress } => {
+                let Some(call_id) = self.tool_call_id(*tool) else { return false };
+                let update = match progress {
+                    Some(AgentText(m)) => {
+                        ToolUpdate::Progress { raw: m.clone(), message: m.clone() }
+                    }
+                    None => ToolUpdate::Final {
+                        answer: Answered::Returned { value: None, agents: vec![] },
+                    },
+                };
+                SpeechCommand::ToolUpdate { call_id, update }.into()
+            }
+            Input::FillerStart { tool, speech, delay, interval, text } => {
+                let (Some(call_id), Some(speech)) =
+                    (self.tool_call_id(*tool), self.speech_id(*speech))
+                else {
+                    return false;
+                };
+                let id = FillerId(self.next_filler);
+                self.next_filler += 1;
+                SpeechCommand::FillerStart {
+                    id,
+                    call_id,
+                    speech,
+                    delay: Duration::from_millis(delay.0),
+                    interval: interval.map(|ms| Duration::from_millis(ms.0)),
+                    max_steps: None,
+                    source: text
+                        .clone()
+                        .map_or(FillerSource::Host, |AgentText(t)| FillerSource::Text(t)),
+                }
+                .into()
+            }
+            Input::FillerStop { filler } => {
+                let Some(id) = self.filler_id(*filler) else { return false };
+                SpeechCommand::FillerStop { id }.into()
+            }
+            Input::PauseAuthorization {} => SpeechCommand::PauseAuthorization.into(),
+            Input::ResumeAuthorization {} => SpeechCommand::ResumeAuthorization.into(),
+
+            Input::CommitTurn { skip_reply } => {
+                TurnCommand::Commit { skip_reply: *skip_reply }.into()
+            }
+            Input::ClearTurn {} => TurnCommand::Clear.into(),
+            Input::Configure { knob, mode, ms, on, words } => {
+                TurnCommand::Configure(patch(*knob, *mode, *ms, *on, *words)).into()
+            }
+
+            Input::Handoff { agent, instructions, tools, pause_previous, resume } => {
+                let (done, rx) = oneshot::channel();
+                waiting = Some(Pending::Handoff(rx));
+                let mut frame = frame(&registry, agent, &instructions.0, tools);
+                frame.previous =
+                    if *pause_previous { PreviousActivity::Pause } else { PreviousActivity::Close };
+                frame.next = if *resume { NewActivity::Resume } else { NewActivity::Start };
+                frame.done = Some(done);
+                FrameCommand::Update(Box::new(frame)).into()
+            }
+            Input::SetSpeakerFilter { enabled } => {
+                FrameCommand::SetSpeakerFilter(enabled.then(speaker_filter)).into()
+            }
+            Input::UpdateInstructions { text: AgentText(text) } => {
+                FrameCommand::UpdateInstructions(instructions(text)).into()
+            }
+            Input::UpdateTools { tools } => {
+                FrameCommand::UpdateTools(toolset(&registry, tools)).into()
+            }
+            Input::SetAudioInput { attach } => {
+                let source = attach.then(|| {
+                    let (mic, frames) = fakes::FakeAudioInput::new();
+                    let nth = self.registry.new_mic();
+                    self.mics.insert(nth, (frames, 0));
+                    HostAudio(mic as _)
+                });
+                if !attach {
+                    for (nth, _) in std::mem::take(&mut self.mics) {
+                        self.record.close(at, Kind::Mic, nth);
+                    }
+                }
+                FrameCommand::SetAudioInput(source).into()
+            }
+            Input::SetVideoInput { attach } => {
+                let source = attach.then(|| {
+                    HostVideo(fakes::FakeVideoInput::new(&registry, self.refs.clone()) as _)
+                });
+                FrameCommand::SetVideoInput(source).into()
+            }
+            Input::SetIoEnabled { leg, enabled } => {
+                FrameCommand::SetIoEnabled { leg: *leg, enabled: *enabled }.into()
+            }
+            Input::UpdateChatCtx { items, text: AgentText(text) } => {
+                FrameCommand::UpdateChatCtx(history(items, text)).into()
+            }
+            Input::SetAudioOutput { attach } => {
+                let out = attach.then(|| {
+                    let pausable = self.setup.pausable_output;
+                    HostAudioOut(fakes::FakeAudioOutput::new(registry.clone(), pausable))
+                });
+                FrameCommand::SetAudioOutput(out).into()
+            }
+            Input::SetTranscriptionOutput { attach } => {
+                let out = attach.then(|| HostTextOut(fakes::FakeTextOutput::new(registry.clone())));
+                FrameCommand::SetTranscriptionOutput(out).into()
+            }
+            Input::UpdateModels { legs } => {
+                let (stt, llm, tts) = match legs {
+                    Legs::Stt => (true, false, false),
+                    Legs::Llm => (false, true, false),
+                    Legs::Tts => (false, false, true),
+                    Legs::LlmAndTts => (false, true, true),
+                    Legs::All => (true, true, true),
+                };
+                FrameCommand::UpdateModels {
+                    stt: given(stt.then(|| {
+                        let connect = Duration::from_millis(self.setup.connect_ms.unwrap_or(0));
+                        fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>
+                    })),
+                    llm: given(llm.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>)),
+                    tts: given(tts.then(|| fakes::FakeTts::new(registry.clone()) as Arc<Tts>)),
+                    vad: Maybe::NotGiven,
+                }
+                .into()
+            }
+
+            Input::Drain { wait } => {
+                let done = wait.then(|| {
+                    let (tx, rx) = oneshot::channel();
+                    waiting = Some(Pending::Drain(rx));
+                    tx
+                });
+                FrameCommand::Drain { done }.into()
+            }
+            Input::PushVideo {} => Command::Video(ImageContent {
+                id: "img_case".into(),
+                image: ImageSource::Frame(MediaRef::new(self.record.now().seq, &self.refs)),
+                inference_width: None,
+                inference_height: None,
+                inference_detail: Default::default(),
+                mime_type: None,
+            }),
+            Input::Close { drain } => {
+                self.record.enter_phase(Phase::Closing);
+                Close { drain: *drain, ..Default::default() }.into()
+            }
+            Input::HookDone { hook, answer, text: AgentText(text) } => {
+                let Some(id) = self.hook_id(*hook) else { return false };
+                Command::HookDone { id, outcome: hook_outcome(*answer, text.clone()) }
+            }
+            // The hook is gone from the live set, but the record still knows its id: the answer
+            // reaches the driver as a host's late answer does.
+            Input::HookDoneLate { hook, answer, text: AgentText(text) } => {
+                let Some(id) = self.hook_id(Ref::new(hook.nth)) else { return false };
+                Command::HookDone { id, outcome: hook_outcome(*answer, text.clone()) }
+            }
+            Input::HostMetrics {} => Command::HostMetrics(Box::new(vad_metrics())),
+            Input::Ivr { input, silence, text: UserText(text) } => match input {
+                IvrInput::Start => {
+                    IvrCommand::Start { max_silence: Duration::from_millis(silence.0) }.into()
+                }
+                IvrInput::SeedTranscript => {
+                    IvrCommand::SeedTranscript { text: text.clone() }.into()
+                }
+                IvrInput::Close => IvrCommand::Close.into(),
+            },
+            Input::SetStaticKeyterms { terms } => Command::SetStaticKeyterms(terms.clone()),
+            Input::Dtmf { input, key, digits, confirm, timeout } => match input {
+                DtmfInput::Start => {
+                    let Ok(collector) = DtmfCollector::new(
+                        digits.0 as usize + 1,
+                        *confirm,
+                        Duration::from_millis(timeout.0),
+                        DtmfEvent::Pound,
+                    ) else {
+                        return false;
+                    };
+                    let (done, rx) = oneshot::channel();
+                    waiting = Some(Pending::Dtmf(rx));
+                    DtmfCommand::Start { collector, done }.into()
+                }
+                DtmfInput::Digit => DtmfCommand::Digit { digit: key.digit().to_owned() }.into(),
+                DtmfInput::Stop => DtmfCommand::Stop.into(),
+            },
+            Input::Task { agent, speech } => {
+                let speech = match speech.map(|r| self.speech_id(r)) {
+                    Some(None) => return false,
+                    given => given.flatten(),
+                };
+                let task_id = format!("task_{:04}", self.next_task);
+                self.next_task += 1;
+                TaskCommand::Enter(Box::new(TaskEntry {
+                    handle: TaskHandle::new(task_id.into()),
+                    frame: frame(&registry, agent, &format!("You are {agent}."), &[]),
+                    speech,
+                    preserve_function_call_history: true,
+                    parent: None,
+                }))
+                .into()
+            }
+            Input::Recorder { attach } => Command::Recorder(if *attach {
+                RecorderCommand::Attach(HostRecorder(fakes::FakeRecorder::new(registry.clone())))
+            } else {
+                RecorderCommand::Detach
+            }),
+            Input::Run { user_input, expects_output, retries } => Command::Run(Box::new(RunSpec {
+                user_input: user_input.clone().map(|UserText(t)| t),
+                expects_output: *expects_output,
+                max_retries: retries.0,
+                retry_instructions: "Please try again.".into(),
+            })),
+            _ => unreachable!("{input:?} is not a command"),
+        };
+
+        // A command the driver never received made no call: the loop is gone, the input is
+        // refused, and nothing is opened for it. Only a command the driver has opens the stream it
+        // feeds and the call it will answer.
+        if self.session.api.send(command).is_err() {
+            return false;
+        }
+        if let Some((audio, feeding)) = stream {
+            let nth = self.record.open(at, Kind::Stream, Id::Pending, Detail::Stream { audio });
+            self.streams.insert(nth, feeding);
+        }
+        if let Some(waiting) = waiting {
+            let nth = self.record.open(at, Kind::Answer, Id::Pending, Detail::None);
+            self.pending.insert(nth, waiting);
+        }
+        true
+    }
+
+    /// The live tool invocation running under this call id.
+    pub(super) fn tool_by_call_id(&self, call_id: &str) -> Option<u32> {
+        self.record.live().of(Kind::Tool).into_iter().find(|nth| {
+            matches!(self.record.resource(Kind::Tool, *nth).map(|r| r.detail()),
+                Some(Detail::Tool { call_id: id, .. }) if id == call_id)
+        })
+    }
+
+    /// Whether this tool answered `Detached` and is still running: what the host ends with a
+    /// final `ToolUpdate` rather than a second answer.
+    pub fn tool_detached(&self, nth: u32) -> bool {
+        matches!(self.controls.get(&Slot { kind: Kind::Tool, nth }), Some(Control::Running))
+    }
+
+    fn tool_call_id(&self, reference: Ref<crate::input::Tool>) -> Option<String> {
+        match self.record.resource(Kind::Tool, reference.nth)?.detail() {
+            Detail::Tool { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        }
+    }
+
+    /// The host's side of a `RunOutput`: an object the driver only ever hands back.
+    /// recorded when it opened that one. Resolution can fail, and a failure is the case pointing
+    /// at something that is no longer there -- never a reason to substitute anything.
+    fn host_ref(&self) -> HostRef {
+        HostRef::new(self.record.now().seq, &self.refs)
+    }
+}
+
+// ==============================================================================================
+// Feeding a stream, answering a fake
+// ==============================================================================================
+
+/// A stream a `say` opened, until the case ends it with `FeedEnd`.
+pub(super) enum Feeding {
+    Text(mpsc::Sender<String>),
+    Audio { sender: mpsc::Sender<AudioFrame>, chunks: u16 },
+}
+
+impl Run {
+    /// Close every utterance still open on a recognition stream.
+    fn end_utterances_on(&mut self, at: Observed, stt: u32) {
+        let open: Vec<u32> = self
+            .utterances
+            .iter()
+            .filter(|(nth, on)| **on == stt && self.record.live().has(Kind::Utterance, **nth))
+            .map(|(nth, _)| *nth)
+            .collect();
+        for nth in open {
+            self.record.close(at, Kind::Utterance, nth);
+        }
+    }
+
+    /// Push tagged frames into an attached microphone. The driver's audio leg forwards them to
+    /// every provider listening, which is where they are recorded.
+    fn speak(&mut self, mic: u32, chunks: u32) -> bool {
+        let Some((sender, count)) = self.mics.get_mut(&mic) else { return false };
+        for _ in 0..chunks {
+            let sample = Tag::mic(mic, *count % (Tag::MAX_CHUNK + 1));
+            let data = sample.to_le_bytes().repeat(SAMPLES_PER_CHUNK);
+            let frame = AudioFrame::new(data, SAMPLE_RATE, 1, SAMPLES_PER_CHUNK as u32);
+            if sender.send(frame).is_err() {
+                return false;
+            }
+            *count = count.wrapping_add(1);
+        }
+        true
+    }
+
+    /// Push one piece of a `say`'s input stream. Each audio chunk carries its stream and its index
+    /// in its samples, so what reaches the sink can be decoded back to what the case fed.
+    fn feed(&mut self, at: Observed, input: &Input) -> bool {
+        use mpsc::error::TrySendError::*;
+        match input {
+            Input::FeedText { stream, text: AgentText(text) } => {
+                let Some(Feeding::Text(sender)) = self.streams.get_mut(&stream.nth) else {
+                    return false;
+                };
+                match sender.try_send(text.clone()) {
+                    Ok(()) => true,
+                    Err(Closed(_)) => false,
+                    Err(Full(_)) => panic!("fixture text input full"),
+                }
+            }
+            Input::FeedAudio { stream, chunks: Count(count) } => {
+                let nth = stream.nth;
+                let Some(Feeding::Audio { sender, chunks }) = self.streams.get_mut(&nth) else {
+                    return false;
+                };
+                for _ in 0..*count {
+                    let sample = Tag::fed(nth, *chunks);
+                    let data = sample.to_le_bytes().repeat(SAMPLES_PER_CHUNK);
+                    let frame = AudioFrame::new(data, SAMPLE_RATE, 1, SAMPLES_PER_CHUNK as u32);
+                    match sender.try_send(frame) {
+                        Ok(()) => *chunks += 1,
+                        Err(Closed(_)) => return false,
+                        Err(Full(_)) => panic!("fixture audio input full"),
+                    }
+                }
+                true
+            }
+            Input::FeedEnd { stream } => {
+                if self.streams.remove(&stream.nth).is_none() {
+                    return false;
+                }
+                self.record.close(at, Kind::Stream, stream.nth);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Hand one answer to the fake waiting for it. An utterance is reached through the recognition
+    /// stream it was opened on, which is the only indirection here: the recogniser is the thing
+    /// with a channel, and an utterance is a span of what the case sent down it.
+    fn deliver(&mut self, at: Observed, input: &Input) -> bool {
+        let (slot, utterance) = match input {
+            Input::LlmText { chat, .. }
+            | Input::LlmToolCall { chat, .. }
+            | Input::LlmEnd { chat }
+            | Input::LlmFail { chat } => (Slot { kind: Kind::Chat, nth: chat.nth }, None),
+            Input::TtsHold { tts } | Input::TtsRelease { tts } | Input::TtsFail { tts } => {
+                (Slot { kind: Kind::Tts, nth: tts.nth }, None)
+            }
+            Input::SttStart { stt } | Input::SttFail { stt } => {
+                (Slot { kind: Kind::Stt, nth: stt.nth }, None)
+            }
+            Input::SttInterim { utterance, .. }
+            | Input::SttPreflight { utterance, .. }
+            | Input::SttFinal { utterance, .. }
+            | Input::SttEnd { utterance } => {
+                let Some(stt) = self.utterances.get(&utterance.nth).copied() else { return false };
+                (Slot { kind: Kind::Stt, nth: stt }, Some(utterance.nth))
+            }
+            Input::VadInference { vad, .. }
+            | Input::VadStart { vad, .. }
+            | Input::VadEnd { vad, .. } => (Slot { kind: Kind::Vad, nth: vad.nth }, None),
+            Input::EotAnswer { prediction, .. } | Input::EotFail { prediction } => {
+                (Slot { kind: Kind::Prediction, nth: prediction.nth }, None)
+            }
+            Input::OverlapVerdict { port, .. } | Input::OverlapFail { port } => {
+                (Slot { kind: Kind::Interruption, nth: port.nth }, None)
+            }
+            Input::ToolAnswered { tool, .. } => (Slot { kind: Kind::Tool, nth: tool.nth }, None),
+            Input::PlayoutStarted { segment }
+            | Input::PlayoutFinished { segment }
+            | Input::PlayoutProgressed { segment, .. } => {
+                (Slot { kind: Kind::Segment, nth: segment.nth }, None)
+            }
+            Input::SinkReset { output } => (Slot { kind: Kind::Output, nth: output.nth }, None),
+            Input::VideoFrames { video, .. } => (Slot { kind: Kind::Video, nth: video.nth }, None),
+            Input::RealtimeEvent { socket, .. } => {
+                (Slot { kind: Kind::Realtime, nth: socket.nth }, None)
+            }
+            _ => return false,
+        };
+        if !self.record.live().has(slot.kind, slot.nth) || !self.deliver_to(slot, input) {
+            return false;
+        }
+        match input {
+            // An utterance runs from the start of speech to whatever ends it; the recogniser keeps
+            // its stream either way, which is why only the utterance closes here.
+            // A new start of speech on a stream supersedes whatever utterance was still open on it.
+            Input::SttStart { .. } => {
+                self.end_utterances_on(at, slot.nth);
+                let nth = self.record.open(at, Kind::Utterance, Id::Slot(slot.nth), Detail::None);
+                self.utterances.insert(nth, slot.nth);
+            }
+            // A final transcript does not end the utterance: a real provider sends its
+            // end-of-speech after the final, and the driver must see both in that order.
+            Input::SttEnd { .. } => {
+                if let Some(nth) = utterance {
+                    self.record.close(at, Kind::Utterance, nth);
+                }
+            }
+            Input::SttFail { .. } => self.end_utterances_on(at, slot.nth),
+            _ => {}
+        }
+        true
+    }
+
+    /// Hand one input to the fake behind a slot, through the control this run owns.
+    ///
+    /// No lock is taken here and none is held inside: the fake writes what it did to a channel
+    /// this run drains afterwards. A fake recording from inside the call it is being given is
+    /// therefore ordinary, which is the whole reason the controls live here and not beside the
+    /// fakes' own records.
+    fn deliver_to(&mut self, slot: Slot, input: &Input) -> bool {
+        if fakes::boundary_of(input) != Some(slot.kind) {
+            return false;
+        }
+        let Some(control) = self.controls.remove(&slot) else {
+            return false;
+        };
+        let (accepted, keep) = self.registry.deliver(slot, control, input);
+        if let Some(control) = keep {
+            self.controls.insert(slot, control);
+        }
+        accepted
+    }
+}
+
+// ==============================================================================================
+// Waiting
+// ==============================================================================================
+
+/// How long one awaited thing gets, in virtual milliseconds. Not a production SLA: every fake
+/// answers the moment it is released, so anything still pending after this is stuck.
+pub const BUDGET_MS: u64 = 30_000;
+
+/// How many times closing will wait for a fresh batch of tasks before giving up on the driver.
+const MAX_JOIN_ROUNDS: u32 = 100;
+
+impl Run {
+    async fn await_answer(&mut self, nth: u32) -> bool {
+        let Some(waiting) = self.pending.get_mut(&nth) else { return false };
+        match tokio::time::timeout(Duration::from_millis(BUDGET_MS), waiting.recv()).await {
+            Ok(settled) => {
+                self.pending.remove(&nth);
+                self.record_answer(nth, settled);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    async fn await_speech(&mut self, nth: u32) -> bool {
+        let Some(resource) = self.record.resource(Kind::Speech, nth) else { return false };
+        let Id::Speech(speech) = resource.id() else { return false };
+        let Some(handle) = self.handles.get(&speech.0).cloned() else { return false };
+        tokio::time::timeout(Duration::from_millis(BUDGET_MS), handle.wait_for_done()).await.is_ok()
+    }
+
+    async fn await_exit(&mut self) -> bool {
+        let Some(driver) = &mut self.driver else { return true };
+        let Ok(joined) = tokio::time::timeout(Duration::from_millis(BUDGET_MS), driver).await
+        else {
+            return false;
+        };
+        self.driver = None;
+        if let Err(error) = joined {
+            self.record.set_driver_panic(format!("{error}"));
+        }
+        self.record.enter_phase(Phase::Closed);
+        true
+    }
+
+    /// Await every retained task.
+    ///
+    /// A task may spawn another before finishing, so this loops -- and because the work is the
+    /// product's, the loop can fail to terminate. It is bounded for the same reason the release
+    /// loop is: an unbounded loop here is a hang, not a slow run, and a driver that keeps
+    /// spawning while closing is a result worth reporting rather than waiting on forever.
+    pub async fn join_tasks(&mut self) -> Result<(), String> {
+        for round in 0..MAX_JOIN_ROUNDS {
+            let tasks = std::mem::take(&mut *self.tasks.0.lock().unwrap());
+            if tasks.is_empty() {
+                return Ok(());
+            }
+            let _ = round;
+            for task in tasks {
+                if let Err(error) = task.await
+                    && !error.is_cancelled()
+                {
+                    return Err(format!("child task panicked: {error}"));
+                }
+            }
+        }
+        Err(format!("still spawning tasks after {MAX_JOIN_ROUNDS} rounds of joining"))
+    }
+}

@@ -13,6 +13,8 @@ required-environments = [
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
+# python-sdks main has the agent grants, not yet released to PyPI; an archive, since git clones fail on LFS
+livekit-api = { url = "https://github.com/livekit/python-sdks/archive/bdeadbacc75ece1274c55e02d3da9a34c8bde5b8.tar.gz", subdirectory = "livekit-api" }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
@@ -92,7 +94,7 @@ livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
 
 [tool.uv.workspace]
-members = ["livekit-plugins/*", "livekit-agents", "examples/avatar", "examples/drive_thru", "examples/expressive_agent", "examples/frontdesk", "examples/healthcare", "examples/homepage", "examples/hotel_receptionist", "examples/inference", "examples/survey", "examples/voice_agents"]
+members = ["livekit-plugins/*", "livekit-agents", "examples_old/avatar", "examples_old/drive_thru", "examples_old/expressive_agent", "examples_old/frontdesk", "examples_old/healthcare", "examples_old/homepage", "examples_old/hotel_receptionist", "examples_old/inference", "examples_old/survey", "examples_old/voice_agents"]
 exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blockguard",
@@ -114,6 +116,8 @@ dev = [
     "pytest-xdist>=3.8.0",
     "jsonschema>=4.25.0",
     "playwright>=1.58.0",
+    "a2a-sdk[http-server]>=1.1.2,<2",
+    "uvicorn>=0.30",
 ]
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 lint = ["ruff"]
@@ -148,7 +152,9 @@ typing = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-exclude = [".github"]
+# `_generated` is written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`): generator
+# output is not hand-formatted, and a lint finding there is fixed in the generator, not the file.
+exclude = [".github", "livekit-agents/livekit/agents/_generated"]
 
 [tool.ruff.lint]
 select = [
@@ -183,6 +189,7 @@ filterwarnings = [
 addopts = [
     "--import-mode=importlib",
     "--ignore=examples",
+    "--ignore=examples_old",
     "-p",
     "tests.concurrency",
 ]

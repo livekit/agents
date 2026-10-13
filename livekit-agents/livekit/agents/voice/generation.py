@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
 import json
 import time
@@ -23,6 +24,15 @@ from ..llm import (
     utils as llm_utils,
 )
 from ..llm.chat_context import Instructions
+from ..llm.tool_context import (
+    WAITING_PREFIX,
+    Completed,
+    Failed,
+    InputRequired,
+    Rejected,
+    Transition,
+    is_transition,
+)
 from ..log import logger
 from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, otel_metrics, trace_types, tracer
 from ..types import (
@@ -40,7 +50,7 @@ from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
-    from .agent_session import AgentSession
+    from .agent_session import LiveSession
     from .transcription.text_transforms import TextTransforms
 
 
@@ -812,7 +822,7 @@ class _ToolOutput:
 
 def perform_tool_executions(
     *,
-    session: AgentSession,
+    session: LiveSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],
@@ -840,7 +850,7 @@ def perform_tool_executions(
 @utils.log_exceptions(logger=logger)
 async def _execute_tools_task(
     *,
-    session: AgentSession,
+    session: LiveSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],
@@ -1149,6 +1159,62 @@ class ToolExecutionOutput:
     agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
+    transition: Transition | None = None
+    """The transition the tool returned, applied by the activity once the call is recorded."""
+
+
+def _transition_output(fnc_call: llm.FunctionCall, transition: Transition) -> ToolExecutionOutput:
+    """The call output recorded for a transition.
+
+    A model request cannot carry a call without an output, so the output stands in for the
+    state: the value of ``Completed``, the error of ``Failed`` and ``Rejected``, the question
+    an ``InputRequired`` waits on (replaced by the answer when it arrives) and the status of
+    ``Working``. None of them asks the model for a reply; the activity acts on the transition.
+    """
+    is_error = False
+    if isinstance(transition, Completed):
+        value = transition.value
+        output = value if isinstance(value, str) else _serialize_output(value)
+    elif isinstance(transition, Failed):
+        output, is_error = transition.error, True
+    elif isinstance(transition, Rejected):
+        output, is_error = transition.reason, True
+    elif isinstance(transition, InputRequired):
+        output = f"{WAITING_PREFIX}{transition.question}"
+    else:
+        output = transition.message or "working"
+
+    return ToolExecutionOutput(
+        fnc_call=fnc_call.model_copy(),
+        fnc_call_out=llm.FunctionCallOutput(
+            name=fnc_call.name,
+            call_id=fnc_call.call_id,
+            output=output,
+            is_error=is_error,
+            reply_required=False,
+        ),
+        agent_task=None,
+        raw_output=transition,
+        raw_exception=None,
+        transition=transition,
+    )
+
+
+def _serialize_output(value: Any) -> str:
+    if value is None:
+        return "completed"
+    try:
+        return json.dumps(value, default=_json_default)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _json_default(value: Any) -> Any:
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return dataclasses.asdict(value)
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return str(value)
 
 
 def make_tool_output(
@@ -1159,6 +1225,9 @@ def make_tool_output(
     if isinstance(output, BaseException):
         exception = output
         output = None
+
+    if exception is None and is_transition(output):
+        return _transition_output(fnc_call, output)
 
     if exception is not None:
         base_result = llm_utils.make_function_call_output(

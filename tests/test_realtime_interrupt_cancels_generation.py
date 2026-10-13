@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, function_tool, llm, utils
+from livekit.agents import Agent, LiveSession, function_tool, llm, utils
 from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_io import FakeAudioOutput
@@ -33,7 +33,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 @asynccontextmanager
 async def _speaking_reply() -> AsyncIterator[
     tuple[
-        AgentSession,
+        LiveSession,
         FakeRealtimeSession,
         SpeechHandle,
         FakeAudioOutput,
@@ -47,7 +47,7 @@ async def _speaking_reply() -> AsyncIterator[
     model = FakeRealtimeModel(capabilities=fake_capabilities())
     audio_output = FakeAudioOutput(can_pause=True)
 
-    async with AgentSession(llm=model) as session:
+    async with LiveSession(llm=model) as session:
         session.output.audio = audio_output
         await session.start(Agent(instructions="test"))
 
@@ -168,7 +168,7 @@ async def test_interrupt_racing_the_generation_event_cancels_the_response() -> N
     # before it ever forwards the response: nothing else is left to cancel it
     model = FakeRealtimeModel(capabilities=fake_capabilities())
 
-    async with AgentSession(llm=model) as session:
+    async with LiveSession(llm=model) as session:
         await session.start(Agent(instructions="test"))
 
         handle = session.generate_reply()
@@ -212,7 +212,7 @@ async def test_interrupting_a_finished_speech_spares_the_newer_reply() -> None:
 
     model = FakeRealtimeModel(capabilities=fake_capabilities())
 
-    async with AgentSession(llm=model) as session:
+    async with LiveSession(llm=model) as session:
         session.output.audio = FakeAudioOutput(can_pause=True)
         await session.start(ToolAgent())
         rt_session = model.active_session

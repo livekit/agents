@@ -59,7 +59,7 @@ def _downmix_to_mono(frame: rtc.AudioFrame) -> rtc.AudioFrame:
 
 
 class MeetingAudioInput(AudioInput):
-    """AudioInput that feeds mixed external meeting audio into AgentSession STT."""
+    """AudioInput that feeds mixed external meeting audio into LiveSession STT."""
 
     def __init__(self, *, rate_out: int = _DEFAULT_STT_RATE, queue_size: int = 100) -> None:
         """Initialize the meeting audio input.

@@ -53,7 +53,7 @@ from .run_result import RunResult
 if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference.interruption import OverlappingSpeechEvent
-    from .agent_session import AgentSession, AgentSessionOptions
+    from .agent_session import AgentSessionOptions, LiveSession
 
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
@@ -347,7 +347,7 @@ class SessionHost:
         self._started = False
         self._recv_task: asyncio.Task[None] | None = None
         self._tasks = utils.aio.TaskSet()
-        self._session: AgentSession | None = None
+        self._session: LiveSession | None = None
         self._events_registered = False
         # events are emitted from sync callbacks and nobody awaits them, so they
         # queue here and one long-lived writer drains them in emission order.
@@ -356,7 +356,7 @@ class SessionHost:
         self._event_ch = utils.aio.Chan[agent_pb.AgentSessionMessage]()
         self._write_task: asyncio.Task[None] | None = None
 
-    def register_session(self, session: AgentSession) -> None:
+    def register_session(self, session: LiveSession) -> None:
         self._session = session
         if not self._events_registered:
             self._events_registered = True
@@ -738,7 +738,10 @@ class SessionHost:
 
         elif req.HasField("get_agent_info"):
             agent = self._session.current_agent
-            items = [encode_chat_item(item) for item in agent.chat_ctx.items]
+            activity = self._session._activity
+            items = [
+                encode_chat_item(item) for item in (activity.chat_ctx.items if activity else [])
+            ]
             # collapse modality variants for the report; audio-first matches the
             # update_instructions default for voice sessions
             agent_instructions = (

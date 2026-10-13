@@ -5,7 +5,7 @@ import os
 import httpx2 as httpx
 import pytest
 
-from livekit.agents import Agent, AgentSession, RunContext, function_tool, llm
+from livekit.agents import Agent, LiveSession, RunContext, function_tool, llm
 from livekit.plugins.cerebras import LLM
 from livekit.plugins.cerebras.llm import _CerebrasClient
 
@@ -51,7 +51,7 @@ class WeatherAgent(Agent):
 @pytest.mark.asyncio
 async def test_chat():
     """Basic chat completion returns a non-empty assistant message."""
-    async with _cerebras_llm() as model, AgentSession(llm=model) as sess:
+    async with _cerebras_llm() as model, LiveSession(llm=model) as sess:
         await sess.start(Agent(instructions="You are a helpful assistant."))
         result = await sess.run(user_input="Say hello in exactly one word.")
         result.expect.next_event().is_message(role="assistant")
@@ -61,7 +61,7 @@ async def test_chat():
 @pytest.mark.asyncio
 async def test_function_call():
     """LLM can invoke a tool and the result is returned."""
-    async with LLM(model=TOOL_MODEL) as model, AgentSession(llm=model) as sess:
+    async with LLM(model=TOOL_MODEL) as model, LiveSession(llm=model) as sess:
         await sess.start(WeatherAgent())
         result = await sess.run(user_input="What is the weather in Tokyo?")
         result.expect.next_event().is_function_call(
@@ -93,7 +93,7 @@ def _cerebras_llm_with_transport(
 async def test_gzip_only_headers():
     """Gzip-only sends Content-Encoding: gzip with JSON content type."""
     model, transport = _cerebras_llm_with_transport(use_gzip=True, use_msgpack=False)
-    async with model, AgentSession(llm=model) as sess:
+    async with model, LiveSession(llm=model) as sess:
         await sess.start(Agent(instructions="You are a helpful assistant."))
         result = await sess.run(user_input="Say hello in exactly one word.")
         result.expect.next_event().is_message(role="assistant")
@@ -109,7 +109,7 @@ async def test_gzip_only_headers():
 async def test_msgpack_only_headers():
     """Msgpack-only sends Content-Type: application/vnd.msgpack without gzip."""
     model, transport = _cerebras_llm_with_transport(use_gzip=False, use_msgpack=True)
-    async with model, AgentSession(llm=model) as sess:
+    async with model, LiveSession(llm=model) as sess:
         await sess.start(Agent(instructions="You are a helpful assistant."))
         result = await sess.run(user_input="Say hello in exactly one word.")
         result.expect.next_event().is_message(role="assistant")
@@ -125,7 +125,7 @@ async def test_msgpack_only_headers():
 async def test_msgpack_and_gzip_headers():
     """Both flags send msgpack content type with gzip encoding."""
     model, transport = _cerebras_llm_with_transport(use_gzip=True, use_msgpack=True)
-    async with model, AgentSession(llm=model) as sess:
+    async with model, LiveSession(llm=model) as sess:
         await sess.start(Agent(instructions="You are a helpful assistant."))
         result = await sess.run(user_input="Say hello in exactly one word.")
         result.expect.next_event().is_message(role="assistant")
@@ -141,7 +141,7 @@ async def test_msgpack_and_gzip_headers():
 async def test_no_compression_headers():
     """With both flags off, sends standard JSON without gzip."""
     async with _cerebras_llm(gzip_compression=False, msgpack_encoding=False) as model:
-        async with AgentSession(llm=model) as sess:
+        async with LiveSession(llm=model) as sess:
             await sess.start(Agent(instructions="You are a helpful assistant."))
             result = await sess.run(user_input="Say hello in exactly one word.")
             result.expect.next_event().is_message(role="assistant")

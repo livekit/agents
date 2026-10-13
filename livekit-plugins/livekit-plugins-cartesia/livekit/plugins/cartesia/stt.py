@@ -79,10 +79,10 @@ class STT(stt.STT):
     Examples:
 
         ```# Turn detecting
-        from livekit.agents import AgentSession
+        from livekit.agents import LiveSession
         from livekit.plugins import cartesia
 
-        session = AgentSession(
+        session = LiveSession(
             stt=cartesia.STT(),
             llm=LLM(),  # choose your favorite LLM
             tts=cartesia.TTS(),
@@ -165,10 +165,10 @@ class STT(stt.STT):
         Examples:
 
             ```# Turn detecting
-            from livekit.agents import AgentSession
+            from livekit.agents import LiveSession
             from livekit.plugins import cartesia
 
-            session = AgentSession(
+            session = LiveSession(
                 stt=cartesia.STT(),
                 llm=LLM(),  # choose your favorite LLM
                 tts=cartesia.TTS(),

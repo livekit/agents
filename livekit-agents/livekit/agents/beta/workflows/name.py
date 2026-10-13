@@ -79,7 +79,6 @@ class GetNameTask(AgentTask[GetNameResult]):
         name_format: NotGivenOr[str] = NOT_GIVEN,
         verify_spelling: bool = False,
         extra_instructions: str = "",
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -152,7 +151,6 @@ class GetNameTask(AgentTask[GetNameResult]):
                     extra_instructions=extra,
                 ),
             ),
-            chat_ctx=chat_ctx,
             turn_detection=turn_detection,
             tools=[*(tools or []), self._build_update_name_tool()],
             stt=stt,
@@ -250,7 +248,7 @@ class GetNameTask(AgentTask[GetNameResult]):
 
         if not self._confirmation_required(ctx):
             if not self.done():
-                self.complete(
+                self._complete(
                     GetNameResult(
                         first_name=self._first_name if self._collect_first_name else None,
                         middle_name=self._middle_name if self._collect_middle_name else None,
@@ -266,7 +264,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         )
         current_tools = [t for t in self.tools if t.id != "confirm_name"]
         current_tools.append(confirm_tool)
-        await self.update_tools(current_tools)
+        await self._update_tools(current_tools)
 
         read_back = (
             f"Spell out the name letter by letter for verification: {' '.join(full_name.replace(' ', ''))}"
@@ -299,7 +297,7 @@ class GetNameTask(AgentTask[GetNameResult]):
                 )
 
             if not self.done():
-                self.complete(
+                self._complete(
                     GetNameResult(
                         first_name=self._first_name if self._collect_first_name else None,
                         middle_name=self._middle_name if self._collect_middle_name else None,
@@ -318,7 +316,7 @@ class GetNameTask(AgentTask[GetNameResult]):
             reason: A short explanation of why the user declined to provide their name
         """
         if not self.done():
-            self.complete(ToolError(f"couldn't get the name: {reason}"))
+            self._complete(ToolError(f"couldn't get the name: {reason}"))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):

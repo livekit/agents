@@ -1,0 +1,44 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/availability.yaml --agent-name hotel`.
+# The hotel's clock is pinned: run the backend with HOTEL_TODAY=2026-11-02, so the absolute
+# dates below and the seeded bookings in hotel.py stay where they are. One complication per
+# scenario; the label names it; the expectations describe the outcome and name the failing case.
+
+id: SCNG_5VT23RCHtx5C
+name: The LiveKit Hotel, availability
+
+scenarios:
+- id: SCN_gez7zT0RCBGp
+  label: "Just looking, no booking"
+  instructions: >
+    You are Nadia Brooks, comparing options, not booking today. Open with "What do you have for
+    two people, November 8th to the 10th?" Listen to what is available and the rates, then ask
+    which of those has an ocean view. Say you will think about it and end the conversation, even
+    if offered to book. The truth for those dates and two guests: a queen with a city view at
+    $220, a queen with an ocean view at $260, a king with an ocean view at $280, a suite with an
+    ocean view at $480.
+  agent_expectations: >
+    The agent lists the rooms the hotel returned with their rates and views, answers the ocean view
+    question from that list, and does not start a booking the guest did not ask for. Fails if a
+    room, rate or view is stated that the hotel did not return, or if the agent starts collecting
+    a name or a card.
+
+- id: SCN_guwcxtM7MqzF
+  label: "Dates in the past"
+  instructions: >
+    You are Leo Brandt, confused about the date. Open with "Anything free for two on October 20th
+    to the 22nd?" If told the dates have passed, say "oh, I meant November", same days. Listen to
+    the answer and end the conversation. Today is November 2nd 2026.
+  agent_expectations: >
+    The agent says the October dates have passed instead of quoting rooms for them, then answers
+    for November 20th to 22nd from the hotel's availability. Fails if rooms are quoted for dates in
+    the past.
+
+- id: SCN_0TZeRj3ygvUZ
+  label: "A room type the hotel does not have"
+  instructions: >
+    You are Sofia Moreau, asking for a penthouse. Open with "Do you have a penthouse for two,
+    November 14th to the 16th?" If there is no penthouse, ask what the best room is, and end the
+    conversation after the answer.
+  agent_expectations: >
+    The agent says there is no penthouse and offers the best the hotel has for those dates, the
+    suite, with its rate. Fails if a penthouse is offered or priced.

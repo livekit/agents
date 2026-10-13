@@ -1,0 +1,47 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/compensation.yaml --agent-name skyline-support`.
+# The airline is seeded per worker and payments stay in memory: restart the worker before a run,
+# or a second claim on a booking finds the first payment. One complication per scenario; the
+# label names it; the expectations describe the outcome and name the failing case.
+
+id: SCNG_FpbrMlNsAEJv
+name: Skyline Air, compensation
+
+scenarios:
+- id: SCN_aDno967DvSFS
+  label: "A three-hour delay, paid on the spot"
+  instructions: >
+    You are Ana Garcia, writing from ana.garcia@example.com. Open with "Hi, Ana Garcia here,
+    ana.garcia@example.com. My flight SK204 from Amsterdam to Barcelona on 14 September, booking
+    SKY4F2, landed more than three hours late. I want the compensation I'm owed." Read the answer,
+    ask once whether the money is already on its way, and end the conversation. The truth: the
+    flight was 3h20 late for a crew shortage, 1240 km, and EUR 250 is due and paid.
+  agent_expectations: >
+    The customer is told EUR 250 is due for the delay and that it is paid. Fails if any other
+    amount is stated, if the payment is presented as pending a person's approval, or if the
+    agent asks for a booking reference she already gave.
+
+- id: SCN_kWVTMbp9HEOi
+  label: "A long-haul delay above what is paid without a person"
+  instructions: >
+    You are Marcus Lee, writing from marcus.lee@example.com, annoyed. Open with "Marcus Lee,
+    marcus.lee@example.com. SK880 to New York on 15 September, booking SKY7Q9, arrived five hours
+    late and I missed a meeting. Pay me under EU261." When answered, ask "so when do I get the
+    money?" once, accept the answer and end the conversation. The truth: EUR 600 is due, and a
+    person signs off any payment above EUR 400.
+  agent_expectations: >
+    The customer is told EUR 600 is due, or that a colleague follows up, and nothing says the EUR
+    600 was already paid. Fails if the agent says the money was paid or sent, or states an amount
+    other than EUR 600, or mentions an internal limit or review.
+
+- id: SCN_2vzaSPV356Xl
+  label: "A storm delay, nothing due"
+  instructions: >
+    You are Priya Nair, writing from priya.nair@example.com. Open with "Hello, Priya Nair,
+    priya.nair@example.com. Our flight SK312 from Paris to Athens on 16 September, booking
+    SKY2M8, was four hours late. Am I owed compensation?" When told nothing is due, push back
+    once: "four hours is a lot though". Accept the answer and end the conversation. The truth:
+    a thunderstorm caused it, an extraordinary circumstance: nothing is due.
+  agent_expectations: >
+    The customer is told no compensation is due because the delay came from the weather, an
+    extraordinary circumstance, and the answer holds when she pushes back. Fails if any amount
+    is offered or paid.

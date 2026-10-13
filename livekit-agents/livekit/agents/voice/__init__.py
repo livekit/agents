@@ -1,8 +1,10 @@
+from typing import Any
+
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
-    AgentSession,
     ExpressiveOptions,
+    LiveSession,
     NonverbalOptions,
     RecordingOptions,
     SpeechSteeringOptions,
@@ -48,6 +50,7 @@ from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
+    "LiveSession",
     "AgentSession",
     "ExpressiveOptions",
     "NonverbalOptions",
@@ -103,3 +106,13 @@ __pdoc__ = {}
 
 for n in NOT_IN_ALL:
     __pdoc__[n] = False
+
+
+def __getattr__(name: str) -> Any:
+    if name == "AgentSession":
+        # deprecated alias, kept one release
+        from . import agent_session
+
+        return agent_session.AgentSession
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

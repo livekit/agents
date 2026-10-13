@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions, llm
+from livekit.agents import Agent, LiveSession, TurnHandlingOptions, llm
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.speech_handle import SpeechHandle
 
@@ -23,7 +23,7 @@ def _livekit_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _activity(*, server_turn_detection: bool, allow_interruptions: bool = True) -> AgentActivity:
-    session = AgentSession(
+    session = LiveSession(
         llm=FakeRealtimeModel(
             capabilities=fake_capabilities(
                 turn_detection=server_turn_detection, can_disable_turn_detection=False

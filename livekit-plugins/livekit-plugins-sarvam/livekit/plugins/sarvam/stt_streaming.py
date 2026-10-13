@@ -630,7 +630,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 self._logger.warning(
                     "Sarvam realtime STT switched to manual endpointing without an external VAD; "
                     "turns will not be delimited unless the agent framework flushes the stream. "
-                    "Configure a VAD on the AgentSession to receive end-of-turn boundaries.",
+                    "Configure a VAD on the LiveSession to receive end-of-turn boundaries.",
                     extra=self._build_log_context(),
                 )
             self._pending_endpointing = opts.endpointing

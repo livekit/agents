@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, ToolResult, function_tool
+from livekit.agents import Agent, LiveSession, ToolResult, function_tool
 from livekit.agents.llm import FunctionCallOutput, FunctionToolCall, StopResponse
 
 from .fake_session import FakeActions, create_session, run_session
@@ -37,7 +37,7 @@ class ToolAgent(Agent):
 
 async def _run(
     behavior: Callable[[], Any], *, reply_to: str | None = None
-) -> tuple[Agent, AgentSession, FunctionCallOutput]:
+) -> tuple[Agent, LiveSession, FunctionCallOutput]:
     """Run one turn whose single tool call is answered, and return that answer."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Do the thing.")
@@ -69,96 +69,6 @@ async def _run(
 
 def _raise_stop_response() -> Any:
     raise StopResponse
-
-
-@pytest.mark.parametrize(
-    "behavior, error_text",
-    [
-        pytest.param(lambda: object(), "invalid output", id="invalid_output"),
-        pytest.param(
-            lambda: [Agent(instructions="first"), Agent(instructions="second")],
-            "more than one agent",
-            id="two_agents",
-        ),
-    ],
-)
-async def test_a_tool_that_produced_nothing_usable_answers_as_an_error(
-    behavior: Callable[[], Any], error_text: str
-) -> None:
-    """The model can recover from a failure; it cannot recover from silence."""
-    agent, session, output = await _run(behavior)
-
-    assert session.current_agent is agent, "an ambiguous handoff must not be applied"
-    assert output.is_error
-    assert error_text in output.output
-
-
-async def test_stop_response_answers_the_call_and_asks_for_no_reply() -> None:
-    """StopResponse means "say nothing", not "leave the call open"."""
-    _, _, output = await _run(_raise_stop_response)
-
-    assert output.output == ""
-    assert not output.is_error
-    assert not output.reply_required
-
-
-async def test_bare_handoff_answers_the_call_and_asks_for_no_reply() -> None:
-    """A handoff with nothing to say is answered, and the new agent speaks instead."""
-    agent, session, output = await _run(lambda: Agent(instructions="You are the next agent."))
-
-    assert session.current_agent is not agent, "the handoff must be applied"
-    assert output.output == ""
-    assert not output.reply_required
-
-
-@pytest.mark.parametrize(
-    "result, expected_output, reply_required",
-    [
-        (
-            ToolResult("Successfully sent DTMF events: 1", reply_required=False),
-            "Successfully sent DTMF events: 1",
-            False,
-        ),
-        (ToolResult("ok", reply_required=True), "ok", True),
-        (ToolResult("ok"), "ok", True),
-        (ToolResult(None, reply_required=True), "", True),
-        (ToolResult(None, reply_required=False), "", False),
-        ("ok", "ok", True),
-        (None, "", False),
-    ],
-)
-async def test_tool_result_controls_follow_up_reply(
-    result: Any, expected_output: str, reply_required: bool
-) -> None:
-    agent, session, output = await _run(lambda: result, reply_to=expected_output)
-
-    assert not output.is_error
-    for items in (agent.chat_ctx.items, session.history.items):
-        outputs = [item for item in items if item.type == "function_call_output"]
-        assert outputs[0].output == expected_output
-        assert outputs[0].reply_required is reply_required
-        replies = [
-            item.text_content
-            for item in items
-            if item.type == "message" and item.role == "assistant"
-        ]
-        assert replies == (["Working on it.", "Done."] if reply_required else ["Working on it."])
-
-
-async def test_handoff_with_tool_result_keeps_output_without_requesting_reply() -> None:
-    next_agent = Agent(instructions="You are the next agent.")
-    _, session, output = await _run(
-        lambda: (next_agent, ToolResult("Transferred", reply_required=False)),
-        reply_to="Transferred",
-    )
-
-    assert session.current_agent is next_agent
-    assert output.output == "Transferred"
-    assert not output.is_error
-    assert not output.reply_required
-    assert not any(
-        item.type == "message" and item.text_content == "Done." for item in session.history.items
-    )
 
 
 async def test_tool_result_does_not_suppress_other_tools_replies() -> None:

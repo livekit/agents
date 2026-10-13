@@ -1,0 +1,129 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# The two host bindings are members (so `-p lk-agents-py` / `-p lk-agents-node` work from here and
+# share this lockfile and target dir) but NOT default members. Cargo unifies features across every
+# package one invocation builds: `lk-agents-py` turns on the `python` feature of abi/voice/rtc/media/
+# inference/worker, which pulls pyo3 into those crates, and pyo3 links libpython into every final
+# artifact that contains them -- including the node addon. A plain `cargo build` / `cargo test` /
+# `cargo nextest run` from `rust/` therefore builds the host-neutral crates only, and each host is
+# built in its own invocation:
+#
+#   cargo build                                   # core crates, no host feature
+#   cargo build -p lk-agents-node                 # node addon: no pyo3, no libpython
+#   cargo nextest run -p lk-agents-py             # python binding tests (links libpython; set
+#                                                 # PYO3_PYTHON / PYTHONHOME to the dev venv)
+#   (cd ../python/livekit-agents && VIRTUAL_ENV=../../.venv-dev maturin develop)
+#   maturin build -i <python> --release           # wheel, from python/livekit-agents
+#
+# `--workspace` (and `-p lk-agents-py -p lk-agents-node` together) selects every member explicitly
+# and so still unifies: the node addon it produces links libpython. Build the node addon on its own
+# (`cargo build -p lk-agents-node`, or `napi build` from node/) whenever the artifact matters.
+default-members = [
+    "crates/lk-agents-abi",
+    "crates/lk-agents-bindgen",
+    "crates/lk-agents-codegen",
+    "crates/lk-agents-fuzz",
+    "crates/lk-agents-host-derive",
+    "crates/lk-agents-inference",
+    "crates/lk-agents-media",
+    "crates/lk-agents-rtc",
+    "crates/lk-agents-storage",
+    "crates/lk-agents-voice",
+    "crates/lk-agents-worker",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# --- pure tier (§6: no tokio, reqwest, prost, pyo3, no C++) ---
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+thiserror    = "2"
+smallvec     = "1"
+ordered-float = "5"
+# --- below the purity line ---
+tokio        = { version = "1", features = ["rt", "sync", "macros", "time"] }
+# The LiveKit protocol, from `livekit/rust-sdks` `main` on GitHub (Cargo.lock pins the commit): `livekit_protocol::agent` is the
+# generated `livekit.agent` package -- `AgentSessionEvent`, `SessionRequest`, the EOT inference
+# messages -- and `livekit_protocol::{WorkerMessage, ServerMessage}` the worker's own wire. One
+# source for every proto in the workspace; nothing generates or vendors a `.rs` from a `.proto`
+# here any more (2026-09-09; `lk-agents-voice/src/remote/proto.rs` and
+# `lk-agents-inference/src/eot/proto.rs` were the two copies).
+#
+# A git dependency, because rust-sdks `main` is not released yet.
+livekit-protocol = { git = "https://github.com/livekit/rust-sdks", branch = "main" }
+# The access token, from the same repository: `AccessToken`/`TokenVerifier`/`Claims` over HS256.
+# The worker's `/agent` credential and a simulated job's participant token need `VideoGrants.agent`
+# and `Claims.kind`.
+livekit-token = { git = "https://github.com/livekit/rust-sdks", branch = "main" }
+# `livekit-api`, from the same repository: its `ThreadClient` and `DatabaseClient` are the only way
+# to agentstore's threads and databases. Its rustls is
+# pinned to `ring`, the workspace's one crypto provider.
+livekit-api = { git = "https://github.com/livekit/rust-sdks", branch = "main", default-features = false, features = ["services", "rustls-tls-native-roots"] }
+# `livekit-protocol`'s prost, and therefore the workspace's: prost-derive emits `::prost::` paths,
+# so every crate that names a `Message` from that package must see the same major, 0.14 since
+# livekit/rust-sdks#1447.
+prost        = { version = "0.14", default-features = false, features = ["std", "derive"] }
+# The well-known types as `livekit-protocol` generates them (`::pbjson_types::Timestamp`, not
+# `::prost_types::`).
+pbjson-types = "0.9"
+# CPU load and count for the worker's default load calculator, on every platform. `system` only:
+# no processes, disks, networks or components.
+sysinfo      = { version = "0.39", default-features = false, features = ["system"] }
+# The log facade, with structured key-values: a crate logs `log::info!(target: "livekit.agents", job_id = id; "..")`
+# and the binding forwards it -- keys included, as `extra` -- into Python's `logging` (`pyo3-log`).
+log          = { version = "0.4", features = ["kv"] }
+pyo3-log     = { version = "0.13", features = ["kv"] }
+# `image`/`base64`: `lk-agents-media` only. Encoding sits below the purity line by design (§1.11),
+# so nothing in tiers 0/1 may pull these -- `cargo-deny` should ban them everywhere else.
+# Default features off: no rayon, no decoders, no format probing. JPEG and PNG encode is the whole
+# use, and it is the only native-free way to drop the PIL dependency (§10, `utils/images/`).
+image        = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+base64       = "0.22"
+async-trait  = "0.1"
+pyo3         = "0.29"
+# The link-time table `#[lk_agents_abi::export]` submits to, so a binding's host module registers
+# every marked item from one call instead of a hand-kept list. Only the bindings may use it.
+inventory    = "0.3"
+# §10: MCP is the official Rust SDK, not a port. `lk-agents-inference::mcp` only. No `server`,
+# `macros` or `schemars` (we are a client); streamable HTTP over the workspace's reqwest and
+# rustls, and the child process for stdio. The legacy SSE transport rmcp does not ship is
+# `mcp::session::connect_sse`, over `sse-stream`, the parser rmcp's own HTTP client uses.
+rmcp         = { version = "3.1", default-features = false, features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+    "transport-child-process",
+] }
+
+[profile.dev]
+debug = 1
+# NOT "unpacked", which is the macOS default and what this workspace used until it became
+# unusable. Unpacked emits one `.o` per codegen unit next to the rlib, names it by a hash of the
+# build, and cargo never garbage-collects the previous set -- so every rebuild ADDS a full copy.
+# Measured before this change: 1,000,414 orphan `.o` files and 71 GB under target/, ~40 % of them
+# belonging to crates that no longer exist (`lk_agents_types`, `lk_agents_eot`, `turn`, ...).
+# At that size the directory costs minutes merely to enumerate: a NO-OP `cargo check --workspace`
+# took 4m43s wall for 0.19 s of CPU, and `make t0` -- the tier whose whole purpose is to be the
+# fast inner loop -- took 4m36s for 12.5 s. "off" embeds the debuginfo in the rlib instead, so
+# nothing accumulates; dsymutil still never runs, which is the one thing "packed" would cost us.
+split-debuginfo = "off"
+
+# The ~270 third-party crates never need debuginfo: we do not step into them, and their line
+# tables are the bulk of both the link input and the artifact size. Our own crates keep the
+# `debug = 1` above, so a failing test still names file:line in code we wrote -- which §5.2
+# depends on, since "eight of the nine FFI hazards fail as a silent hang" is only diagnosable
+# from a readable trace. Dependencies of test targets use this profile too, not `profile.test`.
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test]
+debug = 1
+# Inherited from `profile.dev` in principle, but spelled out: `cargo test`/`nextest` build test
+# targets under this profile, and it was the test binaries -- one per integration test, rebuilt
+# on every run -- that produced the largest single share of the orphan `.o` files above
+# (the driver, then its own crate `lk_agents_driver`, alone: 83,440).
+split-debuginfo = "off"

@@ -17,7 +17,7 @@ from collections.abc import Sequence
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, function_tool, utils
+from livekit.agents import Agent, LiveSession, function_tool, utils
 from livekit.agents.llm import FunctionCall, GenerationCreatedEvent, MessageGeneration
 
 from .fake_io import FakeAudioOutput
@@ -76,7 +76,7 @@ def _generation(
     )
 
 
-async def _wait_for_agent_state(session: AgentSession, state: str) -> None:
+async def _wait_for_agent_state(session: LiveSession, state: str) -> None:
     for _ in range(500):
         if session.agent_state == state:
             return
@@ -100,7 +100,7 @@ async def test_realtime_say_during_tool_keeps_agent_thinking() -> None:
             await release_tool.wait()
             return "order 42 shipped"
 
-    async with AgentSession(llm=model, user_away_timeout=2.0) as session:
+    async with LiveSession(llm=model, user_away_timeout=2.0) as session:
         session.output.audio = FakeAudioOutput()
         await session.start(SlowToolAgent())
 
@@ -164,7 +164,7 @@ async def test_realtime_tool_without_a_reply_returns_the_agent_to_listening() ->
             tool_started.set()
             await release_tool.wait()
 
-    async with AgentSession(llm=model, user_away_timeout=2.0) as session:
+    async with LiveSession(llm=model, user_away_timeout=2.0) as session:
         session.output.audio = FakeAudioOutput()
         await session.start(SilentToolAgent())
 
@@ -207,7 +207,7 @@ async def test_realtime_tool_reply_from_the_server_keeps_the_agent_thinking() ->
             await asyncio.sleep(1.0)
             return "order 42 shipped"
 
-    async with AgentSession(llm=model, user_away_timeout=2.0) as session:
+    async with LiveSession(llm=model, user_away_timeout=2.0) as session:
         session.output.audio = FakeAudioOutput()
         await session.start(ToolAgent())
 

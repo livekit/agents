@@ -1,0 +1,541 @@
+{
+  "case": {
+    "setup": {
+      "stt": false,
+      "turn": "Default",
+      "preemptive": false,
+      "tools": [
+        "lookup"
+      ],
+      "max_tool_steps": null,
+      "instructions": "You are a test agent.",
+      "max_unrecoverable_errors": 3,
+      "hook_bound_ms": null
+    },
+    "inputs": [
+      {
+        "Handoff": {
+          "agent": "billing_agent",
+          "instructions": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "tools": [
+            "billing_agent"
+          ],
+          "pause_previous": true,
+          "resume": true
+        }
+      },
+      {
+        "UpdateInstructions": {
+          "text": ""
+        }
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "AwaitExit": {}
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "Words",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "Configure": {
+          "knob": "Interruptions",
+          "mode": "Stt",
+          "ms": 700,
+          "on": false,
+          "words": 1
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Configure": {
+          "knob": "Detection",
+          "mode": "Default",
+          "ms": 2500,
+          "on": true,
+          "words": 2
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Say": {
+          "text": "",
+          "input": "Audio",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?",
+          "input": "Audio",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": "what",
+          "instructions": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60).",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "allow": null
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "",
+          "allow": null
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "Audio",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioInput",
+          "enabled": false
+        }
+      },
+      {
+        "SetStaticKeyterms": {
+          "terms": [
+            "transfer",
+            "billing_agent"
+          ]
+        }
+      },
+      {
+        "UpdateChatCtx": {
+          "items": [
+            "User"
+          ],
+          "text": ""
+        }
+      },
+      {
+        "SetTranscriptionOutput": {
+          "attach": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Run": {
+          "user_input": null,
+          "expects_output": true,
+          "retries": 3
+        }
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioInput",
+          "enabled": false
+        }
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioInput",
+          "enabled": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Say": {
+          "text": "",
+          "input": "Words",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "input": "Words",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Sure, I can help with that.",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "TextStream",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "Recorder": {
+          "attach": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "",
+          "allow": null
+        }
+      },
+      {
+        "SetAudioInput": {
+          "attach": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "UpdateModels": {
+          "legs": "Tts"
+        }
+      },
+      {
+        "Close": {
+          "drain": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "Words",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioOutput",
+          "enabled": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": false
+        }
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 1000,
+          "stt_flush": 2500,
+          "skip_reply": false
+        }
+      },
+      {
+        "UpdateChatCtx": {
+          "items": [
+            "Assistant",
+            "System"
+          ],
+          "text": "Yes... no, wait -- actually, let me check that again."
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": true
+        }
+      },
+      {
+        "SetTranscriptionOutput": {
+          "attach": false
+        }
+      },
+      {
+        "Say": {
+          "text": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "input": "TextStream",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "Close": {
+          "drain": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Let me pull up your account -- one moment.",
+          "allow": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "WAIT stop stop stop",
+          "instructions": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "allow": null
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Ivr": {
+          "input": "Close",
+          "silence": 50,
+          "text": "my number is five five five, oh one four seven"
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "my number is five five five, oh one four seven",
+          "instructions": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "allow": true
+        }
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": false
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 10,
+          "stt_flush": 20,
+          "skip_reply": true
+        }
+      },
+      {
+        "HostMetrics": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "",
+          "allow": null
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "PushVideo": {}
+      },
+      {
+        "Ivr": {
+          "input": "SeedTranscript",
+          "silence": 5000,
+          "text": "uh let me think... okay so it was last tuesday I think? maybe wednesday"
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "WAIT stop stop stop",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "SetAudioInput": {
+          "attach": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Let me pull up your account -- one moment.",
+          "allow": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "allow": null
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetAudioOutput": {
+          "attach": false
+        }
+      },
+      {
+        "Say": {
+          "text": "",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Sure, I can help with that.",
+          "allow": true
+        }
+      },
+      {
+        "Run": {
+          "user_input": "WAIT stop stop stop",
+          "expects_output": true,
+          "retries": 2
+        }
+      },
+      {
+        "AwaitAnswer": {
+          "answer": 3
+        }
+      }
+    ]
+  },
+  "expect": {
+    "Fails": {
+      "contract": "no_premature_completion",
+      "subject": {
+        "Speech": 8
+      }
+    }
+  }
+}

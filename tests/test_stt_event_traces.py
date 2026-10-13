@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import AgentSession, llm, stt
+from livekit.agents import LiveSession, llm, stt
 from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.endpointing import BaseEndpointing
@@ -35,7 +35,7 @@ def exporter() -> Iterator[InMemorySpanExporter]:
 
 @pytest.fixture
 async def recognition(exporter: InMemorySpanExporter) -> AsyncIterator[AudioRecognition]:
-    session = AgentSession(vad=None, turn_handling={"turn_detection": "manual"})
+    session = LiveSession(vad=None, turn_handling={"turn_detection": "manual"})
     root = tracer.start_span("agent_session")
     session._root_span_context = trace.set_span_in_context(root)
     hooks = MagicMock()

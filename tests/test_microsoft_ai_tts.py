@@ -9,17 +9,17 @@ from xml.etree import ElementTree
 
 import aiohttp
 import pytest
-
 from examples.microsoft import microsoft_ai_smoke as smoke, microsoft_ai_tts_room as room_example
+
 from livekit import rtc
 from livekit.agents import (
     Agent,
-    AgentSession,
     APIConnectOptions,
     APIError,
     APIStatusError,
     APITimeoutError,
     JobContext,
+    LiveSession,
     tts,
 )
 from livekit.agents.voice.agent_session import SessionConnectOptions
@@ -683,7 +683,7 @@ def _mock_example(monkeypatch: pytest.MonkeyPatch):
     started = asyncio.Event()
     ready = asyncio.Event()
     handle = _Handle()
-    session = MagicMock(spec=AgentSession)
+    session = MagicMock(spec=LiveSession)
     session.room_io = SimpleNamespace(wait_for_ready=AsyncMock(side_effect=ready.wait))
     session.say.return_value = handle
 
@@ -692,7 +692,7 @@ def _mock_example(monkeypatch: pytest.MonkeyPatch):
 
     session.start = AsyncMock(side_effect=start)
     session_factory = MagicMock(return_value=session)
-    monkeypatch.setattr(room_example, "AgentSession", session_factory)
+    monkeypatch.setattr(room_example, "LiveSession", session_factory)
     context = MagicMock(spec=JobContext)
     context.room = MagicMock(spec=rtc.Room)
     return context, session, speech, provider_factory, session_factory, started, ready, handle
@@ -820,7 +820,7 @@ async def test_actual_agent_session_say_uses_only_tts_and_emits_audio() -> None:
     capture = AsyncMock(wraps=output.capture_frame)
     output.capture_frame = capture
     async with speech:
-        session = AgentSession(
+        session = LiveSession(
             tts=speech,
             vad=None,
             turn_handling={"turn_detection": None},

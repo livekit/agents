@@ -115,7 +115,7 @@ class EndpointingOptions(TypedDict, total=False):
 
     All keys are optional. Missing keys inherit from the session default
     (at the ``Agent`` level) or use the documented defaults
-    (at the ``AgentSession`` level).
+    (at the ``LiveSession`` level).
     """
 
     mode: Literal["fixed", "dynamic"]
@@ -152,7 +152,7 @@ class InterruptionOptions(TypedDict, total=False):
 
     All keys are optional. Missing keys inherit from the session default
     (at the ``Agent`` level) or use the documented defaults
-    (at the ``AgentSession`` level).
+    (at the ``LiveSession`` level).
 
     ``mode`` absent means the session picks the best available strategy.
     """
@@ -262,7 +262,7 @@ class TurnHandlingOptions(TypedDict, total=False):
 
     Can be passed as a plain dict::
 
-        AgentSession(
+        LiveSession(
             turn_handling={
                 "endpointing": {"min_delay": 0.3},
                 "interruption": {"enabled": False},

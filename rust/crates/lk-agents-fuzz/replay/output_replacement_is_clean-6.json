@@ -1,0 +1,384 @@
+{
+  "case": {
+    "setup": {
+      "stt": false,
+      "turn": "Default",
+      "preemptive": false,
+      "tools": [
+        "lookup"
+      ],
+      "max_tool_steps": null,
+      "instructions": "You are a test agent.",
+      "max_unrecoverable_errors": 3,
+      "hook_bound_ms": null
+    },
+    "inputs": [
+      {
+        "UpdateChatCtx": {
+          "items": [
+            "User"
+          ],
+          "text": "Yes... no, wait -- actually, let me check that again."
+        }
+      },
+      {
+        "Interrupt": {
+          "force": true,
+          "wait": true
+        }
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioOutput",
+          "enabled": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "AwaitAnswer": {
+          "answer": 0
+        }
+      },
+      {
+        "SetSpeakerFilter": {
+          "enabled": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "uh let me think... okay so it was last tuesday I think? maybe wednesday",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "Handoff": {
+          "agent": "sip_1",
+          "instructions": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "tools": [
+            "lookup_order",
+            "caller"
+          ],
+          "pause_previous": true,
+          "resume": false
+        }
+      },
+      {
+        "SetSpeakerFilter": {
+          "enabled": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "input": "Audio",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Interrupt": {
+          "force": false,
+          "wait": true
+        }
+      },
+      {
+        "Interrupt": {
+          "force": false,
+          "wait": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "UpdateTools": {
+          "tools": [
+            "caller"
+          ]
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "TextStream",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "yeah hi um I'm calling about my order",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "Recorder": {
+          "attach": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "Handoff": {
+          "agent": "sip_1",
+          "instructions": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "tools": [],
+          "pause_previous": true,
+          "resume": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "FeedText": {
+          "stream": 2,
+          "text": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60)."
+        }
+      },
+      {
+        "FeedAudio": {
+          "stream": 2,
+          "chunks": 3
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "WaitForIdle": {
+          "hold": null
+        }
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "",
+          "input": "Words",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "",
+          "allow": null
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "Stt"
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "PushVideo": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": "can you hear me",
+          "instructions": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "allow": false
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "Transcription",
+          "enabled": true
+        }
+      },
+      {
+        "UpdateChatCtx": {
+          "items": [
+            "System",
+            "System"
+          ],
+          "text": "That's outside what I can do here, so I'll pass you to someone who can."
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "FeedText": {
+          "stream": 0,
+          "text": "Sure, I can help with that."
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "yeah hi um I'm calling about my order",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "SetStaticKeyterms": {
+          "terms": []
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "no no not that one, the other one",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "Close": {
+          "drain": false
+        }
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "PushVideo": {}
+      },
+      {
+        "Task": {
+          "agent": "transfer",
+          "speech": null
+        }
+      },
+      {
+        "SetAudioOutput": {
+          "attach": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "allow": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "no no not that one, the other one",
+          "instructions": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "allow": true
+        }
+      },
+      {
+        "AwaitAnswer": {
+          "answer": 19
+        }
+      }
+    ]
+  },
+  "expect": {
+    "Fails": {
+      "contract": "output_replacement_is_clean",
+      "subject": {
+        "Resource": [
+          "Output",
+          0
+        ]
+      }
+    }
+  }
+}

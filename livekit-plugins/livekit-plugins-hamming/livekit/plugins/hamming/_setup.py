@@ -30,7 +30,7 @@ from .version import __version__
 
 if TYPE_CHECKING:
     from livekit.agents.job import JobContext
-    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.agent_session import LiveSession
 
 
 @dataclass(frozen=True)
@@ -84,9 +84,9 @@ def configure_hamming(
     recording: RecordingConfigInput | None = None,
     streaming: StreamingConfigInput | None = None,
 ) -> HammingRuntime:
-    """Configure Hamming monitoring export for LiveKit AgentSession.
+    """Configure Hamming monitoring export for LiveKit LiveSession.
 
-    After configuring, attach to each AgentSession via ``hamming.attach_session(session)``.
+    After configuring, attach to each LiveSession via ``hamming.attach_session(session)``.
     """
     config = build_config(
         api_key=api_key,
@@ -119,7 +119,7 @@ def configure_hamming(
 
 
 def attach_session(
-    session: AgentSession[Any],
+    session: LiveSession[Any],
     *,
     job_ctx: JobContext | None = None,
     participant_identity: str | None = None,
@@ -130,7 +130,7 @@ def attach_session(
     session_mode: str = SESSION_MODE_MONITORING,
     recording_context: RecordingContext | None = None,
 ) -> None:
-    """Attach hamming monitoring to a specific AgentSession.
+    """Attach hamming monitoring to a specific LiveSession.
 
     This mirrors explicit plugin lifecycle patterns used by other plugins.
     """

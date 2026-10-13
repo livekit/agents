@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
+from livekit.agents import Agent, AgentTask, Completed, LiveSession, RunContext, function_tool
 from livekit.agents.llm import ChatMessage, FunctionToolCall
 
 from .fake_session import FakeActions, create_session, run_session
@@ -255,8 +255,7 @@ async def test_nested_handoff_in_on_enter_reports_e2e_latency() -> None:
         @function_tool
         async def record_name(self, ctx: RunContext, name: str) -> str:
             """Called when the user provides their name."""
-            self.complete(None)
-            return "recorded"
+            return Completed(None)
 
     class Survey(Agent):
         def __init__(self) -> None:
@@ -381,7 +380,7 @@ async def test_inline_task_in_tool_answers_each_turn() -> None:
         @function_tool
         async def record_email(self, ctx: RunContext, email: str) -> None:
             """Called when the user provides their email."""
-            self.complete(email)
+            return Completed(email)
 
     class Booker(Agent):
         def __init__(self) -> None:
@@ -417,7 +416,7 @@ async def test_inline_task_in_tool_answers_each_turn() -> None:
     _assert_answers(confirmation, email)
 
 
-def _handoff_later(session: AgentSession, delay: float) -> None:
+def _handoff_later(session: LiveSession, delay: float) -> None:
     """A handoff nothing in the conversation caused, like a timer or an external event."""
     asyncio.get_event_loop().call_later(delay, session.update_agent, Greeter())
 
@@ -486,7 +485,7 @@ async def test_reply_after_awaited_task_in_on_enter_answers_the_last_turn() -> N
         @function_tool
         async def record_name(self, ctx: RunContext, name: str) -> None:
             """Called when the user provides their name."""
-            self.complete(name)
+            return Completed(name)
 
     class Survey(Agent):
         def __init__(self) -> None:

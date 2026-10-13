@@ -15,7 +15,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import AgentSession
+from livekit.agents import LiveSession
 from livekit.agents.telemetry import set_tracer_provider, tracer
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
@@ -41,7 +41,7 @@ def _user_speaking(exporter: InMemorySpanExporter) -> ReadableSpan:
 
 
 async def test_backdated_end_is_clamped_to_the_start(span_exporter: InMemorySpanExporter) -> None:
-    session = AgentSession()
+    session = LiveSession()
     started_at = time.time()
     session._update_user_state("speaking", last_speaking_time=started_at)
     # a VAD end-of-speech anchor, backdated past the STT start by the silence it waited on
@@ -52,7 +52,7 @@ async def test_backdated_end_is_clamped_to_the_start(span_exporter: InMemorySpan
 
 
 async def test_end_after_the_start_is_kept(span_exporter: InMemorySpanExporter) -> None:
-    session = AgentSession()
+    session = LiveSession()
     started_at = time.time()
     session._update_user_state("speaking", last_speaking_time=started_at)
     session._update_user_state("listening", last_speaking_time=started_at + 1.25)

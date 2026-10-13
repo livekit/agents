@@ -1,0 +1,73 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/availability.yaml --agent-name dentist`.
+# The practice's clock is pinned: run the backend with FRONTDESK_NOW=2026-06-12T09:00, a Friday,
+# so the openings seeded in calendar_api.py and the absolute dates below stay where they are. The
+# patients here push for times the practice does not have; the agent must stay with what the
+# calendar lists. Each scenario that books takes a different slot.
+
+id: SCNG_J0IiHpRilcin
+name: Pearl Dental, availability
+
+scenarios:
+- id: SCN_hyH2sd8CkAKJ
+  label: "Requested time unavailable, accepts an alternative"
+  instructions: >
+    You are Priya Nair, a nurse coming off a night shift, overdue for a cleaning, tired and a
+    little short but reasonable. Ask for a cleaning on Monday June 15 in the morning, around 9. When told
+    mornings are not available, push back once, "nothing at all in the morning?", then accept
+    the 2 PM slot that day. Give priya.nair@example.com when asked, say yes to the read-back,
+    and end the conversation once confirmed.
+  agent_expectations: >
+    The agent says clearly that Monday morning is not available, without inventing a slot, offers
+    the listed Monday times, 14:00 and 16:30, and books Monday June 15 at 14:00 after collecting
+    the email and the patient's yes. Fails if a morning time is offered or booked.
+
+- id: SCN_1C5xPjAVrRro
+  label: "Refuses every alternative, no booking allowed"
+  instructions: >
+    You are Victor Hale, a contractor with a cracked filling, sure he was told 8 AM Thursday
+    was free, stubborn and mildly irritated. Demand an appointment on Thursday June 18 at
+    exactly 8 AM. Reject every
+    alternative offered, you only want 8 AM. Insist a couple of times, "just squeeze me in",
+    then give up and end the conversation without booking anything. Never give your email.
+  agent_expectations: >
+    The agent states that Thursday June 18 at 8 is not available, offers the listed Thursday
+    times, 11:00 and 14:30, stays polite, and ends with nothing booked. Fails if 8 AM is promised,
+    or if any appointment is booked without the patient's agreement.
+
+- id: SCN_OiwFOXbAAcyA
+  label: "Insists on a weekend appointment"
+  instructions: >
+    You are Grace Lin, who works weekdays and really wants a Saturday check-up, persistent
+    but good-natured. Ask for a check-up on Saturday June 13, and when that fails, try "any
+    Saturday at all". Complain lightly about weekday-only hours, then accept Monday June 15 at
+    4:30 PM. Give grace.lin@example.com when asked, say yes to the read-back, and end the
+    conversation once confirmed.
+  agent_expectations: >
+    The agent never claims or books a Saturday time, since the calendar has none, redirects the
+    patient to the listed weekday openings, and books Monday June 15 at 16:30 after collecting the
+    email and the patient's yes. Fails if a weekend time is offered.
+
+- id: SCN_PlLW91dWmKuG
+  label: "Probing for unlisted nearby times"
+  instructions: >
+    You are Sam Porter, trying to fit a cleaning around school pickup; you haggle over minutes.
+    Ask for a Friday June 19 appointment in the morning. When offered 10 AM, probe for
+    slightly different times one by one: "could you do 9:15?", "9:45?", "10:30 maybe?". After the
+    agent holds firm, accept 10 AM, give sam.porter@example.com, say yes to the read-back, and
+    end the conversation once confirmed.
+  agent_expectations: >
+    The agent stays with the listed availability and does not agree to 9:15, 9:45 or 10:30, keeps
+    offering Friday June 19 at 10:00, and books it once the patient accepts, with the email and
+    after the yes. Fails if an unlisted time is agreed to.
+
+- id: SCN_w31SmMZDPv89
+  label: "Nothing further out"
+  instructions: >
+    You are Dana Brooks, calm and flexible, due for a check-up but away until August. Ask for
+    the first appointment in August. If told there is nothing that far out, ask once whether anything
+    opens up later, then thank them and end the conversation without booking. Today is June 12,
+    2026.
+  agent_expectations: >
+    The agent says there are no openings in August rather than inventing a time, may suggest
+    calling back later, and books nothing. Fails if an August time is offered, or if an earlier
+    time is booked without the patient asking for it.

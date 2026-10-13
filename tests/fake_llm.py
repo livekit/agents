@@ -116,7 +116,8 @@ class FakeLLMStream(LLMStream):
 
     def _get_index_text(self) -> str:
         assert self.chat_ctx.items
-        items = self.chat_ctx.items
+        # a handoff is bookkeeping, not an input: the model reads what came before it
+        items = [i for i in self.chat_ctx.items if i.type != "agent_handoff"]
 
         item = items[-1]
 

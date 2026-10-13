@@ -51,12 +51,19 @@ from .llm.chat_context import (
     FunctionCallOutput,
 )
 from .llm.tool_context import (
+    Completed,
+    Failed,
     FunctionTool,
+    InputRequired,
+    ModelRetry,
     ProviderTool,
+    Rejected,
     StopResponse,
     ToolContext,
     ToolError,
     ToolResult,
+    Transition,
+    Working,
     function_tool,
 )
 from .plugin import Plugin
@@ -82,7 +89,6 @@ from .voice import (
     Agent,
     AgentEvent,
     AgentFalseInterruptionEvent,
-    AgentSession,
     AgentStateChangedEvent,
     AgentTask,
     AudioRecognition,
@@ -92,6 +98,7 @@ from .voice import (
     ErrorEvent,
     ExpressiveOptions,
     FunctionToolsExecutedEvent,
+    LiveSession,
     MetricsCollectedEvent,
     ModelSettings,
     NonverbalOptions,
@@ -137,6 +144,7 @@ from .voice.run_result import (
     RunAssert,
     RunEvent,
     RunResult,
+    RunUsage,
     mock_tools,
 )
 from .voice.turn import (
@@ -147,13 +155,17 @@ from .voice.turn import (
     UserTurnLimitOptions,
 )
 from .worker import (
+    AgentHandler,
     AgentServer,
+    RtcDoor,
     WorkerOptions,
     WorkerPermissions,
     WorkerType,
+    rtc_session,
 )
 
 if typing.TYPE_CHECKING:
+    from .a2a.endpoint import a2a_session  # noqa: F401
     from .llm import mcp  # noqa: F401
 
 
@@ -163,12 +175,28 @@ def __getattr__(name: str) -> typing.Any:
 
         return mcp
 
+    if name == "a2a_session":
+        # the text door, loaded on first use like the rest of the A2A stack
+        from .a2a.endpoint import a2a_session
+
+        return a2a_session
+
+    if name == "AgentSession":
+        # deprecated alias, kept one release
+        from .voice import agent_session
+
+        return agent_session.AgentSession
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
     "__version__",
+    "AgentHandler",
     "AgentServer",
+    "RtcDoor",
+    "rtc_session",
+    "a2a_session",
     "WorkerOptions",
     "WorkerType",
     "WorkerPermissions",
@@ -216,6 +244,13 @@ __all__ = [
     "ToolContext",
     "ToolError",
     "ToolResult",
+    "ModelRetry",
+    "Completed",
+    "Failed",
+    "Rejected",
+    "InputRequired",
+    "Working",
+    "Transition",
     "RunContext",
     "Plugin",
     "Scenario",
@@ -225,6 +260,7 @@ __all__ = [
     "SimulationDispatch",
     "SimulationRun",
     "SimulationVerdict",
+    "LiveSession",
     "AgentSession",
     "AudioRecognition",
     "ExpressiveOptions",
@@ -274,6 +310,7 @@ __all__ = [
     "EventRangeAssert",
     "RunAssert",
     "RunResult",
+    "RunUsage",
     "RunEvent",
     "ChatMessageEvent",
     "FunctionCallEvent",

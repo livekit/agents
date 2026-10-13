@@ -61,7 +61,7 @@ class _FakeSpeechHandle:
 
 
 class _FakeSession:
-    """Minimal AgentSession stand-in. Idle by default; tests emit state events
+    """Minimal LiveSession stand-in. Idle by default; tests emit state events
     via ``emit_agent_state`` / ``emit_user_state``."""
 
     def __init__(self) -> None:

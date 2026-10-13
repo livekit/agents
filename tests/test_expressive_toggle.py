@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
-from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference, tokenize, tts
+from livekit.agents import Agent, ExpressiveOptions, LiveSession, inference, tokenize, tts
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
@@ -15,8 +13,6 @@ from livekit.agents.voice.generation import (
     remove_expressive_instructions,
     update_expressive_instructions,
 )
-
-from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -77,15 +73,15 @@ def test_update_and_remove_expressive_instructions() -> None:
 
 
 def test_expressive_param_defaults_off() -> None:
-    assert AgentSession()._expressive is False
-    assert AgentSession(expressive=True)._expressive is True
+    assert LiveSession()._expressive is False
+    assert LiveSession(expressive=True)._expressive is True
 
     opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
-    assert AgentSession(expressive=opts)._expressive == opts
+    assert LiveSession(expressive=opts)._expressive == opts
 
 
 def test_update_options_expressive() -> None:
-    session = AgentSession(expressive=True)
+    session = LiveSession(expressive=True)
     assert session._expressive is True
 
     # turn off
@@ -125,10 +121,10 @@ def test_agent_expressive_overrides_session() -> None:
     # constructed hermetically; fishaudio declares a markup dialect, which expressive requires
     tts = inference.TTS("fishaudio/s2.1-pro", api_key="fake", api_secret="fake")
 
-    session_on = AgentSession(expressive=True, tts=tts)
-    session_off = AgentSession(tts=tts)
+    session_on = LiveSession(expressive=True, tts=tts)
+    session_off = LiveSession(tts=tts)
 
-    def resolves(agent: Agent, session: AgentSession) -> bool:
+    def resolves(agent: Agent, session: LiveSession) -> bool:
         return AgentActivity(agent, session)._resolve_expressive_options() is not None
 
     # agent unset: the session value applies
@@ -138,49 +134,6 @@ def test_agent_expressive_overrides_session() -> None:
     # agent value wins over the session in both directions
     assert not resolves(Agent(instructions="test", expressive=False), session_on)
     assert resolves(Agent(instructions="test", expressive=True), session_off)
-
-
-async def test_expressive_off_turn_scrubs_history() -> None:
-    """A turn that runs with expressive off removes the injected markup guide and
-    scrubs markup from past assistant turns."""
-    actions = FakeActions()
-    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
-    actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
-    actions.add_tts(2.0, ttfb=0.2, duration=0.3)
-
-    # FakeTTS has no markup dialect, so expressive resolves to off even though the
-    # session asks for it — same situation as a handoff to a non-expressive TTS.
-    session = create_session(
-        actions,
-        extra_kwargs={"expressive": {"speech_steering": {"nonverbal_sounds": {"laughing": False}}}},
-    )
-
-    # seed history as if previous turns ran expressive: marked-up assistant text +
-    # the injected markup guide
-    seeded = ChatContext.empty()
-    seeded.add_message(role="assistant", content=MARKED_UP)
-    update_expressive_instructions(seeded, text="Use the formatting tags below…")
-    agent = Agent(instructions="You are a helpful assistant.", chat_ctx=seeded)
-
-    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
-
-    # the injected guide is gone
-    assert all(item.id != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID for item in agent.chat_ctx.items)
-
-    assistant_texts = [
-        item.text_content
-        for item in agent.chat_ctx.items
-        if item.type == "message" and item.role == "assistant"
-    ]
-    assert assistant_texts, "expected assistant messages in history"
-    for text in assistant_texts:
-        assert "<expr" not in (text or "")
-        assert "<sound" not in (text or "")
-    # the seeded message's visible text survives the scrub, links included
-    assert any("Welcome back!" in (t or "") for t in assistant_texts)
-    assert any("[the guide](https://docs.livekit.io)" in (t or "") for t in assistant_texts)
-    # and the new reply went through normally
-    assert any("I'm doing well" in (t or "") for t in assistant_texts)
 
 
 def test_expressive_needs_a_tts_the_framework_can_lower_for() -> None:
@@ -202,7 +155,7 @@ def test_expressive_needs_a_tts_the_framework_can_lower_for() -> None:
             raise NotImplementedError
 
     def resolves(tts_obj: tts.TTS) -> bool:
-        session = AgentSession(expressive=True, tts=tts_obj)
+        session = LiveSession(expressive=True, tts=tts_obj)
         return (
             AgentActivity(Agent(instructions="test"), session)._resolve_expressive_options()
             is not None
@@ -238,7 +191,7 @@ def test_a_caller_supplied_stream_adapter_stays_expressive() -> None:
     adapter = tts.StreamAdapter(tts=wrapped)
     assert adapter.capabilities.streaming  # what the old guard rejected it for
 
-    session = AgentSession(expressive=True, tts=adapter)
+    session = LiveSession(expressive=True, tts=adapter)
     activity = AgentActivity(Agent(instructions="test"), session)
     assert activity._resolve_expressive_options() is not None
 

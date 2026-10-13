@@ -1,0 +1,37 @@
+[package]
+name = "lk-agents-node"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "lk_agents_node"
+# `rlib` alongside `cdylib` for the same reason `lk-agents-py` carries it: `cargo test -p
+# lk-agents-node` needs a linkable target, and a `cdylib`-only crate has no unit-test harness.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# napi-rs v3. Not in `[workspace.dependencies]` on purpose, exactly as `pyo3-async-runtimes` is
+# not: nothing else in the workspace may take a napi dependency, and putting it in the shared
+# table would advertise it to crates that must not have it (docs/CONTRACTS.md §4.7, the purity line).
+napi = { version = "3", default-features = false, features = ["napi9", "async", "serde-json"] }
+napi-derive = "3"
+lk-agents-abi = { path = "../lk-agents-abi" }
+# The core crates the generated wrappers (`src/generated`, `napi.rs`'s `LINKED`) call into -- the
+# same set `lk-agents-py` links, less `lk-agents-rtc` (nothing it exposes has a napi form yet).
+lk-agents-voice = { path = "../lk-agents-voice" }
+lk-agents-inference = { path = "../lk-agents-inference" }
+lk-agents-worker = { path = "../lk-agents-worker" }
+lk-agents-media = { path = "../lk-agents-media", features = ["images", "blingfire"] }
+async-trait.workspace = true
+prost.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+tokio = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }

@@ -1,0 +1,2052 @@
+{
+  "case": {
+    "setup": {
+      "stt": false,
+      "turn": "Default",
+      "preemptive": false,
+      "tools": [
+        "lookup"
+      ],
+      "max_tool_steps": null,
+      "instructions": "You are a test agent.",
+      "max_unrecoverable_errors": 3,
+      "hook_bound_ms": null
+    },
+    "inputs": [
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetAudioInput": {
+          "attach": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2500
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "Words",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "Words",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "WAIT stop stop stop",
+          "instructions": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "allow": true
+        }
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 15000,
+          "stt_flush": 200,
+          "skip_reply": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "",
+          "allow": null
+        }
+      },
+      {
+        "SetSpeakerFilter": {
+          "enabled": false
+        }
+      },
+      {
+        "Configure": {
+          "knob": "UserAway",
+          "mode": "Default",
+          "ms": 0,
+          "on": false,
+          "words": 0
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "HostMetrics": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "Audio",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": true
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": false
+        }
+      },
+      {
+        "Close": {
+          "drain": true
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 2
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "no no not that one, the other one",
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "Llm"
+        }
+      },
+      {
+        "SetAudioInput": {
+          "attach": false
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 1
+        }
+      },
+      {
+        "Say": {
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "allow": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "okay thanks bye",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "uh let me think... okay so it was last tuesday I think? maybe wednesday",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "TextStream",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "SetStaticKeyterms": {
+          "terms": []
+        }
+      },
+      {
+        "Say": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "input": "Words",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "Say": {
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "HostMetrics": {}
+      },
+      {
+        "Say": {
+          "text": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60).",
+          "input": "Words",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "my number is five five five, oh one four seven",
+          "instructions": "Sure, I can help with that.",
+          "allow": null
+        }
+      },
+      {
+        "Say": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "input": "Audio",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "FeedAudio": {
+          "stream": 3,
+          "chunks": 1
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 2500,
+          "stt_flush": 1000,
+          "skip_reply": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "Interrupt": {
+          "force": false,
+          "wait": true
+        }
+      },
+      {
+        "Configure": {
+          "knob": "Interruptions",
+          "mode": "Manual",
+          "ms": 200,
+          "on": true,
+          "words": 2
+        }
+      },
+      {
+        "Say": {
+          "text": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "GenerateReply": {
+          "user_input": "yeah hi um I'm calling about my order",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "uh let me think... okay so it was last tuesday I think? maybe wednesday",
+          "instructions": "Sure, I can help with that.",
+          "allow": true
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "Llm"
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "no no not that one, the other one",
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "okay thanks bye",
+          "instructions": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "my number is five five five, oh one four seven",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "",
+          "instructions": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "allow": null
+        }
+      },
+      {
+        "Ivr": {
+          "input": "Close",
+          "silence": 1000,
+          "text": "uh let me think... okay so it was last tuesday I think? maybe wednesday"
+        }
+      },
+      {
+        "Say": {
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "can you hear me",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60).",
+          "input": "TextStream",
+          "allow": true,
+          "to_ctx": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "what",
+          "instructions": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "allow": null
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "Tts"
+        }
+      },
+      {
+        "UpdateInstructions": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?"
+        }
+      },
+      {
+        "Say": {
+          "text": "",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "Words",
+          "allow": false,
+          "to_ctx": true
+        }
+      },
+      {
+        "Say": {
+          "text": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "input": "TextStream",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Close": {
+          "drain": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "Say": {
+          "text": "",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "WaitForIdle": {
+          "hold": 0
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "UpdateInstructions": {
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?"
+        }
+      },
+      {
+        "HostMetrics": {}
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "Audio",
+          "allow": true,
+          "to_ctx": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "what",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "AwaitExit": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Handoff": {
+          "agent": "sip_1",
+          "instructions": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "tools": [
+            "transfer",
+            "sip_1"
+          ],
+          "pause_previous": true,
+          "resume": true
+        }
+      },
+      {
+        "Say": {
+          "text": "That's outside what I can do here, so I'll pass you to someone who can.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "Run": {
+          "user_input": null,
+          "expects_output": false,
+          "retries": 0
+        }
+      },
+      {
+        "SetAudioOutput": {
+          "attach": false
+        }
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioInput",
+          "enabled": true
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": false
+        }
+      },
+      {
+        "WaitForIdle": {
+          "hold": 0
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "Interrupt": {
+          "force": true,
+          "wait": true
+        }
+      },
+      {
+        "SetAudioInput": {
+          "attach": true
+        }
+      },
+      {
+        "Run": {
+          "user_input": "yeah hi um I'm calling about my order",
+          "expects_output": true,
+          "retries": 3
+        }
+      },
+      {
+        "UpdateInstructions": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text."
+        }
+      },
+      {
+        "Run": {
+          "user_input": "",
+          "expects_output": false,
+          "retries": 2
+        }
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "Handoff": {
+          "agent": "billing_agent",
+          "instructions": "Sure, I can help with that.",
+          "tools": [
+            "agent-2",
+            "caller",
+            "sip_1"
+          ],
+          "pause_previous": false,
+          "resume": true
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "Tts"
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 700,
+          "stt_flush": 15000,
+          "skip_reply": true
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 5000,
+          "stt_flush": 10,
+          "skip_reply": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "WaitForIdle": {
+          "hold": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": false
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 1000,
+          "stt_flush": 200,
+          "skip_reply": true
+        }
+      },
+      {
+        "ClaimUserTurn": {}
+      },
+      {
+        "Say": {
+          "text": "Yes... no, wait -- actually, let me check that again.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Interrupt": {
+          "force": false,
+          "wait": true
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "Say": {
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Interrupt": {
+          "force": true,
+          "wait": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 20,
+          "stt_flush": 700,
+          "skip_reply": true
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "WaitForIdle": {
+          "hold": null
+        }
+      },
+      {
+        "Interrupt": {
+          "force": false,
+          "wait": false
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "SetAudioOutput": {
+          "attach": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 700
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "uh let me think... okay so it was last tuesday I think? maybe wednesday",
+          "instructions": null,
+          "allow": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "my number is five five five, oh one four seven",
+          "instructions": "",
+          "allow": false
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "uh let me think... okay so it was last tuesday I think? maybe wednesday",
+          "instructions": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "allow": null
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "yeah hi um I'm calling about my order",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "UpdateModels": {
+          "legs": "Llm"
+        }
+      },
+      {
+        "SetAudioInput": {
+          "attach": true
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "HoldFloor": {}
+      },
+      {
+        "PushVideo": {}
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "TextStream",
+          "allow": false,
+          "to_ctx": false
+        }
+      },
+      {
+        "WaitForIdle": {
+          "hold": null
+        }
+      },
+      {
+        "Advance": {
+          "ms": 200
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 15000,
+          "stt_flush": 500,
+          "skip_reply": true
+        }
+      },
+      {
+        "Say": {
+          "text": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60).",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Say": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "input": "Audio",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": true
+        }
+      },
+      {
+        "Interrupt": {
+          "force": true,
+          "wait": false
+        }
+      },
+      {
+        "WaitForIdle": {
+          "hold": 0
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 0
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 3
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 4
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 5
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 6
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 7
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 8
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 9
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 10
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 11
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 12
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 13
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 14
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 15
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 16
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 17
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 18
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 19
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 20
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 21
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 22
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 23
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "ReleaseUserTurn": {}
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "Advance": {
+          "ms": 1601
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      },
+      {
+        "ReleaseFloor": {
+          "hold": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1
+        }
+      }
+    ]
+  },
+  "expect": {
+    "Fails": {
+      "contract": "session_settles",
+      "subject": "Session"
+    }
+  }
+}

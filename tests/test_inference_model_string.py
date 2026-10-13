@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from livekit.agents import inference
-from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice import Agent, LiveSession
 
 pytestmark = pytest.mark.unit
 
@@ -61,7 +61,7 @@ def test_llm_model_strings(model: str) -> None:
 
 
 def test_agent_session_accepts_realtime_model_string() -> None:
-    session = AgentSession(llm="openai/gpt-realtime")
+    session = LiveSession(llm="openai/gpt-realtime")
     assert isinstance(session.llm, inference.RealtimeModel)
 
 
