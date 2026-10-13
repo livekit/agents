@@ -445,7 +445,7 @@ class RecognizeStream(ABC):
         else:
             self._start_time_offset = value + (self._first_frame_at - self._created_at)
 
-    def _offset_at(self, wall_time: float) -> float | None:
+    def _capture_start_offset_from(self, wall_time: float) -> float | None:
         """The ``start_time_offset`` of audio captured at ``wall_time`` on this stream's
         timeline, None while the timeline has no start yet."""
         if self._declared_start_time_offset is not None:
@@ -597,7 +597,7 @@ class RecognizeStream(ABC):
             self._first_frame_at = time.time() - frame.duration
             if self._audio_started_at is None:
                 self._audio_started_at = self._first_frame_at
-            self._start_time_offset = self._offset_at(self._first_frame_at) or 0.0
+            self._start_time_offset = self._capture_start_offset_from(self._first_frame_at) or 0.0
 
         if self._needed_sr and self._needed_sr != frame.sample_rate:
             if not self._resampler:
