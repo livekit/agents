@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.stt import (
     STT,
@@ -18,7 +19,7 @@ from livekit.agents.stt import (
     StreamAdapter,
     STTCapabilities,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions
 from livekit.agents.utils.audio import AudioBuffer, silence_frame
 
 from .fake_stt import FakeSTT, FakeUserSpeech
@@ -293,8 +294,13 @@ class _AudioStream(RecognizeStream):
         stt: STT,
         fail_first_run: bool = False,
         first_run_delay: float = 0.0,
+        sample_rate: int | None = None,
     ) -> None:
-        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+        super().__init__(
+            stt=stt,
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+            sample_rate=sample_rate if sample_rate is not None else NOT_GIVEN,
+        )
         self._fail_first_run = fail_first_run
         self._first_run_delay = first_run_delay
         self.run_count = 0
@@ -414,4 +420,43 @@ async def test_undeclared_start_time_offset_counts_from_the_first_audio() -> Non
     await _wait_for_offsets(stream, 2)
 
     assert stream.offsets[1] == pytest.approx(pushed_at - first_pushed_at)
+    await stream.aclose()
+
+
+class _BufferingResampler:
+    """Fake resampler: holds the first input and releases it with the second."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self._held: list[rtc.AudioFrame] = []
+
+    def push(self, frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
+        self._held.append(frame)
+        if len(self._held) < 2:
+            return []
+        out, self._held = self._held, []
+        return out
+
+    def flush(self) -> list[rtc.AudioFrame]:
+        out, self._held = self._held, []
+        return out
+
+
+async def test_resampled_first_frame_keeps_the_capture_time_of_its_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resampler can hold audio across pushes; the first output's anchor is the capture
+    time of the audio it carries, not the push that released it."""
+    monkeypatch.setattr(rtc, "AudioResampler", _BufferingResampler)
+    stream = _AudioStream(stt=_DummySTT(), sample_rate=8000)
+    stream.start_time_offset = 30.0
+    frame = silence_frame(0.02, 16000)
+
+    await asyncio.sleep(5.0)
+    first_captured_at = time.time() - frame.duration
+    stream.push_frame(frame)  # held by the resampler, no output yet
+    await asyncio.sleep(0.2)
+    stream.push_frame(frame)  # releases both
+    await _wait_for_offsets(stream, 1)
+
+    assert stream.offsets == [pytest.approx(30.0 + first_captured_at - stream._created_at)]
     await stream.aclose()
