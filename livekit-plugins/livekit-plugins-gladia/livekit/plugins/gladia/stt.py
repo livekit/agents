@@ -1081,6 +1081,9 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechEvent(
                                     type=stt.SpeechEventType.END_OF_SPEECH,
                                     request_id=self._request_id,
+                                    alternatives=[speech_data]
+                                    if utterance.get("end", 0) > 0
+                                    else [],
                                 )
                             )
                     # If translation *is* enabled, we suppress this final event
@@ -1156,9 +1159,20 @@ class SpeechStream(stt.SpeechStream):
                     # Emit END_OF_SPEECH after the final *translated* transcript
                     if self._speaking:
                         self._speaking = False
+                        end_time = original_utterance.get("end", 0)
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
-                                type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id
+                                type=stt.SpeechEventType.END_OF_SPEECH,
+                                request_id=self._request_id,
+                                alternatives=[
+                                    stt.SpeechData(
+                                        language=LanguageCode(original_language),
+                                        text="",
+                                        end_time=end_time + self.start_time_offset,
+                                    )
+                                ]
+                                if end_time > 0
+                                else [],
                             )
                         )
 

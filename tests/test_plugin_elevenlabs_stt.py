@@ -67,6 +67,7 @@ def _new_stream(
     stream._event_ch = _EventSink()
     stream._speaking = False
     stream._last_partial_text = ""
+    stream._final_alternatives = []
     stream._start_time_offset = 0.0
     return stream
 
@@ -99,12 +100,46 @@ def _partial_transcript(text: str) -> dict:
     return {"message_type": "partial_transcript", "text": text, "words": []}
 
 
+@pytest.mark.parametrize("server_vad", [None, {"vad_silence_threshold_secs": 0.5}])
+@pytest.mark.parametrize("end_time", [0.4, 0.0])
+def test_elevenlabs_endpoint_preserves_timing_across_empty_commit(server_vad, end_time):
+    stream = _new_stream(server_vad=server_vad, include_timestamps=True)
+    stream._start_time_offset = 7.0
+    final = _committed_transcript("hello", with_timestamps=True)
+    final["words"][0]["end"] = end_time
+    stream._process_stream_event(final)
+    if server_vad is None:
+        stream._process_stream_event(_committed_transcript("", with_timestamps=True))
+
+    endpoint = stream._event_ch.events[-1]
+    assert endpoint.type == stt.SpeechEventType.END_OF_SPEECH
+    if end_time:
+        assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
+    else:
+        assert endpoint.alternatives == []
+
+    stream._process_stream_event(_partial_transcript("next turn"))
+    stream._process_stream_event(_committed_transcript("", with_timestamps=True))
+    assert stream._event_ch.events[-1].alternatives == []
+
+
 def _interim_texts(stream: elevenlabs_stt.SpeechStream) -> list[str]:
     return [
         event.alternatives[0].text
         for event in stream._event_ch.events
         if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT
     ]
+
+
+def test_untimed_final_invalidates_previous_commit_timing() -> None:
+    stream = _new_stream(server_vad=None, include_timestamps=True)
+    stream._process_stream_event(_committed_transcript("hello", with_timestamps=True))
+    final = _committed_transcript("again", with_timestamps=True)
+    final["words"] = []
+    stream._process_stream_event(final)
+    stream._process_stream_event(_committed_transcript("", with_timestamps=True))
+    assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    assert stream._event_ch.events[-1].alternatives == []
 
 
 def test_advancing_partial_transcripts_are_forwarded() -> None:

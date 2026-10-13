@@ -533,7 +533,8 @@ def test_stt_update_options():
 # --- STT streaming recognition against the local WS mock ---
 
 
-async def test_stt_stream_interim_and_final(mock_palabra_stt_ws):
+@pytest.mark.parametrize("end_time", [1.5, 0.0])
+async def test_stt_stream_interim_and_final(mock_palabra_stt_ws, end_time):
     ws = mock_palabra_stt_ws
     stt_ = STT(api_key="test-key")
     stream = stt_.stream()
@@ -549,7 +550,10 @@ async def test_stt_stream_interim_and_final(mock_palabra_stt_ws):
     assert query["sample_rate"] == str(SAMPLE_RATE)
 
     ws["send_queue"].put_nowait(_transcription("Hello", is_eos=False))
-    ws["send_queue"].put_nowait(_transcription("Hello world.", is_eos=True))
+    stream._start_time_offset = 7.0
+    final_message = _transcription("Hello world.", is_eos=True)
+    final_message["segment"]["end_time"] = end_time
+    ws["send_queue"].put_nowait(final_message)
 
     events = []
     async for ev in stream:
@@ -568,13 +572,18 @@ async def test_stt_stream_interim_and_final(mock_palabra_stt_ws):
     assert interim.text == "Hello"
     assert final.text == "Hello world."
     assert final.language == "en"
+    if end_time:
+        assert events[-1].alternatives[0].end_time == pytest.approx(8.5)
+    else:
+        assert events[-1].alternatives == []
 
     stream.end_input()
     await stream.aclose()
     await stt_.aclose()
 
 
-async def test_stt_stream_translation(mock_palabra_stt_ws):
+@pytest.mark.parametrize("end_time", [1.5, 0.0])
+async def test_stt_stream_translation(mock_palabra_stt_ws, end_time):
     ws = mock_palabra_stt_ws
     stt_ = STT(api_key="test-key", language="en", translate_languages=["es"])
     stream = stt_.stream()
@@ -584,7 +593,10 @@ async def test_stt_stream_translation(mock_palabra_stt_ws):
     assert ws["queries"][0]["translate_languages"] == "es"
 
     # Source-language transcript first, then the translation: only the translation is emitted.
-    ws["send_queue"].put_nowait(_transcription("Good morning.", is_eos=True))
+    stream._start_time_offset = 7.0
+    source = _transcription("Good morning.", is_eos=True)
+    source["segment"]["end_time"] = end_time
+    ws["send_queue"].put_nowait(source)
     ws["send_queue"].put_nowait(
         _transcription(
             "Buenos días.", is_eos=True, language="es", message_type="translated_transcription"
@@ -605,6 +617,10 @@ async def test_stt_stream_translation(mock_palabra_stt_ws):
     assert data.source_languages == ["en"]
     assert data.source_texts == ["Good morning."]
     assert data.target_texts == ["Buenos días."]
+    if end_time:
+        assert events[-1].alternatives[0].end_time == pytest.approx(8.5)
+    else:
+        assert events[-1].alternatives == []
 
     stream.end_input()
     await stream.aclose()

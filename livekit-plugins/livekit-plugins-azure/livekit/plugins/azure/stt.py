@@ -424,7 +424,7 @@ class SpeechStream(stt.SpeechStream):
                 stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
             )
 
-    def _on_speech_end(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+    def _on_speech_end(self, evt: speechsdk.RecognitionEventArgs) -> None:
         if not self._speaking:
             return
 
@@ -433,7 +433,18 @@ class SpeechStream(stt.SpeechStream):
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
                 self._event_ch.send_nowait,
-                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=[
+                        stt.SpeechData(
+                            language=LanguageCode(""),
+                            text="",
+                            end_time=evt.offset / 10**7 + self.start_time_offset,
+                        )
+                    ]
+                    if evt.offset > 0
+                    else [],
+                ),
             )
 
     def _on_session_started(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:

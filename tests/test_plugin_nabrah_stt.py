@@ -178,3 +178,20 @@ def test_flush_reports_usage_without_transcript(stream: SpeechStream) -> None:
     assert len(usage_events) == 1
     assert usage_events[0].recognition_usage is not None
     assert usage_events[0].recognition_usage.audio_duration == pytest.approx(1.25)
+
+
+def test_endpoint_preserves_word_end_instead_of_audio_processed(stream: SpeechStream) -> None:
+    stream._start_time_offset = 7.0
+    stream._stt._end_of_turn_confirm_delay_seconds = None
+    emitted: list[stt.SpeechEvent] = []
+    with patch.object(stream, "_emit", side_effect=emitted.append):
+        stream._process_message(
+            {
+                "type": "transcript",
+                "text": "hello <eot>",
+                "audio_processed": 10.0,
+                "words": [{"word": "hello", "start_time": 100, "end_time": 400}],
+            }
+        )
+    endpoint = next(event for event in emitted if event.type == stt.SpeechEventType.END_OF_SPEECH)
+    assert endpoint.alternatives[0].end_time == pytest.approx(7.4)

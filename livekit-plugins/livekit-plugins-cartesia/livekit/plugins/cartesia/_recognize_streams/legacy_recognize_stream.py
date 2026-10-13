@@ -166,7 +166,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._speech_duration: float = 0
-        self._last_speech_end_time: float = 0
 
     async def _run(self) -> None:
         if self._input_ch.closed:
@@ -177,7 +176,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         # invocation by the base class) starts fresh.
         self._speaking = False
         self._speech_duration = 0
-        self._last_speech_end_time = 0
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
@@ -367,12 +365,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 )
                 for word in words
             ]
-            # word timestamps are often within the audio window, so we track time separately
-            if self._last_speech_end_time == 0.0:
-                self._last_speech_end_time = self.start_time_offset
-            start_time = self._last_speech_end_time
-            end_time = start_time + data.get("duration", 0)
-            self._last_speech_end_time = end_time
+            end_time = words[-1].get("end", 0) if words else 0.0
             is_final = data["is_final"]
 
             if not text and not is_final:
@@ -388,8 +381,10 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
             speech_data = stt.SpeechData(
                 language=self._language or LanguageCode("en"),
-                start_time=start_time,
-                end_time=end_time,
+                start_time=words[0].get("start", 0) + self.start_time_offset
+                if end_time > 0
+                else 0.0,
+                end_time=end_time + self.start_time_offset if end_time > 0 else 0.0,
                 text=text,
                 words=timed_words,
             )
@@ -416,7 +411,10 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
                 if self._speaking:
                     self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    end_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        alternatives=[speech_data] if end_time > 0 else [],
+                    )
                     self._event_ch.send_nowait(end_event)
             else:
                 event = stt.SpeechEvent(

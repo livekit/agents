@@ -406,7 +406,12 @@ class SpeechStream(stt.SpeechStream):
                 time.monotonic() - speech_started_at if speech_started_at is not None else 0.0
             )
             logger.debug("RTZR final transcript received (speech_duration=%.2fs)", speech_duration)
-            events.append(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            events.append(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=events[-1].alternatives if duration > 0 else [],
+                )
+            )
             in_speech = False
             speech_started_at = None
 
