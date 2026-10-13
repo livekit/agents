@@ -1,0 +1,163 @@
+tests/test_plugin_slng_stt.py
+  s_bcd3e70328118e::t_6b4b914e5c204a 1-30,32,35-38,41-48
+  s_bcd3e70328118e::t_998c9b63a14826 31
+  s_bcd3e70328118e::t_6a890059fb0e6c 33-34,39-40
+  s_bcd3e70328118e::t_d95e53e8240393 49-59
+livekit-plugins/livekit-plugins-microsoft-ai/livekit/plugins/microsoft_ai/stt.py
+  s_bcd3e70328118e::t_c3e5fdf063f849 24,263,415-421,428,435,542,564,681
+  s_bcd3e70328118e::t_b87c038e6ee169 682-685
+livekit-plugins/livekit-plugins-inworld/livekit/plugins/inworld/stt.py
+  s_bcd3e70328118e::t_6f08d4b2d255b2 251,427-428,456-460,472
+  s_bcd3e70328118e::t_58476078f95456 473-480
+livekit-plugins/livekit-plugins-smallestai/livekit/plugins/smallestai/stt.py
+  s_bcd3e70328118e::t_0e842cef571915 457,749,752,755-767,780,800-802
+  s_bcd3e70328118e::t_edeced7481e245 61
+livekit-plugins/livekit-plugins-rtzr/livekit/plugins/rtzr/stt.py
+  s_bcd3e70328118e::t_13023d3cbb83c6 409-414
+tests/test_microsoft_ai_stt.py
+  s_bcd3e70328118e::t_c3e5fdf063f849 333-364,368
+  s_bcd3e70328118e::t_a332eb75103520 365-367,369
+tests/test_plugin_telnyx_stt.py
+  s_bcd3e70328118e::t_3f86ca6980212c 144-165
+  s_bcd3e70328118e::t_661ca02f0d68cb 142-143
+livekit-plugins/livekit-plugins-cartesia/livekit/plugins/cartesia/_recognize_streams/legacy_recognize_stream.py
+  s_bcd3e70328118e::t_2bb08c9fc883e9 368,384-387,414-415
+  s_bcd3e70328118e::t_f984c01ec3ceb4 416-417
+livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/stt.py
+  s_bcd3e70328118e::t_7c395aac748d98 280,403,509-519,524,527-531,533,551-560,565,569,577-587,590-595,605-608
+  s_bcd3e70328118e::t_122f1bf556ede8 38,612-615
+tests/test_plugin_openai_stt_context.py
+  s_bcd3e70328118e::t_03c2218372b984 540-570
+  s_bcd3e70328118e::t_4bd392496332e6 501-502,511-539,571-587,600-601
+  s_bcd3e70328118e::t_036725b2e06643 588-599,602
+livekit-plugins/livekit-plugins-telnyx/livekit/plugins/telnyx/stt.py
+  s_bcd3e70328118e::t_3f86ca6980212c 293-294,308-311,323
+  s_bcd3e70328118e::t_ff9582a242060c 324-328
+tests/test_meta_stt.py
+  s_bcd3e70328118e::t_c4d06aa0f53026 577-580
+  s_bcd3e70328118e::t_7c395aac748d98 552
+tests/test_plugin_smallestai_stt.py
+  s_bcd3e70328118e::t_0e842cef571915 1-45
+  s_bcd3e70328118e::t_08e22b6b767971 46-48
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py
+  s_bcd3e70328118e::t_54be7f8c59d7f4 450,457,462,470,475-480
+livekit-plugins/livekit-plugins-sarvam/tests/test_speech_timing.py
+  s_bcd3e70328118e::t_998c9b63a14826 34,254
+  s_bcd3e70328118e::t_32493b33cf9bf5 79,120-136
+  s_45d0ae4cf1a624::t_88e29ef40a9a77 137-138
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_bcd3e70328118e::t_a1e664eed14b58 521,819,1092-1097,1236-1237,1242-1250
+  s_bcd3e70328118e::t_7c395aac748d98 1305-1306
+tests/test_plugin_inworld_stt.py
+  s_bcd3e70328118e::t_6f08d4b2d255b2 1-34
+livekit-plugins/livekit-plugins-slng/livekit/plugins/slng/stt.py
+  s_bcd3e70328118e::t_6b4b914e5c204a 1114-1117,1129-1130
+  s_bcd3e70328118e::t_32cea19222bfd9 1131-1132
+tests/test_plugin_xai_stt.py
+  s_bcd3e70328118e::t_3cecc71250ef02 142-183
+  s_bcd3e70328118e::t_c4df618d892795 184-189
+tests/test_plugin_gradium_stt.py
+  s_bcd3e70328118e::t_1037f06f22f3be 13-33,37-41,43-46,49-51,54-60
+  s_bcd3e70328118e::t_3cecc71250ef02 34-36,42,47-48,52-53
+tests/test_plugin_cartesia_stt.py
+  s_bcd3e70328118e::t_2bb08c9fc883e9 1-12,33-54
+  s_bcd3e70328118e::t_7c395aac748d98 13-32
+  s_bcd3e70328118e::t_86ca86f5db29cd 55-57
+livekit-plugins/livekit-plugins-nvidia/livekit/plugins/nvidia/stt.py
+  s_bcd3e70328118e::t_16cab195b2d006 282,285-290
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/qwen3_stt.py
+  s_bcd3e70328118e::t_09261b28542306 381-386
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_bcd3e70328118e::t_b33e0cbbbffcda 469,648,828,835-841,847-853
+  s_bcd3e70328118e::t_426c3b60d8da51 40
+tests/test_plugin_elevenlabs_stt.py
+  s_bcd3e70328118e::t_0a8d263252b9a4 70,103-123
+  s_bcd3e70328118e::t_3cecc71250ef02 134-144
+  s_bcd3e70328118e::t_32940e7d38339e 124-125
+livekit-plugins/livekit-plugins-palabra/livekit/plugins/palabra/stt.py
+  s_bcd3e70328118e::t_b591810698440a 313,315-321
+livekit-plugins/livekit-plugins-speechmatics/livekit/plugins/speechmatics/stt.py
+  s_bcd3e70328118e::t_4fe0948b708a85 561,586,849-850,856,862-867
+  s_bcd3e70328118e::t_95aae952bfe2f5 35
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/stt.py
+  s_bcd3e70328118e::t_103bb81252cf37 5,337,343-346
+livekit-plugins/livekit-plugins-gladia/livekit/plugins/gladia/stt.py
+  s_bcd3e70328118e::t_5d06eb31fc764f 1084-1086,1162,1165-1173
+  s_bcd3e70328118e::t_b2e3abc32bd1c4 1174-1175
+tests/test_plugin_google_stt.py
+  s_bcd3e70328118e::t_b2f510eca33678 4,110-126,128-144
+  s_bcd3e70328118e::t_113539fa788c77 127
+  s_bcd3e70328118e::t_616dee21393621 147-198,201-203
+  s_bcd3e70328118e::t_aa26e63e4221e3 145-146,199-200,204
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/stt.py
+  s_bcd3e70328118e::t_7c395aac748d98 988
+  s_bcd3e70328118e::t_f71f006b40d35d 985-987,989-990,1002-1006,1008-1019
+tests/test_plugin_sarvam_stt_streaming.py
+  s_bcd3e70328118e::t_a1e664eed14b58 59-60,1705,1723-1735,1739-1743
+  s_bcd3e70328118e::t_c4d06aa0f53026 1736-1738
+  s_bcd3e70328118e::t_cd8ea1833d38b5 1744-1751
+tests/test_plugin_speechmatics_stt.py
+  s_bcd3e70328118e::t_7673b848f56c6d 126-158
+tests/test_plugin_azure_stt.py
+  s_bcd3e70328118e::t_a0ae3a7bfbe2b6 12-31
+tests/test_plugin_aws_stt.py
+  s_bcd3e70328118e::t_d96585abb042c5 6,25-52
+tests/test_plugin_mistralai_stt.py
+  s_bcd3e70328118e::t_103bb81252cf37 1-32
+  s_bcd3e70328118e::t_938833db3ff369 33-37
+tests/test_plugin_palabra.py
+  s_bcd3e70328118e::t_b591810698440a 536-537,553-556,575-578,585-586,596-599,620-623
+tests/test_plugin_nabrah_stt.py
+  s_bcd3e70328118e::t_7c395aac748d98 181-193
+  s_bcd3e70328118e::t_7a18eca6b8e8ea 194-197
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/stt.py
+  s_bcd3e70328118e::t_38b072ab1f8306 323-325,701,758-760,764-772
+  s_bcd3e70328118e::t_d92e0fd05b773f 67,773-778,783,814-816,836-840,897-907,1014
+tests/test_plugin_nvidia_stt.py
+  s_bcd3e70328118e::t_16cab195b2d006 1-36
+  s_bcd3e70328118e::t_429f5fb62cf44e 37
+tests/test_plugin_gladia_stt.py
+  s_bcd3e70328118e::t_5d06eb31fc764f 7-9,20-49
+  s_bcd3e70328118e::t_b91115e2f4149a 3-4,50-52
+tests/test_plugin_rtzr_stt.py
+  s_bcd3e70328118e::t_13023d3cbb83c6 1-29
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_bcd3e70328118e::t_998c9b63a14826 927,999,1031,1062,1066
+  s_bcd3e70328118e::t_2b450353b4dfcc 48
+livekit-plugins/livekit-plugins-azure/livekit/plugins/azure/stt.py
+  s_bcd3e70328118e::t_25352207f2e051 427,436-447
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/stt.py
+  s_bcd3e70328118e::t_1037f06f22f3be 277,311,359-361,369-374
+  s_bcd3e70328118e::t_81c743176fe2d7 376,383-384
+tests/test_plugin_baseten_stt.py
+  s_bcd3e70328118e::t_26d3fcffcdd242 16-17,29-40,42-46,50-51
+  s_bcd3e70328118e::t_09261b28542306 1-15,18-28,41,47-49,52-59
+  s_bcd3e70328118e::t_e0b557633468ee 60-63
+tests/test_plugin_gnani_stt.py
+  s_bcd3e70328118e::t_c4d06aa0f53026 12-37
+  s_bcd3e70328118e::t_c93404a158d94c 38-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0d948d1dc083f492786fc63d9ee46bc1c284ff05",
+  "prompts": {},
+  "sessions": {
+    "s_45d0ae4cf1a624": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1378d-ce7c-7ab1-b321-858fe4d899cf",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
