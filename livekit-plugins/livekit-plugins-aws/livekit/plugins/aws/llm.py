@@ -14,7 +14,10 @@
 # limitations under the License.
 from __future__ import annotations
 
+import asyncio
 import os
+import weakref
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -119,6 +122,9 @@ class LLM(llm.LLM):
 
         See https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html for more details on the AWS Bedrock Runtime API.
 
+        The runtime client opens lazily and is reused across turns on the same event loop.
+        Call ``aclose()`` when finished to cancel outstanding chat streams and close the client.
+
         Args:
             model (str, optional): model or inference profile arn to use(https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html).
                 Defaults to 'amazon.nova-2-lite-v1:0'.
@@ -149,6 +155,12 @@ class LLM(llm.LLM):
         self._sampling_params_warned = False
         self._forced_tool_choice_warned = False
         self._session = _resolve_session(session)
+        self._client: Any = None
+        self._client_context: AbstractAsyncContextManager[Any] | None = None
+        self._client_lock = asyncio.Lock()
+        self._client_loop: asyncio.AbstractEventLoop | None = None
+        self._closed = False
+        self._streams: weakref.WeakSet[LLMStream] = weakref.WeakSet()
         if session is None:
             if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
                 self._session.set_credentials(api_key, api_secret)
@@ -186,6 +198,40 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return "AWS Bedrock"
 
+    async def _get_client(self) -> Any:
+        """Lazily open one client on the event loop that owns this instance."""
+        loop = asyncio.get_running_loop()
+        if self._client_loop is not None and self._client_loop is not loop:
+            raise RuntimeError("AWS Bedrock LLM must be used on the same event loop")
+        async with self._client_lock:
+            if self._closed:
+                raise RuntimeError("AWS Bedrock LLM is closed")
+            if self._client is None:
+                config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
+                context = self._session.create_client("bedrock-runtime", config=config)
+                client = await context.__aenter__()
+                # Publish only after successful entry so failed/cancelled initialization can retry.
+                self._client_context = context
+                self._client = client
+                self._client_loop = loop
+            return self._client
+
+    async def aclose(self) -> None:
+        """Close the shared client after closing this instance's chat streams.
+
+        Call on the event loop that used the instance. Repeated calls are safe.
+        """
+        if self._client_loop is not None and self._client_loop is not asyncio.get_running_loop():
+            raise RuntimeError("AWS Bedrock LLM must be closed on the same event loop")
+        self._closed = True
+        await super().aclose()
+        await asyncio.gather(*(stream.aclose() for stream in self._streams))
+        async with self._client_lock:
+            if self._client_context is not None:
+                await self._client_context.__aexit__(None, None, None)
+                self._client_context = None
+                self._client = None
+
     def chat(
         self,
         *,
@@ -197,6 +243,11 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
+        if self._closed:
+            raise RuntimeError("AWS Bedrock LLM is closed")
+        if self._client_loop is not None and self._client_loop is not asyncio.get_running_loop():
+            raise RuntimeError("AWS Bedrock LLM must be used on the same event loop")
+        self._client_loop = asyncio.get_running_loop()
         opts: dict[str, Any] = {}
         extra_kwargs = extra_kwargs if is_given(extra_kwargs) else {}
 
@@ -292,14 +343,15 @@ class LLM(llm.LLM):
         if is_given(self._opts.additional_request_fields):
             opts["additionalModelRequestFields"] = self._opts.additional_request_fields
 
-        return LLMStream(
+        stream = LLMStream(
             self,
             chat_ctx=chat_ctx,
             tools=tools or [],
-            session=self._session,
             conn_options=conn_options,
             extra_kwargs=opts,
         )
+        self._streams.add(stream)
+        return stream
 
 
 class LLMStream(llm.LLMStream):
@@ -308,7 +360,6 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        session: AioSession,
         conn_options: APIConnectOptions,
         tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
@@ -316,7 +367,6 @@ class LLMStream(llm.LLMStream):
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._llm: LLM = llm
         self._opts = extra_kwargs
-        self._session = session
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
@@ -325,20 +375,20 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         retryable = True
         try:
-            config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
-            async with self._session.create_client("bedrock-runtime", config=config) as client:
-                try:
-                    response = await client.converse_stream(**self._opts)
-                except ClientError as e:
-                    # Bedrock rejected the request itself, e.g. a ValidationException
-                    # ("This model doesn't support the temperature field."). Keep the HTTP
-                    # status so a 4xx is not retried; throttling and 5xx still are.
-                    meta = e.response.get("ResponseMetadata", {})
-                    raise APIStatusError(
-                        f"aws bedrock llm: error generating content: {e}",
-                        status_code=meta.get("HTTPStatusCode", -1),
-                        request_id=meta.get("RequestId"),
-                    ) from e
+            client = await self._llm._get_client()
+            try:
+                response = await client.converse_stream(**self._opts)
+            except ClientError as e:
+                # Bedrock rejected the request itself, e.g. a ValidationException
+                # ("This model doesn't support the temperature field."). Keep the HTTP
+                # status so a 4xx is not retried; throttling and 5xx still are.
+                meta = e.response.get("ResponseMetadata", {})
+                raise APIStatusError(
+                    f"aws bedrock llm: error generating content: {e}",
+                    status_code=meta.get("HTTPStatusCode", -1),
+                    request_id=meta.get("RequestId"),
+                ) from e
+            try:
                 request_id = response["ResponseMetadata"]["RequestId"]
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                     raise APIStatusError(
@@ -355,6 +405,8 @@ class LLMStream(llm.LLMStream):
                     if chat_chunk is not None:
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
+            finally:
+                response["stream"].close()
 
         except APIStatusError:
             raise
