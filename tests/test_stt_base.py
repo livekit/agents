@@ -441,22 +441,27 @@ class _BufferingResampler:
         return out
 
 
-async def test_resampled_first_frame_keeps_the_capture_time_of_its_audio(
+async def test_resampled_frames_keep_the_capture_time_of_their_audio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A resampler can hold audio across pushes; the first output's anchor is the capture
-    time of the audio it carries, not the push that released it."""
+    """A resampler can hold audio across pushes and release several frames at once. Each
+    output is stamped with the audio it carries, including the gap between the pushes,
+    so a retry that starts on the second output is anchored where that audio was captured."""
     monkeypatch.setattr(rtc, "AudioResampler", _BufferingResampler)
-    stream = _AudioStream(stt=_DummySTT(), sample_rate=8000)
+    stream = _AudioStream(stt=_DummySTT(), fail_first_run=True, sample_rate=8000)
     stream.start_time_offset = 30.0
     frame = silence_frame(0.02, 16000)
 
     await asyncio.sleep(5.0)
     first_captured_at = time.time() - frame.duration
     stream.push_frame(frame)  # held by the resampler, no output yet
-    await asyncio.sleep(0.2)
-    stream.push_frame(frame)  # releases both
-    await _wait_for_offsets(stream, 1)
+    await asyncio.sleep(1.0)
+    second_captured_at = time.time() - frame.duration
+    stream.push_frame(frame)  # releases both; the first attempt takes one and fails
+    await _wait_for_offsets(stream, 2)
 
-    assert stream.offsets == [pytest.approx(30.0 + first_captured_at - stream._created_at)]
+    assert stream.offsets == [
+        pytest.approx(30.0 + first_captured_at - stream._created_at),
+        pytest.approx(30.0 + second_captured_at - stream._created_at),
+    ]
     await stream.aclose()
