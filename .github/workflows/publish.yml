@@ -148,14 +148,14 @@ jobs:
             echo "Merging this PR will publish all packages as **${VERSION}** to PyPI."
             if [ "$RELEASE_NOTES" = "true" ]; then
               echo
-              echo "On merge, the notes between the markers become the GitHub release, above GitHub's list of merged PRs. Edit them here, or delete the whole block to skip the GitHub release."
+              if [ -s "$RUNNER_TEMP/release_notes.md" ]; then
+                echo "On merge, the notes between the markers become the GitHub release, above GitHub's list of merged PRs. They cover the PRs merged up to $(git rev-parse --short HEAD^); dispatch the release again to redraft them. Edit them here, or delete the whole block to skip the GitHub release."
+              else
+                echo "Drafting the release notes failed, see the publish workflow logs. Write the notes between the markers, or the GitHub release is skipped."
+              fi
               echo
               echo "<!-- release-notes:start -->"
-              if [ -s "$RUNNER_TEMP/release_notes.md" ]; then
-                cat "$RUNNER_TEMP/release_notes.md"
-              else
-                echo "_Drafting failed, see the publish workflow logs. Write the summary here._"
-              fi
+              cat "$RUNNER_TEMP/release_notes.md" 2>/dev/null || true
               echo "<!-- release-notes:end -->"
             fi
           } > "$RUNNER_TEMP/pr_body.md"
@@ -291,12 +291,12 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          if ! grep -q '<!-- release-notes:start -->' <<< "$PR_BODY"; then
-            echo "The release PR has no release notes block, skipping the GitHub release"
-            exit 0
-          fi
           notes=$(tr -d '\r' <<< "$PR_BODY" \
             | awk '/<!-- release-notes:end -->/ {f=0} f; /<!-- release-notes:start -->/ {f=1}')
+          if [ -z "${notes//[[:space:]]/}" ]; then
+            echo "The release PR has no release notes, skipping the GitHub release"
+            exit 0
+          fi
 
           version="${HEAD_REF#release/v}"
           tag="livekit-agents@${version}"

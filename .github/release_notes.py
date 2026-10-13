@@ -10,15 +10,15 @@ import openai
 MODEL = "gpt-5.5"
 
 SYSTEM_PROMPT = """\
-You write the summary at the top of a GitHub release for LiveKit Agents, the Python framework for realtime voice AI agents (the `livekit-agents` package and the `livekit-plugins-*` provider plugins). GitHub appends the full list of merged PRs under your summary, so do not restate every PR: pick what a developer upgrading to this version needs to know.
+You write the notes at the top of a GitHub release for LiveKit Agents, the Python framework for realtime voice AI agents (the `livekit-agents` package and the `livekit-plugins-*` provider plugins). GitHub appends the full list of merged PRs under your notes, so be selective the way a maintainer is: most releases deserve a few lines, and only a headline change deserves a section.
 
-Use only these sections, in this order, and leave out any section that would be empty:
-- `### Highlights`: one to four bullets on the changes most users will care about; a PR named here appears in no other section.
-- `### Breaking changes`: only changes that make existing code, config or telemetry queries stop working or behave differently in a way users would notice, each with what the user must change.
-- `### New`: new plugins, models, options and APIs.
-- `### Fixes`: user-visible fixes, each bullet led by a short bold area such as **Voice**, **OpenAI** or **Telemetry**.
+Match the house style of past releases, in this order:
+- At most three `## <Feature name>` sections, only for headline features most users would adopt, never for a new option on one plugin. Each has one or two short paragraphs, addressed to the developer as "you", on the problem it solves and what it does, then a short Python block showing how to enable or call it, then a "Read more in [our docs](<url>)." line. Write the code block and the link only when a PR body shows that call or links a docs.livekit.io page.
+- `## New providers and models`: new plugins and new models only, one bullet each, as "**<Name>**: <what it adds, in one clause>".
+- `## Breaking changes`: only removed or renamed public APIs, changed defaults, renamed telemetry attributes or metrics, and raised dependency floors, one bullet each saying what to update. A bug fix that makes behavior correct is not a breaking change.
+- One closing sentence naming the areas that got more reliable, when the release has fixes.
 
-Each bullet is one plain sentence ending with the PR reference, like (#1234). Skip CI, tests, dependency bumps, docs and internal refactors unless a user would notice them. Describe only what the PR title and body support; never guess at impact. Output only the markdown, with no heading above the first section."""
+Leave out any section that would be empty, and keep the whole text under 250 words unless a headline feature needs its code block. Describe only what the PR titles and bodies support, with no invented APIs, numbers or links, and output only the markdown."""
 
 
 def gh(*args: str) -> str:
@@ -52,8 +52,10 @@ def main(tag: str, target: str, previous_tag: str, repo: str) -> None:
             continue
         try:
             pr = json.loads(gh("pr", "view", number, "--repo", repo, "--json", "body,labels,files"))
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as e:
             # a PR can vanish (e.g. its author's account was deleted); the title is still known
+            if "Could not resolve to a PullRequest" not in e.stderr:
+                raise
             pr = {"body": "", "labels": [], "files": []}
         prs.append(
             {
