@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -235,16 +236,27 @@ async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
     stream = fallback_adapter.stream()
     # simulate that audio input started 30s before this stream was created
     stream.start_time_offset = 30.0
+    frame = utils.audio.silence_frame(0.02, 16000)
 
     async with stream:
+        # the first leg gets its first frame 5s after creation and anchors on it;
+        # fake1 fails once the input ends, and the second leg picks up the timeline there
+        await asyncio.sleep(5.0)
+        pushed_at = time.time()
+        stream.push_frame(frame)
         stream.end_input()
         async for _ in stream:
             pass
+        switched_at = time.time()
 
     leg1 = fake1.stream_ch.recv_nowait()
     leg2 = fake2.stream_ch.recv_nowait()
-    assert leg1.start_time_offset >= 30.0
-    assert leg2.start_time_offset >= 30.0
+    assert leg1.start_time_offset == pytest.approx(
+        30.0 + pushed_at - frame.duration - stream._created_at
+    )
+    assert leg2.start_time_offset == pytest.approx(
+        30.0 + switched_at - stream._created_at, abs=0.05
+    )
 
     await fallback_adapter.aclose()
 

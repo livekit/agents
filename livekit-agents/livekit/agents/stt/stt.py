@@ -396,6 +396,11 @@ class RecognizeStream(ABC):
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 
+        self._created_at: float = time.time()
+        # the offset as set through the setter, measured at stream creation
+        self._declared_start_time_offset: float = 0.0
+        # capture time of the first frame pushed in the current attempt, None until it arrives
+        self._first_frame_at: float | None = None
         self._start_time_offset: float = 0.0
         self._start_time: float = time.time()
         self._context: BaseModel | None = None
@@ -416,13 +421,26 @@ class RecognizeStream(ABC):
 
     @property
     def start_time_offset(self) -> float:
+        """Offset plugins add to the provider's timestamps.
+
+        The provider counts audio from the first frame it receives, so the value set
+        through the setter, which describes where the stream starts on the caller's
+        timeline, grows by the delay between the stream's creation and the first frame
+        pushed. It is re-anchored on every retry, since a new connection restarts the
+        provider's clock.
+        """
         return self._start_time_offset
 
     @start_time_offset.setter
     def start_time_offset(self, value: float) -> None:
         if value < 0:
             raise ValueError("start_time_offset must be non-negative")
-        self._start_time_offset = value
+        self._declared_start_time_offset = value
+        self._anchor_start_time_offset()
+
+    def _anchor_start_time_offset(self) -> None:
+        delay = 0.0 if self._first_frame_at is None else self._first_frame_at - self._created_at
+        self._start_time_offset = self._declared_start_time_offset + delay
 
     @property
     def start_time(self) -> float:
@@ -470,11 +488,13 @@ class RecognizeStream(ABC):
 
         while self._num_retries <= max_retries:
             try:
-                self._start_time_offset += time.time() - last_start_time
                 self._start_time = time.time()
                 last_start_time = time.time()
                 return await self._run()
             except APIError as e:
+                # the next connection starts its clock with the next frame pushed, which
+                # may already be queued; the offset is re-anchored when it arrives
+                self._first_frame_at = None
                 # an attempt that outlived the connect timeout had connected, so this failure
                 # is not consecutive with the previous one and the budget starts over
                 if time.time() - last_start_time > self._conn_options.timeout:
@@ -556,6 +576,11 @@ class RecognizeStream(ABC):
             raise ValueError("the sample rate of the input frames must be consistent")
 
         self._pushed_sr = frame.sample_rate
+
+        if self._first_frame_at is None:
+            # the provider's clock starts here, however long after the stream was created
+            self._first_frame_at = time.time() - frame.duration
+            self._anchor_start_time_offset()
 
         if self._needed_sr and self._needed_sr != frame.sample_rate:
             if not self._resampler:

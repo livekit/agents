@@ -177,7 +177,12 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
-        # wall-clock anchor for stream-based (STT and barge-in) timestamps
+        self._created_at = time.time()
+        # Wall-clock time the node's relative timestamps count from, so that
+        # ``input_started_at + end_time`` is the wall-clock end of the recognized speech.
+        # The default ``stt_node`` sets it to the session input start it offsets its
+        # stream from; a node that forwards provider timestamps untouched leaves it None
+        # and is anchored on the pipeline's creation, when it opens its stream.
         self.input_started_at: float | None = None
 
     @property
@@ -411,7 +416,11 @@ class AudioRecognition:
 
     @property
     def _input_started_at(self) -> float | None:
-        return self._stt_pipeline.input_started_at if self._stt_pipeline is not None else None
+        if self._stt_pipeline is None:
+            return None
+        if self._stt_pipeline.input_started_at is not None:
+            return self._stt_pipeline.input_started_at
+        return self._stt_pipeline._created_at
 
     def _start(
         self,
@@ -767,9 +776,6 @@ class AudioRecognition:
         """
         self._sample_rate = frame.sample_rate
         if self._stt_pipeline is not None:
-            # stamp the wall-clock anchor on the first frame to reach the pipeline
-            if self._stt_pipeline.input_started_at is None:
-                self._stt_pipeline.input_started_at = time.time() - frame.duration
             self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
 
         if self._vad_ch is not None:
