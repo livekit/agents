@@ -218,20 +218,13 @@ impl Boundary {
         if i.lease.as_ref().is_some_and(Lease::is_lost) {
             return Ok(false);
         }
-        if i.interrupt
-            && i.db.waiter(&i.lane).await?.is_some_and(|w| !w.is_empty() && w != i.holder)
-        {
+        let (waiter, status) = i.db.boundary(&i.lane, &i.task_id).await?;
+        if i.interrupt && waiter.is_some_and(|w| !w.is_empty() && w != i.holder) {
             i.tripped.store(true, Ordering::Release);
             log::info!(target: "livekit.agents", lane = i.lane.as_str(), taskId = i.task_id.as_str(); "yielding the lane to a newer message");
             return Ok(true);
         }
-        let canceled =
-            i.db.tasks(&i.lane, None, super::LOOKUP_LIMIT)
-                .await?
-                .into_iter()
-                .find(|r| r.task_id == i.task_id)
-                .is_some_and(|r| r.status == TaskState::Canceled.as_str());
-        if canceled {
+        if status.as_deref() == Some(TaskState::Canceled.as_str()) {
             i.tripped.store(true, Ordering::Release);
             i.client_canceled.store(true, Ordering::Release);
             log::info!(target: "livekit.agents", lane = i.lane.as_str(), taskId = i.task_id.as_str(); "the task was canceled by a client; yielding");

@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use livekit_api::services::threads::ThreadClient;
 pub use livekit_protocol::agent::agent_task::{GetTasksRequest, Status as TaskStatus, Task};
 pub use livekit_protocol::agent::agent_thread::{
     CreateRequest, GetItemsRequest, Item, ListRequest, Thread, UpdateRequest,
 };
-use livekit_api::services::threads::ThreadClient;
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -14,11 +14,11 @@ use serde_json::{Map, Value};
 use super::records::{REASON_KEY, Ref, TaskRecord, TaskState};
 use super::shortuuid;
 use crate::StorageError;
-use crate::schema::TaskInternal;
-use crate::statements::{ThreadDb, TaskWrite};
+use crate::schema::{TaskInternal, TaskRow};
+use crate::statements::{TaskWrite, ThreadDb};
 
 /// How many rows a lookup by id or `messageId` scans (`Tasks._load`, `Tasks.by_message_id`).
-const LOOKUP_LIMIT: i64 = 500;
+pub(crate) const LOOKUP_LIMIT: i64 = 500;
 /// How many `input-required` rows `pending_ask` scans.
 const PENDING_ASK_LIMIT: i64 = 50;
 
@@ -71,6 +71,9 @@ pub struct Tasks {
     /// In write order: `Tasks.writes` is the values of a dict keyed by task id.
     writes: Vec<TaskWrite>,
     rows: HashMap<String, TaskRecord>,
+    /// The lane's newest rows as the acquire loaded them, newest first: what the run's lookups
+    /// read instead of the database. Complete when shorter than [`LOOKUP_LIMIT`].
+    loaded: Option<Vec<TaskRecord>>,
 }
 
 /// What a write starts from: a pending write of this run, or a row read from the lane.
@@ -81,7 +84,38 @@ enum Base<'a> {
 
 impl Tasks {
     pub fn new(db: ThreadDb, lane: &str) -> Self {
-        Self { db, lane: lane.to_owned(), writes: Vec::new(), rows: HashMap::new() }
+        Self { db, lane: lane.to_owned(), writes: Vec::new(), rows: HashMap::new(), loaded: None }
+    }
+
+    /// Over the rows an acquire loaded, newest first.
+    pub fn loaded(db: ThreadDb, lane: &str, rows: Vec<TaskRow>) -> Self {
+        let loaded: Vec<TaskRecord> = rows.into_iter().map(TaskRecord::from_row).collect();
+        let rows = loaded.iter().map(|r| (r.id.clone(), r.clone())).collect();
+        Self { db, lane: lane.to_owned(), writes: Vec::new(), rows, loaded: Some(loaded) }
+    }
+
+    /// The loaded rows, when they are the whole lane.
+    fn snapshot(&self) -> Option<&[TaskRecord]> {
+        self.loaded.as_deref().filter(|rows| rows.len() < LOOKUP_LIMIT as usize)
+    }
+
+    /// The lane's newest rows, `limit` of them, as of the acquire.
+    pub async fn recent(&self, limit: i64) -> Result<Vec<TaskRecord>, StorageError> {
+        if let Some(rows) = self.loaded.as_deref() {
+            return Ok(rows.iter().take(limit as usize).cloned().collect());
+        }
+        let rows = self.db.tasks(&self.lane, None, limit).await?;
+        Ok(rows.into_iter().map(TaskRecord::from_row).collect())
+    }
+
+    /// The `working` rows, oldest first: a dead holder's, as of the acquire.
+    pub async fn working(&self) -> Result<Vec<TaskRecord>, StorageError> {
+        if let Some(rows) = self.snapshot() {
+            let working = TaskState::Working.as_str();
+            return Ok(rows.iter().rev().filter(|r| r.status == working).cloned().collect());
+        }
+        let rows = self.db.orphans(&self.lane).await?;
+        Ok(rows.into_iter().map(TaskRecord::from_row).collect())
     }
 
     pub fn lane(&self) -> &str {
@@ -124,6 +158,9 @@ impl Tasks {
         if let Some(w) = self.writes.iter().find(|w| w.message_id.as_deref() == Some(message_id)) {
             return Ok(Some(record_from_write(w, &self.lane)));
         }
+        if let Some(rows) = self.snapshot() {
+            return Ok(rows.iter().find(|r| r.message_id.as_deref() == Some(message_id)).cloned());
+        }
         Ok(self
             .db
             .tasks(&self.lane, None, LOOKUP_LIMIT)
@@ -135,9 +172,16 @@ impl Tasks {
 
     /// The newest `input-required` row holding a conversation tool's pending call.
     pub async fn pending_ask(&self) -> Result<Option<TaskRecord>, StorageError> {
+        let input_required = TaskState::InputRequired.as_str();
+        if let Some(rows) = self.snapshot() {
+            return Ok(rows
+                .iter()
+                .find(|r| r.status == input_required && r.ask().is_some_and(truthy))
+                .cloned());
+        }
         Ok(self
             .db
-            .tasks(&self.lane, Some(TaskState::InputRequired.as_str()), PENDING_ASK_LIMIT)
+            .tasks(&self.lane, Some(input_required), PENDING_ASK_LIMIT)
             .await?
             .into_iter()
             .map(TaskRecord::from_row)
@@ -442,7 +486,11 @@ mod tests {
             })
         );
         let plain = merge_write("AST_2", None, TaskState::Submitted, TaskPatch::default()).unwrap();
-        assert_eq!((plain.name, plain.internal), (None, None), "a turn has no name and no internal");
+        assert_eq!(
+            (plain.name, plain.internal),
+            (None, None),
+            "a turn has no name and no internal"
+        );
         let with_meta = merge_write(
             "AST_3",
             None,
@@ -526,7 +574,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(serde_json::to_value(&next.data.metadata).unwrap(), json!({"a": 1, "b": 2, "c": 3}));
+        assert_eq!(
+            serde_json::to_value(&next.data.metadata).unwrap(),
+            json!({"a": 1, "b": 2, "c": 3})
+        );
         assert_eq!(next.name.as_deref(), Some("T"));
     }
 

@@ -132,7 +132,7 @@ impl Turn {
             history: run.history.clone(),
             state: run.state.clone(),
             task_id: answer_task.clone(),
-            tasks: lane.tasks(None, TASKS_IN_CONTEXT).await?,
+            tasks: run.tasks.recent(TASKS_IN_CONTEXT).await?,
             agent_stack: run.agents.refs().to_vec(),
             caller_history: ctx.caller_history.clone(),
             answer_tool,
@@ -193,6 +193,7 @@ impl Turn {
             run.events.append(&event.r#type, event.payload.clone());
         }
 
+        run.answer_task = Some(answer_task.clone());
         let interrupted = boundary.tripped() || out.interrupted;
         let history: Vec<Value> = batch.iter().map(Message::to_a2a).collect();
         let outcome = |output: Option<Value>, interrupted: bool| Outcome {
@@ -319,9 +320,14 @@ impl Turn {
         ctx: &Ctx,
         outcome: Outcome,
         task_id: &str,
-        run_id: &str,
+        run: &mut Run,
     ) -> Result<TurnResult, StorageError> {
-        let record = match ctx.lane.task(&outcome.task_id).await? {
+        let run_id = run.run_id.as_str();
+        let committed = match run.committed_task.take() {
+            Some(r) if r.id == outcome.task_id => Some(r),
+            _ => ctx.lane.task(&outcome.task_id).await?,
+        };
+        let record = match committed {
             Some(r) => r,
             None => unpersisted_failed(task_id, ctx.lane.name(), None, "not-written"),
         };

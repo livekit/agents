@@ -9,6 +9,7 @@ else (docs/sessions.md). Errors map as plan 5.12 lists them.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -32,6 +33,7 @@ from google.protobuf import json_format
 from pydantic import JsonValue
 
 from .. import _core
+from .._core import ThreadDb
 from .._generated.storage import TaskData
 from .._generated.storage_run import TaskRecord
 from .._generated.storage_turn import TurnResult
@@ -304,14 +306,19 @@ class A2AService(Generic[S]):
             raise ThreadNotFound(f"thread {thread_id} does not exist")
 
         host = self._host(resolved, on_update=on_update, on_token=on_token)
-        return await self._run(resolved, message, host, task_id)
+        db = await self._storage.open(resolved)
+        return await self._run(resolved, message, host, task_id, db)
 
     async def _start(
         self, thread_id: str, message: StoredMessage, exts: Extensions
     ) -> ResponsePump[TurnOutcome]:
         """The turn in a task of its own, its frames through the pump (plan 6)."""
         continued = await self._continued(thread_id, message)
-        stream_id = (await self._storage.streams.create()).stream_id
+        # the answer stream and the thread's database, two services, opened together
+        created, db = await asyncio.gather(
+            self._storage.streams.create(), self._storage.open(thread_id)
+        )
+        stream_id = created.stream_id
         pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, stream_id)
         wire = WireHost(
             lambda on_update, on_token: self._host(
@@ -325,7 +332,7 @@ class A2AService(Generic[S]):
 
         async def produce() -> None:
             try:
-                outcome = await self._run(thread_id, message, wire, stream_id)
+                outcome = await self._run(thread_id, message, wire, stream_id, db)
             except Exception as e:
                 await pump.fail(e)
                 return
@@ -359,9 +366,9 @@ class A2AService(Generic[S]):
         message: StoredMessage,
         host: _core.TurnHostProtocol,
         task_id: str | None,
+        db: ThreadDb,
     ) -> TurnOutcome:
-        """One message through ``_core.Turn``."""
-        db = await self._storage.open(thread_id)
+        """One message through ``_core.Turn`` on ``db``, the thread's database, closed after."""
         core = _core.Thread(db, self._storage.holder)
         try:
             turn = _core.Turn(core, self.lane, host, self._endpoint.turn_options)

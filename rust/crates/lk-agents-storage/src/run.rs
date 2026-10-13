@@ -34,7 +34,7 @@ use crate::StorageError;
 use crate::schema::{ChatItemRow, EventRow, InboxRow};
 use crate::statements::{
     AcquireRequest, CommitRequest, EventWrite, Fence, ItemWrite, Lease, LeaseAfter, Loaded,
-    RunEndedRequest, ThreadDb,
+    RunEndedRequest, SubmittedTask, ThreadDb,
 };
 
 /// Plan 3.3.2: a waiter that has not acquired after 60 s fails `lease-timeout`.
@@ -97,11 +97,12 @@ pub struct Item {
 impl Item {
     /// From a payload that carries its own `id` and `type`, as every chat item does.
     pub fn new(payload: Value) -> Result<Self, StorageError> {
-        let text = |key: &str| {
-            payload.get(key).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| {
-                StorageError::Invalid(format!("chat item without a string {key}"))
-            })
-        };
+        let text =
+            |key: &str| {
+                payload.get(key).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| {
+                    StorageError::Invalid(format!("chat item without a string {key}"))
+                })
+            };
         text("type")?;
         Ok(Self { id: text("id")?, payload })
     }
@@ -238,7 +239,7 @@ impl RunUsage {
 }
 
 /// `lane.run(...)`'s arguments.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RunOptions {
     /// Idempotency key: a `run_id` that already committed yields a closed run.
     pub run_id: String,
@@ -255,6 +256,11 @@ pub struct RunOptions {
     /// The request's channel, for the `run_started` event.
     pub channel: Option<String>,
     pub wait_timeout: Duration,
+    /// The turn's `submitted` row, written in the acquire batch (`Run::submitted` tells whether
+    /// it was new); `None` for a run with no row or one submitted earlier.
+    pub submit: Option<SubmittedTask>,
+    /// Take `task_id`'s row to `working` in the acquire batch (`Run::picked_up`).
+    pub pickup: bool,
 }
 
 impl RunOptions {
@@ -267,6 +273,8 @@ impl RunOptions {
             interrupt: false,
             channel: None,
             wait_timeout: LEASE_WAIT_TIMEOUT,
+            submit: None,
+            pickup: false,
         }
     }
 }
@@ -450,6 +458,9 @@ impl Lane {
                 "channel": opts.channel,
             }),
             events_after: 0,
+            submit: opts.submit.clone(),
+            pickup: opts.pickup,
+            tasks_limit: tasks::LOOKUP_LIMIT,
         };
         let deadline = Instant::now() + opts.wait_timeout;
         let mut delay = LEASE_POLL_MIN;
@@ -459,6 +470,8 @@ impl Lane {
             if let Some(loaded) = self.db().acquire(&request).await? {
                 break loaded;
             }
+            // the row is in; a retry of the batch must not report it as a duplicate
+            request.submit = None;
             if !opts.wait {
                 return Err(StorageError::LeaseHeld(format!(
                     "lane {} is held by another run",
@@ -514,7 +527,11 @@ impl Lane {
             state_json: loaded.lane.state,
             agents: AgentStack::new(stack),
             events: EventLog::new(loaded.events, thread.inner.clock.clone()),
-            tasks: Tasks::new(self.db().clone(), &self.name),
+            tasks: Tasks::loaded(self.db().clone(), &self.name, loaded.tasks),
+            submitted: loaded.submitted,
+            picked_up: loaded.picked_up,
+            answer_task: None,
+            committed_task: None,
             usage: RunUsage::default(),
             lease,
             lease_token: Some(token),
@@ -552,6 +569,10 @@ impl Lane {
             agents: AgentStack::default(),
             events: EventLog::new(Vec::new(), thread.inner.clock.clone()),
             tasks: Tasks::new(self.db().clone(), &self.name),
+            submitted: None,
+            picked_up: false,
+            answer_task: None,
+            committed_task: None,
             usage: RunUsage::default(),
             lease: None,
             lease_token: None,
@@ -595,6 +616,14 @@ pub struct Run {
     pub agents: AgentStack,
     pub events: EventLog,
     pub tasks: Tasks,
+    /// Whether the acquire's `submit` inserted its row; `Some(false)` is a retried `messageId`.
+    pub submitted: Option<bool>,
+    /// Whether the acquire's `pickup` took the row to `working`.
+    pub picked_up: bool,
+    /// The task the turn answers: its row comes back with the commit (`committed_task`).
+    pub answer_task: Option<String>,
+    /// `answer_task`'s row as the commit left it.
+    pub committed_task: Option<TaskRecord>,
     pub usage: RunUsage,
     lease: Option<Lease>,
     lease_token: Option<String>,
@@ -721,6 +750,7 @@ impl Run {
                 payload: serde_json::json!({"outcome": self.outcome, "reason": self.reason}),
             },
             after: if self.keep_lease { LeaseAfter::Renew } else { LeaseAfter::Release },
+            read_task: self.answer_task.clone(),
         }
     }
 
@@ -748,6 +778,7 @@ impl Run {
         let request = self.commit_request(now_ms);
         let result = self.db.commit(&request).await?;
         self.committed_version = Some(result.version);
+        self.committed_task = result.task.map(TaskRecord::from_row);
         self.thread.after_commit();
         Ok(())
     }

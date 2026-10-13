@@ -72,11 +72,16 @@ pub const PICKUP_STATUS: &str = "SELECT status FROM tasks \
      WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working')";
 pub const PICKUP_TASK: &str = "UPDATE tasks SET status = 'working', updated_at = unixepoch() \
      WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working')";
+/// The pickup inside the acquire batch: the run's row goes `working` only under this lease.
+pub const PICKUP_HELD: &str = "UPDATE tasks SET status = 'working', updated_at = unixepoch() \
+     WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working') \
+     AND EXISTS (SELECT 1 FROM lanes WHERE lane = tasks.lane AND lease_token = ?)";
+pub const TASK_STATUS: &str = "SELECT status FROM tasks WHERE lane = ? AND task_id = ?";
 pub const MARK_ORPHAN_FAILED: &str = "UPDATE tasks SET status = 'failed', status_message = jsonb(?), updated_at = unixepoch() \
      WHERE lane = ? AND task_id = ? AND status = 'working'";
-pub const TABLE_EXISTS: &str =
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'";
+/// The schema probe: one read, which fails `no such table` on a database no SDK wrote yet.
 pub const SCHEMA_VERSION_READ: &str = "SELECT version FROM schema_version";
+pub const NO_SCHEMA: &str = "no such table: schema_version";
 
 /// The fence every commit write carries: the lane at the loaded version, under the lease token.
 const FENCED: &str = "FROM lanes WHERE lane = ? AND version = ? AND lease_token = ?";
@@ -150,6 +155,9 @@ pub fn select_lanes() -> String {
 }
 pub fn select_tasks() -> String {
     format!("SELECT {} FROM tasks WHERE lane = ? ORDER BY seq DESC LIMIT ?", TaskRow::SELECT)
+}
+pub fn select_task() -> String {
+    format!("SELECT {} FROM tasks WHERE lane = ? AND task_id = ?", TaskRow::SELECT)
 }
 pub fn select_tasks_by_status() -> String {
     format!(

@@ -206,23 +206,16 @@ impl Turn {
         task_id: &str,
         interrupt: bool,
     ) -> Result<TurnResult, StorageError> {
-        if let Some(mut existing) = task_by_message_id(&ctx.lane, &msg.message_id).await? {
-            // a retried messageId: the task it created, awaited when a runner still has it, or
-            // failed worker-lost here when its holder died and the lease lapsed
-            if !existing.terminal()
-                && let Some(ended) = self.await_task(ctx, &existing.id, false, true).await?
-            {
-                existing = ended;
-            }
-            return Ok(result_for(Some(existing), self.thread.id(), task_id, None));
-        }
-        self.submit(msg, task_id).await?;
+        // the early `submitted` row, the lease and the pickup, one batch (plan 3.3.4): a
+        // `tasks/get` before the commit finds the task, and a holder that dies leaves an orphan
         let opened = ctx
             .lane
             .open(RunOptions {
                 interrupt,
                 channel: Some(msg.channel.clone()),
                 wait_timeout: self.opts.wait_timeout(),
+                submit: Some(submitted_task(&self.lane, msg, task_id)),
+                pickup: true,
                 ..RunOptions::new(task_id, task_id)
             })
             .await;
@@ -243,11 +236,24 @@ impl Turn {
             }
             Err(e) => return Err(e),
         };
+        if run.submitted == Some(false)
+            && let Some(mut existing) = run.tasks.by_message_id(&msg.message_id).await?
+        {
+            // a retried messageId: the task it created, awaited when a runner still has it, or
+            // failed worker-lost when its holder died and the lease lapsed
+            self.close_run(&mut run, Ok(())).await?;
+            if !existing.terminal()
+                && let Some(ended) = self.await_task(ctx, &existing.id.clone(), false, true).await?
+            {
+                existing = ended;
+            }
+            return Ok(result_for(Some(existing), self.thread.id(), task_id, None));
+        }
         let body = async {
-            if run.closed || !self.pickup(task_id).await? {
+            if run.closed || !run.picked_up {
                 return Ok(None);
             }
-            self.fail_orphans(&[task_id.to_owned()]).await?;
+            self.fail_orphans(&run, &[task_id.to_owned()]).await?;
             self.turn(ctx, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], interrupt)
                 .await
                 .map(Some)
@@ -255,7 +261,7 @@ impl Turn {
         .await;
         let outcome = self.close_run(&mut run, body).await?;
         match outcome {
-            Some(outcome) => self.finish(ctx, outcome, task_id, &run.run_id).await,
+            Some(outcome) => self.finish(ctx, outcome, task_id, &mut run).await,
             None => {
                 let record = ctx.lane.task(task_id).await?;
                 Ok(result_for(record, self.thread.id(), task_id, None))
@@ -267,17 +273,7 @@ impl Turn {
     /// the commit finds the task. Unfenced; the commit's upsert moves it to its terminal state.
     /// The batch policy writes its row in the receive batch instead.
     async fn submit(&self, msg: &Message, task_id: &str) -> Result<(), StorageError> {
-        self.thread
-            .db()
-            .insert_submitted_task(&SubmittedTask {
-                lane: self.lane.clone(),
-                task_id: task_id.to_owned(),
-                message_id: Some(msg.message_id.clone()),
-                name: None,
-                data: turn_data(msg),
-                internal: None,
-            })
-            .await?;
+        self.thread.db().insert_submitted_task(&submitted_task(&self.lane, msg, task_id)).await?;
         Ok(())
     }
 
@@ -432,7 +428,7 @@ impl Turn {
                     Ok(mut run) => {
                         let body = async {
                             if !run.closed {
-                                self.fail_orphans(&[]).await?;
+                                self.fail_orphans(&run, &[]).await?;
                             }
                             Ok(())
                         }
@@ -502,7 +498,7 @@ impl Turn {
                     batch_ids.push(tid.clone());
                 }
                 if !batch.is_empty() {
-                    self.fail_orphans(&task_ids).await?;
+                    self.fail_orphans(&run, &task_ids).await?;
                     self.turn(ctx, &mut run, &batch, &batch_ids, false).await?;
                 }
                 run.drained_id = Some(last_id);
@@ -549,7 +545,7 @@ impl Turn {
         let body =
             self.turn(ctx, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false).await;
         let outcome = self.close_run(&mut run, body).await?;
-        self.finish(ctx, outcome, task_id, &run.run_id).await
+        self.finish(ctx, outcome, task_id, &mut run).await
     }
 
     async fn reject(
@@ -601,14 +597,14 @@ impl Turn {
             if !self.pickup(task_id).await? {
                 return Ok(None);
             }
-            self.fail_orphans(&[task_id.to_owned()]).await?;
+            self.fail_orphans(&run, &[task_id.to_owned()]).await?;
             self.turn(ctx, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false)
                 .await
                 .map(Some)
         }
         .await;
         match self.close_run(&mut run, body).await? {
-            Some(outcome) => self.finish(ctx, outcome, task_id, &run.run_id).await,
+            Some(outcome) => self.finish(ctx, outcome, task_id, &mut run).await,
             None => Ok(result_for(ctx.lane.task(task_id).await?, self.thread.id(), task_id, None)),
         }
     }
@@ -617,18 +613,30 @@ impl Turn {
 
     /// A dead holder's `working` rows, found under this run's lease: each fails `worker-lost`
     /// and nothing runs again; the client resends. `skip` is this run's own row.
-    async fn fail_orphans(&self, skip: &[String]) -> Result<(), StorageError> {
+    async fn fail_orphans(&self, run: &Run, skip: &[String]) -> Result<(), StorageError> {
         let db = self.thread.db();
-        for row in db.orphans(&self.lane).await? {
-            if skip.contains(&row.task_id) {
+        for row in run.tasks.working().await? {
+            if skip.contains(&row.id) {
                 continue;
             }
 
-            let message = failed_message(&row.task_id, REASON_WORKER_LOST);
-            db.mark_orphan_failed(&self.lane, &row.task_id, &message).await?;
-            log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = row.task_id.as_str(); "a task whose worker died fails worker-lost");
+            let message = failed_message(&row.id, REASON_WORKER_LOST);
+            db.mark_orphan_failed(&self.lane, &row.id, &message).await?;
+            log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = row.id.as_str(); "a task whose worker died fails worker-lost");
         }
         Ok(())
+    }
+}
+
+/// The early `submitted` row of a turn: its message as the task's history.
+fn submitted_task(lane: &str, msg: &Message, task_id: &str) -> SubmittedTask {
+    SubmittedTask {
+        lane: lane.to_owned(),
+        task_id: task_id.to_owned(),
+        message_id: Some(msg.message_id.clone()),
+        name: None,
+        data: turn_data(msg),
+        internal: None,
     }
 }
 

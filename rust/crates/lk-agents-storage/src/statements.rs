@@ -21,9 +21,10 @@
 //! * [`ThreadDb::receive`]: the inbox transaction, [`ThreadDb::drain_check`], [`ThreadDb::set_waiter`],
 //!   [`ThreadDb::pickup_task`] and [`ThreadDb::mark_orphan_failed`], and the typed reads.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
@@ -73,6 +74,19 @@ pub struct AcquireRequest {
     #[serde(default)]
     #[python(default = "0")]
     pub events_after: i64,
+    /// The turn's `submitted` row, written first in the same batch; `None` for a run with no
+    /// row (a voice turn) or one submitted earlier.
+    #[serde(default)]
+    #[python(default = "None")]
+    pub submit: Option<SubmittedTask>,
+    /// Take `task_id`'s row to `working` under the lease, in the same batch.
+    #[serde(default)]
+    #[python(default = "False")]
+    pub pickup: bool,
+    /// Load the lane's newest task rows, this many.
+    #[serde(default)]
+    #[python(default = "0")]
+    pub tasks_limit: i64,
 }
 
 /// What an acquire loaded: the lane at `version`.
@@ -85,6 +99,19 @@ pub struct Loaded {
     pub lane: LaneRow,
     pub items: Vec<ChatItemRow>,
     pub events: Vec<EventRow>,
+    /// The newest task rows, `tasks_limit` of them, newest first, as of the acquire.
+    #[serde(default)]
+    #[python(default_factory = "list")]
+    pub tasks: Vec<TaskRow>,
+    /// Whether `submit` inserted its row; `Some(false)` is a `task_id` or `messageId` that
+    /// already had one.
+    #[serde(default)]
+    #[python(default = "None")]
+    pub submitted: Option<bool>,
+    /// Whether `pickup` moved the row to `working`; `false` when it is terminal or missing.
+    #[serde(default)]
+    #[python(default = "False")]
+    pub picked_up: bool,
     pub tip: i64,
 }
 
@@ -190,6 +217,10 @@ pub struct CommitRequest {
     #[serde(default = "release")]
     #[python(default = "\"release\"")]
     pub after: LeaseAfter,
+    /// A task row to read back after the writes, in the same batch: the answer's record.
+    #[serde(default)]
+    #[python(default = "None")]
+    pub read_task: Option<String>,
 }
 
 fn release() -> LeaseAfter {
@@ -203,6 +234,10 @@ pub struct CommitResult {
     /// The version after the bump; the loaded one under `concurrent`.
     pub version: i64,
     pub tip: i64,
+    /// `read_task`'s row after the commit, when it asked for one and the row exists.
+    #[serde(default)]
+    #[python(default = "None")]
+    pub task: Option<TaskRow>,
 }
 
 /// Leaving by exception: the `run_ended` event with the outcome, and the release.
@@ -310,6 +345,60 @@ pub struct DrainCheck {
 // the thread database
 // ---------------------------------------------------------------------------------------------
 
+/// How long a parked connection waits for the thread's next turn before it is closed.
+const IDLE_TTL: Duration = Duration::from_secs(60);
+/// Parked connections per database, and in all.
+const IDLE_PER_DATABASE: usize = 2;
+const IDLE_TOTAL: usize = 64;
+
+/// The connections closed threads left behind, by database id: a thread's next turn takes one
+/// back, with the schema version it knew, instead of dialing and probing again.
+#[derive(Default)]
+pub(crate) struct DbPool {
+    idle: Mutex<HashMap<String, Vec<Idle>>>,
+}
+
+struct Idle {
+    conn: Conn,
+    schema: Option<i64>,
+    since: Instant,
+}
+
+impl DbPool {
+    fn take(&self, database_id: &str) -> Option<Idle> {
+        let mut idle = self.idle.lock().expect("pool");
+        let parked = idle.get_mut(database_id)?;
+        while let Some(entry) = parked.pop() {
+            if entry.since.elapsed() < IDLE_TTL && entry.conn.is_idle() {
+                return Some(entry);
+            }
+            entry.conn.close();
+        }
+        None
+    }
+
+    fn put(&self, conn: Conn, schema: Option<i64>) {
+        let mut idle = self.idle.lock().expect("pool");
+        idle.retain(|_, parked| {
+            parked.retain(|entry| {
+                let keep = entry.since.elapsed() < IDLE_TTL && entry.conn.is_idle();
+                if !keep {
+                    entry.conn.close();
+                }
+                keep
+            });
+            !parked.is_empty()
+        });
+        let total: usize = idle.values().map(Vec::len).sum();
+        let parked = idle.entry(conn.database_id().to_owned()).or_default();
+        if !conn.is_idle() || parked.len() >= IDLE_PER_DATABASE || total >= IDLE_TOTAL {
+            conn.close();
+            return;
+        }
+        parked.push(Idle { conn, schema, since: Instant::now() });
+    }
+}
+
 /// One session's database over one connection (plan 13.4), closed at run end.
 #[derive(Clone)]
 pub struct ThreadDb {
@@ -318,6 +407,10 @@ pub struct ThreadDb {
     renew_interval: Duration,
     /// The schema version found at open, `None` when the database has no schema yet.
     schema: Arc<Mutex<Option<i64>>>,
+    /// Where `close` parks the connection; `None` closes it.
+    pool: Option<Arc<DbPool>>,
+    /// Set by `close`, shared by the clones: a parked connection is no longer this database's.
+    closed: Arc<AtomicBool>,
 }
 
 impl ThreadDb {
@@ -332,34 +425,70 @@ impl ThreadDb {
         lease_ttl: Duration,
         renew_interval: Duration,
     ) -> Result<Self, StorageError> {
-        let exists = !conn.query_all(TABLE_EXISTS, vec![]).await?.rows.is_empty();
-        let version = if exists {
-            let set = conn.query_all(SCHEMA_VERSION_READ, vec![]).await?;
-            set.rows.first().and_then(|r| r.first()).and_then(SqlValue::as_i64)
-        } else {
-            None
-        };
-        if let Some(v) = version
-            && v != SCHEMA_VERSION
-        {
-            return Err(StorageError::Schema(format!(
-                "database schema is version {v}, this client writes {SCHEMA_VERSION}"
-            )));
-        }
-        Ok(Self {
+        let version = schema_version(&conn).await?;
+        Ok(Self::over(conn, version, lease_ttl, renew_interval))
+    }
+
+    /// Over a connection whose schema version is known: a parked one, or a parked one's twin.
+    pub(crate) fn over(
+        conn: Conn,
+        schema: Option<i64>,
+        lease_ttl: Duration,
+        renew_interval: Duration,
+    ) -> Self {
+        Self {
             conn,
             lease_ttl_secs: (lease_ttl.as_secs() + u64::from(lease_ttl.subsec_nanos() > 0)) as i64,
             renew_interval,
-            schema: Arc::new(Mutex::new(version)),
-        })
+            schema: Arc::new(Mutex::new(schema)),
+            pool: None,
+            closed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// A pooled open: the parked connection of `database_id` when there is one, else `dial`'s,
+    /// and `close` parks it for the next open.
+    pub(crate) async fn pooled<F, Fut>(
+        pool: Arc<DbPool>,
+        database_id: &str,
+        lease_ttl: Duration,
+        renew_interval: Duration,
+        dial: F,
+    ) -> Result<Self, StorageError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Conn, StorageError>>,
+    {
+        let mut db = match pool.take(database_id) {
+            Some(idle) => Self::over(idle.conn, idle.schema, lease_ttl, renew_interval),
+            None => Self::open_with_timing(dial().await?, lease_ttl, renew_interval).await?,
+        };
+        db.pool = Some(pool);
+        Ok(db)
     }
 
     pub fn conn(&self) -> &Conn {
         &self.conn
     }
 
+    /// The connection, for a statement; `Unavailable` once closed.
+    fn live(&self) -> Result<&Conn, StorageError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(StorageError::Unavailable("the database is closed".into()));
+        }
+        Ok(&self.conn)
+    }
+
+    /// Done with the database: the connection is parked for the thread's next turn when this
+    /// open was pooled, closed otherwise. Every clone is closed with it.
     pub fn close(&self) {
-        self.conn.close();
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        match &self.pool {
+            Some(pool) => pool.put(self.conn.clone(), *self.schema.lock().expect("schema")),
+            None => self.conn.close(),
+        }
     }
 
     fn schema_missing(&self) -> bool {
@@ -377,21 +506,13 @@ impl ThreadDb {
         if !self.schema_missing() {
             return Ok(true);
         }
-        let exists = !self.conn.query_all(TABLE_EXISTS, vec![]).await?.rows.is_empty();
-        if !exists {
-            return Ok(false);
-        }
-        let set = self.conn.query_all(SCHEMA_VERSION_READ, vec![]).await?;
-        match set.rows.first().and_then(|r| r.first()).and_then(SqlValue::as_i64) {
-            Some(v) if v == SCHEMA_VERSION => {
+        match schema_version(self.live()?).await? {
+            Some(_) => {
                 self.schema_applied();
                 Ok(true)
             }
-            Some(v) => Err(StorageError::Schema(format!(
-                "database schema is version {v}, this client writes {SCHEMA_VERSION}"
-            ))),
-            // the tables exist but the version row is not written yet: the creator's batch is
-            // in flight; the caller retries
+            // no schema, or the tables exist but the version row is not written yet: the
+            // creator's batch is in flight; the caller retries
             None => Ok(false),
         }
     }
@@ -419,7 +540,7 @@ impl ThreadDb {
             return Ok(());
         }
         let stmts = self.bootstrap();
-        match self.conn.batch(stmts).await {
+        match self.live()?.batch(stmts).await {
             Ok(_) => {
                 self.schema_applied();
                 Ok(())
@@ -434,10 +555,8 @@ impl ThreadDb {
 
     /// The acquire and the load, one `Batch`; `None` when the lease is held by another holder.
     pub async fn acquire(&self, req: &AcquireRequest) -> Result<Option<Loaded>, StorageError> {
-        // the DDL rides in the acquire batch of a fresh database; a connection that opened before
-        // another worker created the schema learns so here, and a batch that loses the race to
-        // the DDL is retried without it
-        self.refresh_schema().await?;
+        // the DDL rides in the acquire batch of a fresh database; a batch that loses the race to
+        // another creator's DDL is retried without it
         match self.acquire_batch(req).await {
             Err(e) if Self::lost_schema_race(&e) => {
                 self.schema_applied();
@@ -451,6 +570,9 @@ impl ThreadDb {
         let lane = req.lane.as_str();
         let token = req.lease_token.as_str();
         let mut stmts = self.bootstrap();
+        if let Some(task) = &req.submit {
+            stmts.push(submitted_task(task));
+        }
         let ddl = stmts.len();
         stmts.push(statement(INSERT_LANE, vec![lane.into()]));
         stmts.push(statement(
@@ -482,11 +604,18 @@ impl ThreadDb {
             ],
         ));
         stmts.push(statement(COMMITTED_RUN, vec![lane.into(), req.run_id.as_str().into()]));
+        if req.pickup {
+            stmts.push(statement(
+                PICKUP_HELD,
+                vec![lane.into(), req.task_id.as_str().into(), token.into()],
+            ));
+        }
         stmts.push(statement(&select_items(), vec![lane.into()]));
         stmts.push(statement(&select_lane_events(), vec![lane.into(), req.events_after.into()]));
         stmts.push(statement(&select_lane(), vec![lane.into()]));
-        let out = self.conn.batch(stmts).await?;
-        if ddl > 0 {
+        stmts.push(statement(&select_tasks(), vec![lane.into(), req.tasks_limit.into()]));
+        let out = self.live()?.batch(stmts).await?;
+        if self.schema_missing() {
             self.schema_applied();
         }
         let r = &out.results;
@@ -494,19 +623,27 @@ impl ThreadDb {
             return Ok(None); // not acquired: the reads are discarded
         };
         let already_committed = !r[ddl + 4].rows().is_empty();
-        let items =
-            r[ddl + 5].rows().iter().map(ChatItemRow::from_row).collect::<Result<_, _>>()?;
-        let events = r[ddl + 6].rows().iter().map(EventRow::from_row).collect::<Result<_, _>>()?;
-        let lane = r[ddl + 7]
+        let mut i = ddl + 5;
+        let picked_up = req.pickup && {
+            i += 1;
+            r[i - 1].rows_affected() > 0
+        };
+        let items = r[i].rows().iter().map(ChatItemRow::from_row).collect::<Result<_, _>>()?;
+        let events = r[i + 1].rows().iter().map(EventRow::from_row).collect::<Result<_, _>>()?;
+        let lane = r[i + 2]
             .rows()
             .first()
             .ok_or_else(|| StorageError::Decode("acquire: no lane row".into()))?;
+        let tasks = r[i + 3].rows().iter().map(TaskRow::from_row).collect::<Result<_, _>>()?;
         Ok(Some(Loaded {
             version,
             already_committed,
             lane: LaneRow::from_row(lane)?,
             items,
             events,
+            tasks,
+            submitted: req.submit.as_ref().map(|_| r[ddl - 1].rows_affected() > 0),
+            picked_up,
             tip: out.tip,
         }))
     }
@@ -514,7 +651,8 @@ impl ThreadDb {
     /// Releases the lease without writing anything else: the path of a retried `run_id`
     /// (`Loaded::already_committed`). `true` when this token still held the lane.
     pub async fn release(&self, lane: &str, lease_token: &str) -> Result<bool, StorageError> {
-        Ok(self.conn.exec(RELEASE, vec![lane.into(), lease_token.into()]).await?.rows_affected > 0)
+        Ok(self.live()?.exec(RELEASE, vec![lane.into(), lease_token.into()]).await?.rows_affected
+            > 0)
     }
 
     /// `true` while this holder still has the lease.
@@ -660,7 +798,10 @@ impl ThreadDb {
             // Appends only, no bump: the version reported is the lane's current one.
             None => stmts.push(statement(&select_lane(), vec![lane.into()])),
         }
-        let out = self.conn.batch(stmts).await?;
+        if let Some(task_id) = &req.read_task {
+            stmts.push(statement(&select_task(), vec![lane.into(), task_id.as_str().into()]));
+        }
+        let out = self.live()?.batch(stmts).await?;
         let version = match &req.fence {
             Some(_) => first_int(&out.results[last]),
             // The lane row, whose first column is its name: the version is the second.
@@ -671,8 +812,12 @@ impl ThreadDb {
                 .transpose()?
                 .map(|l| l.version),
         };
+        let task = match &req.read_task {
+            Some(_) => out.results[last + 1].rows().first().map(TaskRow::from_row).transpose()?,
+            None => None,
+        };
         match (&req.fence, version) {
-            (_, Some(version)) => Ok(CommitResult { version, tip: out.tip }),
+            (_, Some(version)) => Ok(CommitResult { version, tip: out.tip, task }),
             (Some(f), None) => {
                 Err(StorageError::VersionConflict { lane: req.lane.clone(), expected: f.version })
             }
@@ -683,7 +828,7 @@ impl ThreadDb {
     /// Leaving by exception: `run_ended` with the outcome, and the release; nothing else.
     pub async fn run_ended(&self, req: &RunEndedRequest) -> Result<(), StorageError> {
         let lane = req.lane.as_str();
-        self.conn
+        self.live()?
             .batch(vec![
                 statement(
                     RUN_ENDED,
@@ -774,23 +919,8 @@ impl ThreadDb {
     /// when the `task_id` or the `messageId` already had one.
     pub async fn insert_submitted_task(&self, task: &SubmittedTask) -> Result<bool, StorageError> {
         self.ensure_schema().await?;
-        let lane = task.lane.as_str();
-        let r = self
-            .conn
-            .exec(
-                INSERT_SUBMITTED_TASK,
-                vec![
-                    task.task_id.as_str().into(),
-                    lane.into(),
-                    lane.into(),
-                    task.name.clone().into(),
-                    task.message_id.clone().into(),
-                    SqlValue::json(&task.data),
-                    SqlValue::opt_json(task.internal.as_ref()),
-                ],
-            )
-            .await?;
-        Ok(r.rows_affected > 0)
+        let r = self.live()?.batch(vec![submitted_task(task)]).await?;
+        Ok(r.results[0].rows_affected() > 0)
     }
 
     /// The drain check (plan 3.3.4), one atomic `Batch`: count the rows above `drained_id`, and
@@ -816,12 +946,35 @@ impl ThreadDb {
     /// the caller acquires instead.
     pub async fn set_waiter(&self, lane: &str, waiter: &str) -> Result<bool, StorageError> {
         self.ensure_schema().await?;
-        Ok(self.conn.exec(SET_WAITER, vec![waiter.into(), lane.into()]).await?.rows_affected > 0)
+        Ok(self.live()?.exec(SET_WAITER, vec![waiter.into(), lane.into()]).await?.rows_affected > 0)
     }
 
     /// The holder's boundary check.
+    /// The holder's boundary check, one batch: the lane's waiter and the task's status.
+    pub async fn boundary(
+        &self,
+        lane: &str,
+        task_id: &str,
+    ) -> Result<(Option<String>, Option<String>), StorageError> {
+        let out = self
+            .conn
+            .batch(vec![
+                statement(WAITER, vec![lane.into()]),
+                statement(TASK_STATUS, vec![lane.into(), task_id.into()]),
+            ])
+            .await?;
+        let text = |r: &StatementResult| {
+            r.rows()
+                .first()
+                .and_then(|row| row.first())
+                .and_then(SqlValue::as_str)
+                .map(str::to_owned)
+        };
+        Ok((text(&out.results[0]), text(&out.results[1])))
+    }
+
     pub async fn waiter(&self, lane: &str) -> Result<Option<String>, StorageError> {
-        let set = self.conn.query_all(WAITER, vec![lane.into()]).await?;
+        let set = self.live()?.query_all(WAITER, vec![lane.into()]).await?;
         Ok(set.rows.first().and_then(|r| r.first()).and_then(SqlValue::as_str).map(str::to_owned))
     }
 
@@ -939,7 +1092,7 @@ impl ThreadDb {
         if !self.refresh_schema().await? {
             return Ok(Vec::new()); // a database with no schema holds nothing
         }
-        self.conn.query_all(sql, params).await?.rows.iter().map(decode).collect()
+        self.live()?.query_all(sql, params).await?.rows.iter().map(decode).collect()
     }
 }
 
@@ -1034,6 +1187,41 @@ impl From<WsdbError> for StorageError {
 }
 
 /// The first cell of the first row, as an integer: `RETURNING version`, `COUNT(*)`.
+/// The `submitted` row of a turn, `INSERT OR IGNORE`: a `task_id` or `messageId` that already
+/// has one inserts nothing.
+fn submitted_task(task: &SubmittedTask) -> pb::Statement {
+    let lane = task.lane.as_str();
+    statement(
+        INSERT_SUBMITTED_TASK,
+        vec![
+            task.task_id.as_str().into(),
+            lane.into(),
+            lane.into(),
+            task.name.clone().into(),
+            task.message_id.clone().into(),
+            SqlValue::json(&task.data),
+            SqlValue::opt_json(task.internal.as_ref()),
+        ],
+    )
+}
+
+/// The schema version the database holds: `None` before any SDK wrote it. Behind means a
+/// migration (none in v1), ahead means a newer SDK wrote this database.
+async fn schema_version(conn: &Conn) -> Result<Option<i64>, StorageError> {
+    let set = match conn.query_all(SCHEMA_VERSION_READ, vec![]).await {
+        Ok(set) => set,
+        Err(WsdbError::Server { message, .. }) if message.contains(NO_SCHEMA) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    match set.rows.first().and_then(|r| r.first()).and_then(SqlValue::as_i64) {
+        Some(v) if v == SCHEMA_VERSION => Ok(Some(v)),
+        Some(v) => Err(StorageError::Schema(format!(
+            "database schema is version {v}, this client writes {SCHEMA_VERSION}"
+        ))),
+        None => Ok(None),
+    }
+}
+
 fn first_int(r: &StatementResult) -> Option<i64> {
     r.rows().first().and_then(|row| row.first()).and_then(SqlValue::as_i64)
 }
@@ -1053,7 +1241,9 @@ mod tests {
              AND NOT EXISTS (SELECT 1 FROM inbox WHERE inbox.lane = older.lane AND inbox.task_id = older.task_id) \
              AND older.seq < (SELECT seq FROM tasks WHERE lane = lanes.lane AND task_id = ?)) RETURNING version"
         );
-        assert!(RUN_STARTED.contains("SELECT ?, ?, ?, 'run_started', jsonb(?) FROM lanes WHERE lane = ? AND lease_token = ?"));
+        assert!(RUN_STARTED.contains(
+            "SELECT ?, ?, ?, 'run_started', jsonb(?) FROM lanes WHERE lane = ? AND lease_token = ?"
+        ));
         assert!(RUN_STARTED.ends_with("AND NOT EXISTS (SELECT 1 FROM events WHERE lane = lanes.lane AND run_id = ? AND type = 'run_ended')"));
         assert!(RELEASE_IF_DRAINED.contains("NOT EXISTS (SELECT 1 FROM inbox WHERE inbox.lane = lanes.lane AND inbox.id > lanes.drained_id)"));
         assert_eq!(
@@ -1129,7 +1319,9 @@ mod tests {
                 upsert.contains("ON CONFLICT(task_id) DO UPDATE SET status = excluded.status,")
             );
             assert!(!upsert.contains("seq = excluded.seq"), "the upsert keeps the early row's seq");
-            assert!(upsert.contains("internal = excluded.internal, updated_at = excluded.updated_at"));
+            assert!(
+                upsert.contains("internal = excluded.internal, updated_at = excluded.updated_at")
+            );
         }
         let t: SubmittedTask = serde_json::from_value(serde_json::json!({
             "lane": "front-desk", "task_id": "AST_1", "message_id": "m1",

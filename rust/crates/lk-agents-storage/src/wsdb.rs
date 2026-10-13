@@ -246,7 +246,8 @@ impl Conn {
             .as_str()
             .into_client_request()
             .map_err(|e| WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)))?;
-        let dial = tokio_tungstenite::connect_async(request);
+        // no Nagle: a request that follows a credit frame must not wait for the delayed ack
+        let dial = tokio_tungstenite::connect_async_with_config(request, None, true);
         let (ws, _) = tokio::time::timeout(self.0.opts.dial_timeout, dial)
             .await
             .map_err(|_| WsdbError::Timeout)?
@@ -402,6 +403,12 @@ impl Conn {
         self.0.state.lock().expect("state").closed
     }
 
+    /// Open, outside a transaction, nothing in flight: a connection another opener can take.
+    pub fn is_idle(&self) -> bool {
+        let st = self.0.state.lock().expect("state");
+        !st.closed && !st.in_txn && st.pending.is_empty()
+    }
+
     /// Ends the connection; every waiter and every later call fails [`WsdbError::Closed`].
     pub fn close(&self) {
         {
@@ -538,6 +545,12 @@ impl Conn {
         let (id, mut rx) = self.register().await?;
         let r = async {
             self.write(id, pb::client_message::Message::Batch(pb::Batch { statements }))?;
+            // the receive window up front: a result larger than the server's initial window
+            // does not wait a round trip for the first replenishment
+            self.write(
+                id,
+                pb::client_message::Message::Credit(pb::Credit { batches: self.0.opts.credits }),
+            )?;
             let mut results: Vec<Option<StatementResult>> = (0..n).map(|_| None).collect();
             let slot =
                 |results: &mut Vec<Option<StatementResult>>, i: u32| -> Result<usize, WsdbError> {

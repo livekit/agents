@@ -33,10 +33,11 @@
 //! `VersionConflict`, `NotSerializable(field)`, `TooLarge(what, limit)` and `Unavailable`
 //! (retryable), plus the transport and decoding failures a client has to name.
 
+use std::sync::Arc;
 use std::time::Duration;
 
-pub mod chat_item;
 pub mod agentstore;
+pub mod chat_item;
 pub mod run;
 pub mod schema;
 pub mod statements;
@@ -48,7 +49,8 @@ pub mod wire;
 pub mod wsdb;
 
 pub use agentstore::Databases;
-pub use run::{Lane, Run, RunOptions, Thread, Tasks};
+pub use run::{Lane, Run, RunOptions, Tasks, Thread};
+use statements::DbPool;
 pub use statements::{Lease, ThreadDb};
 pub use streams::{StreamReader, Streams};
 pub use threads::Threads;
@@ -153,7 +155,10 @@ impl StorageOptions {
         let u = url::Url::parse(&self.url)
             .map_err(|e| StorageError::Invalid(format!("agentstore url {}: {e}", self.url)))?;
         if !matches!(u.scheme(), "http" | "https") || u.host_str().is_none() {
-            return Err(StorageError::Invalid(format!("agentstore url {} is not http(s)", self.url)));
+            return Err(StorageError::Invalid(format!(
+                "agentstore url {} is not http(s)",
+                self.url
+            )));
         }
         Ok(u)
     }
@@ -183,6 +188,8 @@ pub struct Storage {
     streams: Streams,
     threads: Threads,
     databases: Databases,
+    /// The connections closed threads parked for their next turn.
+    pool: Arc<DbPool>,
 }
 
 /// Make `ring` the process TLS provider, once: `reqwest` and `tokio-tungstenite` use
@@ -212,7 +219,15 @@ impl Storage {
         let streams = Streams::new(http, opts.streams()?, minter.clone());
         let threads = Threads::new(minter.threads(&opts.url));
         let databases = Databases::new(minter.databases(&opts.url));
-        Ok(Self { data_plane: opts.data_plane()?, opts, minter, streams, threads, databases })
+        Ok(Self {
+            data_plane: opts.data_plane()?,
+            opts,
+            minter,
+            streams,
+            threads,
+            databases,
+            pool: Arc::default(),
+        })
     }
 
     /// [`StorageOptions::from_env`], `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
@@ -233,8 +248,15 @@ impl Storage {
     pub async fn open(&self, database_id: &str) -> Result<ThreadDb, StorageError> {
         let mut opts = ConnOptions::new(self.data_plane.clone(), database_id);
         opts.reconnect = self.opts.reconnect.clone();
-        let conn = Conn::dial(opts, self.minter.clone()).await?;
-        ThreadDb::open_with_timing(conn, self.opts.lease_ttl, self.opts.renew_interval).await
+        let minter = self.minter.clone();
+        ThreadDb::pooled(
+            self.pool.clone(),
+            database_id,
+            self.opts.lease_ttl,
+            self.opts.renew_interval,
+            || async move { Ok(Conn::dial(opts, minter).await?) },
+        )
+        .await
     }
 
     pub fn streams(&self) -> &Streams {
@@ -258,7 +280,10 @@ mod tests {
     #[test]
     fn the_data_plane_and_streams_sit_under_the_public_api() {
         let o = StorageOptions::new("https://beta-api.staging.livekit.cloud/");
-        assert_eq!(o.data_plane().unwrap(), "wss://beta-api.staging.livekit.cloud/v0/agentstore/db");
+        assert_eq!(
+            o.data_plane().unwrap(),
+            "wss://beta-api.staging.livekit.cloud/v0/agentstore/db"
+        );
         assert_eq!(
             o.streams().unwrap(),
             "https://beta-api.staging.livekit.cloud/v0/agentstore/streams"

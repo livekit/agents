@@ -46,6 +46,9 @@ fn acquire(lane: &str, holder: &str, token: &str, run_id: &str) -> AcquireReques
         task_id: String::new(),
         run_started: json!({"task_id": "AST_1", "channel": "a2a"}),
         events_after: 0,
+        submit: None,
+        pickup: false,
+        tasks_limit: 0,
     }
 }
 
@@ -270,6 +273,7 @@ async fn a_lane_runs_through_the_lease_the_commit_and_the_inbox() {
         drained_id: None,
         run_ended: event("run_ended", json!({"outcome": "completed"})),
         after: LeaseAfter::Release,
+        read_task: None,
     };
     let r = db.commit(&commit).await.unwrap();
     assert_eq!(r.version, 1);
@@ -361,6 +365,7 @@ async fn a_lane_runs_through_the_lease_the_commit_and_the_inbox() {
         drained_id: Some(id),
         run_ended: event("run_ended", json!({"outcome": "completed"})),
         after: LeaseAfter::Renew,
+        read_task: None,
     };
     assert_eq!(db.commit(&drained).await.unwrap().version, 2);
     assert_lease_ttl(&db, lane, storage.options().lease_ttl).await;
@@ -500,6 +505,7 @@ async fn two_handles_opened_on_a_fresh_database_before_any_write_both_commit() {
         drained_id: None,
         run_ended: event("run_ended", json!({"outcome": "completed"})),
         after: LeaseAfter::Release,
+        read_task: None,
     };
     first.commit(&commit("desk", "r1", "t1", "i1")).await.unwrap();
     second.commit(&commit("expert", "r2", "t2", "i2")).await.unwrap();
