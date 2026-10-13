@@ -5,7 +5,6 @@ from .model import (
     ChoiceResult,
     Decision,
     DecisionCapabilities,
-    DecisionInputModality,
     DecisionKind,
     DecisionModel,
     DecisionResponse,
@@ -14,6 +13,7 @@ from .model import (
     ProbabilityResult,
     Score,
     ScoreResult,
+    format_transcript,
 )
 
 __all__ = [
@@ -21,7 +21,6 @@ __all__ = [
     "ChoiceResult",
     "Decision",
     "DecisionCapabilities",
-    "DecisionInputModality",
     "DecisionKind",
     "DecisionModel",
     "DecisionResponse",
@@ -30,4 +29,5 @@ __all__ = [
     "ProbabilityResult",
     "Score",
     "ScoreResult",
+    "format_transcript",
 ]

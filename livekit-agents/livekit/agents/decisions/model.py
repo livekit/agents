@@ -5,7 +5,7 @@ import copy
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
 from opentelemetry import trace
@@ -21,7 +21,6 @@ from ..telemetry import gen_ai, trace_types, tracer
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 DecisionKind = Literal["probability", "choice", "score"]
-DecisionInputModality = Literal["text", "image"]
 _Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 
 
@@ -58,8 +57,6 @@ Decision = Probability | Choice | Score
 class DecisionCapabilities:
     decision_kinds: list[DecisionKind]
     """Decision kinds the model can evaluate"""
-    input_modalities: list[DecisionInputModality] = field(default_factory=lambda: ["text"])
-    """Chat content the model can consume."""
 
 
 class ProbabilityResult(BaseModel):
@@ -99,6 +96,38 @@ class DecisionResponse(BaseModel):
     request_id: str = ""
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+
+
+def format_transcript(chat_ctx: ChatContext, *, include_context_events: bool = False) -> str:
+    """Convert a conversation into the transcript decision models receive.
+
+    Only user and assistant text is kept, one ``role: text`` line per message, with
+    expressive markup removed. Instructions, system and developer messages, and
+    non-text content are always left out.
+
+    Args:
+        chat_ctx: The conversation to convert.
+        include_context_events: Also include tool calls, tool outputs, agent handoffs,
+            and interrupted assistant replies.
+    """
+    lines: list[str] = []
+    for item in chat_ctx.items:
+        if item.type == "message":
+            if item.role not in ("user", "assistant") or not (text := item.text_content):
+                continue
+            if include_context_events and item.interrupted:
+                text += " [interrupted]"
+            lines.append(f"{item.role}: {text}")
+        elif not include_context_events:
+            continue
+        elif item.type == "function_call":
+            lines.append(f"[function call: {item.name}({item.arguments})]")
+        elif item.type == "function_call_output":
+            label = "function error" if item.is_error else "function output"
+            lines.append(f"[{label}: {item.output}]")
+        elif item.type == "agent_handoff":
+            lines.append(f"[agent handoff: {item.old_agent_id} -> {item.new_agent_id}]")
+    return "\n".join(lines)
 
 
 def _kind(decision: Decision) -> DecisionKind:
@@ -165,10 +194,11 @@ def _validate_result(result: DecisionResult, decision: Decision) -> None:
 
 
 class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
-    """Provider-neutral batched decisions over a conversation.
+    """Provider-neutral batched decisions over a text input or conversation.
 
-    Pass an explicit ChatContext, including any new message received separately by
-    ``on_user_turn_completed``.
+    A ChatContext is converted with :func:`format_transcript`, so every provider receives
+    the same text. Call it directly to include tool calls and handoffs. In
+    ``on_user_turn_completed``, add the new message to the context first.
     """
 
     def __init__(self, *, capabilities: DecisionCapabilities) -> None:
@@ -196,16 +226,20 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     async def evaluate(
         self,
         *,
-        chat_ctx: ChatContext,
+        input: str | ChatContext,
         decisions: Mapping[str, Decision],
-        include_context_events: bool = False,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> DecisionResponse:
         """Evaluate a batch of decisions.
 
+        Args:
+            input: Text to evaluate, sent as-is, or a conversation converted with
+                :func:`format_transcript`.
+            decisions: Decisions keyed by name.
+            conn_options: Retry and per-attempt timeout settings.
+
         Each requested name appears in either ``results`` or ``errors``. Request failures
-        still raise. ``include_context_events`` includes
-        tools, handoffs, and interruption metadata in the provider input.
+        and malformed responses raise.
         """
         span = trace.get_current_span()
         span.set_attributes(
@@ -217,6 +251,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         )
         definitions = copy.deepcopy(dict(decisions))
         _validate_decisions(definitions, capabilities=self.capabilities)
+        text = input if isinstance(input, str) else format_transcript(input)
         if not definitions:
             return DecisionResponse(results={}, model=self.model, provider=self.provider)
 
@@ -225,10 +260,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
             try:
                 response = await asyncio.wait_for(
                     self._evaluate_impl(
-                        chat_ctx=chat_ctx,
-                        decisions=definitions,
-                        include_context_events=include_context_events,
-                        conn_options=conn_options,
+                        input=text, decisions=definitions, conn_options=conn_options
                     ),
                     timeout=conn_options.timeout,
                 )
@@ -276,9 +308,8 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     async def _evaluate_impl(
         self,
         *,
-        chat_ctx: ChatContext,
+        input: str,
         decisions: Mapping[str, Decision],
-        include_context_events: bool,
         conn_options: APIConnectOptions,
     ) -> DecisionResponse: ...
 

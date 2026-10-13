@@ -13,7 +13,15 @@ from livekit.agents.decisions import (
     ProbabilityResult,
     ScoreResult,
 )
-from livekit.agents.llm import ChatContext
+from livekit.agents.llm import (
+    AgentConfigUpdate,
+    AgentHandoff,
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    ImageContent,
+)
 from livekit.agents.metrics import DecisionMetrics
 from livekit.agents.types import APIConnectOptions
 
@@ -52,7 +60,7 @@ class StaticModel(decisions.DecisionModel):
             )
         )
         self.outcomes = list(outcomes)
-        self.requests: list[tuple[ChatContext, Mapping[str, decisions.Decision], bool]] = []
+        self.requests: list[tuple[str, Mapping[str, decisions.Decision]]] = []
 
     @property
     def model(self) -> str:
@@ -65,12 +73,11 @@ class StaticModel(decisions.DecisionModel):
     async def _evaluate_impl(
         self,
         *,
-        chat_ctx: ChatContext,
+        input: str,
         decisions: Mapping[str, decisions.Decision],
-        include_context_events: bool,
         conn_options: APIConnectOptions,
     ) -> DecisionResponse:
-        self.requests.append((chat_ctx, decisions, include_context_events))
+        self.requests.append((input, decisions))
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -79,14 +86,14 @@ class StaticModel(decisions.DecisionModel):
 
 class HangingModel(StaticModel):
     async def _evaluate_impl(self, **kwargs) -> DecisionResponse:  # type: ignore[override]
-        self.requests.append((kwargs["chat_ctx"], kwargs["decisions"], False))
+        self.requests.append((kwargs["input"], kwargs["decisions"]))
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
 
 
 async def evaluate(model: decisions.DecisionModel, **kwargs) -> DecisionResponse:
     return await model.evaluate(
-        chat_ctx=kwargs.pop("chat_ctx", ChatContext.empty()),
+        input=kwargs.pop("input", "The caller asked for a table."),
         decisions=kwargs.pop("decisions", QUESTIONS),
         **kwargs,
     )
@@ -104,18 +111,13 @@ async def test_results_usage_and_identity_are_reported_once() -> None:
     )
     collected = []
     model.on("metrics_collected", collected.append)
-    context = ChatContext.empty()
-    context.add_message(role="user", content="Book a table, please.")
-
-    response = await evaluate(model, chat_ctx=context, include_context_events=True)
+    response = await evaluate(model)
 
     assert response.results.keys() == QUESTIONS.keys()
     assert response.errors == {}
     assert (response.model, response.provider) == ("resolved-model", "test-provider")
-    [(chat_ctx, definitions, include_context_events)] = model.requests
-    assert chat_ctx is context
+    [(_, definitions)] = model.requests
     assert definitions == QUESTIONS
-    assert include_context_events is True
     [metrics] = collected
     assert isinstance(metrics, DecisionMetrics)
     assert (metrics.input_tokens, metrics.output_tokens) == (50, 5)
@@ -133,7 +135,7 @@ async def test_model_identity_falls_back_to_configured_model() -> None:
 async def test_definitions_are_copied_before_reaching_the_provider() -> None:
     model = StaticModel(DecisionResponse(results=valid_results()))
     await evaluate(model)
-    [(_, definitions, _)] = model.requests
+    [(_, definitions)] = model.requests
     assert definitions is not QUESTIONS
     assert definitions["intent"].options is not QUESTIONS["intent"].options
 
@@ -287,3 +289,58 @@ async def test_invalid_definitions_fail_before_provider_request(
 def test_probabilities_must_be_finite_and_bounded(value: float) -> None:
     with pytest.raises(ValidationError):
         decisions.ProbabilityResult(value=value)
+
+
+async def test_string_input_is_sent_as_is() -> None:
+    model = StaticModel(DecisionResponse(results=valid_results()))
+    await evaluate(model, input="  Caller: I want a refund.\n")
+    [(sent, _)] = model.requests
+    assert sent == "  Caller: I want a refund.\n"
+
+
+async def test_chat_context_input_is_sent_as_a_transcript() -> None:
+    context = ChatContext.empty()
+    context.add_message(role="user", content="Book a table, please.")
+    context.add_message(role="assistant", content="For how many?")
+    model = StaticModel(DecisionResponse(results=valid_results()))
+    await evaluate(model, input=context)
+    [(sent, _)] = model.requests
+    assert sent == "user: Book a table, please.\nassistant: For how many?"
+
+
+def conversation() -> ChatContext:
+    return ChatContext(
+        [
+            ChatMessage(role="system", content=["Answer only in Spanish."]),
+            ChatMessage(role="developer", content=["Internal instructions."]),
+            AgentConfigUpdate(instructions="More internal instructions."),
+            ChatMessage(
+                role="user",
+                content=["Book a table.", ImageContent(image="https://example.com/image.png")],
+            ),
+            FunctionCall(call_id="call-1", name="book", arguments='{"party_size": 2}'),
+            FunctionCallOutput(call_id="call-1", name="book", output="No tables", is_error=True),
+            AgentHandoff(old_agent_id="booking", new_agent_id="receptionist"),
+            ChatMessage(
+                role="assistant",
+                content=['<expr value="warm"/>I can offer seven.'],
+                interrupted=True,
+            ),
+        ]
+    )
+
+
+def test_transcript_keeps_only_user_and_assistant_text_by_default() -> None:
+    assert decisions.format_transcript(conversation()) == (
+        "user: Book a table.\nassistant: I can offer seven."
+    )
+
+
+def test_transcript_includes_context_events_when_asked() -> None:
+    assert decisions.format_transcript(conversation(), include_context_events=True) == (
+        "user: Book a table.\n"
+        '[function call: book({"party_size": 2})]\n'
+        "[function error: No tables]\n"
+        "[agent handoff: booking -> receptionist]\n"
+        "assistant: I can offer seven. [interrupted]"
+    )
