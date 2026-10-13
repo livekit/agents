@@ -491,6 +491,14 @@ def test_parser_handles_the_unclosed_form_and_other_marker_types() -> None:
     assert parser.spoken == "ohnoa7ok"
 
 
+def test_parser_finds_bracket_tags_and_always_forwards_them() -> None:
+    chunks = ["[ha", "ppy] Okay. [warmly] sure [sa", "d] end"]
+    out, markers, parser = _parse(chunks, forward_expr=False)
+    assert out == "[happy] Okay. [warmly] sure [sad] end"
+    assert markers == [_tags.Marker(0, "happy"), _tags.Marker(len("okaysure"), "sad")]
+    assert parser.saw_brackets
+
+
 def test_parser_reports_only_the_allowed_emotions() -> None:
     text = (
         '<expr type="expression" label="happy"/> hi <expr type="expression" label="sad"/> '
@@ -507,8 +515,16 @@ def test_parser_gives_up_holding_an_unclosed_expr() -> None:
     assert parser.push(stray) == (stray, [])
 
 
-def test_parser_releases_a_partial_marker_at_the_end_of_the_stream() -> None:
-    text = 'hi <expr type="expression" label="x"'
+def test_parser_treats_long_or_multiline_brackets_as_text() -> None:
+    long_run = "[" + "x" * (_tags.MAX_TAG_LENGTH + 1) + "]"
+    out, markers, _ = _parse([long_run, " [a\nb] [happy]"], forward_expr=False)
+    assert out == f"{long_run} [a\nb] [happy]"
+    # their letters count as spoken
+    assert markers == [_tags.Marker(len("x" * 33 + "ab"), "happy")]
+
+
+@pytest.mark.parametrize("text", ["hi [par", 'hi <expr type="expression" label="x"'])
+def test_parser_releases_a_partial_marker_at_the_end_of_the_stream(text: str) -> None:
     out, markers, _ = _parse([text], forward_expr=False)
     assert (out, markers) == (text, [])
 
@@ -549,9 +565,24 @@ def test_emotion_for_label(label: str, emotion: str | None) -> None:
     assert _tags.emotion_for_label(label) == emotion
 
 
+@pytest.mark.parametrize(
+    ("name", "emotion"),
+    [
+        ("happy", "happy"),
+        (" Sad ", "sad"),
+        # anything but an exact name is a voice-only audio tag
+        ("warmly", None),
+        ("happy laugh", None),
+    ],
+)
+def test_emotion_for_tag(name: str, emotion: str | None) -> None:
+    assert _tags.emotion_for_tag(name) == emotion
+
+
 def test_emotion_matching_respects_the_allowed_set() -> None:
     assert _tags.emotion_for_label("happy", allowed=("neutral", "sad")) is None
     assert _tags.emotion_for_label("happy, then sad", allowed=("neutral", "sad")) == "sad"
+    assert _tags.emotion_for_tag("happy", allowed=("neutral", "sad")) is None
 
 
 # ---------------------------------------------------------------------------
@@ -679,6 +710,43 @@ def test_planner_resyncs_on_a_long_word_after_an_unmatched_token() -> None:
     )
     # "happy" was in the skipped span: it resolves where coverage resumed
     assert _cue_times(_run(planner, 2.0)) == [("happy", 0.9), ("sad", 1.4)]
+
+
+def test_planner_skips_bracket_tokens_in_the_alignment() -> None:
+    planner = _planner("Okay [sad] sad news.")
+    planner.add_marker(_tags.Marker(len("okay"), "sad"))
+    planner.add_timings(
+        [
+            _timed("Okay ", 0.0, 0.4),
+            # the tag is aligned as a word of its own, ahead of the word it names
+            _timed("[sad] ", 0.4, 0.4),
+            _timed("sad ", 0.6, 0.9),
+            _timed("news.", 0.9, 1.3),
+        ]
+    )
+    assert _cue_times(_run(planner, 1.3)) == [("sad", 0.6)]
+
+
+def test_planner_skips_the_tail_of_a_tag_whose_start_was_dropped() -> None:
+    planner = _planner("[excited] We did it. [sad] Sadly I am still so excited.")
+    planner.add_marker(_tags.Marker(len("wedidit"), "sad"))
+    planner.add_timings(
+        [
+            # matched as a word, the tail would jump to the "excited" at the end
+            _timed("xcited] ", 0.0, 0.0),
+            _timed("We ", 0.0, 0.2),
+            _timed("did ", 0.2, 0.4),
+            _timed("it. ", 0.4, 0.6),
+            _timed("[sad] ", 0.7, 0.7),
+            _timed("Sadly ", 0.7, 1.1),
+            _timed("I ", 1.1, 1.2),
+            _timed("am ", 1.2, 1.4),
+            _timed("still ", 1.4, 1.7),
+            _timed("so ", 1.7, 1.9),
+            _timed("excited.", 1.9, 2.5),
+        ]
+    )
+    assert _cue_times(_run(planner, 2.5)) == [("sad", 0.7)]
 
 
 def test_planner_matches_a_first_word_missing_its_first_letters() -> None:
@@ -867,6 +935,50 @@ async def test_emotion_frames_matches_word_timings_through_echoed_markup() -> No
     assert cues == {0: [("happy", 0.0)], 7: [("sad", 0.0)]}
 
 
+async def test_emotion_frames_drops_bracket_tags_from_transcripts() -> None:
+    node = _FakeNode(
+        [
+            _timed_frame(300, _timed("[happy] ", 0.0, 0.0), _timed("Okay ", 0.0, 0.3)),
+            _timed_frame(400, _timed("[sad] ", 0.3, 0.3), _timed("then.", 0.3, 0.7)),
+        ]
+    )
+    frames = [
+        f
+        async for f in _tts_node._emotion_frames(
+            _chunks("[happy] Okay [sa", "d] then."), node, forward_expr=False, aligned=True
+        )
+    ]
+    assert node.text == "[happy] Okay [sad] then."
+    assert [_cues(f) for f in frames] == [[("happy", 0.0)], [("sad", 0.0)]]
+    assert [[str(t) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames] == [
+        ["Okay "],
+        ["then."],
+    ]
+
+
+async def test_emotion_frames_releases_a_bracket_left_open_at_the_end() -> None:
+    node = _FakeNode(
+        [
+            _timed_frame(300, _timed("[happy] ", 0.0, 0.0), _timed("Okay, ", 0.0, 0.3)),
+            _timed_frame(200, _timed("see ", 0.3, 0.45), _timed("[", 0.45, 0.5)),
+        ]
+    )
+    # the closing marker has no word to resolve at, which keeps the last frame back
+    # until the reply ends
+    text = ("[happy] Okay, see [", '<expr type="expression" label="sad"/>')
+    frames = [
+        f
+        async for f in _tts_node._emotion_frames(
+            _chunks(*text), node, forward_expr=False, aligned=True
+        )
+    ]
+    # the "[" was held back in case it opened a tag; at the end it is text after all
+    assert [[str(t) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames] == [
+        ["Okay, "],
+        ["see ", "["],
+    ]
+
+
 async def test_emotion_frames_closes_the_inner_node_early() -> None:
     node = _FakeNode([_frame(100) for _ in range(10)])
     gen = _tts_node._emotion_frames(
@@ -1011,10 +1123,14 @@ async def test_emotion_tts_node_holds_audio_back_for_a_pending_cue(
 
 def test_emotion_instructions() -> None:
     expr = emotion_instructions()
+    brackets = emotion_instructions(style="brackets")
     assert '<expr type="expression" label="..."/>' in expr
     assert all(e in expr for e in EMOTIONS)
+    assert all(f"[{e}]" in brackets for e in EMOTIONS)
     # the expressive template is filled with str.format-style placeholders
-    assert not re.search(r"[{}]", expr)
+    assert not re.search(r"[{}]", expr) and not re.search(r"[{}]", brackets)
 
     short = emotion_instructions(emotions=("neutral", "happy"))
     assert "happy" in short and "skeptical" not in short
+    with pytest.raises(ValueError):
+        emotion_instructions(style="other")  # type: ignore[arg-type]

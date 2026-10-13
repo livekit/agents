@@ -89,11 +89,17 @@ stripped before synthesis:
 agent = MyAgent(instructions=f"{MY_INSTRUCTIONS}\n\n{keyframe.emotion_instructions()}")
 ```
 
+With **ElevenLabs v3/v4**, use `emotion_instructions(style="brackets")` instead: it
+teaches `[happy]`-style audio tags, which those voices read natively, so the tag steers
+the voice too. Only a tag that is exactly an expression name changes the face; other
+audio tags (`[whispers]`, `[warmly]`) steer the voice only. Set
+`use_tts_aligned_transcript=True` on the session so the tags stay out of transcripts.
+
 How precisely a change lands depends on what the TTS reports about its audio:
 
 | TTS | A change lands |
 |-----|----------------|
-| Streaming TTS with word timings on: Cartesia (`add_timestamps` through Inference, the plugin's default), Inworld (`timestamp_type="WORD"`), Rime (websocket), Speechify, Smallest.ai and Baseten (`word_timestamps=True`) | on the word |
+| Streaming TTS with word timings on: Cartesia (`add_timestamps` through Inference, the plugin's default), Inworld (`timestamp_type="WORD"`), ElevenLabs v3/v4, Rime (websocket), Speechify, Smallest.ai and Baseten (`word_timestamps=True`) | on the word |
 | Non-streaming TTS (Gemini, OpenAI, Hume, ...), which the framework synthesizes sentence by sentence | at the start of the marker's sentence |
 | Streaming TTS without word timings (Deepgram, xAI, ...) | only for a marker before the reply's first word; later markers are ignored |
 

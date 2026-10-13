@@ -17,9 +17,11 @@ from __future__ import annotations
 import re
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
+from typing import Literal
 
 from livekit import rtc
 from livekit.agents import utils
+from livekit.agents.tts._provider_format import drop_bracket_cues
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, TimedString
 from livekit.agents.voice import Agent, ModelSettings
 
@@ -41,11 +43,16 @@ DEFAULT_MAX_CUE_HOLD = 0.5
 # any XML-shaped tag: expr markers, and the provider-native tags they lower to, which a
 # provider's alignment may echo between the words
 _XML_TAG_RE = re.compile(r"</?[A-Za-z][^<>]*>")
+_BRACKET_SPAN_RE = re.compile(r"\[[^\]\n]{1,32}\]")
+# the end of a tag whose start an alignment dropped, as ElevenLabs may at the start of a
+# reply: "[happy] Oh" aligned as "ppy] Oh"
+_TAG_TAIL_RE = re.compile(r"^\s*[^\s\[\]]{0,32}\]")
 
 
 def _clean_aligned(text: str) -> str:
-    """Normalized spoken characters of a TTS-aligned token, markup removed."""
-    return normalize(_XML_TAG_RE.sub("", text))
+    """Normalized spoken characters of a TTS-aligned token, markers removed."""
+    text = _BRACKET_SPAN_RE.sub("", _XML_TAG_RE.sub("", text))
+    return normalize(_TAG_TAIL_RE.sub("", text))
 
 
 class _CuePlanner:
@@ -255,6 +262,7 @@ async def _emotion_frames(
             planner.spoken = parser.spoken
             planner.text_done()
 
+    held_tokens: list[TimedString] = []
     inner = inner_node(_parsed_text())
     try:
         async for frame in inner:
@@ -264,9 +272,19 @@ async def _emotion_frames(
                 if isinstance(t, str)
             ]
             planner.add_timings(timed)
+            if parser.saw_brackets and timed:
+                # the TTS aligned the bracket tags as words; keep them out of the transcript
+                frame.userdata[USERDATA_TIMED_TRANSCRIPT] = drop_bracket_cues(timed, held_tokens)
             for released in planner.push_frame(frame):
                 yield released
-        for released in planner.finish():
+        last = planner.finish()
+        if held_tokens and last:
+            tail = drop_bracket_cues([], held_tokens, final=True)
+            last[-1].userdata[USERDATA_TIMED_TRANSCRIPT] = [
+                *last[-1].userdata.get(USERDATA_TIMED_TRANSCRIPT, []),
+                *tail,
+            ]
+        for released in last:
             yield released
     finally:
         aclose = getattr(inner, "aclose", None)
@@ -293,9 +311,10 @@ def emotion_tts_node(
     It is a drop-in for ``Agent.default.tts_node``, so a ``tts_node`` that processes the
     text before synthesis, or the frames after, can call it in the same place.
 
-    Markers are ``<expr type="expression" label="..."/>``, LiveKit's expressive markup.
-    With expressive mode active the markup is passed through, so one marker steers both
-    the voice and the face; otherwise it is stripped before the TTS. See
+    Markers are ``<expr type="expression" label="..."/>`` (LiveKit's expressive markup)
+    and ``[tag]`` audio tags. With expressive mode active the ``<expr>`` markup is passed
+    through, so one marker steers both the voice and the face; otherwise it is stripped
+    before the TTS. Bracket tags are always passed through. See
     :func:`emotion_instructions` for the prompt that teaches the markers.
 
     With a TTS that reports word timings, cues land on the words themselves; a
@@ -329,25 +348,42 @@ def emotion_tts_node(
     )
 
 
-def emotion_instructions(*, emotions: Sequence[Emotion] = EMOTIONS) -> str:
-    """Prompt text that teaches the LLM the markers :func:`emotion_tts_node` reads.
+InstructionStyle = Literal["expr", "brackets"]
 
-    It teaches ``<expr type="expression" label="..."/>``. With expressive mode
-    (``AgentSession(expressive=...)``) pass it as ``tts_instructions_append`` so one
-    marker steers voice and face; with any other TTS add it to the agent's instructions
-    and it drives the face only.
+
+def emotion_instructions(
+    *, emotions: Sequence[Emotion] = EMOTIONS, style: InstructionStyle = "expr"
+) -> str:
+    """Prompt text that teaches the LLM the markers :func:`emotion_tts_node` reads.
 
     Args:
         emotions: The faces to offer.
+        style: ``"expr"`` teaches ``<expr type="expression" label="..."/>``. With
+            expressive mode (``AgentSession(expressive=...)``) pass it as
+            ``tts_instructions_append`` so one marker steers voice and face; with any
+            other TTS add it to the agent's instructions and it drives the face only.
+            ``"brackets"`` teaches ``[label]`` tags, which ElevenLabs v3/v4 voices read
+            natively; add it to the agent's instructions.
 
     The text has no braces, so it is safe inside the expressive template.
     """
     names = ", ".join(emotions)
-    return (
-        "Your face is animated from your expression markers: an "
-        '<expr type="expression" label="..."/> marker also sets the expression you '
-        "hold until the next one. Start every reply with one, and add one wherever "
-        "the mood changes, right before the words it applies to. The face knows only "
-        f"these expressions: {names}. Use only those names as expression labels; a "
-        "marker with any other label leaves the face as it was."
-    )
+    if style == "expr":
+        return (
+            "Your face is animated from your expression markers: an "
+            '<expr type="expression" label="..."/> marker also sets the expression you '
+            "hold until the next one. Start every reply with one, and add one wherever "
+            "the mood changes, right before the words it applies to. The face knows only "
+            f"these expressions: {names}. Use only those names as expression labels; a "
+            "marker with any other label leaves the face as it was."
+        )
+    if style == "brackets":
+        return (
+            "Your face is animated from emotion tags in your reply: a tag in square "
+            "brackets sets the expression you hold until the next one. Start every reply "
+            "with one, and add one wherever the mood changes, right before the words it "
+            f"applies to. Available tags: {' '.join(f'[{e}]' for e in emotions)}. Use "
+            "only these names in emotion tags. Other audio tags are fine alongside them, "
+            "but they don't change your face."
+        )
+    raise ValueError(f"unknown instruction style {style!r}")
