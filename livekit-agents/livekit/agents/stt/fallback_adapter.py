@@ -402,7 +402,7 @@ class FallbackRecognizeStream(RecognizeStream):
                     )
                     # the inner stream continues this stream's timeline from its own creation;
                     # it then adds the delay to its own first frame like any stream
-                    seed = self._offset_at(time.time())
+                    seed = self._capture_start_offset_from(time.time())
                     if seed is not None:
                         main_stream.start_time_offset = seed
 
