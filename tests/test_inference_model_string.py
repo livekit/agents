@@ -29,6 +29,7 @@ def inference_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         "openai/gpt-realtime-2.1-mini",
         "xai/grok-voice",
         "xai/grok-voice-latest",
+        "xai/grok-voice-think-fast-3.0",
         "xai/grok-voice-think-fast-2.0",
     ],
 )

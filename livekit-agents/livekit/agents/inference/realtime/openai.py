@@ -85,6 +85,13 @@ class RealtimeModel(_RealtimeModel):
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        """
+        Args:
+            provider (str, optional): Host that must serve the model, e.g. ``"azure"`` or
+                ``"openai"`` for OpenAI models. The session is refused if no host in the
+                region matches.
+            inference_class (InferenceClass, optional): Has no effect on realtime sessions.
+        """
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")
 
