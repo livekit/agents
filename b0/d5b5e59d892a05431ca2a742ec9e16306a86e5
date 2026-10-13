@@ -1,0 +1,30 @@
+tests/test_stt_base.py
+  s_5804d43a97d8ab::t_45ff93de640548 21,290-291
+livekit-agents/livekit/agents/stt/stt.py
+  s_5804d43a97d8ab::t_5069aecf44dc70 6,382,405,593-603,613-615,617,625-626,628
+  s_5804d43a97d8ab::t_380e17aa331e4f 403,431,434,509
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b0d5b5e59d892a05431ca2a742ec9e16306a86e5",
+  "prompts": {},
+  "sessions": {
+    "s_5804d43a97d8ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5865c939-a099-49cb-b810-a3a86e4d9575",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
