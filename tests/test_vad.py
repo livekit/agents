@@ -18,6 +18,45 @@ pytestmark = pytest.mark.plugin("silero")
 SAMPLE_RATES = [16000, 44100]  # test multiple input sample rates
 
 
+@pytest.mark.parametrize(
+    ("available_providers", "expected_providers"),
+    [
+        (
+            ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+            ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        ),
+        (["CPUExecutionProvider"], ["CPUExecutionProvider"]),
+    ],
+)
+def test_new_inference_session_selects_cuda_before_cpu(
+    tmp_path, monkeypatch, available_providers, expected_providers
+) -> None:
+    model_path = tmp_path / "silero_vad.onnx"
+    model_path.touch()
+    captured: dict[str, object] = {}
+    session = object()
+
+    monkeypatch.setattr(
+        onnx_model.onnxruntime,
+        "get_available_providers",
+        lambda: available_providers,
+    )
+    monkeypatch.setattr(
+        onnx_model.onnxruntime,
+        "InferenceSession",
+        lambda path, *, providers, sess_options: captured.update(
+            path=path, providers=providers, sess_options=sess_options
+        )
+        or session,
+    )
+
+    assert (
+        onnx_model.new_inference_session(force_cpu=False, onnx_file_path=model_path)
+        is session
+    )
+    assert captured["providers"] == expected_providers
+
+
 VAD = InferenceVAD(
     model="silero",
     min_speech_duration=0.5,
