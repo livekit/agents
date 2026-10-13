@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generic, TypeVar
@@ -91,6 +92,8 @@ METHODS: dict[str, str] = {
 STREAMING = frozenset({"stream", "resubscribe"})
 
 REASON_THREAD_NOT_FOUND = "thread-not-found"
+READY_STREAMS = 2
+"""Answer streams created ahead of the requests that will use them."""
 REASON_STORAGE_UNAVAILABLE = "storage-unavailable"
 """Plan 5.12: the ``failed`` reason of a message to an id the threads service does not know."""
 
@@ -133,6 +136,7 @@ class A2AService(Generic[S]):
         self._lane = lane
         self._credentials = credentials
         self._agents = agents
+        self._streams: deque[asyncio.Task[StreamInfo]] = deque()
 
     @property
     def agent_name(self) -> str:
@@ -234,14 +238,12 @@ class A2AService(Generic[S]):
     async def send(self, params: Params, call: CallContext) -> pb.SendMessageResponse:
         """``message/send``: the turn, answered with the ``Task`` when it ends."""
         message = _message_of(params)
-        stream = asyncio.ensure_future(self._storage.streams.create())
         thread_id = await self._resolve(message, call)
         if thread_id is None:
-            stream.cancel()
             record, context_id = self._unknown_session(message, call)
         else:
             try:
-                pump = await self._start(thread_id, message, call.extensions, stream)
+                pump = await self._start(thread_id, message, call.extensions)
                 async for _ in pump.frames():
                     pass
                 record, context_id = pump.outcome.result.task, pump.outcome.context_id
@@ -264,10 +266,8 @@ class A2AService(Generic[S]):
     async def stream(self, params: Params, call: CallContext) -> AsyncIterator[StreamEvent]:
         """``message/stream``: the acknowledgment, progress, the artifact, the final status."""
         message = _message_of(params)
-        stream = asyncio.ensure_future(self._storage.streams.create())
         thread_id = await self._resolve(message, call)
         if thread_id is None:
-            stream.cancel()
             record, context_id = self._unknown_session(message, call)
             yield submitted_task(record.id, context_id)
             yield final_event(record, context_id, exts=call.extensions)
@@ -275,7 +275,7 @@ class A2AService(Generic[S]):
 
         announced = False
         try:
-            pump = await self._start(thread_id, message, call.extensions, stream)
+            pump = await self._start(thread_id, message, call.extensions)
             async for event in pump.frames():
                 announced = True
                 yield event
@@ -313,17 +313,21 @@ class A2AService(Generic[S]):
         db = await self._storage.open(resolved)
         return await self._run(resolved, message, host, task_id, db)
 
+    def _next_stream(self) -> asyncio.Task[StreamInfo]:
+        """An answer stream created ahead of the request, so a turn does not wait for one;
+        the next is made as this one is taken."""
+        while len(self._streams) < READY_STREAMS:
+            self._streams.append(asyncio.ensure_future(self._storage.streams.create()))
+        taken = self._streams.popleft()
+        self._streams.append(asyncio.ensure_future(self._storage.streams.create()))
+        return taken
+
     async def _start(
-        self,
-        thread_id: str,
-        message: StoredMessage,
-        exts: Extensions,
-        stream: asyncio.Future[StreamInfo],
+        self, thread_id: str, message: StoredMessage, exts: Extensions
     ) -> ResponsePump[TurnOutcome]:
-        """The turn in a task of its own, its frames through the pump (plan 6); ``stream`` is
-        the answer stream, created as the request came in."""
+        """The turn in a task of its own, its frames through the pump (plan 6)."""
         continued, created, db = await asyncio.gather(
-            self._continued(thread_id, message), stream, self._storage.open(thread_id)
+            self._continued(thread_id, message), self._next_stream(), self._storage.open(thread_id)
         )
         stream_id = created.stream_id
         pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, stream_id)

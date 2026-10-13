@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
@@ -160,7 +161,14 @@ struct BoundaryInner {
     lease: Option<Lease>,
     tripped: AtomicBool,
     client_canceled: AtomicBool,
+    /// When the acquire that made this boundary cleared the holder's waiter and picked the
+    /// task up: a check within [`FRESH`] of it is answered from it, without a read.
+    acquired: Instant,
 }
+
+/// How long the acquire answers the boundary: an interrupt that lands inside this window
+/// waits for the next boundary.
+const FRESH: Duration = Duration::from_millis(100);
 
 /// The `boundary()` of `_turn`: the host asks before each model call and once more before the
 /// answer streams. `true` once means `true` from then on. The lease lost means the run cannot
@@ -201,6 +209,7 @@ impl Boundary {
                 lease,
                 tripped: AtomicBool::new(false),
                 client_canceled: AtomicBool::new(false),
+                acquired: Instant::now(),
             }),
         }
     }
@@ -216,6 +225,9 @@ impl Boundary {
             return Ok(true);
         }
         if i.lease.as_ref().is_some_and(Lease::is_lost) {
+            return Ok(false);
+        }
+        if i.acquired.elapsed() < FRESH {
             return Ok(false);
         }
         let (waiter, status) = i.db.boundary(&i.lane, &i.task_id).await?;

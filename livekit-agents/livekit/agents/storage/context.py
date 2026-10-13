@@ -158,8 +158,11 @@ class TurnHost(Generic[S]):
             if isinstance(handled, AsyncIterable):
                 # yielded as it is written: each piece reaches the client, the answer is the
                 # last run's, or the text itself when no run was made
-                text = await context.stream(handled)
-                output: object = results[-1] if results else text
+                parts: list[str] = []
+                async for delta in handled:
+                    parts.append(delta)
+                    await context.token(delta)
+                output: object = results[-1] if results else "".join(parts)
             else:
                 output = await handled
         except StorageError:
