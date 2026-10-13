@@ -32,6 +32,7 @@ class ProtocolTrace:
 
     Speech is one span per transcript segment. Output audio keeps one bounded counter, not
     payloads or per-frame spans; input audio flows through silence, so it is not traced.
+    ``sent`` means the local WebSocket send completed, not that the service accepted it.
     """
 
     def __init__(self) -> None:

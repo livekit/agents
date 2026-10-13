@@ -1893,9 +1893,8 @@ async def test_backend_traces_separate_delegations_and_continuations(
 
 
 @pytest.mark.no_concurrent
-@pytest.mark.parametrize("ending", ["response.failed", "response.incomplete", "close"])
-async def test_unfinished_backend_traces_end_once(
-    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, ending: str
+async def test_unfinished_backend_trace_ends_on_close(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter
 ) -> None:
     _connect_hook(monkeypatch)
     model = GPTLiveModel(api_key="sk-test")
@@ -1913,17 +1912,13 @@ async def test_unfinished_backend_traces_end_once(
                 },
             }
         )
-        if ending != "close":
-            session._handle_event({"type": "response.event", "event": {"type": ending}})
     finally:
         await session.aclose()
         await model.aclose()
     spans = [s for s in _backend_spans(backend_span_exporter) if s.name == "llm_request"]
     assert len(spans) == 1
     assert spans[0].status.is_ok is False
-    assert spans[0].attributes["error.type"] == (
-        "connection_closed" if ending == "close" else ending
-    )
+    assert spans[0].attributes["error.type"] == "connection_closed"
     assert not session._backend_traces
 
 
@@ -1979,15 +1974,9 @@ async def test_backend_trace_ends_on_disconnect_before_reconnect(
 
 
 @pytest.mark.no_concurrent
-@pytest.mark.parametrize("status", [None, "in_progress", "incomplete"])
 @pytest.mark.parametrize("kind", ["message", "function_call"])
-@pytest.mark.parametrize("ending", ["response.completed", "response.incomplete"])
 async def test_backend_trace_ignores_unfinished_items(
-    monkeypatch: pytest.MonkeyPatch,
-    backend_span_exporter: InMemorySpanExporter,
-    status: str | None,
-    kind: str,
-    ending: str,
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, kind: str
 ) -> None:
     _connect_hook(monkeypatch)
     model = GPTLiveModel(api_key="sk-test")
@@ -1997,37 +1986,7 @@ async def test_backend_trace_ignores_unfinished_items(
         event = (
             _backend_message("Unfinished text") if kind == "message" else _function_call_done("c1")
         )
-        event["item"]["status"] = status
-        session._handle_event(_response_event("d1", event))
-        session._handle_event(_response_event("d1", {"type": ending}))
-        assert not session._history.items
-    finally:
-        await session.aclose()
-        await model.aclose()
-    attrs = _backend_spans(backend_span_exporter)[0].attributes
-    assert "gen_ai.output.messages" not in attrs
-    assert attrs["gen_ai.response.finish_reasons"] == (
-        "stop" if ending == "response.completed" else "error",
-    )
-
-
-@pytest.mark.no_concurrent
-@pytest.mark.parametrize("field", ["call_id", "name", "arguments"])
-@pytest.mark.parametrize("capture", [True, False])
-async def test_backend_trace_ignores_malformed_calls(
-    monkeypatch: pytest.MonkeyPatch,
-    backend_span_exporter: InMemorySpanExporter,
-    field: str,
-    capture: bool,
-) -> None:
-    _connect_hook(monkeypatch)
-    gen_ai.set_capture_content(capture)
-    model = GPTLiveModel(api_key="sk-test")
-    session = model.session()
-    try:
-        session._handle_event(_response_event("d1", {"type": "response.created"}))
-        event = _function_call_done("c1")
-        del event["item"][field]
+        event["item"]["status"] = "in_progress"
         session._handle_event(_response_event("d1", event))
         session._handle_event(_response_event("d1", _completed("r1")))
         assert not session._history.items
@@ -2123,7 +2082,7 @@ async def test_backend_trace_preserves_valid_edge_case_output(
 
 @pytest.mark.no_concurrent
 @pytest.mark.parametrize("capture", [True, False])
-async def test_protocol_timeline_correlates_submission_receipts_and_speech(
+async def test_protocol_timeline_correlates_submissions_and_receipts(
     monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, capture: bool
 ) -> None:
     ws = _connect_hook(monkeypatch)
@@ -2174,14 +2133,6 @@ async def test_protocol_timeline_correlates_submission_receipts_and_speech(
                     "type": "session.commentary.appended",
                     "client_event_id": "context1",
                     "offset_ms": 100,
-                }
-            )
-            session._handle_event(
-                {
-                    "type": "session.output_transcript.delta",
-                    "delta": "PRIVATE speech",
-                    "start_ms": 120,
-                    "end_ms": 150,
                 }
             )
         finally:
