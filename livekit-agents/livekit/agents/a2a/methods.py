@@ -34,7 +34,7 @@ from pydantic import JsonValue
 
 from .. import _core
 from .._core import ThreadDb
-from .._generated.storage import TaskData
+from .._generated.storage import StreamInfo, TaskData
 from .._generated.storage_run import TaskRecord
 from .._generated.storage_turn import TurnResult
 from ..log import logger
@@ -46,7 +46,7 @@ from ..storage.protocol import (
     StorageError,
     ThreadNotFound,
 )
-from ..storage.resolve import AgentRegistry, Thread, resolve_thread
+from ..storage.resolve import AgentRegistry, ResolvedThread, Thread, resolve_thread
 from ..utils import shortuuid
 from .auth import ANONYMOUS, AuthError, Credentials, Flag, Forbidden, Principal, Unauthorized
 from .codec import (
@@ -234,12 +234,14 @@ class A2AService(Generic[S]):
     async def send(self, params: Params, call: CallContext) -> pb.SendMessageResponse:
         """``message/send``: the turn, answered with the ``Task`` when it ends."""
         message = _message_of(params)
+        stream = asyncio.ensure_future(self._storage.streams.create())
         thread_id = await self._resolve(message, call)
         if thread_id is None:
+            stream.cancel()
             record, context_id = self._unknown_session(message, call)
         else:
             try:
-                pump = await self._start(thread_id, message, call.extensions)
+                pump = await self._start(thread_id, message, call.extensions, stream)
                 async for _ in pump.frames():
                     pass
                 record, context_id = pump.outcome.result.task, pump.outcome.context_id
@@ -262,8 +264,10 @@ class A2AService(Generic[S]):
     async def stream(self, params: Params, call: CallContext) -> AsyncIterator[StreamEvent]:
         """``message/stream``: the acknowledgment, progress, the artifact, the final status."""
         message = _message_of(params)
+        stream = asyncio.ensure_future(self._storage.streams.create())
         thread_id = await self._resolve(message, call)
         if thread_id is None:
+            stream.cancel()
             record, context_id = self._unknown_session(message, call)
             yield submitted_task(record.id, context_id)
             yield final_event(record, context_id, exts=call.extensions)
@@ -271,7 +275,7 @@ class A2AService(Generic[S]):
 
         announced = False
         try:
-            pump = await self._start(thread_id, message, call.extensions)
+            pump = await self._start(thread_id, message, call.extensions, stream)
             async for event in pump.frames():
                 announced = True
                 yield event
@@ -310,13 +314,16 @@ class A2AService(Generic[S]):
         return await self._run(resolved, message, host, task_id, db)
 
     async def _start(
-        self, thread_id: str, message: StoredMessage, exts: Extensions
+        self,
+        thread_id: str,
+        message: StoredMessage,
+        exts: Extensions,
+        stream: asyncio.Future[StreamInfo],
     ) -> ResponsePump[TurnOutcome]:
-        """The turn in a task of its own, its frames through the pump (plan 6)."""
-        continued = await self._continued(thread_id, message)
-        # the answer stream and the thread's database, two services, opened together
-        created, db = await asyncio.gather(
-            self._storage.streams.create(), self._storage.open(thread_id)
+        """The turn in a task of its own, its frames through the pump (plan 6); ``stream`` is
+        the answer stream, created as the request came in."""
+        continued, created, db = await asyncio.gather(
+            self._continued(thread_id, message), stream, self._storage.open(thread_id)
         )
         stream_id = created.stream_id
         pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, stream_id)
@@ -529,9 +536,12 @@ class A2AService(Generic[S]):
             raise Forbidden("the grant does not allow create")
 
         try:
-            resolved = await resolve_thread(
-                self._storage.threads, context_id=context_id, scope=scope
-            )
+            if context_id:
+                # the thread as this process last saw it: a message a turn needs no fresh read
+                info = await self._storage.get_thread(context_id)
+                resolved = ResolvedThread(thread=info, created=False)
+            else:
+                resolved = await resolve_thread(self._storage.threads, scope=scope)
         except ThreadNotFound:
             return None
 

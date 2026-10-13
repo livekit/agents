@@ -3,10 +3,11 @@
 Status: designed, not built. Extends [agents.md](agents.md) and
 [tools.md](tools.md).
 
-## Streaming runs
+## Stepping a run
 
-`run_stream()` is `run()` with tokens as they arrive, and `iter()` walks the
-same loop step by step. Both take the arguments of `run()`.
+`iter()` walks the loop of `run()` step by step, with the arguments of
+`run()`. Streaming the reply is built: `agent.stream()` in
+[agents.md](agents.md).
 
 ## Toolsets on an agent
 

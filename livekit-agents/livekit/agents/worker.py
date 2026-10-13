@@ -54,6 +54,7 @@ from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
 from .storage.agentdb import AgentDBStorage
+from .storage.context import Handler
 from .storage.protocol import StorageError
 from .storage.resolve import AgentRegistry, Thread, resolve_thread
 from .types import NOT_GIVEN, NotGivenOr
@@ -426,7 +427,7 @@ class AgentHandler:
         debounce: Any = None,
         storage: Any | None = None,
         version: str | None = None,
-    ) -> Callable[[Callable[..., Awaitable[Any]]], Any]:
+    ) -> Callable[[Handler[Any]], Any]:
         """The text door, as ``AgentServer.a2a_session``, on this handler's lane."""
         from .a2a.endpoint import a2a_session
 
@@ -443,7 +444,7 @@ class AgentHandler:
             lane=self.lane,
         )
 
-        def decorator(handler: Callable[..., Awaitable[Any]]) -> Any:
+        def decorator(handler: Handler[Any]) -> Any:
             ep = door(handler)
             self.doors.append(ep)
             return ep
@@ -607,7 +608,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         storage: Any | None = None,
         version: str | None = None,
         lane: str | None = None,
-    ) -> Callable[[Callable[..., Awaitable[Any]]], Any]:
+    ) -> Callable[[Handler[Any]], Any]:
         """The text door (plan 7.3): one A2A endpoint served as an ASGI app under ``/<endpoint>``.
 
         ::
@@ -650,7 +651,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             lane=lane,
         )
 
-        def decorator(handler: Callable[..., Awaitable[Any]]) -> Any:
+        def decorator(handler: Handler[Any]) -> Any:
             return self.add(door(handler))[0]
 
         return decorator

@@ -27,8 +27,9 @@ from .resolve import AgentRegistry, Thread
 
 S = TypeVar("S", default=None)  # a door declared with no state: ``A2ASessionContext``
 
-Handler = Callable[["A2ASessionContext[S]"], Awaitable[object]]
-"""The developer's handler: the context in, the answer out."""
+Handler = Callable[["A2ASessionContext[S]"], "Awaitable[object] | AsyncIterable[str]"]
+"""The developer's handler: the context in, the answer out, either returned whole or yielded as
+it is written (an async generator), in which case the answer is the last run's result."""
 
 UpdateHook = Callable[[str, str], Awaitable[None]]
 """``(task_id, text)``: a progress message to the door's live response."""
@@ -79,6 +80,11 @@ class A2ASessionContext(Generic[S]):
         self.events.append(_tool_event("update", text=text))
         if self._on_update is not None:
             await self._on_update(self.task_id, text)
+
+    async def token(self, delta: str) -> None:
+        """One piece of the reply as the model writes it, shown before the turn ends."""
+        if self._on_token is not None:
+            await self._on_token(self.task_id, delta)
 
     async def stream(self, source: AsyncIterable[str]) -> str:
         """Forward tokens as they arrive; the boundary is checked once before the first one."""
@@ -138,6 +144,7 @@ class TurnHost(Generic[S]):
             boundary=boundary.check,
             on_result=results.append,
             on_update=context.update,
+            on_token=context.token,
             thread_id=self._thread.id,
             agent_stack=ctx.agent_stack,
             rebuild=self._agents.rebuild,
@@ -147,7 +154,14 @@ class TurnHost(Generic[S]):
 
         token = set_run_hooks(hooks)
         try:
-            output = await self._handler(context)
+            handled = self._handler(context)
+            if isinstance(handled, AsyncIterable):
+                # yielded as it is written: each piece reaches the client, the answer is the
+                # last run's, or the text itself when no run was made
+                text = await context.stream(handled)
+                output: object = results[-1] if results else text
+            else:
+                output = await handled
         except StorageError:
             raise
         except Exception as e:

@@ -1,4 +1,5 @@
 import os
+from collections.abc import AsyncIterator
 
 from livekit.agents import Agent, AgentHandler, JobContext, LiveSession
 from livekit.agents.a2a import A2ASessionContext
@@ -48,6 +49,6 @@ async def phone(ctx: JobContext) -> None:
 
 
 @front_desk.a2a_session(endpoint="frontend", description="Pearl Dental front desk.")
-async def text(ctx: A2ASessionContext) -> str:
-    result = await chat.run(ctx.message, message_history=ctx.message_history)
-    return result.input_required or str(result.output)
+async def text(ctx: A2ASessionContext) -> AsyncIterator[str]:
+    async for delta in chat.stream(ctx.message, message_history=ctx.message_history):
+        yield delta

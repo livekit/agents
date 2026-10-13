@@ -161,9 +161,12 @@ to another agent. The history belongs to the thread: inside the agent's
 hooks and tools, `agent.chat_ctx` is a read-only view of the history the
 current run works on, and outside them it raises.
 
-What is designed beyond this, streaming runs, `toolsets=`, history
-processors, model-call hooks and capabilities, is in
-[planned-agents.md](planned-agents.md).
+`agent.stream(message, ...)` is the same turn as an async iterator of the
+reply's text, one piece as the model writes it, with `run.result` the
+`RunResult` once the loop ends.
+
+What is designed beyond this, `toolsets=`, history processors, model-call
+hooks and capabilities, is in [planned-agents.md](planned-agents.md).
 
 See `examples/use-cases/01_appointments_by_phone_and_text.py` and
 `04_a_claim_with_a_photo.py`.

@@ -14,10 +14,11 @@ run hooks and reads it back from the result.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import inspect
 import json
-from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -100,7 +101,8 @@ class RunHooks:
     ran so far and no reply (the ``interrupt`` policy of plan 3.3.4). ``on_result`` receives every
     result, so the door can commit what the run added without the handler forwarding it.
     ``on_update`` receives a tool's ``ctx.update(text)``: the door forwards it as progress, a
-    ``working`` frame on the text door, speech on a call. ``thread_id`` is the session the run
+    ``working`` frame on the text door, speech on a call. ``on_token`` receives the model's text
+    as it arrives, so the text door shows the reply as it is written. ``thread_id`` is the session the run
     belongs to, what ``A2ADelegate`` sends as the expert's ``contextId`` (plan 7.5).
     ``agent_stack`` is the lane's stack as loaded and ``rebuild`` makes an agent of one entry,
     the server's registry; the run resolves them itself since only it knows the root.
@@ -113,6 +115,7 @@ class RunHooks:
     boundary: Callable[[], Awaitable[bool]] | None = None
     on_result: Callable[[RunResult[Any]], None] | None = None
     on_update: Callable[[str], Any] | None = None
+    on_token: Callable[[str], Awaitable[None]] | None = None
     thread_id: str | None = None
     agent_stack: Sequence[Ref] = ()
     rebuild: Callable[[Ref], Agent | None] | None = None
@@ -146,7 +149,9 @@ def reset_run_hooks(token: _HooksToken) -> None:
 
 
 class AgentRun(Generic[Run_T]):
-    """One turn of an ``Agent`` on a history, created by ``agent.run()``."""
+    """One turn of an ``Agent`` on a history: what ``agent.run()`` awaits, and what
+    ``agent.stream()`` hands out to iterate, the reply as the model writes it, one piece of text
+    at a time, with ``result`` set once the loop ends."""
 
     def __init__(
         self,
@@ -182,6 +187,35 @@ class AgentRun(Generic[Run_T]):
         if isinstance(message, str):
             message = ChatMessage(role="user", content=[message])
         self._message = message
+        self._result: RunResult[Run_T] | None = None
+        self._on_token: Callable[[str], Awaitable[None]] | None = None
+
+    async def __aiter__(self) -> AsyncIterator[str]:
+        if self._result is not None:
+            raise RuntimeError("the run already ended")
+
+        deltas: asyncio.Queue[str | None] = asyncio.Queue()
+
+        async def on_token(delta: str) -> None:
+            deltas.put_nowait(delta)
+
+        self._on_token = on_token
+        task = asyncio.ensure_future(self._run())
+        task.add_done_callback(lambda _: deltas.put_nowait(None))
+        try:
+            while (delta := await deltas.get()) is not None:
+                yield delta
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+
+    @property
+    def result(self) -> RunResult[Run_T]:
+        """What the run produced; set once it was awaited or iterated to its end."""
+        if self._result is None:
+            raise RuntimeError("the run has not ended")
+        return self._result
 
     # -- the binding, what the agent and its nodes read --
 
@@ -237,6 +271,7 @@ class AgentRun(Generic[Run_T]):
             result = await self._run_bound()
         finally:
             _AgentActivityContextVar.reset(token)
+        self._result = result
         if hooks is not None and hooks.on_result is not None:
             hooks.on_result(result)
         return result
@@ -457,7 +492,10 @@ class AgentRun(Generic[Run_T]):
             if answer_call is not None:
                 text, calls = "", [answer_call]
             else:
-                text, calls, usage = await self._infer(_without_pending_calls(chat_ctx), tool_ctx)
+                on_token = self._on_token or (hooks.on_token if hooks is not None else None)
+                text, calls, usage = await self._infer(
+                    _without_pending_calls(chat_ctx), tool_ctx, on_token=on_token
+                )
                 self._usage._add_completion(usage)
 
             if text:
@@ -563,14 +601,21 @@ class AgentRun(Generic[Run_T]):
         return text.strip() or question
 
     async def _infer(
-        self, chat_ctx: ChatContext, tool_ctx: ToolContext
+        self,
+        chat_ctx: ChatContext,
+        tool_ctx: ToolContext,
+        *,
+        on_token: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, list[FunctionCall], CompletionUsage | None]:
-        """One model request through the agent's ``llm_node``: text, calls and usage."""
+        """One model request through the agent's ``llm_node``: text, calls and usage; each text
+        delta reaches ``on_token`` as it arrives."""
         node = self._agent.llm_node(chat_ctx, tool_ctx.flatten(), ModelSettings())
         if inspect.iscoroutine(node):
             node = await node
 
         if isinstance(node, str):
+            if on_token is not None and node:
+                await on_token(node)
             return node, [], None
         if not isinstance(node, AsyncIterable):
             raise UnexpectedModelBehavior("llm_node returned neither text nor a stream")
@@ -582,6 +627,8 @@ class AgentRun(Generic[Run_T]):
         async for chunk in node:
             if isinstance(chunk, str):
                 text_parts.append(chunk)
+                if on_token is not None and chunk:
+                    await on_token(chunk)
                 continue
             if not isinstance(chunk, ChatChunk):
                 continue
@@ -591,6 +638,8 @@ class AgentRun(Generic[Run_T]):
                 continue
             if chunk.delta.content:
                 text_parts.append(chunk.delta.content)
+                if on_token is not None:
+                    await on_token(chunk.delta.content)
             for tool_call in chunk.delta.tool_calls:
                 if tool_call.type != "function":
                     continue

@@ -24,6 +24,22 @@ Called once per turn with the agent's lane already loaded; a batched burst
 is one call. The return value is the answer; the framework commits the lane
 and delivers it. A handler that raises ends the task `failed`.
 
+A handler that yields instead of returning delivers the answer as it is
+written: each piece reaches the client at once, and the answer is the last
+run's result, its question when a tool asked for input. `agent.stream()` is
+`agent.run()` as that iterator:
+
+```python
+@server.a2a_session(endpoint="scheduling", description="Book, confirm or move an appointment.")
+async def text(ctx: A2ASessionContext) -> AsyncIterator[str]:
+    async for delta in scheduler.stream(ctx.message, message_history=ctx.message_history):
+        yield delta
+```
+
+A handler that awaits `agent.run()` streams too, the run forwards the
+model's text to the client itself; yielding is for a handler that wants the
+pieces in its own hands.
+
 A module defines its doors on an `AgentHandler` and leaves the server to
 the entrypoint, which serves them with `server.add(handler, ...)`:
 

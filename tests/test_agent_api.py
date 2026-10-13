@@ -467,3 +467,19 @@ def test_agent_session_alias_is_deprecated() -> None:
         warnings.simplefilter("always")
         assert livekit.agents.AgentSession is LiveSession
     assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+
+
+async def test_stream_yields_the_reply_as_it_is_written() -> None:
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(input="hello", content="hi there, friend", ttft=0, duration=0)
+        ]
+    )
+    agent = Agent(instructions="say hi", llm=llm)
+
+    run = agent.stream("hello")
+    deltas = [delta async for delta in run]
+
+    assert len(deltas) > 1, "the reply arrives in pieces"
+    assert "".join(deltas) == "hi there, friend"
+    assert run.result.output == "hi there, friend"

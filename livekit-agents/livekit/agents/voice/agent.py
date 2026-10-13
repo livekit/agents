@@ -394,7 +394,8 @@ class Agent:
 
         Pure: a message in, a typed ``RunResult`` out, nothing kept after. The run stops at
         an ``InputRequired`` from a tool, with ``result.input_required`` set and
-        ``result.output`` ``None``.
+        ``result.output`` ``None``. ``stream()`` is the same turn with the reply as it is
+        written.
 
         Args:
             message: The user's message.
@@ -404,9 +405,37 @@ class Agent:
             usage: A ``RunUsage`` to add this run's usage to, for a delegated run.
             max_steps: The most model requests one turn may make.
         """
+        run = self.stream(
+            message,
+            message_history=message_history,
+            state=state,
+            deps=deps,
+            usage=usage,
+            max_steps=max_steps,
+        )
+        return await run._run()
+
+    def stream(
+        self,
+        message: str | llm.ChatMessage,
+        *,
+        message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
+        state: Any = None,
+        deps: Any = None,
+        usage: RunUsage | None = None,
+        max_steps: int | None = None,
+    ) -> AgentRun[Any]:
+        """The turn of ``run()`` as an async iterator of the reply's text, one piece as the
+        model writes it; ``run.result`` is the ``RunResult`` once the loop ends::
+
+            run = agent.stream("book me in", message_history=history)
+            async for delta in run:
+                print(delta, end="")
+            answer = run.result.output
+        """
         from .agent_run import AgentRun
 
-        run = AgentRun[Any](
+        return AgentRun[Any](
             self,
             message,
             message_history=message_history,
@@ -416,7 +445,6 @@ class Agent:
             max_steps=max_steps,
             output_type=self._output_type,
         )
-        return await run._run()
 
     def output_validator(self, f: _OutputValidatorFn) -> _OutputValidatorFn:
         """Register a validator of the run's output, as a decorator.
