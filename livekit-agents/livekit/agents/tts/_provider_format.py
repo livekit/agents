@@ -1136,9 +1136,6 @@ def _convert_expr(provider: str, text: str) -> str:
             if provider == "ssml":
                 return f'<say-as interpret-as="characters">{inner}</say-as>'
             return inner
-        if provider == "eleven_v3":
-            # a free-form cue steers the words after it, so the span follows it
-            return f"[{label}] {inner}" if label else inner
         # prosody: native wrapping tags exist only for xAI
         if provider == "xai":
             native = label.replace(" ", "-")
@@ -1173,11 +1170,11 @@ def _convert_expr(provider: str, text: str) -> str:
             if provider == "cartesia":
                 # Cartesia's discrete emotion vocabulary (instructions list it)
                 return f'<emotion value="{label}"/>'
-            if provider in ("inworld", "fishaudio", "eleven_v3"):
+            if provider in ("inworld", "fishaudio"):
                 return f'<expression value="{label}"/>'
             return ""  # xAI has no free-form delivery descriptions
         if marker_type == "sound":
-            if provider in ("cartesia", "ssml", "elevenlabs", "google_markup"):
+            if provider in ("cartesia", "ssml", "google_markup"):
                 return ""  # no non-verbal sound support
             if provider == "xai":
                 label = _XAI_SOUND_ALIASES.get(label.lower(), label)
@@ -1185,10 +1182,8 @@ def _convert_expr(provider: str, text: str) -> str:
                 label = _FISHAUDIO_SOUND_ALIASES.get(label.lower(), label)
             return f'<sound value="{label}"/>'
         if marker_type == "break":
-            if provider in ("ssml", "elevenlabs"):
-                return _ssml_break(provider, label)
-            if provider == "eleven_v3":
-                return "..."  # no SSML and no pause tag; ElevenLabs advises an ellipsis
+            if provider == "ssml":
+                return _ssml_break(label)
             if provider == "google_markup":
                 return _google_pause(label)
             return f'<break time="{label}"/>'
@@ -1282,21 +1277,21 @@ _SSML_TAGS = [
     "mstts:silence",
 ]
 
-# Dialects that say() text is lowered onto, but that have no LLM instructions, so
-# expressive mode stays off for them. Kept apart from _PROVIDER_MARKUP so their tag names
-# don't join the union the sinks strip from every LLM reply.
-#   ssml           - Google, Azure, AWS Polly. Only what all three read on their default
-#                    voices: <break> and <say-as interpret-as="characters">. <emphasis> is
-#                    left out: Polly rejects it on every engine but standard
+# Dialects say() text may carry, with no LLM instructions, so expressive mode stays off
+# for them. Kept apart from _PROVIDER_MARKUP so their tag names don't join the union the
+# sinks strip from every LLM reply.
+#   ssml           - Google, Azure, AWS Polly. <expr/> lowers to what all three read on
+#                    their default voices: <break> and <say-as interpret-as="characters">.
+#                    <emphasis> is left out: Polly rejects it on every engine but standard
 #                    (https://docs.aws.amazon.com/polly/latest/dg/supportedtags.html), and
 #                    Azure HD and Chirp 3 HD voices don't read it.
-#   elevenlabs     - ElevenLabs with SSML parsing on: <break> (up to 3s) and <phoneme> only
-#                    (https://elevenlabs.io/docs/overview/capabilities/text-to-speech/best-practices)
-#   eleven_v3      - ElevenLabs v3/v4 audio tags: [whispers], [laughs]. No SSML; a pause is
-#                    an ellipsis, as the same page advises
-#   google_markup  - Google's markup input (Chirp 3 HD): pauses only, [pause short] /
-#                    [pause] / [pause long]
+#   google_markup  - Google's markup input (Chirp 3 HD): <expr/> breaks lower to its
+#                    pauses, [pause short] / [pause] / [pause long]
 #                    (https://docs.cloud.google.com/text-to-speech/docs/chirp3-hd)
+#   elevenlabs     - ElevenLabs with SSML parsing on, which reads <break> and <phoneme>
+#   eleven_v3      - ElevenLabs v3/v4 audio tags: [whispers], [laughs]
+# The two ElevenLabs dialects only name native markup to strip. The plugin streams
+# natively, so nothing converts <expr/> for it (tts_node drops the markers).
 _SAY_ONLY_MARKUP: dict[str, list[str]] = {
     "ssml": _SSML_TAGS,
     "elevenlabs": ["break", "phoneme"],
@@ -1330,14 +1325,10 @@ def _break_seconds(raw: str) -> float | None:
     return secs if secs >= 0 else None
 
 
-def _ssml_break(provider: str, label: str) -> str:
+def _ssml_break(label: str) -> str:
     secs = _break_seconds(label)
     if secs is None:
-        # every ssml target has a default pause; ElevenLabs documents only time="..."
-        return "<break/>" if provider == "ssml" else ""
-    if provider == "elevenlabs":
-        # ElevenLabs documents seconds, up to 3
-        return f'<break time="{round(min(secs, 3.0), 2):g}s"/>'
+        return "<break/>"  # not a duration: the default pause, which every target has
     # Polly's limit (Azure clamps at 20s, Google documents none)
     return f'<break time="{round(min(secs, 10.0) * 1000)}ms"/>'
 
@@ -1757,11 +1748,8 @@ def convert_markup(provider: str, text: str) -> str:
     """
     if provider == "gemini":
         return _convert_gemini_expr(text)
-    if provider in _SAY_ONLY_MARKUP:
-        text = _convert_expr(provider, text)
-        if provider == "eleven_v3":
-            text = convert_expression_tags(text)
-        return text
+    if provider in ("ssml", "google_markup"):
+        return _convert_expr(provider, text)
     if provider not in _PROVIDER_MARKUP:
         return strip_expr_markup(text)
     # lower expr markers first; the per-provider conversions below then

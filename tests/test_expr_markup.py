@@ -646,12 +646,6 @@ def test_convert_expr_ssml() -> None:
     )
 
 
-def test_convert_expr_elevenlabs_ssml_keeps_only_breaks() -> None:
-    assert convert_markup("elevenlabs", SAY_TURN) == (
-        'Hi <break time="1s"/> there. Secret ok. Code A7X. Now.'
-    )
-
-
 @pytest.mark.parametrize(
     ("provider", "label", "expected"),
     [
@@ -659,20 +653,10 @@ def test_convert_expr_elevenlabs_ssml_keeps_only_breaks() -> None:
         ("ssml", "1.5s", '<break time="1500ms"/>'),
         ("ssml", "30s", '<break time="10000ms"/>'),  # Polly's limit
         ("ssml", "a while", "<break/>"),  # not a duration: the default pause
-        ("elevenlabs", "1.5s", '<break time="1.5s"/>'),
-        ("elevenlabs", "5s", '<break time="3s"/>'),  # ElevenLabs' limit
-        ("elevenlabs", "a while", ""),
     ],
 )
 def test_convert_expr_ssml_break_limits(provider: str, label: str, expected: str) -> None:
     assert convert_markup(provider, f'<expr type="break" label="{label}"/>') == expected
-
-
-def test_convert_expr_eleven_v3() -> None:
-    # v3/v4 have no SSML and no documented pause tag; ElevenLabs advises an ellipsis
-    assert convert_markup("eleven_v3", SAY_TURN) == (
-        "Hi ... there. [whispers] Secret [laughs] ok. Code A7X. [emphasis] Now."
-    )
 
 
 def test_convert_expr_google_markup_keeps_only_pauses() -> None:
@@ -689,9 +673,11 @@ def test_convert_expr_google_pause_levels(label: str, pause: str) -> None:
     assert convert_markup("google_markup", f'<expr type="break" label="{label}"/>') == pause
 
 
-@pytest.mark.parametrize("provider", ["", "deepgram"])
+@pytest.mark.parametrize("provider", ["", "deepgram", "elevenlabs", "eleven_v3"])
 def test_convert_expr_without_a_dialect_drops_markers(provider: str) -> None:
-    # nothing would lower them, so they must not reach the TTS and be read aloud
+    # nothing would lower them, so they must not reach the TTS and be read aloud. The
+    # ElevenLabs dialects name only native markup: the plugin streams natively, so
+    # nothing converts for it
     assert convert_markup(provider, SAY_TURN) == "Hi there. Secret ok. Code A7X. Now."
 
 
