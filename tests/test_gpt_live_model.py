@@ -2062,6 +2062,32 @@ async def test_backend_trace_deduplicates_calls_like_dispatch(
 
 
 @pytest.mark.no_concurrent
+async def test_backend_tracing_failure_never_drops_dispatch(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    calls: list[llm.FunctionCall] = []
+    session.on("function_call", calls.append)
+
+    def _broken_trace(envelope: Any) -> None:
+        raise RuntimeError("exporter down")
+
+    monkeypatch.setattr(session, "_trace_response_event", _broken_trace)
+    try:
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("c1")))
+        session._handle_event(_response_event("d1", _completed("r1")))
+        assert [c.call_id for c in calls] == ["c1"]
+        assert not session._backend_running_responses
+        assert session._backend_open_calls == {"c1"}
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.no_concurrent
 @pytest.mark.parametrize("kind", ["refusal", "empty_arguments"])
 async def test_backend_trace_preserves_valid_edge_case_output(
     monkeypatch: pytest.MonkeyPatch,
@@ -2166,7 +2192,7 @@ async def test_protocol_timeline_correlates_submission_receipts_and_speech(
     assert all(s.context.trace_id == parent.get_span_context().trace_id for s in spans)
     events = [dict(s.attributes or {}) for s in spans]
     commands = [e for e in events if e.get("lk.openai.event_id") == "result1"]
-    assert [e["lk.openai.direction"] for e in commands] == ["queued", "sent"]
+    assert [e["lk.openai.direction"] for e in commands] == ["sent"]
     assert all(e["lk.openai.item.call_id"] == "tool1" for e in commands)
     assert commands[0]["lk.session_id"] == "live_test"
     assert any(e.get("lk.openai.client_event_id") == "context1" for e in events)
@@ -2174,6 +2200,62 @@ async def test_protocol_timeline_correlates_submission_receipts_and_speech(
     assert any(e.get("lk.openai.response.id") == "resp1" for e in events)
     assert ("PRIVATE" in str(events)) is capture
     assert "PRIVATE" not in str([pii.filter_attributes(e) for e in events])
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("capture", [True, False])
+async def test_protocol_traces_one_span_per_speech_segment(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, capture: bool
+) -> None:
+    _connect_hook(monkeypatch)
+    gen_ai.set_capture_content(capture)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_transcript("user", "PRIVATE what is", 0))
+        session._handle_event(_transcript("user", " the weather", 200))
+        session._end_speech("user")
+        session._handle_event(_transcript("assistant", "PRIVATE sunny", 1000))
+        session._handle_event(_transcript("assistant", " today", 1200))
+        # a pause on the model's clock opens the next segment; the last one ends on close
+        session._handle_event(_transcript("assistant", "Anything else?", 3000))
+    finally:
+        await session.aclose()
+        await model.aclose()
+    finished = backend_span_exporter.get_finished_spans()
+    speech = [dict(s.attributes or {}) for s in finished if s.name == "gpt_live.speech"]
+    assert [
+        (
+            s["lk.openai.role"],
+            s["lk.openai.fragment_count"],
+            s["lk.openai.start_ms"],
+            s["lk.openai.end_ms"],
+            s["lk.session_id"],
+        )
+        for s in speech
+    ] == [
+        ("user", 2, 0, 400, "live_test"),
+        ("assistant", 2, 1000, 1400, "live_test"),
+        ("assistant", 1, 3000, 3200, "live_test"),
+    ]
+    assert not [
+        s
+        for s in finished
+        if s.name == "gpt_live.protocol"
+        and str(s.attributes.get("lk.openai.event_type")).endswith("_transcript.delta")
+    ]
+    content = [s.get("lk.pii.openai_content") for s in speech]
+    if capture:
+        assert [json.loads(str(c))["transcript"] for c in content] == [
+            "PRIVATE what is the weather",
+            "PRIVATE sunny today",
+            "Anything else?",
+        ]
+    else:
+        assert content == [None, None, None]
+    assert "PRIVATE" not in str([pii.filter_attributes(s) for s in speech])
 
 
 @pytest.mark.no_concurrent
@@ -2203,14 +2285,12 @@ async def test_protocol_send_failure_never_claims_sent(
         if s.name == "gpt_live.protocol"
         and s.attributes.get("lk.openai.event_id") == "failed-command"
     ]
-    assert [e["lk.openai.direction"] for e in events] == (
-        ["send_failed"] if event_type == "session.input_audio.append" else ["queued", "send_failed"]
-    )
+    assert [e["lk.openai.direction"] for e in events] == ["send_failed"]
     assert "PRIVATE" not in str(events)
 
 
 @pytest.mark.no_concurrent
-def test_protocol_audio_is_bounded_and_reasoning_is_excluded(
+def test_protocol_traces_bounded_output_audio_only_and_no_reasoning(
     monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter
 ) -> None:
     from livekit.plugins.openai.realtime._gpt_live_telemetry import ProtocolTrace
@@ -2224,6 +2304,7 @@ def test_protocol_audio_is_bounded_and_reasoning_is_excluded(
         timeline.record(
             "received", {"type": "session.output_audio.delta", "delta": "PRIVATE AUDIO"}
         )
+        timeline.record("sent", {"type": "session.input_audio.append", "audio": "PRIVATE AUDIO"})
     timeline.record(
         "received",
         _response_event(
@@ -2235,7 +2316,11 @@ def test_protocol_audio_is_bounded_and_reasoning_is_excluded(
     spans = backend_span_exporter.get_finished_spans()
     audio = [s for s in spans if s.name == "gpt_live.audio_activity"]
     assert len(audio) == 1
+    assert audio[0].attributes["lk.openai.event_type"] == "session.output_audio.delta"
     assert audio[0].attributes["lk.openai.frame_count"] == 1000
+    assert not [
+        s for s in spans if s.attributes.get("lk.openai.event_type") == "session.input_audio.append"
+    ]
     assert audio[0].attributes["lk.session_id"] == "live_audio"
     assert "PRIVATE" not in str([s.attributes for s in spans])
 

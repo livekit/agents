@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from opentelemetry import trace
@@ -13,24 +15,54 @@ from livekit.agents.telemetry import gen_ai, tracer
 
 from ..log import logger
 
+_TRANSCRIPT_DELTAS = ("session.input_transcript.delta", "session.output_transcript.delta")
+
+
+@dataclass
+class _SpeechSegment:
+    span: trace.Span
+    text: str = ""
+    end_ms: int | None = None
+    fragments: int = 0
+    last_ns: int = 0
+
 
 class ProtocolTrace:
     """Record transport boundaries separately from inference and actual playback.
 
-    Audio is continuous, including silence: activity does not prove speech. Keep
-    one bounded counter per direction, not audio payloads or per-frame spans.
+    Speech is one span per transcript segment. Output audio keeps one bounded counter, not
+    payloads or per-frame spans; input audio flows through silence, so it is not traced.
     """
 
     def __init__(self) -> None:
         self._context = trace.set_span_in_context(trace.get_current_span())
         self._session_id = ""
-        self._audio: dict[str, tuple[int, int, int]] = {}
+        self._output_audio: tuple[int, int, int] | None = None
+        self._speech: dict[str, _SpeechSegment] = {}
 
     def record(
-        self, direction: Literal["queued", "sent", "received", "send_failed"], event: dict[str, Any]
+        self, direction: Literal["sent", "received", "send_failed"], event: dict[str, Any]
     ) -> None:
+        self._guard(self._record, direction, event)
+
+    def speech(
+        self, segment_id: str, role: str, text: str, start_ms: int | None, end_ms: int | None
+    ) -> None:
+        """Grow one speaker's segment to its text so far, opening its span on the first fragment."""
+        self._guard(self._grow_speech, segment_id, role, text, start_ms, end_ms)
+
+    def end_speech(self, segment_id: str) -> None:
+        self._guard(self._end_speech, segment_id)
+
+    def close(self) -> None:
+        self._guard(self._close)
+        self._output_audio = None
+        self._speech.clear()
+        self._session_id = ""
+
+    def _guard(self, fn: Callable[..., None], *args: Any) -> None:
         try:
-            self._record(direction, event)
+            fn(*args)
         except Exception as exc:
             # Never let exporter/payload errors change protocol execution or log content.
             logger.warning(
@@ -39,18 +71,17 @@ class ProtocolTrace:
 
     def _record(self, direction: str, event: dict[str, Any]) -> None:
         kind = event.get("type", "")
-        now = time.time_ns()
-        if (
-            kind in ("session.input_audio.append", "session.output_audio.delta")
-            and direction != "send_failed"
-        ):
-            if direction not in ("sent", "received"):
-                return
-            count, start, end = self._audio.get(kind, (0, now, now))
+        if kind == "session.input_audio.append" and direction == "sent":
+            return
+        if kind == "session.output_audio.delta":
+            now = time.time_ns()
+            count, start, end = self._output_audio or (0, now, now)
             if now - start >= 1_000_000_000:
-                self._flush_audio(kind, count, start, end)
+                self._flush_audio(count, start, end)
                 count, start = 0, now
-            self._audio[kind] = (count + 1, start, now)
+            self._output_audio = (count + 1, start, now)
+            return
+        if kind in _TRANSCRIPT_DELTAS:
             return
         if kind == "session.started":
             self._session_id = event.get("session", {}).get("id", "")
@@ -107,12 +138,9 @@ class ProtocolTrace:
                 "response.incomplete",
             ):
                 span.set_status(trace.StatusCode.ERROR)
-            # One payload copy at submission/receipt; sent is only transport proof.
-            if gen_ai.capture_content_enabled() and direction in ("queued", "received"):
+            if gen_ai.capture_content_enabled():
                 content: dict[str, Any] = {}
-                if kind in ("session.input_transcript.delta", "session.output_transcript.delta"):
-                    content["delta"] = event.get("delta")
-                elif kind in (
+                if kind in (
                     "session.instructions.append",
                     "session.thinking.append",
                     "session.commentary.append",
@@ -132,32 +160,55 @@ class ProtocolTrace:
                 if content:
                     span.set_attribute("lk.pii.openai_content", json.dumps(content))
 
-    def _flush_audio(self, kind: str, count: int, start: int, end: int) -> None:
+    def _grow_speech(
+        self, segment_id: str, role: str, text: str, start_ms: int | None, end_ms: int | None
+    ) -> None:
+        now = time.time_ns()
+        if (segment := self._speech.get(segment_id)) is None:
+            attrs: dict[str, AttributeValue] = {
+                "lk.session_id": self._session_id,
+                "lk.openai.role": role,
+            }
+            if start_ms is not None:
+                attrs["lk.openai.start_ms"] = start_ms
+            span = tracer.start_span(
+                "gpt_live.speech", context=self._context, start_time=now, attributes=attrs
+            )
+            segment = self._speech[segment_id] = _SpeechSegment(span)
+        segment.text, segment.end_ms, segment.last_ns = text, end_ms, now
+        segment.fragments += 1
+
+    def _end_speech(self, segment_id: str) -> None:
+        if (segment := self._speech.pop(segment_id, None)) is None:
+            return
+        if segment.end_ms is not None:
+            segment.span.set_attribute("lk.openai.end_ms", segment.end_ms)
+        segment.span.set_attribute("lk.openai.fragment_count", segment.fragments)
+        if gen_ai.capture_content_enabled():
+            segment.span.set_attribute(
+                "lk.pii.openai_content", json.dumps({"transcript": segment.text})
+            )
+        # A segment closes on the next pause or turn; it spans first to last fragment.
+        segment.span.end(end_time=segment.last_ns)
+
+    def _flush_audio(self, count: int, start: int, end: int) -> None:
         span = tracer.start_span(
             "gpt_live.audio_activity",
             context=self._context,
             start_time=start,
             attributes={
                 "lk.session_id": self._session_id,
-                "lk.openai.event_type": kind,
-                "lk.openai.direction": "sent"
-                if kind == "session.input_audio.append"
-                else "received",
+                "lk.openai.event_type": "session.output_audio.delta",
+                "lk.openai.direction": "received",
                 "lk.openai.frame_count": count,
             },
         )
         span.end(end_time=end)
 
-    def close(self) -> None:
-        try:
-            if self._session_id:
-                self.record("received", {"type": "connection.closed", "reason": "adapter_cleanup"})
-            for kind, (count, start, end) in self._audio.items():
-                self._flush_audio(kind, count, start, end)
-        except Exception as exc:
-            logger.warning(
-                "gpt-live protocol tracing failed", extra={"error_type": type(exc).__name__}
-            )
-        finally:
-            self._audio.clear()
-            self._session_id = ""
+    def _close(self) -> None:
+        if self._session_id:
+            self._record("received", {"type": "connection.closed", "reason": "adapter_cleanup"})
+        if self._output_audio:
+            self._flush_audio(*self._output_audio)
+        for segment_id in list(self._speech):
+            self._end_speech(segment_id)

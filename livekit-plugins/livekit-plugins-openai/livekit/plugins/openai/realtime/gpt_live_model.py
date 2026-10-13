@@ -721,7 +721,6 @@ class GPTLiveSession(
         self, ws_conn: aiohttp.ClientWebSocketResponse, event: types.ClientEvent | dict[str, Any]
     ) -> None:
         raw = event if isinstance(event, dict) else event.model_dump(exclude_none=True)
-        self._protocol_trace.record("queued", raw)
         self.emit("openai_client_event_queued", raw)
         if lk_oai_debug and raw.get("type") != "session.input_audio.append":
             logger.debug("gpt-live client event", extra={"lk.pii.event": raw})
@@ -828,6 +827,9 @@ class GPTLiveSession(
             speech.end_ms = max(speech.end_ms or 0, event.end_ms)
         if isinstance(message := self._history.get_by_id(speech.message_id), llm.ChatMessage):
             message.content[0] = speech.text
+        self._protocol_trace.speech(
+            speech.message_id, role, speech.text, event.start_ms, speech.end_ms
+        )
 
         if role == "user":
             self.emit(
@@ -850,7 +852,10 @@ class GPTLiveSession(
 
     def _end_speech(self, role: Role) -> None:
         """Close a speaker's message; for the user this is the end of their turn."""
-        if (speech := self._speech.pop(role, None)) is None or role != "user":
+        if (speech := self._speech.pop(role, None)) is None:
+            return
+        self._protocol_trace.end_speech(speech.message_id)
+        if role != "user":
             return
         # the final transcript goes out first, so nothing waits for one after the stop
         self.emit(
@@ -955,7 +960,13 @@ class GPTLiveSession(
             current.finish(failure)
 
     def _handle_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
-        self._trace_response_event(envelope)
+        try:
+            self._trace_response_event(envelope)
+        except Exception as exc:
+            # tracing must never cost the backend a dispatch: a dropped call stalls the delegation
+            logger.warning(
+                "gpt-live backend tracing failed", extra={"error_type": type(exc).__name__}
+            )
         # the inner event carries no response id, so a delegation's responses are followed in
         # sequence: a continuation is the next response.created under the same delegation, and a
         # response the application started itself has a null delegation
@@ -1000,12 +1011,12 @@ class GPTLiveSession(
                 arguments=item.arguments,
             )
             self._history.insert(fnc_call)
+            self.emit("function_call", fnc_call)
             # Trace only calls accepted by the same validation and deduplication as dispatch.
             if current := self._backend_traces.get(d_id):
                 current.has_tool_calls = True
                 if current.record_content:
                     current.output.extend(gen_ai.to_output_messages(function_calls=[fnc_call]))
-            self.emit("function_call", fnc_call)
 
         elif event.type == "response.completed":
             if response is not None and (usage := response.usage) is not None:

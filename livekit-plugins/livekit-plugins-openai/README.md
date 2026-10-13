@@ -18,32 +18,34 @@ You'll need an API key from OpenAI. It can be set as an environment variable: `O
 
 ## GPT-Live tracing
 
-GPT-Live adds two complementary trace layers to the normal agent/tool/playback spans:
+GPT-Live adds three complementary trace layers to the normal agent/tool/playback spans:
 
 - `llm_request` spans cover managed backend Responses calls, including response and
   delegation IDs, duration, usage, completed public text/refusals and accepted tool calls.
 - `gpt_live.protocol` spans record delegation creation, response lifecycle metadata,
   submitted tool results, continuation requests, context updates and acknowledgments,
-  input/output transcript timing, usage/context-window metadata, and errors. Correlate
-  them using session, delegation, response, tool-call and client-event IDs.
+  usage/context-window metadata, and errors. Correlate them using session, delegation,
+  response, tool-call and client-event IDs.
+- `gpt_live.speech` spans cover one speaker's transcript segment each, from its first to its
+  last fragment, with role, fragment count and the model's `start_ms`/`end_ms`.
 
 Nested backend events are kept except token streams (`*.delta`), so built-in tool progress
 such as `response.web_search_call.*`, nested `error` events and event types the service adds
 later stay visible. Failed and incomplete responses carry the provider's `error.code` or
 `incomplete_details.reason`; `llm_request` reports the same value as `error.type`.
 
-Protocol `direction` distinguishes `queued`, `sent`, `received`, and `send_failed`.
+Protocol `direction` distinguishes `sent`, `received`, and `send_failed`.
 `sent` means the local WebSocket send completed, not that OpenAI accepted the command.
 Tool-result submission has no separate success acknowledgment. Context `*.appended`
 receipts indicate estimated context injection, not that the caller heard speech.
 `connection.closed` with `adapter_cleanup` marks local connection cleanup rather than
 an invented provider close receipt.
 
-`gpt_live.audio_activity` summarizes continuous input/output transport in one-second
-windows with frame counts and first/last arrival or send times. Final partial windows
-flush on connection cleanup. Audio may contain silence: compare output transcripts
-with the existing `agent_speaking` spans for local playback evidence. Neither proves
-what reached the caller's phone. Raw audio is never included in traces.
+`gpt_live.audio_activity` summarizes received output audio in one-second windows with
+frame counts and first/last arrival times. Final partial windows flush on connection
+cleanup. Input audio streams continuously, including silence, so it is not traced. Compare
+output transcripts with the existing `agent_speaking` spans for local playback evidence.
+Neither proves what reached the caller's phone. Raw audio is never included in traces.
 
 Content follows `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` and LiveKit's
 PII filtering. Content attributes use the existing GenAI names or `lk.pii.*`; ordinary
