@@ -729,6 +729,26 @@ class _StreamData:
     timeout_timer: asyncio.TimerHandle | None = None
     # set once close_context is sent: no more input, only provider output is pending
     input_closed: bool = False
+    # text-to-dialogue alignment restarts at 0 on every message; this is where the
+    # next message's audio starts within the context
+    audio_offset_ms: float = 0.0
+
+
+def _dialogue_chunk_duration_ms(
+    opts: _TTSOptions, audio: bytes, alignment: dict[str, Any] | None
+) -> float:
+    """How much audio one text-to-dialogue message adds to its context, in ms."""
+    if not audio:
+        return 0.0
+    if opts.encoding.startswith("pcm"):
+        return len(audio) / (2 * opts.sample_rate) * 1000  # 16-bit mono
+    fmt = opts.encoding.split("_")  # e.g. mp3_22050_32
+    if fmt[0] == "mp3" and len(fmt) == 3:
+        return len(audio) * 8 / int(fmt[2])  # constant bitrate: kbps == bits per ms
+    # no fixed bitrate (opus, mp3_44100): fall back to the span of the alignment
+    starts = (alignment or {}).get("char_start_times_ms") or []
+    durs = (alignment or {}).get("char_durations_ms") or []
+    return float(starts[-1] + durs[-1]) if starts and durs else 0.0
 
 
 def _accumulate_alignment(
@@ -1233,19 +1253,22 @@ class _DialogueConnection(_Connection):
                 emitter = ctx.emitter
                 stream = ctx.stream
 
+                audio = base64.b64decode(data["audio"]) if data.get("audio") else b""
                 alignment = data.get("alignment")
                 if alignment:
+                    # times restart at 0 on every message: shift them onto the context's clock
+                    starts = alignment.get("char_start_times_ms")
                     _accumulate_alignment(
                         stream,
                         emitter,
                         alignment.get("chars"),
-                        alignment.get("char_start_times_ms"),
+                        [round(ctx.audio_offset_ms + s) for s in starts] if starts else None,
                         alignment.get("char_durations_ms"),
                     )
+                ctx.audio_offset_ms += _dialogue_chunk_duration_ms(self._opts, audio, alignment)
 
-                if data.get("audio"):
-                    b64data = base64.b64decode(data["audio"])
-                    emitter.push(b64data)
+                if audio:
+                    emitter.push(audio)
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
                         ctx.timeout_timer = None
