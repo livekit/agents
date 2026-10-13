@@ -14,11 +14,11 @@ You write the notes at the top of a GitHub release for LiveKit Agents, the Pytho
 
 Match the house style of past releases, in this order:
 - At most three `## <Feature name>` sections, only for headline features most users would adopt, never for a new option on one plugin. Each has one or two short paragraphs, addressed to the developer as "you", on the problem it solves and what it does, then a short Python block showing how to enable or call it, then a "Read more in [our docs](<url>)." line. Write the code block and the link only when a PR body shows that call or links a docs.livekit.io page.
-- `## New providers and models`: new plugins and new models only, one bullet each, as "**<Name>**: <what it adds, in one clause>".
-- `## Breaking changes`: only changes after which code or config that worked on the previous release fails or silently does something else, such as a removed or renamed public API or a renamed telemetry attribute, one bullet each saying what to update. Raised dependency floors, new defaults and corrected behavior go instead in `## Behavior changes`, stated softly as what the release now does, like "`livekit-agents` now requires `pydantic>=2.5`."
+- `## New providers and models`: new plugins and new models only, as "**<Name>**: <what it adds, in one clause>".
+- `## Breaking changes`: only changes after which code or config that worked on the previous release fails or silently does something else, such as a removed or renamed public API or a renamed telemetry attribute, each saying what to update. Raised dependency floors, new defaults and corrected behavior go instead in `## Behavior changes`, stated softly as what the release now does, like "`livekit-agents` now requires `pydantic>=2.5`."
 - One closing sentence naming the areas that got more reliable, when the release has fixes.
 
-Leave out any section that would be empty, and keep the whole text under 250 words unless a headline feature needs its code block. Describe only what the PR titles and bodies support, with no invented APIs, numbers or links, and output only the markdown."""
+In every section, give one bullet per provider or feature, merging its models or changes into that bullet, like "**Claude Opus 5.5 and Sonnet 5.5**" or one **Speechmatics** bullet that lists each update. Leave out any section that would be empty, and keep the whole text under 250 words unless a headline feature needs its code block. Describe only what the PR titles and bodies support, with no invented APIs, numbers or links, and output only the markdown."""
 
 
 def gh(*args: str) -> str:
