@@ -90,7 +90,7 @@ from .keyterm_detection import (
 )
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
-from .run_result import RunOutputOptions, RunResult
+from .run_result import RunOutputOptions, RunResult, _RunSuspension
 from .speech_handle import InputDetails, SpeechHandle
 from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options, _RunningTasks
 from .turn import (
@@ -731,6 +731,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._global_run_state: RunResult | None = None
         # guards keeping an active run open across `_wait_for_idle_and_hold` scopes
         self._foreground_guards: set[asyncio.Future[None]] = set()
+        self._run_suspensions: list[_RunSuspension] = []
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
         # the latest user turn no agent speech has reported e2e_latency for yet
@@ -1131,7 +1132,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if self._global_run_state is not None and not self._global_run_state.done():
                     raise RuntimeError("nested runs are not supported")
 
-                run_state = RunResult(output_type=None)
+                run_state = RunResult(output_type=None, session=self)
                 self._global_run_state = run_state
 
             # it is ok to await it directly, there is no previous task to drain.
