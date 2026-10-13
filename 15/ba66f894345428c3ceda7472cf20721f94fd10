@@ -1,0 +1,23 @@
+livekit-agents/livekit/agents/stt/fallback_adapter.py
+  s_5804d43a97d8ab::t_bf4f48f84b5e13 405
+livekit-agents/livekit/agents/stt/stt.py
+  s_5804d43a97d8ab::t_fa03e7c7cc81d8 443,445-447,449,451,454,458,603
+livekit-agents/livekit/agents/voice/agent.py
+  s_5804d43a97d8ab::t_eea61023e798f1 390-392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "15ba66f894345428c3ceda7472cf20721f94fd10",
+  "prompts": {},
+  "sessions": {
+    "s_5804d43a97d8ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5865c939-a099-49cb-b810-a3a86e4d9575",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
