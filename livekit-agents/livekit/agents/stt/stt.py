@@ -591,7 +591,7 @@ class RecognizeStream(ABC):
         if self._first_frame_at is None:
             # the provider's clock starts with the first frame it receives, however long
             # after the stream was created
-            # TODO: anchor on the first frame each attempt consumes instead. A frame still
+            # TODO(chenghao-mou): anchor on the first frame each attempt consumes instead. A frame still
             # queued when a connection fails is the next connection's first audio, but it
             # was pushed before the reset, so the anchor waits for the next push.
             self._first_frame_at = time.time() - frame.duration
