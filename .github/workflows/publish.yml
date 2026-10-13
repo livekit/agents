@@ -70,7 +70,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install anthropic click packaging pyyaml colorama
+        run: pip install click openai packaging pyyaml colorama
 
       - name: Bump versions
         env:
@@ -107,7 +107,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           previous=$(git describe --tags --abbrev=0 --match 'livekit-agents@*')

@@ -4,17 +4,17 @@ import json
 import re
 import subprocess
 
-import anthropic
 import click
+import openai
 
-MODEL = "claude-opus-5-5"
+MODEL = "gpt-5.5"
 
 SYSTEM_PROMPT = """\
 You write the summary at the top of a GitHub release for LiveKit Agents, the Python framework for realtime voice AI agents (the `livekit-agents` package and the `livekit-plugins-*` provider plugins). GitHub appends the full list of merged PRs under your summary, so do not restate every PR: pick what a developer upgrading to this version needs to know.
 
 Use only these sections, in this order, and leave out any section that would be empty:
-- `### Highlights`: one to four bullets on the changes most users will care about.
-- `### Breaking changes`: anything that changes public API, defaults, behavior users rely on, or telemetry names, and what the user must change.
+- `### Highlights`: one to four bullets on the changes most users will care about; a PR named here appears in no other section.
+- `### Breaking changes`: only changes that make existing code, config or telemetry queries stop working or behave differently in a way users would notice, each with what the user must change.
 - `### New`: new plugins, models, options and APIs.
 - `### Fixes`: user-visible fixes, each bullet led by a short bold area such as **Voice**, **OpenAI** or **Telemetry**.
 
@@ -68,27 +68,16 @@ def main(tag: str, target: str, previous_tag: str, repo: str) -> None:
     if not prs:
         raise click.ClickException(f"no PRs between {previous_tag} and {target}")
 
-    client = anthropic.Anthropic()
-    with client.beta.messages.stream(
+    response = openai.OpenAI().responses.create(
         model=MODEL,
-        max_tokens=16000,
-        output_config={"effort": "medium"},
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        system=SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": f"Release {tag} (previous: {previous_tag}). Merged PRs:\n\n"
-                + json.dumps(prs, indent=1),
-            }
-        ],
-    ) as stream:
-        message = stream.get_final_message()
-
-    if message.stop_reason != "end_turn":
-        raise click.ClickException(f"drafting stopped early: {message.stop_reason}")
-    click.echo("".join(block.text for block in message.content if block.type == "text").strip())
+        reasoning={"effort": "medium"},
+        instructions=SYSTEM_PROMPT,
+        input=f"Release {tag} (previous: {previous_tag}). Merged PRs:\n\n"
+        + json.dumps(prs, indent=1),
+    )
+    if response.status != "completed":
+        raise click.ClickException(f"drafting stopped early: {response.status}")
+    click.echo(response.output_text.strip())
 
 
 if __name__ == "__main__":
