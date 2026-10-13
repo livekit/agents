@@ -1302,7 +1302,7 @@ _SAY_ONLY_MARKUP: dict[str, list[str]] = {
 # a free-form bracket cue; a markdown link's "[text](" is prose, not a cue
 _BRACKET_CUE_RE = re.compile(LEADING_WS + r"\[(?P<inner>[^\]\n]*)\](?!\()")
 # Google markup's only brackets: its three pauses
-_GOOGLE_PAUSE_RE = re.compile(LEADING_WS + r"\[(?P<inner>pause(?: short| long)?)\]")
+_GOOGLE_PAUSE_RE = re.compile(LEADING_WS + r"\[(?P<inner>pause(?: short| long)?)\](?!\()")
 
 # the bracket spans each dialect reads as markup, so in say() text they are not prose.
 # Google's are pauses only: stripping every bracket would cut "Option [A]" from history.
@@ -1578,12 +1578,13 @@ class TranscriptMarkupStripper:
             if not nxt or nxt == "/" or nxt.isalpha():
                 return True
         if self._brackets is not None:
-            # "[label]" ending the chunk may still open a markdown link ("[label](url)")
-            # once the next chunk arrives, and a link is prose, not a cue
-            if self._buf.endswith("]"):
-                return True
-            # a cue split across chunks; past _MAX_HELD_CHARS a lone "[" is plain text
             last_open = self._buf.rfind("[")
+            # a cue ending the chunk may still open a markdown link ("[label](url)") once
+            # the next chunk arrives, and a link is prose. A span this dialect wouldn't
+            # strip ("[A]" for Google's pauses) is prose either way, so it isn't held.
+            if self._buf.endswith("]"):
+                return last_open >= 0 and self._brackets.match(self._buf, last_open) is not None
+            # a cue split across chunks; past _MAX_HELD_CHARS a lone "[" is plain text
             if last_open > self._buf.rfind("]") and len(self._buf) - last_open <= _MAX_HELD_CHARS:
                 return True
         return False

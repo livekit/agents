@@ -717,6 +717,19 @@ def test_stripper_removes_only_google_pauses() -> None:
     assert out == "Wait here. Option [A] is ready."
 
 
+def test_google_pauses_keep_markdown_links_and_dont_hold_prose() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_PAUSES)
+    assert _strip_streamed(stripper, ["See [pause](https://x.io) now."]) == (
+        "See [pause](https://x.io) now."
+    )
+    # "[A]" is prose for Google, so a chunk ending on it isn't held for a link check
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_PAUSES)
+    assert stripper.push("Option [A]") == "Option [A]"
+    # a free-form dialect still holds it: it may be a cue or a link's label
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
+    assert stripper.push("Option [A]") == ""
+
+
 def test_union_native_markup_keeps_the_broadest_brackets() -> None:
     assert union_native_markup([native_markup("ssml"), native_markup("google_markup")]) == (
         sorted(_SSML_TAGS),
