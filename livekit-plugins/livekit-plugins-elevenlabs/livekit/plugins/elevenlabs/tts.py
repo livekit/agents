@@ -732,23 +732,50 @@ class _StreamData:
     # text-to-dialogue alignment restarts at 0 on every message; this is where the
     # next message's audio starts within the context
     audio_offset_ms: float = 0.0
+    # trailing bytes of an incomplete Ogg page (opus output)
+    ogg_tail: bytes = b""
 
 
-def _dialogue_chunk_duration_ms(
-    opts: _TTSOptions, audio: bytes, alignment: dict[str, Any] | None
-) -> float:
-    """How much audio one text-to-dialogue message adds to its context, in ms."""
+def _ogg_end_ms(data: bytes) -> tuple[float | None, bytes]:
+    """Audio end (ms) of the last complete Ogg page in `data`, and the leftover bytes."""
+    end_ms = None
+    pos = 0
+    while len(data) - pos >= 27:
+        header_len = 27 + data[pos + 26]
+        if len(data) - pos < header_len:
+            break
+        page_len = header_len + sum(data[pos + 27 : pos + header_len])
+        if len(data) - pos < page_len:
+            break
+        granule = int.from_bytes(data[pos + 6 : pos + 14], "little", signed=True)
+        if granule > 0:  # 0 on header pages, -1 when no packet ends on the page
+            end_ms = granule / 48  # opus granule positions count 48 kHz samples
+        pos += page_len
+    return end_ms, data[pos:]
+
+
+def _advance_dialogue_clock(
+    ctx: _StreamData, opts: _TTSOptions, audio: bytes, alignment: dict[str, Any] | None
+) -> None:
+    """Move the context's clock past one text-to-dialogue message's audio."""
     if not audio:
-        return 0.0
-    if opts.encoding.startswith("pcm"):
-        return len(audio) / (2 * opts.sample_rate) * 1000  # 16-bit mono
-    fmt = opts.encoding.split("_")  # e.g. mp3_22050_32
-    if fmt[0] == "mp3" and len(fmt) == 3:
-        return len(audio) * 8 / int(fmt[2])  # constant bitrate: kbps == bits per ms
-    # no fixed bitrate (opus, mp3_44100): fall back to the span of the alignment
-    starts = (alignment or {}).get("char_start_times_ms") or []
-    durs = (alignment or {}).get("char_durations_ms") or []
-    return float(starts[-1] + durs[-1]) if starts and durs else 0.0
+        return
+    fmt = opts.encoding.split("_")  # e.g. pcm_24000, mp3_22050_32, opus_48000_32
+    if fmt[0] == "pcm":
+        ctx.audio_offset_ms += len(audio) / (2 * opts.sample_rate) * 1000  # 16-bit mono
+    elif fmt[0] == "mp3" and len(fmt) == 3:
+        ctx.audio_offset_ms += len(audio) * 8 / int(fmt[2])  # constant bitrate: kbps == bits per ms
+    else:
+        # the alignment span misses audio-only messages, so it is only a lower bound
+        starts = (alignment or {}).get("char_start_times_ms") or []
+        durs = (alignment or {}).get("char_durations_ms") or []
+        if starts and durs:
+            ctx.audio_offset_ms += starts[-1] + durs[-1]
+        if fmt[0] == "opus":
+            # every complete Ogg page carries the exact total audio sent so far
+            end_ms, ctx.ogg_tail = _ogg_end_ms(ctx.ogg_tail + audio)
+            if end_ms is not None:
+                ctx.audio_offset_ms = max(ctx.audio_offset_ms, end_ms)
 
 
 def _accumulate_alignment(
@@ -1265,7 +1292,7 @@ class _DialogueConnection(_Connection):
                         [round(ctx.audio_offset_ms + s) for s in starts] if starts else None,
                         alignment.get("char_durations_ms"),
                     )
-                ctx.audio_offset_ms += _dialogue_chunk_duration_ms(self._opts, audio, alignment)
+                _advance_dialogue_clock(ctx, self._opts, audio, alignment)
 
                 if audio:
                     emitter.push(audio)

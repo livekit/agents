@@ -6,7 +6,6 @@ import contextlib
 import json
 import logging
 from types import SimpleNamespace
-from typing import Any
 
 import aiohttp
 import pytest
@@ -774,14 +773,79 @@ async def test_dialogue_recv_loop_offsets_chunk_relative_alignment() -> None:
             _websocket_text_message({"context_id": context_id, "is_final": True}),
         ],
     )
-    words: list[Any] = []
-    connection.emitter.push_timed_transcript = words.extend  # type: ignore[method-assign]
 
     await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
         connection
     )
 
-    assert [(w, w.start_time, w.end_time) for w in words] == [
+    assert [(w, w.start_time, w.end_time) for w in connection.emitter.timed_words] == [
+        ("hi ", 0.5, 0.8),
+        ("there ", 0.8, 1.4),
+        ("you ", 1.4, 1.8),
+    ]
+
+
+def _ogg_page(granule: int, payload: bytes) -> bytes:
+    # CRC is left at 0: the plugin only reads the page layout and granule position
+    segments = [255] * (len(payload) // 255) + [len(payload) % 255]
+    return (
+        b"OggS\x00\x00"
+        + granule.to_bytes(8, "little", signed=True)
+        + bytes(12)
+        + bytes([len(segments)])
+        + bytes(segments)
+        + payload
+    )
+
+
+@pytest.mark.asyncio
+async def test_dialogue_recv_loop_offsets_opus_alignment_by_ogg_granule() -> None:
+    context_id = "ctx_123"
+    pages = _ogg_page(0, b"OpusHead" + bytes(11)) + _ogg_page(0, b"OpusTags" + bytes(8))
+    first = pages + _ogg_page(24000, bytes(300))  # 500 ms, no alignment
+    second = _ogg_page(24000 + 43200, bytes(900))  # 900 ms more
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {"context_id": context_id, "audio": base64.b64encode(first).decode("ascii")}
+            ),
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    # split mid-page: the clock catches up once the page completes
+                    "audio": base64.b64encode(second[:400]).decode("ascii"),
+                    "alignment": {
+                        "chars": list("hi there "),
+                        "char_start_times_ms": [i * 100 for i in range(9)],
+                        "char_durations_ms": [100] * 9,
+                    },
+                }
+            ),
+            _websocket_text_message(
+                {"context_id": context_id, "audio": base64.b64encode(second[400:]).decode("ascii")}
+            ),
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(_ogg_page(67200 + 19200, bytes(400))).decode("ascii"),
+                    "alignment": {
+                        "chars": list("you "),
+                        "char_start_times_ms": [0, 100, 200, 300],
+                        "char_durations_ms": [100] * 4,
+                    },
+                }
+            ),
+            _websocket_text_message({"context_id": context_id, "is_final": True}),
+        ],
+    )
+    connection._opts = SimpleNamespace(encoding="opus_48000_32", sample_rate=48000)
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert [(w, w.start_time, w.end_time) for w in connection.emitter.timed_words] == [
         ("hi ", 0.5, 0.8),
         ("there ", 0.8, 1.4),
         ("you ", 1.4, 1.8),
