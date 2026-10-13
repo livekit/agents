@@ -118,6 +118,7 @@ class _STTOptions:
     diarize: bool
     format: bool  # punctuation/capitalization; streaming only
     itn_normalize: bool  # spoken -> written numbers ("twenty five" -> "25"); streaming only
+    no_format_delay: bool  # skip the ITN hold-and-merge on a number split across finals
     numerals: bool | None  # legacy digits post-pass; None = server default
     keywords: list[tuple[str, float]]  # (keyword, intensifier) pairs; streaming only
     sentence_timestamps: bool  # include sentence-level "utterances"; streaming only
@@ -147,6 +148,7 @@ class STT(stt.STT):
         diarize: bool = False,
         format: bool = True,
         itn_normalize: bool = False,
+        no_format_delay: bool = False,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         sentence_timestamps: bool = False,
@@ -186,6 +188,13 @@ class STT(stt.STT):
             itn_normalize: Run the server's inverse text normalization so spoken
                 numbers come back as digits ("twenty five" -> "25"). Independent of
                 ``format``. Defaults to False.
+            no_format_delay: With ``itn_normalize`` on, a number still being dictated
+                at the end of a final is held back and merged into the next final so
+                it normalizes whole (``"I have 4,000"`` + ``"dollars"`` becomes
+                ``"$4,000"`` rather than two separately normalized halves). Set to
+                True to emit every final as soon as it is ready and give that up. No
+                effect unless ``itn_normalize`` is True; text is never dropped either
+                way. Defaults to False.
             numerals: Legacy digits post-pass; leave unset and use ``itn_normalize``.
             keywords: Boost recognition via ``(keyword, intensifier)`` tuples, e.g.
                 ``[("NVIDIA", 2.0)]``. Intensifier ~1.0 (mild) to ~5.0 (strong).
@@ -259,6 +268,7 @@ class STT(stt.STT):
             diarize=diarize,
             format=format,
             itn_normalize=itn_normalize,
+            no_format_delay=no_format_delay,
             numerals=numerals if is_given(numerals) else None,
             keywords=list(keywords) if is_given(keywords) else [],
             sentence_timestamps=sentence_timestamps,
@@ -370,6 +380,7 @@ class STT(stt.STT):
         encoding: NotGivenOr[STTEncoding | str] = NOT_GIVEN,
         format: NotGivenOr[bool] = NOT_GIVEN,
         itn_normalize: NotGivenOr[bool] = NOT_GIVEN,
+        no_format_delay: NotGivenOr[bool] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         sentence_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         redact_pii: NotGivenOr[bool] = NOT_GIVEN,
@@ -391,6 +402,7 @@ class STT(stt.STT):
             encoding=encoding,
             format=format,
             itn_normalize=itn_normalize,
+            no_format_delay=no_format_delay,
             keywords=keywords,
             sentence_timestamps=sentence_timestamps,
             redact_pii=redact_pii,
@@ -409,6 +421,7 @@ class STT(stt.STT):
                 encoding=encoding,
                 format=format,
                 itn_normalize=itn_normalize,
+                no_format_delay=no_format_delay,
                 keywords=keywords,
                 sentence_timestamps=sentence_timestamps,
                 redact_pii=redact_pii,
@@ -468,6 +481,7 @@ class SpeechStream(stt.SpeechStream):
         encoding: NotGivenOr[STTEncoding | str] = NOT_GIVEN,
         format: NotGivenOr[bool] = NOT_GIVEN,
         itn_normalize: NotGivenOr[bool] = NOT_GIVEN,
+        no_format_delay: NotGivenOr[bool] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         sentence_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         redact_pii: NotGivenOr[bool] = NOT_GIVEN,
@@ -486,6 +500,7 @@ class SpeechStream(stt.SpeechStream):
             encoding=encoding,
             format=format,
             itn_normalize=itn_normalize,
+            no_format_delay=no_format_delay,
             keywords=keywords,
             sentence_timestamps=sentence_timestamps,
             redact_pii=redact_pii,
@@ -673,6 +688,7 @@ class SpeechStream(stt.SpeechStream):
             "diarize": str(o.diarize).lower(),
             "format": str(o.format).lower(),
             "itn_normalize": str(o.itn_normalize).lower(),
+            "no_format_delay": str(o.no_format_delay).lower(),
             "sentence_timestamps": str(o.sentence_timestamps).lower(),
             "redact_pii": str(o.redact_pii).lower(),
             "redact_pci": str(o.redact_pci).lower(),
