@@ -124,6 +124,18 @@ class FallbackAdapter(
 
             t.on("metrics_collected", self._on_metrics_collected)
 
+    class Markup(TTS.Markup):
+        def _native_markup(self) -> tuple[list[str], bool]:
+            # any instance may speak a say(), so strip what every one of them reads
+            assert isinstance(self._tts, FallbackAdapter)
+            xml_tags: set[str] = set()
+            brackets = False
+            for instance in self._tts._tts_instances:
+                tags, has_brackets = instance.markup._native_markup()
+                xml_tags.update(tags)
+                brackets = brackets or has_brackets
+            return sorted(xml_tags), brackets
+
     def _next_instance(self) -> TTS:
         """The instance the next request goes to first: the first one marked available, or
         the primary once all are down (they are then all retried, primary first). A failed

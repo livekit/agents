@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
@@ -42,6 +42,21 @@ if TYPE_CHECKING:
 class ModelSettings:
     tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
     """The tool choice to use when calling the LLM."""
+    _say_markup: bool = field(default=False, repr=False)
+    # framework-internal: a say() whose text may carry markup, so tts_node lowers it
+
+
+async def _strip_expr(text: AsyncIterable[str]) -> AsyncGenerator[str, None]:
+    """Drop ``<expr/>`` markers from streamed TTS input, holding a marker split across
+    chunks until it closes."""
+    from ..tts._provider_format import TranscriptMarkupStripper
+
+    stripper = TranscriptMarkupStripper(xml_tags=[])
+    async for chunk in text:
+        if out := stripper.push(chunk):
+            yield out
+    if out := stripper.flush():
+        yield out
 
 
 class Agent:
@@ -594,16 +609,23 @@ class Agent:
                 )
 
             expressive_active = activity._resolve_expressive_options() is not None
+            # markers only exist in the stream when expressive is active or a say()
+            # carries them
+            markup_input = expressive_active or model_settings._say_markup
             wrapped_tts = activity.tts
             temporary_adapter: tts.StreamAdapter | None = None
+
+            if markup_input and not activity._tts_can_lower():
+                # a natively streaming plugin sends its input as-is, so a marker would be
+                # read aloud; drop the markers (their words stay)
+                text = _strip_expr(text)
 
             if not activity.tts.capabilities.streaming:
                 temporary_adapter = tts.StreamAdapter(
                     tts=wrapped_tts,
                     sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
                         retain_format=True,
-                        # markup only exists in the stream when expressive is active
-                        xml_aware=expressive_active,
+                        xml_aware=markup_input,
                     ),
                 )
                 wrapped_tts = temporary_adapter
@@ -615,6 +637,7 @@ class Agent:
                 # rather than leaving stale state on the instance. The provider's chunk
                 # defaults then drive the TTS's input tokenizer.
                 activity.tts._set_expressive(expressive_active)
+                activity.tts._set_markup_input(markup_input)
 
                 conn_options = activity.session.conn_options.tts_conn_options
                 async with wrapped_tts.stream(conn_options=conn_options) as stream:

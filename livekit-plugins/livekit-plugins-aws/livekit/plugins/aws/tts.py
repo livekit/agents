@@ -113,6 +113,12 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
         )
 
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            assert isinstance(self._tts, TTS)
+            return "ssml" if self._tts._opts.text_type == "ssml" else ""
+
     @property
     def model(self) -> str:
         return self._opts.speech_engine

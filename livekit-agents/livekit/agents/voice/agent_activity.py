@@ -1773,7 +1773,10 @@ class AgentActivity(RecognitionHooks):
                     text=text,
                     audio=audio or None,
                     add_to_chat_ctx=add_to_chat_ctx,
-                    model_settings=ModelSettings(),
+                    # a streamed text may carry markup anywhere; a string is known up front
+                    model_settings=ModelSettings(
+                        _say_markup=not isinstance(text, str) or "<" in text
+                    ),
                     _previous_user_metrics=user_metrics,
                 ),
                 speech_handle=handle,
@@ -3041,6 +3044,45 @@ class AgentActivity(RecognitionHooks):
             return instructions.render(modality=modality)
         return instructions
 
+    def _tts_can_lower(self) -> bool:
+        """Whether something lowers ``<expr/>`` markers before they reach the TTS.
+
+        Guaranteed only where the framework owns the input path: the gateway TTS's own
+        stream, and the ``tts.StreamAdapter`` wrapping every non-streaming TTS. A natively
+        streaming plugin owns its own input task — several declare a dialect today without
+        lowering anything — so its markers would be spoken. A ``StreamAdapter`` handed in
+        directly is streaming only at its surface; inside it is that same lowering path,
+        so it is exempt.
+        """
+        return self.tts is not None and (
+            not self.tts.capabilities.streaming
+            or isinstance(self.tts, (inference.TTS, tts.StreamAdapter))
+        )
+
+    async def _strip_say_markup(self, text: AsyncIterable[str]) -> AsyncGenerator[str, None]:
+        """The plain text of a ``say()`` for its transcript and chat history.
+
+        The TTS's native markup (SSML, bracket cues) always goes: the LLM is never taught
+        it, and it breaks once the TTS changes. ``<expr/>`` markers stay while expressive
+        is active, as in an LLM reply — the sinks strip them from the transcript, and
+        history keeps them as examples for the LLM. Otherwise they go too.
+        """
+        from ..tts._provider_format import TranscriptMarkupStripper, _retext
+        from ..types import TimedString
+
+        xml_tags, brackets = self.tts.markup._native_markup() if self.tts else ([], False)
+        stripper = TranscriptMarkupStripper(
+            xml_tags=xml_tags,
+            brackets=brackets,
+            strip_expr=self._resolve_expressive_options() is None,
+        )
+        async for chunk in text:
+            if out := stripper.push(chunk):
+                # keep an aligned transcript's timing on what survives
+                yield _retext(chunk, out) if isinstance(chunk, TimedString) else out
+        if out := stripper.flush():
+            yield out
+
     def _resolve_expressive_options(self) -> ExpressiveOptions | None:
         """Resolve the effective expressive setting. Returns None if disabled.
 
@@ -3052,22 +3094,14 @@ class AgentActivity(RecognitionHooks):
         - a markup dialect (``llm_instructions()`` is not ``None``). Without one no
           markers can appear, and xml-aware chunking would re-introduce the stray-``<``
           streaming stall for nothing.
-        - something to *lower* those markers, or the TTS speaks them aloud. Guaranteed
-          only where the framework owns the input path: the gateway TTS's own stream, and
-          the ``tts.StreamAdapter`` wrapping every non-streaming TTS. A natively
-          streaming plugin owns its own input task — several declare a dialect today
-          without lowering anything. A ``StreamAdapter`` handed in directly is streaming
-          only at its surface; inside it is that same lowering path, so it is exempt.
+        - something to *lower* those markers (see :meth:`_tts_can_lower`).
         """
         from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS, resolve_expressive_options
 
         if (
             self.tts is None
             or self.tts.markup.llm_instructions() is None
-            or (
-                self.tts.capabilities.streaming
-                and not isinstance(self.tts, (inference.TTS, tts.StreamAdapter))
-            )
+            or not self._tts_can_lower()
         ):
             return None
 
@@ -3282,6 +3316,10 @@ class AgentActivity(RecognitionHooks):
                 )
 
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
+
+        if audio is None and text_source is not None:
+            # the TTS reads markup in say() text; the transcript and history must not
+            text_source = self._strip_say_markup(text_source)
 
         # text output
         tr_node = self._agent.transcription_node(text_source, model_settings)

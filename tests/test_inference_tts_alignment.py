@@ -133,3 +133,58 @@ async def test_connection_retains_header_session_id(monkeypatch: pytest.MonkeyPa
     assert http_session.headers[HEADER_SESSION_ID] == "inference_connection"
     assert connection.session_id == "inference_connection"
     assert connection.ws is websocket
+
+
+async def test_say_markup_lowered_and_cues_dropped_without_expressive() -> None:
+    # a say() marker lowers to a bracket cue the provider aligns as a word; with
+    # expressive off it must still be dropped from the aligned transcript
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "session-1"},
+            {"type": "output_audio", "audio": base64.b64encode(b"\0\0" * 2400).decode()},
+            {
+                "type": "output_alignment",
+                "words": [
+                    {"word": "[laugh]", "start": 0.0, "end": 0.1},
+                    {"word": "hello", "start": 0.1, "end": 0.3},
+                ],
+            },
+            {"type": "done"},
+        ]
+    )
+    tts = TTS(
+        model="inworld/inworld-tts-2",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+    )
+    tts._pool = _FakePool(websocket, session_id="inference_connection")  # type: ignore[assignment]
+
+    tts._set_markup_input(True)
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        stream.push_text('<expr type="sound" label="laugh"/> hello.')
+        stream.end_input()
+        events = [event async for event in stream]
+
+    sent = "".join(msg.get("transcript", "") for msg in websocket.sent)
+    assert "[laugh]" in sent and "<expr" not in sent
+    timed_transcript = [
+        str(timed_text)
+        for event in events
+        for timed_text in event.frame.userdata[USERDATA_TIMED_TRANSCRIPT]
+    ]
+    assert "[laugh]" not in "".join(timed_transcript)
+    assert "hello" in "".join(timed_transcript)
+
+
+@pytest.mark.parametrize(
+    ("model", "key"),
+    [
+        ("elevenlabs/eleven_v3", "eleven_v3"),
+        ("elevenlabs/eleven_flash_v2_5", ""),
+        ("deepgram/aura-2", "deepgram"),
+    ],
+)
+def test_inference_markup_key(model: str, key: str) -> None:
+    tts = TTS(model=model, api_key="test-key", api_secret="test-secret")
+    assert tts.markup._provider_key() == key

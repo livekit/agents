@@ -55,6 +55,10 @@ class StreamAdapter(TTS):
             assert isinstance(self._tts, StreamAdapter)
             return self._tts._wrapped_tts.markup._provider_key()
 
+        def _native_markup(self) -> tuple[list[str], bool]:
+            assert isinstance(self._tts, StreamAdapter)
+            return self._tts._wrapped_tts.markup._native_markup()
+
     def _tokenizer_for(self, *, lowering: bool) -> tokenize.SentenceTokenizer:
         """The sentence tokenizer for one synthesis.
 
@@ -79,6 +83,10 @@ class StreamAdapter(TTS):
         # straight to the session has to pass this through
         super()._set_expressive(enabled)
         self._wrapped_tts._set_expressive(enabled)
+
+    def _set_markup_input(self, enabled: bool) -> None:
+        super()._set_markup_input(enabled)
+        self._wrapped_tts._set_markup_input(enabled)
 
     @property
     def model(self) -> str:
@@ -117,11 +125,11 @@ class StreamAdapterWrapper(SynthesizeStream):
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
         self._tts: StreamAdapter = tts
         self._wrapped_tts_conn_options = conn_options
-        # Snapshot whether expressive is active now, while the framework holds it fixed
+        # Snapshot whether markers can appear now, while the framework holds it fixed
         # for this synthesis (set synchronously before stream()). _run happens later in
-        # its own task, and _expressive lives on the shared TTS, so another turn or
+        # its own task, and _markup_input lives on the shared TTS, so another turn or
         # session could flip it in between.
-        self._expressive = tts._wrapped_tts._expressive
+        self._markup_input = tts._wrapped_tts._markup_input
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         async for _ in event_aiter:
@@ -131,7 +139,8 @@ class StreamAdapterWrapper(SynthesizeStream):
         # the framework's input path for every non-streaming TTS, and the first place
         # whole sentences exist
         markup = self._tts._wrapped_tts.markup
-        lowering = bool(markup._provider_key()) and self._expressive
+        # a TTS with no dialect still lowers: convert drops the markers it can't speak
+        lowering = self._markup_input
 
         sent_stream = self._tts._tokenizer_for(lowering=lowering).stream()
         if self._tts._stream_pacer:

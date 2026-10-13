@@ -13,10 +13,12 @@ import pytest
 
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.tts._provider_format import (
+    _SSML_TAGS,
     TranscriptMarkupStripper,
     convert_markup,
     expression_attribute,
     llm_instructions,
+    native_markup,
     normalize_markup,
     split_all_markup,
     strip_all_markup,
@@ -622,3 +624,108 @@ def test_only_the_stranded_separator_goes() -> None:
     assert strip_expr_markup(turn) == "Intro:\n    indented text"
     # and a marker mid-line still leaves exactly one separator
     assert strip_all_markup('a <expr type="sound" label="laugh"/> b') == "a b"
+
+
+# ---------------------------------------------------------------------------
+# convert_markup: dialects say() text lowers onto (no LLM instructions)
+# ---------------------------------------------------------------------------
+
+SAY_TURN = (
+    'Hi <expr type="break" label="1s"/> there. '
+    '<expr type="expression" label="whispers"/> Secret <expr type="sound" label="laughs"/> ok. '
+    'Code <expr type="spell">A7X</expr>. <expr type="prosody" label="emphasis">Now</expr>.'
+)
+
+
+def test_convert_expr_ssml() -> None:
+    assert convert_markup("ssml", SAY_TURN) == (
+        'Hi <break time="1s"/> there. Secret ok. '
+        'Code <say-as interpret-as="characters">A7X</say-as>. <emphasis>Now</emphasis>.'
+    )
+
+
+def test_convert_expr_eleven_v3() -> None:
+    assert convert_markup("eleven_v3", SAY_TURN) == (
+        "Hi [pause] there. [whispers] Secret [laughs] ok. Code A7X. [emphasis] Now."
+    )
+
+
+def test_convert_expr_bracket_pauses_keeps_only_pauses() -> None:
+    assert (
+        convert_markup("bracket_pauses", SAY_TURN) == "Hi [pause] there. Secret ok. Code A7X. Now."
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "cues", "pauses"),
+    [
+        ("200ms", "[short pause]", "[pause short]"),
+        ("1s", "[pause]", "[pause]"),
+        ("2s", "[long pause]", "[pause long]"),
+    ],
+)
+def test_convert_expr_bracket_break_levels(label: str, cues: str, pauses: str) -> None:
+    marker = f'<expr type="break" label="{label}"/>'
+    assert convert_markup("eleven_v3", marker) == cues
+    assert convert_markup("bracket_pauses", marker) == pauses
+
+
+@pytest.mark.parametrize("provider", ["", "deepgram"])
+def test_convert_expr_without_a_dialect_drops_markers(provider: str) -> None:
+    # nothing would lower them, so they must not reach the TTS and be read aloud
+    assert convert_markup(provider, SAY_TURN) == "Hi there. Secret ok. Code A7X. Now."
+
+
+def test_normalize_closes_markers_for_say_only_dialects() -> None:
+    assert normalize_markup("ssml", '<expr type="break" label="1s">') == (
+        '<expr type="break" label="1s"/>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# native markup: what a TTS reads, stripped from say() transcripts and history
+# ---------------------------------------------------------------------------
+
+
+def _strip_streamed(stripper: TranscriptMarkupStripper, chunks: list[str]) -> str:
+    return "".join(stripper.push(c) for c in chunks) + stripper.flush()
+
+
+def test_native_markup_per_dialect() -> None:
+    assert native_markup("ssml") == (_SSML_TAGS, False)
+    assert native_markup("eleven_v3") == ([], True)
+    assert native_markup("inworld")[1] is True
+    assert "emotion" in native_markup("cartesia")[0]
+    assert native_markup("") == ([], False)
+
+
+def test_stripper_removes_native_ssml_and_keeps_expr() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=_SSML_TAGS, strip_expr=False)
+    out = _strip_streamed(
+        stripper,
+        [
+            'Say <phoneme ph="x">tom',
+            'ato</phoneme> <expr type="break" label="1s"/> <say-as interpret-as="date">',
+            '1/2</say-as> <amazon:effect name="whispered">ok</amazon:effect> <break time="1s"/>end',
+        ],
+    )
+    assert out == 'Say tomato <expr type="break" label="1s"/> 1/2 ok end'
+
+
+def test_stripper_removes_bracket_cues_split_across_chunks() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    out = _strip_streamed(stripper, ["[whispers] Hello and [la", "ughs] done."])
+    assert out == "Hello and done."
+
+
+def test_stripper_leaves_markdown_links_for_a_bracket_dialect() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    assert _strip_streamed(stripper, ["See [the guide](https://x.io)."]) == (
+        "See [the guide](https://x.io)."
+    )
+
+
+def test_stripper_releases_a_lone_bracket() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    out = stripper.push("[" + "a" * 300)
+    assert out.startswith("[a")  # past the hold cap, a lone "[" is plain text

@@ -248,8 +248,8 @@ def test_a_caller_supplied_stream_adapter_stays_expressive() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_adapter_snapshots_expressive_per_stream() -> None:
-    """_expressive lives on the shared TTS, but a stream is one synthesis.
+async def test_stream_adapter_snapshots_markup_input_per_stream() -> None:
+    """_markup_input lives on the shared TTS, but a stream is one synthesis.
 
     The pipeline sets the flag synchronously before stream(); _run happens later in its
     own task, so another turn or session sharing the TTS could flip it in the gap and
@@ -274,13 +274,13 @@ async def test_stream_adapter_snapshots_expressive_per_stream() -> None:
     wrapped = _NonStreaming()
     adapter = tts.StreamAdapter(tts=wrapped)
 
-    adapter._set_expressive(True)
+    adapter._set_markup_input(True)
     stream = adapter.stream()
-    adapter._set_expressive(False)  # a second turn, before this one's _run runs
+    adapter._set_markup_input(False)  # a second turn, before this one's _run runs
 
     try:
-        assert stream._expressive is True
-        assert wrapped._expressive is False
+        assert stream._markup_input is True
+        assert wrapped._markup_input is False
     finally:
         await stream.aclose()
         await adapter.aclose()

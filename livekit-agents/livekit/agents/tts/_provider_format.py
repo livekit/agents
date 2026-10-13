@@ -968,14 +968,17 @@ def max_input_len(provider: str) -> int | None:
     return _MAX_INPUT_LEN.get(provider)
 
 
-def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceTokenizer:
+def sentence_tokenizer(
+    provider: str, *, expressive: bool, markup: bool = False
+) -> tokenize.SentenceTokenizer:
     """Default blingfire sentence tokenizer for a provider's streamed TTS input.
 
     The provider's hard max chunk length caps every emitted token. When ``expressive``
     is set, it also raises the *minimum* so consecutive sentences are batched up to
     that size, keeping prosody continuous across the turn; otherwise tokens emit per
     sentence (the unchanged default). Providers with no configured limit are uncapped
-    and always per-sentence.
+    and always per-sentence. ``markup`` (markers can appear, e.g. from ``say()``) keeps
+    a marker in one token without the expressive batching.
     """
     from .. import tokenize
 
@@ -983,9 +986,9 @@ def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceT
     return tokenize.blingfire.SentenceTokenizer(
         max_token_len=max_len,
         min_token_len=max_len if expressive else None,
-        # markup only exists in the stream when expressive is active; xml-aware
-        # tokenization would otherwise hold streaming on a stray "<" in plain text
-        xml_aware=expressive,
+        # markup only exists in the stream when expressive is active or a say() carries
+        # it; xml-aware tokenization would otherwise hold streaming on a stray "<"
+        xml_aware=expressive or markup,
     )
 
 
@@ -1126,7 +1129,16 @@ def _convert_expr(provider: str, text: str) -> str:
         label = attrs.get("label", "").strip().lower()
         inner = m.group("inner")
         if marker_type == "spell":
-            return f"<spell>{inner}</spell>" if provider == "cartesia" else inner
+            if provider == "cartesia":
+                return f"<spell>{inner}</spell>"
+            if provider == "ssml":
+                return f'<say-as interpret-as="characters">{inner}</say-as>'
+            return inner
+        if provider == "ssml":
+            return f"<emphasis>{inner}</emphasis>" if label == "emphasis" else inner
+        if provider == "eleven_v3":
+            # a free-form cue steers the words after it, so the span follows it
+            return f"[{label}] {inner}" if label else inner
         # prosody: native wrapping tags exist only for xAI
         if provider == "xai":
             native = label.replace(" ", "-")
@@ -1161,11 +1173,11 @@ def _convert_expr(provider: str, text: str) -> str:
             if provider == "cartesia":
                 # Cartesia's discrete emotion vocabulary (instructions list it)
                 return f'<emotion value="{label}"/>'
-            if provider in ("inworld", "fishaudio"):
+            if provider in ("inworld", "fishaudio", "eleven_v3"):
                 return f'<expression value="{label}"/>'
             return ""  # xAI has no free-form delivery descriptions
         if marker_type == "sound":
-            if provider == "cartesia":
+            if provider in ("cartesia", "ssml", "bracket_pauses"):
                 return ""  # no non-verbal sound support
             if provider == "xai":
                 label = _XAI_SOUND_ALIASES.get(label.lower(), label)
@@ -1240,6 +1252,76 @@ _PROVIDER_MARKUP: dict[str, list[str]] = {
 # without knowing which provider produced it (see :class:`TranscriptMarkupStripper`).
 _ALL_MARKUP_TAGS: list[str] = sorted({tag for tags in _PROVIDER_MARKUP.values() for tag in tags})
 
+# W3C SSML plus the vendor extensions Azure (mstts:) and Polly (amazon:) accept inline
+_SSML_TAGS = [
+    "speak",
+    "break",
+    "prosody",
+    "emphasis",
+    "say-as",
+    "sub",
+    "phoneme",
+    "lang",
+    "voice",
+    "p",
+    "s",
+    "w",
+    "mark",
+    "audio",
+    "lexicon",
+    "amazon:effect",
+    "amazon:domain",
+    "amazon:auto-breaths",
+    "mstts:express-as",
+    "mstts:silence",
+]
+
+# Dialects that say() text is lowered onto, but that have no LLM instructions, so
+# expressive mode stays off for them. Kept apart from _PROVIDER_MARKUP so their tag names
+# don't join the union the sinks strip from every LLM reply.
+#   ssml           - SSML-capable TTS (Google, Azure, AWS Polly, ElevenLabs SSML parsing)
+#   eleven_v3      - ElevenLabs v3/v4 bracket cues: [whispers], [laughs], [short pause]
+#   bracket_pauses - bracket pauses only: [pause short], [pause], [pause long]
+#                    (Google Chirp 3 HD markup)
+_SAY_ONLY_MARKUP: dict[str, list[str]] = {
+    "ssml": _SSML_TAGS,
+    "eleven_v3": [],
+    "bracket_pauses": [],
+}
+
+# dialects whose native syntax includes square-bracket cues
+_BRACKET_NATIVE = {"inworld", "xai", "fishaudio", "eleven_v3", "bracket_pauses"}
+
+_BREAK_RE = re.compile(r'<break\s+time="([^"]*)"\s*/?>')
+
+
+def _break_seconds(raw: str) -> float:
+    raw = raw.strip().lower()
+    try:
+        return float(raw[:-2]) / 1000 if raw.endswith("ms") else float(raw.rstrip("s"))
+    except ValueError:
+        return 0.0
+
+
+def _break_to_bracket(provider: str, match: re.Match[str]) -> str:
+    # three pause levels; the two dialects word them in opposite orders
+    secs = _break_seconds(match.group(1))
+    level = "short" if secs < 0.5 else "long" if secs >= 1.5 else ""
+    if not level:
+        return "[pause]"
+    return f"[pause {level}]" if provider == "bracket_pauses" else f"[{level} pause]"
+
+
+def native_markup(provider: str) -> tuple[list[str], bool]:
+    """The XML tag names native to *provider*, and whether bracket cues are native too.
+
+    Used to strip a TTS's native markup from ``say()`` text before it reaches the
+    transcript and chat history. Unlike the sinks' union, this is the one dialect the
+    active TTS reads, so it is safe to also strip bracket cues for a bracket dialect.
+    """
+    xml_tags = _PROVIDER_MARKUP.get(provider) or _SAY_ONLY_MARKUP.get(provider, [])
+    return xml_tags, provider in _BRACKET_NATIVE
+
 
 def _drop_trailing_separator(clean: str, stripped_any: bool) -> str:
     """Drop the space a marker ending the text leaves with nothing to pair against.
@@ -1275,20 +1357,58 @@ def split_all_markup(
             space before it along (:func:`_drop_trailing_separator`). ``False``
             mid-stream, where that whitespace belongs to words still arriving.
     """
-    # every markup shape is angle-bracketed, so text without "<" cannot contain any. The
-    # sinks call this per streamed chunk and expressive is off by default, making this the
-    # overwhelmingly common case — skip the tag-union scan entirely
-    if "<" not in text:
-        return text, []
-
-    text, expr_tags = _split_expr(text, at_line_start=at_line_start)
-    clean, raw_tags = extract_and_strip(
-        text, xml_tags=_ALL_MARKUP_TAGS, at_line_start=at_line_start
+    return _split_markup(
+        text,
+        xml_tags=_ALL_MARKUP_TAGS,
+        brackets=False,
+        strip_expr=True,
+        at_line_start=at_line_start,
+        at_text_end=at_text_end,
     )
-    tags = expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
+
+
+# a bracket cue; a markdown link's "[text](" is prose, not a cue
+_BRACKET_CUE_RE = re.compile(LEADING_WS + r"\[(?P<inner>[^\]\n]*)\](?!\()")
+
+
+def _split_brackets(text: str, *, at_line_start: bool) -> tuple[str, list[ExpressiveTag]]:
+    """Strip bracket cues, spacing the removal the same way as :func:`_split_expr`."""
+    tags: list[ExpressiveTag] = []
+    out: list[str] = ["" if at_line_start else "\u0000"]
+    pos = 0
+    for m in _BRACKET_CUE_RE.finditer(text):
+        out.append(text[pos : m.start()])
+        pos = m.end()
+        tags.append({"type": "cue", "value": m.group("inner").strip()})
+        pos = _strip_one(out, text, pos, m, "")
+    out.append(text[pos:])
+    return "".join(out).lstrip("\u0000"), tags
+
+
+def _split_markup(
+    text: str,
+    *,
+    xml_tags: list[str],
+    brackets: bool,
+    strip_expr: bool,
+    at_line_start: bool,
+    at_text_end: bool,
+) -> tuple[str, list[ExpressiveTag]]:
+    tags: list[ExpressiveTag] = []
+    # every XML shape is angle-bracketed, so text without "<" cannot contain any. The
+    # sinks call this per streamed chunk and expressive is off by default, making this the
+    # overwhelmingly common case — skip the tag scan entirely
+    if "<" in text:
+        if strip_expr:
+            text, tags = _split_expr(text, at_line_start=at_line_start)
+        text, raw_tags = extract_and_strip(text, xml_tags=xml_tags, at_line_start=at_line_start)
+        tags += [{"type": tag, "value": value} for tag, value in raw_tags]
+    if brackets and "[" in text:
+        text, cue_tags = _split_brackets(text, at_line_start=at_line_start)
+        tags += cue_tags
     if at_text_end:
-        clean = _drop_trailing_separator(clean, bool(tags))
-    return clean, tags
+        text = _drop_trailing_separator(text, bool(tags))
+    return text, tags
 
 
 def strip_all_markup(text: str) -> str:
@@ -1337,7 +1457,25 @@ class TranscriptMarkupStripper:
     synchronizer) so stripping and expression extraction stay identical across them.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        xml_tags: list[str] | None = None,
+        brackets: bool = False,
+        strip_expr: bool = True,
+    ) -> None:
+        """
+        Args:
+            xml_tags: The XML tag names to strip. Defaults to every provider's tags (the
+                provider-agnostic union the sinks strip).
+            brackets: Also strip bracket cues (``[whispers]``). Only safe when the TTS
+                reads brackets as cues; in LLM output they are prose.
+            strip_expr: Strip ``<expr/>`` markers. ``False`` leaves them for a later
+                stage (the sinks, which also surface ``lk.expression``).
+        """
+        self._xml_tags = _ALL_MARKUP_TAGS if xml_tags is None else xml_tags
+        self._brackets = brackets
+        self._strip_expr = strip_expr
         self._buf = ""
         self._tags: list[ExpressiveTag] = []
         self._seam_after_strip = False
@@ -1363,7 +1501,14 @@ class TranscriptMarkupStripper:
 
         # at_text_end is handled below against the segment's tags, not this chunk's: the
         # flush that ends a segment often carries only held whitespace and no marker
-        clean, tags = split_all_markup(text, at_line_start=self._line_start, at_text_end=False)
+        clean, tags = _split_markup(
+            text,
+            xml_tags=self._xml_tags,
+            brackets=self._brackets,
+            strip_expr=self._strip_expr,
+            at_line_start=self._line_start,
+            at_text_end=False,
+        )
         self._tags.extend(tags)
         if final:
             clean = _drop_trailing_separator(clean, bool(self._tags))
@@ -1376,7 +1521,9 @@ class TranscriptMarkupStripper:
 
         # a tag only abuts the next chunk when this one *ended* on it; a tag stripped
         # earlier leaves whitespace the LLM itself wrote, which is passed through
-        ended_on_tag = bool(tags) and text.rstrip(" \t").endswith(">")
+        ended_on_tag = bool(tags) and text.rstrip(" \t").endswith(
+            (">", "]") if self._brackets else ">"
+        )
         self._seam_after_strip = ended_on_tag and bool(held)
         self._eat_leading_ws = ended_on_tag and self._line_start
         return out
@@ -1389,6 +1536,11 @@ class TranscriptMarkupStripper:
         if last_lt > self._buf.rfind(">"):
             nxt = self._buf[last_lt + 1 : last_lt + 2]
             if not nxt or nxt == "/" or nxt.isalpha():
+                return True
+        if self._brackets:
+            # a cue split across chunks; past _MAX_HELD_CHARS a lone "[" is plain text
+            last_open = self._buf.rfind("[")
+            if last_open > self._buf.rfind("]") and len(self._buf) - last_open <= _MAX_HELD_CHARS:
                 return True
         return False
 
@@ -1499,7 +1651,7 @@ def normalize_markup(provider: str, text: str) -> str:
     ``<expression value="happy">`` instead of ``<expression value="happy"/>`` — or
     ``<expr type="sound" label="laugh">`` instead of ``<expr type="sound" label="laugh"/>``).
     """
-    if provider in _PROVIDER_MARKUP:
+    if provider in _PROVIDER_MARKUP or provider in _SAY_ONLY_MARKUP:
         text = _EXPR_UNCLOSED_RE.sub(r"\1/>", text)
     tags = _SELF_CLOSING_TAGS.get(provider)
     if not tags:
@@ -1509,13 +1661,25 @@ def normalize_markup(provider: str, text: str) -> str:
 
 
 def convert_markup(provider: str, text: str) -> str:
-    """Convert framework-standard markup to a provider's native syntax."""
+    """Convert framework-standard markup to a provider's native syntax.
+
+    A provider with no dialect speaks no markers, so they are dropped (their words
+    stay) rather than read aloud.
+    """
     if provider == "gemini":
         return _convert_gemini_expr(text)
-    if provider in _PROVIDER_MARKUP:
-        # lower expr markers first; the per-provider conversions below then
-        # handle the intermediate framework-standard tags they produce
+    if provider in _SAY_ONLY_MARKUP:
         text = _convert_expr(provider, text)
+        if provider == "eleven_v3":
+            text = convert_expression_tags(text)
+        if provider != "ssml":
+            text = _BREAK_RE.sub(lambda m: _break_to_bracket(provider, m), text)
+        return text
+    if provider not in _PROVIDER_MARKUP:
+        return strip_expr_markup(text)
+    # lower expr markers first; the per-provider conversions below then
+    # handle the intermediate framework-standard tags they produce
+    text = _convert_expr(provider, text)
     if provider in ("inworld", "xai"):
         # <sound value="X"/> -> [X] (and <expression value="X"/> -> [X]); for xAI this
         # turns inline sounds into its native brackets while emotion/prosody stay <..>
