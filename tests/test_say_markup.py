@@ -247,6 +247,24 @@ async def test_held_aligned_words_keep_their_start_time() -> None:
     assert isinstance(out[-1], TimedString) and out[-1].start_time == 3.0
 
 
+async def test_markup_only_aligned_chunk_keeps_the_next_start_time() -> None:
+    from types import SimpleNamespace
+
+    from livekit.agents.types import TimedString
+    from livekit.agents.voice.agent_activity import AgentActivity
+
+    activity = SimpleNamespace(tts=_MarkupTTS("ssml"), _resolve_expressive_options=lambda: None)
+
+    async def aligned() -> AsyncIterable[str]:
+        yield TimedString('<break time="1s"/>', start_time=0.0, end_time=1.0)
+        yield TimedString("Hello.", start_time=2.0, end_time=2.5)
+
+    out = [c async for c in AgentActivity._strip_say_markup(activity, aligned())]  # type: ignore[arg-type]
+
+    assert "".join(out) == "Hello."
+    assert isinstance(out[0], TimedString) and out[0].start_time == 2.0
+
+
 async def test_stream_adapter_converts_on_a_plain_turn() -> None:
     # conversion doesn't wait for the markup flag (only xml-aware chunking does), so a
     # marker on a plain turn is dropped for a TTS that can't speak it, never read aloud

@@ -1649,6 +1649,10 @@ async def strip_markup_stream(
         if out := stripper.push(chunk):
             yield _timed(out)
             first = None
+        elif not stripper._buf.strip():
+            # the chunk was markup only and nothing is held: the next words keep their
+            # own start time, not the removed markup's
+            first = None
     if out := stripper.flush():
         yield _timed(out)
 
