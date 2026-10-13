@@ -40,12 +40,20 @@ def new_inference_session(
     opts.intra_op_num_threads = 1
     opts.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
 
+    available_providers = onnxruntime.get_available_providers()
     if force_cpu:
         providers = ["CPUExecutionProvider"]
-    elif "CUDAExecutionProvider" in onnxruntime.get_available_providers():
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    elif "CUDAExecutionProvider" in available_providers:
+        providers = [
+            "CUDAExecutionProvider",
+            *(
+                provider
+                for provider in available_providers
+                if provider not in {"TensorrtExecutionProvider", "CUDAExecutionProvider"}
+            ),
+        ]
     else:
-        providers = ["CPUExecutionProvider"]
+        providers = available_providers
 
     session = onnxruntime.InferenceSession(path, providers=providers, sess_options=opts)
 

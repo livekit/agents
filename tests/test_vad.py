@@ -25,10 +25,14 @@ SAMPLE_RATES = [16000, 44100]  # test multiple input sample rates
             ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
             ["CUDAExecutionProvider", "CPUExecutionProvider"],
         ),
+        (
+            ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+            ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        ),
         (["CPUExecutionProvider"], ["CPUExecutionProvider"]),
     ],
 )
-def test_new_inference_session_selects_cuda_before_cpu(
+def test_new_inference_session_selects_available_providers(
     tmp_path, monkeypatch, available_providers, expected_providers
 ) -> None:
     model_path = tmp_path / "silero_vad.onnx"
@@ -44,16 +48,12 @@ def test_new_inference_session_selects_cuda_before_cpu(
     monkeypatch.setattr(
         onnx_model.onnxruntime,
         "InferenceSession",
-        lambda path, *, providers, sess_options: captured.update(
-            path=path, providers=providers, sess_options=sess_options
-        )
-        or session,
+        lambda path, *, providers, sess_options: (
+            captured.update(path=path, providers=providers, sess_options=sess_options) or session
+        ),
     )
 
-    assert (
-        onnx_model.new_inference_session(force_cpu=False, onnx_file_path=model_path)
-        is session
-    )
+    assert onnx_model.new_inference_session(force_cpu=False, onnx_file_path=model_path) is session
     assert captured["providers"] == expected_providers
 
 
