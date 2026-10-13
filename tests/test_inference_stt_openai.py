@@ -652,6 +652,45 @@ async def test_a_direct_stream_suffix_language_is_not_applied_to_a_refused_model
     )
 
 
+async def test_a_direct_stream_suffix_language_is_not_applied_across_providers() -> None:
+    """A ``:language`` suffix belongs to the model carrying it. When a direct stream update
+    names a model from another provider the live session stays on its running provider, so
+    the new model's language must not be applied even though its rate is accepted."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        # 24 kHz so OpenAI's required rate matches; the session still runs Deepgram
+        stt = _make_stt(
+            model="deepgram/nova-3",
+            sample_rate=24000,
+            base_url=base_url,
+            http_session=session,
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            await _wait_until_stream_is_live(stream)
+            stream.push_frame(_silence(24000, 0.1))
+            stream.update_options(model="openai/gpt-live-transcribe:fr")
+            await asyncio.sleep(0.1)
+        finally:
+            await stream.aclose()
+
+    assert stream._opts.model == "deepgram/nova-3"
+    assert stream._opts.language is NOT_GIVEN or stream._opts.language is None
+    assert all("language" not in u["settings"] for u in updates), (
+        "another provider's model must not impose its language on the running session"
+    )
+
+
 async def test_a_model_switch_does_not_send_the_new_providers_extra() -> None:
     """An extra written alongside a model switch is for that model. A live Deepgram stream
     must not be handed OpenAI's string ``keywords``, which it reads as weighted tuples."""

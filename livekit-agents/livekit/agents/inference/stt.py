@@ -981,13 +981,20 @@ class SpeechStream(stt.SpeechStream):
         if is_given(model):
             refused = self._warn_if_rate_refused(model)
             # Mirror __init__/STT.update_options: strip ":language" suffix. It belongs to the
-            # model carrying it, so it is not applied when this stream cannot run that model.
+            # model carrying it, so it is not applied when this stream cannot run that model
+            # or when the model belongs to a provider the live session stays off.
+            parsed_language: NotGivenOr[LanguageCode] = NOT_GIVEN
             if isinstance(model, str):
                 parsed_model, parsed_language = _parse_model_string(model)
                 model = parsed_model
-                if is_given(parsed_language) and not is_given(language) and not refused:
-                    language = parsed_language
             changed_provider = _provider_for_model(model) != _provider_for_model(self._opts.model)
+            if (
+                is_given(parsed_language)
+                and not is_given(language)
+                and not refused
+                and not changed_provider
+            ):
+                language = parsed_language
 
         if is_given(language):
             self._opts.language = LanguageCode(language)
