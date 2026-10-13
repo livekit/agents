@@ -184,16 +184,3 @@ async def test_say_markup_lowered_without_expressive() -> None:
     stripper = TranscriptMarkupStripper(xml_tags=xml_tags, brackets=brackets)
     shown = "".join([out async for out in strip_markup_stream(_aligned(), stripper)])
     assert "[laugh]" not in shown and "hello" in shown
-
-
-@pytest.mark.parametrize(
-    ("model", "key"),
-    [
-        ("elevenlabs/eleven_v3", "eleven_v3"),
-        ("elevenlabs/eleven_flash_v2_5", ""),
-        ("deepgram/aura-2", "deepgram"),
-    ],
-)
-def test_inference_markup_key(model: str, key: str) -> None:
-    tts = TTS(model=model, api_key="test-key", api_secret="test-secret")
-    assert tts.markup._provider_key() == key

@@ -483,9 +483,6 @@ class TTS(tts.TTS):
                 return "inworld"
             elif provider == "inworld":
                 return ""  # older inworld models don't support markup
-            elif provider == "elevenlabs":
-                # v3/v4 read bracket cues; earlier models have no markup
-                return "eleven_v3" if ("eleven_v3" in model or "eleven_v4" in model) else ""
             return provider
 
         # llm_instructions / normalize / convert are inherited from the base Markup,

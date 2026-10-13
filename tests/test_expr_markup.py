@@ -23,6 +23,7 @@ from livekit.agents.tts._provider_format import (
     split_all_markup,
     strip_all_markup,
     strip_expr_markup,
+    union_native_markup,
 )
 
 pytestmark = pytest.mark.unit
@@ -705,19 +706,41 @@ def test_normalize_closes_markers_for_say_only_dialects() -> None:
 # ---------------------------------------------------------------------------
 
 
+# the free-form bracket cues a bracket dialect reads, and Google's pause-only ones
+_CUES = native_markup("eleven_v3")[1]
+_PAUSES = native_markup("google_markup")[1]
+
+
 def _strip_streamed(stripper: TranscriptMarkupStripper, chunks: list[str]) -> str:
     return "".join(stripper.push(c) for c in chunks) + stripper.flush()
 
 
 def test_native_markup_per_dialect() -> None:
-    assert native_markup("ssml") == (_SSML_TAGS, False)
-    assert native_markup("elevenlabs") == (["break", "phoneme"], False)
-    assert native_markup("eleven_v3") == ([], True)
-    # Google markup's only brackets are pauses; "Option [A]" is prose
-    assert native_markup("google_markup") == ([], False)
-    assert native_markup("inworld")[1] is True
+    assert native_markup("ssml") == (_SSML_TAGS, None)
+    assert native_markup("elevenlabs") == (["break", "phoneme"], None)
+    assert _CUES is not None and native_markup("inworld")[1] is _CUES
+    assert _PAUSES is not None and _PAUSES is not _CUES
     assert "emotion" in native_markup("cartesia")[0]
-    assert native_markup("") == ([], False)
+    assert native_markup("") == ([], None)
+
+
+def test_stripper_removes_only_google_pauses() -> None:
+    # Google markup's only brackets are its pauses; any other bracket is prose
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_PAUSES)
+    out = _strip_streamed(stripper, ["Wait [pause] here. [pau", "se long]Option [A] is ready."])
+    assert out == "Wait here. Option [A] is ready."
+
+
+def test_union_native_markup_keeps_the_broadest_brackets() -> None:
+    assert union_native_markup([native_markup("ssml"), native_markup("google_markup")]) == (
+        sorted(_SSML_TAGS),
+        _PAUSES,
+    )
+    assert (
+        union_native_markup([native_markup("google_markup"), native_markup("eleven_v3")])[1]
+        is _CUES
+    )
+    assert union_native_markup([native_markup(""), native_markup("ssml")])[1] is None
 
 
 def test_stripper_removes_native_ssml_and_keeps_expr() -> None:
@@ -734,29 +757,29 @@ def test_stripper_removes_native_ssml_and_keeps_expr() -> None:
 
 
 def test_stripper_removes_bracket_cues_split_across_chunks() -> None:
-    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
     out = _strip_streamed(stripper, ["[whispers] Hello and [la", "ughs] done."])
     assert out == "Hello and done."
 
 
 def test_stripper_leaves_markdown_links_for_a_bracket_dialect() -> None:
-    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
     assert _strip_streamed(stripper, ["See [the guide](https://x.io)."]) == (
         "See [the guide](https://x.io)."
     )
 
 
 def test_stripper_holds_a_bracket_until_a_streamed_link_can_complete() -> None:
-    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
     assert _strip_streamed(stripper, ["See [guide]", "(https://x.io)."]) == (
         "See [guide](https://x.io)."
     )
     # a cue ending the stream is still a cue
-    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
     assert _strip_streamed(stripper, ["Done [laughs]"]) == "Done"
 
 
 def test_stripper_releases_a_lone_bracket() -> None:
-    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
     out = stripper.push("[" + "a" * 300)
     assert out.startswith("[a")  # past the hold cap, a lone "[" is plain text

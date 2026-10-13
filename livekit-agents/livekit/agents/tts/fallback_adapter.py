@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import re
 import time
 from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
@@ -125,16 +126,14 @@ class FallbackAdapter(
             t.on("metrics_collected", self._on_metrics_collected)
 
     class Markup(TTS.Markup):
-        def _native_markup(self) -> tuple[list[str], bool]:
+        def _native_markup(self) -> tuple[list[str], re.Pattern[str] | None]:
             # any instance may speak a say(), so strip what every one of them reads
+            from ._provider_format import union_native_markup
+
             assert isinstance(self._tts, FallbackAdapter)
-            xml_tags: set[str] = set()
-            brackets = False
-            for instance in self._tts._tts_instances:
-                tags, has_brackets = instance.markup._native_markup()
-                xml_tags.update(tags)
-                brackets = brackets or has_brackets
-            return sorted(xml_tags), brackets
+            return union_native_markup(
+                [t.markup._native_markup() for t in self._tts._tts_instances]
+            )
 
     def _next_instance(self) -> TTS:
         """The instance the next request goes to first: the first one marked available, or

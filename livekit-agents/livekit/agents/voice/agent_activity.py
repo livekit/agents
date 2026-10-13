@@ -3069,7 +3069,7 @@ class AgentActivity(RecognitionHooks):
         """
         from ..tts._provider_format import TranscriptMarkupStripper, strip_markup_stream
 
-        xml_tags, brackets = self.tts.markup._native_markup() if self.tts else ([], False)
+        xml_tags, brackets = self.tts.markup._native_markup() if self.tts else ([], None)
         stripper = TranscriptMarkupStripper(
             xml_tags=xml_tags,
             brackets=brackets,

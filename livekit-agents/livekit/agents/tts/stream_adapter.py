@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterable
 from typing import Any, ClassVar
 
@@ -55,7 +56,7 @@ class StreamAdapter(TTS):
             assert isinstance(self._tts, StreamAdapter)
             return self._tts._wrapped_tts.markup._provider_key()
 
-        def _native_markup(self) -> tuple[list[str], bool]:
+        def _native_markup(self) -> tuple[list[str], re.Pattern[str] | None]:
             assert isinstance(self._tts, StreamAdapter)
             return self._tts._wrapped_tts.markup._native_markup()
 

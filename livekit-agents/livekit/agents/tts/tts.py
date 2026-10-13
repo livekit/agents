@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import datetime
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Iterator
@@ -146,8 +147,8 @@ class TTS(
 
             return convert_markup(self._provider_key(), text)
 
-        def _native_markup(self) -> tuple[list[str], bool]:
-            """The XML tag names this TTS reads natively, and whether it reads bracket cues.
+        def _native_markup(self) -> tuple[list[str], re.Pattern[str] | None]:
+            """The XML tag names this TTS reads natively, and the bracket cues it reads.
 
             The framework strips these from ``say()`` text for the transcript and chat
             history, while the TTS still gets them.

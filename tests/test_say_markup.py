@@ -147,6 +147,16 @@ async def test_bracket_cues_stripped_for_a_bracket_dialect() -> None:
     assert history == "Hello there."
 
 
+async def test_google_pauses_stripped_but_other_brackets_kept() -> None:
+    tts_obj = _MarkupTTS("google_markup")
+    marked = "Wait [pause] here. Option [A] is ready."
+    transcript, history = await _say(marked, tts_obj)
+
+    assert "".join(tts_obj.inputs).split() == marked.split()
+    assert transcript == "Wait here. Option [A] is ready."
+    assert history == "Wait here. Option [A] is ready."
+
+
 async def test_brackets_are_prose_for_other_dialects() -> None:
     tts_obj = _MarkupTTS("ssml")
     _, history = await _say("Option [A] is fine.", tts_obj)

@@ -1304,10 +1304,20 @@ _SAY_ONLY_MARKUP: dict[str, list[str]] = {
     "google_markup": [],
 }
 
-# dialects that read square brackets as free-form cues, so a bracket in say() text is
-# markup, not prose. Google markup is left out: its only brackets are pauses, and
-# stripping every bracket would cut "Option [A]" from history.
-_BRACKET_NATIVE = {"inworld", "xai", "fishaudio", "eleven_v3"}
+# a free-form bracket cue; a markdown link's "[text](" is prose, not a cue
+_BRACKET_CUE_RE = re.compile(LEADING_WS + r"\[(?P<inner>[^\]\n]*)\](?!\()")
+# Google markup's only brackets: its three pauses
+_GOOGLE_PAUSE_RE = re.compile(LEADING_WS + r"\[(?P<inner>pause(?: short| long)?)\]")
+
+# the bracket spans each dialect reads as markup, so in say() text they are not prose.
+# Google's are pauses only: stripping every bracket would cut "Option [A]" from history.
+_BRACKET_NATIVE: dict[str, re.Pattern[str]] = {
+    "inworld": _BRACKET_CUE_RE,
+    "xai": _BRACKET_CUE_RE,
+    "fishaudio": _BRACKET_CUE_RE,
+    "eleven_v3": _BRACKET_CUE_RE,
+    "google_markup": _GOOGLE_PAUSE_RE,
+}
 
 
 def _break_seconds(raw: str) -> float | None:
@@ -1340,15 +1350,26 @@ def _google_pause(label: str) -> str:
     return "[pause long]" if secs >= 1.5 else "[pause]"
 
 
-def native_markup(provider: str) -> tuple[list[str], bool]:
-    """The XML tag names native to *provider*, and whether bracket cues are native too.
+def native_markup(provider: str) -> tuple[list[str], re.Pattern[str] | None]:
+    """The XML tag names native to *provider*, and the bracket spans it reads, if any.
 
     Used to strip a TTS's native markup from ``say()`` text before it reaches the
     transcript and chat history. Unlike the sinks' union, this is the one dialect the
-    active TTS reads, so it is safe to also strip bracket cues for a bracket dialect.
+    active TTS reads, so it is safe to also strip its bracket cues.
     """
     xml_tags = _PROVIDER_MARKUP.get(provider) or _SAY_ONLY_MARKUP.get(provider, [])
-    return xml_tags, provider in _BRACKET_NATIVE
+    return xml_tags, _BRACKET_NATIVE.get(provider)
+
+
+def union_native_markup(
+    markups: list[tuple[list[str], re.Pattern[str] | None]],
+) -> tuple[list[str], re.Pattern[str] | None]:
+    """The native markup of several TTSs at once (a ``FallbackAdapter``'s instances)."""
+    xml_tags = sorted({tag for tags, _ in markups for tag in tags})
+    patterns = [pattern for _, pattern in markups if pattern is not None]
+    # the free-form pattern covers every narrower one
+    brackets = _BRACKET_CUE_RE if _BRACKET_CUE_RE in patterns else next(iter(patterns), None)
+    return xml_tags, brackets
 
 
 def _drop_trailing_separator(clean: str, stripped_any: bool) -> str:
@@ -1388,23 +1409,22 @@ def split_all_markup(
     return _split_markup(
         text,
         xml_tags=_ALL_MARKUP_TAGS,
-        brackets=False,
+        brackets=None,
         strip_expr=True,
         at_line_start=at_line_start,
         at_text_end=at_text_end,
     )
 
 
-# a bracket cue; a markdown link's "[text](" is prose, not a cue
-_BRACKET_CUE_RE = re.compile(LEADING_WS + r"\[(?P<inner>[^\]\n]*)\](?!\()")
-
-
-def _split_brackets(text: str, *, at_line_start: bool) -> tuple[str, list[ExpressiveTag]]:
-    """Strip bracket cues, spacing the removal the same way as :func:`_split_expr`."""
+def _split_brackets(
+    text: str, pattern: re.Pattern[str], *, at_line_start: bool
+) -> tuple[str, list[ExpressiveTag]]:
+    """Strip the bracket cues *pattern* matches, spacing the removal the same way as
+    :func:`_split_expr`."""
     tags: list[ExpressiveTag] = []
     out: list[str] = ["" if at_line_start else "\u0000"]
     pos = 0
-    for m in _BRACKET_CUE_RE.finditer(text):
+    for m in pattern.finditer(text):
         out.append(text[pos : m.start()])
         pos = m.end()
         tags.append({"type": "cue", "value": m.group("inner").strip()})
@@ -1417,7 +1437,7 @@ def _split_markup(
     text: str,
     *,
     xml_tags: list[str],
-    brackets: bool,
+    brackets: re.Pattern[str] | None,
     strip_expr: bool,
     at_line_start: bool,
     at_text_end: bool,
@@ -1431,8 +1451,8 @@ def _split_markup(
             text, tags = _split_expr(text, at_line_start=at_line_start)
         text, raw_tags = extract_and_strip(text, xml_tags=xml_tags, at_line_start=at_line_start)
         tags += [{"type": tag, "value": value} for tag, value in raw_tags]
-    if brackets and "[" in text:
-        text, cue_tags = _split_brackets(text, at_line_start=at_line_start)
+    if brackets is not None and "[" in text:
+        text, cue_tags = _split_brackets(text, brackets, at_line_start=at_line_start)
         tags += cue_tags
     if at_text_end:
         text = _drop_trailing_separator(text, bool(tags))
@@ -1489,15 +1509,16 @@ class TranscriptMarkupStripper:
         self,
         *,
         xml_tags: list[str] | None = None,
-        brackets: bool = False,
+        brackets: re.Pattern[str] | None = None,
         strip_expr: bool = True,
     ) -> None:
         """
         Args:
             xml_tags: The XML tag names to strip. Defaults to every provider's tags (the
                 provider-agnostic union the sinks strip).
-            brackets: Also strip bracket cues (``[whispers]``). Only safe when the TTS
-                reads brackets as cues; in LLM output they are prose.
+            brackets: Also strip the bracket cues this pattern matches (``[whispers]``),
+                from :func:`native_markup`. Only safe for the dialect the TTS reads; in
+                LLM output brackets are prose.
             strip_expr: Strip ``<expr/>`` markers. ``False`` leaves them for a later
                 stage (the sinks, which also surface ``lk.expression``).
         """
@@ -1550,7 +1571,7 @@ class TranscriptMarkupStripper:
         # a tag only abuts the next chunk when this one *ended* on it; a tag stripped
         # earlier leaves whitespace the LLM itself wrote, which is passed through
         ended_on_tag = bool(tags) and text.rstrip(" \t").endswith(
-            (">", "]") if self._brackets else ">"
+            (">", "]") if self._brackets is not None else ">"
         )
         self._seam_after_strip = ended_on_tag and bool(held)
         self._eat_leading_ws = ended_on_tag and self._line_start
@@ -1565,7 +1586,7 @@ class TranscriptMarkupStripper:
             nxt = self._buf[last_lt + 1 : last_lt + 2]
             if not nxt or nxt == "/" or nxt.isalpha():
                 return True
-        if self._brackets:
+        if self._brackets is not None:
             # "[label]" ending the chunk may still open a markdown link ("[label](url)")
             # once the next chunk arrives, and a link is prose, not a cue
             if self._buf.endswith("]"):
