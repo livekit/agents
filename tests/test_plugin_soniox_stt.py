@@ -354,6 +354,63 @@ def _nonfinal_token(text: str, language: str, translation_status: str | None = N
 END_TOKEN_FINAL: dict[str, Any] = {"text": "<end>", "is_final": True}
 
 
+@pytest.mark.parametrize("offset", [0.0, 8.5])
+async def test_eos_uses_final_token_end_time_and_resets_between_turns(offset):
+    stream = _make_stream()
+    stream._start_time_offset = offset
+    events = await _drive_recv(
+        stream,
+        [
+            {
+                "tokens": [
+                    {**_final_token("hello", "en"), "start_ms": 1000, "end_ms": 2400},
+                    END_TOKEN_FINAL,
+                    _final_token("again", "en"),
+                    END_TOKEN_FINAL,
+                ],
+            }
+        ],
+        expect_events=4,
+    )
+
+    endpoints = [event for event in events if event.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 2
+    assert endpoints[0].alternatives[0].end_time == pytest.approx(offset + 2.4)
+    assert endpoints[1].alternatives == []
+
+
+@pytest.mark.parametrize("source_end, translation_end", [(2400, None), (2400, 3000), (None, 2400)])
+async def test_eos_prefers_source_token_timing_for_translation(source_end, translation_end):
+    from livekit.plugins.soniox.stt import TranslationConfig
+
+    stream = _make_stream(translation=TranslationConfig(type="one_way", target_language="en"))
+    stream._start_time_offset = 8.5
+    events = await _drive_recv(
+        stream,
+        [
+            {
+                "tokens": [
+                    {
+                        **_final_token("hola", "es", "original"),
+                        **({"start_ms": 1000, "end_ms": source_end} if source_end else {}),
+                    },
+                    {
+                        **_final_token("hello", "en", "translation"),
+                        **(
+                            {"start_ms": 1000, "end_ms": translation_end} if translation_end else {}
+                        ),
+                    },
+                    END_TOKEN_FINAL,
+                ],
+            }
+        ],
+        expect_events=2,
+    )
+
+    assert events[-1].type == SpeechEventType.END_OF_SPEECH
+    assert events[-1].alternatives[0].end_time == pytest.approx(10.9)
+
+
 # --- Two-way translation, code-switched input -------------------------------
 
 

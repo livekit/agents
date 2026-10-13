@@ -1637,6 +1637,28 @@ def _turn_message(**overrides):
     return msg
 
 
+@pytest.mark.parametrize("offset", [0.0, 8.5])
+async def test_eos_uses_last_word_end_time(offset):
+    stream = _make_stream_for_unit_test()
+    stream._start_time_offset = offset
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello"))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives[0].end_time == pytest.approx(offset + 0.48)
+
+
+@pytest.mark.parametrize("words", [[], [{"text": "hello", "confidence": 0.9}]])
+async def test_eos_without_word_timing_does_not_use_stream_offset(words):
+    stream = _make_stream_for_unit_test()
+    stream._start_time_offset = 8.5
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello", words=words))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives == []
+
+
 async def test_end_of_turn_confidence_surfaced_on_interim_metadata():
     """A held-turn partial carries its end_of_turn_confidence on interim metadata."""
     stream = _make_stream_for_unit_test()

@@ -1247,7 +1247,18 @@ class SpeechStream(stt.SpeechStream):
 
             if self._speaking:
                 self._speaking = False
-                end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                words = data.get("words") or []
+                end_alternatives = []
+                if words and words[-1].get("end", 0) > 0:
+                    end_alternatives = [
+                        replace(speech_data, end_time=self.start_time_offset + words[-1]["end"])
+                    ]
+                elif data.get("duration", 0) > 0:
+                    end_alternatives = [speech_data]
+                end_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=end_alternatives,
+                )
                 self._event_ch.send_nowait(end_event)
                 self._on_end_of_speech()
         else:

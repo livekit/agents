@@ -505,9 +505,14 @@ class SpeechStream(stt.SpeechStream):
                         ],
                     )
                 )
+                # Translation tokens can omit timing; the source tokens carry the speech span.
+                endpoint_tokens = final_original if final_original.end_time > 0 else final
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.END_OF_SPEECH,
+                        alternatives=[endpoint_tokens.to_speech_data(self.start_time_offset)]
+                        if endpoint_tokens.end_time > 0
+                        else [],
                     )
                 )
 
