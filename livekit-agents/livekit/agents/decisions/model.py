@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import math
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
@@ -11,7 +10,6 @@ from typing import Annotated, Any, Literal
 
 from opentelemetry import trace
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
 
 from livekit import rtc
 
@@ -25,9 +23,6 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 DecisionKind = Literal["probability", "choice", "score"]
 DecisionInputModality = Literal["text", "image"]
 _Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
-# Jev rounds scores and probabilities independently to two decimal places.
-_ROUNDING_ERROR = 0.005
-_FLOAT_EPSILON = 1e-9
 
 
 @dataclass(frozen=True)
@@ -64,9 +59,7 @@ class DecisionCapabilities:
     decision_kinds: list[DecisionKind]
     """Decision kinds the model can evaluate"""
     input_modalities: list[DecisionInputModality] = field(default_factory=lambda: ["text"])
-    """Chat content the model can consume. AgentSession leaves other content out of
-    background evaluations.
-    """
+    """Chat content the model can consume."""
 
 
 class ProbabilityResult(BaseModel):
@@ -79,7 +72,7 @@ class ChoiceResult(BaseModel):
     kind: Literal["choice"] = "choice"
     value: str
     probabilities: dict[str, _Probability] | None = None
-    """Provider distribution (possibly rounded), or None if unavailable."""
+    """Provider distribution over option names, or None if unavailable."""
     provider_data: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -87,9 +80,7 @@ class ScoreResult(BaseModel):
     kind: Literal["score"] = "score"
     value: float = Field(ge=0, allow_inf_nan=False)
     probabilities: dict[int, _Probability]
-    """Provider distribution over zero-based level indices. The probabilities and
-    expected index can be independently rounded.
-    """
+    """Provider distribution over zero-based level indices."""
     levels: list[str]
     provider_data: dict[str, Any] = Field(default_factory=dict)
 
@@ -108,56 +99,6 @@ class DecisionResponse(BaseModel):
     request_id: str = ""
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
-
-
-class DecisionsCompletedEvent(BaseModel):
-    type: Literal["decisions_completed"] = "decisions_completed"
-    results: dict[str, DecisionResult]
-    errors: dict[str, str] = Field(default_factory=dict)
-    source_message_id: str
-    created_at: float = Field(default_factory=time.time)
-
-
-class DecisionOptions(TypedDict, total=False):
-    """Background evaluation of the active agent's decisions.
-
-    One request runs at a time. Eligible updates replace one pending snapshot;
-    intermediate snapshots can be skipped. Results identify the snapshot evaluated.
-    """
-
-    turn_interval: int
-    """Evaluate every N committed, non-empty user text turns. Default: 1."""
-    max_context_turns: int
-    """Include the last N user turns and intervening assistant text, ending at the
-    triggering user message. By default, tools and other context events are excluded.
-    Default: 6. Context can include conversation from before an agent handoff.
-    """
-    include_context_events: bool
-    """Include tool calls, tool outputs, handoffs, and interruption metadata.
-    Default: False. Instructions are always excluded, and images are included only when
-    the decision model accepts image input.
-    """
-    timeout: float
-    """Maximum seconds per background evaluation, including retries. Default: 10."""
-
-
-_DEFAULT_DECISION_OPTIONS: DecisionOptions = {
-    "turn_interval": 1,
-    "max_context_turns": 6,
-    "include_context_events": False,
-    "timeout": 10.0,
-}
-
-
-def _resolve_options(options: DecisionOptions | None) -> DecisionOptions:
-    resolved = DecisionOptions(**{**_DEFAULT_DECISION_OPTIONS, **(options or {})})
-    for name in ("turn_interval", "max_context_turns"):
-        value = resolved[name]
-        if type(value) is not int or value < 1:
-            raise ValueError(f"decision_options.{name} must be a positive integer")
-    if not math.isfinite(resolved["timeout"]) or resolved["timeout"] <= 0:
-        raise ValueError("decision_options.timeout must be positive and finite")
-    return resolved
 
 
 def _kind(decision: Decision) -> DecisionKind:
@@ -221,23 +162,13 @@ def _validate_result(result: DecisionResult, decision: Decision) -> None:
             raise APIError("score distribution does not match levels", retryable=False)
         if result.value > len(decision.levels) - 1:
             raise APIError("score is outside the defined scale", retryable=False)
-        expected_score = sum(index * p for index, p in result.probabilities.items())
-        score_tolerance = _ROUNDING_ERROR * (1 + sum(range(len(decision.levels)))) + _FLOAT_EPSILON
-        if not math.isclose(result.value, expected_score, abs_tol=score_tolerance):
-            raise APIError("score must be the expected level index", retryable=False)
-    if isinstance(result, (ChoiceResult, ScoreResult)) and result.probabilities is not None:
-        probability_sum_tolerance = _ROUNDING_ERROR * len(result.probabilities) + _FLOAT_EPSILON
-        if not math.isclose(
-            sum(result.probabilities.values()), 1.0, abs_tol=probability_sum_tolerance
-        ):
-            raise APIError("decision probabilities must sum to one", retryable=False)
 
 
 class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
-    """Provider-neutral batched decisions, also usable outside AgentSession.
+    """Provider-neutral batched decisions over a conversation.
 
-    For on-demand evaluation, pass an explicit ChatContext, including any new message
-    received separately by ``on_user_turn_completed``.
+    Pass an explicit ChatContext, including any new message received separately by
+    ``on_user_turn_completed``.
     """
 
     def __init__(self, *, capabilities: DecisionCapabilities) -> None:

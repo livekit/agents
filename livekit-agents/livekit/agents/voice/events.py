@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
 from typing_extensions import Self
 
-from ..decisions import DecisionsCompletedEvent
 from ..inference.interruption import (
     AdaptiveInterruptionDetector,
     InterruptionDetectionError,
@@ -290,7 +289,6 @@ class RunContext(Generic[Userdata_T]):
 
 
 EventTypes = Literal[
-    "decisions_completed",
     "user_state_changed",
     "agent_state_changed",
     "user_input_transcribed",
@@ -587,7 +585,6 @@ class CloseEvent(BaseModel):
 
 AgentEvent = Annotated[
     UserInputTranscribedEvent
-    | DecisionsCompletedEvent
     | UserTranscriptionTimeoutEvent
     | UserStateChangedEvent
     | AgentStateChangedEvent

@@ -30,7 +30,7 @@ from ._exceptions import (
     UnexpectedModelBehavior,
     create_api_error_from_http,
 )
-from .decisions import DecisionModel, DecisionOptions, DecisionsCompletedEvent
+from .decisions import DecisionModel
 from .job import (
     AutoSubscribe,
     JobContext,
@@ -170,8 +170,6 @@ def __getattr__(name: str) -> typing.Any:
 __all__ = [
     "decisions",
     "DecisionModel",
-    "DecisionOptions",
-    "DecisionsCompletedEvent",
     "__version__",
     "AgentServer",
     "WorkerOptions",

@@ -6,7 +6,6 @@ from ..log import logger as default_logger
 from .base import (
     AgentMetrics,
     AvatarMetrics,
-    DecisionMetrics,
     EOUMetrics,
     InterruptionMetrics,
     LLMMetrics,
@@ -27,17 +26,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             "model_provider": metrics.metadata.model_provider or "unknown",
         }
 
-    if isinstance(metrics, DecisionMetrics):
-        logger.info(
-            "Decision metrics",
-            extra=metadata
-            | {
-                "duration": metrics.duration,
-                "input_tokens": metrics.input_tokens,
-                "output_tokens": metrics.output_tokens,
-            },
-        )
-    elif isinstance(metrics, LLMMetrics):
+    if isinstance(metrics, LLMMetrics):
         logger.info(
             "LLM metrics",
             extra=metadata

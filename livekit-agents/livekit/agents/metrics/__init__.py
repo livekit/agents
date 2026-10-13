@@ -12,7 +12,6 @@ from .base import (
 )
 from .usage import (
     AgentSessionUsage,
-    DecisionModelUsage,
     EOTModelUsage,
     InterruptionModelUsage,
     LLMModelUsage,
@@ -26,7 +25,6 @@ from .utils import log_metrics
 
 __all__ = [
     "DecisionMetrics",
-    "DecisionModelUsage",
     "LLMMetrics",
     "AgentMetrics",
     "VADMetrics",

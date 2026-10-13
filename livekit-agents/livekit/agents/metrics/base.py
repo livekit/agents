@@ -248,7 +248,6 @@ class AvatarMetrics(_BaseMetrics):
 
 AgentMetrics = (
     STTMetrics
-    | DecisionMetrics
     | LLMMetrics
     | TTSMetrics
     | VADMetrics
