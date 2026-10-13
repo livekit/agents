@@ -2238,3 +2238,113 @@ def test_protocol_audio_is_bounded_and_reasoning_is_excluded(
     assert audio[0].attributes["lk.openai.frame_count"] == 1000
     assert audio[0].attributes["lk.session_id"] == "live_audio"
     assert "PRIVATE" not in str([s.attributes for s in spans])
+
+
+@pytest.mark.no_concurrent
+def test_protocol_keeps_new_lifecycle_events_and_failure_codes(
+    backend_span_exporter: InMemorySpanExporter,
+) -> None:
+    from livekit.plugins.openai.realtime._gpt_live_telemetry import ProtocolTrace
+
+    timeline = ProtocolTrace()
+    timeline.record("received", {"type": "session.started", "session": {"id": "live_codes"}})
+    for inner in (
+        {"type": "response.queued"},
+        {"type": "response.web_search_call.searching", "item_id": "ws_1"},
+        {"type": "response.reasoning_summary_text.done", "text": "PRIVATE REASONING"},
+        {"type": "response.output_text.delta", "delta": "PRIVATE TOKEN"},
+        {"type": "error", "code": "server_error", "param": "tools", "message": "PRIVATE"},
+        {
+            "type": "response.failed",
+            "response": {
+                "id": "r1",
+                "error": {"code": "rate_limit_exceeded", "message": "PRIVATE"},
+            },
+        },
+        {
+            "type": "response.incomplete",
+            "response": {"id": "r2", "incomplete_details": {"reason": "max_output_tokens"}},
+        },
+    ):
+        timeline.record("received", _response_event("d1", inner))
+    timeline.record(
+        "received",
+        {"type": "session.usage.updated", "usage": {"seconds": 12.5}},
+    )
+    timeline.record("received", {"type": "info", "code": "data_channel_permissions"})
+    timeline.record(
+        "received",
+        {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 15.0}},
+    )
+    timeline.close()
+    events = {
+        s.attributes["lk.openai.event_type"]: (s.attributes, s.status.is_ok)
+        for s in backend_span_exporter.get_finished_spans()
+        if s.name == "gpt_live.protocol"
+    }
+    assert "response.output_text.delta" not in events
+    assert "response.queued" in events
+    assert "response.web_search_call.searching" in events
+    assert "response.reasoning_summary_text.done" in events
+    nested_error, ok = events["error"]
+    assert (nested_error["lk.openai.code"], nested_error["lk.openai.param"], ok) == (
+        "server_error",
+        "tools",
+        False,
+    )
+    assert events["response.failed"][0]["lk.openai.response.error.code"] == "rate_limit_exceeded"
+    assert (
+        events["response.incomplete"][0]["lk.openai.response.incomplete_details.reason"]
+        == "max_output_tokens"
+    )
+    assert events["session.usage.updated"][0]["lk.openai.usage.seconds"] == 12.5
+    assert events["session.closed"][0]["lk.openai.usage.seconds"] == 15.0
+    assert events["info"][0]["lk.openai.code"] == "data_channel_permissions"
+    assert "PRIVATE" not in str([attrs for attrs, _ in events.values()])
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize(
+    ("ending", "response", "error_type"),
+    [
+        (
+            "response.failed",
+            {"error": {"code": "server_error", "message": "PRIVATE"}},
+            "server_error",
+        ),
+        ("response.failed", {"error": None}, "response.failed"),
+        (
+            "response.incomplete",
+            {"incomplete_details": {"reason": "content_filter"}},
+            "content_filter",
+        ),
+        ("response.incomplete", {}, "response.incomplete"),
+    ],
+)
+async def test_backend_trace_reports_the_provider_failure_code(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_span_exporter: InMemorySpanExporter,
+    ending: str,
+    response: dict[str, Any],
+    error_type: str,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(
+            _response_event("d1", {"type": "response.created", "response": {"id": "r1"}})
+        )
+        session._handle_event(
+            _response_event("d1", {"type": ending, "response": {"id": "r1", **response}})
+        )
+    finally:
+        await session.aclose()
+        await model.aclose()
+    (span,) = _backend_spans(backend_span_exporter)
+    assert span.attributes["error.type"] == error_type
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("error",)
+    assert span.status.is_ok is False
+    assert "PRIVATE" not in str(span.attributes)

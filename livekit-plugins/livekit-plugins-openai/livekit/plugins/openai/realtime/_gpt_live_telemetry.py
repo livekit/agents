@@ -56,15 +56,13 @@ class ProtocolTrace:
             self._session_id = event.get("session", {}).get("id", "")
         inner = event.get("event", {}) if kind == "response.event" else event
         inner_kind = inner.get("type", kind)
-        if kind == "response.event" and inner_kind not in (
-            "response.created",
-            "response.in_progress",
-            "response.completed",
-            "response.failed",
-            "response.incomplete",
-            "response.output_item.done",
-        ):
-            return  # Completed items are captured by the backend response span.
+        if kind == "response.event" and inner_kind.endswith(".delta"):
+            # Token streams are not lifecycle; the backend response span keeps completed output.
+            # Every other nested type is kept, since the service may forward new ones.
+            return
+        response = inner.get("response")
+        if not isinstance(response, dict):
+            response = {}
         attrs: dict[str, AttributeValue] = {
             "lk.session_id": self._session_id,
             "lk.openai.direction": direction,
@@ -79,15 +77,20 @@ class ProtocolTrace:
             "end_ms",
             "sequence_number",
             "reason",
+            "code",
+            "param",
         ):
             value = event.get(key, inner.get(key))
             if isinstance(value, (str, int, float, bool)):
                 attrs[f"lk.openai.{key}"] = value
         for group, source, keys in (
             ("delegation", event.get("delegation"), ("id", "target", "response_id")),
-            ("response", inner.get("response"), ("id", "model", "status")),
+            ("response", response, ("id", "model", "status")),
+            ("response.error", response.get("error"), ("code",)),
+            ("response.incomplete_details", response.get("incomplete_details"), ("reason",)),
             ("item", inner.get("item"), ("id", "type", "status", "call_id", "name")),
-            ("error", event.get("error"), ("type", "code", "client_event_id")),
+            ("error", event.get("error"), ("type", "code", "param", "client_event_id")),
+            ("usage", event.get("usage"), ("seconds",)),
             ("context_window", event.get("context_window"), ("usage_ratio",)),
         ):
             if isinstance(source, dict):

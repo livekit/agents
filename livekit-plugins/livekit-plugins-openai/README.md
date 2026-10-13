@@ -27,6 +27,11 @@ GPT-Live adds two complementary trace layers to the normal agent/tool/playback s
   input/output transcript timing, usage/context-window metadata, and errors. Correlate
   them using session, delegation, response, tool-call and client-event IDs.
 
+Nested backend events are kept except token streams (`*.delta`), so built-in tool progress
+such as `response.web_search_call.*`, nested `error` events and event types the service adds
+later stay visible. Failed and incomplete responses carry the provider's `error.code` or
+`incomplete_details.reason`; `llm_request` reports the same value as `error.type`.
+
 Protocol `direction` distinguishes `queued`, `sent`, `received`, and `send_failed`.
 `sent` means the local WebSocket send completed, not that OpenAI accepted the command.
 Tool-result submission has no separate success acknowledgment. Context `*.appended`

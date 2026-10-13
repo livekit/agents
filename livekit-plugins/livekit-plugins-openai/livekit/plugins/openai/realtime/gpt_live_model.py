@@ -946,7 +946,13 @@ class GPTLiveSession(
                 current.output.append({"role": "assistant", "parts": parts})
         if event.type in ("response.completed", "response.failed", "response.incomplete"):
             self._backend_traces.pop(d_id)
-            current.finish(None if event.type == "response.completed" else event.type)
+            failure = None
+            if event.type == "response.failed":
+                failure = ((response and response.error) or {}).get("code") or event.type
+            elif event.type == "response.incomplete":
+                details = (response and response.incomplete_details) or {}
+                failure = details.get("reason") or event.type
+            current.finish(failure)
 
     def _handle_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
         self._trace_response_event(envelope)
