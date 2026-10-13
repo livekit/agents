@@ -1,0 +1,24 @@
+tests/test_multi_speaker_adapter.py
+  s_bcd3e70328118e::t_06c25961e0d58d 30,236-240
+  s_bcd3e70328118e::t_74aeb841ea310f 37-38,187-235,241-252
+livekit-agents/livekit/agents/inference/stt.py
+  s_bcd3e70328118e::t_74aeb841ea310f 302-310,1265-1276
+tests/test_inference_stt_start_of_speech.py
+  s_bcd3e70328118e::t_b6a8aacd83b897 16,37,153-161,165,168,173,193-228,233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "95b9e5569f21d3f2c09ca9ac27a36089c149f9a8",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
