@@ -57,7 +57,7 @@ def to_chat_ctx(
             for content in msg.content:
                 if isinstance(content, llm.ImageContent):
                     parts.append(_to_image_part(content))
-                elif isinstance(content, llm.AudioContent):
+                elif isinstance(content, (llm.AudioContent, llm.CacheBreakpoint)):
                     pass
                 elif content and isinstance(content, dict):
                     parts.append({"text": json.dumps(content)})
