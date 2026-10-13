@@ -387,6 +387,9 @@ class Agent:
 
         You can override this node with your own implementation for more flexibility (e.g.,
         custom pre-processing of audio, additional buffering, or alternative STT strategies).
+        Timestamps in the yielded ``SpeechData`` are relative to the first audio frame the
+        node consumes, unless the node sets ``start_time_offset`` on its stream; the default
+        implementation sets it so they are relative to the session start.
 
         Args:
             audio (AsyncIterable[rtc.AudioFrame]): An asynchronous stream of audio frames.
