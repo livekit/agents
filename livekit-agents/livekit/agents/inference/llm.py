@@ -207,6 +207,7 @@ OpenAIModels = Literal[
 ]
 
 GoogleModels = Literal[
+    "google/gemini-4-argon",
     "google/gemini-3.1-pro",
     "google/gemini-3-flash",
     "google/gemini-3.1-flash-lite",
