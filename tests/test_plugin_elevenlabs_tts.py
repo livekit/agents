@@ -6,11 +6,13 @@ import contextlib
 import json
 import logging
 from types import SimpleNamespace
+from typing import Any
 
 import aiohttp
 import pytest
 
 from livekit.agents import tts as agents_tts, utils
+from livekit.agents.voice.io import TimedString
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
 pytestmark = pytest.mark.plugin("elevenlabs")
@@ -34,12 +36,14 @@ class _FakeEmitter:
     def __init__(self) -> None:
         self.audio_chunks: list[bytes] = []
         self.timed_transcript_pushes = 0
+        self.timed_words: list[TimedString] = []
 
     def push(self, audio: bytes) -> None:
         self.audio_chunks.append(audio)
 
-    def push_timed_transcript(self, _timed_words: object) -> None:
+    def push_timed_transcript(self, timed_words: list[TimedString]) -> None:
         self.timed_transcript_pushes += 1
+        self.timed_words.extend(timed_words)
 
 
 class _FakeStream:
@@ -66,6 +70,7 @@ class _FakeConnection:
             )
         }
         self.preferred_alignment = "normalized"
+        self._opts = SimpleNamespace(encoding="pcm_24000", sample_rate=24000)
 
     def unregister_stream(self, context_id: str) -> None:
         elevenlabs_tts._Connection.unregister_stream(self, context_id)  # pyright: ignore[reportArgumentType]
@@ -736,6 +741,51 @@ async def test_dialogue_recv_loop_parses_audio_and_alignment() -> None:
     assert connection.waiter.done()
     assert connection.waiter.result() is None
     assert connection._context_data == {}
+
+
+@pytest.mark.asyncio
+async def test_dialogue_recv_loop_offsets_chunk_relative_alignment() -> None:
+    context_id = "ctx_123"
+
+    def pcm(ms: int) -> str:
+        return base64.b64encode(b"\x00\x00" * (24000 * ms // 1000)).decode("ascii")
+
+    def chunk(text: str, audio_ms: int) -> object:
+        # text-to-dialogue alignment restarts at 0 on every message
+        return _websocket_text_message(
+            {
+                "context_id": context_id,
+                "audio": pcm(audio_ms),
+                "alignment": {
+                    "chars": list(text),
+                    "char_start_times_ms": [i * 100 for i in range(len(text))],
+                    "char_durations_ms": [100] * len(text),
+                },
+            }
+        )
+
+    connection = _FakeConnection(
+        context_id,
+        [
+            # audio without alignment still moves the clock
+            _websocket_text_message({"context_id": context_id, "audio": pcm(500)}),
+            chunk("hi there ", 900),
+            chunk("you ", 400),
+            _websocket_text_message({"context_id": context_id, "is_final": True}),
+        ],
+    )
+    words: list[Any] = []
+    connection.emitter.push_timed_transcript = words.extend  # type: ignore[method-assign]
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert [(w, w.start_time, w.end_time) for w in words] == [
+        ("hi ", 0.5, 0.8),
+        ("there ", 0.8, 1.4),
+        ("you ", 1.4, 1.8),
+    ]
 
 
 @pytest.mark.asyncio
