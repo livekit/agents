@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import TYPE_CHECKING, Generic, TypeVar
 
@@ -125,6 +126,8 @@ class WireHost(Generic[S]):
         self._artifact_id = shortuuid("art_")
         self._streamed: list[str] = []
         self._acked = False
+        self._started = time.monotonic()
+        self._marks: dict[str, int] = {}
 
     async def handle(self, ctx: TurnContext, boundary: Boundary) -> HandlerOutput:
         self._ack(self._task_id, self._context_id)
@@ -139,6 +142,7 @@ class WireHost(Generic[S]):
     async def on_token(self, task_id: str, delta: str) -> None:
         if task_id != self._task_id or not delta:
             return
+        self._mark("firstTokenMs")
 
         self._pump.emit(
             artifact_event(
@@ -162,13 +166,20 @@ class WireHost(Generic[S]):
         if record.id == self._task_id and artifacts:
             self._pump.emit(self._answer(outcome, str(artifacts[0]["artifactId"])))
         self._pump.emit(final_event(record, outcome.context_id, exts=self._exts))
+        self._mark("doneMs")
+        logger.debug("a turn's timing", extra={"taskId": self._task_id, **self._marks})
 
     def _ack(self, task_id: str, context_id: str) -> None:
         if self._acked:
             return
 
         self._acked = True
+        self._mark("ackMs")
         self._pump.emit(submitted_task(task_id, context_id))
+
+    def _mark(self, name: str) -> None:
+        """Milliseconds from the host's creation to a point of the turn, the first time."""
+        self._marks.setdefault(name, round((time.monotonic() - self._started) * 1000))
 
     def _answer(self, outcome: TurnOutcome, artifact_id: str) -> pb.TaskArtifactUpdateEvent:
         """The answer artifact's last chunk: empty when the streamed tokens spelled the answer

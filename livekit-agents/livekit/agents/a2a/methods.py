@@ -266,6 +266,7 @@ class A2AService(Generic[S]):
     async def stream(self, params: Params, call: CallContext) -> AsyncIterator[StreamEvent]:
         """``message/stream``: the acknowledgment, progress, the artifact, the final status."""
         message = _message_of(params)
+        received = time.monotonic()
         thread_id = await self._resolve(message, call)
         if thread_id is None:
             record, context_id = self._unknown_session(message, call)
@@ -276,6 +277,13 @@ class A2AService(Generic[S]):
         announced = False
         try:
             pump = await self._start(thread_id, message, call.extensions)
+            logger.debug(
+                "a turn started",
+                extra={
+                    "threadId": thread_id,
+                    "openMs": round((time.monotonic() - received) * 1000),
+                },
+            )
             async for event in pump.frames():
                 announced = True
                 yield event
