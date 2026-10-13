@@ -401,6 +401,11 @@ class RecognizeStream(ABC):
         )
         # capture time of each queued item, in queue order (None for a flush sentinel)
         self._capture_times: deque[float | None] = deque()
+        # audio the resampler still holds: seconds fed and emitted, and the capture time
+        # of the oldest held sample, so a resampled frame is stamped with its own audio
+        self._resampled_in = 0.0
+        self._resampled_out = 0.0
+        self._held_captured_at: float | None = None
         self._event_ch = aio.Chan[SpeechEvent]()
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
@@ -635,13 +640,17 @@ class RecognizeStream(ABC):
 
         captured_at = time.time() - frame.duration
         if self._resampler:
-            frames = self._resampler.push(frame)
-            for frame in frames:
-                self._capture_times.append(captured_at)
-                self._input_ch.send_nowait(frame)
+            if self._held_captured_at is None:
+                self._held_captured_at = captured_at
+            self._resampled_in += frame.duration
+            self._queue_resampled(self._resampler.push(frame), self._held_captured_at)
+            backlog = self._resampled_in - self._resampled_out
+            # whatever is still held is the tail of this frame's audio
+            self._held_captured_at = (
+                captured_at + frame.duration - backlog if backlog > 1e-9 else None
+            )
         else:
-            self._capture_times.append(captured_at)
-            self._input_ch.send_nowait(frame)
+            self._queue_input(frame, captured_at)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
@@ -649,12 +658,25 @@ class RecognizeStream(ABC):
         self._check_not_closed()
 
         if self._resampler:
-            for frame in self._resampler.flush():
-                self._capture_times.append(time.time() - frame.duration)
-                self._input_ch.send_nowait(frame)
+            # nothing held means nothing to flush; the fallback only satisfies the type
+            start = self._held_captured_at if self._held_captured_at is not None else time.time()
+            self._queue_resampled(self._resampler.flush(), start)
+            self._resampled_out = self._resampled_in
+            self._held_captured_at = None
 
-        self._capture_times.append(None)
-        self._input_ch.send_nowait(self._FlushSentinel())
+        self._queue_input(self._FlushSentinel(), None)
+
+    def _queue_input(
+        self, item: rtc.AudioFrame | RecognizeStream._FlushSentinel, captured_at: float | None
+    ) -> None:
+        self._capture_times.append(captured_at)
+        self._input_ch.send_nowait(item)
+
+    def _queue_resampled(self, frames: list[rtc.AudioFrame], start: float) -> None:
+        for frame in frames:
+            self._queue_input(frame, start)
+            start += frame.duration
+            self._resampled_out += frame.duration
 
     def end_input(self) -> None:
         """Mark the end of input, no more audio will be pushed"""
