@@ -13,7 +13,7 @@ from collections.abc import AsyncIterable
 
 import pytest
 
-from livekit.agents import Agent, tts
+from livekit.agents import Agent, APIConnectionError, tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_io import FakeTextOutput
@@ -63,7 +63,7 @@ class _RecordingStream(FakeSynthesizeStream):
 
 
 async def _say(
-    text: str | AsyncIterable[str], tts_obj: _MarkupTTS, *, expressive: bool = False
+    text: str | AsyncIterable[str], tts_obj: tts.TTS, *, expressive: bool = False
 ) -> tuple[str, str]:
     """Run one say(); return what the room transcript showed and what history stored."""
 
@@ -278,3 +278,50 @@ async def test_stream_adapter_converts_on_a_plain_turn() -> None:
     await adapter.aclose()
 
     assert tts_obj.inputs == ["Hi there."]
+
+
+def _down(key: str, *, streaming: bool = False) -> _MarkupTTS:
+    """An instance that fails before any audio, so the fallback moves on."""
+    tts_obj = _MarkupTTS(key, streaming=streaming, audio_duration=0.0)
+    tts_obj.update_options(fake_exception=APIConnectionError("down"))
+    return tts_obj
+
+
+async def test_fallback_converts_for_each_instance() -> None:
+    primary, secondary = _down("ssml"), _MarkupTTS("google_markup")
+    transcript, history = await _say(BREAK, tts.FallbackAdapter([primary, secondary]))
+
+    assert set(primary.inputs) == {'Hi <break time="1000ms"/> there.'}
+    assert secondary.inputs == ["Hi [pause] there."]
+    assert transcript == "Hi there."
+    assert history == "Hi there."
+
+
+async def test_fallback_streams_each_instance_its_own_dialect() -> None:
+    # the streaming plugin converts nothing, so its markers are dropped; the instance
+    # behind a StreamAdapter still converts them
+    primary, secondary = _down("cartesia", streaming=True), _MarkupTTS("ssml")
+    _, history = await _say(BREAK, tts.FallbackAdapter([primary, secondary]))
+
+    assert primary.inputs and "<expr" not in "".join(primary.inputs)
+    assert secondary.inputs == ['Hi <break time="1000ms"/> there.']
+    assert history == "Hi there."
+
+
+async def test_fallback_strips_another_instances_native_markup() -> None:
+    primary, secondary = _down("ssml"), _MarkupTTS("cartesia")
+    marked = 'Say <phoneme alphabet="ipa" ph="t">tomato</phoneme> now.'
+    _, history = await _say(marked, tts.FallbackAdapter([primary, secondary]))
+
+    assert set(primary.inputs) == {marked}
+    assert secondary.inputs == ["Say tomato now."]
+    assert history == "Say tomato now."
+
+
+async def test_fallback_strips_bracket_cues_for_an_instance_without_them() -> None:
+    primary, secondary = _down("eleven_v3"), _MarkupTTS("")
+    _, history = await _say("[whispers] Hello there.", tts.FallbackAdapter([primary, secondary]))
+
+    assert set(primary.inputs) == {"[whispers] Hello there."}
+    assert secondary.inputs == ["Hello there."]
+    assert history == "Hello there."

@@ -18,6 +18,7 @@ from ..log import logger
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
+from ._provider_format import TranscriptMarkupStripper
 from .stream_adapter import StreamAdapter
 from .tts import (
     TTS,
@@ -135,6 +136,26 @@ class FallbackAdapter(
                 [t.markup._native_markup() for t in self._tts._tts_instances]
             )
 
+        # each instance gets <expr/> converted to its own dialect by the adapter's
+        # streams, so the markers pass through the adapter unchanged
+        def normalize(self, text: str) -> str:
+            return text
+
+        def convert(self, text: str) -> str:
+            return text
+
+    def _child_stripper(self, tts: TTS, *, strip_expr: bool) -> TranscriptMarkupStripper | None:
+        """Strips what *tts* can't read from a say(): the other instances' native markup,
+        and ``<expr/>`` markers when *strip_expr*. None when nothing needs stripping."""
+        all_tags, all_brackets = self.markup._native_markup()
+        own_tags, own_brackets = tts.markup._native_markup()
+        foreign = [tag for tag in all_tags if tag not in own_tags]
+        # an instance that reads bracket cues keeps them all; the rest lose them
+        brackets = all_brackets if own_brackets is None else None
+        if not foreign and brackets is None and not strip_expr:
+            return None
+        return TranscriptMarkupStripper(xml_tags=foreign, brackets=brackets, strip_expr=strip_expr)
+
     def _next_instance(self) -> TTS:
         """The instance the next request goes to first: the first one marked available, or
         the primary once all are down (they are then all retried, primary first). A failed
@@ -217,6 +238,14 @@ def _record_fallback_served(
     caller_span.set_attributes(response_attrs)
 
 
+def _converts_input(tts: TTS) -> bool:
+    """Whether *tts* converts ``<expr/>`` markers in its own input, in both synthesize()
+    and stream(): the gateway TTS, and a nested FallbackAdapter."""
+    from ..inference import TTS as InferenceTTS
+
+    return isinstance(tts, (InferenceTTS, FallbackAdapter))
+
+
 def _mark_recovery(stream: ChunkedStream | SynthesizeStream) -> None:
     # the probe nests beside the request's real attempts; tell them apart
     if stream._tts_request_span is not None:
@@ -235,17 +264,37 @@ class FallbackChunkedStream(ChunkedStream):
         self._fallback_adapter = tts
         # the span this request was made under (tts_node); see _record_fallback_served
         self._caller_span = trace.get_current_span()
+        # snapshot: the flag is set synchronously just before this stream is made
+        self._markup_input = tts._markup_input
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         async for _ in event_aiter:
             pass
 
+    def _child_text(self, tts: TTS) -> str:
+        """The input text in *tts*'s own dialect.
+
+        Converted on every turn, as the StreamAdapter does; the other instances' native
+        markup can only come from a say(), so it is stripped only then.
+        """
+        text = self._input_text
+        if self._markup_input and (
+            stripper := self._fallback_adapter._child_stripper(tts, strip_expr=False)
+        ):
+            text = stripper.push(text) + stripper.flush()
+        if not _converts_input(tts):
+            text = tts.markup.convert(tts.markup.normalize(text))
+        return text
+
     async def _try_synthesize(
         self, *, tts: TTS, recovering: bool = False
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         try:
+            # a nested adapter or gateway TTS converts for itself: hand it the flag,
+            # synchronously before synthesize() snapshots it
+            tts._set_markup_input(self._markup_input)
             async with tts.synthesize(
-                self._input_text,
+                self._child_text(tts),
                 conn_options=dataclasses.replace(
                     self._conn_options,
                     max_retry=self._fallback_adapter._max_retry_per_tts,
@@ -379,6 +428,8 @@ class FallbackSynthesizeStream(SynthesizeStream):
         self._fallback_adapter = tts
         self._caller_span = trace.get_current_span()
         self._pushed_tokens: list[str] = []
+        # snapshot: the flag is set synchronously just before this stream is made
+        self._markup_input = tts._markup_input
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         async for _ in event_aiter:
@@ -392,27 +443,43 @@ class FallbackSynthesizeStream(SynthesizeStream):
         conn_options: APIConnectOptions,
         recovering: bool = False,
     ) -> AsyncGenerator[SynthesizedAudio, None]:
+        # each instance gets the input in its own dialect. The flag is handed over
+        # synchronously before stream() snapshots it, so the instance converts <expr/>
+        # itself where it can.
+        tts._set_markup_input(self._markup_input)
         # If TTS doesn't support streaming, wrap it with StreamAdapter
         temporary_adapter: StreamAdapter | None = None
         if tts.capabilities.streaming:
             stream = tts.stream(conn_options=conn_options)
         else:
-            from .. import tokenize
-
-            temporary_adapter = StreamAdapter(
-                tts=tts,
-                sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
-            )
+            # the default tokenizer: xml-aware while markup can appear, so a marker is
+            # never split across two requests
+            temporary_adapter = StreamAdapter(tts=tts)
             stream = temporary_adapter.stream(conn_options=conn_options)
+
+        stripper: TranscriptMarkupStripper | None = None
+        if self._markup_input:
+            # a natively streaming plugin sends its input as-is: drop the markers there
+            lowers = temporary_adapter is not None or isinstance(tts, StreamAdapter)
+            stripper = self._fallback_adapter._child_stripper(
+                tts, strip_expr=not (lowers or _converts_input(tts))
+            )
 
         @utils.log_exceptions(logger=logger)
         async def _forward_input_task() -> None:
             try:
                 async for data in input_ch:
                     if isinstance(data, str):
-                        stream.push_text(data)
+                        if stripper is not None:
+                            data = stripper.push(data)
+                        if data:
+                            stream.push_text(data)
                     elif isinstance(data, self._FlushSentinel):
+                        if stripper is not None and (rest := stripper.flush()):
+                            stream.push_text(rest)
                         stream.flush()
+                if stripper is not None and (rest := stripper.flush()):
+                    stream.push_text(rest)
             finally:
                 stream.end_input()
 

@@ -189,6 +189,9 @@ class StreamAdapterWrapper(SynthesizeStream):
                     continue
 
                 self._mark_started()
+                # a wrapped FallbackAdapter converts per instance, so it reads the flag;
+                # set it synchronously before synthesize() snapshots it
+                self._tts._wrapped_tts._set_markup_input(self._markup_input)
                 async with self._tts._wrapped_tts.synthesize(
                     text, conn_options=self._wrapped_tts_conn_options
                 ) as tts_stream:
