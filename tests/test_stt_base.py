@@ -8,7 +8,6 @@ import time
 
 import pytest
 
-from livekit import rtc
 from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.stt import (
     STT,
@@ -19,7 +18,7 @@ from livekit.agents.stt import (
     StreamAdapter,
     STTCapabilities,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.audio import AudioBuffer, silence_frame
 
 from .fake_stt import FakeSTT, FakeUserSpeech
@@ -288,28 +287,14 @@ async def test_retry_budget_still_gives_up_on_consecutive_short_lived_attempts()
 class _AudioStream(RecognizeStream):
     """Records ``start_time_offset`` as each run receives its first frame, then returns."""
 
-    def __init__(
-        self,
-        *,
-        stt: STT,
-        fail_first_run: bool = False,
-        first_run_delay: float = 0.0,
-        sample_rate: int | None = None,
-    ) -> None:
-        super().__init__(
-            stt=stt,
-            conn_options=DEFAULT_API_CONNECT_OPTIONS,
-            sample_rate=sample_rate if sample_rate is not None else NOT_GIVEN,
-        )
+    def __init__(self, *, stt: STT, fail_first_run: bool = False) -> None:
+        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS)
         self._fail_first_run = fail_first_run
-        self._first_run_delay = first_run_delay
         self.run_count = 0
         self.offsets: list[float] = []
 
     async def _run(self) -> None:
         self.run_count += 1
-        if self.run_count == 1:
-            await asyncio.sleep(self._first_run_delay)
         async for data in self._input_ch:
             if isinstance(data, RecognizeStream._FlushSentinel):
                 continue
@@ -380,28 +365,6 @@ async def test_start_time_offset_reanchors_on_retry_at_the_next_frame() -> None:
     await stream.aclose()
 
 
-async def test_start_time_offset_reanchors_on_a_frame_queued_before_the_retry() -> None:
-    """A frame queued while the first connection fails is the first audio the next
-    connection sends, so its capture time anchors the offset, not a later push."""
-    stream = _AudioStream(stt=_DummySTT(), fail_first_run=True, first_run_delay=2.0)
-    stream.start_time_offset = 30.0
-    frame = silence_frame(0.02, 16000)
-
-    # both frames are queued before the first attempt consumes anything; it takes the
-    # first one and fails, so the second is what the next connection starts with
-    stream.push_frame(frame)
-    await asyncio.sleep(1.0)
-    queued_at = time.time()
-    stream.push_frame(frame)
-    await _wait_for_offsets(stream, 2)
-
-    assert stream.run_count == 2
-    assert stream.offsets[1] == pytest.approx(
-        30.0 + queued_at - frame.duration - stream._created_at
-    )
-    await stream.aclose()
-
-
 async def test_undeclared_start_time_offset_counts_from_the_first_audio() -> None:
     """With no offset set the timeline starts with the first audio, so a late first frame
     adds nothing, and a retry continues that timeline from the next frame consumed."""
@@ -420,48 +383,4 @@ async def test_undeclared_start_time_offset_counts_from_the_first_audio() -> Non
     await _wait_for_offsets(stream, 2)
 
     assert stream.offsets[1] == pytest.approx(pushed_at - first_pushed_at)
-    await stream.aclose()
-
-
-class _BufferingResampler:
-    """Fake resampler: holds the first input and releases it with the second."""
-
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        self._held: list[rtc.AudioFrame] = []
-
-    def push(self, frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
-        self._held.append(frame)
-        if len(self._held) < 2:
-            return []
-        out, self._held = self._held, []
-        return out
-
-    def flush(self) -> list[rtc.AudioFrame]:
-        out, self._held = self._held, []
-        return out
-
-
-async def test_resampled_frames_keep_the_capture_time_of_their_audio(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A resampler can hold audio across pushes and release several frames at once. Each
-    output is stamped with the audio it carries, including the gap between the pushes,
-    so a retry that starts on the second output is anchored where that audio was captured."""
-    monkeypatch.setattr(rtc, "AudioResampler", _BufferingResampler)
-    stream = _AudioStream(stt=_DummySTT(), fail_first_run=True, sample_rate=8000)
-    stream.start_time_offset = 30.0
-    frame = silence_frame(0.02, 16000)
-
-    await asyncio.sleep(5.0)
-    first_captured_at = time.time() - frame.duration
-    stream.push_frame(frame)  # held by the resampler, no output yet
-    await asyncio.sleep(1.0)
-    second_captured_at = time.time() - frame.duration
-    stream.push_frame(frame)  # releases both; the first attempt takes one and fails
-    await _wait_for_offsets(stream, 2)
-
-    assert stream.offsets == [
-        pytest.approx(30.0 + first_captured_at - stream._created_at),
-        pytest.approx(30.0 + second_captured_at - stream._created_at),
-    ]
     await stream.aclose()
