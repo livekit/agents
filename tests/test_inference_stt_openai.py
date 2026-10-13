@@ -26,7 +26,7 @@ from livekit import rtc
 from livekit.agents import NOT_GIVEN, APIConnectOptions
 from livekit.agents.inference.stt import (
     STT,
-    OpenaiOptions,
+    OpenAIOptions,
     _keyterms_extra_for_model,
 )
 from livekit.agents.stt import RecognizeStream, SpeechEvent, SpeechEventType
@@ -529,8 +529,8 @@ async def test_a_live_user_keyword_update_is_not_dropped_for_a_keyterm_model() -
 
 
 def test_openai_options_are_accepted_by_the_typed_constructor() -> None:
-    """`OpenaiOptions` is exposed through the overload, not only the implementation."""
-    opts: OpenaiOptions = {"keywords": ["LiveKit"], "delay": "low"}
+    """`OpenAIOptions` is exposed through the overload, not only the implementation."""
+    opts: OpenAIOptions = {"keywords": ["LiveKit"], "delay": "low"}
     stt = STT(
         model="openai/gpt-live-transcribe",
         api_key="test-key",

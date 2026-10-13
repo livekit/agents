@@ -193,7 +193,7 @@ class GoogleOptions(TypedDict, total=False):
     custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
 
 
-class OpenaiOptions(TypedDict, total=False):
+class OpenAIOptions(TypedDict, total=False):
     # Mirrors the transcription config of an OpenAI Realtime transcription session.
     # https://developers.openai.com/api/docs/guides/realtime-transcription
     languages: list[str]  # expected input languages; overrides `language`
@@ -623,7 +623,7 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[OpenaiOptions] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[OpenAIOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -667,7 +667,7 @@ class STT(stt.STT):
             | SpeechmaticsOptions
             | InworldOptions
             | GoogleOptions
-            | OpenaiOptions
+            | OpenAIOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
