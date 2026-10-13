@@ -18,7 +18,7 @@ from ..log import logger
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
-from ._provider_format import TranscriptMarkupStripper
+from ._provider_format import TranscriptMarkupStripper, foreign_brackets
 from .stream_adapter import StreamAdapter
 from .tts import (
     TTS,
@@ -150,8 +150,7 @@ class FallbackAdapter(
         all_tags, all_brackets = self.markup._native_markup()
         own_tags, own_brackets = tts.markup._native_markup()
         foreign = [tag for tag in all_tags if tag not in own_tags]
-        # an instance that reads bracket cues keeps them all; the rest lose them
-        brackets = all_brackets if own_brackets is None else None
+        brackets = foreign_brackets(all_brackets, own_brackets)
         if not foreign and brackets is None and not strip_expr:
             return None
         return TranscriptMarkupStripper(xml_tags=foreign, brackets=brackets, strip_expr=strip_expr)
@@ -239,10 +238,13 @@ def _record_fallback_served(
 
 
 def _converts_input(tts: TTS) -> bool:
-    """Whether *tts* converts ``<expr/>`` markers in its own input, in both synthesize()
-    and stream(): the gateway TTS, and a nested FallbackAdapter."""
+    """Whether *tts* converts ``<expr/>`` markers in its own synthesize() input: the
+    gateway TTS, and a nested FallbackAdapter (also behind a StreamAdapter, whose
+    synthesize() goes straight to the TTS it wraps)."""
     from ..inference import TTS as InferenceTTS
 
+    if isinstance(tts, StreamAdapter):
+        return _converts_input(tts._wrapped_tts)
     return isinstance(tts, (InferenceTTS, FallbackAdapter))
 
 

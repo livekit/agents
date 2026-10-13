@@ -325,3 +325,31 @@ async def test_fallback_strips_bracket_cues_for_an_instance_without_them() -> No
     assert set(primary.inputs) == {"[whispers] Hello there."}
     assert secondary.inputs == ["Hello there."]
     assert history == "Hello there."
+
+
+async def test_fallback_strips_cues_a_pause_only_instance_cant_read() -> None:
+    # Google reads only its pauses: another instance's free-form cue must not reach it
+    primary, secondary = _down("eleven_v3"), _MarkupTTS("google_markup")
+    marked = "[whispers] Hello [pause] there."
+    _, history = await _say(marked, tts.FallbackAdapter([primary, secondary]))
+
+    assert set(primary.inputs) == {marked}
+    assert secondary.inputs == ["Hello [pause] there."]
+    assert history == "Hello there."
+
+
+async def test_nested_fallback_behind_a_stream_adapter_converts_on_synthesize() -> None:
+    # StreamAdapter.synthesize() goes straight to the fallback it wraps, which converts
+    # for its own instances; the outer one must not strip the markers first
+    inner = _MarkupTTS("ssml")
+    nested = tts.StreamAdapter(tts=tts.FallbackAdapter([inner]))
+    outer = tts.FallbackAdapter([_down("cartesia"), nested])
+    outer._set_markup_input(True)
+    try:
+        async with outer.synthesize(BREAK) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        await outer.aclose()
+
+    assert inner.inputs == ['Hi <break time="1000ms"/> there.']
