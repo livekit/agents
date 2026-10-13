@@ -154,8 +154,8 @@ async def test_speech_timestamps_follow_first_audio(
         # the event reaches the session untouched: consumers keep the timeline they had
         assert received[0].alternatives[0].end_time == provider_end_time
         if node_kind == "custom":
-            # no offset was declared; the stream only accounts for the delay to its audio
-            assert stream.start_time_offset == pytest.approx(audio_delay)
+            # no offset was declared: the stream's timeline starts with its first audio
+            assert stream.start_time_offset == 0.0
 
         metrics = _compute_end_of_turn_metrics(
             speech_start_time=recognition._speech_start_time,
@@ -167,5 +167,60 @@ async def test_speech_timestamps_follow_first_audio(
         assert metrics.stopped_speaking_at == pytest.approx(first_audio_at + 0.6)
         assert metrics.transcription_delay == pytest.approx(0.3)
         assert metrics.end_of_turn_delay == pytest.approx(0.6)
+    finally:
+        await session.aclose()
+
+
+async def test_node_without_a_stream_counts_from_its_first_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A node that builds events itself, relative to its first frame, is anchored there."""
+    now = 1000.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    first_frame = asyncio.Event()
+    events = aio.Chan[stt.SpeechEvent]()
+
+    class ManualAgent(Agent):
+        async def stt_node(
+            self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+        ) -> AsyncIterator[stt.SpeechEvent]:
+            async for _ in audio:
+                first_frame.set()
+                break
+            yield await events.recv()
+
+    session = AgentSession(
+        stt=FakeSTT(),
+        llm=FakeLLM(),
+        vad=None,
+        turn_handling={"turn_detection": "stt"},
+        session_close_transcript_timeout=0.0,
+        aec_warmup_duration=None,
+    )
+    await session.start(ManualAgent(instructions="test"))
+    try:
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+        frame = rtc.AudioFrame.create(16000, 1, 320)
+        first_audio_at = 1020.0
+        now = first_audio_at + frame.duration
+        recognition._push_audio(frame)
+        await asyncio.wait_for(first_frame.wait(), timeout=1.0)
+
+        now = first_audio_at + 0.2
+        await recognition._on_stt_event(
+            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH, created_at=now)
+        )
+        now = first_audio_at + 0.9
+        events.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[stt.SpeechData(language="en", text="hello", end_time=0.6)],
+                created_at=now,
+            )
+        )
+        await asyncio.wait_for(recognition._final_transcript_received.wait(), timeout=1.0)
+
+        assert recognition._last_speaking_time == pytest.approx(first_audio_at + 0.6)
     finally:
         await session.aclose()

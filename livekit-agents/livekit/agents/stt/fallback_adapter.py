@@ -402,9 +402,9 @@ class FallbackRecognizeStream(RecognizeStream):
                     )
                     # the inner stream continues this stream's timeline from its own creation;
                     # it then adds the delay to its own first frame like any stream
-                    main_stream.start_time_offset = self._declared_start_time_offset + (
-                        time.time() - self._created_at
-                    )
+                    seed = self._timeline_offset_at(time.time())
+                    if seed is not None:
+                        main_stream.start_time_offset = seed
 
                     if forward_input_task is None or forward_input_task.done():
                         forward_input_task = asyncio.create_task(_forward_input_task())

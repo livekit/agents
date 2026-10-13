@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections import deque
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
@@ -356,6 +357,22 @@ class SpeakerContext(Protocol):
     def to_instructions(self) -> str: ...
 
 
+_TInput = TypeVar("_TInput")
+
+
+class _InputChan(aio.Chan[_TInput]):
+    """Input channel that reports each item as the stream's run consumes it."""
+
+    def __init__(self, on_recv: Callable[[_TInput], None]) -> None:
+        super().__init__()
+        self._on_recv = on_recv
+
+    def recv_nowait(self) -> _TInput:
+        item = super().recv_nowait()
+        self._on_recv(item)
+        return item
+
+
 class RecognizeStream(ABC):
     class _FlushSentinel:
         """Sentinel to mark when it was flushed"""
@@ -379,7 +396,11 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
+        self._input_ch: aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel] = _InputChan(
+            self._on_input_consumed
+        )
+        # capture time of each queued item, in queue order (None for a flush sentinel)
+        self._capture_times: deque[float | None] = deque()
         self._event_ch = aio.Chan[SpeechEvent]()
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
@@ -397,9 +418,12 @@ class RecognizeStream(ABC):
         self._resampler: rtc.AudioResampler | None = None
 
         self._created_at: float = time.time()
-        # the offset as set through the setter, measured at stream creation
-        self._declared_start_time_offset: float = 0.0
-        # capture time of the first frame pushed in the current attempt, None until it arrives
+        # the offset as set through the setter, measured at stream creation; None when the
+        # caller declared no timeline, in which case it starts with the first audio
+        self._declared_start_time_offset: float | None = None
+        # capture time of the first frame the stream's audio ever consumed
+        self._audio_started_at: float | None = None
+        # capture time of the first frame the current attempt consumed, None until it does
         self._first_frame_at: float | None = None
         self._start_time_offset: float = 0.0
         self._start_time: float = time.time()
@@ -423,11 +447,12 @@ class RecognizeStream(ABC):
     def start_time_offset(self) -> float:
         """Offset plugins add to the provider's timestamps.
 
-        The provider counts audio from the first frame it receives, so the value set
-        through the setter, which describes where the stream starts on the caller's
-        timeline, grows by the delay between the stream's creation and the first frame
-        pushed. It is re-anchored on every retry, since a new connection restarts the
-        provider's clock.
+        The provider counts audio from the first frame it receives. A value set through
+        the setter says where the stream was created on the caller's timeline, so it
+        grows by the delay until the first frame is consumed. With no value set, the
+        timeline starts with the stream's first audio and the offset stays zero. Either
+        way a new connection restarts the provider's clock, so the offset is re-anchored
+        on the first frame each attempt consumes, which keeps one continuous timeline.
         """
         return self._start_time_offset
 
@@ -438,9 +463,32 @@ class RecognizeStream(ABC):
         self._declared_start_time_offset = value
         self._anchor_start_time_offset()
 
+    def _timeline_offset_at(self, t: float) -> float | None:
+        """Where wall-clock ``t`` falls on this stream's timeline, None if it has none yet."""
+        if self._declared_start_time_offset is not None:
+            return self._declared_start_time_offset + (t - self._created_at)
+        if self._audio_started_at is not None:
+            return t - self._audio_started_at
+        return None
+
     def _anchor_start_time_offset(self) -> None:
-        delay = 0.0 if self._first_frame_at is None else self._first_frame_at - self._created_at
-        self._start_time_offset = self._declared_start_time_offset + delay
+        if self._first_frame_at is None:
+            self._start_time_offset = self._declared_start_time_offset or 0.0
+            return
+        self._start_time_offset = self._timeline_offset_at(self._first_frame_at) or 0.0
+
+    def _on_input_consumed(self, item: rtc.AudioFrame | RecognizeStream._FlushSentinel) -> None:
+        captured_at = self._capture_times.popleft() if self._capture_times else None
+        if not isinstance(item, rtc.AudioFrame) or self._first_frame_at is not None:
+            return
+        # the provider's clock starts with this frame, which may have been queued
+        # before the connection was (re)established
+        self._first_frame_at = (
+            captured_at if captured_at is not None else time.time() - item.duration
+        )
+        if self._audio_started_at is None:
+            self._audio_started_at = self._first_frame_at
+        self._anchor_start_time_offset()
 
     @property
     def start_time(self) -> float:
@@ -577,11 +625,6 @@ class RecognizeStream(ABC):
 
         self._pushed_sr = frame.sample_rate
 
-        if self._first_frame_at is None:
-            # the provider's clock starts here, however long after the stream was created
-            self._first_frame_at = time.time() - frame.duration
-            self._anchor_start_time_offset()
-
         if self._needed_sr and self._needed_sr != frame.sample_rate:
             if not self._resampler:
                 self._resampler = rtc.AudioResampler(
@@ -590,11 +633,14 @@ class RecognizeStream(ABC):
                     quality=rtc.AudioResamplerQuality.HIGH,
                 )
 
+        captured_at = time.time() - frame.duration
         if self._resampler:
             frames = self._resampler.push(frame)
             for frame in frames:
+                self._capture_times.append(captured_at)
                 self._input_ch.send_nowait(frame)
         else:
+            self._capture_times.append(captured_at)
             self._input_ch.send_nowait(frame)
 
     def flush(self) -> None:
@@ -604,8 +650,10 @@ class RecognizeStream(ABC):
 
         if self._resampler:
             for frame in self._resampler.flush():
+                self._capture_times.append(time.time() - frame.duration)
                 self._input_ch.send_nowait(frame)
 
+        self._capture_times.append(None)
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:
