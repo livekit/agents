@@ -227,7 +227,8 @@ class TTS(tts.TTS):
             assert isinstance(self._tts, TTS)
             if is_dialogue_model(self._tts._opts.model):
                 return "eleven_v3"  # v3/v4 read [whispers]-style cues, not SSML
-            return "ssml" if self._tts._opts.enable_ssml_parsing else ""
+            # SSML parsing reads only <break> and <phoneme>, not the shared ssml dialect
+            return "elevenlabs" if self._tts._opts.enable_ssml_parsing else ""
 
     @property
     def model(self) -> str:

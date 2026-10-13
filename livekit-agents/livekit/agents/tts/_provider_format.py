@@ -1134,8 +1134,6 @@ def _convert_expr(provider: str, text: str) -> str:
             if provider == "ssml":
                 return f'<say-as interpret-as="characters">{inner}</say-as>'
             return inner
-        if provider == "ssml":
-            return f"<emphasis>{inner}</emphasis>" if label == "emphasis" else inner
         if provider == "eleven_v3":
             # a free-form cue steers the words after it, so the span follows it
             return f"[{label}] {inner}" if label else inner
@@ -1177,7 +1175,7 @@ def _convert_expr(provider: str, text: str) -> str:
                 return f'<expression value="{label}"/>'
             return ""  # xAI has no free-form delivery descriptions
         if marker_type == "sound":
-            if provider in ("cartesia", "ssml", "bracket_pauses"):
+            if provider in ("cartesia", "ssml", "elevenlabs", "bracket_pauses"):
                 return ""  # no non-verbal sound support
             if provider == "xai":
                 label = _XAI_SOUND_ALIASES.get(label.lower(), label)
@@ -1185,6 +1183,8 @@ def _convert_expr(provider: str, text: str) -> str:
                 label = _FISHAUDIO_SOUND_ALIASES.get(label.lower(), label)
             return f'<sound value="{label}"/>'
         if marker_type == "break":
+            if provider in _SSML_MAX_BREAK:
+                return _ssml_break(provider, label)
             return f'<break time="{label}"/>'
         if marker_type == "prosody" and provider == "cartesia":
             # Cartesia prosody is a self-closing point control (speed/volume)
@@ -1279,15 +1279,27 @@ _SSML_TAGS = [
 # Dialects that say() text is lowered onto, but that have no LLM instructions, so
 # expressive mode stays off for them. Kept apart from _PROVIDER_MARKUP so their tag names
 # don't join the union the sinks strip from every LLM reply.
-#   ssml           - SSML-capable TTS (Google, Azure, AWS Polly, ElevenLabs SSML parsing)
-#   eleven_v3      - ElevenLabs v3/v4 bracket cues: [whispers], [laughs], [short pause]
+#   ssml           - Google, Azure, AWS Polly. Only what all three read on their default
+#                    voices: <break> and <say-as interpret-as="characters">. <emphasis> is
+#                    left out: Polly rejects it on every engine but standard
+#                    (https://docs.aws.amazon.com/polly/latest/dg/supportedtags.html), and
+#                    Azure HD and Chirp 3 HD voices don't read it.
+#   elevenlabs     - ElevenLabs with SSML parsing on: <break> (up to 3s) and <phoneme> only
+#                    (https://elevenlabs.io/docs/overview/capabilities/text-to-speech/best-practices)
+#   eleven_v3      - ElevenLabs v3/v4 audio tags: [whispers], [laughs]. No SSML; a pause is
+#                    an ellipsis, as the same page advises
 #   bracket_pauses - bracket pauses only: [pause short], [pause], [pause long]
-#                    (Google Chirp 3 HD markup)
+#                    (https://docs.cloud.google.com/text-to-speech/docs/chirp3-hd markup)
 _SAY_ONLY_MARKUP: dict[str, list[str]] = {
     "ssml": _SSML_TAGS,
+    "elevenlabs": ["break", "phoneme"],
     "eleven_v3": [],
     "bracket_pauses": [],
 }
+
+# the longest <break> each SSML dialect accepts: Polly's limit (Azure clamps at 20s, Google
+# documents none), and ElevenLabs' 3s
+_SSML_MAX_BREAK = {"ssml": 10.0, "elevenlabs": 3.0}
 
 # dialects whose native syntax includes square-bracket cues
 _BRACKET_NATIVE = {"inworld", "xai", "fishaudio", "eleven_v3", "bracket_pauses"}
@@ -1295,21 +1307,33 @@ _BRACKET_NATIVE = {"inworld", "xai", "fishaudio", "eleven_v3", "bracket_pauses"}
 _BREAK_RE = re.compile(r'<break\s+time="([^"]*)"\s*/?>')
 
 
-def _break_seconds(raw: str) -> float:
+def _break_seconds(raw: str) -> float | None:
+    """A ``1s`` / ``500ms`` duration in seconds, or None when it isn't one."""
     raw = raw.strip().lower()
     try:
-        return float(raw[:-2]) / 1000 if raw.endswith("ms") else float(raw.rstrip("s"))
+        secs = float(raw[:-2]) / 1000 if raw.endswith("ms") else float(raw.removesuffix("s"))
     except ValueError:
-        return 0.0
+        return None
+    return secs if secs >= 0 else None
 
 
-def _break_to_bracket(provider: str, match: re.Match[str]) -> str:
-    # three pause levels; the two dialects word them in opposite orders
-    secs = _break_seconds(match.group(1))
-    level = "short" if secs < 0.5 else "long" if secs >= 1.5 else ""
-    if not level:
-        return "[pause]"
-    return f"[pause {level}]" if provider == "bracket_pauses" else f"[{level} pause]"
+def _ssml_break(provider: str, label: str) -> str:
+    secs = _break_seconds(label)
+    if secs is None:
+        # every ssml target has a default pause; ElevenLabs documents only time="..."
+        return "<break/>" if provider == "ssml" else ""
+    secs = min(secs, _SSML_MAX_BREAK[provider])
+    if provider == "elevenlabs":
+        return f'<break time="{round(secs, 2):g}s"/>'  # ElevenLabs documents seconds
+    return f'<break time="{round(secs * 1000)}ms"/>'
+
+
+def _break_to_bracket(match: re.Match[str]) -> str:
+    # Chirp 3 HD has three pause levels with no fixed lengths; these cut-offs are ours
+    secs = _break_seconds(match.group(1)) or 0.0
+    if secs < 0.5:
+        return "[pause short]"
+    return "[pause long]" if secs >= 1.5 else "[pause]"
 
 
 def native_markup(provider: str) -> tuple[list[str], bool]:
@@ -1538,6 +1562,10 @@ class TranscriptMarkupStripper:
             if not nxt or nxt == "/" or nxt.isalpha():
                 return True
         if self._brackets:
+            # "[label]" ending the chunk may still open a markdown link ("[label](url)")
+            # once the next chunk arrives, and a link is prose, not a cue
+            if self._buf.endswith("]"):
+                return True
             # a cue split across chunks; past _MAX_HELD_CHARS a lone "[" is plain text
             last_open = self._buf.rfind("[")
             if last_open > self._buf.rfind("]") and len(self._buf) - last_open <= _MAX_HELD_CHARS:
@@ -1672,8 +1700,9 @@ def convert_markup(provider: str, text: str) -> str:
         text = _convert_expr(provider, text)
         if provider == "eleven_v3":
             text = convert_expression_tags(text)
-        if provider != "ssml":
-            text = _BREAK_RE.sub(lambda m: _break_to_bracket(provider, m), text)
+            text = _BREAK_RE.sub("...", text)
+        elif provider == "bracket_pauses":
+            text = _BREAK_RE.sub(_break_to_bracket, text)
         return text
     if provider not in _PROVIDER_MARKUP:
         return strip_expr_markup(text)

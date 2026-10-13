@@ -638,15 +638,39 @@ SAY_TURN = (
 
 
 def test_convert_expr_ssml() -> None:
+    # <emphasis> is dropped: Polly rejects it on every engine but standard
     assert convert_markup("ssml", SAY_TURN) == (
-        'Hi <break time="1s"/> there. Secret ok. '
-        'Code <say-as interpret-as="characters">A7X</say-as>. <emphasis>Now</emphasis>.'
+        'Hi <break time="1000ms"/> there. Secret ok. '
+        'Code <say-as interpret-as="characters">A7X</say-as>. Now.'
     )
 
 
+def test_convert_expr_elevenlabs_ssml_keeps_only_breaks() -> None:
+    assert convert_markup("elevenlabs", SAY_TURN) == (
+        'Hi <break time="1s"/> there. Secret ok. Code A7X. Now.'
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "label", "expected"),
+    [
+        ("ssml", "500ms", '<break time="500ms"/>'),
+        ("ssml", "1.5s", '<break time="1500ms"/>'),
+        ("ssml", "30s", '<break time="10000ms"/>'),  # Polly's limit
+        ("ssml", "a while", "<break/>"),  # not a duration: the default pause
+        ("elevenlabs", "1.5s", '<break time="1.5s"/>'),
+        ("elevenlabs", "5s", '<break time="3s"/>'),  # ElevenLabs' limit
+        ("elevenlabs", "a while", ""),
+    ],
+)
+def test_convert_expr_ssml_break_limits(provider: str, label: str, expected: str) -> None:
+    assert convert_markup(provider, f'<expr type="break" label="{label}"/>') == expected
+
+
 def test_convert_expr_eleven_v3() -> None:
+    # v3/v4 have no SSML and no documented pause tag; ElevenLabs advises an ellipsis
     assert convert_markup("eleven_v3", SAY_TURN) == (
-        "Hi [pause] there. [whispers] Secret [laughs] ok. Code A7X. [emphasis] Now."
+        "Hi ... there. [whispers] Secret [laughs] ok. Code A7X. [emphasis] Now."
     )
 
 
@@ -657,17 +681,11 @@ def test_convert_expr_bracket_pauses_keeps_only_pauses() -> None:
 
 
 @pytest.mark.parametrize(
-    ("label", "cues", "pauses"),
-    [
-        ("200ms", "[short pause]", "[pause short]"),
-        ("1s", "[pause]", "[pause]"),
-        ("2s", "[long pause]", "[pause long]"),
-    ],
+    ("label", "pause"),
+    [("200ms", "[pause short]"), ("1s", "[pause]"), ("2s", "[pause long]")],
 )
-def test_convert_expr_bracket_break_levels(label: str, cues: str, pauses: str) -> None:
-    marker = f'<expr type="break" label="{label}"/>'
-    assert convert_markup("eleven_v3", marker) == cues
-    assert convert_markup("bracket_pauses", marker) == pauses
+def test_convert_expr_bracket_break_levels(label: str, pause: str) -> None:
+    assert convert_markup("bracket_pauses", f'<expr type="break" label="{label}"/>') == pause
 
 
 @pytest.mark.parametrize("provider", ["", "deepgram"])
@@ -693,6 +711,7 @@ def _strip_streamed(stripper: TranscriptMarkupStripper, chunks: list[str]) -> st
 
 def test_native_markup_per_dialect() -> None:
     assert native_markup("ssml") == (_SSML_TAGS, False)
+    assert native_markup("elevenlabs") == (["break", "phoneme"], False)
     assert native_markup("eleven_v3") == ([], True)
     assert native_markup("inworld")[1] is True
     assert "emotion" in native_markup("cartesia")[0]
@@ -723,6 +742,16 @@ def test_stripper_leaves_markdown_links_for_a_bracket_dialect() -> None:
     assert _strip_streamed(stripper, ["See [the guide](https://x.io)."]) == (
         "See [the guide](https://x.io)."
     )
+
+
+def test_stripper_holds_a_bracket_until_a_streamed_link_can_complete() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    assert _strip_streamed(stripper, ["See [guide]", "(https://x.io)."]) == (
+        "See [guide](https://x.io)."
+    )
+    # a cue ending the stream is still a cue
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=True)
+    assert _strip_streamed(stripper, ["Done [laughs]"]) == "Done"
 
 
 def test_stripper_releases_a_lone_bracket() -> None:

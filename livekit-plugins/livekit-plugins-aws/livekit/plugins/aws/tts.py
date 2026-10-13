@@ -169,7 +169,9 @@ class ChunkedStream(tts.ChunkedStream):
                 response = await client.synthesize_speech(
                     **_strip_nones(
                         {
-                            "Text": self._input_text,
+                            "Text": _ssml_document(self._input_text)
+                            if self._opts.text_type == "ssml"
+                            else self._input_text,
                             "OutputFormat": "mp3",
                             "Engine": self._opts.speech_engine,
                             "VoiceId": self._opts.voice,
@@ -195,3 +197,10 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except Exception as e:
             raise APIConnectionError() from e
+
+
+def _ssml_document(text: str) -> str:
+    """Polly reads SSML only as a document with a ``<speak>`` root
+    (https://docs.aws.amazon.com/polly/latest/dg/ssml.html); the framework sends one
+    sentence at a time, so wrap each one that isn't already a document."""
+    return text if text.lstrip().startswith("<speak") else f"<speak>{text}</speak>"

@@ -91,7 +91,7 @@ async def test_expr_lowered_for_the_tts_and_stripped_from_history() -> None:
     tts_obj = _MarkupTTS("ssml")
     transcript, history = await _say(BREAK, tts_obj)
 
-    assert "".join(tts_obj.inputs) == 'Hi <break time="1s"/> there.'
+    assert "".join(tts_obj.inputs) == 'Hi <break time="1000ms"/> there.'
     assert transcript == "Hi there."
     assert history == "Hi there."
 
@@ -161,7 +161,7 @@ async def test_streamed_say_with_a_marker_split_across_chunks() -> None:
     tts_obj = _MarkupTTS("ssml")
     transcript, history = await _say(chunks(), tts_obj)
 
-    assert "".join(tts_obj.inputs) == 'Hi <break time="1s"/> there.'
+    assert "".join(tts_obj.inputs) == 'Hi <break time="1000ms"/> there.'
     assert transcript == "Hi there."
     assert history == "Hi there."
 
@@ -212,3 +212,26 @@ async def test_interrupted_say_stores_plain_text() -> None:
     assert said.raw_text_content
     assert "<" not in said.raw_text_content
     assert said.raw_text_content.startswith("I saw")
+
+
+async def test_held_aligned_words_keep_their_start_time() -> None:
+    # a tag split inside itself across aligned chunks holds the earlier words until it
+    # closes; they must not take the timing of the chunk that closed it
+    from types import SimpleNamespace
+
+    from livekit.agents.types import TimedString
+    from livekit.agents.voice.agent_activity import AgentActivity
+
+    activity = SimpleNamespace(tts=_MarkupTTS("ssml"), _resolve_expressive_options=lambda: None)
+
+    async def aligned() -> AsyncIterable[str]:
+        yield TimedString("Hello <prosody rate=", start_time=0.0, end_time=0.5)
+        yield TimedString('"slow">world</prosody> ', start_time=2.0, end_time=2.5)
+        yield TimedString("again.", start_time=3.0, end_time=3.5)
+
+    out = [c async for c in AgentActivity._strip_say_markup(activity, aligned())]  # type: ignore[arg-type]
+
+    assert "".join(out) == "Hello world again."
+    assert isinstance(out[0], TimedString)
+    assert (out[0].start_time, out[0].end_time) == (0.0, 2.5)
+    assert isinstance(out[-1], TimedString) and out[-1].start_time == 3.0
