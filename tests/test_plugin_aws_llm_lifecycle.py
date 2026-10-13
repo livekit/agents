@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from aiobotocore.session import AioSession
@@ -142,7 +143,9 @@ async def test_agent_session_close_closes_bedrock_client(
     bedrock: tuple[LLM, _Bedrock],
 ) -> None:
     model, backend = bedrock
-    session = AgentSession(llm=model, turn_handling={"turn_detection": None})
+    session = AgentSession(
+        llm=model, close_llm_on_session_close=True, turn_handling={"turn_detection": None}
+    )
     await session.start(Agent(instructions="you are helpful"))
     result = await session.run(user_input="hello")
     result.expect.next_event().is_message(role="assistant")
@@ -161,7 +164,6 @@ async def test_session_close_preserves_explicitly_shared_model(
     sessions = [
         AgentSession(
             llm=model,
-            close_llm_on_session_close=False,
             turn_handling={"turn_detection": None},
         )
         for _ in range(2)
@@ -182,6 +184,36 @@ async def test_session_close_preserves_explicitly_shared_model(
     assert all(response.closed for response in backend.responses)
     await model.aclose()
     assert backend.closed == 1
+
+
+async def test_owned_model_session_rejects_restart(bedrock: tuple[LLM, _Bedrock]) -> None:
+    model, _ = bedrock
+    session = AgentSession(
+        llm=model, close_llm_on_session_close=True, turn_handling={"turn_detection": None}
+    )
+    await session.start(Agent(instructions="you are helpful"))
+    await session.aclose()
+    with pytest.raises(RuntimeError, match="closed.*LLM"):
+        await session.start(Agent(instructions="you are helpful"))
+
+
+async def test_model_close_failure_does_not_skip_room_cleanup(
+    bedrock: tuple[LLM, _Bedrock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model, _ = bedrock
+    session = AgentSession(
+        llm=model, close_llm_on_session_close=True, turn_handling={"turn_detection": None}
+    )
+    await session.start(Agent(instructions="you are helpful"))
+    room_io = AsyncMock()
+    host = AsyncMock()
+    session._room_io = room_io
+    session._session_host = host
+    monkeypatch.setattr(model, "aclose", AsyncMock(side_effect=RuntimeError("close failed")))
+    await session.aclose()
+    room_io.aclose.assert_awaited_once()
+    host.aclose.assert_awaited_once()
+    monkeypatch.undo()
 
 
 async def test_concurrent_first_turns_share_initialization(bedrock: tuple[LLM, _Bedrock]) -> None:
