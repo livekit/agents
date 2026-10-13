@@ -287,14 +287,23 @@ async def test_retry_budget_still_gives_up_on_consecutive_short_lived_attempts()
 class _AudioStream(RecognizeStream):
     """Records ``start_time_offset`` as each run receives its first frame, then returns."""
 
-    def __init__(self, *, stt: STT, fail_first_run: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        fail_first_run: bool = False,
+        first_run_delay: float = 0.0,
+    ) -> None:
         super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS)
         self._fail_first_run = fail_first_run
+        self._first_run_delay = first_run_delay
         self.run_count = 0
         self.offsets: list[float] = []
 
     async def _run(self) -> None:
         self.run_count += 1
+        if self.run_count == 1:
+            await asyncio.sleep(self._first_run_delay)
         async for data in self._input_ch:
             if isinstance(data, RecognizeStream._FlushSentinel):
                 continue
@@ -362,4 +371,47 @@ async def test_start_time_offset_reanchors_on_retry_at_the_next_frame() -> None:
     assert stream.offsets[1] == pytest.approx(
         30.0 + pushed_at - frame.duration - stream._created_at
     )
+    await stream.aclose()
+
+
+async def test_start_time_offset_reanchors_on_a_frame_queued_before_the_retry() -> None:
+    """A frame queued while the first connection fails is the first audio the next
+    connection sends, so its capture time anchors the offset, not a later push."""
+    stream = _AudioStream(stt=_DummySTT(), fail_first_run=True, first_run_delay=2.0)
+    stream.start_time_offset = 30.0
+    frame = silence_frame(0.02, 16000)
+
+    # both frames are queued before the first attempt consumes anything; it takes the
+    # first one and fails, so the second is what the next connection starts with
+    stream.push_frame(frame)
+    await asyncio.sleep(1.0)
+    queued_at = time.time()
+    stream.push_frame(frame)
+    await _wait_for_offsets(stream, 2)
+
+    assert stream.run_count == 2
+    assert stream.offsets[1] == pytest.approx(
+        30.0 + queued_at - frame.duration - stream._created_at
+    )
+    await stream.aclose()
+
+
+async def test_undeclared_start_time_offset_counts_from_the_first_audio() -> None:
+    """With no offset set the timeline starts with the first audio, so a late first frame
+    adds nothing, and a retry continues that timeline from the next frame consumed."""
+    stream = _AudioStream(stt=_DummySTT(), fail_first_run=True)
+    frame = silence_frame(0.02, 16000)
+
+    await asyncio.sleep(5.0)
+    first_pushed_at = time.time()
+    stream.push_frame(frame)
+    await _wait_for_offsets(stream, 1)
+    assert stream.offsets == [0.0]
+
+    await asyncio.sleep(1.0)
+    pushed_at = time.time()
+    stream.push_frame(frame)
+    await _wait_for_offsets(stream, 2)
+
+    assert stream.offsets[1] == pytest.approx(pushed_at - first_pushed_at)
     await stream.aclose()
