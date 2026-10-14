@@ -11,6 +11,12 @@ OpenAIRealtimeModels = Literal[
 
 OpenAIGPTLiveModels = Literal["openai/gpt-live-1"]
 
+GoogleRealtimeModels = Literal[
+    "google/gemini-3.8-live",
+    "google/gemini-3.8-live-extended-thinking",
+    "google/gemini-live",
+]
+
 XAIRealtimeModels = Literal[
     "xai/grok-voice",
     "xai/grok-voice-latest",
@@ -18,7 +24,9 @@ XAIRealtimeModels = Literal[
     "xai/grok-voice-think-fast-2.0",
 ]
 
-RealtimeModels = OpenAIRealtimeModels | OpenAIGPTLiveModels | XAIRealtimeModels
+RealtimeModels = (
+    OpenAIRealtimeModels | OpenAIGPTLiveModels | GoogleRealtimeModels | XAIRealtimeModels
+)
 
 _REALTIME_MODEL_IDS: frozenset[str] = frozenset(
     model for literal in get_args(RealtimeModels) for model in get_args(literal)

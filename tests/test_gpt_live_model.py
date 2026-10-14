@@ -576,7 +576,7 @@ async def test_transport_errors_do_not_expose_provider_payloads(
 
 @pytest.mark.parametrize(
     "voice",
-    ["aster", "beacon", "cinder", "marin", "stone", "vesper", "future-voice", {"id": "voice_test"}],
+    ["beacon", "cedar", "cinder", "marin", "stone", "vesper", "future-voice", {"id": "voice_test"}],
 )
 async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
     monkeypatch: pytest.MonkeyPatch, voice: str | dict[str, Any]
@@ -1912,7 +1912,7 @@ def test_inference_accepts_only_the_default_delegation_tier() -> None:
 
 
 @pytest.mark.parametrize(
-    "code", ["invalid_model", "unsupported_server_tool", "unsupported_delegated_model"]
+    "code", ["invalid_model", "unsupported_server_tool", "unsupported_delegated_model", "forbidden"]
 )
 async def test_inference_does_not_retry_a_session_the_gateway_refused(
     monkeypatch: pytest.MonkeyPatch, code: str

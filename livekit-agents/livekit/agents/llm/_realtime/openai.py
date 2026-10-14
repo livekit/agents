@@ -1443,28 +1443,29 @@ class RealtimeSession(
                 has_changes = True
             self._opts.reasoning = reasoning
 
-        has_audio_config = False
+        has_audio_output = False
+        has_audio_input = False
         audio_output = RealtimeAudioConfigOutput()
         audio_input = RealtimeAudioConfigInput()
-        audio_config = RealtimeAudioConfig(output=audio_output, input=audio_input)
+        audio_config = RealtimeAudioConfig()
 
         if is_given(voice):
             if self._opts.voice != voice:
                 audio_output.voice = voice
-                has_audio_config = True
+                has_audio_output = True
             self._opts.voice = voice
 
         if is_given(turn_detection):
             if self._opts.turn_detection != turn_detection:
                 audio_input.turn_detection = turn_detection
-                has_audio_config = True
+                has_audio_input = True
             self._opts.turn_detection = turn_detection
             self._capabilities.turn_detection = _server_turn_taking_enabled(turn_detection)
 
         if is_given(input_audio_transcription):
             if self._opts.input_audio_transcription != input_audio_transcription:
                 audio_input.transcription = input_audio_transcription
-                has_audio_config = True
+                has_audio_input = True
             self._opts.input_audio_transcription = input_audio_transcription
             self._capabilities.user_transcription = input_audio_transcription is not None
 
@@ -1472,16 +1473,20 @@ class RealtimeSession(
             input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
             if self._opts.input_audio_noise_reduction != input_audio_noise_reduction:
                 audio_input.noise_reduction = input_audio_noise_reduction
-                has_audio_config = True
+                has_audio_input = True
             self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(speed):
             if self._opts.speed != speed:
                 audio_output.speed = speed
-                has_audio_config = True
+                has_audio_output = True
             self._opts.speed = speed
 
-        if has_audio_config:
+        if has_audio_output:
+            audio_config.output = audio_output
+        if has_audio_input:
+            audio_config.input = audio_input
+        if has_audio_output or has_audio_input:
             session.audio = audio_config
             has_changes = True
 
@@ -2168,7 +2173,8 @@ class RealtimeSession(
             # only if audio is not available
             self._current_generation._first_token_timestamp = time.time()
 
-        item_generation.text_ch.send_nowait(event.delta)
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            item_generation.text_ch.send_nowait(event.delta)
         item_generation.audio_transcript += event.delta
 
     def _handle_response_text_done(self, event: ResponseTextDoneEvent) -> None:
@@ -2188,7 +2194,8 @@ class RealtimeSession(
             delta = io.TimedString(delta, start_time=start_time)
 
         item_generation = self._current_generation.messages[item_id]
-        item_generation.text_ch.send_nowait(delta)
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            item_generation.text_ch.send_nowait(delta)
         item_generation.audio_transcript += delta
 
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
@@ -2203,14 +2210,15 @@ class RealtimeSession(
             item_generation.modalities.set_result(["audio", "text"])
 
         data = base64.b64decode(event.delta)
-        item_generation.audio_ch.send_nowait(
-            rtc.AudioFrame(
-                data=data,
-                sample_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
-                samples_per_channel=len(data) // 2,
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            item_generation.audio_ch.send_nowait(
+                rtc.AudioFrame(
+                    data=data,
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    samples_per_channel=len(data) // 2,
+                )
             )
-        )
 
     def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
         if isinstance(self._current_generation, _DiscardedGeneration):

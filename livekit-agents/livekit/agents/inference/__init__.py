@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any
 
 from ._realtime_models import (
+    GoogleRealtimeModels,
     OpenAIGPTLiveModels,
     OpenAIRealtimeModels,
     RealtimeModels,
@@ -69,6 +70,7 @@ __all__ = [
     "RealtimeModels",
     "OpenAIRealtimeModels",
     "OpenAIGPTLiveModels",
+    "GoogleRealtimeModels",
     "XAIRealtimeModels",
     "is_realtime_model",
     "llm_from_model_string",

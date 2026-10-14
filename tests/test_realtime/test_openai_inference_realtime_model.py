@@ -614,3 +614,21 @@ async def test_xai_session_discards_abandoned_response(
     assert generation is not None and generation._done_fut.done()
     assert isinstance(session._current_generation, _DiscardedGeneration)
     await session.aclose()
+
+
+async def test_update_options_voice_omits_empty_audio_input_subobject(
+    paused_realtime_main: None,
+) -> None:
+    model = RealtimeModel(
+        "xai/grok-voice-think-fast-2.0",
+        api_key="key",
+        api_secret="secret",
+    )
+    session = model.session()
+    session._msg_ch.recv_nowait()
+
+    session.update_options(voice="rex")
+    update = session._msg_ch.recv_nowait()
+
+    assert update["session"]["audio"] == {"output": {"voice": "rex"}}
+    await session.aclose()

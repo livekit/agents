@@ -67,11 +67,12 @@ _FATAL_ERROR_CODES = frozenset(
         "invalid_api_key",
         "account_deactivated",
         "billing_hard_limit_reached",
+        "forbidden",
     }
 )
 
 Role = Literal["user", "assistant"]
-GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
+GPTLiveVoices = Literal["beacon", "cedar", "cinder", "marin", "stone", "vesper"]
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
