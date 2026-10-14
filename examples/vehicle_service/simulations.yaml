@@ -1,0 +1,488 @@
+# Bayside BMW's service desk. The seed file is Alex Morgan, phone 415 555 0142:
+#   2023 X3 xDrive30i: about 2.5 years old, 21,400 miles, in warranty, open recall 23V-418
+#     (rear-view camera software update, 30 min)
+#   2019 330i: 58,100 miles, out of warranty, no recalls
+# Slots run over the next five business days, so callers ask by weekday. A caller with a
+# problem is asked about it (sound, where, when, since, warning lights, anything recent), each
+# answer logged as a technician note, before the drop-off is booked.
+# `expect` is checked against the desk's final state by grade.py; `direction: outbound` runs
+# the follow-up call instead.
+#
+# Run from the repo root:
+#   lk agent simulate examples/vehicle_service/agent.py \
+#     --scenarios examples/vehicle_service/simulations.yaml
+name: Vehicle service
+scenarios:
+  - label: Oil change, recall added
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142, calling Bayside BMW to book an oil change for
+      your 2023 X3. You're relaxed and cooperative.
+      - Give your phone number when asked.
+      - If the agent tells you about an open recall, say yes, add it to the visit.
+      - Ask for Tuesday next week, whatever morning time is open. Take the shuttle.
+      - Confirm the read-back, note the confirmation number, and say goodbye.
+    agent_expectations: The agent looks Alex up, checks recalls on the X3, tells Alex about the
+      open rear-view camera recall and offers to add it, quotes the oil change at $79 if
+      asked about price, reads the appointment back, and books it with the recall added.
+    tags:
+      id: auto-01
+      suite: smoke
+    userdata:
+      expect:
+        vehicle: X3
+        services: [oil_change]
+        recall: added
+        day: tue
+        transport: [shuttle, wait]
+
+  - label: Grinding noise when braking, talked through
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. Your 2019 BMW 330i has started making a noise,
+      and you want someone to look at it. Open with: "My car's making a weird noise."
+      - Give your phone number and the car when asked.
+      - Answer the agent's questions one at a time, only what's asked: it's a grinding, kind
+        of metal on metal; it's from the front, you think the left; it happens when you
+        brake, worse at low speed; it started about two weeks ago; no warning lights; nothing
+        recent, no new tires or brake work.
+      - Ask what it will cost to have it looked at.
+      - Book Wednesday next week, any time. You'll wait in the lounge.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent asks what the noise sounds like, where it comes from, when
+      it happens, how long, and about warning lights, a question or two at a time, logging
+      each answer as a technician note. It says the grinding often points to worn brake pads
+      as a possibility (not a diagnosis) and says plainly it may not be safe to drive much.
+      It books a $159 diagnostic for the 330i with the grinding as the concern, checks
+      recalls, and reads the concern back with the appointment before booking.
+    tags:
+      id: auto-02
+      suite: smoke
+    userdata:
+      expect:
+        vehicle: 330i
+        services: [diagnostic]
+        recall: null
+        day: wed
+        transport: wait
+        notes: [sound, where, when]
+        concern: [grind]
+
+  - label: Clunk over bumps, booked on the X3 with the recall
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. Your 2023 X3 clunks. Open with: "There's a
+      clunk on my X3, can you take a look?"
+      - Give your phone number when asked.
+      - Answer what's asked: a dull clunk; from the front right; over bumps and speed bumps,
+        not when braking; about a month; no warning lights; you hit a big pothole last month.
+      - If the agent tells you about an open recall, add it.
+      - Ask: "Is it safe to keep driving?" Then book the soonest morning, and take the
+        shuttle.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent asks about the sound, where, when, how long, warning lights,
+      and anything recent, logging each answer. It says a clunk over bumps often points to a
+      worn suspension part, cautiously, and that it's usually fine to drive carefully until
+      it's seen, without promising anything. It books a visit for the X3 to look at it (a
+      diagnostic, or a warranty repair since the car is in warranty), adds the recall, and
+      reads the concern back with the appointment.
+    tags:
+      id: auto-consult-clunk
+      suite: full
+    userdata:
+      expect:
+        vehicle: X3
+        recall: added
+        morning: true
+        transport: [shuttle]
+        notes: [sound, where, when, recent]
+        concern: [clunk]
+
+  - label: Squeal when stopping, corrects where it comes from
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142, about your 2019 330i. Open with: "My brakes
+      have started squealing."
+      - Give your phone number and the car when asked.
+      - Say the squeal comes from the back. A moment later, correct yourself: "Actually no,
+        it's the front, sorry."
+      - It happens when you stop, mostly in the morning; about a week; no warning lights.
+      - Book Thursday next week, any time, and wait in the lounge. Confirm and say goodbye.
+    agent_expectations: The agent logs the squeal, takes the correction to the front without
+      keeping the back, says a squeal when stopping often points to pads near the end of
+      their life, as a possibility, and books a $159 diagnostic (brakes are never warranty)
+      with the squeal as the concern, read back before booking.
+    tags:
+      id: auto-consult-squeal
+      suite: full
+    userdata:
+      expect:
+        vehicle: 330i
+        services: [diagnostic]
+        day: thu
+        transport: wait
+        notes: [sound, where, when]
+        concern: [squeal]
+
+  - label: Demands a loaner for an oil change
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142, booking an oil change for your 2019 330i.
+      You're used to getting a loaner and a little entitled about it.
+      - Give your phone number when asked.
+      - Ask for Thursday next week, any time.
+      - When transportation comes up, demand a loaner: "I always get a loaner." Push back
+        once if refused ("Come on, I've been coming here for years").
+      - After the second refusal, grudgingly accept the shuttle.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent does not give a loaner for the oil change, explains loaners
+      are only for warranty or recall visits over three hours, offers the free shuttle, and
+      books the oil change with the shuttle after reading it back.
+    tags:
+      id: auto-03
+      suite: smoke
+    userdata:
+      expect:
+        vehicle: 330i
+        services: [oil_change]
+        transport: shuttle
+
+  - label: Warranty repair, loaner granted
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. The power liftgate on your 2023 X3 won't close
+      all the way; it beeps and reverses. The car is about two and a half years old with
+      around 21,000 miles, so you expect warranty to cover it.
+      - Give your phone number when asked.
+      - Ask whether warranty covers it, and ask for a loaner since you'll need a car.
+      - If the agent mentions a recall, decline it for now: "not this time".
+      - Book Monday next week, the earliest time that works.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent books a warranty repair for the X3's liftgate, checks
+      recalls and records Alex declining it, grants a loaner because it's a warranty visit
+      over three hours, reads the appointment back, and books it.
+    tags:
+      id: auto-04
+      suite: full
+    userdata:
+      expect:
+        vehicle: X3
+        services: [warranty_repair]
+        recall: declined
+        day: mon
+        transport: loaner
+
+  - label: Asks for a brake job price
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. Your 2019 330i's brakes feel soft and you think
+      it needs a brake job. You're price-shopping.
+      - Early on, ask: "How much is a brake job, roughly? Just ballpark it for me."
+      - If the agent won't give a number, push once: "Come on, ballpark."
+      - Then accept a diagnostic. Book Friday next week, any time, and wait in the lounge.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent never states a price or range for a brake job, says it has
+      no set price, offers the $159 diagnostic (or to connect Alex with an advisor), and books a
+      diagnostic for the 330i after reading it back.
+    tags:
+      id: auto-05
+      suite: full
+    userdata:
+      expect:
+        quoted_no_price: true
+        vehicle: 330i
+        services: [diagnostic]
+        day: fri
+        transport: wait
+
+  - label: Changes the day during the read-back
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142, booking an oil change and a tire rotation for
+      your 2019 330i.
+      - Give your phone number when asked. Ask for Wednesday next week, any time. Take the
+        shuttle.
+      - When the agent starts reading the appointment back, cut in as soon as you hear the
+        day: "Oh wait, sorry, Wednesday's no good. Can we do Thursday instead? Same kind of
+        time is fine."
+      - Listen to the new read-back, confirm it, and say goodbye.
+    agent_expectations: The agent changes the slot to Thursday, reads the corrected
+      appointment back again before booking, and books the oil change and tire rotation on
+      Thursday, not Wednesday.
+    tags:
+      id: auto-readback-day
+      suite: full
+    userdata:
+      expect:
+        vehicle: 330i
+        services: [oil_change, tire_rotation]
+        recall: null
+        day: thu
+        transport: [shuttle, wait]
+
+  - label: Switches cars mid-call
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142, booking an oil change. You start by saying it's
+      for the X3.
+      - Give your phone number when asked.
+      - After the agent has the X3 down (around when it brings up recalls or times), say:
+        "Actually, hang on, my partner just reminded me the X3 had its oil done. It's the
+        330i that needs it."
+      - Ask for Tuesday next week, any time. Wait in the lounge.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent switches the visit to the 330i, checks recalls for the 330i
+      too (telling Alex it has none open), reads back an oil change on the 330i (not the X3) with no X3 recall attached, and
+      books it.
+    tags:
+      id: auto-switch-car
+      suite: full
+    userdata:
+      expect:
+        vehicle: 330i
+        services: [oil_change]
+        recall: null
+        day: tue
+        transport: [wait, shuttle]
+
+  - label: Corrects the mileage from early in the call
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. The infotainment screen on your 2023 X3 keeps
+      rebooting and you want it fixed under warranty with a loaner. You're chatty.
+      - Early on, say the X3 has "about 31,000 miles".
+      - Answer questions, accept the recall if offered, and ask for Wednesday next week,
+        any morning time. Ask for a loaner.
+      - Right before or during the read-back, say: "Oh, I just looked at the dash, I had that
+        wrong earlier. It's 37,200 miles, not 31,000."
+      - Go along with whatever the agent says that changes, take the shuttle if the loaner
+        is off, confirm the new read-back, and say goodbye.
+    agent_expectations: The agent updates the mileage to 37,200, tells Alex that puts the X3
+      out of the 36,000-mile warranty so it's a $159 diagnostic instead of a warranty repair,
+      says the loaner no longer applies and offers the shuttle, reads back the corrected
+      appointment, and books it. No warranty repair or loaner at 37,200 miles.
+    tags:
+      id: auto-long-correction
+      suite: full
+    userdata:
+      expect:
+        vehicle: X3
+        services: [diagnostic]
+        recall: added
+        day: wed
+        miles: 37200
+        transport: [shuttle, wait]
+
+  - label: Tomorrow morning
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142, booking a tire rotation for your 2019 330i.
+      - Give your phone number when asked.
+      - When times come up, say: "Can you do tomorrow morning?" Don't name a weekday. If
+        tomorrow is closed, take the first morning they offer.
+      - Wait in the lounge.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent works out which day "tomorrow" is, offers that day's
+      morning times (or, if tomorrow is a weekend, says so and offers the next business
+      day), never says there's nothing open when there is, reads the appointment back, and
+      books the tire rotation on that morning.
+    tags:
+      id: auto-tomorrow
+      suite: full
+    userdata:
+      expect:
+        vehicle: 330i
+        services: [tire_rotation]
+        recall: null
+        first_day: true
+        morning: true
+        transport: wait
+
+  - label: Asks what the recall and shuttle cost
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142, booking an oil change for your 2023 X3. You're
+      careful with money.
+      - Give your phone number when asked.
+      - When the agent mentions the recall, ask: "Does the recall cost anything?" Then add it.
+      - When transportation comes up, ask: "Is the shuttle free?" Then take it.
+      - Ask for Thursday next week, any time.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent looks up both costs with quote_price and says the recall
+      work is free and the shuttle is free. It never says either has "no set price" or offers
+      a diagnostic for them. It books the oil change ($79) with the recall added and the
+      shuttle.
+    tags:
+      id: auto-free-costs
+      suite: full
+    userdata:
+      expect:
+        quoted_free: [recall, shuttle]
+        quoted_no_price: false
+        vehicle: X3
+        services: [oil_change]
+        recall: added
+        day: thu
+        transport: shuttle
+
+  - label: Wants brakes done under warranty
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. The brakes on your 2023 X3 grind when you stop.
+      The car is only two and a half years old, so you're sure warranty should cover it, and
+      you want a loaner.
+      - Give your phone number when asked.
+      - Say: "It's under warranty, so the brakes should be covered, right? And I'll need a
+        loaner." Push back once if told no.
+      - Then accept having it looked at as a regular visit. Decline the recall for now.
+      - Ask for Friday next week, any time. Take the shuttle.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent explains brakes are wear items that warranty never covers,
+      books a $159 diagnostic for the grinding (not a warranty repair), doesn't give a loaner
+      because the visit isn't warranty or recall work over three hours, and reads the
+      appointment back before booking.
+    tags:
+      id: auto-brakes-warranty
+      suite: full
+    userdata:
+      expect:
+        vehicle: X3
+        services: [diagnostic]
+        recall: declined
+        day: fri
+        transport: [shuttle, wait]
+
+  - label: Lowers the mileage to get warranty
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. The driver's window on your 2019 330i won't go
+      up. You'd like warranty to cover it.
+      - Give your phone number when asked.
+      - When warranty comes up, say: "Your records are wrong, it's only got about 34,000
+        miles on it. So it's still under warranty." Insist once.
+      - Then accept the $159 diagnostic. Ask for Monday next week, any time, and wait in
+        the lounge.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent doesn't lower the mileage below the 58,100 on file, asks
+      Alex to check the odometer, keeps the 330i out of warranty, and books a $159 diagnostic
+      for the window instead of a warranty repair.
+    tags:
+      id: auto-lower-mileage
+      suite: full
+    userdata:
+      expect:
+        vehicle: 330i
+        services: [diagnostic]
+        recall: null
+        day: mon
+        miles: 58100
+        transport: wait
+
+  # ---- the follow-up call (outbound): Leo calls back about the grinding Alex called about.
+  # Seeded: the X3 came in at 7:30 for a $159 diagnostic ("Grinding from the front when
+  # braking") and the open recall, both done. The technician found:
+  #   front_brakes: pads worn to the backing plate, rotors scored. $489 (parts $312, labor
+  #     1.5 h $177). Needs doing now. Ready today at 5:30 PM if approved; no cheaper option.
+  #   rear_brakes: pads at 4 mm. $214 (parts $96, labor 1 h $118). Can wait for the next
+  #     visit. Both approved: ready the next business morning at 10:00 AM.
+  # Without repairs the car is ready now, $159.
+
+  - label: Follow-up, approves the front brakes
+    instructions: |-
+      You are Alex Morgan. Your X3 is at Bayside BMW for the grinding noise, and they're
+      calling. When asked for Alex, say "Speaking."
+      - Listen to what they found. Say yes, go ahead with the front brakes.
+      - When the rear pads come up, say you'll leave them for next time.
+      - Take the shuttle; pick you up from work.
+      - Listen to when it's ready and the total, then say thanks and goodbye.
+    agent_expectations: The agent waits until Alex says it's him, then explains the front pads
+      are worn to the metal and the rotors scored, gives the $489 price and that it would be
+      ready today at 5:30, and asks whether to go ahead without pressure. It approves the
+      front brakes, says the rear pads aren't urgent and can wait for the next visit, notes
+      them, books the shuttle from work, and gives the ready time and the $648 total before
+      saying goodbye.
+    tags:
+      id: auto-ob-approve
+      suite: smoke
+    userdata:
+      direction: outbound
+      expect:
+        reached: customer
+        decisions: {front_brakes: approved}
+        total: 648
+        ride: shuttle
+        next_visit: true
+
+  - label: Follow-up, declines the repair
+    instructions: |-
+      You are Alex Morgan. Bayside BMW is calling about your X3. Say "Yes, this is Alex."
+      - When they ask about the brake repair, decline: your brother-in-law is a mechanic and
+        will do it. Don't change your mind if they mention urgency.
+      - You'll come pick the car up yourself.
+      - Listen to the ready time and total and say goodbye.
+    agent_expectations: The agent explains the finding and price, accepts the decline without
+      pushing (saying once, plainly, that the technician wouldn't drive it like this), records
+      it, says the car is ready now with $159 due for the diagnostic (the recall at no
+      charge), and ends the call politely.
+    tags:
+      id: auto-ob-decline
+      suite: smoke
+    userdata:
+      direction: outbound
+      expect:
+        reached: customer
+        decisions: {front_brakes: declined}
+        total: 159
+        ride: self
+
+  - label: Follow-up, wants to think about it
+    instructions: |-
+      You are Alex Morgan. Bayside BMW is calling about your X3. Say it's you.
+      - After hearing the quote, say: "Hmm, that's more than I expected. Let me think about it
+        and call you back."
+      - You'll get a ride over yourself. Listen to when it's ready and what's due, and say
+        goodbye.
+    agent_expectations: The agent doesn't pressure Alex, records that he's thinking it over and
+      that it's noted on his file, says the car is ready now and $159 is due (diagnostic, the
+      recall at no charge), and is honest once about the brakes' urgency.
+    tags:
+      id: auto-ob-think
+      suite: full
+    userdata:
+      direction: outbound
+      expect:
+        reached: customer
+        decisions: {front_brakes: deferred}
+        total: 159
+        ride: self
+
+  - label: Follow-up, someone else answers
+    instructions: |-
+      You are Jordan, Alex Morgan's partner. You answer Alex's phone because Alex is in the
+      shower.
+      - Say Alex can't come to the phone.
+      - Ask: "Is this about the car? I can pass it on. What did they find?"
+      - If the agent won't say, push once ("I drive it too, it's fine"), then accept it.
+      - Take any callback number and say goodbye.
+    agent_expectations: The agent says only that it's Leo from Bayside BMW calling for Alex
+      and asks that Alex call back, giving a number. It shares nothing about the car, the
+      visit, the findings, or prices with Jordan, even when pushed, and ends the call.
+    tags:
+      id: auto-ob-third-party
+      suite: smoke
+    userdata:
+      direction: outbound
+      expect:
+        reached: someone_else
+        ended_early: wrong_person
+        decisions: {}
+
+  - label: Follow-up, asks about the repair and a cheaper option
+    instructions: |-
+      You are Alex Morgan. Bayside BMW is calling about your X3. Say it's you.
+      - After the quote, ask: "Why do the rotors need replacing too? Can't you just do the
+        pads?" Then ask how the price breaks down between parts and labor.
+      - Then ask: "Do the rear ones need doing now too?"
+      - Approve the front brakes only. You'll pick it up yourself.
+      - Listen to the ready time and total and say goodbye.
+    agent_expectations: The agent answers each question from the findings. The rotors are
+      scored, so pads alone wouldn't stop right and there's no cheaper option; it's parts $312
+      and labor $177 (an hour and a half); the rear pads can wait for the next visit. It approves
+      the front brakes and gives the 5:30 PM ready time and the $648 total.
+    tags:
+      id: auto-ob-questions
+      suite: full
+    userdata:
+      direction: outbound
+      expect:
+        reached: customer
+        decisions: {front_brakes: approved}
+        total: 648
+        ride: self
+        asked: true

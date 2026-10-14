@@ -1,0 +1,587 @@
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from decimal import Decimal
+
+import pytest
+from agent import _line_note
+from backend import Pos, PosError, demo_pos
+from call import pause_between_sentences, spoken_number
+from grade import grade
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture()
+def pos() -> Pos:
+    return demo_pos()
+
+
+def _ready_for_pickup(pos: Pos) -> None:
+    pos.set_pickup()
+    pos.set_contact("sam carter", "415-555-0142")
+
+
+def test_menu_is_the_seeded_day(pos: Pos) -> None:
+    assert len(pos.menu) == 27
+    assert not pos.item("buffalo_cauliflower").available
+    assert "nuts" in pos.item("pesto").allergens
+
+
+def test_ro01_pickup_order_matches_and_totals(pos: Pos) -> None:
+    pos.add("pepperoni", 1, "large")
+    pos.add("wings", 1, "a dozen", sauce="hot")
+    pos.add("coke", 1, "2 liter")
+    _ready_for_pickup(pos)
+    q = pos.price()
+    # 19.99 + 16.99 + 3.99, then 9% tax rounded to the cent
+    assert q.subtotal == Decimal("40.97")
+    assert q.tax == Decimal("3.69")
+    assert q.delivery_fee == 0
+    assert q.total == Decimal("44.66")
+    order = pos.submit()
+    assert order.number
+    assert [ln.describe() for ln in pos.lines] == [
+        "L1: 1 × large Pepperoni",
+        "L2: 1 × dozen Bone-in Wings, hot sauce",
+        "L3: 1 × 2-liter Coke",
+    ]
+
+
+def test_ro02_corrections_mid_read_back_change_only_those_lines(pos: Pos) -> None:
+    pos.add("pepperoni", 1, "L")
+    pos.add("wings", 1, "12", sauce="thai")
+    pos.add("coke", 1, "2L")
+    _ready_for_pickup(pos)
+    pos.price()
+    pos.update("L1", size="medium")
+    pos.remove("L3")
+    # the read-back total is stale now, so it can't be submitted at the old price
+    assert not pos.quote_current
+    with pytest.raises(PosError, match="changed after it was read back"):
+        pos.submit()
+    q = pos.price()
+    assert q.subtotal == Decimal("16.99") + Decimal("16.99")
+    pos.submit()
+    assert [ln.describe() for ln in pos.lines] == [
+        "L1: 1 × medium Pepperoni",
+        "L2: 1 × dozen Bone-in Wings, Thai chili peanut sauce",
+    ]
+    assert [ln.id for ln in pos.removed] == ["L3"]
+
+
+def test_ro03_86d_item_is_refused_with_same_category_substitutes(pos: Pos) -> None:
+    with pytest.raises(PosError, match="sold out today") as e:
+        pos.add("buffalo_cauliflower")
+    assert "Breadsticks" in str(e.value) and "Pepperoni" not in str(e.value)
+    assert "86" not in str(e.value)  # kitchen slang, not for the caller
+    assert not pos.lines
+
+
+def test_ro04_delivers_to_any_street_address(pos: Pos) -> None:
+    pos.add("pepperoni", 2, "large")
+    pos.set_delivery("2150 Bryant St, San Francisco 94110")
+    assert (pos.fulfillment.mode, pos.fulfillment.zip) == ("delivery", "94110")
+    pos.set_delivery("45 Rideau St, Ottawa, ON K1N 5W8")
+    assert pos.fulfillment.address == "45 Rideau St, Ottawa, ON K1N 5W8"
+    assert pos.fulfillment.zip is None
+    # the driver needs a street: a ZIP, a city, or a street with no number isn't one
+    for partial in ("94107", "Oakland", "De Haro St"):
+        with pytest.raises(PosError, match="full street address"):
+            pos.set_delivery(partial)
+    assert pos.fulfillment.address == "45 Rideau St, Ottawa, ON K1N 5W8"
+    pos.set_pickup()
+    assert pos.fulfillment.mode == "pickup"
+
+
+def test_ro05_delivery_under_minimum_submits_only_once_it_reaches_20(pos: Pos) -> None:
+    pos.add("pepperoni", 1, "small")  # $13.99
+    pos.set_delivery("300 De Haro St, San Francisco, CA 94107")
+    pos.set_contact("Sam", "(415) 555-0142")
+    pos.price()
+    with pytest.raises(PosError, match="needs a \\$20.00 subtotal"):
+        pos.submit()
+    pos.add("breadsticks")  # $19.98: still short
+    pos.price()
+    with pytest.raises(PosError, match="short"):
+        pos.submit()
+    pos.add("coke", 1, "can")  # $21.97
+    q = pos.price()
+    assert q.delivery_fee == Decimal("4.99")
+    assert q.total == Decimal("21.97") + Decimal("1.98") + Decimal("4.99")
+    pos.submit()
+
+
+def test_a_cent_short_is_still_short(pos: Pos) -> None:
+    pos.add("pepperoni", 1, "large")  # $19.99
+    pos.set_delivery("1355 Market St, 94103")
+    assert pos.below_minimum() == Decimal("0.01")
+
+
+def test_ro06_allergen_lookup_names_the_nut_items(pos: Pos) -> None:
+    tag, items = pos.with_allergen("peanuts")
+    assert tag == "nuts"
+    assert items == ["Pesto Chicken", "wings with Thai chili peanut sauce"]
+    with pytest.raises(PosError, match="doesn't track"):
+        pos.with_allergen("sesame")
+    line = pos.add("wings", 1, "6", sauce="Thai")
+    assert "nuts" in line.allergens
+
+
+@pytest.mark.parametrize(
+    ("said", "tag"),
+    [
+        ("gluten-free", "gluten"),
+        ("Gluten free", "gluten"),
+        ("celiac", "gluten"),
+        ("I have celiac disease", "gluten"),
+        ("dairy-free", "dairy"),
+        ("lactose intolerant", "dairy"),
+        ("peanut allergy", "nuts"),
+        ("tree nuts", "nuts"),
+    ],
+)
+def test_allergy_phrasings_map_to_the_tracked_allergens(pos: Pos, said: str, tag: str) -> None:
+    assert pos.with_allergen(said)[0] == tag
+
+
+def test_untracked_or_mixed_allergens_are_refused(pos: Pos) -> None:
+    for said in ("sesame", "shellfish"):
+        with pytest.raises(PosError, match="doesn't track"):
+            pos.with_allergen(said)
+    with pytest.raises(PosError, match="one allergen per call"):
+        pos.with_allergen("nuts and dairy")
+
+
+def test_every_allergy_mentioned_is_kept_and_flagged(pos: Pos) -> None:
+    pos.note_allergy("nuts", severe=True)
+    pos.note_allergy("dairy", severe=False)
+    pos.note_allergy("nuts", severe=False)  # asked again: still severe
+    assert pos.allergies == {"nuts": True, "dairy": False}
+    assert "dairy" in _line_note(pos, pos.add("cheese", 1, "large"))
+    pesto = _line_note(pos, pos.add("pesto", 1, "small"))
+    assert "dairy and nuts" in pesto
+    assert _line_note(pos, pos.add("house_salad")) == ""
+    assert grade(pos, {"allergy": ["nuts", "dairy"]}) == []
+    assert grade(pos, {"allergy": "gluten"}) == [
+        "the gluten allergy was never looked up in the menu data"
+    ]
+
+
+def test_leaving_a_topping_off(pos: Pos) -> None:
+    line = pos.add("veggie", 1, "large", without=["no olives"])
+    assert line.describe() == "L1: 1 × large Garden Veggie, no black olives"
+    assert line.total == Decimal("19.99")
+    pos.update("L1", without=["olives", "hold the onions"])
+    assert line.without == ["black olives", "onions"]
+    pos.update("L1", without=[])
+    assert line.without == []
+    # the same pizza without something is its own line
+    pos.add("bbq_chicken", 1, "medium", without=["onion"])
+    assert pos.add("bbq_chicken", 1, "medium").without == []
+    assert pos.lines[1].modifiers() == ["no red onions"]
+    with pytest.raises(PosError, match="doesn't come with 'olives'"):
+        pos.add("pepperoni", 1, "large", without=["olives"])
+    with pytest.raises(PosError, match="leave off"):
+        pos.add("pepperoni", 1, "large", toppings=["no olives"])
+    with pytest.raises(PosError, match="added topping"):
+        pos.add("veggie", 1, "small", toppings=["olives"], without=["olives"])
+    with pytest.raises(PosError, match="Only pizza"):
+        pos.add("caesar", without=["croutons"])
+
+
+def test_ro07_repeating_an_item_never_makes_a_second_line(pos: Pos) -> None:
+    pos.add("pepperoni", 2, "large")
+    with pytest.raises(PosError, match="already in the cart"):
+        pos.add("pepperoni", 2, "large")
+    # the same pizza with a different topping is a different line
+    pos.add("pepperoni", 1, "large", toppings=["mushrooms"])
+    # "yeah, two" again as an update is a no-op, and doesn't invalidate a quote
+    _ready_for_pickup(pos)
+    pos.price()
+    pos.update("L1", quantity=2, size="large")
+    assert pos.quote_current
+    assert [ln.quantity for ln in pos.lines] == [2, 1]
+    # "yeah, two" read as two more is refused: an increase has to be asked for
+    with pytest.raises(PosError, match="already has 2"):
+        pos.update("L1", quantity=4)
+    pos.update("L1", quantity=3, more=True)
+    pos.update("L2", quantity=1)
+    assert [ln.quantity for ln in pos.lines] == [3, 1]
+
+
+def test_required_modifiers(pos: Pos) -> None:
+    with pytest.raises(PosError, match="needs a size"):
+        pos.add("margherita")
+    with pytest.raises(PosError, match="need a sauce"):
+        pos.add("wings", 1, "dozen")
+    with pytest.raises(PosError, match="needs a size"):
+        pos.add("sprite")
+    with pytest.raises(PosError, match="comes in"):
+        pos.add("margherita", 1, "extra large")
+    with pytest.raises(PosError, match="no sauce called"):
+        pos.add("wings", 1, "dozen", sauce="ranch")
+    with pytest.raises(PosError, match="doesn't take toppings"):
+        pos.add("caesar", toppings=["bacon"])
+    with pytest.raises(PosError, match="isn't on the menu"):
+        pos.add("calzone")
+    # a one-size item needs nothing
+    assert pos.add("breadsticks").size.price == Decimal("5.99")
+
+
+def test_a_dozen_wings_is_one_order(pos: Pos) -> None:
+    with pytest.raises(PosError, match="use quantity 1"):
+        pos.add("wings", 12, "dozen", sauce="hot")
+    line = pos.add("wings", 1, "dozen", sauce="hot")
+    with pytest.raises(PosError, match="use quantity 1"):
+        pos.update(line.id, quantity=6, size="half dozen", more=True)
+
+
+def test_toppings_are_priced(pos: Pos) -> None:
+    line = pos.add("margherita", 2, "M", toppings=["Jalapeños", "extra cheese"])
+    assert line.unit_price == Decimal("15.99") + Decimal("4.00")
+    assert line.total == Decimal("39.98")
+
+
+def test_submit_needs_a_read_back_and_details(pos: Pos) -> None:
+    with pytest.raises(PosError, match="empty"):
+        pos.submit()
+    pos.add("pepperoni", 2, "large")
+    with pytest.raises(PosError, match="Pickup or delivery"):
+        pos.submit()
+    with pytest.raises(PosError, match="pickup or delivery"):
+        pos.price()
+    pos.set_pickup()
+    with pytest.raises(PosError, match="name"):
+        pos.submit()
+    pos.set_contact("Sam", "415 555 0142")
+    with pytest.raises(PosError, match="read it back"):
+        pos.submit()
+    pos.price()
+    # switching to delivery changes the total, so the read-back is stale
+    pos.set_delivery("1355 Market St, 94103")
+    with pytest.raises(PosError, match="changed after"):
+        pos.submit()
+    pos.price()
+    pos.submit()
+    with pytest.raises(PosError, match="already sent"):
+        pos.add("coke", 1, "can")
+
+
+def test_upsell_at_most_once(pos: Pos) -> None:
+    pos.offer_upsell()
+    with pytest.raises(PosError, match="already offered"):
+        pos.offer_upsell()
+    fresh = demo_pos()
+    fresh.add("breadsticks")
+    with pytest.raises(PosError, match="already in the order"):
+        fresh.offer_upsell()
+
+
+def test_bad_phone_is_refused(pos: Pos) -> None:
+    with pytest.raises(PosError, match="ten-digit"):
+        pos.set_contact(phone="555-0142")
+    pos.set_contact(phone="1 415 555 0142")
+    assert pos.phone == "(415) 555-0142"
+
+
+@pytest.mark.parametrize(
+    "said", ["494", "123 456 7890", "415 111 0142", "911 555 0142", "000 000 0000"]
+)
+def test_a_number_that_cant_be_real_is_refused(pos: Pos, said: str) -> None:
+    with pytest.raises(PosError, match="real ten-digit"):
+        pos.set_contact(phone=said)
+    assert pos.phone is None
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "415-555-0142",
+        "(415) 555 0142",
+        "four one five, five five five, oh one four two",
+        "4 1 5 5 5 5 zero one 4 2",
+        "415 555 o142",
+        "my cell is 415 555 0142",
+    ],
+)
+def test_a_phone_number_said_any_way(pos: Pos, said: str) -> None:
+    pos.set_contact(phone=said)
+    assert pos.phone == "(415) 555-0142"
+
+
+def test_natural_names_for_items_sizes_and_sauces(pos: Pos) -> None:
+    # "hot sauce", "a large", "pepperoni pizza", "meat lover's": what callers (and the
+    # model, copying them) say, not the menu's exact words
+    assert pos.item("pepperoni pizza").id == "pepperoni"
+    assert pos.item("Meat Lover's pizza").id == "meat_lovers"
+    assert pos.item("sausage and peppers").id == "sausage_peppers"
+    assert pos.item("breadstick").id == "breadsticks"
+    assert pos.item("cokes").id == "coke"
+    assert pos.item("boneless").id == "boneless"
+    line = pos.add("wings", 1, "12 piece", sauce="hot sauce")
+    assert line.describe() == "L1: 1 × dozen Bone-in Wings, hot sauce"
+    assert pos.add("margherita", 1, "a large", toppings=["extra mushrooms"]).describe() == (
+        "L2: 1 × large Margherita, + mushrooms"
+    )
+    assert pos.add("coke", 2, "2 liters").size.id == "2L"
+    assert pos.add("boneless", 1, "six pieces", sauce="BBQ sauce").size.id == "6"
+    # still refused: not on the menu, not a size, not a sauce
+    with pytest.raises(PosError, match="isn't on the menu"):
+        pos.item("pizza")
+    with pytest.raises(PosError, match="comes in"):
+        pos.add("cheese", 1, "extra large")
+    with pytest.raises(PosError, match="no sauce called"):
+        pos.add("wings", 1, "dozen", sauce="ranch sauce")
+
+
+def test_grade_passes_the_expected_order(pos: Pos) -> None:
+    pos.add("pepperoni", 1, "large")
+    pos.add("wings", 1, "dozen", sauce="hot")
+    _ready_for_pickup(pos)
+    pos.price()
+    pos.submit()
+    expect = {
+        "submitted": True,
+        "fulfillment": "pickup",
+        "cart": ["1 × dozen Bone-in Wings, hot sauce", "1 × large Pepperoni"],
+        "total": "40.31",
+        "name": "Sam Carter",
+        "phone": "(415) 555-0142",
+    }
+    assert grade(pos, expect) == []
+
+
+def test_grade_flags_a_wrong_cart_and_a_missing_order(pos: Pos) -> None:
+    pos.add("pepperoni", 2, "large")
+    pos.add("coke", 1, "can")
+    _ready_for_pickup(pos)
+    pos.price()
+    problems = grade(
+        pos,
+        {"submitted": True, "cart": ["1 × large Pepperoni"], "not_in_cart": ["coke"]},
+    )
+    assert len(problems) == 3
+    assert problems[0].startswith("no order was submitted")
+
+
+def test_grade_flags_an_order_that_mustnt_be_submitted(pos: Pos) -> None:
+    pos.add("cheese", 1, "small")
+    _ready_for_pickup(pos)
+    pos.price()
+    pos.submit()
+    assert grade(pos, {"submitted": False}) == [
+        f"order #{pos.order.number} was submitted but shouldn't have been"  # type: ignore[union-attr]
+    ]
+
+
+# ---- the delivery-update call ----
+
+
+@pytest.fixture()
+def out() -> Pos:
+    return demo_pos("outbound", "Sam Carter")
+
+
+def test_outbound_seeds_order_214_out_for_delivery(out: Pos) -> None:
+    assert out.order is not None and out.order.number == "214"
+    assert out.delivery is not None and out.delivery.charged == Decimal("49.65")
+    assert out.fulfillment.zip == "94107"
+    assert [ln.item.id for ln in out.out_of_stock()] == ["sprite"]
+    assert out.same_price_swaps(out.line("L3"))[0] == "2-liter Coke"
+    # the inbound demo still starts empty, with the Sprite in stock
+    assert demo_pos().item("sprite").available and not demo_pos().lines
+
+
+def test_swap_keeps_the_price(out: Pos) -> None:
+    line = out.swap_out_of_stock("L3", "coke")
+    assert line.describe() == "L3: 1 × 2-liter Coke"
+    assert out.quote is not None and out.quote.total == Decimal("49.65")
+    assert out.balance() == 0 and out.quote_current
+    assert grade(out, {"cart": ["1 × large Pepperoni"]})  # not read back, cart differs
+
+
+def test_swap_must_match_the_category_and_price(out: Pos) -> None:
+    with pytest.raises(PosError, match="same price"):
+        out.swap_out_of_stock("L3", "cannoli")
+    with pytest.raises(PosError, match="doesn't come at"):
+        out.swap_out_of_stock("L3", "water")
+    with pytest.raises(PosError, match="isn't out of stock"):
+        out.swap_out_of_stock("L1", "cheese")
+
+
+def test_remove_refunds_the_item_and_its_tax(out: Pos) -> None:
+    _, refund = out.remove_out_of_stock("L3")
+    assert refund == Decimal("4.35")
+    assert out.quote is not None and out.quote.total == Decimal("45.30")
+    assert out.balance() == Decimal("-4.35")
+    assert [ln.item.id for ln in out.removed] == ["sprite"]
+
+
+def test_only_breadsticks_can_ride_along(out: Pos) -> None:
+    with pytest.raises(PosError, match="can't be added now"):
+        out.add_extra("cannoli")
+    with pytest.raises(PosError, match="at most"):
+        out.add_extra("breadsticks", 3)
+    _, charge = out.add_extra("breadsticks")
+    assert charge == Decimal("6.53")
+    # saying it again is a repeat, not a second order
+    assert out.add_extra("breadsticks") == (out.lines[-1], Decimal("0"))
+    assert out.lines[-1].quantity == 1
+    # the rest of the order is locked, as before
+    with pytest.raises(PosError, match="already sent"):
+        out.add("cannoli")
+
+
+def test_cancel_is_always_refused_and_shown(out: Pos) -> None:
+    with pytest.raises(PosError, match="Too late to cancel"):
+        out.cancel()
+    assert out.delivery is not None and out.delivery.cancel_refused
+    assert out.order is not None
+    out.note_for_staff("Order took too long,  wants a call back")
+    assert out.delivery.staff_note == "Order took too long, wants a call back"
+
+
+def test_driver_note_replaces_and_is_checked(out: Pos) -> None:
+    with pytest.raises(PosError, match="empty"):
+        out.set_driver_note("   ")
+    with pytest.raises(PosError, match="under"):
+        out.set_driver_note("x" * 201)
+    out.set_driver_note("Gate code 4512")
+    out.set_driver_note("Gate code 4512,  unit 3B")
+    assert out.delivery is not None and out.delivery.note == "Gate code 4512, unit 3B"
+
+
+def test_read_back_needs_the_sprite_resolved_and_goes_stale(out: Pos) -> None:
+    with pytest.raises(PosError, match="still unresolved"):
+        out.read_back()
+    out.swap_out_of_stock("L3", "coke")
+    out.read_back()
+    assert out.read_back_current
+    out.set_driver_note("Leave at the door")
+    assert not out.read_back_current
+    out.read_back()
+    expect = {
+        "cart": ["1 × large Pepperoni", "1 × dozen Bone-in Wings, hot sauce", "1 × 2-liter Coke"],
+        "total": "49.65",
+        "balance": "0",
+        "driver_note": ["door"],
+        "staff_note": False,
+        "cancel_refused": False,
+    }
+    assert grade(out, expect) == []
+
+
+def test_grade_flags_an_unresolved_outbound_call(out: Pos) -> None:
+    problems = grade(out, {})
+    assert any("out of stock" in p for p in problems)
+    assert any("read back" in p for p in problems)
+
+
+def test_the_sprite_choice_can_change_after_a_swap(out: Pos) -> None:
+    out.swap_out_of_stock("L3", "coke")
+    line = out.swap_out_of_stock("L3", "diet_coke")
+    assert line.describe() == "L3: 1 × 2-liter Diet Coke"
+    assert out.balance() == 0
+    assert out.delivery is not None
+    swap = out.delivery.changes["swap"]
+    assert swap == "1 × 2-liter Sprite → 1 × 2-liter Diet Coke, same price"
+    # "actually, just refund it": it comes off as the Sprite that was ordered
+    _, refund = out.remove_out_of_stock("L3")
+    assert refund == Decimal("4.35") and out.balance() == Decimal("-4.35")
+    assert [ln.describe() for ln in out.removed] == ["L3: 1 × 2-liter Sprite"]
+    assert out.delivery.changes["swap"] == "Removed 1 × 2-liter Sprite, refund $4.35"
+    with pytest.raises(PosError, match="already removed"):
+        out.remove_out_of_stock("L3")
+    # the rest of the order still can't change
+    with pytest.raises(PosError, match="isn't out of stock"):
+        out.swap_out_of_stock("L1", "cheese")
+
+
+def test_a_refunded_sprite_can_become_a_coke(out: Pos) -> None:
+    out.add_extra("breadsticks")
+    out.remove_out_of_stock("L3")
+    line = out.swap_out_of_stock("l3", "coke")
+    assert [ln.id for ln in out.lines] == ["L1", "L2", "L3", "L4"] and not out.removed
+    assert line.describe() == "L3: 1 × 2-liter Coke"
+    assert out.balance() == Decimal("6.53")  # the breadsticks, and no refund
+    out.read_back()
+    expect = {
+        "cart": [
+            "1 × large Pepperoni",
+            "1 × dozen Bone-in Wings, hot sauce",
+            "1 × 2-liter Coke",
+            "1 × Breadsticks",
+        ],
+        "not_in_cart": ["sprite"],
+        "balance": "6.53",
+    }
+    assert grade(out, expect) == []
+
+
+def test_breadsticks_can_be_recounted_or_taken_off(out: Pos) -> None:
+    out.swap_out_of_stock("L3", "coke")
+    out.add_extra("breadsticks")
+    line, charge = out.add_extra("breadsticks", 2)
+    assert line.quantity == 2
+    assert charge == Decimal("6.53") and out.balance() == Decimal("13.06")
+    assert out.quote is not None and out.quote.total == Decimal("62.71")
+    assert out.delivery is not None
+    assert out.delivery.changes["extra"] == "Added 2 × Breadsticks, $13.06 more"
+    with pytest.raises(PosError, match="at most 2"):
+        out.add_extra("breadsticks", 3)
+    out.read_back()
+    _, charge = out.add_extra("breadsticks", 0)
+    assert charge == Decimal("-13.06") and out.balance() == 0
+    assert "extra" not in out.delivery.changes and not out.read_back_current
+    assert not any(ln.item.id == "breadsticks" for ln in out.lines + out.removed)
+    with pytest.raises(PosError, match="no Breadsticks"):
+        out.add_extra("breadsticks", 0)
+
+
+def test_wrong_person_ends_the_call_with_nothing_shared_or_changed(out: Pos) -> None:
+    assert not out.call_done
+    out.end_without_update("wrong_person")
+    assert out.call_done
+    assert out.delivery is not None and out.delivery.ended_early == "wrong_person"
+    # nothing about the order goes to whoever answered
+    for act in (
+        lambda: out.swap_out_of_stock("L3", "coke"),
+        lambda: out.add_extra("breadsticks"),
+        lambda: out.set_driver_note("Leave at the door"),
+        out.cancel,
+        out.read_back,
+    ):
+        with pytest.raises(PosError, match="isn't the customer"):
+            act()
+    assert out.delivery is not None and not out.delivery.cancel_refused
+    assert grade(out, {"ended_early": "wrong_person", "unchanged": True}) == []
+    assert grade(out, {}) == ["the call ended early as wrong_person, expected None"]
+
+
+def test_call_back_later_can_end_the_call_until_they_change_something(out: Pos) -> None:
+    out.end_without_update("call_back_later")
+    assert out.call_done
+    # they carry on after all: now it's a normal update, read back before it ends
+    out.swap_out_of_stock("L3", "coke")
+    assert out.delivery is not None and out.delivery.ended_early is None
+    assert not out.call_done
+    out.read_back()
+    assert out.call_done
+
+
+# ---- the call helpers ----
+
+
+async def test_pause_between_sentences() -> None:
+    async def chunks() -> AsyncIterator[str]:
+        for c in ["Dr. Patel is free at nine a.m. tomorrow. Does", " that work?"]:
+            yield c
+
+    out = "".join([c async for c in pause_between_sentences(chunks())])
+    assert out == 'Dr. Patel is free at nine a.m. tomorrow. <break time="300ms"/> Does that work?'
+
+
+def test_spoken_number() -> None:
+    assert spoken_number("+14155550142") == "415-555-0142"
+    assert spoken_number("555-0142") == "555-0142"

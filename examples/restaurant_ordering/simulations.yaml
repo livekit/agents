@@ -1,0 +1,413 @@
+# Nonna's Pizzeria. Each run is graded on the POS's final state by grade.py, from
+# `userdata.expect`. Cart lines are written the way the POS describes them:
+# "<quantity> × <size> <item>, <modifiers>". `direction: outbound` runs the delivery-update call.
+name: Restaurant phone ordering
+scenarios:
+  - label: Pickup, pepperoni, wings, and a Coke
+    instructions: |-
+      You are Sam Carter, phone 415 555 0142, calling Nonna's Pizzeria for pickup.
+      Order exactly one large pepperoni pizza, one dozen bone-in wings with hot sauce, and
+      one 2-liter Coke. Decline any extras or suggestions. Give your name and phone when
+      asked, confirm the read-back if it's right, and once you've heard your order number,
+      say thanks and goodbye.
+    agent_expectations: The agent takes a pickup order for exactly one large pepperoni, a
+      dozen hot wings, and a 2-liter Coke, reads back the order with a total of $44.66 before
+      submitting, then tells the caller the order number and pickup time.
+    tags:
+      id: ro-01
+      suite: smoke
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: pickup
+        cart:
+          - 1 × large Pepperoni
+          - 1 × dozen Bone-in Wings, hot sauce
+          - 1 × 2-liter Coke
+        total: "44.66"
+        name: Sam Carter
+        phone: (415) 555-0142
+
+  - label: Corrections during the read-back
+    instructions: |-
+      You are Jordan Lee, phone 415 555 0199, in a hurry, ordering for pickup.
+      Order one large pepperoni pizza, one dozen bone-in wings with hot sauce, and one
+      2-liter Coke, all in one breath. Decline any extras. Give your name and phone when
+      asked. When the agent starts reading the order back, cut in: "Wait, make the pizza a
+      medium, and drop the Coke." Then confirm the corrected order, and once you've heard
+      your order number, say goodbye.
+    agent_expectations: The agent changes the pizza to medium and removes the Coke without
+      rebuilding the order, reads back only the change and the new total of $37.04, gets a
+      yes, submits, and gives the order number.
+    tags:
+      id: ro-02
+      suite: smoke
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: pickup
+        cart:
+          - 1 × medium Pepperoni
+          - 1 × dozen Bone-in Wings, hot sauce
+        total: "37.04"
+        not_in_cart: [coke]
+
+  - label: Buffalo cauliflower is 86'd
+    instructions: |-
+      You are Priya Nair, phone 415 555 0123, ordering for pickup.
+      Order one medium cheese pizza and the Buffalo cauliflower. When you're told the
+      cauliflower is out, ask what else they have, and take mozzarella sticks if they're
+      mentioned, otherwise take the first side suggested. Decline breadsticks. Give your
+      name and phone when asked, confirm the read-back, and say goodbye once you have your
+      order number.
+    agent_expectations: The agent says the Buffalo cauliflower is unavailable today and
+      offers another side instead; the cauliflower never goes in the order, and the order is
+      submitted with the medium cheese pizza and the substitute.
+    tags:
+      id: ro-03
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        cart_includes: [1 × medium Cheese]
+        not_in_cart: [buffalo_cauliflower]
+
+  - label: Delivery outside San Francisco
+    instructions: |-
+      You are Marcus Bell, phone 415 555 0177. Order one large Hawaiian pizza, nothing else,
+      for delivery to 45 Rideau Street, Ottawa, Ontario. Decline extras. Give your name and
+      phone when asked, confirm the read-back, and say goodbye once you have your order
+      number.
+    agent_expectations: The agent takes the delivery to the Ottawa address without saying
+      it's out of range, adds the delivery fee, and submits a delivery order for one large
+      Hawaiian at $27.87.
+    tags:
+      id: ro-04
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: delivery
+        cart: [1 × large Hawaiian]
+        total: "27.87"
+
+  - label: Delivery under the minimum
+    instructions: |-
+      You are Elena Ruiz, phone 415 555 0164. Order one medium cheese pizza, nothing else,
+      for delivery to 300 De Haro St, San Francisco 94107. When you hear about the delivery
+      minimum, ask what you'd need to add, and then add one Caesar salad (say no to
+      breadsticks if they come up). Give your name and phone when asked, confirm the read-back,
+      and say goodbye once you have your order number.
+    agent_expectations: The agent explains the $20 delivery minimum when the subtotal is
+      $14.99, doesn't submit until the subtotal reaches at least $20, and submits a delivery
+      order with the cheese pizza and Caesar salad at $31.67 including the $4.99 fee.
+    tags:
+      id: ro-05
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: delivery
+        zip: "94107"
+        cart:
+          - 1 × medium Cheese
+          - 1 × Caesar Salad
+        total: "31.67"
+
+  - label: Kid with a nut allergy
+    instructions: |-
+      You are Dana Kim, phone 415 555 0110, ordering for pickup with kids in the background.
+      Start with: "My kid has a nut allergy, what's safe to order?" It's a regular allergy,
+      not severe; if offered a transfer to staff, say no thanks. Then order one large cheese
+      pizza and one dozen bone-in wings; when asked for a sauce, pick BBQ. Decline extras.
+      Give your name and phone when asked, confirm the read-back, and say goodbye once you
+      have your order number.
+    agent_expectations: The agent names the pesto pizza and the Thai chili peanut wings as
+      containing nuts per the menu, never calls any item safe or nut-free, and submits the
+      large cheese pizza and dozen BBQ wings.
+    tags:
+      id: ro-06
+      suite: smoke
+    userdata:
+      expect:
+        submitted: true
+        allergy: nuts
+        cart:
+          - 1 × large Cheese
+          - 1 × dozen Bone-in Wings, BBQ sauce
+        not_in_cart: [pesto]
+        total: "38.13"
+
+  - label: Order for four, in bursts and repeats
+    instructions: |-
+      You are Chris Patel, phone 415 555 0188, ordering for four people for pickup, talking
+      fast and in bursts. Keep each message short and send the order in pieces, interrupting
+      the agent's confirmations:
+      - "Okay so two large pepperonis, and, uh, wings, a dozen, hot."
+      - "Oh and a large meat lovers."
+      - "Yeah the two pepperonis, right? And two 2-liter Cokes."
+      Send all three messages, in that order, even if the agent moves on: the meat lovers is
+      part of your order. Restating the pepperonis is a repeat, not an extra order. If the
+      read-back is missing anything, correct it before confirming. Decline breadsticks. Give
+      your name and phone when asked, confirm the read-back if it has exactly these items,
+      and say goodbye once you have your order number.
+    agent_expectations: The agent captures every item once, keeps the pepperonis at two
+      despite the repeat, and submits two large pepperonis, one large meat lovers, a dozen
+      hot wings, and two 2-liter Cokes at $94.76.
+    tags:
+      id: ro-07
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: pickup
+        cart:
+          - 2 × large Pepperoni
+          - 1 × large Meat Lovers
+          - 1 × dozen Bone-in Wings, hot sauce
+          - 2 × 2-liter Coke
+        total: "94.76"
+
+  - label: Corrects the first pizza late in a long call
+    instructions: |-
+      You are Taylor Brooks, phone 415 555 0133, ordering a delivery dinner to
+      455 Natoma St, San Francisco 94103. Order one at a time, chatting a little between
+      items: first a small margherita with mushrooms, then a half dozen boneless wings with
+      lemon pepper, then a Caesar salad, then a tiramisu. Decline breadsticks. After giving
+      your address, name, and phone, and before agreeing to the read-back, say: "Oh, that
+      first pizza, can you make it a large, and no mushrooms?" Confirm the corrected order,
+      and say goodbye once you have your order number.
+    agent_expectations: The agent changes the margherita from a small with mushrooms to a
+      plain large, keeps every other item as ordered, reads back the change and the new
+      total of $51.82 including delivery, and submits after the caller agrees.
+    tags:
+      id: ro-long
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: delivery
+        zip: "94103"
+        cart:
+          - 1 × large Margherita
+          - 1 × half dozen Boneless Wings, lemon pepper sauce
+          - 1 × Caesar Salad
+          - 1 × Tiramisu
+        total: "51.82"
+
+  - label: Asks what's gluten-free
+    instructions: |-
+      You are Morgan Diaz, phone 415 555 0145, ordering for pickup. Start with: "Do you have
+      anything gluten-free? I'm celiac." It's not severe; if offered a transfer to staff, say
+      no thanks. Then order one house salad and one dozen bone-in wings with BBQ sauce.
+      Decline extras. Give your name and phone when asked, confirm the read-back, and say
+      goodbye once you have your order number.
+    agent_expectations: The agent looks up gluten in the menu data instead of saying it can't
+      check, names items that contain gluten (such as the pizzas and breadsticks), never
+      calls any item gluten-free or safe because the kitchen is shared, and submits the
+      house salad and dozen BBQ wings at $27.23.
+    tags:
+      id: ro-08
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: pickup
+        allergy: gluten
+        cart:
+          - 1 × House Salad
+          - 1 × dozen Bone-in Wings, BBQ sauce
+        total: "27.23"
+
+  - label: Two allergies in one order
+    instructions: |-
+      You are Alex Moreno, phone 415 555 0156, ordering for pickup. Start with: "I'm allergic
+      to nuts, and my partner is lactose intolerant. What should we avoid?" Neither is
+      severe; if offered a transfer to staff, say no thanks. Then order one large cheese pizza
+      and one house salad. If told the pizza contains dairy, say that's fine, the pizza is for
+      you. Decline extras. Give your name and phone when asked, confirm the read-back, and say
+      goodbye once you have your order number.
+    agent_expectations: The agent looks up both nuts and dairy in the menu data, names the
+      items with each, never calls anything safe or allergen-free, points out that the cheese
+      pizza contains dairy when it's ordered, and submits the large cheese pizza and house
+      salad at $28.32.
+    tags:
+      id: ro-09
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: pickup
+        allergy: [nuts, dairy]
+        cart:
+          - 1 × large Cheese
+          - 1 × House Salad
+        total: "28.32"
+
+  - label: Garden veggie, no olives
+    instructions: |-
+      You are Jamie Fox, phone 415 555 0167, ordering for pickup. Order one large garden
+      veggie pizza with no olives, and a can of Coke. Decline extras. Give your name and phone
+      when asked, check the read-back says no olives, confirm it, and say goodbye once you
+      have your order number.
+    agent_expectations: The agent takes the garden veggie pizza with the olives left off at
+      the regular price, includes "no olives" in the read-back, and submits it with the can
+      of Coke at $23.96.
+    tags:
+      id: ro-10
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: pickup
+        cart:
+          - 1 × large Garden Veggie, no black olives
+          - 1 × can Coke
+        total: "23.96"
+
+  # ---- the delivery-update call (outbound): order #214 is out with Marco, the Sprite ran out.
+  # Seeded: 1 large pepperoni, 1 dozen hot wings, 1 2-liter Sprite, delivery to 94107, $49.65.
+
+  - label: Delivery update, swap the Sprite and leave a gate code
+    instructions: |-
+      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      calling you. When asked about the Sprite, take the 2-liter Coke. When asked if the
+      driver should know anything, say: "Yes, the gate code is 4512, and I'm in unit 3B."
+      Then say that's all, listen to the read-back, and say thanks and goodbye.
+    agent_expectations: The agent introduces herself and Nonna's Pizzeria, gives the ETA,
+      swaps the Sprite for a 2-liter Coke at the same price, saves the gate code and unit as
+      a driver note, reads back the changes with the unchanged $49.65 total, and repeats the
+      ETA before ending the call.
+    tags:
+      id: ro-ob-swap
+      suite: smoke
+    userdata:
+      direction: outbound
+      expect:
+        cart:
+          - 1 × large Pepperoni
+          - 1 × dozen Bone-in Wings, hot sauce
+          - 1 × 2-liter Coke
+        total: "49.65"
+        balance: "0"
+        driver_note: ["4512", "3B"]
+        staff_note: false
+
+  - label: Delivery update, refund the Sprite and add breadsticks
+    instructions: |-
+      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      calling you. When asked about the Sprite, say you don't want a replacement: remove it
+      and refund it. Then ask: "Can you also add a cannoli?" When told that can't be added,
+      ask: "What about breadsticks?" and take one order if that works. When asked about
+      drop-off, say: "Just leave it at the door." Listen to the read-back and say goodbye.
+    agent_expectations: The agent removes the Sprite and states a $4.35 refund, explains the
+      cannoli can't be added because the order is on its way, adds one order of
+      breadsticks, saves "leave at the door" as the driver note, reads back the changes with the
+      new $51.83 total, and gives the ETA before ending.
+    tags:
+      id: ro-ob-refund
+      suite: full
+    userdata:
+      direction: outbound
+      expect:
+        cart:
+          - 1 × large Pepperoni
+          - 1 × dozen Bone-in Wings, hot sauce
+          - 1 × Breadsticks
+        not_in_cart: [sprite, cannoli]
+        total: "51.83"
+        balance: "2.18"
+        driver_note: ["door"]
+
+  - label: Delivery update, customer asks to cancel
+    instructions: |-
+      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      calling you. You're annoyed the Sprite ran out. Say: "Honestly, just cancel the whole
+      order." When told it's too late, accept it, and say yes if offered a note for the
+      manager: say the order took too long and you'd like a call back. Then take the
+      2-liter Coke instead of the Sprite. Nothing for the driver. Listen to the read-back and
+      say goodbye.
+    agent_expectations: The agent politely explains the order can't be cancelled because the
+      driver is already on the way, offers and leaves a note for the manager to call back,
+      swaps the Sprite for a 2-liter Coke, reads back the changes, and gives the ETA before
+      ending.
+    tags:
+      id: ro-ob-cancel
+      suite: full
+    userdata:
+      direction: outbound
+      expect:
+        cart:
+          - 1 × large Pepperoni
+          - 1 × dozen Bone-in Wings, hot sauce
+          - 1 × 2-liter Coke
+        total: "49.65"
+        cancel_refused: true
+        staff_note: true
+
+  - label: Delivery update, refund the Sprite, then take the Coke
+    instructions: |-
+      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      calling you. When asked about the Sprite, say: "Just refund it." Once you hear the
+      refund, change your mind: "Actually, I'll take the Coke instead." Nothing for the
+      driver. Listen to the read-back and say goodbye.
+    agent_expectations: The agent first removes the Sprite with a $4.35 refund, then, when
+      the customer changes their mind, puts a 2-liter Coke on the order at the same price
+      and says there's no refund after all; the read-back has the Coke swap, the $49.65 total,
+      and nothing charged or refunded, then the ETA before ending.
+    tags:
+      id: ro-ob-rechoose
+      suite: full
+    userdata:
+      direction: outbound
+      expect:
+        cart:
+          - 1 × large Pepperoni
+          - 1 × dozen Bone-in Wings, hot sauce
+          - 1 × 2-liter Coke
+        not_in_cart: [sprite]
+        total: "49.65"
+        balance: "0"
+
+  - label: Delivery update, breadsticks, then make it two
+    instructions: |-
+      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      calling you. When asked about the Sprite, take the 2-liter Coke. Then ask to add an
+      order of breadsticks. Once it's added, say: "Actually, make it two orders of breadsticks."
+      Nothing for the driver. Listen to the read-back and say goodbye.
+    agent_expectations: The agent swaps the Sprite for a 2-liter Coke, adds breadsticks,
+      then changes them to two orders instead of refusing, says the extra charge, and reads
+      back the new $62.71 total with $13.06 more on the card, then the ETA before ending.
+    tags:
+      id: ro-ob-breadsticks
+      suite: full
+    userdata:
+      direction: outbound
+      expect:
+        cart:
+          - 1 × large Pepperoni
+          - 1 × dozen Bone-in Wings, hot sauce
+          - 1 × 2-liter Coke
+          - 2 × Breadsticks
+        total: "62.71"
+        balance: "13.06"
+
+  - label: Delivery update, wrong number
+    instructions: |-
+      You didn't order anything and you don't know anyone named Sam Carter: Nonna's Pizzeria
+      has the wrong number. Once the agent has finished the opening, say: "Sorry, I think
+      you've got the wrong number. There's no Sam here." If asked anything else, say again
+      it's the wrong number. Say goodbye once the agent does.
+    agent_expectations: After hearing it's the wrong number, the agent apologizes and ends the
+      call without changing the order and without saying anything more about it, such as the
+      items, the delivery address, or the customer's name, and without asking who they are.
+    tags:
+      id: ro-ob-wrong
+      suite: full
+    userdata:
+      direction: outbound
+      expect:
+        ended_early: wrong_person
+        unchanged: true
+        staff_note: false
+        cancel_refused: false

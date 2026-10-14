@@ -27,7 +27,9 @@ members = [
     "livekit-example-homepage",
     "livekit-example-hotel-receptionist",
     "livekit-example-inference",
+    "livekit-example-restaurant-ordering",
     "livekit-example-survey",
+    "livekit-example-vehicle-service",
     "livekit-example-voice-agents",
     "livekit-plugins-anam",
     "livekit-plugins-anthropic",
@@ -2660,6 +2662,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-example-restaurant-ordering"
+version = "0"
+source = { virtual = "examples/restaurant_ordering" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "livekit-plugins-noise-cancellation" },
+    { name = "python-dotenv" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-plugins-noise-cancellation", specifier = ">=0.2" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+]
+
+[[package]]
 name = "livekit-example-survey"
 version = "0"
 source = { virtual = "examples/survey" }
@@ -2681,6 +2700,23 @@ requires-dist = [
     { name = "livekit-plugins-silero", editable = "livekit-plugins/livekit-plugins-silero" },
     { name = "livekit-plugins-turn-detector", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+]
+
+[[package]]
+name = "livekit-example-vehicle-service"
+version = "0"
+source = { virtual = "examples/vehicle_service" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "livekit-plugins-noise-cancellation" },
+    { name = "python-dotenv" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-plugins-noise-cancellation", specifier = ">=0.2" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
@@ -3409,6 +3445,21 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "nltk", specifier = ">=3.9.1,<4" },
+]
+
+[[package]]
+name = "livekit-plugins-noise-cancellation"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/90/2a8043f5565654e6dc393671487adf045e6b1ced5a30849971bd06ca81a3/livekit_plugins_noise_cancellation-0.3.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:be077ba5c927189e31a6b33fd58f9d799df88c7a130df997af91f9d7aa63d5c8", size = 66604894, upload-time = "2026-09-15T19:28:41.505Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/27/4fcf53e681ef863484dec15a1d822d290248c394f4eceb635de44cb611e2/livekit_plugins_noise_cancellation-0.3.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:104c1ae210186f278d04de6f6f19ae2be2d79bc9440e7899ab918bd771f908cb", size = 65096466, upload-time = "2026-09-15T19:28:44.92Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/a5/29626b96e89c9d8620e89a33573b4971a8814ac5f74f419199526ff0e24a/livekit_plugins_noise_cancellation-0.3.2-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:28d82b0a3af773cf3653d8bcedb2166596847c03ab4009e64c931eb77af62a22", size = 70806325, upload-time = "2026-09-15T19:28:48.321Z" },
+    { url = "https://files.pythonhosted.org/packages/07/65/3ca9af4cc5517ebe9c58668f82362a737a981d930514e4af77d8fba360a3/livekit_plugins_noise_cancellation-0.3.2-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:632416212279531f30a012486627f4371ef474eca87e9610fbca6787d8599a3d", size = 73590802, upload-time = "2026-09-15T19:28:51.577Z" },
+    { url = "https://files.pythonhosted.org/packages/04/3b/d4a853d237edbe0425e52474e9ad6d4a9d4fd48ec3693d3d69eadf9f2692/livekit_plugins_noise_cancellation-0.3.2-py3-none-win_amd64.whl", hash = "sha256:28ab0d02a34a0459f3202246a818197ed3d2c7173d8239b649a8688ea47cd2f8", size = 66294362, upload-time = "2026-09-15T19:28:54.775Z" },
 ]
 
 [[package]]

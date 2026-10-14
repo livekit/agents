@@ -40,6 +40,14 @@ Demonstrates supervisor escalation workflows for call centers, showing how to im
 
 A complete drive-thru ordering system example that showcases interactive voice agents for food ordering with database integration and order management.
 
+### 🍕 [Restaurant Ordering](./restaurant_ordering/)
+
+A pizzeria phone agent that takes pickup and delivery orders against a mock point of sale: sizes, sauces, allergies, sold-out items, one upsell, and the total. It also places the outbound call when an item in a delivery runs out.
+
+### 🔧 [Vehicle Service](./vehicle_service/)
+
+A car dealership's service desk on the phone. Inbound, it turns what the caller describes into technician notes, catches an open recall, and books the drop-off. Outbound, it calls back with what the technician found, the price, and what can wait, and records the approval.
+
 ### 🎭 [Expressive Agent](./expressive_agent/)
 
 A free-form companion agent running Expressive Mode. Tell it good news or bad news and hear the delivery change: emotion, pacing, and non-verbal sounds, all chosen from context.
