@@ -375,3 +375,72 @@ async def test_zero_cooldown_attempts_each_failing_replacement_once() -> None:
     finally:
         await session.aclose()
         await adapter.aclose()
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+@pytest.mark.parametrize("cooldown", [0, 10])
+async def test_initialization_tries_each_candidate_and_preserves_history(exhausted, cooldown):
+    failures = [FakeRealtimeModel(), FakeRealtimeModel()]
+    for index, model in enumerate(failures):
+        model.bring_up_error = RuntimeError(f"startup failure {index}")
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter(
+        failures if exhausted else [*failures, backup], cooldown=cooldown
+    )
+    session = adapter.session()
+    errors = []
+    session.on("error", errors.append)
+    history = ChatContext.empty()
+    history.add_message(role="user", content="Saved history")
+    try:
+        if exhausted:
+            with pytest.raises(RuntimeError, match="startup failure 1"):
+                await session.initialize(
+                    instructions="Saved instructions", chat_ctx=history, tools=[]
+                )
+        else:
+            await session.initialize(instructions="Saved instructions", chat_ctx=history, tools=[])
+            assert backup.active_session.chat_ctx.items == history.items
+            assert backup.active_session.updated_instructions == "Saved instructions"
+            assert not backup.active_session.closed
+        assert all(len(model.created_sessions) == 1 for model in failures)
+        assert all(model.active_session.closed for model in failures)
+        assert len(errors) == 2
+        assert errors[0].recoverable
+        assert errors[1].recoverable is (not exhausted)
+    finally:
+        await session.aclose()
+        await adapter.aclose()
+
+
+async def test_closing_during_initialization_cancels_and_closes_child():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class SlowSession(FakeRealtimeSession):
+        async def initialize(self, **kwargs):
+            entered.set()
+            await release.wait()
+            await super().initialize(**kwargs)
+
+    class SlowModel(FakeRealtimeModel):
+        def session(self, *, turn_detection_disabled=False):
+            child = SlowSession(self)
+            self.created_sessions.append(child)
+            return child
+
+    model = SlowModel()
+    adapter = RealtimeModelFallbackAdapter([model])
+    session = adapter.session()
+    initializing = asyncio.create_task(session.initialize())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(session.aclose(), 1)
+        with pytest.raises(asyncio.CancelledError):
+            await initializing
+        assert model.active_session.closed
+    finally:
+        release.set()
+        await utils.aio.cancel_and_wait(initializing)
+        await session.aclose()
+        await adapter.aclose()

@@ -4271,6 +4271,10 @@ class AgentActivity(RecognitionHooks):
                     instructions=instructions,
                     inference_span=inference_span,
                 )
+            except llm.RealtimeError as error:
+                logger.error("realtime generation failed: %s", error)
+                speech_handle._mark_done(error=error)
+                self._session._update_agent_state("listening")
             finally:
                 inference_span.end()
 
@@ -4536,11 +4540,11 @@ class AgentActivity(RecognitionHooks):
                 if audio_output is None and "audio" in msg_modalities
                 else None
             )
-            try:
+
+            async def _forward_message() -> _ForwardOutput:
                 tr_node = self._agent.transcription_node(tr_text_input, model_settings)
                 text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
-
-                out = await forward_generation(
+                return await forward_generation(
                     speech_handle=speech_handle,
                     audio_output=audio_output,
                     text_output=text_output,
@@ -4549,14 +4553,20 @@ class AgentActivity(RecognitionHooks):
                     on_first_frame=_on_message_first_frame,
                     reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
                 )
-                if discard_audio_task is not None:
-                    await speech_handle.wait_if_not_interrupted([discard_audio_task])
-                    if not speech_handle.interrupted:
-                        discard_audio_task.result()
-                return _MsgOutput(msg=msg, out=out)
+
+            if discard_audio_task is None:
+                return _MsgOutput(msg=msg, out=await _forward_message())
+
+            forwarding = asyncio.create_task(_forward_message())
+            message_tasks = asyncio.gather(forwarding, discard_audio_task)
+            try:
+                await speech_handle.wait_if_not_interrupted([message_tasks])
+                if not speech_handle.interrupted:
+                    message_tasks.result()
+                return _MsgOutput(msg=msg, out=await forwarding)
             finally:
-                if discard_audio_task is not None:
-                    await utils.aio.cancel_and_wait(discard_audio_task)
+                await utils.aio.cancel_and_wait(forwarding, discard_audio_task)
+                await asyncio.gather(message_tasks, return_exceptions=True)
 
         @utils.log_exceptions(logger=logger)
         async def _process_messages() -> None:
@@ -4598,21 +4608,42 @@ class AgentActivity(RecognitionHooks):
             tool_execution_completed_cb=_tool_execution_completed_cb,
         )
 
-        await speech_handle.wait_if_not_interrupted([*tasks])
+        # Propagate a processing failure even if the provider's other streams remain open.
+        processing = asyncio.gather(*tasks)
+        try:
+            await speech_handle.wait_if_not_interrupted([processing])
+            if not speech_handle.interrupted:
+                processing.result()
 
-        # the cancel is session-wide, so send it only while this response is still generating
-        if speech_handle.interrupted and not generation_ended:
-            playback_session.interrupt()
+            # the cancel is session-wide, so send it only while this response is still generating
+            if speech_handle.interrupted and not generation_ended:
+                playback_session.interrupt()
 
-        current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
-        _record_interruption(speech_handle)
-        current_span.set_attribute(
-            trace_types.ATTR_RESPONSE_FUNCTION_CALLS,
-            json.dumps([fnc.model_dump(exclude={"type", "created_at"}) for fnc in function_calls]),
-        )
+            current_span.set_attribute(
+                trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted
+            )
+            _record_interruption(speech_handle)
+            current_span.set_attribute(
+                trace_types.ATTR_RESPONSE_FUNCTION_CALLS,
+                json.dumps(
+                    [fnc.model_dump(exclude={"type", "created_at"}) for fnc in function_calls]
+                ),
+            )
 
-        # _process_messages handles its own playout waits and interrupt cleanup
-        await process_msg_task
+            # _process_messages handles its own playout waits and interrupt cleanup
+            await process_msg_task
+        except BaseException:
+            if not generation_ended:
+                with contextlib.suppress(Exception):
+                    playback_session.interrupt()
+            await utils.aio.cancel_and_wait(*tasks, exe_task, *authorization_tasks)
+            for tee in tees:
+                await tee.aclose()
+            raise
+        finally:
+            if not processing.done():
+                processing.cancel()
+            await asyncio.gather(processing, return_exceptions=True)
 
         if audio_output is not None:
             self._session._update_agent_state(

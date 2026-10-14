@@ -31,3 +31,26 @@ async def test_prism_fallback_typed_input_playback_and_explicit_restart() -> Non
                 if text == "First turn":
                     await adapter.restart_session()
                     assert [item["text"] for item in peer.items] == ["First turn", "Hello"]
+
+
+async def test_prism_startup_uses_backup_after_primary_initialization_failure() -> None:
+    async with peer_model() as (primary_peer, primary, _):
+        primary_peer.refusals["session.update"] = ("invalid_session", "event")
+        async with peer_model() as (backup_peer, backup, _):
+            adapter = llm.RealtimeModelFallbackAdapter([primary, backup])
+            history = llm.ChatContext.empty()
+            history.add_message(role="user", content="Saved history")
+            async with AgentSession(llm=adapter) as session:
+                await asyncio.wait_for(
+                    session.start(Agent(instructions="Saved instructions", chat_ctx=history)), 3
+                )
+                assert backup_peer.settings["instructions"] == "Saved instructions"
+                assert [item["text"] for item in backup_peer.items] == ["Saved history"]
+                speech = session.generate_reply(user_input="Hello backup")
+                request = await backup_peer.next()
+                assert request["response"]["prism_input_text"] == "Hello backup"
+                response_id = await backup_peer.start(request)
+                await backup_peer.message(response_id)
+                await backup_peer.end(response_id)
+                await asyncio.wait_for(speech.wait_for_playout(), 3)
+                assert speech.exception() is None
