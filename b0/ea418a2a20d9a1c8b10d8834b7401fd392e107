@@ -1,0 +1,82 @@
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/stt.py
+  s_bcd3e70328118e::t_07a20eedc64d7b 1015
+tests/test_plugin_elevenlabs_stt.py
+  s_bcd3e70328118e::t_f40824f4e4e3d3 71
+  s_bcd3e70328118e::t_3c748584300388 107
+livekit-agents/livekit/agents/stt/fallback_adapter.py
+  s_bcd3e70328118e::t_86b852c4709374 403-405
+livekit-agents/livekit/agents/stt/stt.py
+  s_bcd3e70328118e::t_199ef5bb11292b 6,365-419,437,475-478,480,486,536-537,629-631,633,641-642,644
+livekit-agents/livekit/agents/voice/agent.py
+  s_bcd3e70328118e::t_be3872d1dc3229 390-392
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_bcd3e70328118e::t_25e7db16323de3 180-181
+livekit-plugins/livekit-plugins-sarvam/tests/test_speech_timing.py
+  s_bcd3e70328118e::t_60e53f5eabb921 31,124,143
+tests/test_audio_recognition_push_audio.py
+  s_bcd3e70328118e::t_e67b97f6da6cf0 28-29,74,81
+tests/test_inference_stt_aligned_transcript_claim.py
+  s_bcd3e70328118e::t_30b336c694159f 127
+tests/test_inference_stt_start_of_speech.py
+  s_bcd3e70328118e::t_6b83dc78268ebb 35,136,166,215,234
+tests/test_plugin_assemblyai_stt.py
+  s_bcd3e70328118e::t_d601de03fb9be2 1643,1654
+tests/test_plugin_aws_stt.py
+  s_bcd3e70328118e::t_697559ad638d24 30
+tests/test_plugin_azure_stt.py
+  s_bcd3e70328118e::t_8193e863fec65c 17,44
+tests/test_plugin_baseten_stt.py
+  s_bcd3e70328118e::t_f7166b1904d029 10,23-24
+tests/test_plugin_cartesia_stt.py
+  s_bcd3e70328118e::t_31bc97e9c5ad11 25,42
+tests/test_plugin_deepgram_stt.py
+  s_bcd3e70328118e::t_209f5fd95a4e94 282,329,355
+tests/test_plugin_gladia_stt.py
+  s_bcd3e70328118e::t_ac72e29acca85b 29
+tests/test_plugin_gnani_stt.py
+  s_bcd3e70328118e::t_bdcbb0ca73009e 34
+tests/test_plugin_google_stt.py
+  s_bcd3e70328118e::t_78803173f073e3 135
+tests/test_plugin_inworld_stt.py
+  s_bcd3e70328118e::t_b6413a8b6e2d5f 20
+tests/test_plugin_nabrah_stt.py
+  s_bcd3e70328118e::t_6cd820c2b4bfcd 184
+tests/test_plugin_nvidia_stt.py
+  s_bcd3e70328118e::t_d82ed73815a51d 17
+tests/test_plugin_palabra.py
+  s_bcd3e70328118e::t_9feb63b7106a1e 553,576-578,598,623-625
+tests/test_plugin_rtzr_stt.py
+  s_bcd3e70328118e::t_304d7bda1f98d7 16
+tests/test_plugin_sarvam_stt_streaming.py
+  s_bcd3e70328118e::t_05044914cbe16d 60,1727
+tests/test_plugin_smallestai_stt.py
+  s_bcd3e70328118e::t_b9279b4a99b26e 18
+tests/test_plugin_soniox_stt.py
+  s_bcd3e70328118e::t_7027e2af56b464 360,387
+tests/test_plugin_speechmatics_stt.py
+  s_bcd3e70328118e::t_a1185a0f1d82b6 129
+tests/test_plugin_telnyx_stt.py
+  s_bcd3e70328118e::t_38e21e7f73ddad 154
+tests/test_plugin_xai_stt.py
+  s_bcd3e70328118e::t_cda2710936b55c 158
+tests/test_stt_base.py
+  s_bcd3e70328118e::t_cc39774fbb2768 21,288,291,293,295,301-304,315-319,323-324,326,335,339-340,346,348,351,356,359,366,373,377-381,386-391,394,400
+tests/test_stt_fallback.py
+  s_bcd3e70328118e::t_0e769c70a50b34 238,243,255-256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b0ea418a2a20d9a1c8b10d8834b7401fd392e107",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
