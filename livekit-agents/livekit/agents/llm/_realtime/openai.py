@@ -1055,7 +1055,9 @@ class RealtimeSession(
                     ws_conn = await self._create_ws_conn()
                     if reconnecting:
                         await _reconnect()
-                        num_retries = 0  # reset the retry counter
+                    num_retries = 0  # reset the retry counter
+                    # a failed first handshake leaves the startup events queued, with nothing to replay
+                    reconnecting = True
                     await self._run_ws(ws_conn)
 
                 except APIError as e:
@@ -1082,8 +1084,6 @@ class RealtimeSession(
                 except Exception as e:
                     self._emit_error(e, recoverable=False)
                     raise
-
-                reconnecting = True
         finally:
             # the session loop has exited (fatal server error, retries exhausted, or
             # close); close any in-progress generation and fail any pending
@@ -1698,15 +1698,17 @@ class RealtimeSession(
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
-            data = f.data.tobytes()
-            for nf in self._bstream.write(data):
-                self.send_event(
-                    InputAudioBufferAppendEvent(
-                        type="input_audio_buffer.append",
-                        audio=base64.b64encode(nf.data).decode("utf-8"),
-                    )
+            self._append_audio(self._bstream.write(f.data.tobytes()))
+
+    def _append_audio(self, frames: list[rtc.AudioFrame]) -> None:
+        for nf in frames:
+            self.send_event(
+                InputAudioBufferAppendEvent(
+                    type="input_audio_buffer.append",
+                    audio=base64.b64encode(nf.data).decode("utf-8"),
                 )
-                self._pushed_duration_s += nf.duration
+            )
+            self._pushed_duration_s += nf.duration
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         message = llm.ChatMessage(
@@ -1723,11 +1725,14 @@ class RealtimeSession(
         )
 
     def commit_audio(self) -> None:
+        # the partial frame belongs to this turn, not the next
+        self._append_audio(self._bstream.flush())
         if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
             self.send_event(InputAudioBufferCommitEvent(type="input_audio_buffer.commit"))
             self._pushed_duration_s = 0
 
     def clear_audio(self) -> None:
+        self._bstream.clear()
         self.send_event(InputAudioBufferClearEvent(type="input_audio_buffer.clear"))
         self._pushed_duration_s = 0
 
