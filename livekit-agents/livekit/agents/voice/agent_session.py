@@ -1714,8 +1714,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def clear_user_turn(self) -> None:
         """Discard the current user transcription and input audio buffer.
 
-        In manual turn detection, this is ignored while a commit is finalizing
-        STT or waiting for end-of-turn delivery.
+        In manual turn detection, this does not discard a transcript whose
+        commit future has resolved, even if end-of-turn delivery is pending.
         """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
@@ -1733,6 +1733,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Returns a future that resolves with the user's audio transcript once STT
         is complete and end-of-turn detection has been triggered.
+        In manual turn detection, the resolved transcript is a snapshot. Later
+        transcripts and clears do not change that committed turn.
 
         Args:
             transcript_timeout (float, optional): The timeout for the final transcript

@@ -1966,8 +1966,8 @@ class AgentActivity(RecognitionHooks):
         return future
 
     def clear_user_turn(self) -> None:
-        if self._audio_recognition and not self._audio_recognition._clear_user_turn():
-            return
+        if self._audio_recognition:
+            self._audio_recognition._clear_user_turn()
 
         if self._rt_session is not None:
             self._rt_session.clear_audio()
