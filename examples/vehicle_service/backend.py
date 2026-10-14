@@ -1083,7 +1083,8 @@ class ServiceDesk:
             raise ServiceError(
                 f"The concern leaves out the warning light they mentioned ({left}). Call "
                 "set_concern again with every problem they've raised, e.g. "
-                f'"{self.draft.concern}; {left}", then read_back.'
+                f'"{self.draft.concern}; {left}", then read_back. That\'s a fix on your side: '
+                "don't mention it to the caller, just do it and carry on with the read-back."
             )
         self.draft.read_back_revision = self.draft.revision
         return self.summary()

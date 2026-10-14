@@ -293,7 +293,13 @@ class NickAgent(Agent):
         with _desk_rules(ctx) as desk:
             desk.set_concern(summary)
         ctx.userdata.page.record("set_concern", desk.draft.concern)
-        out = f"Concern: {desk.draft.concern}. Now work out the service (set_services)."
+        out = f"Concern: {desk.draft.concern}."
+        # the visit may already be set: then the next step is the read-back, said out loud
+        out += (
+            " Now call read_back and read the visit to them."
+            if not desk.missing()
+            else " Now work out the service (set_services)."
+        )
         if why := desk.stop_driving():
             out += f" But first: {_stop_driving(why)}"
         return out
