@@ -1,9 +1,9 @@
 """The twelve checks of plan 10.1 that run locally, against the live stack of examples/.
 
 Gated by ``V0_STACK=1``; skipped otherwise, and when the stack or the workers are not up. Needs
-the fast brain and the slow brain, livekit-server and agent-db as examples/README.md starts
-them, with the same environment. Not here: 6's crash (the storage crate's DST tests), 10's two
-regions, 11's SIP call.
+the fast brain and the slow brain as examples/README.md starts them, with the same environment:
+the node is ``LIVEKIT_URL``'s, or ``LIVEKIT_HTTP`` when set. Not here: 6's crash (the storage
+crate's DST tests), 10's two regions, 11's SIP call.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -21,10 +22,13 @@ import pytest
 STACK = bool(os.environ.get("V0_STACK"))
 pytestmark = [
     pytest.mark.unit,  # the category; every test skips unless V0_STACK=1 names the live stack
-    pytest.mark.skipif(not STACK, reason="V0_STACK=1 runs these against the local stack"),
+    pytest.mark.skipif(not STACK, reason="V0_STACK=1 runs these against the live stack"),
 ]
 
-LIVEKIT_HTTP = os.environ.get("LIVEKIT_HTTP", "http://127.0.0.1:7880")
+# the node over HTTP: LIVEKIT_URL's scheme swapped, as the worker addresses its own doors
+LIVEKIT_HTTP = os.environ.get("LIVEKIT_HTTP") or re.sub(
+    r"^ws(s?)://", r"http\1://", os.environ.get("LIVEKIT_URL") or "ws://127.0.0.1:7880"
+).rstrip("/")
 AGENT = "dentist"
 BASE = f"{LIVEKIT_HTTP}/agents/{AGENT}/default"
 EP = f"{BASE}/frontend/v1"
@@ -117,12 +121,14 @@ class Dentist:
 
 
 async def stack_is_up() -> bool:
+    """Whether the node routes to both brains, asked under the project credential; whether a
+    public door also answers without one is a check of its own."""
+    headers = {"Authorization": f"Bearer {project_token()}"}
     try:
         async with httpx.AsyncClient(timeout=5.0) as http:
-            card = await http.get(f"{BASE}/frontend/.well-known/agent-card.json")
+            card = await http.get(f"{BASE}/frontend/.well-known/agent-card.json", headers=headers)
             slow = await http.get(
-                f"{SLOW_BASE}/backend/.well-known/agent-card.json",
-                headers={"Authorization": f"Bearer {project_token()}"},
+                f"{SLOW_BASE}/backend/.well-known/agent-card.json", headers=headers
             )
         return card.status_code == 200 and slow.status_code == 200
     except (httpx.HTTPError, KeyError):
@@ -163,6 +169,22 @@ def progress(frames: list[dict]) -> list[str]:
         for p in u["status"]["message"].get("parts") or []
         if "text" in p
     ]
+
+
+# -- a public door -------------------------------------------------------------------------
+
+
+async def test_a_public_door_answers_without_a_token() -> None:
+    if not await stack_is_up():
+        pytest.skip("the fast and slow brains are not reachable through livekit-server")
+    async with httpx.AsyncClient(timeout=5.0) as http:
+        card = await http.get(f"{BASE}/frontend/.well-known/agent-card.json")
+        private = await http.get(f"{SLOW_BASE}/backend/.well-known/agent-card.json")
+    assert card.status_code == 200, (
+        f"the node refused the public front desk without a token ({card.status_code}): "
+        "the worker registered the door public, so the node ignores the flag"
+    )
+    assert private.status_code == 401, "the back office is not public"
 
 
 # -- 1 thin slice, 5 idempotency ----------------------------------------------------------
