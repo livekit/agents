@@ -79,7 +79,7 @@ load_dotenv()
 
 PERSONA = "Nick"
 BUSINESS = "Bayside BMW"
-VOICE = "Schedar"  # Gemini TTS "Schedar": even, steady
+VOICE = "Charon"  # Gemini TTS "Charon": informative, clear
 # the number a customer calls back on, said on the follow-up and on voicemail
 SERVICE_DESK_NUMBER = os.getenv("SERVICE_DESK_NUMBER", "")
 # the participant identity of a phone the agent rings
