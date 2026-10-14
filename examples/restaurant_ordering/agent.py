@@ -49,6 +49,7 @@ from call import (
 from dotenv import load_dotenv
 from grade import grade
 from page import Page, visitor_name
+from scripted_callers import disconnect_scripted_callers
 
 from livekit import api
 from livekit.agents import (
@@ -1261,6 +1262,8 @@ async def entrypoint(ctx: JobContext) -> None:
     session.on("close", lambda _: ctx.delete_room())
     # a caller who's gone silent gets one "are you still there?", then a goodbye
     hang_up_when_silent(session, session.userdata.page)
+    # a bot farm runs known question banks at public agents: hang up on their opening lines
+    disconnect_scripted_callers(session, session.userdata.page)
     # the demo website, if it's watching: the page that asked to ring a phone, the browser
     # caller, or viewers of a call to the restaurant's number
     session.userdata.page.watch(ctx.room, session, page=meta.get("page"), caller=caller)

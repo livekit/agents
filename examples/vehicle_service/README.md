@@ -45,6 +45,8 @@ The session runs on LiveKit Inference: Deepgram Nova-3, GPT-4.1 mini, and Gemini
 
 Background noise is handled in two places. Before speech-to-text, enhanced noise cancellation removes background voices (a TV, people nearby) and noise: `BVC` for browser callers, and `BVCTelephony`, trained on narrowband call audio, for phone callers. Then adaptive interruption decides whether what's left is the caller cutting in or just a sound, so a cough or a passing voice doesn't stop Nick mid-sentence. Leave Krisp off on the SIP trunk, since the agent already cleans the audio.
 
+Bots hang up on their own: a bot farm runs two fixed question banks at public LiveKit agents, so `scripted_callers.py` checks the caller's first three turns against their known opening lines (`scripted_questions.txt`, the same list as [homepage](../homepage/)) and ends the call on a match. A real caller is never matched past their opening.
+
 ## Run it
 
 ```bash
