@@ -851,7 +851,8 @@ async def test_upload_session_report_omits_simulation_metadata_for_normal_sessio
 
 
 def test_setup_cloud_tracer_logger_provider_always_created() -> None:
-    """LoggerProvider should be set up even when enable_logs=False."""
+    """The log pipeline is set up even when enable_logs=False: session report records
+    upload through it. Python log records do not reach it."""
     with (
         _stub_cloud_tracer_deps() as stubs,
         patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
@@ -861,6 +862,9 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
             enable_logs=False,
             metadata={"lk.simulation.enabled": True},
         )
+        from livekit.agents.telemetry import traces as traces_mod
+
+        assert traces_mod._cloud.log_handler not in logging.getLogger().handlers
 
     stubs.set_logger_provider.assert_called_once()
     service_resource_calls = [
@@ -870,9 +874,8 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
     ]
     assert service_resource_calls
     assert not any(k.startswith("lk.simulation.") for k in service_resource_calls[0])
-    # OTLP exporter should NOT be created when enable_logs=False
-    stubs.log_exporter.assert_not_called()
-    stubs.log_batch.assert_not_called()
+    stubs.log_exporter.assert_called_once()
+    stubs.log_batch.assert_called_once()
 
 
 def _resource_attrs_for_env(env: dict[str, str]) -> dict[str, Any]:
@@ -1070,7 +1073,9 @@ def test_exporters_only_upload_records_of_registered_jobs() -> None:
     inner.export.assert_called_once_with([recorded])
 
     def _rec(attrs: dict[str, Any] | None) -> SimpleNamespace:
-        return SimpleNamespace(log_record=SimpleNamespace(attributes=attrs))
+        return SimpleNamespace(
+            log_record=SimpleNamespace(attributes=attrs), instrumentation_scope=None
+        )
 
     inner = MagicMock()
     log_gate = _GatedLogExporter(inner, export_jobs)
@@ -1625,15 +1630,61 @@ def test_logs_of_a_job_that_disabled_logs_are_not_uploaded() -> None:
     }
     inner = MagicMock()
     gate = _GatedLogExporter(inner, export_jobs)
-    disabled = SimpleNamespace(log_record=SimpleNamespace(attributes=attrs))
+    disabled = SimpleNamespace(
+        log_record=SimpleNamespace(attributes=attrs), instrumentation_scope=None
+    )
     recorded = SimpleNamespace(
-        log_record=SimpleNamespace(attributes={"room_id": "room-a", "job_id": "job-a"})
+        log_record=SimpleNamespace(attributes={"room_id": "room-a", "job_id": "job-a"}),
+        instrumentation_scope=None,
     )
 
     gate.export([disabled])
     inner.export.assert_not_called()
     gate.export([recorded, disabled])
     inner.export.assert_called_once_with([recorded])
+
+
+async def test_session_report_records_upload_when_log_export_is_off() -> None:
+    """Session report, evaluation, and outcome records are part of the recording, not
+    Python log export: they reach Cloud with logs=False. Ordinary log records do not."""
+    from opentelemetry.sdk._logs.export import (
+        InMemoryLogRecordExporter,
+        SimpleLogRecordProcessor,
+    )
+
+    from livekit.agents.telemetry.traces import _setup_cloud_tracer
+
+    exporter = InMemoryLogRecordExporter()
+    with _stub_cloud_tracer_deps() as stubs:
+        stubs.log_exporter.return_value = exporter
+        stubs.log_batch.side_effect = SimpleLogRecordProcessor
+        state = _setup_cloud_tracer(
+            room_id="room-1",
+            job_id="job-1",
+            **_observability_endpoint_arg(_setup_cloud_tracer),
+            enable_traces=False,
+            enable_logs=False,
+        )
+        ctx = _make_telemetry_job_ctx(room_id="room-1", job_id="job-1", traces=False, logs=False)
+        ctx._telemetry_state = state
+
+        report = _make_mock_report(
+            {"audio": True, "traces": False, "logs": False, "transcript": False}
+        )
+        report.sdk_version = "1.0.0"
+        report.model_usage = []
+        tagger = _make_mock_tagger(
+            evaluations=[{"name": "test-eval", "verdict": "pass"}], outcome_reason="all good"
+        )
+        with (
+            _job_ctx_active(ctx),
+            patch(f"{_TRACES_MOD}._serialize_session_options", return_value={}),
+        ):
+            await _call_upload(report, tagger=tagger)
+            stubs.logger_state["provider"].get_logger("livekit.agents").emit(body="python log")
+
+    bodies = [r.log_record.body for r in exporter.get_finished_logs()]
+    assert sorted(bodies) == ["evaluation", "outcome", "session report"]
 
 
 # ---------------------------------------------------------------------------

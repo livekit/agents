@@ -536,6 +536,11 @@ class _GatedSpanExporter(SpanExporter):
         self._inner.shutdown()
 
 
+# logger scopes of the records _upload_session_report emits. They are part of the
+# session recording, not Python log export, so the job's `logs` option does not gate them.
+_SESSION_REPORT_SCOPES = ("chat_history", "evaluations")
+
+
 class _GatedLogExporter(LogRecordExporter):
     """Log counterpart of :class:`_GatedSpanExporter`."""
 
@@ -544,12 +549,14 @@ class _GatedLogExporter(LogRecordExporter):
         self._export_jobs = export_jobs
 
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
-        exportable = [
-            r
-            for r in batch
-            if (state := _job_export_state(self._export_jobs, r.log_record.attributes)) is not None
-            and state.logs_enabled
-        ]
+        exportable: list[ReadableLogRecord] = []
+        for r in batch:
+            state = _job_export_state(self._export_jobs, r.log_record.attributes)
+            if state is None:
+                continue
+            scope = r.instrumentation_scope.name if r.instrumentation_scope else None
+            if state.logs_enabled or scope in _SESSION_REPORT_SCOPES:
+                exportable.append(r)
         if not exportable:
             return LogRecordExportResult.SUCCESS
         return self._inner.export(exportable)
@@ -947,14 +954,15 @@ class _CloudTelemetry:
                 if self._span_metadata_processor is not None:
                     self._span_metadata_processor.set_metadata(session_metadata)
 
-            # Always set up the logger provider — it's needed for session reports,
-            # evaluations, and chat history, not just Python log export.
+            # Always set up the log pipeline — session reports, evaluations, and chat
+            # history upload through it, not just Python log export. `enable_logs`
+            # only decides whether Python log records reach it.
             self._ensure_logger_provider()
+            self._ensure_log_pipeline(url)
+            if self._log_metadata_processor is not None:
+                self._log_metadata_processor.set_metadata(session_metadata)
 
             if enable_logs:
-                self._ensure_log_pipeline(url)
-                if self._log_metadata_processor is not None:
-                    self._log_metadata_processor.set_metadata(session_metadata)
                 if self._log_handler is not None:
                     root = logging.getLogger()
                     if self._log_handler not in root.handlers:
