@@ -19,13 +19,15 @@ import re
 import time
 from collections.abc import AsyncIterable, Iterator
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from backend import (
     DELIVERY_FEE,
-    DELIVERY_MINIMUM,
     ENDED_EARLY,
     MAX_EXTRAS,
     SAUCES,
+    SMALL_ORDER_FEE,
+    SMALL_ORDER_UNDER,
     TAX_RATE,
     TOPPINGS,
     EndedEarly,
@@ -35,11 +37,12 @@ from backend import (
     demo_pos,
 )
 from call import (
+    USER_AWAY_TIMEOUT,
     VOICE_RULES,
     end_after_reply,
     first_name,
     hang_up,
-    pause_between_sentences,
+    hang_up_when_silent,
     room_options,
     spoken_number,
 )
@@ -70,7 +73,8 @@ load_dotenv()
 
 PERSONA = "Gabby"
 BUSINESS = "Zappi's Pizzeria"
-VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"  # Cartesia "Katie"
+HOURS = "open every day, 11 a.m. to 10 p.m."
+VOICE = "luna"  # Rime Coda "Luna"
 # the number a customer calls back on, said on voicemail
 RESTAURANT_NUMBER = os.getenv("RESTAURANT_NUMBER", "")
 # the participant identity of a phone the agent rings
@@ -112,7 +116,7 @@ def _tokens(text: str) -> list[str]:
 
 
 def _drink_size_said(ctx: Ctx, pos: Pos, item_id: str, size: str | None) -> None:
-    """Refuses a drink size the caller didn't give for that drink. Sodas and pizzas share
+    """Refuses a drink size the caller didn't give for a drink. Sodas and pizzas share
     small, medium, and large, so in "a large pepperoni and a Coke" the "large" is the
     pizza's, and the model tends to borrow it, or to pick a size, instead of asking."""
     item = pos.item(item_id)
@@ -121,7 +125,9 @@ def _drink_size_said(ctx: Ctx, pos: Pos, item_id: str, size: str | None) -> None
     chosen = item.size(size)
     sizes = {t for n in (chosen.id, chosen.label, *chosen.aliases) for t in _tokens(n)}
     sizes = {t for t in sizes if len(t) > 1}
-    mine = {t for t in _tokens(item.name) if len(t) > 2} | _DRINK_WORDS
+    # any drink's name counts: in "make the large Coke a Sprite" the size is the Sprite's too
+    drinks = [m for m in pos.menu if m.category == item.category]
+    mine = {t for m in drinks for t in _tokens(m.name) if len(t) > 2} | _DRINK_WORDS
     others = (
         {t for m in pos.menu if m is not item for t in _tokens(m.name) if len(t) > 2} | _OTHER_KINDS
     ) - mine
@@ -199,10 +205,90 @@ def _asked_for_more(ctx: Ctx, total: int) -> bool:
     )
 
 
+_NO = re.compile(r"^\W*(no|nope|nah|don'?t|do not|wait|hold on|not yet)\b")
+# a read-back answered with a shrug isn't a yes: "sure, I guess", "whatever", "I don't know"
+_UNSURE = re.compile(
+    r"\b(whatever|i guess|i suppose|i don'?t know|i dunno|dunno|not sure|maybe|probably|"
+    r"i think so|kind of|kinda)\b"
+)
+_AGREE = re.compile(
+    r"\b(yes|yeah|yep|yup|yea|correct|right|sounds? good|looks? good|perfect|great|go ahead|"
+    r"place it|do it|absolutely|definitely|exactly|all good|good|ok|okay|sure|confirm|"
+    r"confirmed)\b"
+)
+_DISAGREE = re.compile(r"^\W*(no|nope|nah|wait|hold on)\b|\bnot (right|correct)\b|\bwrong\b")
+
+
+def _read_back_answer(ctx: Ctx, since: float | None) -> str:
+    """How the caller answered the read-back given at `since`: "yes", "unsure", "no", or
+    "none" yet. The latest answer counts; words that are none of these (a phone number given
+    after their yes) are skipped."""
+    if since is None:
+        return "none"
+    heard = [
+        (m.text_content or "").lower()
+        for m in ctx.session.history.messages()
+        if m.role == "user" and m.created_at > since
+    ]
+    for said in reversed(heard):
+        if _DISAGREE.search(said):
+            return "no"
+        if _UNSURE.search(said):
+            return "unsure"
+        if _AGREE.search(said):
+            return "yes"
+    return "none"
+
+
+def _answered_yes_since(ctx: Ctx, asked_at: float | None) -> bool:
+    # whether the caller has answered since the cancellation was read back to them, and not
+    # with a no: a cancel goes through only on their yes, never in the turn that asked
+    if asked_at is None:
+        return False
+    heard = [
+        m.text_content or ""
+        for m in ctx.session.history.messages()
+        if m.role == "user" and m.created_at > asked_at
+    ]
+    return bool(heard) and not _NO.match(heard[-1].lower())
+
+
+def _cancel_read_back_at(ctx: Ctx) -> float | None:
+    # when the agent asked "cancel the whole order?" in its own words, before calling
+    # cancel_order: its last question before the caller's last words, if that was about
+    # cancelling
+    asked: float | None = None
+    for m in ctx.session.history.messages():
+        text = (m.text_content or "").lower()
+        if m.role == "assistant" and text:
+            asked = m.created_at if "cancel" in text and "?" in text else None
+    return asked
+
+
+def _cancel_needs_a_yes(ctx: Ctx, pos: Pos, confirmed: bool, asked_at: float | None) -> None:
+    if confirmed and pos.cancel_asked and not _answered_yes_since(ctx, asked_at):
+        raise PosError(
+            "They haven't said yes to cancelling: wait for a clear yes to the read-back before "
+            "calling cancel_order with confirmed. If they said no, carry on with the order."
+        )
+
+
+def _tip(amount: float | None, percent: float | None) -> dict[str, Decimal | None]:
+    return {
+        "amount": None if amount is None else Decimal(str(amount)),
+        "percent": None if percent is None else Decimal(str(percent)),
+    }
+
+
 class GabbyAgent(Agent):
     def __init__(self, pos: Pos) -> None:
         super().__init__(instructions=_instructions(pos))
         self._submitted_at: float | None = None
+        # when the current total was first read back, and for which cart version
+        self._read_back_at: float | None = None
+        self._read_back_version: int | None = None
+        self._cancel_asked_at: float | None = None
+        self._cancelled_at: float | None = None
         self._warned = False
 
     async def on_enter(self) -> None:
@@ -266,8 +352,10 @@ class GabbyAgent(Agent):
         clear = [m.name for m in pos.menu if m.available and tag not in m.allergens]
         out = (
             f"{found} These don't list {tag}: {', '.join(clear) or 'nothing'}. But it's all made "
-            f"in one shared kitchen, so you can't promise anything is free of {tag}. Never say an "
-            f'item is "safe" or "{tag}-free". Answer what they asked in a sentence or two; when a '
+            f"in one shared kitchen, so you can't promise anything is free of {tag}. Never call "
+            f'anything "safe", "safer", "safest", or "{tag}-free", in any form (not even "the '
+            "safest thing is to skip it\": say \"I'd skip anything you're unsure of\"), and don't "
+            'pick "the best choice" for them. Answer what they asked in a sentence or two; when a '
             'list is long, sum it up ("all the pizzas and the wings") instead of reading out '
             "every item."
         )
@@ -332,11 +420,15 @@ class GabbyAgent(Agent):
         without: list[str] | None = None,
         first_half: list[str] | None = None,
         second_half: list[str] | None = None,
+        item_id: str | None = None,
     ) -> str:
         """Change one line in the cart. Pass only what changed; the rest stays as it is.
 
         Args:
             line_id: The cart line, e.g. "L1".
+            item_id: A different menu item for this line ("make the Coke a Sprite"), e.g.
+                "sprite". It keeps the line's count, and its size if the new item comes in
+                it: don't ask the size again.
             quantity: The new total for this line, not how many to add. "Two pepperonis"
                 when the line already has two is a repeat: no change.
             size: The new size, only as the caller said it for this item: never one
@@ -350,8 +442,11 @@ class GabbyAgent(Agent):
         """
         more = quantity is not None and _asked_for_more(ctx, quantity)
         with _pos_rules(ctx) as pos:
-            before = pos.line(line_id).describe()
-            _drink_size_said(ctx, pos, pos.line(line_id).item.id, size)
+            current = pos.line(line_id)
+            before = current.describe()
+            # the size the line already has isn't a new one to check
+            if not (size and current.size.matches(size)):
+                _drink_size_said(ctx, pos, item_id or current.item.id, size)
             line = pos.update(
                 line_id,
                 quantity,
@@ -362,6 +457,7 @@ class GabbyAgent(Agent):
                 more=more,
                 first_half=first_half,
                 second_half=second_half,
+                item_id=item_id,
             )
         after = line.describe()
         if after == before:
@@ -415,13 +511,22 @@ class GabbyAgent(Agent):
             pos.set_delivery(address)
         ctx.userdata.page.record("set_delivery", address, stage="details")
         out = f"Delivery to {address}. The delivery fee is ${DELIVERY_FEE}."
-        if short := pos.below_minimum():
-            out += (
-                f" But delivery needs a ${DELIVERY_MINIMUM} subtotal and it's ${pos.subtotal()} "
-                f"now, ${short} short. Tell them, and offer to add something or switch to pickup."
-            )
         # the cart as it stands, so anything the caller asked for but isn't in it gets added
         return f"{out} {pos.cart_summary()}"
+
+    @function_tool
+    async def set_delivery_note(self, ctx: Ctx, note: str) -> str:
+        """Save drop-off details for the driver on a delivery order: leave it at the door,
+        don't ring the bell, a gate code, the unit. Pass the whole note each time; it replaces
+        the last one.
+
+        Args:
+            note: The details, in a few words, e.g. "Leave at the door, don't ring the bell".
+        """
+        with _pos_rules(ctx) as pos:
+            note = pos.set_delivery_note(note)
+        ctx.userdata.page.record("set_delivery_note", note, stage="details")
+        return f"Saved for the driver: {note}. It's read back with the order."
 
     @function_tool
     async def set_contact(self, ctx: Ctx, name: str | None = None, phone: str | None = None) -> str:
@@ -449,25 +554,110 @@ class GabbyAgent(Agent):
         again after any change: an order can only be submitted at a total that's current."""
         with _pos_rules(ctx) as pos:
             q = pos.price()
+        if q.version != self._read_back_version:
+            # a new total to read back: only an answer after this one places the order
+            self._read_back_at, self._read_back_version = time.time(), q.version
         ctx.userdata.page.record("price_order", f"Total ${q.total}", stage="readback")
         out = f"{pos.cart_summary()} {q.describe()} (tax is {TAX_RATE:.0%} of the subtotal)."
-        if short := pos.below_minimum():
-            out += f" Delivery is ${short} under the ${DELIVERY_MINIMUM} minimum."
-        return out
+        if note := pos.fulfillment.note:
+            out += f" Note for the driver: {note}. Include it in the read-back."
+        if q.small_order_fee:
+            out += (
+                f" Say the ${q.small_order_fee} small-order fee once in the read-back, since "
+                f"it's under ${SMALL_ORDER_UNDER}; never suggest adding items to avoid it."
+            )
+        return f"{out} {pos.payment()}: only if they ask how to pay."
+
+    @function_tool
+    async def set_tip(
+        self, ctx: Ctx, amount: float | None = None, percent: float | None = None
+    ) -> str:
+        """Add the tip the caller asks for, or change or remove it. Never suggest or ask for a
+        tip. Pass one of amount or percent.
+
+        Args:
+            amount: The tip in dollars, e.g. 5 for "five dollars"; 0 takes it off.
+            percent: A percent of the subtotal, e.g. 15 for "fifteen percent".
+        """
+        with _pos_rules(ctx) as pos:
+            tip = pos.set_tip(**_tip(amount, percent))
+        ctx.userdata.page.record("set_tip", f"Tip ${tip}", stage="readback")
+        return (
+            f"Tip is ${tip}, paid with the order in person. Call price_order, then read back the "
+            "new total with the tip and ask if that's right."
+        )
 
     @function_tool
     async def submit_order(self, ctx: Ctx) -> str:
         """Send the order to the kitchen. Only after you've read back the order and total
-        from price_order and the caller said it's right."""
+        from price_order and the caller clearly said it's right."""
         with _pos_rules(ctx) as pos:
+            answer = _read_back_answer(ctx, self._read_back_at)
+            if answer == "unsure":
+                raise PosError(
+                    "That wasn't a clear yes. Ask, in a few words: \"Just to be sure, should I "
+                    'place the order?" Submit only on a clear yes.'
+                )
+            if answer == "no":
+                raise PosError(
+                    "They didn't say the read-back is right. Ask what to change, make the "
+                    "change, and read back the new total."
+                )
+            if answer == "none" and pos.quote_current:
+                raise PosError(
+                    "They haven't said yes to the read-back yet. Read back the order and total "
+                    "and ask if it's right; submit only after a clear yes."
+                )
             order = pos.submit()
         detail = f"Order #{order.number}, {order.ready_in}"
+        if order.note:
+            detail += f" · driver note: {order.note}"
         ctx.userdata.page.record("submit_order", detail, stage="submitted")
         self._submitted_at = time.time()
+        note = f" The driver has the note: {order.note}." if order.note else ""
         return (
-            f"Order number {order.number} is in, {order.ready_in}. Now tell the caller the "
+            f"Order number {order.number} is in, {order.ready_in}.{note} Now tell the caller the "
             "order number and when it'll be ready, and ask if there's anything else. Don't "
-            "end the call yet."
+            f"end the call yet. ({pos.payment()}.)"
+        )
+
+    @function_tool
+    async def cancel_order(self, ctx: Ctx, confirmed: bool = False) -> str:
+        """The caller wants to cancel their order. Call it first without confirmed: it tells
+        you what to read back. Call it with confirmed=True only after they clearly say yes.
+
+        Args:
+            confirmed: True only once the caller said yes to the cancellation read-back.
+        """
+        with _pos_rules(ctx) as pos:
+            if confirmed and not pos.cancel_asked and (at := _cancel_read_back_at(ctx)):
+                # she already asked, before calling the tool: that was the read-back
+                pos.cancel()
+                self._cancel_asked_at = at
+            _cancel_needs_a_yes(ctx, pos, confirmed, self._cancel_asked_at)
+            result = pos.cancel(confirmed)
+        if result == "not_placed":
+            self._warned = True  # nothing to nag about at end_call: they don't want it
+            ctx.userdata.page.record("cancel_order", "Nothing placed: no order")
+            return (
+                "Nothing has been placed, so there's nothing to cancel and nothing is due. Tell "
+                "them no order went in, and ask if there's anything else; if not, say goodbye "
+                "and call end_call."
+            )
+        assert pos.order is not None
+        if result == "ask":
+            self._cancel_asked_at = time.time()
+            ctx.userdata.page.record("cancel_order", "Asked to confirm the cancellation")
+            return (
+                f'Read it back first: "Cancel the whole order, number {pos.order.number}? '
+                'Nothing will be due." Then wait. Only on a clear yes, call cancel_order with '
+                "confirmed=True; if not, carry on with the order as it is."
+            )
+        self._cancelled_at = time.time()
+        ctx.userdata.page.record("cancel_order", f"Order #{pos.order.number} cancelled")
+        return (
+            f"Order {pos.order.number} is cancelled; nothing is due. Tell them, and ask if "
+            "there's anything else."
         )
 
     @function_tool
@@ -481,8 +671,16 @@ class GabbyAgent(Agent):
             for m in ctx.session.history.messages()
             if m.role == "assistant" and m.text_content
         ]
+        if order and order.cancelled:
+            # a cancelled order isn't done until the caller has heard that it is
+            if not any(t > (self._cancelled_at or 0) for t in spoken):
+                ud.page.record("end_call", "Refused: cancellation not told yet")
+                raise ToolError(
+                    f"Tell the caller order {order.number} is cancelled and nothing is due, "
+                    "then say goodbye before ending the call."
+                )
         # a submitted order isn't done until the caller has heard its number and pickup time
-        if order and not any(t > (self._submitted_at or 0) for t in spoken):
+        elif order and not any(t > (self._submitted_at or 0) for t in spoken):
             ud.page.record("end_call", "Refused: order number not given yet")
             raise ToolError(
                 f"Tell the caller their order number, {order.number}, and that it'll be "
@@ -506,6 +704,7 @@ class DeliveryUpdateAgent(Agent):
     def __init__(self, pos: Pos) -> None:
         super().__init__(instructions=_outbound_instructions(pos))
         self._wrapped_at: float | None = None  # the read-back, or ending without the update
+        self._cancel_asked_at: float | None = None
 
     async def on_enter(self) -> None:
         ud: Userdata = self.session.userdata
@@ -522,7 +721,7 @@ class DeliveryUpdateAgent(Agent):
     async def swap_out_of_stock_item(self, ctx: Ctx, line_id: str, item_id: str) -> str:
         """Replace the out-of-stock item with another at the same price, once the customer
         picks it. Also when they change their mind: a different replacement, or the
-        replacement after all once it was refunded.
+        replacement after all once it was taken off.
 
         Args:
             line_id: The out-of-stock line, e.g. "L3".
@@ -531,24 +730,22 @@ class DeliveryUpdateAgent(Agent):
         with _pos_rules(ctx) as pos:
             line = pos.swap_out_of_stock(line_id, item_id)
         ctx.userdata.page.record("swap_out_of_stock_item", line.describe(), stage="changes")
-        return f"Swapped: {line.describe()}, same price. Total ${_total(pos)}.{_money(pos)}"
+        return f"Swapped: {line.describe()}, same price.{_money(pos)}"
 
     @function_tool
     async def remove_out_of_stock_item(self, ctx: Ctx, line_id: str) -> str:
-        """Take the out-of-stock item off the order and refund it, if the customer would
-        rather not have a replacement, even after picking one earlier on this call.
+        """Take the out-of-stock item off the order, so it comes off what's due at the door,
+        once the customer has said they'd rather not have a replacement (even after picking
+        one earlier on this call). Never without their choice.
 
         Args:
             line_id: The out-of-stock line, e.g. "L3".
         """
         with _pos_rules(ctx) as pos:
-            line, refund = pos.remove_out_of_stock(line_id)
-        detail = f"{line.describe()} · refund ${refund}"
+            line, less = pos.remove_out_of_stock(line_id)
+        detail = f"{line.describe()} · -${less} at the door"
         ctx.userdata.page.record("remove_out_of_stock_item", detail, stage="changes")
-        return (
-            f"Removed {line.describe()}. ${refund} goes back to their card (the item plus its "
-            f"tax). New total ${_total(pos)}."
-        )
+        return f"Removed {line.describe()} (the item plus its tax comes off).{_money(pos)}"
 
     @function_tool
     async def add_to_delivery(self, ctx: Ctx, item_id: str, quantity: int = 1) -> str:
@@ -561,23 +758,20 @@ class DeliveryUpdateAgent(Agent):
             quantity: How many orders of it in all, not how many more; 0 takes it off.
         """
         with _pos_rules(ctx) as pos:
-            line, charge = pos.add_extra(item_id, quantity)
-        if not charge:
+            line, diff = pos.add_extra(item_id, quantity)
+        if not diff:
             return f"No change: it's already {line.describe()}. quantity is how many in all."
+        sign = "+" if diff > 0 else "-"
         if not quantity:
-            detail = f"Took off {line.item.name} · -${-charge}"
+            detail = f"Took off {line.item.name} · -${-diff} at the door"
             ctx.userdata.page.record("add_to_delivery", detail, stage="changes")
-            return (
-                f"Took the {line.item.name.lower()} off; they won't be charged the ${-charge}. "
-                f"New total ${_total(pos)}."
-            )
-        sign = "+" if charge > 0 else "-"
-        detail = f"{line.describe()} · {sign}${abs(charge)}"
+            return f"Took the {line.item.name.lower()} off.{_money(pos)}"
+        detail = f"{line.describe()} · {sign}${abs(diff)} at the door"
         ctx.userdata.page.record("add_to_delivery", detail, stage="changes")
-        more = f"${charge} more" if charge > 0 else f"${-charge} less"
+        change = f"${diff} more" if diff > 0 else f"${-diff} less"
         return (
-            f"{line.describe()} on the order; the driver has them. {more} on the same card "
-            f"(with tax). New total ${_total(pos)}."
+            f"{line.describe()} on the order; the driver has them. That's {change} at the door "
+            f"(with tax).{_money(pos)}"
         )
 
     @function_tool
@@ -594,25 +788,55 @@ class DeliveryUpdateAgent(Agent):
         return f"Saved for {pos.delivery.driver if pos.delivery else 'the driver'}: {note}."
 
     @function_tool
-    async def cancel_order(self, ctx: Ctx) -> str:
-        """The customer wants to cancel the order. Call it before answering them, every time
-        they ask."""
-        with _pos_rules(ctx) as pos:
-            pos.cancel()
-        return "Cancelled."  # never reached: an order out for delivery can't be cancelled
-
-    @function_tool
-    async def note_for_manager(self, ctx: Ctx, summary: str) -> str:
-        """Leave a note for the manager: a complaint, or a request for a call back. Only after
-        the customer says they want it.
+    async def set_tip(
+        self, ctx: Ctx, amount: float | None = None, percent: float | None = None
+    ) -> str:
+        """Add the tip for the driver the customer asks for, or change or remove it; it's paid
+        with the order at the door. Never suggest or ask for a tip. Pass one of amount or
+        percent.
 
         Args:
-            summary: What happened and what they want, in a sentence.
+            amount: The tip in dollars, e.g. 5 for "five dollars"; 0 takes it off.
+            percent: A percent of the order's subtotal, e.g. 15 for "fifteen percent".
         """
         with _pos_rules(ctx) as pos:
-            summary = pos.note_for_staff(summary)
-        ctx.userdata.page.record("note_for_manager", summary, stage="changes")
-        return f"Noted for the manager, who will call them back at {pos.phone}: {summary}."
+            tip = pos.set_tip(**_tip(amount, percent))
+        ctx.userdata.page.record("set_tip", f"Tip for the driver ${tip}", stage="changes")
+        return f"Tip for the driver is ${tip}, paid at the door with the order.{_money(pos)}"
+
+    @function_tool
+    async def cancel_order(self, ctx: Ctx, confirmed: bool = False) -> str:
+        """The customer wants to cancel the whole order. Call it first without confirmed: it
+        tells you what to read back. Call it with confirmed=True only after they clearly say
+        yes.
+
+        Args:
+            confirmed: True only once the customer said yes to the cancellation read-back.
+        """
+        with _pos_rules(ctx) as pos:
+            if confirmed and not pos.cancel_asked and (at := _cancel_read_back_at(ctx)):
+                # she already asked, before calling the tool: that was the read-back
+                pos.cancel()
+                self._cancel_asked_at = at
+            _cancel_needs_a_yes(ctx, pos, confirmed, self._cancel_asked_at)
+            result = pos.cancel(confirmed)
+        d = pos.delivery
+        assert d is not None and pos.order is not None
+        if result == "ask":
+            self._cancel_asked_at = time.time()
+            ctx.userdata.page.record("cancel_order", "Asked to confirm the cancellation")
+            return (
+                f'Read it back first: "Cancel the whole order? {d.driver} will turn back, and '
+                'nothing will be due." Then wait. Only on a clear yes, call cancel_order with '
+                "confirmed=True; if not, carry on with the update."
+            )
+        ctx.userdata.page.record(
+            "cancel_order", f"Order #{pos.order.number} cancelled", stage="changes"
+        )
+        return (
+            f"Order {pos.order.number} is cancelled: {d.driver} is turning back, and nothing "
+            "is due. Call final_read_back."
+        )
 
     @function_tool
     async def final_read_back(self, ctx: Ctx) -> str:
@@ -623,9 +847,15 @@ class DeliveryUpdateAgent(Agent):
         changes = "; ".join(d.changes.values()) or "no changes"
         ctx.userdata.page.record("final_read_back", changes, stage="confirmed")
         self._wrapped_at = time.time()
+        if pos.order and pos.order.cancelled:
+            return (
+                f"Order {pos.order.number} is cancelled; {d.driver} is turning back, and nothing "
+                "is due. Say so in a sentence, sorry for the trouble, and say goodbye. Then call "
+                "end_call."
+            )
         return (
-            f"Changes: {changes}. Order total ${_total(pos)}.{_money(pos)} Read back, in one or "
-            "two sentences, each change, the total, and the refund or charge; then say "
+            f"Changes: {changes}.{_money(pos)} Read back, in one or two sentences, each change "
+            "and what's due at the door (and how much more or less that is); then say "
             f"{d.driver} will be there in about {d.eta_minutes} minutes, and say goodbye. "
             "Then call end_call."
         )
@@ -648,11 +878,12 @@ class DeliveryUpdateAgent(Agent):
                 "Recorded. Say a polite goodbye in a sentence (sorry for the mix-up, if it's a "
                 "wrong number; thanks, if it's someone else who picked up), nothing more: don't "
                 "mention the order, the address, the customer's name, or the driver, and don't "
-                "ask who they are. Then call end_call."
+                "ask who they are. Call end_call in that same turn, right after the goodbye."
             )
         return (
             f"Recorded; the order stays as it is, and {d.driver} is still on the way. Don't "
-            "push about the order. Say goodbye in a sentence, and call end_call."
+            "push about the order. Say goodbye in a sentence, and call end_call in that same "
+            "turn, right after the goodbye."
         )
 
     @function_tool
@@ -669,7 +900,13 @@ class DeliveryUpdateAgent(Agent):
         ]
         # the call isn't done until the customer has heard what changed and when it arrives,
         # unless it ended without the update
-        if not pos.call_done or not any(t > (self._wrapped_at or 0) for t in spoken):
+        if pos.call_done and not any(t > (self._wrapped_at or 0) for t in spoken):
+            ud.page.record("end_call", "Refused: no goodbye yet")
+            raise ToolError(
+                "Say your goodbye first, in a sentence, and call end_call again right after it, "
+                "in the same turn."
+            )
+        if not pos.call_done:
             ud.page.record("end_call", "Refused: changes not read back yet")
             raise ToolError(
                 "Call final_read_back, read the changes and the ETA back to the customer, and "
@@ -682,17 +919,16 @@ class DeliveryUpdateAgent(Agent):
         )
 
 
-def _total(pos: Pos) -> str:
-    return str(pos.quote.total) if pos.quote else "unknown"
-
-
 def _money(pos: Pos) -> str:
-    balance = pos.balance()
+    # what's due at the door now, against what was due when the order went out
+    if pos.order and pos.order.cancelled:
+        return " Nothing is due: the order is cancelled."
+    balance, due = pos.balance(), pos.due_now()
     if balance < 0:
-        return f" ${-balance} is refunded to their card."
+        return f" ${due} due at the door now, ${-balance} less than before; cash or card."
     if balance > 0:
-        return f" ${balance} more goes on their card."
-    return " Nothing more is charged or refunded."
+        return f" ${due} due at the door now, ${balance} more than before; cash or card."
+    return f" Still ${due} due at the door, cash or card."
 
 
 def _voicemail() -> str:
@@ -712,12 +948,14 @@ def _instructions(pos: Pos) -> str:
 {VOICE_RULES}
 
 You're {PERSONA}, answering the phone at {BUSINESS}, a neighborhood pizzeria in San
-Francisco. You take pickup and delivery orders. Sound warm, quick, and lightly upbeat, like a
-capable neighborhood pizzeria employee during a busy shift: welcoming and helpful, never bubbly
-or salesy (about a 6 out of 10 for enthusiasm). For example: "Absolutely, I can help with
-that. What size would you like?" Drop the upbeat tone and be calm,
-plain, and careful whenever an allergy comes up, or there's a problem with a payment, a
-charge, or a refund.
+Francisco. You take pickup and delivery orders. We're {HOURS} Anything else about the
+restaurant that isn't in these instructions (the address, parking, other days or holidays,
+how busy it is), you don't know: say so plainly, never make it up.
+Sound warm, quick, and lightly upbeat, like a capable neighborhood pizzeria employee during a
+busy shift: welcoming and helpful, never bubbly or salesy (about a 6 out of 10 for
+enthusiasm). For example: "Absolutely, I can help with that. What size would you like?" Drop
+the upbeat tone and be calm, plain, and careful whenever an allergy comes up, or a
+complaint, or a cancellation.
 
 # The menu (ids for the tools)
 {menu}
@@ -757,22 +995,49 @@ Say a price when they ask, and the total at the read-back.
   "another", "more", "add one", "put the other one back", a bigger total ("make it
   three"), or yes when you offered one more; then use update_item with the new total.
 - Corrections: change exactly the line they mean with update_item or remove_item. Never
-  remove and re-add, and never rebuild the cart.
+  remove and re-add, and never rebuild the cart. To change what an item is ("make the Coke
+  a Sprite"), pass the new item_id to update_item: it keeps the count and the size, so don't
+  ask the size again.
 - If an item is out, say so and offer one or two others from the same category.
 - If they say something you can't match to the menu or a size, ask about just that part.
 - Leaving something off a pizza ("no olives", "hold the onions"): pass it in `without`.
   The price doesn't change.
 - Allergies: call items_with_allergen first. Name the items that contain it, per the menu.
-  Never say anything is safe or free of an allergen; the kitchen is shared. A severe
-  allergy gets the same answer, said seriously.
+  Never use the words "safe", "safer", or "safest" in any form, even when they do ("the
+  safest thing is to skip..."): say "I'd skip anything you're unsure of" instead. Never call
+  anything free of an allergen or "the best choice" for an allergy; the kitchen is shared. A
+  severe allergy gets the same answer, said seriously.
 - Something we don't do (cutting it in squares, extra crispy, a crust or item
   that isn't on the menu): say it the way someone at the counter would, briefly and kindly
   ("Sorry, we don't do that, but I can..."), with the closest thing we do have, if there is
   one. Never mention "the system", "options", or what you can or can't see.
 - Discount codes and coupons: we don't have any. Say so in a sentence ("Sorry, we don't
   have any discount codes right now.") and carry on.
-- You handle the whole call yourself: never offer to pass them to a staff member or a
-  manager. If they ask for a person, say you're the one taking orders and can help with it.
+- You handle the whole call yourself: never offer to pass them, transfer them, or leave a
+  note for a staff member or a manager, and never promise a call back. If they ask for a
+  person, say you're the one taking orders and can help with it.
+- Never say you've noted, saved, passed on, or done something unless a tool did it, and
+  never say you'll check or look into something you have no tool for. If there's no tool
+  for what they ask, say plainly that you can't do that.
+- Payment: they pay in person, cash or card: when they pick it up, or to the driver at the
+  door. Answer "can I pay cash / by card / by text / online?" from that alone: you can't
+  take payment over the phone or send a payment link. Never ask for card details; if they
+  start to read out a card number, stop them politely ("No need, you'll pay in person when
+  you get it.").
+- Tips: never suggest or ask for one. If they want to add a tip (for the driver, or the
+  kitchen), call set_tip with the dollars or percent they say; it's paid with the order. A
+  tip change after the read-back is a change like any other: price and read back again.
+- Drop-off details for a delivery ("leave it at the door", "don't ring the bell", a gate
+  code, the unit): save them with set_delivery_note. Pickup has no driver to pass a note to.
+- Cancelling: before the order is submitted, "never mind" or "cancel it" just means nothing
+  goes in: call cancel_order, which tells you so. After submit_order, they can cancel the
+  order they placed on this call: call cancel_order, read back what it tells you ("Cancel
+  the whole order? Nothing will be due."), and only on a clear yes call it again with
+  confirmed=True.
+- A complaint, or "I want something for my trouble": apologize sincerely, and offer only
+  what you can actually do: change or swap an item, take one off, or cancel. Whether to
+  tip is up to them. Promise nothing else: no discounts, credits, free items, refunds, or
+  call backs.
 - Once, when the order sounds done and has no breadsticks, call offer_breadsticks and
   suggest them. That's the only upsell: don't push anything else.
 
@@ -780,19 +1045,26 @@ Say a price when they ask, and the total at the read-back.
 Don't ask for anything they've already told you (pickup or delivery, the address, the name,
 the number), and when they give two things at once, take both.
 1. If the order has no breadsticks and you haven't offered them, call offer_breadsticks
-   and suggest them first. Then ask pickup or delivery. For delivery, get the full street address and call
-   set_delivery; we deliver anywhere.
-   Delivery is ${DELIVERY_FEE} and needs a ${DELIVERY_MINIMUM} subtotal.
+   and suggest them first. Then ask pickup or delivery. For delivery, get the full street
+   address and call set_delivery; we deliver anywhere, for ${DELIVERY_FEE}.
+   An order under ${SMALL_ORDER_UNDER} (pickup or delivery) has a ${SMALL_ORDER_FEE}
+   small-order fee. Mention it once in the read-back; never push them to add items to avoid
+   it.
 2. Ask for a name, then (after they answer) a callback number, one at a time, and call
    set_contact with what you have.
 3. Call price_order, then read back the whole order and the total in two or three
-   sentences, and ask if that's right. Give the total with tax (and say it includes the
-   delivery fee, for delivery); don't break out the subtotal and tax unless they ask.
+   sentences, and ask if that's right. Give the total with tax, and say what it includes: the
+   delivery fee, for delivery; the small-order fee, if there is one ("plus a
+   ${SMALL_ORDER_FEE} small-order fee, since it's under ${SMALL_ORDER_UNDER:.0f}"); the tip,
+   if they added one. Read back the note for the driver too, if there is one. Don't break
+   out the subtotal and tax unless they ask.
 4. If they change something during the read-back, make just that change, call price_order
    again, and say only what changed and the new total. Then ask if that's right.
-5. When they say yes, call submit_order. Then, in your next words, tell them the order number
-   and when it'll be ready, and ask if there's anything else. Only after that, say goodbye
-   and call end_call; never in the same turn as submit_order."""
+5. Only a clear yes ("yes", "that's right", "sounds good") places the order. "Sure, I
+   guess", "whatever", or "I don't know" isn't one: ask "Just to be sure, should I place
+   it?" When they clearly say yes, call submit_order. Then, in your next words, tell them
+   the order number and when it'll be ready, and ask if there's anything else. Only after
+   that, say goodbye and call end_call; never in the same turn as submit_order."""
 
 
 def _outbound_instructions(pos: Pos) -> str:
@@ -806,46 +1078,71 @@ def _outbound_instructions(pos: Pos) -> str:
 
 You're {PERSONA} from {BUSINESS}, a pizzeria in San Francisco, making an outbound call to
 {pos.name} about their delivery order. Be polite, clear, and brief, warm but not bubbly.
-Drop the upbeat tone and be calm and plain about anything to do with money (a refund, a new
-charge, the new total) or an allergy.
+Drop the upbeat tone and be calm and plain about anything to do with money (what's due at
+the door, more or less than before), a complaint, a cancellation, or an allergy.
 
 # The order
-Order #{pos.order.number}, paid by card: {lines}. Delivery to {pos.fulfillment.address}.
-Total ${d.charged}. {d.driver}, the driver, is about {d.eta_minutes} minutes away.
+Order #{pos.order.number}: {lines}. Delivery to {pos.fulfillment.address}.
+{BUSINESS} is {HOURS}
+${d.due} is due at the door: they pay {d.driver}, the driver, cash or card, when it arrives.
+{d.driver} is about {d.eta_minutes} minutes away.
 The {out[0].item.name} ({out[0].id}) ran out after the order was placed.
 
 # What to handle
-You've already said who you are and asked for {first_name(pos.name or "")}. Once they say it's them,
-tell them {d.driver} is about {d.eta_minutes} minutes away and that the {out[0].item.name} ran
-out, and ask whether to replace it with a large Coke at the same price or remove it and refund
-it.
+You've already said who you are and asked for {first_name(pos.name or "")}. Once they say
+it's them, tell them {d.driver} is about {d.eta_minutes} minutes away and that the
+{out[0].item.name} ran out, and ask whether to replace it with a large Coke at the same price
+or take it off the order (it comes off what they pay at the door).
+Once they've said it's them, it's their order: when they ask, read them what's on it, the
+address, and what's due, plainly.
 If it isn't {pos.name} (a wrong number, or someone else who picked up), call
 end_without_update with wrong_person and say a polite goodbye: say nothing more about the
 order, the address, or who it's for.
 If they're driving, busy, ask you to call later, or aren't interested, don't push: call
-end_without_update (call_back_later or declined) and say goodbye.
+end_without_update (call_back_later or declined), then say goodbye and call end_call in that
+same turn.
 Every change goes through its tool, in the same turn the customer asks for it. Never say a
-change is made, or quote a total or refund, until its tool has returned.
+change is made, or quote an amount, until its tool has returned. Swap the item, take it
+off, or cancel only when the customer has clearly chosen that: never pick for them, and if
+it's unclear, ask. Never say you've noted, saved, passed on, updated, or done something
+unless a tool did it, and never say you'll check or look into something you have no tool
+for; if there's no tool for it, say plainly that you can't do that. Anything about the
+restaurant that isn't in these instructions, you don't know: say so, never make it up.
 1. The out-of-stock item. Replace it at the same price (swap_out_of_stock_item; same-price
-   options: {swaps}), or remove it and refund it (remove_out_of_stock_item). Say the refund
-   amount the tool returns. If they change their mind later, call the tool for the new
-   choice.
+   options: {swaps}), or take it off the order (remove_out_of_stock_item): say how much less
+   is due at the door, as the tool gives it. If they change their mind later, call the tool
+   for the new choice.
 2. Drop-off details. Ask if there's anything the driver should know: a gate code, the
    building or unit, leave at the door, call on arrival. Save what they say with
-   save_driver_note. If there's nothing, don't call it; move on.
+   save_driver_note. If there's nothing, don't call it; move on. The address can't change:
+   {d.driver} takes it to the address on the order. If they need it somewhere else, they
+   can cancel.
 3. Adding an item: call add_to_delivery for whatever they ask for, and relay its answer.
    Breadsticks can be added (up to {MAX_EXTRAS} orders), since the driver carries them; say
-   the added charge. To change how many, call it again with the new total (0 takes them
-   off). Anything else is refused because the order is already on its way.
-4. Cancelling: call cancel_order before you answer, every time they ask. It's too late once
-   the driver is on the way: say so politely, and offer to leave a note for the manager to
-   call them back (note_for_manager, only if they want it).
-5. Everything else on the order is already with the driver and can't be changed.
+   how much more that is at the door. To change how many, call it again with the new total
+   (0 takes them off). Anything else is refused because the order is already on its way.
+4. A tip for the driver: never suggest or ask for one. If they want to add one, call
+   set_tip with the dollars or percent they say; it's added to what's due at the door.
+5. Cancelling: they can cancel the whole order, even though it's on its way: {d.driver}
+   turns back and nothing is due. Call cancel_order, read back what it tells you ("Cancel the
+   whole order? {d.driver} will turn back, and nothing will be due."), and only on a clear
+   yes call it again with confirmed=True.
+6. Everything else on the order is already with the driver and can't be changed.
+Payment is only in person, at the door, cash or card: answer "can I pay cash / by card / by
+text?" from that alone. Never ask for card details; if they start to read out a card number,
+stop them politely ("No need, you'll pay {d.driver} at the door."). Nothing is charged or
+refunded over the phone: a change just makes what's due at the door more or less.
+A complaint, or "I want something for my trouble": apologize sincerely, and offer only what
+you can actually do: the swap, taking the out-of-stock item off, or cancelling. Whether to
+tip is up to them. Promise nothing else: no discounts, credits, free items, refunds, or call
+backs. You handle the whole call yourself: never offer to pass them, transfer them, or leave
+a note for a manager or anyone else.
 
 # Wrapping up
 When nothing else is changing, call final_read_back and read back what it returns: each
-change, the order total, any refund or added charge, and the ETA. Then say goodbye and call
-end_call. If anything changes after the read-back, call final_read_back again."""
+change, what's due at the door, and the ETA (or, if it's cancelled, that nothing is due).
+Then say goodbye and call end_call. If anything changes after the read-back, call
+final_read_back again."""
 
 
 server = AgentServer()
@@ -896,20 +1193,13 @@ async def entrypoint(ctx: JobContext) -> None:
         pos = demo_pos()
         agent = GabbyAgent(pos)
 
-    tts = inference.TTS(
-        "cartesia/sonic-3.5",
-        voice=VOICE,
-        language="en",
-        # warm without being bubbly: the instructions turn it down for allergies and money
-        extra_kwargs={"emotion": "content"},
-    )
+    tts = inference.TTS("rime/coda", voice=VOICE, language="en")
     session = AgentSession[Userdata](
         userdata=Userdata(pos=pos),
         tts_text_transforms=[
             "filter_markdown",
             "filter_emoji",
             say_pepperoni_pizzas,
-            pause_between_sentences,
         ],
         stt=inference.STT("deepgram/nova-3", language="en"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
@@ -919,6 +1209,8 @@ async def entrypoint(ctx: JobContext) -> None:
             interruption={"mode": "adaptive"},
             preemptive_generation={"enabled": True},
         ),
+        # neither side speaking this long makes the caller "away": see hang_up_when_silent
+        user_away_timeout=USER_AWAY_TIMEOUT,
     )
 
     if sim:
@@ -927,6 +1219,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # the caller hung up, or the agent did: close the room, and the phone line with it
     session.on("close", lambda _: ctx.delete_room())
+    # a caller who's gone silent gets one "are you still there?", then a goodbye
+    hang_up_when_silent(session, session.userdata.page)
     # the demo website, if it's watching: the page that asked to ring a phone, the browser
     # caller, or viewers of a call to the restaurant's number
     session.userdata.page.watch(ctx.room, session, page=meta.get("page"), caller=caller)

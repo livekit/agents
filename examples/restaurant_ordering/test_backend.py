@@ -1,17 +1,34 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from agent import _asked_for_more, _drink_size_said, _line_note, say_pepperoni_pizzas
-from backend import Pos, PosError, demo_pos
-from call import pause_between_sentences, spoken_number
+from agent import (
+    _answered_yes_since,
+    _asked_for_more,
+    _cancel_needs_a_yes,
+    _cancel_read_back_at,
+    _drink_size_said,
+    _line_note,
+    _read_back_answer,
+    say_pepperoni_pizzas,
+)
+from backend import Pos, PosError, demo_pos, looks_like_an_address
+from call import (
+    SILENT_GOODBYE,
+    STILL_THERE,
+    hang_up_when_silent,
+    spoken_number,
+)
 from grade import grade
+from page import Page
 
 from livekit.agents import llm
+from livekit.agents.voice import UserStateChangedEvent
 
 pytestmark = pytest.mark.unit
 
@@ -100,28 +117,39 @@ def test_ro04_delivers_to_any_street_address(pos: Pos) -> None:
     assert pos.fulfillment.mode == "pickup"
 
 
-def test_ro05_delivery_under_minimum_submits_only_once_it_reaches_20(pos: Pos) -> None:
-    pos.add("pepperoni", 1, "small")  # $13.99
+def test_ro05_a_small_delivery_order_goes_in_with_the_small_order_fee(pos: Pos) -> None:
+    # no delivery minimum: a medium cheese ($14.99) delivers, with the $2.99 fee on top
+    pos.add("cheese", 1, "medium")
     pos.set_delivery("300 De Haro St, San Francisco, CA 94107")
     pos.set_contact("Sam", "(415) 555-0142")
-    pos.price()
-    with pytest.raises(PosError, match="needs a \\$20.00 subtotal"):
-        pos.submit()
-    pos.add("breadsticks")  # $19.98: still short
-    pos.price()
-    with pytest.raises(PosError, match="short"):
-        pos.submit()
-    pos.add("coke", 1, "small")  # $21.97
     q = pos.price()
-    assert q.delivery_fee == Decimal("4.99")
-    assert q.total == Decimal("21.97") + Decimal("1.98") + Decimal("4.99")
+    assert (q.subtotal, q.tax, q.delivery_fee, q.small_order_fee) == (
+        Decimal("14.99"),
+        Decimal("1.35"),
+        Decimal("4.99"),
+        Decimal("2.99"),
+    )
+    assert q.total == Decimal("24.32")
+    assert "small-order fee $2.99" in q.describe()
+    assert pos.snapshot()["quote"]["smallOrderFee"] == 2.99
+    assert "shortOfMinimum" not in pos.snapshot()["fulfillment"]
     pos.submit()
+    assert grade(pos, {"submitted": True, "total": "24.32"}) == []
 
 
-def test_a_cent_short_is_still_short(pos: Pos) -> None:
-    pos.add("pepperoni", 1, "large")  # $19.99
-    pos.set_delivery("1355 Market St, 94103")
-    assert pos.below_minimum() == Decimal("0.01")
+def test_the_small_order_fee_is_for_pickup_too_and_only_under_15(pos: Pos) -> None:
+    pos.add("fries")  # $4.49
+    pos.set_pickup()
+    q = pos.price()
+    assert q.small_order_fee == Decimal("2.99")
+    # untaxed, like the delivery fee
+    assert q.total == Decimal("4.49") + Decimal("0.40") + Decimal("2.99")
+    pos.add("house_salad")  # $12.48: still under
+    assert pos.price().small_order_fee == Decimal("2.99")
+    pos.add("cannoli")  # $16.97
+    q = pos.price()
+    assert q.small_order_fee == 0 and "small-order" not in q.describe()
+    assert pos.snapshot()["quote"]["smallOrderFee"] == 0
 
 
 def test_ro06_allergen_lookup_names_the_nut_items(pos: Pos) -> None:
@@ -312,6 +340,30 @@ def test_submit_needs_a_read_back_and_details(pos: Pos) -> None:
         pos.add("coke", 1, "small")
 
 
+def test_update_can_change_the_item_and_keeps_its_size(pos: Pos) -> None:
+    pos.add("coke", 2, "large")
+    line = pos.update("L1", item_id="sprite")
+    assert line.describe() == "L1: 2 × large Sprite" and line.was == "2 × large Coke"
+    # lemonade comes regular or large: the large carries over
+    assert pos.update("L1", item_id="lemonade").describe() == "L1: 2 × large Lemonade"
+    pizza = pos.add("pepperoni", 1, "medium", toppings=["mushrooms"], without=["pepperoni"])
+    # a new pizza keeps the size and the added toppings; what was left off was the old one's
+    line = pos.update(pizza.id, item_id="cheese")
+    assert line.describe() == "L2: 1 × medium Cheese, + mushrooms"
+    wings = pos.add("wings", 1, "dozen", sauce="BBQ")
+    assert pos.update(wings.id, item_id="boneless").describe() == (
+        "L3: 1 × dozen Boneless Wings, BBQ sauce"
+    )
+    # a one-size item drops the size; a size the new item doesn't come in is asked
+    assert pos.update(wings.id, item_id="breadsticks").describe() == "L3: 1 × Breadsticks"
+    pos.add("water")
+    with pytest.raises(PosError, match="needs a size"):
+        pos.update("L4", item_id="coke")
+    with pytest.raises(PosError, match="sold out"):
+        pos.update("L4", item_id="buffalo_cauliflower")
+    assert pos.update("L4", item_id="coke", size="small").describe() == "L4: 1 × small Coke"
+
+
 def test_upsell_at_most_once(pos: Pos) -> None:
     pos.offer_upsell()
     with pytest.raises(PosError, match="already offered"):
@@ -419,6 +471,123 @@ def test_grade_flags_an_order_that_mustnt_be_submitted(pos: Pos) -> None:
     ]
 
 
+def test_a_tip_goes_on_the_total_and_needs_a_new_read_back(pos: Pos) -> None:
+    pos.add("pepperoni", 1, "large")
+    pos.add("wings", 1, "dozen", sauce="hot")
+    _ready_for_pickup(pos)
+    pos.price()
+    tip = pos.set_tip(Decimal("5"))
+    assert tip == Decimal("5.00") and not pos.quote_current
+    with pytest.raises(PosError, match="changed after it was read back"):
+        pos.submit()
+    q = pos.price()
+    assert (q.tip, q.total) == (Decimal("5.00"), Decimal("45.31"))
+    assert "tip $5.00" in q.describe()
+    assert pos.snapshot()["quote"]["tip"] == 5.0
+    # the same tip again is no change; a percent is of the subtotal ($36.98), to the cent
+    pos.set_tip(Decimal("5.00"))
+    assert pos.quote_current
+    assert pos.set_tip(percent=Decimal("15")) == Decimal("5.55")
+    for bad in ({"amount": Decimal("-1")}, {"amount": Decimal("101")}):
+        with pytest.raises(PosError, match="between"):
+            pos.set_tip(**bad)
+    with pytest.raises(PosError, match="one of the two"):
+        pos.set_tip(Decimal("5"), Decimal("10"))
+    pos.price()
+    pos.submit()
+    assert grade(pos, {"submitted": True, "tip": "5.55", "total": "45.86"}) == []
+    with pytest.raises(PosError, match="already sent"):
+        pos.set_tip(Decimal("10"))
+
+
+def test_payment_is_in_person(pos: Pos) -> None:
+    assert pos.payment() is None and pos.snapshot()["payment"] is None
+    pos.set_pickup()
+    assert pos.payment() == "Pay at pickup, cash or card"
+    pos.set_delivery("300 De Haro St, 94107")
+    assert pos.snapshot()["payment"] == "Pay the driver at the door, cash or card"
+
+
+def test_cancelling_before_submit_places_nothing(pos: Pos) -> None:
+    pos.add("pepperoni", 1, "large")
+    assert pos.cancel() == "not_placed" and pos.cancel(confirmed=True) == "not_placed"
+    assert pos.order is None
+    assert grade(pos, {"submitted": False, "cancelled": False}) == []
+
+
+def test_the_order_placed_on_the_call_can_be_cancelled_after_a_read_back(pos: Pos) -> None:
+    pos.add("pepperoni", 1, "large")
+    _ready_for_pickup(pos)
+    pos.price()
+    order = pos.submit()
+    assert pos.cancel(confirmed=True) == "ask" and not order.cancelled
+    assert pos.cancel(confirmed=True) == "cancelled"
+    assert order.cancelled
+    snap = pos.snapshot()
+    assert snap["order"]["cancelled"] is True
+    assert snap["payment"] == "Nothing due: the order was cancelled"
+    with pytest.raises(PosError, match="already cancelled"):
+        pos.cancel(confirmed=True)
+    with pytest.raises(PosError, match="cancelled on this call"):
+        pos.add("coke", 1, "small")
+    with pytest.raises(PosError, match="cancelled on this call"):
+        pos.set_tip(Decimal("2"))
+    assert grade(pos, {"submitted": True, "cancelled": True}) == []
+    assert grade(pos, {"cancelled": False}) == ["cancelled is True, expected False"]
+
+
+def test_a_delivery_note_for_the_driver(pos: Pos) -> None:
+    pos.add("pepperoni", 1, "large")
+    pos.set_pickup()
+    with pytest.raises(PosError, match="no driver"):
+        pos.set_delivery_note("Leave it at the door")
+    pos.set_delivery("123 Market St, 94105")
+    pos.set_contact("Sam", "415 555 0142")
+    pos.price()
+    for bad, why in (("   ", "empty"), ("x" * 201, "keep it under 200")):
+        with pytest.raises(PosError, match=why):
+            pos.set_delivery_note(bad)
+    note = pos.set_delivery_note("Leave it at the door,  don't ring the bell")
+    assert note == "Leave it at the door, don't ring the bell"
+    # it's read back with the order, so a new note needs a new read-back
+    assert not pos.quote_current
+    assert pos.snapshot()["fulfillment"]["note"] == note
+    # a corrected address keeps it
+    pos.set_delivery("125 Market St, 94105")
+    assert pos.fulfillment.note == note
+    pos.price()
+    order = pos.submit()
+    assert order.note == note
+    assert grade(pos, {"driver_note": ["door", "bell"]}) == []
+    assert grade(pos, {"driver_note": ["gate"]}) == [f"driver note {note!r} is missing 'gate'"]
+    with pytest.raises(PosError, match="already sent"):
+        pos.set_delivery_note("Call on arrival")
+
+
+@pytest.mark.parametrize(
+    "note",
+    ["Deliver to 500 Howard Street", "bring it to 1355 Market St instead", "455 natoma st"],
+)
+def test_a_note_that_names_an_address_is_refused(pos: Pos, out: Pos, note: str) -> None:
+    assert looks_like_an_address(note)
+    pos.add("pepperoni", 1, "large")
+    pos.set_delivery("123 Market St, 94105")
+    with pytest.raises(PosError, match="call set_delivery"):
+        pos.set_delivery_note(note)
+    # on its way, the order goes to the address on it
+    with pytest.raises(PosError, match="can't change where the order goes"):
+        out.set_driver_note(note)
+    assert out.delivery is not None and out.delivery.note is None
+
+
+@pytest.mark.parametrize(
+    "note",
+    ["Gate code 4512, unit 3B", "Leave it at the door, don't ring the bell", "Call on arrival"],
+)
+def test_drop_off_details_are_not_an_address(note: str) -> None:
+    assert not looks_like_an_address(note)
+
+
 # ---- the delivery-update call ----
 
 
@@ -429,7 +598,8 @@ def out() -> Pos:
 
 def test_outbound_seeds_order_214_out_for_delivery(out: Pos) -> None:
     assert out.order is not None and out.order.number == "214"
-    assert out.delivery is not None and out.delivery.charged == Decimal("49.65")
+    assert out.delivery is not None and out.delivery.due == Decimal("49.65")
+    assert out.payment() == "Pay the driver at the door, cash or card"
     assert out.fulfillment.zip == "94107"
     assert [ln.item.id for ln in out.out_of_stock()] == ["sprite"]
     assert out.same_price_swaps(out.line("L3"))[0] == "large Coke"
@@ -454,11 +624,15 @@ def test_swap_must_match_the_category_and_price(out: Pos) -> None:
         out.swap_out_of_stock("L1", "cheese")
 
 
-def test_remove_refunds_the_item_and_its_tax(out: Pos) -> None:
-    _, refund = out.remove_out_of_stock("L3")
-    assert refund == Decimal("4.35")
+def test_taking_it_off_makes_the_item_and_its_tax_less_at_the_door(out: Pos) -> None:
+    _, less = out.remove_out_of_stock("L3")
+    assert less == Decimal("4.35")
     assert out.quote is not None and out.quote.total == Decimal("45.30")
-    assert out.balance() == Decimal("-4.35")
+    assert out.balance() == Decimal("-4.35") and out.due_now() == Decimal("45.30")
+    assert out.delivery is not None
+    assert out.delivery.changes["swap"] == "Removed 1 × large Sprite, $4.35 less at the door"
+    snap = out.snapshot()["delivery"]
+    assert (snap["due"], snap["dueNow"], snap["balance"]) == (49.65, 45.30, -4.35)
     assert [ln.item.id for ln in out.removed] == ["sprite"]
 
 
@@ -477,14 +651,57 @@ def test_only_breadsticks_can_ride_along(out: Pos) -> None:
         out.add("cannoli")
 
 
-def test_cancel_is_always_refused_and_shown(out: Pos) -> None:
-    with pytest.raises(PosError, match="Too late to cancel"):
+def test_the_order_out_with_the_driver_can_be_cancelled_after_a_read_back(out: Pos) -> None:
+    out.add_extra("breadsticks")
+    # the first call reads it back; nothing is cancelled until a confirmed call after that
+    assert out.cancel(confirmed=True) == "ask"
+    assert out.order is not None and not out.order.cancelled
+    # a change in between needs the cancellation read back again
+    out.set_driver_note("Leave at the door")
+    assert not out.cancel_asked
+    assert out.cancel() == "ask"
+    assert out.cancel(confirmed=True) == "cancelled"
+    assert out.order.cancelled and out.due_now() == 0
+    assert out.balance() == Decimal("-49.65")  # nothing of the $49.65 due when it went out
+    assert out.delivery is not None
+    assert list(out.delivery.changes.values()) == ["Cancelled order 214; nothing is due"]
+    # the Sprite needn't be resolved: the read-back is the cancellation
+    out.read_back()
+    assert out.call_done
+    snap = out.snapshot()
+    assert snap["order"]["cancelled"] and snap["delivery"]["cancelled"]
+    assert snap["delivery"]["dueNow"] == 0
+    assert snap["payment"] == "Nothing due: the order was cancelled"
+    for act in (
+        lambda: out.swap_out_of_stock("L3", "coke"),
+        lambda: out.add_extra("breadsticks", 2),
+        lambda: out.set_driver_note("Gate 4512"),
+        lambda: out.set_tip(Decimal("5")),
+    ):
+        with pytest.raises(PosError, match="cancelled on this call"):
+            act()
+    with pytest.raises(PosError, match="cancelled on this call"):
         out.cancel()
-    assert out.delivery is not None and out.delivery.cancel_refused
-    assert out.order is not None
-    out.note_for_staff("Order took too long,  wants a call back")
-    assert out.delivery.staff_note == "Order took too long, wants a call back"
-    assert out.snapshot()["delivery"]["staffNote"].startswith("Order took")
+    assert grade(out, {"cancelled": True, "balance": "-49.65"}) == []
+    assert grade(out, {"cancelled": False}) == ["cancelled is True, expected False"]
+
+
+def test_a_tip_for_the_driver_is_added_at_the_door(out: Pos) -> None:
+    out.swap_out_of_stock("L3", "coke")
+    out.read_back()
+    assert out.set_tip(Decimal("5")) == Decimal("5.00")
+    assert out.quote is not None and out.quote.total == Decimal("54.65")
+    assert out.balance() == Decimal("5.00") and not out.read_back_current
+    assert out.delivery is not None
+    assert out.delivery.changes["tip"] == "Tip for Marco $5.00, added at the door"
+    # 10% of the $40.97 subtotal, to the cent; 0 takes it off the read-back
+    assert out.set_tip(percent=Decimal("10")) == Decimal("4.10")
+    assert out.snapshot()["quote"]["tip"] == 4.10
+    out.set_tip(Decimal("0"))
+    assert "tip" not in out.delivery.changes and out.balance() == 0
+    out.set_tip(Decimal("3"))
+    out.read_back()
+    assert grade(out, {"tip": "3", "balance": "3"}) == []
 
 
 def test_driver_note_replaces_and_is_checked(out: Pos) -> None:
@@ -512,8 +729,8 @@ def test_read_back_needs_the_sprite_resolved_and_goes_stale(out: Pos) -> None:
         "total": "49.65",
         "balance": "0",
         "driver_note": ["door"],
-        "staff_note": False,
-        "cancel_refused": False,
+        "cancelled": False,
+        "tip": "0",
     }
     assert grade(out, expect) == []
 
@@ -532,26 +749,26 @@ def test_the_sprite_choice_can_change_after_a_swap(out: Pos) -> None:
     assert out.delivery is not None
     swap = out.delivery.changes["swap"]
     assert swap == "1 × large Sprite → 1 × large Diet Coke, same price"
-    # "actually, just refund it": it comes off as the Sprite that was ordered
-    _, refund = out.remove_out_of_stock("L3")
-    assert refund == Decimal("4.35") and out.balance() == Decimal("-4.35")
+    # "actually, just take it off": it comes off as the Sprite that was ordered
+    _, less = out.remove_out_of_stock("L3")
+    assert less == Decimal("4.35") and out.balance() == Decimal("-4.35")
     assert [ln.describe() for ln in out.removed] == ["L3: 1 × large Sprite"]
-    assert out.delivery.changes["swap"] == "Removed 1 × large Sprite, refund $4.35"
-    with pytest.raises(PosError, match="already removed"):
+    assert out.delivery.changes["swap"] == "Removed 1 × large Sprite, $4.35 less at the door"
+    with pytest.raises(PosError, match="already taken off"):
         out.remove_out_of_stock("L3")
     # the rest of the order still can't change
     with pytest.raises(PosError, match="isn't out of stock"):
         out.swap_out_of_stock("L1", "cheese")
 
 
-def test_a_refunded_sprite_can_become_a_coke(out: Pos) -> None:
+def test_a_sprite_taken_off_can_become_a_coke(out: Pos) -> None:
     out.add_extra("breadsticks")
     out.remove_out_of_stock("L3")
     line = out.swap_out_of_stock("l3", "coke")
     assert [ln.id for ln in out.lines] == ["L1", "L2", "L3", "L4"] and not out.removed
     assert line.describe() == "L3: 1 × large Coke"
     assert line.was == "1 × large Sprite"
-    assert out.balance() == Decimal("6.53")  # the breadsticks, and no refund
+    assert out.balance() == Decimal("6.53")  # the breadsticks, and the Sprite's price back
     out.read_back()
     expect = {
         "cart": [
@@ -574,7 +791,7 @@ def test_breadsticks_can_be_recounted_or_taken_off(out: Pos) -> None:
     assert charge == Decimal("6.53") and out.balance() == Decimal("13.06")
     assert out.quote is not None and out.quote.total == Decimal("62.71")
     assert out.delivery is not None
-    assert out.delivery.changes["extra"] == "Added 2 × Breadsticks, $13.06 more"
+    assert out.delivery.changes["extra"] == "Added 2 × Breadsticks, $13.06 more at the door"
     with pytest.raises(PosError, match="at most 2"):
         out.add_extra("breadsticks", 3)
     out.read_back()
@@ -597,12 +814,13 @@ def test_wrong_person_ends_the_call_with_nothing_shared_or_changed(out: Pos) -> 
         lambda: out.swap_out_of_stock("L3", "coke"),
         lambda: out.add_extra("breadsticks"),
         lambda: out.set_driver_note("Leave at the door"),
+        lambda: out.set_tip(Decimal("5")),
         out.cancel,
         out.read_back,
     ):
         with pytest.raises(PosError, match="isn't the customer"):
             act()
-    assert out.delivery is not None and not out.delivery.cancel_refused
+    assert out.order is not None and not out.order.cancelled and not out.cancel_asked
     assert grade(out, {"ended_early": "wrong_person", "unchanged": True}) == []
     assert grade(out, {}) == ["the call ended early as wrong_person, expected None"]
 
@@ -703,6 +921,10 @@ def test_a_drink_size_the_caller_gave_is_taken(pos: Pos, turns: list[tuple[str, 
     _drink_size_said(_said(*turns), pos, "coke", size)
 
 
+def test_a_drinks_size_carries_to_the_drink_it_becomes(pos: Pos) -> None:
+    _drink_size_said(_said(("user", "Make the large Coke a Sprite.")), pos, "sprite", "large")
+
+
 @pytest.mark.parametrize(
     ("said", "size"),
     [
@@ -717,16 +939,152 @@ def test_a_drink_size_is_never_borrowed_or_picked(pos: Pos, said: str, size: str
         _drink_size_said(_said(("user", said)), pos, "coke", size)
 
 
+def _heard_at(*turns: tuple[str, str, float]) -> Any:
+    chat = llm.ChatContext()
+    for role, text, at in turns:
+        chat.add_message(role=role, content=text, created_at=at)  # type: ignore[arg-type]
+    return SimpleNamespace(session=SimpleNamespace(history=chat))
+
+
+@pytest.mark.parametrize("answer", ["Yes.", "Yeah, cancel it.", "Do it", "please"])
+def test_a_cancel_goes_through_on_a_yes_after_the_read_back(answer: str) -> None:
+    ctx = _heard_at(("user", "Cancel my order.", 1.0), ("user", answer, 3.0))
+    assert _answered_yes_since(ctx, 2.0)
+
+
+@pytest.mark.parametrize(
+    ("turns", "asked_at"),
+    [
+        # the read-back was never given, or the caller hasn't answered it yet
+        ([("user", "Cancel my order.", 1.0)], None),
+        ([("user", "Cancel my order.", 1.0)], 2.0),
+        # an answer, but a no
+        ([("user", "No, wait, keep it.", 3.0)], 2.0),
+        ([("user", "Don't cancel it.", 3.0)], 2.0),
+        ([("user", "Hold on.", 3.0)], 2.0),
+    ],
+)
+def test_a_cancel_never_goes_through_without_a_yes(
+    turns: list[tuple[str, str, float]], asked_at: float | None
+) -> None:
+    ctx = _heard_at(*turns)
+    assert not _answered_yes_since(ctx, asked_at)
+    pos = demo_pos("outbound")
+    pos.cancel()
+    with pytest.raises(PosError, match="haven't said yes"):
+        _cancel_needs_a_yes(ctx, pos, True, asked_at)
+    # the first call, to read it back, needs no yes
+    _cancel_needs_a_yes(ctx, pos, False, asked_at)
+
+
+def test_a_cancellation_asked_in_her_own_words_counts_as_the_read_back() -> None:
+    asked = _heard_at(
+        ("user", "Just cancel it.", 1.0),
+        ("assistant", "Cancel the whole order? Nothing will be due.", 2.0),
+        ("user", "Yes.", 3.0),
+    )
+    assert _cancel_read_back_at(asked) == 2.0
+    # a statement about cancelling, or a later question about something else, isn't one
+    for said in ("I can cancel it for you.", "Anything else?"):
+        other = _heard_at(
+            ("assistant", "Cancel the whole order?", 1.0),
+            ("assistant", said, 2.0),
+            ("user", "Yes.", 3.0),
+        )
+        assert _cancel_read_back_at(other) is None
+
+
+@pytest.mark.parametrize(
+    ("answers", "want"),
+    [
+        (["Yes, that's right."], "yes"),
+        (["Yep."], "yes"),
+        (["Sounds good."], "yes"),
+        # a yes, then a detail that's none of yes or no: still the yes
+        (["Yes.", "Four one five, five five five, zero one four two."], "yes"),
+        (["Whatever."], "unsure"),
+        (["Sure, I guess."], "unsure"),
+        (["I don't know."], "unsure"),
+        (["No, that's not right."], "no"),
+        (["Wait, make it a medium."], "no"),
+        (["Hmm."], "none"),
+        ([], "none"),
+    ],
+)
+def test_only_a_clear_yes_answers_the_read_back(answers: list[str], want: str) -> None:
+    ctx = _heard_at(
+        ("user", "Yes, a large pepperoni.", 1.0),  # before the read-back: doesn't count
+        ("assistant", "That's $21.79. Is that right?", 2.0),
+        *(("user", a, 3.0 + i) for i, a in enumerate(answers)),
+    )
+    assert _read_back_answer(ctx, 2.0) == want
+    assert _read_back_answer(ctx, None) == "none"
+
+
+class _Speech:
+    async def wait_for_playout(self) -> None:
+        return None
+
+
+class _QuietSession:
+    """Just enough of AgentSession for hang_up_when_silent: its events, and what it says."""
+
+    def __init__(self) -> None:
+        self.handlers: dict[str, Any] = {}
+        self.said: list[str] = []
+        self.resets = 0
+
+    def on(self, event: str) -> Any:
+        def register(fn: Any) -> Any:
+            self.handlers[event] = fn
+            return fn
+
+        return register
+
+    def say(self, text: str, **_: Any) -> _Speech:
+        self.said.append(text)
+        return _Speech()
+
+    def reset_away_timer(self) -> None:
+        self.resets += 1
+
+    async def user(self, old: str, new: str) -> None:
+        ev = UserStateChangedEvent(old_state=old, new_state=new)
+        self.handlers["user_state_changed"](ev)
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+
+async def test_silence_gets_one_check_in_then_a_goodbye() -> None:
+    session = _QuietSession()
+    page = Page("Gabby", demo_pos())
+    hang_up_when_silent(session, page)  # type: ignore[arg-type]
+    await session.user("listening", "away")
+    assert session.said == [STILL_THERE] and session.resets == 1
+    assert page.end_reason is None
+    # back to listening after the check-in isn't the caller speaking: the count holds
+    await session.user("away", "listening")
+    await session.user("listening", "away")
+    assert session.said == [STILL_THERE, SILENT_GOODBYE]
+    assert page.end_reason == "No response"
+    # once it's hung up, more silence does nothing
+    await session.user("listening", "away")
+    assert session.said == [STILL_THERE, SILENT_GOODBYE]
+
+
+async def test_the_caller_speaking_resets_the_silence_count() -> None:
+    session = _QuietSession()
+    page = Page("Gabby", demo_pos())
+    hang_up_when_silent(session, page)  # type: ignore[arg-type]
+    await session.user("listening", "away")
+    await session.user("away", "speaking")
+    await session.user("speaking", "listening")
+    await session.user("listening", "away")
+    # a fresh quiet spell: another check-in, not a hang-up
+    assert session.said == [STILL_THERE, STILL_THERE] and page.end_reason is None
+
+
 # ---- the call helpers ----
-
-
-async def test_pause_between_sentences() -> None:
-    async def chunks() -> AsyncIterator[str]:
-        for c in ["Dr. Patel is free at nine a.m. tomorrow. Does", " that work?"]:
-            yield c
-
-    out = "".join([c async for c in pause_between_sentences(chunks())])
-    assert out == 'Dr. Patel is free at nine a.m. tomorrow. <break time="300ms"/> Does that work?'
 
 
 async def test_pepperonis_are_said_as_pepperoni_pizzas() -> None:

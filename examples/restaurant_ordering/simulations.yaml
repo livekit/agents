@@ -91,16 +91,16 @@ scenarios:
         cart: [1 × large Hawaiian]
         total: "27.87"
 
-  - label: Delivery under the minimum
+  - label: A small delivery order pays the small-order fee
     instructions: |-
       You are Elena Ruiz, phone 415 555 0164. Order one medium cheese pizza, nothing else,
-      for delivery to 300 De Haro St, San Francisco 94107. When you hear about the delivery
-      minimum, ask what you'd need to add, and then add one Caesar salad (say no to
-      breadsticks if they come up). Give your name and phone when asked, confirm the read-back,
-      and say goodbye once you have your order number.
-    agent_expectations: The agent explains the $20 delivery minimum when the subtotal is
-      $14.99, doesn't submit until the subtotal reaches at least $20, and submits a delivery
-      order with the cheese pizza and Caesar salad at $31.67 including the $4.99 fee.
+      for delivery to 300 De Haro St, San Francisco 94107. Say no to breadsticks or anything
+      else. If you hear about a fee, ask what it's for, and accept it. Give your name and phone
+      when asked, confirm the read-back, and say goodbye once you have your order number.
+    agent_expectations: The agent takes the delivery for the medium cheese pizza alone, with no
+      delivery minimum, and reads back a $24.32 total that includes the $4.99 delivery fee and
+      a $2.99 small-order fee because the order is under $15. It mentions the small-order fee
+      without pushing the caller to add items to avoid it, and submits the order.
     tags:
       id: ro-05
       suite: full
@@ -111,8 +111,69 @@ scenarios:
         zip: "94107"
         cart:
           - 1 × medium Cheese
-          - 1 × Caesar Salad
-        total: "31.67"
+        total: "24.32"
+
+  - label: Pickup with a tip, and asks how to pay
+    instructions: |-
+      You are Sam Carter, phone 415 555 0142, ordering for pickup. Order one large pepperoni
+      pizza and nothing else; decline breadsticks. Give your name and phone when asked. When
+      the order is read back, say: "Can I add a five dollar tip? And can I just give you my
+      card number now?" Confirm the new total, and say goodbye once you have your order
+      number.
+    agent_expectations: The agent adds a $5 tip, reads back the new total of $26.79 with the
+      tip, and says payment is in person at pickup, cash or card, without asking for or taking
+      any card details. It submits the order and gives the order number.
+    tags:
+      id: ro-tip
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: pickup
+        cart: [1 × large Pepperoni]
+        tip: "5"
+        total: "26.79"
+
+  - label: Delivery with drop-off details
+    instructions: |-
+      You are Jordan Lee, phone 415 555 0199. Order one large pepperoni pizza and nothing
+      else, for delivery to 123 Market Street, San Francisco 94105, and in the same breath
+      say: "Leave it at the door and don't ring the bell, the baby's asleep." Decline
+      breadsticks. Give your name and phone when asked, check the read-back mentions the
+      note, confirm it, and say goodbye once you have your order number.
+    agent_expectations: The agent saves the drop-off note (leave it at the door, don't ring
+      the bell) for the driver, includes it in the read-back with the $26.78 total, and
+      submits the delivery order.
+    tags:
+      id: ro-note
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        fulfillment: delivery
+        zip: "94105"
+        cart: [1 × large Pepperoni]
+        total: "26.78"
+        driver_note: ["door", "bell"]
+
+  - label: Cancels the order after placing it
+    instructions: |-
+      You are Priya Nair, phone 415 555 0123, ordering for pickup. Order one medium margherita
+      and nothing else; decline breadsticks. Give your name and phone when asked, confirm the
+      read-back. Once you've heard your order number, say: "Oh no, I just realized I can't make
+      it tonight. Can you cancel that?" When asked to confirm, say yes. Then say goodbye.
+    agent_expectations: The agent submits the order and gives the order number; when the caller
+      asks to cancel, it asks to confirm that the whole order should be cancelled with nothing
+      due, cancels it only after the yes, and tells the caller it's cancelled and nothing is
+      due. It doesn't offer to transfer the caller or pass them to anyone.
+    tags:
+      id: ro-cancel
+      suite: full
+    userdata:
+      expect:
+        submitted: true
+        cancelled: true
+        cart: [1 × medium Margherita]
 
   - label: Kid with a nut allergy
     instructions: |-
@@ -266,7 +327,9 @@ scenarios:
         total: "23.96"
 
   # ---- the delivery-update call (outbound): order #214 is out with Marco, the Sprite ran out.
-  # Seeded: 1 large pepperoni, 1 dozen hot wings, 1 large Sprite, delivery to 94107, $49.65.
+  # Seeded: 1 large pepperoni, 1 dozen hot wings, 1 large Sprite, delivery to 94107, $49.65
+  # due at the door (cash or card to the driver). `balance` is how much more (+) or less (-)
+  # is due at the door than that.
 
   - label: Delivery update, swap the Sprite and leave a gate code
     instructions: |-
@@ -276,8 +339,8 @@ scenarios:
       Then say that's all, listen to the read-back, and say thanks and goodbye.
     agent_expectations: The agent introduces herself and Zappi's Pizzeria, gives the ETA,
       swaps the Sprite for a large Coke at the same price, saves the gate code and unit as
-      a driver note, reads back the changes with the unchanged $49.65 total, and repeats the
-      ETA before ending the call.
+      a driver note, reads back the changes with the same $49.65 due at the door, and repeats
+      the ETA before ending the call.
     tags:
       id: ro-ob-swap
       suite: smoke
@@ -291,19 +354,19 @@ scenarios:
         total: "49.65"
         balance: "0"
         driver_note: ["4512", "3B"]
-        staff_note: false
+        cancelled: false
 
-  - label: Delivery update, refund the Sprite and add breadsticks
+  - label: Delivery update, take off the Sprite and add breadsticks
     instructions: |-
       You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
-      calling you. When asked about the Sprite, say you don't want a replacement: remove it
-      and refund it. Then ask: "Can you also add a cannoli?" When told that can't be added,
+      calling you. When asked about the Sprite, say you don't want a replacement: just take
+      it off. Then ask: "Can you also add a cannoli?" When told that can't be added,
       ask: "What about breadsticks?" and take one order if that works. When asked about
       drop-off, say: "Just leave it at the door." Listen to the read-back and say goodbye.
-    agent_expectations: The agent removes the Sprite and states a $4.35 refund, explains the
-      cannoli can't be added because the order is on its way, adds one order of
-      breadsticks, saves "leave at the door" as the driver note, reads back the changes with the
-      new $51.83 total, and gives the ETA before ending.
+    agent_expectations: The agent takes the Sprite off and says that's $4.35 less at the door
+      (not a refund to a card), explains the cannoli can't be added because the order is on its
+      way, adds one order of breadsticks, saves "leave at the door" as the driver note, reads
+      back the changes with $51.83 now due at the door, and gives the ETA before ending.
     tags:
       id: ro-ob-refund
       suite: full
@@ -319,20 +382,40 @@ scenarios:
         balance: "2.18"
         driver_note: ["door"]
 
-  - label: Delivery update, customer asks to cancel
+  - label: Delivery update, customer cancels the order
     instructions: |-
       You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
       calling you. You're annoyed the Sprite ran out. Say: "Honestly, just cancel the whole
-      order." When told it's too late, accept it, and say yes if offered a note for the
-      manager: say the order took too long and you'd like a call back. Then take the
-      large Coke instead of the Sprite. Nothing for the driver. Listen to the read-back and
-      say goodbye.
-    agent_expectations: The agent politely explains the order can't be cancelled because the
-      driver is already on the way, offers and leaves a note for the manager to call back,
-      swaps the Sprite for a large Coke, reads back the changes, and gives the ETA before
-      ending.
+      order." When asked to confirm the cancellation, say: "Yes, cancel it." Listen to what
+      the agent says and say goodbye.
+    agent_expectations: The agent doesn't refuse; it asks the customer to confirm cancelling
+      the whole order, saying the driver will turn back and nothing will be due, and cancels
+      only after the yes. It then says the order is cancelled and nothing is due, without
+      giving an ETA, offering to transfer the customer, or leaving a note for anyone, and ends
+      the call.
     tags:
       id: ro-ob-cancel
+      suite: full
+    userdata:
+      direction: outbound
+      expect:
+        cancelled: true
+        balance: "-49.65"
+
+  - label: Delivery update, a complaint and a tip
+    instructions: |-
+      You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
+      calling you. You're unhappy: say "This is the second time something's been missing. I
+      want something for my trouble." Listen to what's offered. Then take the large Coke
+      instead of the Sprite, and say: "Fine. Add a five dollar tip for the driver, it's not
+      his fault." Nothing for the driver's note. Listen to the read-back and say goodbye.
+    agent_expectations: The agent apologizes sincerely and offers only what it can do (the
+      same-price swap, taking the Sprite off, or cancelling), promising no discount, credit,
+      free item, refund, call back, or manager. It swaps the Sprite for a large Coke, adds the
+      $5 tip for the driver, and reads back $54.65 now due at the door, $5 more than before,
+      then the ETA before ending.
+    tags:
+      id: ro-ob-complaint
       suite: full
     userdata:
       direction: outbound
@@ -341,20 +424,21 @@ scenarios:
           - 1 × large Pepperoni
           - 1 × dozen Bone-in Wings, hot sauce
           - 1 × large Coke
-        total: "49.65"
-        cancel_refused: true
-        staff_note: true
+        tip: "5"
+        total: "54.65"
+        balance: "5"
+        cancelled: false
 
-  - label: Delivery update, refund the Sprite, then take the Coke
+  - label: Delivery update, take off the Sprite, then take the Coke
     instructions: |-
       You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
-      calling you. When asked about the Sprite, say: "Just refund it." Once you hear the
-      refund, change your mind: "Actually, I'll take the Coke instead." Nothing for the
-      driver. Listen to the read-back and say goodbye.
-    agent_expectations: The agent first removes the Sprite with a $4.35 refund, then, when
-      the customer changes their mind, puts a large Coke on the order at the same price
-      and says there's no refund after all; the read-back has the Coke swap, the $49.65 total,
-      and nothing charged or refunded, then the ETA before ending.
+      calling you. When asked about the Sprite, say: "Just take it off." Once you hear what
+      that comes to, change your mind: "Actually, I'll take the Coke instead." Nothing for
+      the driver. Listen to the read-back and say goodbye.
+    agent_expectations: The agent first takes the Sprite off, $4.35 less at the door, then,
+      when the customer changes their mind, puts a large Coke on the order at the same price;
+      the read-back has the Coke swap and the same $49.65 due at the door, then the ETA before
+      ending.
     tags:
       id: ro-ob-rechoose
       suite: full
@@ -376,8 +460,9 @@ scenarios:
       order of breadsticks. Once it's added, say: "Actually, make it two orders of breadsticks."
       Nothing for the driver. Listen to the read-back and say goodbye.
     agent_expectations: The agent swaps the Sprite for a large Coke, adds breadsticks,
-      then changes them to two orders instead of refusing, says the extra charge, and reads
-      back the new $62.71 total with $13.06 more on the card, then the ETA before ending.
+      then changes them to two orders instead of refusing, says how much more that is, and
+      reads back $62.71 now due at the door, $13.06 more than before, then the ETA before
+      ending.
     tags:
       id: ro-ob-breadsticks
       suite: full
@@ -409,5 +494,4 @@ scenarios:
       expect:
         ended_early: wrong_person
         unchanged: true
-        staff_note: false
-        cancel_refused: false
+        cancelled: false

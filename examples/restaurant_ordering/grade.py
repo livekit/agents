@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from backend import DELIVERY_FEE, TAX_RATE, Pos
+from backend import DELIVERY_FEE, SMALL_ORDER_FEE, SMALL_ORDER_UNDER, TAX_RATE, Pos
 
 
 def grade(pos: Pos, expect: dict[str, Any]) -> list[str]:
@@ -18,21 +18,24 @@ def grade(pos: Pos, expect: dict[str, Any]) -> list[str]:
         not_in_cart: menu ids that mustn't be in the cart at the end.
         fulfillment: "pickup" or "delivery".
         zip: the delivery ZIP.
+        driver_note: words the drop-off note for the driver must contain, case-insensitive,
+            e.g. ["door"]; on the delivery-update call, the note saved on that call.
         total: the submitted total, e.g. "44.66".
+        tip: the tip in that total, e.g. "5.00" ("0" for none).
+        cancelled: whether the order placed on the call must (true) or mustn't (false) end up
+            cancelled.
         allergy: the allergen, or list of allergens, items_with_allergen must have been asked
             about, e.g. "nuts" or ["nuts", "dairy"].
         name, phone: the contact on the order, phone as "(415) 555-0142".
 
     The delivery-update call (outbound) also takes:
-        balance: owed (+) or refunded (-) against the original charge, e.g. "-4.35".
-        driver_note: words the driver note must contain, case-insensitive, e.g. ["4512"].
-        staff_note: whether a note for the manager must (true) or mustn't (false) exist.
-        cancel_refused: whether the customer asked to cancel (and was refused).
+        balance: how much more (+) or less (-) is due at the door than when the order went
+            out, e.g. "-4.35"; a cancelled order is its whole original amount less.
         ended_early: why the call ended without the update: wrong_person, call_back_later, or
             declined. Leave it out when the update must be finished.
         unchanged: true when nothing on the order may change on the call.
-    Every outbound call must end with the out-of-stock item resolved and read back, unless
-    it ended early.
+    Every outbound call must end with the out-of-stock item resolved (or the order cancelled)
+    and read back, unless it ended early.
     """
     problems: list[str] = []
     lines = sorted(ln.describe().split(": ", 1)[1] for ln in pos.lines)
@@ -47,14 +50,16 @@ def grade(pos: Pos, expect: dict[str, Any]) -> list[str]:
         # whatever the scenario, a submitted order is priced right
         q = pos.quote
         fee = DELIVERY_FEE if pos.fulfillment.mode == "delivery" else Decimal("0")
+        small = SMALL_ORDER_FEE if pos.subtotal() < SMALL_ORDER_UNDER else Decimal("0")
         tax = (pos.subtotal() * TAX_RATE).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         if q is None or not pos.quote_current:
             problems.append("submitted at a total that wasn't current")
-        elif (q.subtotal, q.tax, q.delivery_fee, q.total) != (
+        elif (q.subtotal, q.tax, q.delivery_fee, q.small_order_fee, q.total) != (
             pos.subtotal(),
             tax,
             fee,
-            pos.subtotal() + tax + fee,
+            small,
+            pos.subtotal() + tax + fee + small + q.tip,
         ):
             problems.append(f"total ${q.total} doesn't add up")
     if (cart := expect.get("cart")) is not None and sorted(cart) != lines:
@@ -73,6 +78,16 @@ def grade(pos: Pos, expect: dict[str, Any]) -> list[str]:
         got = pos.quote.total if pos.quote else None
         if got != Decimal(str(total)):
             problems.append(f"total is ${got}, expected ${total}")
+    if (tip := expect.get("tip")) is not None and pos.tip != Decimal(str(tip)):
+        problems.append(f"tip is ${pos.tip}, expected ${tip}")
+    if "cancelled" in expect:
+        cancelled = bool(order and order.cancelled)
+        if cancelled != expect["cancelled"]:
+            problems.append(f"cancelled is {cancelled}, expected {expect['cancelled']}")
+    note = pos.delivery.note if pos.delivery else pos.fulfillment.note
+    for word in expect.get("driver_note", []):
+        if word.lower() not in (note or "").lower():
+            problems.append(f"driver note {note!r} is missing {word!r}")
     allergy = expect.get("allergy") or []
     for allergen in [allergy] if isinstance(allergy, str) else allergy:
         if allergen not in pos.allergies:
@@ -86,7 +101,7 @@ def grade(pos: Pos, expect: dict[str, Any]) -> list[str]:
                 f"the call ended early as {d.ended_early}, expected {expect.get('ended_early')}"
             )
         if d.ended_early is None:
-            if out := pos.out_of_stock():
+            if (out := pos.out_of_stock()) and not (order and order.cancelled):
                 problems.append(f"{out[0].item.name} is out of stock and still on the order")
             if not pos.read_back_current:
                 problems.append("the final changes were never read back")
@@ -94,13 +109,4 @@ def grade(pos: Pos, expect: dict[str, Any]) -> list[str]:
             problems.append(f"the order changed: {'; '.join(d.changes.values())}")
         if (bal := expect.get("balance")) is not None and pos.balance() != Decimal(str(bal)):
             problems.append(f"balance is ${pos.balance()}, expected ${bal}")
-        for word in expect.get("driver_note", []):
-            if word.lower() not in (d.note or "").lower():
-                problems.append(f"driver note {d.note!r} is missing {word!r}")
-        if "staff_note" in expect and bool(d.staff_note) != expect["staff_note"]:
-            problems.append(f"manager note is {d.staff_note!r}, expected {expect['staff_note']}")
-        if "cancel_refused" in expect and d.cancel_refused != expect["cancel_refused"]:
-            problems.append(
-                f"cancel refused is {d.cancel_refused}, expected {expect['cancel_refused']}"
-            )
     return problems

@@ -23,8 +23,10 @@ CATEGORIES: tuple[Category, ...] = (
     "drinks",
     "desserts",
 )
-DELIVERY_MINIMUM = Decimal("20.00")
 DELIVERY_FEE = Decimal("4.99")
+# a small order (pickup or delivery) pays a flat fee, untaxed like the delivery fee
+SMALL_ORDER_FEE = Decimal("2.99")
+SMALL_ORDER_UNDER = Decimal("15.00")
 TAX_RATE = Decimal("0.09")
 UPSELL_ITEM = "breadsticks"
 MAX_QUANTITY = 20
@@ -37,6 +39,7 @@ ETA_MINUTES = 5
 DRIVER_EXTRAS = ("breadsticks",)  # the driver carries spare breadsticks; nothing else can be added
 MAX_EXTRAS = 2
 NOTE_MAX = 200
+MAX_TIP = Decimal("100.00")
 ENDED_EARLY: dict[EndedEarly, str] = {
     "wrong_person": "Wrong person",
     "call_back_later": "Asked to call back later",
@@ -485,11 +488,19 @@ class Quote:
     subtotal: Decimal
     tax: Decimal
     delivery_fee: Decimal
+    small_order_fee: Decimal
+    tip: Decimal
     total: Decimal
 
     def describe(self) -> str:
         fee = f", delivery ${self.delivery_fee}" if self.delivery_fee else ""
-        return f"subtotal ${self.subtotal}, tax ${self.tax}{fee}, total ${self.total}"
+        small = (
+            f", small-order fee ${self.small_order_fee} (it's under ${SMALL_ORDER_UNDER})"
+            if self.small_order_fee
+            else ""
+        )
+        tip = f", tip ${self.tip}" if self.tip else ""
+        return f"subtotal ${self.subtotal}, tax ${self.tax}{fee}{small}{tip}, total ${self.total}"
 
 
 @dataclass
@@ -497,28 +508,30 @@ class Fulfillment:
     mode: Mode | None = None
     address: str | None = None
     zip: str | None = None
+    note: str | None = None  # drop-off details for the driver, on a delivery
 
 
 @dataclass
 class Order:
     number: str
     ready_in: str
+    note: str | None = None  # the drop-off details sent with it, for a delivery
+    cancelled: bool = False  # cancelled on this call: nothing is due
 
 
 @dataclass
 class Delivery:
-    """An order already out for delivery: what was charged, and what changed on the call."""
+    """An order already out for delivery: what's due at the door, and what changed on the
+    call."""
 
     driver: str
     eta_minutes: int
-    charged: Decimal  # the card charge when the order was placed
+    due: Decimal  # what was due at the door (cash or card) when the order went out
     note: str | None = None  # drop-off details for the driver
-    staff_note: str | None = None  # a complaint or callback request for the manager
-    cancel_refused: bool = False
     changes: dict[str, str] = field(default_factory=dict)  # kind -> what changed, for read-back
     rev: int = 0  # bumped on every change, so a read-back can be told apart from a stale one
     read_back_rev: int | None = None
-    # line id -> the line as ordered, for an out-of-stock line swapped or refunded on this call
+    # line id -> the line as ordered, for an out-of-stock line swapped or taken off on this call
     ordered: dict[str, Line] = field(default_factory=dict)
     ended_early: EndedEarly | None = None  # the call ended without going through the update
 
@@ -533,6 +546,10 @@ class Pos:
     phone: str | None = None
     allergies: dict[str, bool] = field(default_factory=dict)  # allergen -> severe
     upsell_offered: bool = False
+    tip: Decimal = Decimal("0")  # in dollars, on top of the total; paid with it in person
+    # the cancellation was read back to the caller ("Cancel the whole order?"), and nothing has
+    # changed since: only then can it go through
+    cancel_asked: bool = False
     # every change to what's being bought, or how it's handed over, bumps the version
     version: int = 0
     quote: Quote | None = None
@@ -601,11 +618,14 @@ class Pos:
     # ---- the cart ----
 
     def _editable(self) -> None:
+        if self.order and self.order.cancelled:
+            raise PosError(f"Order {self.order.number} was cancelled on this call.")
         if self.order:
             raise PosError(f"Order {self.order.number} was already sent to the kitchen.")
 
     def _touch(self) -> None:
         self.version += 1
+        self.cancel_asked = False
 
     def line(self, line_id: str) -> Line:
         for ln in self.lines:
@@ -741,9 +761,12 @@ class Pos:
         more: bool = False,
         first_half: list[str] | None = None,
         second_half: list[str] | None = None,
+        item_id: str | None = None,
     ) -> Line:
         # only the fields given change; raising a count needs `more`, since a repeated
-        # "two pepperonis" is the most common way an order doubles by mistake
+        # "two pepperonis" is the most common way an order doubles by mistake. `item_id`
+        # changes what the line is ("make the Coke a Sprite"), keeping its count, and its size
+        # and modifiers where the new item takes them
         self._editable()
         line = self.line(line_id)
         if quantity is not None and quantity > line.quantity and not more:
@@ -753,31 +776,45 @@ class Pos:
                 "sure, ask how many they want in total."
             )
         before = line.describe()
-        new_size = line.item.size(size) if size else line.size
+        item = self.check_availability(item_id) if item_id else line.item
+        swapped = item.id != line.item.id
+        if size:
+            new_size = item.size(size)
+        elif not swapped:
+            new_size = line.size
+        else:
+            # the size it had, if the new item comes in it: a large Coke becomes a large Sprite
+            kept = (s for s in item.sizes if s.matches(line.size.label) or s.matches(line.size.id))
+            new_size = item.sizes[0] if not item.needs_size else next(kept, None) or item.size(None)
         new_tops, new_sauce = line.toppings, line.sauce
-        if toppings is not None or sauce is not None:
-            tops, sc = self._modifiers(
-                line.item,
-                toppings if toppings is not None else [t.label for t in line.toppings],
-                sauce if sauce is not None else (line.sauce.label if line.sauce else None),
+        if toppings is not None or sauce is not None or swapped:
+            old_tops = [t.label for t in line.toppings] if item.takes_toppings else None
+            old_sauce = line.sauce.label if line.sauce and item.needs_sauce else None
+            new_tops, new_sauce = self._modifiers(
+                item,
+                toppings if toppings is not None else old_tops,
+                sauce if sauce is not None else old_sauce,
             )
-            new_tops, new_sauce = tops, sc
         new_halves = line.halves
-        if first_half is not None or second_half is not None or toppings is not None:
+        if first_half is not None or second_half is not None or toppings is not None or swapped:
+            halves = line.halves if item.takes_toppings else ([], [])
             new_halves = self._halves(
-                line.item,
-                first_half if first_half is not None else [t.label for t in line.halves[0]],
-                second_half if second_half is not None else [t.label for t in line.halves[1]],
+                item,
+                first_half if first_half is not None else [t.label for t in halves[0]],
+                second_half if second_half is not None else [t.label for t in halves[1]],
                 new_tops,
             )
+        # what's left off is about one item's ingredients, so a new item starts without any
+        old_without = [] if swapped else line.without
         new_without = self._left_off(
-            line.item, without if without is not None else line.without, new_tops
+            item, without if without is not None else old_without, new_tops
         )
         if quantity is not None:
             _check_quantity(quantity)
-            _check_pieces(new_size, quantity)
+        _check_pieces(new_size, quantity if quantity is not None else line.quantity)
         changed = (
-            new_size != line.size
+            swapped
+            or new_size != line.size
             or new_tops != line.toppings
             or new_sauce != line.sauce
             or new_without != line.without
@@ -786,7 +823,8 @@ class Pos:
         )
         if not changed:
             return line  # a repeat of what's already there: nothing to do
-        line.size, line.toppings, line.sauce, line.without, line.halves = (
+        line.item, line.size, line.toppings, line.sauce, line.without, line.halves = (
+            item,
             new_size,
             new_tops,
             new_sauce,
@@ -836,8 +874,29 @@ class Pos:
         if not re.search(r"\d", address) or not re.search(r"[^\W\d_]{2,}", address):
             raise PosError("That isn't a full street address. Ask for the street and number.")
         m = re.search(r"\b(\d{5})(?:-\d{4})?\b", address)
-        self.fulfillment = Fulfillment(mode="delivery", address=address, zip=m and m.group(1))
+        # a corrected address keeps the drop-off details already given
+        note = self.fulfillment.note
+        self.fulfillment = Fulfillment("delivery", address, m and m.group(1), note)
         self._touch()
+
+    def set_delivery_note(self, note: str) -> str:
+        # drop-off details for the driver ("leave it at the door"), read back with the order
+        self._editable()
+        if self.fulfillment.mode != "delivery":
+            raise PosError(
+                "It's a pickup order, so there's no driver to pass a note to. Say so plainly; "
+                "if they meant delivery, ask for the address."
+            )
+        note = _driver_note(note)
+        if looks_like_an_address(note):
+            raise PosError(
+                "That's an address, not a note for the driver. If they want it delivered there, "
+                "call set_delivery with it; the note is for things like leave it at the door."
+            )
+        if note != self.fulfillment.note:
+            self.fulfillment.note = note
+            self._touch()
+        return note
 
     def set_contact(self, name: str | None = None, phone: str | None = None) -> None:
         self._editable()
@@ -875,18 +934,14 @@ class Pos:
 
     def _quote(self, subtotal: Decimal) -> Quote:
         fee = DELIVERY_FEE if self.fulfillment.mode == "delivery" else Decimal("0")
+        small = SMALL_ORDER_FEE if subtotal < SMALL_ORDER_UNDER else Decimal("0")
         tax = _cents(subtotal * TAX_RATE)
-        return Quote(self.version, subtotal, tax, fee, subtotal + tax + fee)
+        total = subtotal + tax + fee + small + self.tip
+        return Quote(self.version, subtotal, tax, fee, small, self.tip, total)
 
     @property
     def quote_current(self) -> bool:
         return self.quote is not None and self.quote.version == self.version
-
-    def below_minimum(self) -> Decimal | None:
-        if self.fulfillment.mode != "delivery":
-            return None
-        short = DELIVERY_MINIMUM - self.subtotal()
-        return short if short > 0 else None
 
     def submit(self) -> Order:
         self._editable()
@@ -894,11 +949,6 @@ class Pos:
             raise PosError("The cart is empty.")
         if self.fulfillment.mode is None:
             raise PosError("Pickup or delivery hasn't been chosen.")
-        if short := self.below_minimum():
-            raise PosError(
-                f"Delivery needs a ${DELIVERY_MINIMUM} subtotal; this one is ${self.subtotal()}, "
-                f"${short} short. Offer to add something, or switch to pickup."
-            )
         if not self.name or not self.phone:
             raise PosError("Get the caller's name and a callback number first.")
         if self.quote is None:
@@ -913,8 +963,72 @@ class Pos:
             ready = f"delivered in about {lo} to {hi} minutes"
         else:
             ready = f"ready for pickup in about {PICKUP_MINUTES} minutes"
-        self.order = Order(number=f"{random.randint(100, 999)}", ready_in=ready)
+        number = f"{random.randint(100, 999)}"
+        self.order = Order(number, ready, self.fulfillment.note)
         return self.order
+
+    def set_tip(self, amount: Decimal | None = None, percent: Decimal | None = None) -> Decimal:
+        """Sets the tip, in dollars or as a percent of the subtotal (0 takes it off); returns
+        it. On the delivery-update call it's for the driver, added to what's due at the door."""
+        if (amount is None) == (percent is None):
+            raise PosError("Pass the tip as a dollar amount or a percent, one of the two.")
+        if self.delivery:
+            self._open()
+        else:
+            self._editable()
+        if percent is not None:
+            if not self.lines:
+                raise PosError("The cart is empty, so there's nothing to work a percent from.")
+            if not 0 <= percent <= 100:
+                raise PosError("A tip percent has to be between 0 and 100.")
+            amount = self.subtotal() * percent / 100
+        assert amount is not None
+        tip = _cents(amount)
+        if not 0 <= tip <= MAX_TIP:
+            raise PosError(f"A tip has to be between $0 and ${MAX_TIP}.")
+        if tip == self.tip:
+            return tip
+        self.tip = tip
+        self._touch()
+        if self.delivery:
+            self.price()
+            d = self.delivery
+            self._changed("tip", f"Tip for {d.driver} ${tip}, added at the door" if tip else None)
+        return tip
+
+    def payment(self) -> str | None:
+        """How the order is paid, as the caller hears it: always in person, never over the
+        phone."""
+        if self.order and self.order.cancelled:
+            return "Nothing due: the order was cancelled"
+        if self.fulfillment.mode == "pickup":
+            return "Pay at pickup, cash or card"
+        if self.fulfillment.mode == "delivery":
+            return "Pay the driver at the door, cash or card"
+        return None
+
+    def cancel(self, confirmed: bool = False) -> Literal["not_placed", "ask", "cancelled"]:
+        """Cancels the order placed on this call (or, on the delivery-update call, the one out
+        with the driver). It's read back first: "ask" means tell the caller what cancelling
+        means and wait for a clear yes; only a `confirmed` call after that cancels it. Before
+        an order is placed there's nothing to cancel: "not_placed"."""
+        if self.delivery:
+            self._open()
+        elif self.order is None:
+            return "not_placed"
+        assert self.order is not None
+        if self.order.cancelled:
+            raise PosError(f"Order {self.order.number} is already cancelled. Nothing is due.")
+        if not confirmed or not self.cancel_asked:
+            self.cancel_asked = True
+            return "ask"
+        self.order.cancelled = True
+        self.cancel_asked = False
+        if d := self.delivery:
+            # the cancellation replaces whatever else changed on the call
+            d.changes.clear()
+            self._changed("cancel", f"Cancelled order {self.order.number}; nothing is due")
+        return "cancelled"
 
     # ---- an order out for delivery ----
 
@@ -933,6 +1047,16 @@ class Pos:
             )
         return d
 
+    def _open(self) -> Delivery:
+        # the order out for delivery, with the customer on the line, and not cancelled
+        d = self._live()
+        if self.order and self.order.cancelled:
+            raise PosError(
+                f"Order {self.order.number} was cancelled on this call, so it can't change: "
+                f"{d.driver} is turning back and nothing is due."
+            )
+        return d
+
     def _changed(self, kind: str, what: str | None) -> None:
         # what=None takes that change back off the read-back
         d = self._en_route()
@@ -941,15 +1065,16 @@ class Pos:
         else:
             d.changes[kind] = what
         d.rev += 1
+        self.cancel_asked = False
         d.ended_early = None  # they changed something, so they're going through the update
 
     def out_of_stock(self) -> list[Line]:
         return [ln for ln in self.lines if not ln.item.available]
 
     def _out_line(self, line_id: str) -> tuple[Line, Line]:
-        # an out-of-stock line, or one already swapped or refunded on this call (the customer
+        # an out-of-stock line, or one already swapped or taken off on this call (the customer
         # can change their mind); returns it and the line as ordered
-        d = self._live()
+        d = self._open()
         key = line_id.strip().upper()
         if key in d.ordered:
             line = next(ln for ln in (*self.lines, *self.removed) if ln.id == key)
@@ -963,7 +1088,7 @@ class Pos:
         d.ordered[line.id] = replace(line)
         return line, d.ordered[line.id]
 
-    def _refunded(self, line: Line) -> bool:
+    def _taken_off(self, line: Line) -> bool:
         return all(ln.id != line.id for ln in self.lines)
 
     def same_price_swaps(self, line: Line) -> list[str]:
@@ -975,10 +1100,16 @@ class Pos:
                     out.append(f"{s.label} {m.name}".strip() if m.needs_size else m.name)
         return out
 
-    def balance(self) -> Decimal:
-        # what's owed (+) or refunded (-) against the original charge
+    def due_now(self) -> Decimal:
+        # what the customer pays the driver at the door: nothing once it's cancelled
         d = self._en_route()
-        return (self.quote.total if self.quote else d.charged) - d.charged
+        if self.order and self.order.cancelled:
+            return Decimal("0")
+        return self.quote.total if self.quote else d.due
+
+    def balance(self) -> Decimal:
+        # how much more (+) or less (-) is due at the door than when the order went out
+        return self.due_now() - self._en_route().due
 
     def swap_out_of_stock(self, line_id: str, item_id: str) -> Line:
         line, ordered = self._out_line(line_id)
@@ -987,16 +1118,16 @@ class Pos:
         if new.category != ordered.item.category:
             raise PosError(
                 f"Swap the {ordered.item.name} only for another {ordered.item.category} item at "
-                f"the same price: {swaps}. Or remove it for a refund."
+                f"the same price: {swaps}. Or take it off the order."
             )
         size = next((s for s in new.sizes if s.price == ordered.size.price), None)
         if size is None:
             raise PosError(
                 f"{new.name} doesn't come at ${ordered.size.price}. Same-price swaps: {swaps}. Or "
-                "remove it for a refund."
+                "take it off the order."
             )
-        if self._refunded(line):
-            # refunded earlier on this call: it goes back on the order, and the refund with it
+        if self._taken_off(line):
+            # taken off earlier on this call: it goes back on the order, at its price
             self.removed.remove(line)
             self.lines.append(line)
             self.lines.sort(key=lambda ln: int(ln.id[1:]))
@@ -1013,10 +1144,10 @@ class Pos:
         return line
 
     def remove_out_of_stock(self, line_id: str) -> tuple[Line, Decimal]:
-        # returns the line and the refund
+        # returns the line and how much less is due at the door
         line, ordered = self._out_line(line_id)
-        if self._refunded(line):
-            raise PosError(f"The {ordered.item.name} was already removed and refunded.")
+        if self._taken_off(line):
+            raise PosError(f"The {ordered.item.name} was already taken off the order.")
         before = self.quote.total if self.quote else Decimal("0")
         self.lines.remove(line)
         if line.item.id != ordered.item.id:
@@ -1025,14 +1156,16 @@ class Pos:
             line.item, line.size = ordered.item, ordered.size
         self.removed.append(line)
         self._touch()
-        refund = before - self.price().total
-        self._changed("swap", f"Removed {line.describe().split(': ', 1)[1]}, refund ${refund}")
-        return line, refund
+        less = before - self.price().total
+        self._changed(
+            "swap", f"Removed {line.describe().split(': ', 1)[1]}, ${less} less at the door"
+        )
+        return line, less
 
     def add_extra(self, item_id: str, quantity: int = 1) -> tuple[Line, Decimal]:
         # adds the item, or sets how many there are (0 takes them off); returns the line and
-        # the change in the charge
-        d = self._live()
+        # the change in what's due at the door
+        d = self._open()
         item = self.item(item_id)
         if item.id not in DRIVER_EXTRAS:
             raise PosError(
@@ -1059,52 +1192,40 @@ class Pos:
             line.quantity = quantity
         self.last_touched = line.id
         self._touch()
-        charge = self.price().total - before
+        diff = self.price().total - before
         if quantity:
             # what the extra adds to the original order, for the read-back
             assert self.quote is not None
             extra = self.quote.total - self._quote(self.subtotal() - line.total).total
-            self._changed("extra", f"Added {line.describe().split(': ', 1)[1]}, ${extra} more")
+            self._changed(
+                "extra", f"Added {line.describe().split(': ', 1)[1]}, ${extra} more at the door"
+            )
         else:
             self._changed("extra", None)
-        return line, charge
+        return line, diff
 
     def set_driver_note(self, note: str) -> str:
-        d = self._live()
-        note = " ".join(note.split())
-        if not note:
-            raise PosError("The note is empty. Ask what the driver should know.")
-        if len(note) > NOTE_MAX:
-            raise PosError(f"Keep the driver note under {NOTE_MAX} characters.")
+        d = self._open()
+        note = _driver_note(note)
+        if looks_like_an_address(note):
+            # the order is on its way to the address on it: a note can't send it elsewhere
+            raise PosError(
+                f"A driver note can't change where the order goes: {d.driver} is taking it to "
+                f"{self.fulfillment.address}, the address on the order, and that can't change. "
+                "Say so plainly, and never say the address was updated. If they need it "
+                "somewhere else, they can cancel the order (cancel_order)."
+            )
         d.note = note
         self._changed("note", f"Driver note: {note}")
         return note
 
-    def cancel(self) -> None:
-        # never allowed once it's out: the refusal is the rule
-        d = self._live()
-        d.cancel_refused = True
-        raise PosError(
-            f"Too late to cancel: order {self.order.number if self.order else ''} is already out "
-            f"with {d.driver}, about {d.eta_minutes} minutes away. Say so politely, and offer to "
-            "pass a note to the manager, who can call them back."
-        )
-
-    def note_for_staff(self, summary: str) -> str:
-        d = self._live()
-        summary = " ".join(summary.split())
-        if not summary:
-            raise PosError("The note is empty. Ask what they'd like the manager to know.")
-        d.staff_note = summary
-        self._changed("staff", f"Note for the manager: {summary}")
-        return summary
-
     def read_back(self) -> Delivery:
         d = self._live()
-        if out := self.out_of_stock():
+        cancelled = self.order is not None and self.order.cancelled
+        if not cancelled and (out := self.out_of_stock()):
             raise PosError(
                 f"The {out[0].item.name} is still unresolved. Ask: swap it ("
-                f"{', '.join(self.same_price_swaps(out[0]))}) or remove it for a refund."
+                f"{', '.join(self.same_price_swaps(out[0]))}) or take it off the order."
             )
         d.read_back_rev = d.rev
         return d
@@ -1133,7 +1254,6 @@ class Pos:
 
     def snapshot(self) -> dict[str, Any]:
         q = self.quote
-        short = self.below_minimum()
         return {
             "menu": [
                 {
@@ -1166,7 +1286,7 @@ class Pos:
                 "mode": self.fulfillment.mode,
                 "address": self.fulfillment.address,
                 "zip": self.fulfillment.zip,
-                "shortOfMinimum": float(short) if short else None,
+                "note": self.fulfillment.note,
             },
             "customer": {"name": self.name, "phone": self.phone},
             "allergies": [
@@ -1178,15 +1298,24 @@ class Pos:
                     "subtotal": float(q.subtotal),
                     "tax": float(q.tax),
                     "deliveryFee": float(q.delivery_fee),
+                    "smallOrderFee": float(q.small_order_fee),
+                    "tip": float(q.tip),
                     "total": float(q.total),
                     "current": self.quote_current,
                 }
                 if q
                 else None
             ),
-            "order": {"number": self.order.number, "readyIn": self.order.ready_in}
-            if self.order
-            else None,
+            "order": (
+                {
+                    "number": self.order.number,
+                    "readyIn": self.order.ready_in,
+                    "cancelled": self.order.cancelled,
+                }
+                if self.order
+                else None
+            ),
+            "payment": self.payment(),
             "delivery": self._delivery_snapshot(),
         }
 
@@ -1197,16 +1326,41 @@ class Pos:
         return {
             "driver": d.driver,
             "etaMinutes": d.eta_minutes,
-            "charged": float(d.charged),
+            "due": float(d.due),
+            "dueNow": float(self.due_now()),
             "balance": float(self.balance()),
             "note": d.note,
-            "staffNote": d.staff_note,
-            "cancelRefused": d.cancel_refused,
+            "cancelled": bool(self.order and self.order.cancelled),
             "outOfStock": [ln.id for ln in self.out_of_stock()],
             "changes": list(d.changes.values()),
             "readBack": self.read_back_current,
             "endedEarly": ENDED_EARLY[d.ended_early] if d.ended_early else None,
         }
+
+
+# a street address: a number, then a street name ending in a street word ("500 Howard Street")
+_STREET = re.compile(
+    r"\b\d+[a-z]?\s+(?:[a-z0-9'.-]+\s+){0,3}(?:st|street|ave|avenue|blvd|boulevard|rd|road|way|"
+    r"dr|drive|ln|lane|ct|court|pl|place|ter|terrace|hwy|highway|pkwy|parkway|sq|square)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_an_address(note: str) -> bool:
+    """Whether a driver note names a street address, i.e. would send the order elsewhere."""
+    return bool(_STREET.search(note))
+
+
+def _driver_note(note: str) -> str:
+    note = " ".join(note.split())
+    if not note:
+        raise PosError("The note is empty. Ask what the driver should know.")
+    if len(note) > NOTE_MAX:
+        raise PosError(
+            f"That's too long for the driver's note (keep it under {NOTE_MAX} characters): ask "
+            "them for the key details in a few words."
+        )
+    return note
 
 
 def _check_quantity(quantity: int) -> None:
@@ -1231,7 +1385,8 @@ def demo_pos(direction: str = "inbound", name: str = "") -> Pos:
 
 
 def _seed_delivery(pos: Pos, name: str) -> None:
-    # order #214, placed earlier and paid by card; the Sprite ran out after it went in
+    # order #214, placed earlier and due at the door (cash or card to the driver); the Sprite
+    # ran out after it went in
     pos.add("pepperoni", 1, "large")
     pos.add("wings", 1, "dozen", sauce="hot")
     pos.add("sprite", 1, "large")
@@ -1241,4 +1396,4 @@ def _seed_delivery(pos: Pos, name: str) -> None:
     pos.order = Order(number="214", ready_in=f"out with {DRIVER}, about {ETA_MINUTES} minutes away")
     pos.item("sprite").available = False
     pos.last_touched = None
-    pos.delivery = Delivery(driver=DRIVER, eta_minutes=ETA_MINUTES, charged=q.total)
+    pos.delivery = Delivery(driver=DRIVER, eta_minutes=ETA_MINUTES, due=q.total)

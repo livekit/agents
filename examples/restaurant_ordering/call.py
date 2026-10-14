@@ -1,5 +1,5 @@
-"""Phone-call helpers: the speaking rules, the voice's pacing, the audio input, and hanging up
-or handing off without cutting the caller off.
+"""Phone-call helpers: the speaking rules, the audio input, and hanging up
+without cutting the caller off, or when they've gone silent.
 
 The helpers that take a RunContext expect its userdata to carry `page` (page.py), the demo
 page's view of the call, which hears about a hang-up before the room closes."""
@@ -9,18 +9,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterable
 from typing import Any
 
 from page import Page
 
 from livekit import rtc
-from livekit.agents import RunContext, get_job_context, room_io
-from livekit.agents.voice import SpeechHandle
+from livekit.agents import AgentSession, RunContext, get_job_context, room_io
+from livekit.agents.voice import SpeechHandle, UserStateChangedEvent
 from livekit.agents.voice.room_io.types import NoiseCancellationParams
 from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("restaurant-ordering")
+
+# how long neither side has spoken before the caller counts as away (AgentSession's
+# user_away_timeout); the first time, the agent checks in, the second, it hangs up
+USER_AWAY_TIMEOUT = 12.0
+STILL_THERE = "Are you still there?"
+SILENT_GOODBYE = "I'll let you go. Call us back anytime."
 
 VOICE_RULES = """\
 You're on a phone call. Speak in short, plain sentences: no markdown, lists, emoji, or symbols.
@@ -29,15 +34,16 @@ words, and quick acknowledgments ("Sure.", "Got it.", "Okay, so..."), and vary y
 you look something up, say so the way a person would ("Let me pull that up."). Don't
 over-apologize, over-thank, or repeat the caller's words back unless you're confirming a detail.
 Write numbers in digits, the way they're normally written ($79, $3,800, 7:30 a.m., Oct 14,
-2023, 26,200 miles), never spelled out as words: the voice reads them naturally, and the
-caller sees them on screen. Don't read out confirmation or reference numbers unless asked.
+2023, 26,200 miles), never spelled out as words: the voice reads them naturally.
+Don't read out confirmation or reference numbers unless asked.
 Take dates, times, and numbers however the caller says them, and convert them yourself for
 your tools. Never tell the caller what format to use.
-If they ask something you don't have the answer to (hours, parking, directions, policies), say
+If they ask something you don't have the answer to (parking, directions, policies), say
 so plainly and offer what you can do; never make it up. Never read out internal IDs or codes.
 Keep each turn to one or two sentences. Ask one thing at a time: a single question per turn,
 never two requests bundled together ("your name and phone number", "the size and the sauce").
 Wait for the answer, then ask the next. If they give two things at once anyway, take both.
+The caller can't see anything: never say "look right", "looks good", "as you can see", or "on your screen". Ask "Does that sound right?" instead.
 People interrupt, correct themselves, and talk over you. When they do, stop, take the
 correction, and carry on from there: never repeat the old value, and never restart a list
 from the top when only one item changed. A short "mm-hm" or "yeah" while you talk means
@@ -47,24 +53,6 @@ day.") before you hang up. Never hang up on their last words.
 Once you've said goodbye ("Thanks for calling, have a great day!"), call end_call in that same
 turn: the call ends after your words finish. Don't wait for a reply to a goodbye, and don't say
 goodbye without ending the call."""
-
-
-_SENTENCE_END = re.compile(r"(?<=[.?!])\s+")
-# a period that ends an abbreviation ("Dr.", "a.m."), not a sentence
-_ABBREVIATION = re.compile(r"(?:\b(?:Dr|Mr|Mrs|Ms|St|Jr|Sr|vs|No)|\b[a-zA-Z]\.[a-zA-Z])\.\Z")
-
-
-async def pause_between_sentences(text: AsyncIterable[str]) -> AsyncIterable[str]:
-    """Cartesia runs sentences together; a short break after each one paces it like a person."""
-    buf = ""
-    async for chunk in text:
-        buf += chunk
-        while m := _SENTENCE_END.search(buf):
-            sentence, buf = buf[: m.start()], buf[m.end() :]
-            pause = "" if _ABBREVIATION.search(sentence) else ' <break time="300ms"/>'
-            yield f"{sentence}{pause} "
-    if buf:
-        yield buf
 
 
 def room_options(participant: str) -> room_io.RoomOptions:
@@ -143,3 +131,37 @@ async def end_after_reply(ctx: RunContext[Any], reason: str = "Call complete") -
 async def _hang_up_after(speech: SpeechHandle, reason: str, page: Page) -> None:
     await speech.wait_for_playout()
     await hang_up(reason, page)
+
+
+def hang_up_when_silent(session: AgentSession[Any], page: Page | None = None) -> None:
+    """Checks in once when the line goes quiet, and hangs up if it stays quiet.
+
+    The session's user state turns "away" once neither side has spoken for its
+    user_away_timeout. The first time, the agent asks if they're still there, in a fixed line;
+    the second time in a row, with no word from the caller in between, it says goodbye and
+    hangs up. Silence never agrees to anything: no tool runs on it. Only for real calls: a
+    simulation or a text-only test never arms it."""
+    away = 0
+    tasks: set[asyncio.Task[None]] = set()
+
+    async def check_in() -> None:
+        session.say(STILL_THERE)
+        # back to listening, so another full quiet spell after the question counts again
+        session.reset_away_timer()
+
+    async def goodbye() -> None:
+        await session.say(SILENT_GOODBYE, allow_interruptions=False).wait_for_playout()
+        await hang_up("No response", page)
+
+    @session.on("user_state_changed")
+    def _on_user_state(ev: UserStateChangedEvent) -> None:
+        nonlocal away
+        if ev.new_state == "speaking":
+            away = 0
+            return
+        if ev.new_state != "away" or away >= 2:
+            return
+        away += 1
+        task = asyncio.create_task(check_in() if away == 1 else goodbye())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
