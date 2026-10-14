@@ -1288,7 +1288,11 @@ class Pos:
                 "zip": self.fulfillment.zip,
                 "note": self.fulfillment.note,
             },
-            "customer": {"name": self.name, "phone": self.phone},
+            # the delivery update's customer, when no name is known, is just "Customer"
+            "customer": {
+                "name": "Customer" if self.delivery and not self.name else self.name,
+                "phone": self.phone,
+            },
             "allergies": [
                 {"allergen": a, "severe": severe} for a, severe in sorted(self.allergies.items())
             ],
@@ -1380,7 +1384,8 @@ def _check_pieces(size: Size, quantity: int) -> None:
 def demo_pos(direction: str = "inbound", name: str = "") -> Pos:
     pos = Pos(menu=seed_menu())
     if direction == "outbound":
-        _seed_delivery(pos, name or "Sam Carter")
+        # no name means none is known: the order stays under no name, never a made-up one
+        _seed_delivery(pos, name)
     return pos
 
 

@@ -1265,8 +1265,9 @@ class ServiceDesk:
 
     # ---- a car in the shop (the follow-up call) ----
 
-    def confirm_customer(self) -> ShopVisit:
-        """Whoever picked up said they're the customer: the visit can be talked about now."""
+    def confirm_customer(self, name: str = "") -> ShopVisit:
+        """Whoever picked up said they're the customer: the visit can be talked about now. A
+        name they gave goes on a file that had none."""
         v = self._shop()
         if v.reached == "someone_else":
             who = self._first_name()
@@ -1276,6 +1277,8 @@ class ServiceDesk:
             )
         v.reached = "customer"
         v.ended_early = None
+        if self.customer and not self.customer.name and (said := " ".join(name.split())):
+            self.customer.name = said
         return v
 
     def repair_details(self, question: str = "") -> list[Finding]:
@@ -1518,7 +1521,9 @@ class ServiceDesk:
         self._shop().rev += 1
 
     def _first_name(self) -> str:
-        return first_name(self.customer.name if self.customer else "")
+        # no name on the file: "the customer", never a made-up one
+        name = self.customer.name if self.customer else ""
+        return first_name(name) if name else "the customer"
 
     def _shop_car(self) -> Vehicle:
         return self._vehicle_by_vin(self._shop().appointment.vin)
@@ -1655,7 +1660,12 @@ class ServiceDesk:
         return {
             "today": self.today.isoformat(),
             # isNew: a file set up on this call, for a name and number that had none
-            "customer": {"name": c.name, "phone": _phone(c.phone), "isNew": c.new} if c else None,
+            # a follow-up with no name known: just "Customer"
+            "customer": (
+                {"name": c.name or "Customer", "phone": _phone(c.phone), "isNew": c.new}
+                if c
+                else None
+            ),
             "vehicles": [self._vehicle_dict(x) for x in c.vehicles] if c else [],
             "menu": [
                 {"id": m.id, "label": m.label, "price": m.price, "hours": m.hours, "kind": m.kind}
@@ -2090,7 +2100,8 @@ def demo_desk(
     direction: Literal["inbound", "outbound"] = "inbound",
 ) -> ServiceDesk:
     """Alex Morgan's file: an in-warranty X3 with an open recall, and an older 330i. Outbound,
-    the X3 is in the shop today, and the inspection found worn front brakes."""
+    the X3 is in the shop today, and the inspection found worn front brakes; an empty
+    `customer_name` there means no name is known, and the file has none."""
     today = today or local_today()
     x3 = Vehicle(
         vin="WBX57DP0XPN123456",
@@ -2116,7 +2127,7 @@ def demo_desk(
         v.miles_on_file = v.miles
     customer = Customer(
         id="C-20417",
-        name=" ".join(customer_name.split()) or "Alex Morgan",
+        name=" ".join(customer_name.split()) or ("" if direction == "outbound" else "Alex Morgan"),
         phone="4155550142",
         vehicles=[x3, sedan],
     )
@@ -2165,7 +2176,8 @@ def _seed_shop_visit(desk: ServiceDesk) -> None:
     # booked earlier, the way the consultation call books it: a diagnostic for the grinding on
     # the X3, with the technician's notes, the open recall added, and the shuttle. It came in at
     # 7:30 this morning; the diagnostic and the recall are done.
-    c = desk.lookup_customer(desk._customers[0].phone, desk._customers[0].name)
+    # the file is open from the start, with or without a name on it
+    c = desk.customer = desk._customers[0]
     x3 = c.vehicles[0]
     desk.select_vehicle(x3.vin)
     for kind, text in (

@@ -724,14 +724,8 @@ class DeliveryUpdateAgent(Agent):
 
     async def on_enter(self) -> None:
         ud: Userdata = self.session.userdata
-        pos = ud.pos
         ud.page.push(stage="update")
-        # a fixed opener: who's calling and for whom, and nothing about the order until the
-        # customer has said it's them
-        self.session.say(
-            f"Hi, this is {PERSONA} from {BUSINESS}, calling about a delivery. "
-            f"Am I speaking with {first_name(pos.name or '')}?"
-        )
+        self.session.say(_opener(ud.pos))
 
     @function_tool
     async def swap_out_of_stock_item(self, ctx: Ctx, line_id: str, item_id: str) -> str:
@@ -947,6 +941,21 @@ def _money(pos: Pos) -> str:
     return f" Still ${due} due at the door, cash or card."
 
 
+def _opener(pos: Pos) -> str:
+    # a fixed opener: who's calling and for whom, and nothing about the order until the
+    # customer has said it's them. Without a name, it asks about the order instead: never a
+    # made-up name
+    if pos.name:
+        return (
+            f"Hi, this is {PERSONA} from {BUSINESS}, calling about a delivery. "
+            f"Am I speaking with {first_name(pos.name)}?"
+        )
+    return (
+        f"Hi, this is {PERSONA} from {BUSINESS}, calling about a delivery order. Did you place "
+        "an order with us tonight?"
+    )
+
+
 def _voicemail() -> str:
     # who's calling, what about, and a number to call back: never the details
     number = spoken_number(RESTAURANT_NUMBER) if RESTAURANT_NUMBER else "the restaurant"
@@ -1092,11 +1101,22 @@ def _outbound_instructions(pos: Pos) -> str:
     assert d is not None and pos.order is not None and out
     lines = "; ".join(ln.describe() for ln in pos.lines)
     swaps = ", ".join(pos.same_price_swaps(out[0]))
+    if pos.name:
+        to = pos.name
+        reached = f"asked for {first_name(pos.name)}. Once they say it's them,"
+        not_them = f"it isn't {pos.name}"
+    else:
+        # no name to go on: never one made up
+        to = "the customer who placed it"
+        reached = """asked whether they placed an order with us
+tonight. You don't have their name: never say or guess one, and don't ask for it; if they
+give it, use it. Once they say yes, it was their order,"""
+        not_them = "they didn't place an order"
     return f"""\
 {VOICE_RULES}
 
 You're {PERSONA} from {BUSINESS}, a pizzeria in San Francisco, making an outbound call to
-{pos.name} about their delivery order. Be polite, clear, and brief, warm but not bubbly.
+{to} about their delivery order. Be polite, clear, and brief, warm but not bubbly.
 Drop the upbeat tone and be calm and plain about anything to do with money (what's due at
 the door, more or less than before), a complaint, a cancellation, or an allergy.
 
@@ -1108,13 +1128,13 @@ ${d.due} is due at the door: they pay {d.driver}, the driver, cash or card, when
 The {out[0].item.name} ({out[0].id}) ran out after the order was placed.
 
 # What to handle
-You've already said who you are and asked for {first_name(pos.name or "")}. Once they say
-it's them, tell them {d.driver} is about {d.eta_minutes} minutes away and that the
-{out[0].item.name} ran out, and ask whether to replace it with a large Coke at the same price
+You've already said who you are and {reached}
+tell them {d.driver} is about {d.eta_minutes} minutes away and that the {out[0].item.name} ran
+out, and ask whether to replace it with a large Coke at the same price
 or take it off the order (it comes off what they pay at the door).
 Once they've said it's them, it's their order: when they ask, read them what's on it, the
 address, and what's due, plainly.
-If it isn't {pos.name} (a wrong number, or someone else who picked up), call
+If {not_them} (a wrong number, or someone else who picked up), call
 end_without_update with wrong_person and say a polite goodbye: say nothing more about the
 order, the address, or who it's for.
 If they're driving, busy, ask you to call later, or aren't interested, don't push: call
@@ -1204,7 +1224,8 @@ async def entrypoint(ctx: JobContext) -> None:
     agent: Agent
     if outbound:
         # order #214 is already placed, paid for, and out with the driver, under the name the
-        # website's visitor gave (or the metadata's `name`)
+        # website's visitor gave (or the metadata's `name`); with neither, it's under no name,
+        # and Gabby asks about the order instead of for someone
         pos = demo_pos("outbound", visitor_name(caller) or meta.get("name") or "")
         agent = DeliveryUpdateAgent(pos)
     else:

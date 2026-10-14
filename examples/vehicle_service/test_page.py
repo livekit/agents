@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from agent import PERSONA, NickAgent, RepairCallAgent, Userdata, _decided
+from agent import PERSONA, NickAgent, RepairCallAgent, Userdata, _decided, _opener, _voicemail
 from backend import PAYMENT, demo_desk
 from call import NO_RESPONSE, SILENT_GOODBYE, STILL_THERE, hang_up_when_silent
 from page import STATE_RPC_METHOD, dial_error, visitor_name
@@ -183,6 +183,53 @@ def test_a_decision_leads_with_the_new_total() -> None:
     assert said.startswith(
         "TOTAL DUE AT PICKUP IS NOW $648 (diagnostic $159 + front brake pads and rotors $489)."
     )
+
+
+def test_the_follow_up_asks_for_the_customer_by_name() -> None:
+    desk = demo_desk("Jordan Lee", today=TODAY, direction="outbound")
+    assert (
+        _opener(desk)
+        == "Hi, this is Nick calling from Bayside BMW service. May I speak with Jordan?"
+    )
+    said = str(RepairCallAgent(desk).instructions)
+    assert "outbound call to Jordan Lee" in said and "asked for Jordan." in said
+    assert _voicemail(desk).startswith(
+        "Hi, this is Nick from Bayside BMW service, calling for Jordan Lee."
+    )
+
+
+def test_without_a_name_the_follow_up_names_nobody() -> None:
+    desk = demo_desk("", today=TODAY, direction="outbound")
+    assert desk.customer is not None and desk.customer.name == ""
+    assert desk.snapshot()["customer"]["name"] == "Customer"
+    assert _opener(desk) == (
+        "Hi, this is Nick from Bayside BMW service, calling about a car you left with us this "
+        "morning. Is this the person who dropped it off?"
+    )
+    agent = RepairCallAgent(desk)
+    said = str(agent.instructions)
+    assert "never say or guess one" in said and "whoever dropped off the car" in said
+    voicemail = _voicemail(desk)
+    assert voicemail.startswith("Hi, this is Nick from Bayside BMW service. Please call us back")
+    for spoken in (_opener(desk), said, voicemail):
+        assert "Alex" not in spoken and "Morgan" not in spoken
+        assert "with there" not in spoken and "for there" not in spoken
+    # the read-backs say "the customer", never a name, and a name they give goes on the file
+    desk.confirm_customer()
+    desk.arrange_pickup("self", collected_by="their friend Sam")
+    assert "the customer's name" in desk.ready_summary()
+    desk.confirm_customer("jordan  lee")
+    assert desk.customer.name == "jordan lee"
+    desk.confirm_customer("Someone Else")
+    assert desk.customer.name == "jordan lee"
+
+
+async def test_without_a_name_the_wrong_person_hears_no_name() -> None:
+    desk = demo_desk("", today=TODAY, direction="outbound")
+    ud = Userdata(desk=desk)
+    agent: Any = RepairCallAgent(desk)
+    said = await agent.end_without_update(SimpleNamespace(userdata=ud), "wrong_person")
+    assert "whoever dropped off the car" in said and "there" not in said.split()
 
 
 def test_the_visitors_name_is_only_a_browser_callers() -> None:

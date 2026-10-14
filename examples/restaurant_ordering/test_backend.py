@@ -8,13 +8,16 @@ from typing import Any
 
 import pytest
 from agent import (
+    DeliveryUpdateAgent,
     _answered_yes_since,
     _asked_for_more,
     _cancel_needs_a_yes,
     _cancel_read_back_at,
     _drink_size_said,
     _line_note,
+    _opener,
     _read_back_answer,
+    _voicemail,
     say_pepperoni_pizzas,
 )
 from backend import Pos, PosError, demo_pos, looks_like_an_address
@@ -605,6 +608,38 @@ def test_outbound_seeds_order_214_out_for_delivery(out: Pos) -> None:
     assert out.same_price_swaps(out.line("L3"))[0] == "large Coke"
     # the inbound demo still starts empty, with the Sprite in stock
     assert demo_pos().item("sprite").available and not demo_pos().lines
+
+
+def test_the_opener_asks_for_the_customer_by_name(out: Pos) -> None:
+    assert _opener(out) == (
+        "Hi, this is Gabby from Zappi's Pizzeria, calling about a delivery. Am I speaking with Sam?"
+    )
+    said = str(DeliveryUpdateAgent(out).instructions)
+    assert "outbound call to\nSam Carter" in said and "asked for Sam." in said
+    assert "If it isn't Sam Carter" in said
+
+
+def test_without_a_name_nobody_is_named() -> None:
+    pos = demo_pos("outbound")
+    assert not pos.name and pos.snapshot()["customer"]["name"] == "Customer"
+    assert _opener(pos) == (
+        "Hi, this is Gabby from Zappi's Pizzeria, calling about a delivery order. Did you "
+        "place an order with us tonight?"
+    )
+    said = str(DeliveryUpdateAgent(pos).instructions)
+    assert "the customer who placed it" in said and "never say or guess one" in said
+    assert "If they didn't place an order" in said
+    for spoken in (_opener(pos), said, _voicemail()):
+        assert "Sam" not in spoken and "Carter" not in spoken
+        assert "with there" not in spoken and "for there" not in spoken
+    # the inbound order has no name until the caller gives one, and the page shows none
+    assert demo_pos().snapshot()["customer"]["name"] is None
+
+
+def test_the_voicemail_names_nobody() -> None:
+    assert _voicemail().startswith(
+        "Hi, this is Gabby from Zappi's Pizzeria, with a quick update on your delivery."
+    )
 
 
 def test_swap_keeps_the_price(out: Pos) -> None:

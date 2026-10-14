@@ -769,20 +769,21 @@ class RepairCallAgent(Agent):
         ud: Userdata = self.session.userdata
         desk = ud.desk
         ud.page.push(stage="reach")
-        # a fixed opener: who's calling, and for whom; nothing about the car until it's them
-        who = first_name(desk.customer.name if desk.customer else "")
-        self.session.say(
-            f"Hi, this is {PERSONA} calling from {BUSINESS} service. May I speak with {who}?"
-        )
+        self.session.say(_opener(desk))
 
     @function_tool
-    async def confirm_customer(self, ctx: Ctx) -> str:
+    async def confirm_customer(self, ctx: Ctx, name: str = "") -> str:
         """Whoever picked up said they're the customer. Returns what the technician found.
-        Call it before saying anything about the car."""
+        Call it before saying anything about the car.
+
+        Args:
+            name: Their name, only if they said it on this call, e.g. "Jordan Lee". Leave
+                out otherwise; never guess one.
+        """
         with _desk_rules(ctx) as desk:
-            desk.confirm_customer()
+            desk.confirm_customer(name)
         who = desk.customer.name if desk.customer else ""
-        ctx.userdata.page.record("confirm_customer", f"Speaking with {who}")
+        ctx.userdata.page.record("confirm_customer", f"Speaking with {who or 'the customer'}")
         assert desk.visit is not None
         now = [f for f in desk.visit.findings if f.urgency == "now"]
         return (
@@ -935,12 +936,16 @@ class RepairCallAgent(Agent):
             desk.end_without_update(reason)
         ctx.userdata.page.record("end_without_update", ENDED_EARLY[reason])
         self._wrapped_at = time.time()
-        who = first_name(desk.customer.name if desk.customer else "")
+        name = desk.customer.name if desk.customer else ""
         if reason == "wrong_person":
+            ask = (
+                f"Ask that {first_name(name)} call back at {_callback()}"
+                if name
+                else f"Ask that whoever dropped off the car call back at {_callback()}"
+            )
             return (
-                f"Recorded. Ask that {who} call back at {_callback()}, and say a polite goodbye "
-                f"in a sentence: nothing about the car, the visit, or why you're calling, even "
-                "if they ask. Then call end_call."
+                f"Recorded. {ask}, and say a polite goodbye in a sentence: nothing more about "
+                "the car, the visit, or why you're calling, even if they ask. Then call end_call."
             )
         return (
             f"Recorded. Don't push: say they can call back at {_callback()} whenever suits, "
@@ -1026,13 +1031,51 @@ def _decided(desk: ServiceDesk, result: str, notes: list[str]) -> str:
     return " ".join(out)
 
 
+def _opener(desk: ServiceDesk) -> str:
+    # a fixed opener: who's calling, and for whom; nothing about the car until it's them.
+    # Without a name, it asks about the car instead: never a made-up name
+    name = desk.customer.name if desk.customer else ""
+    if name:
+        return (
+            f"Hi, this is {PERSONA} calling from {BUSINESS} service. May I speak with "
+            f"{first_name(name)}?"
+        )
+    return (
+        f"Hi, this is {PERSONA} from {BUSINESS} service, calling about a car you left with us "
+        "this morning. Is this the person who dropped it off?"
+    )
+
+
 def _outbound_instructions(desk: ServiceDesk) -> str:
     v = desk.visit
     assert v is not None and desk.customer is not None
     name = desk.customer.name
-    who = first_name(name)
     car = desk.vehicle(v.appointment.vin).name.split()[0]
     today = desk.today
+    if name:
+        who = first_name(name)
+        reach = f"""You've already said who you are and asked for {who}.
+- Once they say it's them, call confirm_customer: it returns what the technician found.
+  Until it succeeds, say nothing about the car, the visit, or why you're calling.
+- If it's someone else, or {who} can't come to the phone: say only that it's {PERSONA} from
+  {BUSINESS} calling for {who}, and ask that {who} call back at {_callback()}. If they ask what
+  it's about, say you can only discuss it with {who}. Call end_without_update with
+  wrong_person, say goodbye, and call end_call.
+- If it's {who} but a bad time"""
+    else:
+        # no name to go on: never one made up
+        name = "the customer who dropped off their car"
+        reach = f"""You've already said who you are, that you're calling about a car they left
+with you this morning, and asked if this is the person who dropped it off. You don't have
+their name: never say or guess one, and don't ask for it. If they give it, use it, and pass
+it to confirm_customer.
+- Once they say yes, call confirm_customer: it returns what the technician found.
+  Until it succeeds, say nothing more about the car, the visit, or why you're calling.
+- If it's a wrong number, or someone else: say only that it's {PERSONA} from {BUSINESS}, and
+  ask that whoever dropped off the car call back at {_callback()}. If they ask what it's
+  about, say you can only discuss it with the person who dropped it off. Call
+  end_without_update with wrong_person, say goodbye, and call end_call.
+- If it's them but a bad time"""
     return f"""\
 {VOICE_RULES}
 
@@ -1046,14 +1089,7 @@ repair approval, and any cost they didn't expect: say it clearly and give them r
 decide.
 
 # Who picked up
-You've already said who you are and asked for {who}.
-- Once they say it's them, call confirm_customer: it returns what the technician found.
-  Until it succeeds, say nothing about the car, the visit, or why you're calling.
-- If it's someone else, or {who} can't come to the phone: say only that it's {PERSONA} from
-  {BUSINESS} calling for {who}, and ask that {who} call back at {_callback()}. If they ask what
-  it's about, say you can only discuss it with {who}. Call end_without_update with
-  wrong_person, say goodbye, and call end_call.
-- If it's {who} but a bad time (driving, at work, "call me later"): don't push. Call
+{reach} (driving, at work, "call me later"): don't push. Call
   end_without_update with call_back_later, say they can call back at {_callback()} whenever
   suits, say goodbye, and call end_call.
 
@@ -1097,11 +1133,13 @@ answer, always finish this way, never with end_without_update.
 Ask if there's anything else, say goodbye, and call end_call."""
 
 
-def _voicemail() -> str:
-    # who's calling, for whom, and a number to call back: never why
+def _voicemail(desk: ServiceDesk) -> str:
+    # who's calling, for whom (when there's a name), and a number to call back: never why
+    name = desk.customer.name if desk.customer else ""
+    calling = f", calling for {name}" if name else ""
     return (
-        f"Hi, this is {PERSONA} from {BUSINESS} service, calling for Alex Morgan. Please call "
-        f"us back at {_callback()}. Thanks, goodbye."
+        f"Hi, this is {PERSONA} from {BUSINESS} service{calling}. Please call us back at "
+        f"{_callback()}. Thanks, goodbye."
     )
 
 
@@ -1145,14 +1183,16 @@ async def entrypoint(ctx: JobContext) -> None:
     # "today" is the website visitor's (the metadata's `timezone`), else the dealership's; the
     # file is under the name they gave, and the phone number is what finds it
     today = local_today(meta.get("timezone"))
-    name = visitor_name(caller) or "Alex Morgan"
+    name = visitor_name(caller)
     agent: Agent
     if outbound:
-        # the visit is already booked, and the car is in the shop
-        desk = demo_desk(name, today, direction="outbound")
+        # the visit is already booked, and the car is in the shop, under the visitor's name (or
+        # the metadata's `name`); with neither, it's under no name, and Nick asks about the car
+        # instead of for someone
+        desk = demo_desk(name or meta.get("name") or "", today, direction="outbound")
         agent = RepairCallAgent(desk)
     else:
-        desk = demo_desk(name, today)
+        desk = demo_desk(name or "Alex Morgan", today)
         agent = NickAgent(desk)
 
     tts = inference.TTS("google/gemini-3.8-flash-tts", voice=VOICE, language="en")
@@ -1239,7 +1279,9 @@ async def ring(
         result = await detector.execute()
     logger.info("answered by %s", result.category, extra={"transcript": result.transcript})
     if result.category == "machine-vm":
-        await probe.say(_voicemail(), allow_interruptions=False).wait_for_playout()
+        await probe.say(
+            _voicemail(session.userdata.desk), allow_interruptions=False
+        ).wait_for_playout()
         await probe.aclose()
         await hang_up("Reached voicemail; left a message", page)
         return

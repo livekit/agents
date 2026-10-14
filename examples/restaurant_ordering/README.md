@@ -37,7 +37,7 @@ The POS enforces the rest:
 
 ### The outbound delivery update
 
-Order #214 (a large pepperoni, a dozen hot wings, and a large Sprite) is with Marco, about 5 minutes away, and the Sprite ran out after the order went in. Gabby opens with who she is and asks for the customer, saying nothing about the order until they confirm. A wrong number, a bad time, or a "no thanks" ends the call with `end_without_update`, sharing nothing.
+Order #214 (a large pepperoni, a dozen hot wings, and a large Sprite) is with Marco, about 5 minutes away, and the Sprite ran out after the order went in. Gabby opens with who she is and asks for the customer by name, or, with no name to go on, whether they placed an order tonight (never a made-up name), saying nothing about the order until they confirm. A wrong number, a bad time, or a "no thanks" ends the call with `end_without_update`, sharing nothing.
 
 The order is paid at the door, cash or card, so nothing is charged or refunded on the call: each change makes what's due at the door more or less. With the customer on the line, she offers a same-price swap (a large Coke) or taking the item off ($4.35 less at the door, the item and its tax), and the customer can change their mind either way. Once they've confirmed it's them, she reads them the order when asked. She asks about drop-off details for the driver (a note can't send the order to another address: the driver takes it to the one on it, and cancelling is the way out), can add breadsticks (the only thing the driver carries), and adds a tip for the driver if the customer asks. The customer can cancel the whole order even though it's on its way: once they confirm, Marco turns back and nothing is due. A complaint gets a sincere apology and only what she can actually do (the swap, taking the item off, or cancelling), with no other promises. `final_read_back` gives the changes and what's due at the door; `end_call` refuses until the customer has heard it.
 
@@ -61,7 +61,7 @@ In `dev`, the job metadata picks the direction: `{"direction": "outbound"}` star
 {"direction": "outbound", "dial": "+15105550100", "name": "Sam Carter"}
 ```
 
-with `SIP_OUTBOUND_TRUNK_ID` set. `name` is who the order is under (Sam Carter if left out). Answering-machine detection decides who picked up: voicemail gets a short message with a callback number, and Gabby joins only for a person. Set `RESTAURANT_NUMBER` to the number customers should call back on.
+with `SIP_OUTBOUND_TRUNK_ID` set. `name` is who the order is under; without it (or a browser caller's name), the order is under no name, and Gabby never says one. Answering-machine detection decides who picked up: voicemail gets a short message with a callback number, and Gabby joins only for a person. Set `RESTAURANT_NUMBER` to the number customers should call back on.
 
 Gabby handles every call herself, with no handoff to staff, no notes for a manager, and no promised call backs: something the restaurant doesn't do, a discount code, a complaint, or an allergy the menu data doesn't track gets a plain answer from her. She never says she's noted or done something unless a tool did it. To add a handoff, see [warm-transfer](../warm-transfer/).
 

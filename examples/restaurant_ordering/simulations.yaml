@@ -1,6 +1,7 @@
 # Zappi's Pizzeria. Each run is graded on the POS's final state by grade.py, from
 # `userdata.expect`. Cart lines are written the way the POS describes them:
-# "<quantity> × <size> <item>, <modifiers>". `direction: outbound` runs the delivery-update call.
+# "<quantity> × <size> <item>, <modifiers>". `direction: outbound` runs the delivery-update call,
+# for the order under `name`.
 name: Restaurant phone ordering
 scenarios:
   - label: Pickup, pepperoni, wings, and a Coke
@@ -346,6 +347,7 @@ scenarios:
       suite: smoke
     userdata:
       direction: outbound
+      name: Sam Carter
       expect:
         cart:
           - 1 × large Pepperoni
@@ -372,6 +374,7 @@ scenarios:
       suite: full
     userdata:
       direction: outbound
+      name: Sam Carter
       expect:
         cart:
           - 1 × large Pepperoni
@@ -398,6 +401,7 @@ scenarios:
       suite: full
     userdata:
       direction: outbound
+      name: Sam Carter
       expect:
         cancelled: true
         balance: "-49.65"
@@ -419,6 +423,7 @@ scenarios:
       suite: full
     userdata:
       direction: outbound
+      name: Sam Carter
       expect:
         cart:
           - 1 × large Pepperoni
@@ -444,6 +449,7 @@ scenarios:
       suite: full
     userdata:
       direction: outbound
+      name: Sam Carter
       expect:
         cart:
           - 1 × large Pepperoni
@@ -468,6 +474,7 @@ scenarios:
       suite: full
     userdata:
       direction: outbound
+      name: Sam Carter
       expect:
         cart:
           - 1 × large Pepperoni
@@ -491,6 +498,7 @@ scenarios:
       suite: full
     userdata:
       direction: outbound
+      name: Sam Carter
       expect:
         ended_early: wrong_person
         unchanged: true

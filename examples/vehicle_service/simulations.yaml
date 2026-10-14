@@ -13,7 +13,7 @@
 # problem is asked about it (sound, where, when, since, warning lights, anything recent), each
 # answer logged as a technician note, before the drop-off is booked.
 # `expect` is checked against the desk's final state by grade.py; `direction: outbound` runs
-# the follow-up call instead.
+# the follow-up call instead, for the file under `name`.
 #
 # Run from the repo root:
 #   lk agent simulate examples/vehicle_service/agent.py \
@@ -553,6 +553,7 @@ scenarios:
       suite: smoke
     userdata:
       direction: outbound
+      name: Alex Morgan
       expect:
         reached: customer
         decisions: {front_brakes: approved}
@@ -576,6 +577,7 @@ scenarios:
       suite: smoke
     userdata:
       direction: outbound
+      name: Alex Morgan
       expect:
         reached: customer
         decisions: {front_brakes: declined}
@@ -597,6 +599,7 @@ scenarios:
       suite: full
     userdata:
       direction: outbound
+      name: Alex Morgan
       expect:
         reached: customer
         decisions: {front_brakes: deferred}
@@ -619,6 +622,7 @@ scenarios:
       suite: smoke
     userdata:
       direction: outbound
+      name: Alex Morgan
       expect:
         reached: someone_else
         ended_early: wrong_person
@@ -641,6 +645,7 @@ scenarios:
       suite: full
     userdata:
       direction: outbound
+      name: Alex Morgan
       expect:
         reached: customer
         decisions: {front_brakes: approved}
@@ -665,6 +670,7 @@ scenarios:
       suite: full
     userdata:
       direction: outbound
+      name: Alex Morgan
       expect:
         reached: customer
         decisions: {front_brakes: approved}
