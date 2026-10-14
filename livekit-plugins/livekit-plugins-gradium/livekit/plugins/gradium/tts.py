@@ -42,6 +42,15 @@ from .log import logger
 SUPPORTED_SAMPLE_RATE = 48000
 DEFAULT_VOICE_ID = "4SZHfMpw-p46Ywgs"
 
+# Upper bound on the client-side ping interval. The server answers with pongs, and
+# each pong resets aiohttp's receive timeout, so a stream whose text source stalls (a
+# slow LLM, a tool call mid-reply) is not cut off after `conn_options.timeout` seconds
+# of server silence while the model waits for text. The pong has to land before the
+# receive timer fires, so the interval is also capped at half the timeout. A dead
+# transport is still detected within one interval, and the server closes sessions
+# that produce nothing for 120s itself.
+WS_HEARTBEAT_S = 5.0
+
 # Websocket close codes the server uses for requests it would reject again verbatim:
 # protocol error and unsupported data (unknown model, setup validation). Everything
 # else is worth a retry. 1008 (policy violation) covers the org's concurrency cap,
@@ -173,13 +182,15 @@ class TTS(tts.TTS):
         """Open the websocket, bounding the handshake by `timeout`.
 
         The shared aiohttp session has no connect timeout of its own, so a hung
-        handshake would otherwise block for aiohttp's default of five minutes.
+        handshake would otherwise block for aiohttp's default of five minutes. The
+        receive timeout is applied per receive() call by the streams instead.
         """
         return await asyncio.wait_for(
             self._ensure_session().ws_connect(
                 self._model_endpoint,
                 headers=ws_headers(self._api_key),
-                timeout=aiohttp.ClientWSTimeout(ws_receive=timeout, ws_close=10),
+                heartbeat=min(WS_HEARTBEAT_S, timeout / 2),
+                timeout=aiohttp.ClientWSTimeout(ws_close=10),
             ),
             timeout,
         )
@@ -280,7 +291,7 @@ class ChunkedStream(tts.ChunkedStream):
                 await ws.send_str(json.dumps(flush_msg))
 
                 while True:
-                    msg = await ws.receive()
+                    msg = await ws.receive(timeout=self._conn_options.timeout)
                     if msg.type == aiohttp.WSMsgType.ERROR:
                         raise APIConnectionError("Gradium websocket error") from ws.exception()
                     if msg.type in (
@@ -417,7 +428,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
-                msg = await ws.receive()
+                msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type == aiohttp.WSMsgType.ERROR:
                     raise APIConnectionError("Gradium websocket error") from ws.exception()
                 if msg.type in (
