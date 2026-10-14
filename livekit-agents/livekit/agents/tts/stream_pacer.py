@@ -69,7 +69,12 @@ class StreamPacerWrapper(SentenceStream):
 
     def end_input(self) -> None:
         self._sent_stream.end_input()
-        self._input_ended = True
+        # Do not set _input_ended here: end_input on the sentence stream only
+        # schedules a flush; the buffered tail is appended to _sentences by
+        # _recv_task on a later event-loop iteration. Setting _input_ended early
+        # lets _send_task see (_input_ended and not _sentences) and exit before
+        # that flush lands, dropping the last sentence(s) with no error.
+        # _recv_task already sets _input_ended in its finally once exhausted.
         if self._audio_emitter._dst_ch.closed:
             # close the stream if the audio emitter is closed
             self._closing = True
