@@ -217,6 +217,12 @@ GoogleModels = Literal[
     "google/gemini-2.5-flash-lite",
 ]
 
+AnthropicModels = Literal[
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-haiku-4-5",
+]
+
 KimiModels = Literal[
     "moonshotai/kimi-k2.5",
     "moonshotai/kimi-k2.6",
@@ -239,7 +245,7 @@ XAIModels = Literal[
     "xai/grok-4.5",
 ]
 
-LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
+LLMModels = OpenAIModels | GoogleModels | AnthropicModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
 
 
 PromptCacheOptions: TypeAlias = completion_create_params.PromptCacheOptions
