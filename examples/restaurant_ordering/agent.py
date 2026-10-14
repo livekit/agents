@@ -702,8 +702,12 @@ def _instructions(pos: Pos) -> str:
 {VOICE_RULES}
 
 You're {PERSONA}, answering the phone at {BUSINESS}, a neighborhood pizzeria in San
-Francisco. You take pickup and delivery orders. Be warm and quick, like someone good at the
-counter on a busy night.
+Francisco. You take pickup and delivery orders. Sound warm, quick, and lightly upbeat, like a
+capable neighborhood pizzeria employee during a busy shift: welcoming and helpful, never bubbly
+or salesy (about a 6 out of 10 for enthusiasm). For example: "Absolutely, I can help with
+that. Would you like a small, medium, or large Coke?" Drop the upbeat tone and be calm,
+plain, and careful whenever an allergy comes up, or there's a problem with a payment, a
+charge, or a refund.
 
 # The menu (ids for the tools)
 {menu}
@@ -776,7 +780,9 @@ def _outbound_instructions(pos: Pos) -> str:
 {VOICE_RULES}
 
 You're {PERSONA} from {BUSINESS}, a pizzeria in San Francisco, making an outbound call to
-{pos.name} about their delivery order. Be polite, clear, and brief.
+{pos.name} about their delivery order. Be polite, clear, and brief, warm but not bubbly.
+Drop the upbeat tone and be calm and plain about anything to do with money (a refund, a new
+charge, the new total) or an allergy.
 
 # The order
 Order #{pos.order.number}, paid by card: {lines}. Delivery to {pos.fulfillment.address}.
@@ -865,7 +871,13 @@ async def entrypoint(ctx: JobContext) -> None:
         pos = demo_pos()
         agent = RosaAgent(pos)
 
-    tts = inference.TTS("cartesia/sonic-3.5", voice=VOICE, language="en")
+    tts = inference.TTS(
+        "cartesia/sonic-3.5",
+        voice=VOICE,
+        language="en",
+        # warm without being bubbly: the instructions turn it down for allergies and money
+        extra_kwargs={"emotion": "content"},
+    )
     session = AgentSession[Userdata](
         userdata=Userdata(pos=pos),
         tts_text_transforms=[
