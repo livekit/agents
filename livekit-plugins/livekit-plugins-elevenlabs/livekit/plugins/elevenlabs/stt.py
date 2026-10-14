@@ -831,27 +831,16 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=[speech_data],
                 )
                 self._event_ch.send_nowait(final_event)
-                if self._server_vad is not None:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=SpeechEventType.END_OF_SPEECH,
-                            alternatives=self._final_alternatives,
-                        )
+
+            if self._speaking and (not text or self._server_vad is not None):
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=SpeechEventType.END_OF_SPEECH,
+                        alternatives=self._final_alternatives,
                     )
-                    self._final_alternatives = []
-                    self._speaking = False
-            else:
-                # Empty commit signals end of speech segment (similar to Cartesia's is_final flag)
-                # This groups multiple committed transcripts into one speech segment
-                if self._speaking:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=SpeechEventType.END_OF_SPEECH,
-                            alternatives=self._final_alternatives,
-                        )
-                    )
-                    self._final_alternatives = []
-                    self._speaking = False
+                )
+                self._final_alternatives = []
+                self._speaking = False
 
         elif message_type in ("committed_transcript", "committed_transcript_with_timestamps"):
             # the other copy of a commit the branch above already emitted
