@@ -174,18 +174,10 @@ def _provider_attr(llm: LLM) -> dict[str, str]:
     return {trace_types.ATTR_GEN_AI_PROVIDER_NAME: normalized} if normalized else {}
 
 
-def _fallback_attrs(llm: LLM, index: int) -> dict[str, Any]:
-    """The instance that served: its label, position, model and provider."""
-    return {
-        trace_types.ATTR_FALLBACK_LABEL: llm.label,
-        trace_types.ATTR_FALLBACK_INDEX: index,
-        trace_types.ATTR_GEN_AI_REQUEST_MODEL: llm.model,
-        **_provider_attr(llm),
-    }
-
-
 class FallbackLLMStream(LLMStream):
     _llm_request_span_name: ClassVar[str] = "llm_fallback_adapter"
+    # each instance's request span nests directly under the adapter's
+    _llm_attempt_span_name: ClassVar[str | None] = None
     # Provider request spans own the inference operation.
     _genai_operation_name: ClassVar[str | None] = None
 
@@ -252,12 +244,19 @@ class FallbackLLMStream(LLMStream):
                 if not check_recovery:
                     stream._retry_on_chunk_sent = self._fallback_adapter._retry_on_chunk_sent
                 should_set_current = not check_recovery
-                async for chunk in stream:
-                    if should_set_current:
-                        should_set_current = False
-                        self._current_stream = stream
-                        self._fallback_adapter._active_instance = llm
-                    yield chunk
+                try:
+                    async for chunk in stream:
+                        if should_set_current:
+                            should_set_current = False
+                            self._current_stream = stream
+                            self._fallback_adapter._active_instance = llm
+                        yield chunk
+                finally:
+                    # the probe nests beside the request's real attempts; tell them apart
+                    if check_recovery and stream._llm_request_span is not None:
+                        stream._llm_request_span.set_attribute(
+                            trace_types.ATTR_FALLBACK_RECOVERY, True
+                        )
 
         except asyncio.TimeoutError:
             if check_recovery:
@@ -354,8 +353,6 @@ class FallbackLLMStream(LLMStream):
                             AvailabilityChangedEvent(llm=llm, available=True),
                         )
 
-                    served = _fallback_attrs(llm, i)
-                    trace.get_current_span().set_attributes(served)
                     # request-side attributes named the instance expected to serve; the
                     # response side names the one that did (from `llm`, not the adapter:
                     # concurrent requests may be served by different instances)
@@ -364,7 +361,13 @@ class FallbackLLMStream(LLMStream):
                         **_provider_attr(llm),
                     }
                     if self._llm_request_span is not None:
-                        self._llm_request_span.set_attributes(response_attrs)
+                        self._llm_request_span.set_attributes(
+                            {
+                                trace_types.ATTR_FALLBACK_LABEL: llm.label,
+                                trace_types.ATTR_FALLBACK_INDEX: i,
+                                **response_attrs,
+                            }
+                        )
                     self._caller_span.set_attributes(response_attrs)
                     return
                 except Exception:  # exceptions already logged inside _try_generate
