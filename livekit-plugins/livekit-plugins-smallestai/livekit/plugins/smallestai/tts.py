@@ -172,7 +172,7 @@ class TTS(tts.TTS):
             max_buffer_flush_ms=max_buffer_flush_ms,
             use_continuations=use_continuations,
             max_buffer_delay_ms=max_buffer_delay_ms,
-            pronunciation_dicts=pronunciation_dicts,
+            pronunciation_dicts=list(pronunciation_dicts) if pronunciation_dicts else None,
             base_url=base_url,
             ws_url=ws_url,
         )
@@ -253,7 +253,9 @@ class TTS(tts.TTS):
         if is_given(max_buffer_delay_ms):
             self._opts.max_buffer_delay_ms = max_buffer_delay_ms
         if is_given(pronunciation_dicts):
-            self._opts.pronunciation_dicts = pronunciation_dicts
+            self._opts.pronunciation_dicts = (
+                list(pronunciation_dicts) if pronunciation_dicts else None
+            )
 
     def synthesize(
         self,
