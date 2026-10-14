@@ -129,6 +129,9 @@ class DeepgramFluxOptions(TypedDict, total=False):
     mip_opt_out: bool  # default: False
     tag: str | list[str]
     detect_language: bool
+    # flux-general-multi only: biases toward these languages without restricting
+    # detection; takes precedence over `language`
+    language_hint: str | list[str]
 
 
 class AssemblyaiOptions(TypedDict, total=False):
