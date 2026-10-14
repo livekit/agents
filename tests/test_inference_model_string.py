@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from livekit.agents import inference
+from livekit.agents.llm import DuplexRealtimeAdapter
 from livekit.agents.voice import Agent, AgentSession
 
 pytestmark = pytest.mark.unit
@@ -59,9 +60,23 @@ def test_llm_model_strings(model: str) -> None:
     assert resolved.model == model
 
 
+def test_gpt_live_model_string() -> None:
+    assert inference.is_realtime_model("openai/gpt-live-1")
+
+    resolved = inference.llm_from_model_string("openai/gpt-live-1")
+    assert isinstance(resolved, inference.GPTLiveModel)
+    assert resolved.model == "openai/gpt-live-1"
+
+
 def test_agent_session_accepts_realtime_model_string() -> None:
     session = AgentSession(llm="openai/gpt-realtime")
     assert isinstance(session.llm, inference.RealtimeModel)
+
+
+def test_agent_session_wraps_a_gpt_live_model_string() -> None:
+    session = AgentSession(llm="openai/gpt-live-1")
+    assert isinstance(session.llm, DuplexRealtimeAdapter)
+    assert isinstance(session.llm._duplex_model, inference.GPTLiveModel)
 
 
 def test_agent_accepts_model_strings() -> None:

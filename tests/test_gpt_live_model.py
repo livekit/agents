@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import parse_qs
 
 import aiohttp
 import numpy as np
@@ -17,10 +18,11 @@ import pytest
 from aiohttp import web
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, llm
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, inference, llm
+from livekit.agents.inference.realtime import gpt_live as inference_gpt_live
+from livekit.agents.llm._realtime import gpt_live as gpt_live_model
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.telemetry import pii
-from livekit.plugins.openai.realtime import gpt_live_model
 from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveDelegation,
     GPTLiveModel,
@@ -668,8 +670,17 @@ async def test_a_custom_voice_is_sent_as_an_object(monkeypatch: pytest.MonkeyPat
         await model.aclose()
 
 
+class _OtherProviderTool(llm.ProviderTool):
+    def __init__(self) -> None:
+        super().__init__(id="other_search")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "other_search"}
+
+
 async def test_a_hosted_tool_is_delegated_to_the_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An OpenAI provider tool goes to the backend as its own entry, next to the function tools."""
+    """An OpenAI provider tool goes to the backend as its own entry, next to the function tools;
+    another provider's tool does not, though it serialises the same way."""
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
@@ -678,11 +689,12 @@ async def test_a_hosted_tool_is_delegated_to_the_backend(monkeypatch: pytest.Mon
         await session._update_session(
             instructions="Be concise.",
             chat_ctx=llm.ChatContext.empty(),
-            tools=[_get_weather, WebSearch(search_context_size="low")],
+            tools=[_get_weather, WebSearch(search_context_size="low"), _OtherProviderTool()],
         )
         await asyncio.sleep(0.1)
 
         tools = ws.sent[0]["session"]["delegation"]["responses"]["tools"]
+        assert len(tools) == 2
         assert tools[0]["name"] == "_get_weather"
         assert tools[1] == {"type": "web_search", "search_context_size": "low"}
     finally:
@@ -1819,3 +1831,106 @@ def test_with_azure_does_not_accept_the_openai_key(monkeypatch: pytest.MonkeyPat
         "Missing Azure credentials. Pass api_key or entra_token, "
         "or set the AZURE_OPENAI_API_KEY environment variable"
     )
+
+
+# LiveKit Inference
+
+_LK_SECRET = "secret-with-at-least-32-bytes-for-jwt"
+
+
+def _inference_model(**kwargs: Any) -> inference.GPTLiveModel:
+    return inference.GPTLiveModel(api_key="lk-key", api_secret=_LK_SECRET, **kwargs)
+
+
+def test_the_plugin_and_inference_share_one_client() -> None:
+    from livekit.plugins.openai.realtime import gpt_live_types
+
+    assert GPTLiveModel is gpt_live_model.GPTLiveModel
+    assert gpt_live_types.ServiceTier is gpt_live_model.types.ServiceTier
+    assert issubclass(inference.GPTLiveModel, GPTLiveModel)
+    assert (
+        GPTLiveModel(api_key="sk-test").label
+        == "livekit.plugins.openai.realtime.gpt_live_model.GPTLiveModel"
+    )
+    assert _inference_model().label == "livekit.agents.inference.realtime.gpt_live.GPTLiveModel"
+
+
+@pytest.mark.usefixtures("_no_provider_env")
+async def test_inference_connects_to_the_gateway_with_a_livekit_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gateway picks the deployment from ?model= and authenticates a LiveKit JWT."""
+    tokens = iter(["token-one", "token-two"])
+    monkeypatch.setattr(
+        inference_gpt_live, "create_access_token", lambda key, secret: f"{next(tokens)}:{key}"
+    )
+    async with _live_server() as (base, seen):
+        model = _inference_model(base_url=f"{base}/v1", provider="openai")
+        assert model.provider == "livekit"
+        await _connect(model, seen)
+
+    assert seen.path == "/v1/live/sessions"
+    assert parse_qs(seen.query) == {"model": ["openai/gpt-live-1"]}
+    assert seen.headers["Authorization"] == "Bearer token-one:lk-key"
+    assert seen.headers["X-LiveKit-Inference-Provider"] == "openai"
+    assert "OpenAI-Service-Tier" not in seen.headers
+    assert seen.start["session"]["model"] == "openai/gpt-live-1"
+    assert seen.start["session"]["delegation"]["responses"]["model"] == "gpt-5.6-luna"
+
+    # a reconnect signs a fresh token rather than replaying one that may have expired
+    _connect_hook(monkeypatch)
+    session = model.session()
+    try:
+        _, headers = session._create_ws_url_and_headers()
+        assert headers["Authorization"] == "Bearer token-two:lk-key"
+    finally:
+        await session.aclose()
+
+
+async def test_inference_refuses_hosted_tools_the_gateway_cannot_meter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = _inference_model()
+    session = model.session()
+    try:
+        with pytest.raises(llm.RealtimeError, match="hosted tools"):
+            await session._update_session(
+                instructions="Be concise.", tools=[_get_weather, WebSearch()]
+            )
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+def test_inference_accepts_only_the_default_delegation_tier() -> None:
+    _inference_model(responses_options={})
+    _inference_model(responses_options={"service_tier": "default"})
+
+    with pytest.raises(ValueError, match="default tier"):
+        _inference_model(responses_options={"service_tier": "priority"})
+
+
+@pytest.mark.parametrize(
+    "code", ["invalid_model", "unsupported_server_tool", "unsupported_delegated_model"]
+)
+async def test_inference_does_not_retry_a_session_the_gateway_refused(
+    monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    _connect_hook(monkeypatch)
+    model = _inference_model()
+    session = model.session()
+    try:
+        refusal = gpt_live_model.types.ErrorBody(type="invalid_request_error", code=code)
+        assert session._is_fatal_error(refusal)
+        assert not session._is_fatal_error(
+            gpt_live_model.types.ErrorBody(type="server_error", code="server_error")
+        )
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+def test_inference_realtime_model_points_gpt_live_at_its_own_class() -> None:
+    with pytest.raises(ValueError, match="inference.GPTLiveModel"):
+        inference.RealtimeModel("openai/gpt-live-1", api_key="lk-key", api_secret=_LK_SECRET)

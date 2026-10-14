@@ -9,6 +9,10 @@ python gpt_live_agent.py console
 python client_delegation.py console
 ```
 
+## LiveKit Inference
+
+Both examples connect to OpenAI with `OPENAI_API_KEY`. To run GPT-Live through LiveKit Inference with your LiveKit credentials instead, pass `llm="openai/gpt-live-1"` or `inference.GPTLiveModel()`; it takes the same `voice`, `delegation`, and `responses_options`. Inference runs delegated work on the default service tier only, needs `responses_options["model"]` to be an OpenAI LLM it serves (`gpt-5.6-luna` by default), and does not run hosted tools such as `WebSearch()`.
+
 ## Voices
 
 Both examples use `voice="marin"`. `GPTLiveVoices` also offers `aster`, `beacon`, `cinder`, `stone`, and `vesper`. Other supported names and custom voice objects still pass through to the API.

@@ -16,7 +16,7 @@ session = AgentSession(
 )
 ```
 
-**Note:** OpenAI Realtime and xAI Grok Voice models are available through `inference.RealtimeModel`; use provider plugin classes for direct credentials or for other real-time models such as Amazon Nova Sonic. See the [Real-time Models](#real-time-models) examples below.
+**Note:** OpenAI Realtime and xAI Grok Voice models are available through `inference.RealtimeModel`, and OpenAI GPT-Live through `inference.GPTLiveModel`; use provider plugin classes for direct credentials or for other real-time models such as Amazon Nova Sonic. See the [Real-time Models](#real-time-models) examples below.
 
 ## Table of Contents
 

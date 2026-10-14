@@ -37,6 +37,7 @@ from ...llm._realtime.openai import (
     RealtimeModel as _RealtimeModel,
     RealtimeSession as _RealtimeSession,
 )
+from .._realtime_models import is_gpt_live_model
 
 _XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(model="grok-transcribe")
 _XAI_DEFAULT_TURN_DETECTION = ServerVad(
@@ -94,6 +95,8 @@ class RealtimeModel(_RealtimeModel):
         """
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")
+        if is_gpt_live_model(model):
+            raise ValueError(f"{model} speaks the GPT-Live protocol; use inference.GPTLiveModel")
 
         resolved_api_key, resolved_api_secret = resolve_credentials(api_key, api_secret)
 

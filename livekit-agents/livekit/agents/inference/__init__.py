@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any
 
 from ._realtime_models import (
+    OpenAIGPTLiveModels,
     OpenAIRealtimeModels,
     RealtimeModels,
     XAIRealtimeModels,
@@ -21,7 +22,7 @@ from .vad import VAD, VADModels
 
 if TYPE_CHECKING:
     from .avatar import AvatarSession, LemonSliceOptions
-    from .realtime import RealtimeModel, RealtimeSession
+    from .realtime import GPTLiveModel, GPTLiveSession, RealtimeModel, RealtimeSession
 
 
 # AvatarSession subclasses voice.avatar.AvatarSession. Because this package is
@@ -34,7 +35,7 @@ def __getattr__(name: str) -> Any:
         from . import avatar
 
         return getattr(avatar, name)
-    if name in ("RealtimeModel", "RealtimeSession"):
+    if name in ("RealtimeModel", "RealtimeSession", "GPTLiveModel", "GPTLiveSession"):
         from . import realtime
 
         return getattr(realtime, name)
@@ -63,8 +64,11 @@ __all__ = [
     "TurnDetectorVersions",
     "RealtimeModel",
     "RealtimeSession",
+    "GPTLiveModel",
+    "GPTLiveSession",
     "RealtimeModels",
     "OpenAIRealtimeModels",
+    "OpenAIGPTLiveModels",
     "XAIRealtimeModels",
     "is_realtime_model",
     "llm_from_model_string",
