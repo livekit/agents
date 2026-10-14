@@ -220,14 +220,37 @@ async def test_error_frame_with_server_error_code_is_retried():
     assert all(ws.sent[-1] == {"type": "end_of_stream"} for ws in sockets)
 
 
-async def test_close_with_policy_code_is_not_retried():
-    tts, session, _ = _make_tts([READY, "close"], close_code=1008)
+async def test_close_with_unsupported_data_code_is_not_retried():
+    tts, session, _ = _make_tts([READY, "close"], close_code=1003)
 
     with pytest.raises(APIStatusError) as excinfo:
         await _drain(tts, APIConnectOptions(max_retry=2, timeout=5))
-    assert excinfo.value.status_code == 1008
+    assert excinfo.value.status_code == 1003
     assert excinfo.value.retryable is False
     assert len(session.connects) == 1
+
+
+async def test_concurrency_limit_error_frame_is_retried():
+    """The org's concurrency cap (1008) frees up when another session ends."""
+    from livekit.plugins.gradium import TTS
+
+    limit = {
+        "type": "error",
+        "message": "Concurrency limit exceeded: 15 active sessions",
+        "code": 1008,
+    }
+    sockets = [
+        FakeWebSocket([READY, limit, "close"], close_code=1008),
+        FakeWebSocket([READY, AUDIO, EOS]),
+    ]
+    session = FakeSession(*sockets)
+    tts = TTS(api_key="test-key", http_session=session)  # type: ignore[arg-type]
+
+    duration = 0.0
+    async for ev in tts.synthesize("hello world", conn_options=APIConnectOptions(max_retry=1)):
+        duration += ev.frame.duration
+    assert 0.5 <= duration <= 0.6
+    assert len(session.connects) == 2
 
 
 async def test_synthesize_raises_on_transport_error():
