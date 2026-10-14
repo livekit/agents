@@ -46,7 +46,8 @@ Make sure to add them to the `typing` group and lock them with:
 
 def get_packages(repo_root: Path) -> list[str]:
     """Return all packages to type-check."""
-    packages = ["livekit.agents"]
+    # tests.type_checks pins the public generics: each expected error carries a type: ignore
+    packages = ["livekit.agents", "tests.type_checks"]
 
     plugins_dir = repo_root / "livekit-plugins"
     for plugin_dir in sorted(plugins_dir.glob("livekit-plugins-*")):

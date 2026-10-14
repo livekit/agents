@@ -56,7 +56,7 @@ from ..llm.tool_context import (
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
-from .events import UserTurnExceededEvent
+from .events import Deps_T, State_T, UserTurnExceededEvent
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
@@ -80,6 +80,7 @@ _InstructionsFn = Callable[["RunContext"], str | Awaitable[str]]
 _InstructionsFnT = TypeVar("_InstructionsFnT", bound=Callable[..., str | Awaitable[str]])
 _OnEnterFn = Callable[["LiveSession"], Any]
 _OutputValidatorFn = Callable[["RunContext", Any], Any]
+Output_T = TypeVar("Output_T", default=Any)
 
 DEFAULT_AGENT_ID = "default_agent"
 
@@ -125,7 +126,10 @@ class ModelSettings:
     """The tool choice to use when calling the LLM."""
 
 
-class Agent:
+class Agent(Generic[Deps_T, State_T, Output_T]):
+    """``Agent[Deps, State, Output]``, read from ``deps_type``, ``state_type`` and
+    ``output_type``; a parameter left out is ``Any``."""
+
     def __init__(
         self,
         *,
@@ -133,9 +137,9 @@ class Agent:
         name: str | None = None,
         id: str | None = None,
         tools: list[llm.Tool | llm.Toolset] | None = None,
-        deps_type: type[Any] | None = None,
-        state_type: type[Any] | None = None,
-        output_type: type[Any] | None = None,
+        deps_type: type[Deps_T] | None = None,
+        state_type: type[State_T] | None = None,
+        output_type: type[Output_T] | None = None,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -180,7 +184,7 @@ class Agent:
         self._tools = [*tools, *find_function_tools(self)]
         # registered at import by the decorators below; frozen once the agent is first bound
         self._instruction_fns: list[_InstructionsFn] = []
-        self._instructions_view: _InstructionsView | None = None
+        self._instructions_view: _InstructionsView[Any, Any] | None = None
         self._on_enter_fn: _OnEnterFn | None = None
         self._output_validators: list[_OutputValidatorFn] = []
         self._frozen = False
@@ -188,8 +192,8 @@ class Agent:
 
         # the three type parameters of Agent[Deps, State, Output]; declared for the type
         # checker and the output parser, the values travel with the run
-        self._deps_type = deps_type
-        self._state_type = state_type
+        self._deps_type: type[Deps_T] | None = deps_type
+        self._state_type: type[State_T] | None = state_type
         self._output_type: type[Any] = output_type if output_type is not None else str
 
         if isinstance(stt, str):
@@ -254,7 +258,7 @@ class Agent:
         return self.id
 
     @property
-    def instructions(self) -> _InstructionsView:
+    def instructions(self) -> _InstructionsView[Deps_T, State_T]:
         """The static instructions, also the decorator registering dynamic ones.
 
         Reads as the ``str`` or ``Instructions`` the agent was built with. Used as
@@ -368,15 +372,15 @@ class Agent:
             self._expressive = expressive
 
     @property
-    def deps_type(self) -> type[Any] | None:
+    def deps_type(self) -> type[Deps_T] | None:
         return self._deps_type
 
     @property
-    def state_type(self) -> type[Any] | None:
+    def state_type(self) -> type[State_T] | None:
         return self._state_type
 
     @property
-    def output_type(self) -> type[Any]:
+    def output_type(self) -> type[Output_T]:
         """What ``run()`` returns as ``result.output``: ``str`` unless declared."""
         return self._output_type
 
@@ -385,11 +389,11 @@ class Agent:
         message: str | llm.ChatMessage,
         *,
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
-        state: Any = None,
-        deps: Any = None,
+        state: State_T | None = None,
+        deps: Deps_T | None = None,
         usage: RunUsage | None = None,
         max_steps: int | None = None,
-    ) -> RunResult[Any]:
+    ) -> RunResult[Output_T]:
         """One turn on the given history: the model and tool loop until the answer.
 
         Pure: a message in, a typed ``RunResult`` out, nothing kept after. The run stops at
@@ -420,11 +424,11 @@ class Agent:
         message: str | llm.ChatMessage,
         *,
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
-        state: Any = None,
-        deps: Any = None,
+        state: State_T | None = None,
+        deps: Deps_T | None = None,
         usage: RunUsage | None = None,
         max_steps: int | None = None,
-    ) -> AgentRun[Any]:
+    ) -> AgentRun[Output_T]:
         """The turn of ``run()`` as an async iterator of the reply's text, one piece as the
         model writes it; ``run.result`` is the ``RunResult`` once the loop ends::
 
@@ -435,7 +439,7 @@ class Agent:
         """
         from .agent_run import AgentRun
 
-        return AgentRun[Any](
+        return AgentRun[Output_T](
             self,
             message,
             message_history=message_history,
@@ -446,7 +450,10 @@ class Agent:
             output_type=self._output_type,
         )
 
-    def output_validator(self, f: _OutputValidatorFn) -> _OutputValidatorFn:
+    def output_validator(
+        self,
+        f: Callable[[RunContext[Deps_T, State_T], Output_T], Output_T | Awaitable[Output_T]],
+    ) -> Callable[[RunContext[Deps_T, State_T], Output_T], Output_T | Awaitable[Output_T]]:
         """Register a validator of the run's output, as a decorator.
 
         It receives the ``RunContext`` and the output, returns the value or raises
@@ -1585,21 +1592,25 @@ class _InstructionsObject(Instructions):
 
 
 if TYPE_CHECKING:
+    _RenderedT = TypeVar("_RenderedT", bound=str | Awaitable[str])
 
-    class _InstructionsView(str, Instructions):
+    class _InstructionsView(str, Instructions, Generic[Deps_T, State_T]):
         """What a type checker sees: the value, read as a ``str`` or an ``Instructions``, and
-        the decorator. One class, since a union of callables is an untyped decorator to mypy."""
+        the decorator, which takes the agent's ``RunContext``. One class, since a union of
+        callables is an untyped decorator to mypy."""
 
         _source: str | Instructions
         _agent: Agent
 
-        def __call__(self, f: _InstructionsFnT) -> _InstructionsFnT: ...
+        def __call__(
+            self, f: Callable[[RunContext[Deps_T, State_T]], _RenderedT]
+        ) -> Callable[[RunContext[Deps_T, State_T]], _RenderedT]: ...
 
 else:
     _InstructionsView = _InstructionsText | _InstructionsObject
 
 
-def _wrap_instructions(source: str | Instructions, agent: Agent) -> _InstructionsView:
+def _wrap_instructions(source: str | Instructions, agent: Agent) -> _InstructionsView[Any, Any]:
     view: _InstructionsText | _InstructionsObject
     if isinstance(source, Instructions):
         view = _InstructionsObject(source.common, audio=source.audio, text=source.text)
@@ -1607,4 +1618,4 @@ def _wrap_instructions(source: str | Instructions, agent: Agent) -> _Instruction
         view = _InstructionsText(source)
     view._source = source
     view._agent = agent
-    return cast("_InstructionsView", view)
+    return cast("_InstructionsView[Any, Any]", view)

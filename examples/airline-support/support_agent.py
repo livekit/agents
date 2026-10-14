@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Annotated, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 from skyline import (
@@ -125,10 +125,10 @@ LLM = "google/gemma-4-31b-it"
 T = TypeVar("T")
 
 
-async def call(agent: Agent, prompt: str, output_type: type[T]) -> T:
+async def call(agent: Agent[Any, Any, T], prompt: str) -> T:
     """An agent called as a function: a fresh conversation, a typed output."""
     output = (await agent.run(prompt)).output
-    assert isinstance(output, output_type)
+    assert output is not None  # these agents have no tools, so nothing asks for input
     return output
 
 
@@ -152,6 +152,7 @@ writer = Agent(
         f"method. Answer with the reply's text only.\n\n{POLICY}"
     ),
     llm=LLM,
+    output_type=str,
 )
 reviewer = Agent(
     instructions=(
@@ -178,7 +179,7 @@ class Classify(BaseNode[Ticket, None, TriageResult]):
         ticket.email = (
             f"From: {self.email.sender}\nSubject: {self.email.subject}\n\n{self.email.body}"
         )
-        triage = await call(classifier, ticket.email, Classification)
+        triage = await call(classifier, ticket.email)
         ticket.kind = triage.kind
         ticket.booking_ref, ticket.pir_ref = triage.booking_ref, triage.pir_ref
         if triage.kind == "spam":
@@ -329,7 +330,7 @@ class DraftReply(BaseNode[Ticket]):
         prompt = ctx.state.brief()
         if self.objection and ctx.state.draft:
             prompt += f"\n\nYour last draft:\n{ctx.state.draft}\n\nThe reviewer: {self.objection}"
-        draft = await call(writer, prompt, str)
+        draft = await call(writer, prompt)
         ctx.state.draft = draft
         ctx.state.rounds += 1
         return Review(draft)
@@ -347,7 +348,7 @@ class Review(BaseNode[Ticket, None, TriageResult]):
         | Annotated[End[TriageResult], Edge(label="resolved, to_human")]
     ):
         ticket = ctx.state
-        verdict = await call(reviewer, f"{ticket.brief()}\n\nDraft reply:\n{self.draft}", Verdict)
+        verdict = await call(reviewer, f"{ticket.brief()}\n\nDraft reply:\n{self.draft}")
         if not verdict.approved:
             ticket.review_notes.append(verdict.objection)
             if ticket.rounds >= MAX_ROUNDS:

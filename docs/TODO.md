@@ -9,7 +9,6 @@ belongs to. An item leaves this file when the code lands.
 | Doc section | Code change |
 | --- | --- |
 | [agents.md](agents.md): what an agent is not | Remove `Agent.update_options`; tests in `test_agent_api.py` use it. |
-| [agents.md](agents.md): typing | `Agent` becomes `Agent[Deps, State, Output]` and `run()` returns `RunResult[Output]` (today `RunResult[Any]`). |
 | [agents.md](agents.md): `RunContext` | `ctx.thread` is the durable thread in every run (`RunContext` has no `thread` today); add `ctx.live_session` for the call. |
 | [agents.md](agents.md): `RunContext` | `ctx.task_id` is the A2A task id (today a `run_...` id, or a speech handle id on a call). |
 | [agents.md](agents.md): structured output | Wrap a non-object `output_type` as `{"result": ...}` in the final-result tool and unwrap it; lists and scalars fail today. |
