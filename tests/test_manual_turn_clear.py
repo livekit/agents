@@ -173,6 +173,77 @@ async def test_later_final_does_not_change_snapshot_or_get_erased_by_delivery(
         assert _user_transcripts(agent) == [_TRANSCRIPT, "never mind"]
 
 
+@pytest.mark.parametrize("clear_between_commits", [False, True])
+async def test_overlapping_commits_deliver_both_turns(
+    running_session: tuple[AgentSession, Agent], clear_between_commits: bool
+) -> None:
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    assert await session.commit_user_turn(skip_reply=True) == _TRANSCRIPT
+    first_task = recognition._end_of_turn_task
+    assert first_task is not None and not first_task.done()
+    if clear_between_commits:
+        session.clear_user_turn()
+
+    await recognition._on_stt_event(_final_transcript("next turn"))
+    assert await session.commit_user_turn(skip_reply=True) == "next turn"
+    await _await_delivery(session)
+
+    assert not first_task.cancelled()
+    assert _user_transcripts(agent) == [_TRANSCRIPT, "next turn"]
+
+
+async def test_interim_after_snapshot_is_available_to_next_commit(
+    running_session: tuple[AgentSession, Agent],
+) -> None:
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    assert await session.commit_user_turn(skip_reply=True) == _TRANSCRIPT
+    await recognition._on_stt_event(
+        SpeechEvent(
+            type=SpeechEventType.INTERIM_TRANSCRIPT,
+            alternatives=[SpeechData(text="actually tomorrow", language=LanguageCode("en"))],
+        )
+    )
+    await _await_delivery(session)
+
+    assert (
+        await session.commit_user_turn(skip_reply=True, transcript_timeout=0) == "actually tomorrow"
+    )
+    await _await_delivery(session)
+    assert _user_transcripts(agent) == [_TRANSCRIPT, "actually tomorrow"]
+
+
+async def test_empty_commit_does_not_request_reply_or_block_later_transcripts(
+    running_session: tuple[AgentSession, Agent], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, agent = running_session
+    calls: list[None] = []
+
+    async def llm_node(*args: object, **kwargs: object) -> AsyncIterator[str]:
+        calls.append(None)
+        yield ""
+
+    monkeypatch.setattr(agent, "llm_node", llm_node)
+    assert await session.commit_user_turn(transcript_timeout=0) == ""
+    await asyncio.sleep(0.6)
+    assert not calls
+
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(_final_transcript("next turn"))
+    assert await session.commit_user_turn(skip_reply=True) == "next turn"
+    await _await_delivery(session)
+    assert _user_transcripts(agent) == ["next turn"]
+
+
 @pytest.mark.parametrize("phase", ["scheduled", "waiting_for_stt"])
 async def test_clear_before_snapshot_discards_live_transcript(
     running_session: tuple[AgentSession, Agent], phase: str
