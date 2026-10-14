@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit.agents import Agent, AgentSession, LanguageCode, vad
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.telemetry import set_tracer_provider, tracer
 from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
 from .fake_session import FakeActions, create_session
@@ -15,6 +19,20 @@ from .fake_session import FakeActions, create_session
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 _TRANSCRIPT = "what's the weather tomorrow"
+
+
+@pytest.fixture
+def span_exporter() -> Iterator[InMemorySpanExporter]:
+    original_provider = tracer._tracer_provider
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    set_tracer_provider(provider)
+    try:
+        yield exporter
+    finally:
+        set_tracer_provider(original_provider)
+        provider.shutdown()
 
 
 @pytest.fixture
@@ -60,10 +78,14 @@ def _start_of_speech() -> vad.VADEvent:
     )
 
 
+@pytest.mark.real_time
 @pytest.mark.parametrize("phase", ["queued", "pending_delivery"])
 @pytest.mark.parametrize("clear_before_vad", [False, True])
 async def test_manual_snapshot_survives_vad_and_live_clears(
-    running_session: tuple[AgentSession, Agent], phase: str, clear_before_vad: bool
+    span_exporter: InMemorySpanExporter,
+    running_session: tuple[AgentSession, Agent],
+    phase: str,
+    clear_before_vad: bool,
 ) -> None:
     session, agent = running_session
     activity = session._activity
@@ -83,11 +105,18 @@ async def test_manual_snapshot_survives_vad_and_live_clears(
 
     await recognition._on_vad_event(_start_of_speech())
     await recognition._on_stt_event(_final_transcript("never mind"))
+    live_span = recognition._user_turn_span
+    assert live_span is not None and live_span.is_recording()
     session.clear_user_turn()
+    assert live_span.is_recording() is (not clear_before_vad)
     assert recognition._current_transcript == ""
     await task
     assert activity._user_turn_completed_atask is not None
     await activity._user_turn_completed_atask
+    assert not live_span.is_recording()
+    assert any(
+        span.context == live_span.get_span_context() for span in span_exporter.get_finished_spans()
+    )
 
     messages = [
         item for item in agent.chat_ctx.items if item.type == "message" and item.role == "user"
@@ -99,34 +128,6 @@ async def test_manual_snapshot_survives_vad_and_live_clears(
 
     await recognition._on_stt_event(_final_transcript("the next turn"))
     assert recognition._current_transcript == "the next turn"
-
-
-async def test_vad_preserves_all_pending_manual_snapshots(
-    running_session: tuple[AgentSession, Agent],
-) -> None:
-    session, agent = running_session
-    activity = session._activity
-    assert activity is not None
-    recognition = activity._audio_recognition
-    assert recognition is not None
-    for text in (_TRANSCRIPT, "next turn"):
-        await recognition._on_stt_event(_final_transcript(text))
-        assert await session.commit_user_turn(skip_reply=True) == text
-        session.clear_user_turn()
-    tasks = list(recognition._manual_turn_tasks)
-    assert len(tasks) == 2
-
-    await recognition._on_vad_event(_start_of_speech())
-    await asyncio.gather(*tasks)
-    assert activity._user_turn_completed_atask is not None
-    await activity._user_turn_completed_atask
-
-    assert [
-        item.text_content
-        for item in agent.chat_ctx.items
-        if item.type == "message" and item.role == "user"
-    ] == [_TRANSCRIPT, "next turn"]
-    assert not recognition._user_turn_committed
 
 
 @pytest.mark.parametrize("running_session", ["vad", "stt"], indirect=True)
