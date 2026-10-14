@@ -17,9 +17,16 @@ from .base import (
 
 
 class _BaseModelUsage(BaseModel):
+    # None means the source was not reported by the metrics producer.
+    usage_source: Literal["livekit_inference", "provider_plugin"] | None = None
+    estimated_cost: float | None = None
+    """Estimated cost in USD; None when no applicable rate is available."""
+
     def __repr__(self) -> str:
         # skip zeros for concise display
-        fields = {k: v for k, v in self.model_dump().items() if v != 0 and v != 0.0}
+        fields = {
+            k: v for k, v in self.model_dump().items() if v is not None and v != 0 and v != 0.0
+        }
         fields_str = ", ".join(f"{k}={v!r}" for k, v in fields.items())
         return f"{self.__class__.__name__}({fields_str})"
 
@@ -135,16 +142,24 @@ ModelUsage = LLMModelUsage | TTSModelUsage | STTModelUsage | InterruptionModelUs
 class AgentSessionUsage:
     model_usage: list[ModelUsage]
 
+    @property
+    def estimated_cost(self) -> float | None:
+        """Sum model estimates, or None if any model has no available estimate."""
+        costs = [usage.estimated_cost for usage in self.model_usage]
+        if any(cost is None for cost in costs):
+            return None
+        return sum(cost for cost in costs if cost is not None)
+
 
 class ModelUsageCollector:
-    """Collects and aggregates usage metrics per model/provider combination."""
+    """Collect usage metrics per source/model/provider combination."""
 
     def __init__(self) -> None:
-        self._llm_usage: dict[tuple[str, str], LLMModelUsage] = {}
-        self._tts_usage: dict[tuple[str, str], TTSModelUsage] = {}
-        self._stt_usage: dict[tuple[str, str], STTModelUsage] = {}
-        self._interruption_usage: dict[tuple[str, str], InterruptionModelUsage] = {}
-        self._eot_usage: dict[tuple[str, str], EOTModelUsage] = {}
+        self._llm_usage: dict[tuple[str | None, str, str], LLMModelUsage] = {}
+        self._tts_usage: dict[tuple[str | None, str, str], TTSModelUsage] = {}
+        self._stt_usage: dict[tuple[str | None, str, str], STTModelUsage] = {}
+        self._interruption_usage: dict[tuple[str | None, str, str], InterruptionModelUsage] = {}
+        self._eot_usage: dict[tuple[str | None, str, str], EOTModelUsage] = {}
 
     def __call__(self, metrics: AgentMetrics) -> None:
         self.collect(metrics)
@@ -157,54 +172,68 @@ class ModelUsageCollector:
         | RealtimeModelMetrics
         | InterruptionMetrics
         | EOTInferenceMetrics,
-    ) -> tuple[str, str]:
-        """Extract provider and model from metrics metadata."""
+    ) -> tuple[str | None, str, str]:
+        """Extract usage source, provider, and model from metrics metadata."""
+        usage_source = None
         provider = ""
         model = ""
         if metrics.metadata:
+            usage_source = metrics.metadata.usage_source
             provider = metrics.metadata.model_provider or ""
             model = metrics.metadata.model_name or ""
-        return provider, model
+        return usage_source, provider, model
 
-    def _get_llm_usage(self, provider: str, model: str) -> LLMModelUsage:
-        """Get or create an LLMModelUsage for the given provider/model combination."""
-        key = (provider, model)
+    def _get_llm_usage(self, usage_source: str | None, provider: str, model: str) -> LLMModelUsage:
+        """Get or create an LLMModelUsage for the given source/provider/model combination."""
+        key = (usage_source, provider, model)
         if key not in self._llm_usage:
-            self._llm_usage[key] = LLMModelUsage(provider=provider, model=model)
+            self._llm_usage[key] = LLMModelUsage(
+                usage_source=usage_source, provider=provider, model=model
+            )
         return self._llm_usage[key]
 
-    def _get_tts_usage(self, provider: str, model: str) -> TTSModelUsage:
-        """Get or create a TTSModelUsage for the given provider/model combination."""
-        key = (provider, model)
+    def _get_tts_usage(self, usage_source: str | None, provider: str, model: str) -> TTSModelUsage:
+        """Get or create a TTSModelUsage for the given source/provider/model combination."""
+        key = (usage_source, provider, model)
         if key not in self._tts_usage:
-            self._tts_usage[key] = TTSModelUsage(provider=provider, model=model)
+            self._tts_usage[key] = TTSModelUsage(
+                usage_source=usage_source, provider=provider, model=model
+            )
         return self._tts_usage[key]
 
-    def _get_stt_usage(self, provider: str, model: str) -> STTModelUsage:
-        """Get or create an STTModelUsage for the given provider/model combination."""
-        key = (provider, model)
+    def _get_stt_usage(self, usage_source: str | None, provider: str, model: str) -> STTModelUsage:
+        """Get or create an STTModelUsage for the given source/provider/model combination."""
+        key = (usage_source, provider, model)
         if key not in self._stt_usage:
-            self._stt_usage[key] = STTModelUsage(provider=provider, model=model)
+            self._stt_usage[key] = STTModelUsage(
+                usage_source=usage_source, provider=provider, model=model
+            )
         return self._stt_usage[key]
 
-    def _get_interruption_usage(self, provider: str, model: str) -> InterruptionModelUsage:
-        """Get or create an InterruptionModelUsage for the given provider/model combination."""
-        key = (provider, model)
+    def _get_interruption_usage(
+        self, usage_source: str | None, provider: str, model: str
+    ) -> InterruptionModelUsage:
+        """Get or create interruption usage for the source/provider/model combination."""
+        key = (usage_source, provider, model)
         if key not in self._interruption_usage:
-            self._interruption_usage[key] = InterruptionModelUsage(provider=provider, model=model)
+            self._interruption_usage[key] = InterruptionModelUsage(
+                usage_source=usage_source, provider=provider, model=model
+            )
         return self._interruption_usage[key]
 
-    def _get_eot_usage(self, provider: str, model: str) -> EOTModelUsage:
-        """Get or create an EOTModelUsage for the given provider/model combination."""
-        key = (provider, model)
+    def _get_eot_usage(self, usage_source: str | None, provider: str, model: str) -> EOTModelUsage:
+        """Get or create EOT usage for the source/provider/model combination."""
+        key = (usage_source, provider, model)
         if key not in self._eot_usage:
-            self._eot_usage[key] = EOTModelUsage(provider=provider, model=model)
+            self._eot_usage[key] = EOTModelUsage(
+                usage_source=usage_source, provider=provider, model=model
+            )
         return self._eot_usage[key]
 
     def collect(self, metrics: AgentMetrics) -> None:
         if isinstance(metrics, LLMMetrics):
-            provider, model = self._extract_provider_model(metrics)
-            usage = self._get_llm_usage(provider, model)
+            usage_source, provider, model = self._extract_provider_model(metrics)
+            usage = self._get_llm_usage(usage_source, provider, model)
             usage.input_tokens += metrics.prompt_tokens
             usage.input_cached_tokens += metrics.prompt_cached_tokens
             usage.input_cache_creation_tokens += metrics.cache_creation_tokens
@@ -212,8 +241,8 @@ class ModelUsageCollector:
             usage.output_reasoning_tokens += metrics.reasoning_tokens
 
         elif isinstance(metrics, RealtimeModelMetrics):
-            provider, model = self._extract_provider_model(metrics)
-            usage = self._get_llm_usage(provider, model)
+            usage_source, provider, model = self._extract_provider_model(metrics)
+            usage = self._get_llm_usage(usage_source, provider, model)
             usage.input_tokens += metrics.input_tokens
             usage.input_cached_tokens += metrics.input_token_details.cached_tokens
 
@@ -242,27 +271,27 @@ class ModelUsageCollector:
             usage.session_duration += metrics.session_duration
 
         elif isinstance(metrics, TTSMetrics):
-            provider, model = self._extract_provider_model(metrics)
-            tts_usage = self._get_tts_usage(provider, model)
+            usage_source, provider, model = self._extract_provider_model(metrics)
+            tts_usage = self._get_tts_usage(usage_source, provider, model)
             tts_usage.input_tokens += metrics.input_tokens
             tts_usage.output_tokens += metrics.output_tokens
             tts_usage.characters_count += metrics.characters_count
             tts_usage.audio_duration += metrics.audio_duration
 
         elif isinstance(metrics, STTMetrics):
-            provider, model = self._extract_provider_model(metrics)
-            stt_usage = self._get_stt_usage(provider, model)
+            usage_source, provider, model = self._extract_provider_model(metrics)
+            stt_usage = self._get_stt_usage(usage_source, provider, model)
             stt_usage.input_tokens += metrics.input_tokens
             stt_usage.input_audio_tokens += metrics.input_audio_tokens
             stt_usage.output_tokens += metrics.output_tokens
             stt_usage.audio_duration += metrics.audio_duration
         elif isinstance(metrics, InterruptionMetrics):
-            provider, model = self._extract_provider_model(metrics)
-            interruption_usage = self._get_interruption_usage(provider, model)
+            usage_source, provider, model = self._extract_provider_model(metrics)
+            interruption_usage = self._get_interruption_usage(usage_source, provider, model)
             interruption_usage.total_requests += metrics.num_requests
         elif isinstance(metrics, EOTInferenceMetrics):
-            provider, model = self._extract_provider_model(metrics)
-            eot_usage = self._get_eot_usage(provider, model)
+            usage_source, provider, model = self._extract_provider_model(metrics)
+            eot_usage = self._get_eot_usage(usage_source, provider, model)
             eot_usage.total_requests += metrics.num_requests
 
     def flatten(self) -> list[ModelUsage]:

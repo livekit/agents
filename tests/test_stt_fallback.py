@@ -116,6 +116,7 @@ async def test_reports_active_instance_model_and_provider() -> None:
     assert fallback_adapter.metrics_metadata == {
         "model_name": "primary-model",
         "model_provider": "primary",
+        "usage_source": "provider_plugin",
     }
 
     await fallback_adapter.recognize([])
@@ -124,6 +125,7 @@ async def test_reports_active_instance_model_and_provider() -> None:
     assert fallback_adapter.metrics_metadata == {
         "model_name": "fallback-model",
         "model_provider": "fallback",
+        "usage_source": "provider_plugin",
     }
     # once the primary recovers (its recovery task flips it back to available) the next
     # request goes to it first, so that is what model and provider report
@@ -144,6 +146,7 @@ async def test_reports_active_instance_model_and_provider() -> None:
     assert fallback_adapter.metrics_metadata == {
         "model_name": "fallback-model",
         "model_provider": "fallback",
+        "usage_source": "provider_plugin",
     }
 
     # once the recovered primary serves real traffic again, the label follows
@@ -152,6 +155,7 @@ async def test_reports_active_instance_model_and_provider() -> None:
     assert fallback_adapter.metrics_metadata == {
         "model_name": "primary-model",
         "model_provider": "primary",
+        "usage_source": "provider_plugin",
     }
 
     await fallback_adapter.aclose()
@@ -176,6 +180,7 @@ async def test_stream_reports_active_instance_model_and_provider() -> None:
     assert fallback_adapter.metrics_metadata == {
         "model_name": "fallback-model",
         "model_provider": "fallback",
+        "usage_source": "provider_plugin",
     }
 
     await fallback_adapter.aclose()

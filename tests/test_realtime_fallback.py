@@ -69,6 +69,7 @@ async def test_reports_active_model_and_provider() -> None:
     assert adapter.metrics_metadata == {
         "model_name": "primary-model",
         "model_provider": "primary",
+        "usage_source": "provider_plugin",
     }
 
     session = adapter.session()
@@ -79,6 +80,7 @@ async def test_reports_active_model_and_provider() -> None:
     assert adapter.metrics_metadata == {
         "model_name": "backup-model",
         "model_provider": "backup",
+        "usage_source": "provider_plugin",
     }
     # the adapter keeps its own stable identity for spans, logs, and error events
     assert adapter.model == "RealtimeModelFallbackAdapter"
@@ -101,6 +103,7 @@ async def test_new_session_resets_active_model_to_primary() -> None:
     assert adapter.metrics_metadata == {
         "model_name": "primary-model",
         "model_provider": "primary",
+        "usage_source": "provider_plugin",
     }
 
 

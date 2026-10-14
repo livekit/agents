@@ -509,6 +509,10 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "livekit"
 
+    @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        return "livekit_inference"
+
     async def _connect_ws(self, timeout: float) -> _TTSConnection:
         session = self._ensure_session()
         base_url = self._opts.base_url
