@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents[codecs]>=1.8.5", "livekit-plugins-openai>=1.8.5"]
+dependencies = ["livekit-agents[codecs]>=1.8.6", "livekit-plugins-openai>=1.8.6"]
 
 [tool.mypy]
 plugins = ["pydantic.mypy"]
@@ -42,3 +42,4 @@ include = ["/livekit"]
 
 [tool.uv]
 exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

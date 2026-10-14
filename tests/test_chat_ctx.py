@@ -496,6 +496,30 @@ async def test_summarize_head_tail_split_basic():
 
 
 @pytest.mark.asyncio
+async def test_summarize_keeps_prior_summary():
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="System prompt.")
+    ctx.add_message(
+        role="assistant",
+        content="<chat_history_summary>earlier summary</chat_history_summary>",
+        extra={"is_summary": True},
+    )
+    ctx.add_message(role="user", content="msg1")
+    ctx.add_message(role="assistant", content="reply1")
+    ctx.add_message(role="user", content="msg2")
+    ctx.add_message(role="assistant", content="reply2")
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=1)
+
+    summaries = [it for it in result.items if it.type == "message" and it.extra.get("is_summary")]
+    texts = [it.text_content for it in summaries]
+    assert len(summaries) == 2
+    assert any("earlier summary" in t for t in texts)
+    assert any(CANNED_SUMMARY in t for t in texts)
+
+
+@pytest.mark.asyncio
 async def test_summarize_head_tail_split_with_renderables():
     ctx = _build_conversation_ctx()
 

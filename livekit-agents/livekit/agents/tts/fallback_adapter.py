@@ -186,35 +186,36 @@ class FallbackAdapter(
             t.off("metrics_collected", self._on_metrics_collected)
 
 
-def _fallback_attrs(tts: TTS, index: int) -> dict[str, Any]:
-    """The instance that served: its label, position, model and provider."""
-    attrs: dict[str, Any] = {
-        trace_types.ATTR_FALLBACK_LABEL: tts.label,
-        trace_types.ATTR_FALLBACK_INDEX: index,
-        trace_types.ATTR_GEN_AI_REQUEST_MODEL: tts.model,
-    }
+def _record_fallback_served(
+    tts: TTS, index: int, request_span: trace.Span | None, caller_span: trace.Span
+) -> None:
+    """The instance that served: its label and position on the adapter's request span, and
+    the response side there and on the caller's (tts_node). From ``tts``, not the adapter:
+    concurrent requests may be served by different instances."""
+    response_attrs: dict[str, Any] = {trace_types.ATTR_GEN_AI_RESPONSE_MODEL: tts.model}
     if (normalized := trace_types.gen_ai_provider_name(tts.provider)) is not None:
-        attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
-    return attrs
+        response_attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
+    if request_span is not None:
+        request_span.set_attributes(
+            {
+                trace_types.ATTR_FALLBACK_LABEL: tts.label,
+                trace_types.ATTR_FALLBACK_INDEX: index,
+                **response_attrs,
+            }
+        )
+    caller_span.set_attributes(response_attrs)
 
 
-def _record_fallback_served(tts: TTS, index: int, *spans: trace.Span | None) -> None:
-    """The instance that served: on the current (attempt) span, and as the response side of
-    ``spans`` (the adapter's request span and the caller's, tts_node). From ``tts``, not the
-    adapter: concurrent requests may be served by different instances."""
-    attrs = _fallback_attrs(tts, index)
-    trace.get_current_span().set_attributes(attrs)
-    response_attrs = {
-        trace_types.ATTR_GEN_AI_RESPONSE_MODEL: tts.model,
-        **{k: v for k, v in attrs.items() if k == trace_types.ATTR_GEN_AI_PROVIDER_NAME},
-    }
-    for span in spans:
-        if span is not None:
-            span.set_attributes(response_attrs)
+def _mark_recovery(stream: ChunkedStream | SynthesizeStream) -> None:
+    # the probe nests beside the request's real attempts; tell them apart
+    if stream._tts_request_span is not None:
+        stream._tts_request_span.set_attribute(trace_types.ATTR_FALLBACK_RECOVERY, True)
 
 
 class FallbackChunkedStream(ChunkedStream):
     _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    # each instance's request span nests directly under the adapter's
+    _tts_attempt_span_name: ClassVar[str | None] = None
 
     def __init__(
         self, *, tts: FallbackAdapter, input_text: str, conn_options: APIConnectOptions
@@ -242,11 +243,15 @@ class FallbackChunkedStream(ChunkedStream):
                 ),
             ) as stream:
                 should_set_active = not recovering
-                async for audio in stream:
-                    if should_set_active:
-                        should_set_active = False
-                        self._fallback_adapter._active_instance = tts
-                    yield audio
+                try:
+                    async for audio in stream:
+                        if should_set_active:
+                            should_set_active = False
+                            self._fallback_adapter._active_instance = tts
+                        yield audio
+                finally:
+                    if recovering:
+                        _mark_recovery(stream)
 
         except Exception as e:
             if recovering:
@@ -355,6 +360,8 @@ class FallbackChunkedStream(ChunkedStream):
 
 class FallbackSynthesizeStream(SynthesizeStream):
     _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    # each instance's request span nests directly under the adapter's
+    _tts_attempt_span_name: ClassVar[str | None] = None
 
     def __init__(self, *, tts: FallbackAdapter, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
@@ -410,12 +417,16 @@ class FallbackSynthesizeStream(SynthesizeStream):
         try:
             async with stream:
                 should_set_active = not recovering
-                async for audio in stream:
-                    _capture_started_time()
-                    if should_set_active:
-                        should_set_active = False
-                        self._fallback_adapter._active_instance = tts
-                    yield audio
+                try:
+                    async for audio in stream:
+                        _capture_started_time()
+                        if should_set_active:
+                            should_set_active = False
+                            self._fallback_adapter._active_instance = tts
+                        yield audio
+                finally:
+                    if recovering:
+                        _mark_recovery(stream)
         except Exception as e:
             if recovering:
                 logger.warning(
