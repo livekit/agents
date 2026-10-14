@@ -480,8 +480,24 @@ class GabbyAgent(Agent):
 
     @function_tool
     async def offer_breadsticks(self, ctx: Ctx) -> str:
-        """Call this right before suggesting breadsticks, the only upsell. It refuses if
-        they were already offered or ordered, and then you mustn't suggest them."""
+        """Call this right before suggesting breadsticks, the only upsell, when the caller
+        hasn't asked for them. It refuses if they were already offered or ordered, and then
+        you mustn't suggest them. If they asked for breadsticks, call add_item instead."""
+        heard = next(
+            (
+                m.text_content or ""
+                for m in reversed(ctx.session.history.messages())
+                if m.role == "user"
+            ),
+            "",
+        )
+        if re.search(r"\bbread ?sticks?\b", heard, re.IGNORECASE):
+            # they asked for them: an order, not something to pitch back to them
+            ctx.userdata.page.record("offer_breadsticks", "Refused: the caller asked for them")
+            raise ToolError(
+                "They just asked for breadsticks. Call add_item for them now, and don't ask "
+                "whether to add them."
+            )
         with _pos_rules(ctx) as pos:
             item = pos.offer_upsell()
         ctx.userdata.page.record("offer_breadsticks", "Upsell offered, once")
@@ -1039,7 +1055,10 @@ Say a price when they ask, and the total at the read-back.
   tip is up to them. Promise nothing else: no discounts, credits, free items, refunds, or
   call backs.
 - Once, when the order sounds done and has no breadsticks, call offer_breadsticks and
-  suggest them. That's the only upsell: don't push anything else.
+  suggest them. That's the only upsell: don't push anything else. If they ask for
+  breadsticks themselves, that's an order: add_item, no offer.
+- Whatever they ask for, add it with add_item right away. Never ask "Should I add that?"
+  about something they just ordered; ask only for what's missing (a size, a sauce).
 
 # Finishing up
 Don't ask for anything they've already told you (pickup or delivery, the address, the name,

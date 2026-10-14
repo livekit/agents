@@ -23,7 +23,7 @@ logger = logging.getLogger("restaurant-ordering")
 
 # how long neither side has spoken before the caller counts as away (AgentSession's
 # user_away_timeout); the first time, the agent checks in, the second, it hangs up
-USER_AWAY_TIMEOUT = 12.0
+USER_AWAY_TIMEOUT = 20.0
 STILL_THERE = "Are you still there?"
 SILENT_GOODBYE = "I'll let you go. Call us back anytime."
 

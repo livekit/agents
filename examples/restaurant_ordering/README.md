@@ -65,7 +65,7 @@ with `SIP_OUTBOUND_TRUNK_ID` set. `name` is who the order is under (Sam Carter i
 
 Gabby handles every call herself, with no handoff to staff, no notes for a manager, and no promised call backs: something the restaurant doesn't do, a discount code, a complaint, or an allergy the menu data doesn't track gets a plain answer from her. She never says she's noted or done something unless a tool did it. To add a handoff, see [warm-transfer](../warm-transfer/).
 
-If the line goes quiet (neither side speaking for 12 seconds), Gabby asks once, "Are you still there?"; if it stays quiet, she says goodbye and hangs up (`hang_up_when_silent` in `call.py`). Silence never agrees to anything. It's off in simulations and text-only tests.
+If the line goes quiet (neither side speaking for 20 seconds), Gabby asks once, "Are you still there?"; if it stays quiet, she says goodbye and hangs up (`hang_up_when_silent` in `call.py`). Silence never agrees to anything. It's off in simulations and text-only tests.
 
 Things to try: order two large pepperonis, then say "yeah, two pepperonis" again. Say "make that a medium, and drop the Coke" during the read-back. Ask for the whole menu. Add a tip, then cancel the order once it's placed. On the delivery update, have the Sprite taken off, then change your mind, or cancel the whole order.
 

@@ -31,7 +31,7 @@ logger = logging.getLogger("vehicle-service")
 
 # a caller who's gone quiet: the session marks them away after this many seconds in which
 # neither side has spoken (AgentSession's user_away_timeout)
-USER_AWAY_TIMEOUT = 12.0
+USER_AWAY_TIMEOUT = 20.0
 STILL_THERE = "Are you still there?"
 SILENT_GOODBYE = "I'll let you go. Give us a call back anytime."
 NO_RESPONSE = "No response"
