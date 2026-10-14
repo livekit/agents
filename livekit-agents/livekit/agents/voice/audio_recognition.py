@@ -1119,6 +1119,14 @@ class AudioRecognition:
                             },
                         )
 
+            if (
+                self._turn_detection_mode == "manual"
+                and self._end_of_turn_task is not None
+                and not self._end_of_turn_task.done()
+            ):
+                # A superseded commit must not cancel the pending delivery.
+                await asyncio.wait({self._end_of_turn_task})
+
             if self._audio_interim_transcript:
                 # emit interim transcript as final for frontend display
                 self._hooks.on_final_transcript(
@@ -1145,7 +1153,7 @@ class AudioRecognition:
                 skip_reply=skip_reply,
                 trigger="manual",
             )
-            self._user_turn_committed = True
+            self._user_turn_committed = bool(transcript)
             if not fut.done():
                 fut.set_result(transcript)
 
@@ -1207,14 +1215,10 @@ class AudioRecognition:
         if (
             self._turn_detection_mode == "manual"
             and self._user_turn_committed
-            and (
-                self._end_of_turn_task is None
-                or self._end_of_turn_task.done()
-                or ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT
-            )
+            and (self._end_of_turn_task is None or self._end_of_turn_task.done())
         ):
             # ignore transcript for manual turn detection when user turn already committed
-            # and EOU task is done or this is an interim transcript
+            # and EOU task is done
             return
 
         if (
@@ -1564,7 +1568,7 @@ class AudioRecognition:
         if self._turn_detection_mode == "manual" and trigger != "manual":
             return
 
-        if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
+        if self._stt and not self._audio_transcript:
             # stt enabled but no transcript yet
             return
 
