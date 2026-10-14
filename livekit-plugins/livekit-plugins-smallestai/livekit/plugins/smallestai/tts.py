@@ -66,6 +66,7 @@ class _TTSOptions:
     max_buffer_flush_ms: int
     use_continuations: bool
     max_buffer_delay_ms: int
+    pronunciation_dicts: list[str] | None
     base_url: str
     ws_url: str
 
@@ -85,6 +86,7 @@ class TTS(tts.TTS):
         max_buffer_flush_ms: int = 0,
         use_continuations: bool = True,
         max_buffer_delay_ms: int = 3000,
+        pronunciation_dicts: list[str] | None = None,
         base_url: str = SMALLEST_BASE_URL,
         ws_url: str = SMALLEST_WS_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -131,6 +133,10 @@ class TTS(tts.TTS):
                 buffered fragment waiting for a clean sentence boundary before speaking it
                 anyway. Only applies when ``use_continuations`` is True. Defaults to 3000ms
                 (the server default).
+            pronunciation_dicts: IDs of pronunciation dictionaries (created via the
+                Smallest AI ``/pronunciation-dicts`` endpoint) to apply during synthesis,
+                overriding how specific words are pronounced. Applies to both HTTP
+                synthesize() and WebSocket streaming.
             base_url: Base URL for the Smallest AI HTTP API.
             ws_url: WebSocket URL for low-latency streaming synthesis.
             http_session: An existing aiohttp ClientSession to use.
@@ -166,6 +172,7 @@ class TTS(tts.TTS):
             max_buffer_flush_ms=max_buffer_flush_ms,
             use_continuations=use_continuations,
             max_buffer_delay_ms=max_buffer_delay_ms,
+            pronunciation_dicts=pronunciation_dicts,
             base_url=base_url,
             ws_url=ws_url,
         )
@@ -219,6 +226,7 @@ class TTS(tts.TTS):
         max_buffer_flush_ms: NotGivenOr[int] = NOT_GIVEN,
         use_continuations: NotGivenOr[bool] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
+        pronunciation_dicts: NotGivenOr[list[str] | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options."""
         if is_given(model):
@@ -244,6 +252,8 @@ class TTS(tts.TTS):
             self._opts.use_continuations = use_continuations
         if is_given(max_buffer_delay_ms):
             self._opts.max_buffer_delay_ms = max_buffer_delay_ms
+        if is_given(pronunciation_dicts):
+            self._opts.pronunciation_dicts = pronunciation_dicts
 
     def synthesize(
         self,
@@ -433,6 +443,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         }
         if self._opts.word_timestamps:
             payload["word_timestamps"] = True
+        if self._opts.pronunciation_dicts:
+            payload["pronunciation_dicts"] = self._opts.pronunciation_dicts
         if self._opts.use_continuations:
             payload["context_id"] = context_id
             payload["max_buffer_delay_ms"] = self._opts.max_buffer_delay_ms
@@ -582,7 +594,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 
 def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "model": opts.model,
         "voice_id": opts.voice_id,
         "sample_rate": opts.sample_rate,
@@ -592,3 +604,6 @@ def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
         else opts.language,
         "output_format": opts.output_format,
     }
+    if opts.pronunciation_dicts:
+        data["pronunciation_dicts"] = opts.pronunciation_dicts
+    return data
