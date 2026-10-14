@@ -17,6 +17,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+import numpy as np
 from rimelabs_sdk import Rime, RimeInputError, realtime as r
 
 from livekit import rtc
@@ -135,6 +136,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._report: r.ToolCallRef | None = None
         self._caller_speaking = False
         self._audio: asyncio.Queue[r.AudioChunk] = asyncio.Queue(100)
+        self._audio_format: tuple[int, int] | None = None
+        self._audio_resampler: rtc.AudioResampler | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
     @property
@@ -237,6 +240,11 @@ class RealtimeSession(llm.RealtimeSession):
             new = supplied[key]
             if old.type == "message" and old.role == "user" and new != old:
                 raise self._unsupported("Prism user history cannot be edited")
+        additions: list[
+            tuple[llm.ChatMessage | llm.FunctionCallOutput, r.ToolCallRef | None, str]
+        ] = []
+        # Check the complete update before sending any part of it. A later
+        # unsupported item must not leave earlier additions on the server.
         for item in chat_ctx.items:
             if item.id in known:
                 continue
@@ -258,41 +266,82 @@ class RealtimeSession(llm.RealtimeSession):
                             "result": None,
                         }
                     )
-                try:
-                    await sdk.submit_tool_result(ref, text)
-                except Exception as error:
-                    self._fatal(error)
-                    raise
-                self._chat.items.append(item.model_copy())
-                if item.reply_required:
-                    if self._latest and ref.response_id == self._latest.response_id:
-                        self._parent = self._latest
-                    else:
-                        self._report = ref
+                additions.append((item.model_copy(), ref, text))
             elif (
                 isinstance(item, llm.ChatMessage)
                 and item.role in ("user", "assistant")
                 and all(isinstance(c, str) for c in item.content)
             ):
-                await sdk.add_message(item.role, item.text_content or "")
-                self._chat.items.append(item.model_copy())
+                text = item.text_content or ""
+                # The SDK validates each add_message call separately. Validate
+                # its text limit here so invalid batches send no history.
+                if not text.strip() or len(text) > 4000:
+                    raise RimeInputError("Text must be nonblank and at most 4000 characters")
+                additions.append((item.model_copy(), None, text))
             else:
                 raise self._unsupported(
                     "Prism accepts only text history and results of its own tool calls"
                 )
 
+        for addition, tool_ref, text in additions:
+            if isinstance(addition, llm.FunctionCallOutput):
+                assert tool_ref is not None
+                try:
+                    await sdk.submit_tool_result(tool_ref, text)
+                except Exception as error:
+                    self._fatal(error)
+                    raise
+                self._chat.items.append(addition)
+                if addition.reply_required:
+                    if self._latest and tool_ref.response_id == self._latest.response_id:
+                        self._parent = self._latest
+                    else:
+                        self._report = tool_ref
+            else:
+                await sdk.add_message(cast(Literal["user", "assistant"], addition.role), text)
+                self._chat.items.append(addition)
+
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._require()
         try:
-            self._audio.put_nowait(
-                r.AudioChunk(
-                    data=bytes(frame.data),
-                    format=r.PCMFormat(
-                        sample_rate=cast(Literal[8000, 16000, 24000, 48000], frame.sample_rate),
-                        channels=cast(Literal[1, 2], frame.num_channels),
-                    ),
+            source_format = (frame.sample_rate, frame.num_channels)
+            if source_format != self._audio_format:
+                self._audio_format = source_format
+                self._audio_resampler = None
+
+            # Leave SDK-supported input unchanged. Convert only formats that its
+            # PCMFormat cannot represent, such as a 44.1 kHz custom audio input.
+            if frame.num_channels > 2:
+                samples = np.frombuffer(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
+                mono = (samples.sum(axis=1, dtype=np.int32) // frame.num_channels).astype(np.int16)
+                frame = rtc.AudioFrame(
+                    data=mono.tobytes(),
+                    sample_rate=frame.sample_rate,
+                    num_channels=1,
+                    samples_per_channel=frame.samples_per_channel,
                 )
-            )
+            if frame.sample_rate not in (8000, 16000, 24000, 48000):
+                if self._audio_resampler is None:
+                    self._audio_resampler = rtc.AudioResampler(
+                        input_rate=frame.sample_rate,
+                        output_rate=16000,
+                        num_channels=frame.num_channels,
+                    )
+                frames = self._audio_resampler.push(frame)
+            else:
+                frames = [frame]
+            for converted in frames:
+                self._audio.put_nowait(
+                    r.AudioChunk(
+                        data=bytes(converted.data),
+                        format=r.PCMFormat(
+                            sample_rate=cast(
+                                Literal[8000, 16000, 24000, 48000], converted.sample_rate
+                            ),
+                            channels=cast(Literal[1, 2], converted.num_channels),
+                        ),
+                    )
+                )
         except Exception as error:
             self._fatal(error)
 
@@ -308,6 +357,8 @@ class RealtimeSession(llm.RealtimeSession):
         raise self._unsupported("Prism commits speech through server turn detection")
 
     def clear_audio(self) -> None:
+        self._audio_resampler = None
+        self._audio_format = None
         while not self._audio.empty():
             self._audio.get_nowait()
         # The SDK holds its audio lock across sends and clears, so an in-flight
