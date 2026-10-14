@@ -110,7 +110,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._speech_start_time = None
     ar._vad_speech_started = False
     ar._end_of_turn_task = None
-    ar._manual_turn_tasks = set()
+    ar._manual_turn_tasks = {}
     ar._user_turn_committed = False
     ar._vad = None
     ar._last_language = None

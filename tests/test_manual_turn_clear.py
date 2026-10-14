@@ -16,6 +16,7 @@ from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
+from .fake_realtime import FakeRealtimeModel
 from .fake_session import FakeActions, create_session
 from .trace_schema import assert_trace_well_formed
 
@@ -350,6 +351,52 @@ async def test_clear_resets_realtime_buffer_during_manual_delivery(
         assert recognition._current_transcript == ""
     finally:
         activity._rt_session = None
+
+
+@pytest.mark.parametrize("new_speech", [False, True])
+async def test_realtime_delivery_uses_snapshot_timing(
+    running_session: tuple[AgentSession, Agent],
+    monkeypatch: pytest.MonkeyPatch,
+    new_speech: bool,
+) -> None:
+    session, agent = running_session
+    activity = session._activity
+    assert activity is not None
+    recognition = activity._audio_recognition
+    assert recognition is not None
+    recognition._speech_start_time = time.time() - 0.2
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    committed_speaking_time = recognition.last_speaking_time
+    assert committed_speaking_time is not None
+    assert await session.commit_user_turn(skip_reply=True) == _TRANSCRIPT
+    assert recognition.last_speaking_time is None
+    assert activity._last_user_speaking_time == committed_speaking_time
+
+    realtime_session = MagicMock()
+    activity._rt_session = realtime_session
+    try:
+        answered_at = activity._realtime_user_input_answered_at
+        session.clear_user_turn()
+        realtime_session.clear_audio.assert_called_once_with()
+        assert activity._realtime_user_input_answered_at == answered_at
+        assert activity._last_user_speaking_time == committed_speaking_time
+    finally:
+        activity._rt_session = None
+
+    if new_speech:
+        await asyncio.sleep(0.1)
+        recognition._speech_start_time = time.time()
+        await recognition._on_stt_event(_final_transcript("next turn"))
+        assert recognition.last_speaking_time > committed_speaking_time
+    live_speaking_time = recognition.last_speaking_time
+    model = FakeRealtimeModel()
+    monkeypatch.setattr(agent, "_llm", model)
+
+    await _await_delivery(session)
+
+    assert session._unanswered_user_metrics == {"stopped_speaking_at": committed_speaking_time}
+    assert recognition.last_speaking_time == live_speaking_time
+    await model.aclose()
 
 
 @pytest.mark.real_time

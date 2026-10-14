@@ -286,7 +286,7 @@ class AudioRecognition:
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true while committed turns await delivery
-        self._manual_turn_tasks: set[asyncio.Task[None]] = set()
+        self._manual_turn_tasks: dict[asyncio.Task[None], _ManualTurnSnapshot] = {}
 
         self._sample_rate: int | None = None
 
@@ -457,6 +457,12 @@ class AudioRecognition:
         ):
             return self._last_speaking_time
         return None
+
+    @property
+    def last_committed_speaking_time(self) -> float | None:
+        if not self._manual_turn_tasks:
+            return None
+        return next(reversed(self._manual_turn_tasks.values())).last_speaking_time
 
     @property
     def stt_context(self) -> BaseModel | None:
@@ -1899,10 +1905,10 @@ class AudioRecognition:
             )
         )
         if manual_turn is not None:
-            self._manual_turn_tasks.add(self._end_of_turn_task)
+            self._manual_turn_tasks[self._end_of_turn_task] = manual_turn
 
             def _on_manual_turn_done(task: asyncio.Task[None]) -> None:
-                self._manual_turn_tasks.discard(task)
+                self._manual_turn_tasks.pop(task, None)
                 if self._turn_detection_mode == "manual":
                     self._user_turn_committed = bool(self._manual_turn_tasks)
                 self._end_manual_eou_wait_span(manual_turn, outcome="dropped")
