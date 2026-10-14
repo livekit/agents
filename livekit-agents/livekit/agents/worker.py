@@ -25,10 +25,10 @@ import multiprocessing as mp
 import os
 import sys
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Generic, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
 import aiohttp
 import jwt
@@ -40,6 +40,7 @@ from livekit import api, rtc
 from livekit.protocol import agent, agent_worker, models
 
 from . import _core, ipc, telemetry, utils
+from ._generated.storage_turn import Policy
 from .http import AgentHttp
 from .inference_runner import _InferenceRunner
 from .job import (
@@ -54,12 +55,15 @@ from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
 from .storage.agentdb import AgentDBStorage
-from .storage.context import Handler
+from .storage.context import Handler, S
 from .storage.protocol import StorageError
 from .storage.resolve import AgentRegistry, Thread, resolve_thread
 from .types import NOT_GIVEN, NotGivenOr
 from .utils import http_context, http_server, is_given
 from .version import __version__
+
+if TYPE_CHECKING:
+    from .a2a.endpoint import A2AEndpoint, AuthCallable
 
 # The control plane (registration, availability, assignment, status, drain) and the endpoint data
 # plane are the Rust worker's, `_core.Worker`; this module owns the process pool, the health
@@ -360,7 +364,7 @@ class AgentHandler:
 
     def __init__(self, *, lane: str | None = None) -> None:
         self.lane = lane
-        self.doors: list[Any] = []
+        self.doors: list[RtcDoor | A2AEndpoint[Any]] = []
 
     @overload
     def rtc_session(
@@ -420,14 +424,14 @@ class AgentHandler:
         *,
         endpoint: str,
         description: str,
-        state: type[Any] | None = None,
+        state: type[S] | None = None,
         public: bool = True,
-        auth: Callable[..., Any] | None = None,
-        inbox: Any = None,
-        debounce: Any = None,
-        storage: Any | None = None,
+        auth: AuthCallable | None = None,
+        inbox: Policy | Mapping[str, Policy] | None = None,
+        debounce: datetime.timedelta | Mapping[str, datetime.timedelta] | None = None,
+        storage: AgentDBStorage | None = None,
         version: str | None = None,
-    ) -> Callable[[Handler[Any]], Any]:
+    ) -> Callable[[Handler[S]], A2AEndpoint[S]]:
         """The text door, as ``AgentServer.a2a_session``, on this handler's lane."""
         from .a2a.endpoint import a2a_session
 
@@ -444,7 +448,7 @@ class AgentHandler:
             lane=self.lane,
         )
 
-        def decorator(handler: Handler[Any]) -> Any:
+        def decorator(handler: Handler[S]) -> A2AEndpoint[S]:
             ep = door(handler)
             self.doors.append(ep)
             return ep
@@ -486,7 +490,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
         log_level: str | ServerEnvOption[str] = _default_log_level,
-        storage: Any | None = None,
+        storage: AgentDBStorage | None = None,
         agent_name: str = "",
     ) -> None:
         super().__init__()
@@ -553,13 +557,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_server: http_server.HttpServer | None = None
         # built here and not in run(): the @server.http decorators run at import time
         self._http = AgentHttp()
-        self._a2a_endpoints: dict[str, Any] = {}
+        self._a2a_endpoints: dict[str, A2AEndpoint[Any]] = {}
         self._conn: _core.Worker | None = None  # once run() has started the Rust worker
 
         self._lock = asyncio.Lock()
 
     @property
-    def storage(self) -> Any | None:
+    def storage(self) -> AgentDBStorage | None:
         """The session storage every door of this server opens its lane with (plan 5.7)."""
         return self._storage
 
@@ -600,15 +604,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         *,
         endpoint: str,
         description: str,
-        state: type[Any] | None = None,
+        state: type[S] | None = None,
         public: bool = True,
-        auth: Callable[..., Any] | None = None,
-        inbox: Any = None,
-        debounce: Any = None,
-        storage: Any | None = None,
+        auth: AuthCallable | None = None,
+        inbox: Policy | Mapping[str, Policy] | None = None,
+        debounce: datetime.timedelta | Mapping[str, datetime.timedelta] | None = None,
+        storage: AgentDBStorage | None = None,
         version: str | None = None,
         lane: str | None = None,
-    ) -> Callable[[Handler[Any]], Any]:
+    ) -> Callable[[Handler[S]], A2AEndpoint[S]]:
         """The text door (plan 7.3): one A2A endpoint served as an ASGI app under ``/<endpoint>``.
 
         ::
@@ -651,12 +655,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             lane=lane,
         )
 
-        def decorator(handler: Handler[Any]) -> Any:
-            return self.add(door(handler))[0]
+        def decorator(handler: Handler[S]) -> A2AEndpoint[S]:
+            ep = door(handler)
+            self.add(ep)
+            return ep
 
         return decorator
 
-    def add(self, *doors: Any) -> tuple[Any, ...]:
+    def add(
+        self, *doors: AgentHandler | RtcDoor | A2AEndpoint[Any]
+    ) -> tuple[AgentHandler | RtcDoor | A2AEndpoint[Any], ...]:
         """Serve what a module defined: ``AgentHandler``s, and doors from ``rtc_session`` and
         ``a2a_session``, the one voice door of the worker and text doors under ``/<endpoint>``.
         Returns them."""
@@ -698,7 +706,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return doors
 
     @property
-    def a2a_endpoints(self) -> dict[str, Any]:
+    def a2a_endpoints(self) -> dict[str, A2AEndpoint[Any]]:
         """The text doors registered on this server, by endpoint name."""
         return dict(self._a2a_endpoints)
 

@@ -13,7 +13,7 @@ import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import timedelta
-from typing import Generic, TypeVar
+from typing import Generic
 
 from a2a.server.jsonrpc_models import (
     InternalError as RpcInternalError,
@@ -30,14 +30,12 @@ from starlette.routing import Route
 
 from .._generated.storage_turn import Policy, TurnOptions
 from ..storage.agentdb import AgentDBStorage
-from ..storage.context import Handler
+from ..storage.context import Handler, S
 from ..storage.protocol import dump_state
 from ..storage.resolve import AgentRegistry
 from .auth import ANONYMOUS, AuthError, Credentials, Principal, Unauthorized
 from .extension import EXTENSIONS_HEADER, Extensions, agent_card, to_json
 from .methods import METHODS, STREAMING, A2AService, CallContext, JsonRpc
-
-S = TypeVar("S")
 
 AGENT_CARD_PATH = "/.well-known/agent-card.json"
 RPC_PATH = "/v1"
@@ -102,7 +100,8 @@ class A2AEndpoint(Generic[S]):
     ) -> None:
         if not endpoint or "/" in endpoint:
             raise ValueError("endpoint is one path segment, the last of the endpoint's URL")
-        if inbox == "concurrent" and state is not None:
+        policies = inbox.values() if isinstance(inbox, Mapping) else [inbox]
+        if "concurrent" in policies and state is not None:
             raise ValueError("the concurrent policy requires a door with no state")
 
         self.handler = handler
