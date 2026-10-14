@@ -37,27 +37,61 @@ def oil_change_on_x3(desk: ServiceDesk, *, recall: bool = True) -> None:
 
 def test_lookup_normalizes_the_spoken_number() -> None:
     d = demo_desk(today=TODAY)
-    assert d.lookup_customer("+1 415.555.0142", "Alex Morgan").name == "Alex Morgan"
-    # any number the caller gives finds the demo file
-    c = d.lookup_customer("415 555 9999", "alex")
-    assert (c.name, c.phone, len(c.vehicles)) == ("Alex Morgan", "4155559999", 2)
+    c = d.lookup_customer("+1 415.555.0142", "Alex Morgan")
+    assert (c.name, c.phone, len(c.vehicles), c.new) == ("Alex Morgan", "4155550142", 2, False)
+    assert d.lookup_customer("415 555 0142", "alex") is c
     with pytest.raises(ServiceError, match="ten digits"):
         d.lookup_customer("555 0142", "Alex Morgan")
     # a website visitor's file is under the name they gave the page
     assert demo_desk("jamie lee", TODAY).lookup_customer("4155550142", "Jamie").name == "jamie lee"
 
 
-@pytest.mark.parametrize("name", ["Jordan Morgan", "Jordan", "Alex Kim", "Alexander Morgan"])
-def test_someone_elses_name_hears_nothing_from_the_file(name: str) -> None:
+def test_a_name_and_number_with_no_file_get_a_new_one() -> None:
     d = demo_desk(today=TODAY)
-    with pytest.raises(ServiceError, match="Share nothing from the file"):
-        d.lookup_customer("415 555 0142", name)
-    assert d.customer is None
-    snap = d.snapshot()
-    assert snap["customer"] is None and snap["vehicles"] == []
-    assert snap["existingAppointment"] is None
-    with pytest.raises(ServiceError, match="phone number first"):
-        d.select_vehicle("X3")
+    c = d.lookup_customer("437-465-7465", " DZ ")
+    assert (c.name, c.phone, c.vehicles, c.new) == ("DZ", "4374657465", [], True)
+    assert d.customer is c and d.on_file is None and d.stage() == "vehicle"
+    snap = json.loads(json.dumps(d.snapshot()))
+    assert snap["customer"] == {"name": "DZ", "phone": "(437) 465-7465", "isNew": True}
+    assert snap["vehicles"] == [] and snap["existingAppointment"] is None
+    with pytest.raises(ServiceError, match="no cars on their file yet.*add_vehicle"):
+        d.select_vehicle("X5")
+    # the same name and number again is the same new file
+    assert d.lookup_customer("4374657465", "dz") is c
+    # Alex's name on another number is someone new too
+    other = d.lookup_customer("510 555 0199", "Alex Morgan")
+    assert other.new and other.vehicles == [] and other is not c
+
+
+@pytest.mark.parametrize("name", ["Jordan Morgan", "Jordan", "Alex Kim", "Alexander Morgan"])
+def test_another_name_on_alexs_number_gets_a_new_file_and_nothing_of_his(name: str) -> None:
+    d = demo_desk(today=TODAY)
+    c = d.lookup_customer("415 555 0142", name)
+    assert c.new and c.name == name and c.phone == "4155550142" and c.vehicles == []
+    snap = json.loads(json.dumps(d.snapshot()))
+    assert snap["customer"]["isNew"] is True and snap["customer"]["name"] == name
+    assert snap["vehicles"] == [] and snap["existingAppointment"] is None
+    # nothing of Alex's anywhere but the caller's own name and the price menu
+    text = json.dumps({k: v for k, v in snap.items() if k not in ("customer", "menu")})
+    for secret in ("Alex Morgan", "X3", "330i", X3_VIN, SEDAN_VIN, "21400", "23V-418", "Tire"):
+        assert secret not in text, secret
+    with pytest.raises(ServiceError, match="no cars on their file"):
+        d.select_vehicle(X3_VIN)
+    with pytest.raises(ServiceError, match="There's no other appointment"):
+        d.booked("existing")
+    with pytest.raises(ServiceError):
+        d.check_recalls(X3_VIN)
+    # a car they add is theirs alone, and the recall comes from the catalog, not Alex's file
+    v = d.add_vehicle(2023, "X3", 12_000)
+    assert v.vin != X3_VIN and v.miles == 12_000 and [r.id for r in v.recalls] == ["23V-418"]
+    assert d.on_file is None and d.duplicates() == []
+
+
+def test_switching_files_drops_the_other_files_car(desk: ServiceDesk) -> None:
+    desk.select_vehicle("X3")
+    c = desk.lookup_customer("4374657465", "DZ")
+    assert desk.draft.vin is None and desk.draft_vehicle() is None
+    assert desk.snapshot()["vehicles"] == [] and c.vehicles == []
 
 
 def test_the_lookup_needs_a_name() -> None:
@@ -89,7 +123,7 @@ def test_vehicle_by_vin_or_year_make_model(desk: ServiceDesk, query: str, vin: s
 
 
 def test_a_car_not_on_file_is_refused(desk: ServiceDesk) -> None:
-    with pytest.raises(ServiceError, match="On file"):
+    with pytest.raises(ServiceError, match="On file.*add_vehicle"):
         desk.select_vehicle("Honda Civic")
     with pytest.raises(ServiceError, match="On file"):
         desk.select_vehicle("BMW")  # both cars are BMWs
@@ -936,6 +970,7 @@ def test_the_file_has_a_tire_rotation_on_the_330i_next_week(desk: ServiceDesk) -
 def test_the_appointment_on_file_is_always_next_week(days: int) -> None:
     today = TODAY + dt.timedelta(days=days)
     d = demo_desk(today=today)
+    d.lookup_customer("4155550142", "Alex Morgan")
     assert d.on_file is not None
     slot = next(s for s in d.slots if s.id == d.on_file.slot_id)
     monday = today - dt.timedelta(days=today.weekday())
@@ -1339,7 +1374,7 @@ def test_grade_checks_the_new_expectations(desk: ServiceDesk) -> None:
     desk.book()
     assert grade(desk, {"stop_driving": True, "approval_limit": 500}) == []
     assert grade(desk, {"approval_limit": 300}) == ["approval limit 500.0, expected 300"]
-    assert grade(desk, {"booked": False, "looked_up": False})[0].startswith("opened the file")
+    assert grade(desk, {"new_customer": True}) == ["never set up a new file for the caller"]
 
 
 def test_grade_checks_the_follow_ups_pickup_and_concerns(shop: ServiceDesk) -> None:
@@ -1349,3 +1384,130 @@ def test_grade_checks_the_follow_ups_pickup_and_concerns(shop: ServiceDesk) -> N
     assert grade(shop, {"collected_by": True, "concerns": True}) == [
         "never noted the new concern on the visit"
     ]
+
+
+# ---- a car the caller adds to their file ----
+
+
+def test_add_vehicle_on_a_new_file_selects_it_and_works_out_the_warranty() -> None:
+    d = demo_desk(today=TODAY)
+    d.lookup_customer("4374657465", "DZ")
+    x5 = d.add_vehicle(2021, "x five", 40_000)
+    assert (x5.label, x5.body, x5.miles, x5.added, x5.recalls) == (
+        "2021 BMW X5",
+        "suv",
+        40_000,
+        True,
+        [],
+    )
+    assert d.draft.vin == x5.vin and len(x5.vin) == 17 and d.stage() == "symptoms"
+    # in service July 1 of the model year: past 3 years, so out of warranty
+    assert x5.in_service == dt.date(2021, 7, 1) and not x5.in_warranty(TODAY)
+    assert x5.warranty_reason(TODAY).startswith("Out of warranty: about 5 years")
+    i4 = d.add_vehicle(2025, "i4", 9_000, vin="WBA 73AW0 5SFR 12345")
+    assert i4.vin == "WBA73AW05SFR12345" and i4.in_warranty(TODAY) and d.draft.vin == i4.vin
+    # a new car's July 1 is never later than today
+    assert d.add_vehicle(2027, "X1", 12).in_service == TODAY
+    with pytest.raises(ServiceError, match="mileage doesn't look right"):
+        d.add_vehicle(2024, "X2", -5)
+    with pytest.raises(ServiceError, match="year doesn't look right"):
+        d.add_vehicle(1890, "X2", 5)
+    vehicles = d.snapshot()["vehicles"]
+    assert [(v["label"], v["added"], v["selected"]) for v in vehicles] == [
+        ("2021 BMW X5", True, False),
+        ("2025 BMW i4", True, False),
+        ("2027 BMW X1", True, True),
+    ]
+    assert vehicles[0]["inWarranty"] is False and vehicles[1]["inWarranty"] is True
+
+
+def test_an_added_2023_x3_gets_the_catalog_recall_and_other_cars_none() -> None:
+    d = demo_desk(today=TODAY)
+    d.lookup_customer("4374657465", "DZ")
+    x3 = d.add_vehicle(2023, "X3 M40i", 30_000)
+    assert x3.name == "X3 M40i"
+    assert [(r.id, r.title, r.hours) for r in d.check_recalls(x3.vin)] == [
+        ("23V-418", "Rear-view camera software update", 0.5)
+    ]
+    for year, model in ((2022, "X3"), (2024, "X3"), (2023, "X5"), (2023, "330i")):
+        assert backend.recalls_for(backend.bmw_model(model)[1], year) == []  # type: ignore[index]
+    # each car gets its own copy of the recall
+    x3.recalls[0].parts_in_stock = False
+    assert backend.recalls_for("X3", 2023)[0].parts_in_stock
+    # Alex's seeded cars keep theirs
+    alex = demo_desk(today=TODAY)
+    alex.lookup_customer("4155550142", "Alex Morgan")
+    assert [r.id for r in alex.check_recalls(X3_VIN)] == ["23V-418"]
+    assert alex.check_recalls(SEDAN_VIN) == []
+
+
+def test_everything_else_works_on_an_added_car() -> None:
+    d = demo_desk(today=TODAY)
+    d.lookup_customer("4374657465", "DZ")
+    v = d.add_vehicle(2021, "X5", 40_000)
+    d.add_note("sound", "clunk")
+    d.add_note("when", "over bumps")
+    d.set_concern("clunk over bumps")
+    with pytest.raises(ServiceError, match="isn't in warranty"):
+        d.set_services(["warranty_repair"], "liftgate won't close", warranty_agreed=True)
+    d.set_services(["diagnostic"])
+    assert d.check_recalls(v.vin) == []
+    d.choose_slot("thu-0800")
+    d.choose_transport("shuttle")
+    d.set_mileage(40_250)
+    assert d.read_back().startswith("2021 BMW X5; diagnostic for clunk over bumps; Thursday")
+    appt = d.book()
+    assert (appt.vehicle, appt.services, appt.recall_id) == ("2021 BMW X5", ["Diagnostic"], None)
+    assert appt.what == "diagnostic on the X5"
+    assert grade(d, {"vehicle": "X5", "services": ["diagnostic"], "new_customer": True}) == []
+    snap = d.snapshot()
+    assert snap["appointment"]["vehicle"] == "2021 BMW X5" and snap["draft"]["mileage"] == 40_250
+
+
+def test_a_car_on_alexs_file_or_not_and_a_3_series_says_its_name() -> None:
+    d = demo_desk(today=TODAY)
+    d.lookup_customer("4155550142", "Alex Morgan")
+    with pytest.raises(ServiceError, match="2023 BMW X3 xDrive30i is already on their file"):
+        d.add_vehicle(2023, "X3", 22_000)
+    v = d.add_vehicle(2018, "5 series", 81_000)
+    assert v.label == "2018 BMW 5 Series" and len(d.customer.vehicles) == 3  # type: ignore[union-attr]
+    assert d.vehicle("the 5 series") is v and d.draft.vin == v.vin
+    d.set_services(["oil_change"])
+    d.check_recalls(v.vin)
+    d.choose_slot("wed-0730")
+    d.choose_transport("wait")
+    d.read_back()
+    assert d.book().what == "oil change on the 5 Series"
+
+
+@pytest.mark.parametrize(
+    ("said", "name"),
+    [
+        ("X5", "X5"),
+        ("BMW X7", "X7"),
+        ("x 1", "X1"),
+        ("330i", "330i"),
+        ("M340i xDrive", "M340i xDrive"),
+        ("3 Series", "3 Series"),
+        ("two series", "2 Series"),
+        ("8 series", "8 Series"),
+        ("i4 M50", "i4 M50"),
+        ("iX", "iX"),
+        ("X3 xDrive30i", "X3 xDrive30i"),
+        ("M3 Competition", "M3 Competition"),
+    ],
+)
+def test_bmw_models_the_desk_services(said: str, name: str) -> None:
+    found = backend.bmw_model(said)
+    assert found is not None and found[0] == name
+
+
+@pytest.mark.parametrize(
+    "said", ["Honda Civic", "Toyota Camry", "Tesla Model 3", "Lexus RX 350", "Mini Cooper", "BMW"]
+)
+def test_a_car_that_isnt_a_bmw_is_refused(said: str) -> None:
+    d = demo_desk(today=TODAY)
+    d.lookup_customer("4374657465", "DZ")
+    with pytest.raises(ServiceError, match="only services BMWs"):
+        d.add_vehicle(2020, said, 30_000)
+    assert d.customer is not None and d.customer.vehicles == [] and d.draft.vin is None

@@ -175,7 +175,9 @@ async def test_cancelling_the_appointment_on_file_waits_for_a_clear_yes() -> Non
         ],
         desk,
     )
-    assert desk.on_file is not None and desk.on_file.status == "booked", said
+    # Alex's appointment, whether or not his file was opened
+    on_file = desk._customers[0].on_file
+    assert on_file is not None and on_file.status == "booked", said
     desk = demo_desk(today=TODAY)
     said = await _say(
         [
@@ -287,8 +289,11 @@ async def test_grinding_brakes_are_never_a_warranty_repair() -> None:
     assert "warranty_repair" not in desk.draft.services, said
 
 
+_REFUSALS = ("match", "account holder", "can't find", "unable to")
+
+
 @pytest.mark.asyncio
-async def test_someone_elses_name_hears_nothing_from_the_file() -> None:
+async def test_someone_elses_name_on_a_known_number_gets_a_new_file() -> None:
     desk = demo_desk(today=TODAY)
     said = await _say(
         [
@@ -301,7 +306,47 @@ async def test_someone_elses_name_hears_nothing_from_the_file() -> None:
     text = " ".join(said)
     for secret in ("Alex", "X3", "330i", "recall", "21,400", "tire rotation"):
         assert secret not in text, said
-    assert desk.customer is None
+    assert not any(r in text.lower() for r in _REFUSALS), said
+    c = desk.customer
+    assert c is not None and c.new and c.name == "Jordan Morgan" and c.vehicles == [], said
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_caller_books_a_diagnostic_for_a_car_they_add() -> None:
+    desk = demo_desk(today=TODAY)
+    async with _Call(desk) as call:
+        await call.say(
+            "Hi, my car's been clunking over bumps, can I get it looked at?",
+            "It's Dana Zhou.",
+            "437 465 7465.",
+        )
+        await call.until(
+            lambda: desk.draft_vehicle(),
+            "It's a 2021 BMW X5, with about 40,000 miles on it.",
+        )
+        await call.until(
+            lambda: "diagnostic" in desk.draft.services,
+            "It's a clunk from the front right, only over bumps, for about a week. No warning "
+            "lights, and nothing recent. Yes, book the diagnostic.",
+        )
+        await call.until(
+            lambda: desk.draft.read_back_revision is not None,
+            "Whatever's earliest on Thursday, and I'll take the shuttle.",
+        )
+        await call.until(lambda: desk.appointment, "Yes, that's right, book it.", tries=3)
+    text = " ".join(call.said)
+    assert not any(r in text.lower() for r in _REFUSALS), call.said
+    for secret in ("Alex", "X3", "330i", "tire rotation"):
+        assert secret not in text, call.said
+    c = desk.customer
+    assert c is not None and c.new and c.phone == "4374657465", call.said
+    assert [v.label for v in c.vehicles] == ["2021 BMW X5"], call.said
+    assert c.vehicles[0].miles == 40_000 and not c.vehicles[0].in_warranty(TODAY)
+    appt = desk.appointment
+    assert appt is not None and appt.vehicle == "2021 BMW X5", call.said
+    assert appt.services == ["Diagnostic"] and appt.slot_id.startswith("thu"), call.said
+    assert appt.transport == "shuttle" and appt.vin in desk.recalls_checked, call.said
+    assert "add_vehicle" in call.calls, call.calls
 
 
 @pytest.mark.asyncio

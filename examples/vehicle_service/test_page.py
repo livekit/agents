@@ -84,7 +84,11 @@ async def test_the_browser_caller_and_viewers_get_every_push() -> None:
     assert last["stage"] == "ended" and last["endReason"] == "Call complete"
     assert last["persona"] == PERSONA and last["direction"] == "inbound"
     assert [e["tool"] for e in last["log"]] == ["lookup_customer", "end_call"]
-    assert last["data"]["customer"] == {"name": "Alex Morgan", "phone": "(415) 555-0142"}
+    assert last["data"]["customer"] == {
+        "name": "Alex Morgan",
+        "phone": "(415) 555-0142",
+        "isNew": False,
+    }
 
 
 async def test_a_viewer_who_joins_late_sees_the_call_so_far() -> None:

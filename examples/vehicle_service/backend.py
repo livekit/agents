@@ -4,6 +4,7 @@ call) the repair order for a car that's in the shop today."""
 from __future__ import annotations
 
 import calendar
+import dataclasses
 import datetime as dt
 import re
 from dataclasses import dataclass, field
@@ -169,6 +170,31 @@ class Recall:
     parts_in_stock: bool = True
 
 
+@dataclass(frozen=True)
+class RecallRule:
+    """An open recall for every car of a model family built in a range of model years."""
+
+    family: str  # "X3", as bmw_model() names it
+    first_year: int
+    last_year: int
+    recall: Recall
+
+
+# the open recalls the desk knows about; a car on no rule here has none
+RECALLS = (
+    RecallRule("X3", 2023, 2023, Recall("23V-418", "Rear-view camera software update", 0.5)),
+)
+
+
+def recalls_for(family: str, year: int) -> list[Recall]:
+    """The open recalls on a car, from the catalog: each its own copy."""
+    return [
+        dataclasses.replace(r.recall)
+        for r in RECALLS
+        if r.family == family and r.first_year <= year <= r.last_year
+    ]
+
+
 @dataclass
 class Vehicle:
     vin: str
@@ -180,6 +206,7 @@ class Vehicle:
     in_service: dt.date
     recalls: list[Recall] = field(default_factory=list)
     miles_on_file: int = 0
+    added: bool = False  # put on the file on this call (add_vehicle)
 
     @property
     def label(self) -> str:
@@ -207,6 +234,10 @@ class Customer:
     name: str
     phone: str  # ten digits
     vehicles: list[Vehicle]
+    # set up on this call, for a name and number with no file: no cars, nothing booked
+    new: bool = False
+    # already booked on the file before the call
+    on_file: Appointment | None = None
 
 
 @dataclass
@@ -389,8 +420,10 @@ class Appointment:
     @property
     def what(self) -> str:
         """ "tire rotation on the 330i", the way it's said."""
-        # the label is "2019 BMW 330i": the model is the third word
-        return f"{' and '.join(self.services).lower()} on the {self.vehicle.split()[2]}"
+        # the label is "2019 BMW 330i": the model is the third word ("3 Series": two words)
+        model = self.vehicle.split()[2:]
+        car = " ".join(model[:2]) if model[0].isdigit() and len(model) > 1 else model[0]
+        return f"{' and '.join(self.services).lower()} on the {car}"
 
 
 @dataclass(frozen=True)
@@ -502,8 +535,6 @@ class ServiceDesk:
         self.draft = Draft()
         self.quotes: list[QuoteAsk] = []
         self.appointment: Appointment | None = None  # booked on this call
-        # already on the customer's file before the call, shown once they're looked up
-        self.on_file: Appointment | None = None
         self.changing = False  # the booking made on this call is open for changes again
         self.pending: Pending | None = None
         self.visit: ShopVisit | None = None  # set only for a car that's already in the shop
@@ -512,7 +543,16 @@ class ServiceDesk:
 
     # ---- lookups ----
 
+    @property
+    def on_file(self) -> Appointment | None:
+        """What's already booked on the caller's file from before the call, once they're
+        looked up: never another customer's."""
+        return self.customer.on_file if self.customer else None
+
     def lookup_customer(self, phone: str, name: str = "") -> Customer:
+        """The file for this name and number. A name and number with no file get a new one,
+        with no cars and nothing booked: a different name on a known number shares nothing
+        from that number's file."""
         digits = re.sub(r"\D", "", phone)
         if len(digits) == 11 and digits.startswith("1"):
             digits = digits[1:]
@@ -526,29 +566,42 @@ class ServiceDesk:
                 "That isn't a real phone number. Ask them for it again, with the area code; "
                 "never fill in or guess digits."
             )
-        if not name.strip():
+        name = " ".join(name.split())
+        if not name:
             raise ServiceError(
                 "Ask for their name first (on its own), then call lookup_customer with the "
                 "name and the number."
             )
-        # a demo: whatever number the caller gives is the file's, with the demo's two cars on
-        # it, but only for the name on the account
-        c = next((c for c in self._customers if c.phone == digits), self._customers[0])
-        if not same_person(name, c.name):
-            self.customer = None
-            raise ServiceError(
-                "The name they gave isn't the name on the account for that number. Share "
-                "nothing from the file: not whose it is, the cars, mileage, recalls, or "
-                "appointments. Ask them to check the number and name; if it's someone else's "
-                "account, the account holder needs to call."
+        c = next(
+            (c for c in self._customers if c.phone == digits and same_person(name, c.name)),
+            None,
+        )
+        if c is None:
+            c = Customer(
+                id=f"C-{30_001 + len(self._customers)}",
+                name=name,
+                phone=digits,
+                vehicles=[],
+                new=True,
             )
-        c.phone = digits
+            self._customers.append(c)
+        if c is not self.customer:
+            # the car and anything read back were the other file's
+            self.draft.vin = None
+            self.draft.recall = None
+            self.pending = None
+            self._changed()
         self.customer = c
         return c
 
     def vehicle(self, query: str) -> Vehicle:
         """A car on the customer's file, by VIN (or its last six) or by year and model."""
         c = self._require_customer()
+        if not c.vehicles:
+            raise ServiceError(
+                "There are no cars on their file yet. Ask what car it is, one question at a "
+                "time (the year and model, then the mileage), then call add_vehicle."
+            )
         q = re.sub(r"[^a-z0-9 ]", " ", query.lower())
         compact = q.replace(" ", "")
         for v in c.vehicles:
@@ -557,7 +610,11 @@ class ServiceDesk:
         words = [w for w in q.split() if w not in _VEHICLE_STOPWORDS]
         # "my 3" or "the three" could be the X3 or a 3 series: ask, unless something else says
         rest = [w for w in words if w not in {"3", "three"}]
-        if len(rest) < len(words) and not any(_score(v, rest) for v in c.vehicles):
+        if (
+            len(c.vehicles) > 1
+            and len(rest) < len(words)
+            and not any(_score(v, rest) for v in c.vehicles)
+        ):
             names = " or the ".join(v.name.split()[0] for v in c.vehicles)
             raise ServiceError(f'"3" could be the {names}. Ask which one.')
         # the car the most words point at, so "actually it's the 330i" still lands
@@ -567,7 +624,62 @@ class ServiceDesk:
         if best > 0 and len(matches) == 1:
             return matches[0]
         on_file = ", ".join(v.label for v in c.vehicles)
-        raise ServiceError(f"Couldn't tell which car they mean. On file: {on_file}.")
+        raise ServiceError(
+            f"Couldn't tell which car they mean. On file: {on_file}. If it's a car that isn't "
+            "on their file, ask the year and model, then the mileage, and call add_vehicle."
+        )
+
+    def add_vehicle(self, year: int, model: str, miles: int, vin: str = "") -> Vehicle:
+        """A car the caller describes, put on their file and selected for the visit. Its
+        warranty comes from the model year and the miles, and its recalls from the catalog."""
+        self._require_open()
+        c = self._require_customer()
+        found = bmw_model(model)
+        if found is None:
+            raise ServiceError(
+                f"{model!r} isn't a BMW model this desk services: this desk only services "
+                "BMWs. Say so plainly and kindly. If it is a BMW, ask which model (an X5, a "
+                "330i, an i4)."
+            )
+        name, family = found
+        if not 1980 <= year <= self.today.year + 1:
+            raise ServiceError("That model year doesn't look right. Ask them for the year again.")
+        if not 0 <= miles < 500_000:
+            raise ServiceError("That mileage doesn't look right. Ask them to read the odometer.")
+        same = next((v for v in c.vehicles if v.year == year and _family(v) == family), None)
+        if same is not None:
+            raise ServiceError(
+                f"The {same.label} is already on their file: call select_vehicle with it (and "
+                "update_mileage if the mileage has changed) instead."
+            )
+        typed = re.sub(r"[^A-Za-z0-9]", "", vin).upper()
+        taken = {v.vin for x in self._customers for v in x.vehicles}
+        if len(typed) != 17 or typed in taken:
+            # no VIN is needed: one the desk makes up stands in for it
+            n = len(taken) + 1
+            typed = f"NEW{n:014d}"
+            while typed in taken:
+                n += 1
+                typed = f"NEW{n:014d}"
+        v = Vehicle(
+            vin=typed,
+            year=year,
+            name=name,
+            body="suv" if family.startswith(("X", "iX")) else "sedan",
+            color="",
+            miles=miles,
+            # the date it went into service isn't known: take July 1 of the model year (never
+            # later than today), so the warranty's 3 years run from the middle of that year
+            in_service=min(dt.date(year, 7, 1), self.today),
+            recalls=recalls_for(family, year),
+            added=True,
+        )
+        c.vehicles.append(v)
+        self.draft.vin = v.vin
+        self.draft.recall = None
+        self._changed()
+        self._revalidate()
+        return v
 
     def check_recalls(self, vin: str) -> list[Recall]:
         v = self._vehicle_by_vin(vin)
@@ -1534,7 +1646,8 @@ class ServiceDesk:
             )
         return {
             "today": self.today.isoformat(),
-            "customer": {"name": c.name, "phone": _phone(c.phone)} if c else None,
+            # isNew: a file set up on this call, for a name and number that had none
+            "customer": {"name": c.name, "phone": _phone(c.phone), "isNew": c.new} if c else None,
             "vehicles": [self._vehicle_dict(x) for x in c.vehicles] if c else [],
             "menu": [
                 {"id": m.id, "label": m.label, "price": m.price, "hours": m.hours, "kind": m.kind}
@@ -1690,6 +1803,8 @@ class ServiceDesk:
             if checked
             else None,
             "selected": v.vin == self.draft.vin,
+            # put on the file on this call, from what the caller said
+            "added": v.added,
         }
 
     # ---- internals ----
@@ -1771,6 +1886,71 @@ def _score(v: Vehicle, words: list[str]) -> int:
     return sum(
         1 for w in words if (len(w) >= 2 or w.isdigit()) and any(h.startswith(w) for h in hay)
     )
+
+
+def _family(v: Vehicle) -> str:
+    found = bmw_model(v.name)
+    return found[1] if found else ""
+
+
+_NUMBER_WORDS = dict(
+    zip("one two three four five six seven eight".split(), "12345678", strict=True)
+)
+_OTHER_MAKES = re.compile(
+    r"\b(toyota|honda|ford|chevy|chevrolet|tesla|audi|mercedes|benz|lexus|nissan|kia|hyundai|"
+    r"mazda|subaru|volkswagen|vw|volvo|porsche|jeep|dodge|ram|gmc|cadillac|acura|infiniti|"
+    r"lincoln|buick|mini|jaguar|land rover|range rover|genesis|mitsubishi|fiat|alfa romeo|"
+    r"chrysler|rivian|lucid|polestar|tacoma|camry|civic|accord|corolla|prius|mustang)\b"
+)
+# trims after the model: xDrive40i, sDrive30i, eDrive40, M50i, M, Competition
+_TRIM = re.compile(r"(?:([xse])drive(\d{2}[ie]?)?|m(\d{2}[ied]?)|m|competition)")
+
+
+def bmw_model(said: str) -> tuple[str, str] | None:
+    """A BMW model the desk services, as (its name, its family), from what the caller said:
+    "x five" is ("X5", "X5"), "2019 330i" ("330i", "3 Series"), "X3 M40i" ("X3 M40i", "X3"),
+    "3 series" ("3 Series", "3 Series"), "i4" ("i4", "i4"). None for anything else."""
+    text = said.lower().replace("-", " ")
+    if _OTHER_MAKES.search(text):
+        return None
+    text = re.sub(r"[^a-z0-9 ]", " ", text)
+    words = [_NUMBER_WORDS.get(w, w) for w in text.split() if w != "bmw"]
+    # "x 5", "i 4", "330 i": one word, the way it's badged
+    text = re.sub(r"\b([xizm]) (\d)\b", r"\1\2", " ".join(words))
+    text = re.sub(r"\b([1-8][1-6]\d) ([ied]|xi)\b", r"\1\2", text)
+    words = text.split()
+    for i, w in enumerate(words):
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        if m := re.fullmatch(r"x([1-7])", w):
+            name, family = f"X{m[1]}", f"X{m[1]}"
+        elif w in {"xm", "z4"}:
+            name = family = w.upper()
+        elif m := re.fullmatch(r"ix([1-3])?", w):
+            name = family = f"iX{m[1] or ''}"
+        elif m := re.fullmatch(r"i([3-8])", w):
+            name = family = f"i{m[1]}"
+        elif m := re.fullmatch(r"m([2-8])", w):
+            name = family = f"M{m[1]}"
+        elif m := re.fullmatch(r"(m?)([1-8])([1-6]\d)(i|e|d|xi)", w):
+            name, family = f"{m[1].upper()}{m[2]}{m[3]}{m[4]}", f"{m[2]} Series"
+        elif re.fullmatch(r"[1-8]", w) and nxt in {"series", "serie"}:
+            name = family = f"{w} Series"
+            i += 1
+        else:
+            continue
+        rest = words[i + 1 :]
+        for j, t in enumerate(rest):
+            # "M Sport" is a package, not the M model
+            if not (m := _TRIM.fullmatch(t)) or rest[j + 1 : j + 2] == ["sport"]:
+                break
+            if m[1]:
+                name += f" {m[1]}Drive{m[2] or ''}"
+            elif m[3]:
+                name += f" M{m[3]}"
+            else:
+                name += " M" if t == "m" else " Competition"
+        return name, family
+    return None
 
 
 def spoken_span(amount: float, unit: str = "hour") -> str:
@@ -1913,7 +2093,7 @@ def demo_desk(
         miles=21_400,
         # about two and a half years in service, so it stays in warranty whenever the demo runs
         in_service=today - dt.timedelta(days=940),
-        recalls=[Recall("23V-418", "Rear-view camera software update", 0.5)],
+        recalls=recalls_for("X3", 2023),
     )
     sedan = Vehicle(
         vin="WBA5R1C05KA765432",
@@ -1956,7 +2136,7 @@ def _seed_upcoming(desk: ServiceDesk, sedan: Vehicle) -> None:
     slot = next(s for s in reversed(desk.slots) if s.start.time() == UPCOMING_AT)
     slot.open = False
     rotation = MENU["tire_rotation"]
-    desk.on_file = Appointment(
+    desk._customers[0].on_file = Appointment(
         confirmation=f"RO-{desk._ro_number - 37}",
         vin=sedan.vin,
         vehicle=sedan.label,

@@ -134,9 +134,10 @@ class NickAgent(Agent):
 
     @function_tool
     async def lookup_customer(self, ctx: Ctx, phone: str, name: str) -> str:
-        """Find the customer's file by the phone number they give, under the name they gave.
-        Do this before anything else about their car. If it refuses over the name, share
-        nothing from the file.
+        """Open the customer's file by the name and phone number they gave: ask for the name
+        first, then the number, then call this. Do it before anything else about their car.
+        It never turns anyone away: a name and number with no file get a new one, and the
+        result says which it is.
 
         Args:
             phone: The phone number as digits, e.g. "4155550142": exactly the digits they
@@ -146,8 +147,20 @@ class NickAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             c = desk.lookup_customer(phone, name)
+        if c.new and not c.vehicles:
+            ctx.userdata.page.record("lookup_customer", f"{c.name} · new customer")
+            return (
+                f"No file under {c.name} at that number, so a new one is set up for them, with "
+                "no cars and nothing booked yet. Tell them naturally, e.g. \"I don't see a file "
+                "under that, so I've set one up for you.\" Never say the name or number doesn't "
+                "match an account, never ask for an account holder, and say nothing about any "
+                "other file. Then, unless they've already said, ask what car it is, one question "
+                "at a time: the year and model, then the mileage. Once you have all three, call "
+                "add_vehicle."
+            )
         ctx.userdata.page.record(
-            "lookup_customer", f"{c.name} · {len(c.vehicles)} vehicles on file"
+            "lookup_customer",
+            f"{c.name} · {len(c.vehicles)} vehicles on file" + (" · new customer" if c.new else ""),
         )
         cars = "; ".join(
             f"{v.label}, VIN ending {v.vin[-6:]}, {v.miles:,} miles on file" for v in c.vehicles
@@ -155,7 +168,8 @@ class NickAgent(Agent):
         out = (
             f"Found {c.name}. Vehicles on file: {cars}. If they've already named the car (\"my "
             'X3") or what it needs, call select_vehicle (and set_services) now, without asking '
-            "again; otherwise ask which car."
+            "again; otherwise ask which car. A car that isn't on the file: ask the year and "
+            "model, then the mileage, and call add_vehicle."
         )
         if (e := desk.on_file) and e.status == "booked":
             out += (
@@ -170,8 +184,32 @@ class NickAgent(Agent):
         return out
 
     @function_tool
+    async def add_vehicle(self, ctx: Ctx, year: int, model: str, miles: int, vin: str = "") -> str:
+        """Put a car the caller describes on their file and make it the car for this visit:
+        on a new file, or for a car that isn't on their file yet. Only a car they've described
+        to you. Ask the year and model, then the mileage, one question at a time, then call
+        this.
+
+        Args:
+            year: The model year, e.g. 2021.
+            model: The BMW model as they said it, e.g. "X5", "330i", "3 Series", "i4".
+            miles: The mileage on the odometer as a whole number, e.g. 40000; their best
+                guess is fine.
+            vin: Only if they offer it. Never ask for it, and never read it back.
+        """
+        with _desk_rules(ctx) as desk:
+            v = desk.add_vehicle(year, model, miles, vin)
+        ctx.userdata.page.record("add_vehicle", f"{v.label} · {v.miles:,} miles")
+        return (
+            f"Added the {v.label}, {v.miles:,} miles, to their file; the visit is for it. "
+            f"{v.warranty_reason(desk.today)} (mention warranty only if it matters for this "
+            f"visit). Check its recalls with check_recalls, VIN {v.vin} (never say the VIN)."
+        )
+
+    @function_tool
     async def select_vehicle(self, ctx: Ctx, vehicle: str) -> str:
-        """Set which of their cars the visit is for. Call it again if they switch cars.
+        """Set which of the cars on their file the visit is for. Call it again if they switch
+        cars. For a car that isn't on their file, use add_vehicle.
 
         Args:
             vehicle: The VIN, or the year and model in the caller's own words, e.g. "the X3".
@@ -609,15 +647,21 @@ and log it with add_tech_note. Then carry on, offering the earliest open slot.
 
 The flow (a price question can be answered at any point, even before the lookup):
 1. Ask for their name on its own ("Can I get your name?"); once they've answered, ask for
-   the phone number on their account. Never both in one turn, and skip whatever they've
-   already given. Don't read the number back, unless they said part of it was unclear
-   ("...maybe four two"): then confirm just that part. Then call lookup_customer with both. Don't use their name until they've said
-   it. If it refuses over the name, share nothing from the file (not whose it is, the cars,
-   mileage, recalls, or appointments), and do what it says. Then find out which car
-   (select_vehicle); if "the 3" could be either car, ask which. If they mention mileage,
-   call update_mileage. Don't ask for anything else about them. lookup_customer also says
-   what's already booked on their file: if they're calling about that (or think they're
-   already booked), see "Appointments already booked" below instead of booking anything.
+   their phone number. Never both in one turn, and skip whatever they've already given.
+   Don't read the number back, unless they said part of it was unclear ("...maybe four
+   two"): then confirm just that part. Then call lookup_customer with both. Don't use their
+   name until they've said it. Anyone can book: lookup_customer finds their file, or sets
+   up a new one for a name and number with no file, and says which.
+   - Their file: find out which car (select_vehicle); if "the 3" could be either car, ask
+     which. A car that isn't on it is added the same way as on a new file.
+   - A new file: say so naturally ("I don't see a file under that, so I've set one up for
+     you"), never that a name or number doesn't match, and never ask for an account
+     holder. Ask what car it is, one question at a time: the year and model, then the
+     mileage. Then call add_vehicle. Only add a car they've described.
+   If they mention mileage for a car on file, call update_mileage. Don't ask for anything
+   else about them (a VIN is never needed). lookup_customer also says what's already booked
+   on their file: if they're calling about that (or think they're already booked), see
+   "Appointments already booked" below instead of booking anything.
 2. If something's wrong (a noise, a vibration, a warning light, a leak), narrow it down, one
    question at a time, skipping whatever they've already told you:
    - what it sounds like: grinding, squealing, a clunk, a rattle, a hum;
@@ -677,6 +721,8 @@ Appointments already booked (the one on their file, or one you booked on this ca
   though a tire rotation on another car is already on file.
 
 Rules:
+- This desk only services BMWs: if add_vehicle says their car isn't one, say so plainly and
+  kindly.
 - You handle everything on this call yourself. There's nobody to transfer to: never offer
   to pass them to an advisor, a technician, a manager, or anyone else. If they ask for a
   person, say you can take care of it and carry on. If they want the technician to know

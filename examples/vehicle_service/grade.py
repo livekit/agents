@@ -22,7 +22,8 @@ expect keys (all optional):
     cancelled: true means an appointment booked on this call was then cancelled
     stop_driving: true means the booked visit carries the not-safe-to-drive warning
     approval_limit: the "call me before anything over" amount on the booking, e.g. 500
-    looked_up: false means the caller's file was never opened (a name that didn't match)
+    new_customer: true means the caller got a new file (a name and number with no file), with
+        nothing on it from anyone else's
 A booking is what's still booked at the end: one booked and then cancelled doesn't count.
 
 The follow-up call (outbound) takes instead:
@@ -79,8 +80,14 @@ def grade(desk: ServiceDesk, expect: dict[str, Any]) -> list[str]:
         if not any(q.price == 0 and word in q.answer.lower() for q in desk.quotes):
             problems.append(f"never looked up what the {word} costs with quote_price")
 
-    if expect.get("looked_up") is False and desk.customer is not None:
-        problems.append("opened the file for a caller whose name didn't match it")
+    if expect.get("new_customer"):
+        c = desk.customer
+        if c is None or not c.new:
+            problems.append("never set up a new file for the caller")
+        else:
+            seeded = {v.vin for x in desk._customers if not x.new for v in x.vehicles}
+            if shared := [v.label for v in c.vehicles if v.vin in seeded]:
+                problems.append(f"put another customer's car on the new file: {shared}")
     problems += _grade_existing(desk, expect)
     if expect.get("cancelled") and not (made and made.status == "cancelled"):
         problems.append("never cancelled the appointment booked on this call")
