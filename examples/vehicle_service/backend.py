@@ -7,8 +7,8 @@ import calendar
 import datetime as dt
 import re
 from dataclasses import dataclass, field
-from typing import Literal, cast
-from zoneinfo import ZoneInfo
+from typing import Any, Literal, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ServiceId = Literal["oil_change", "tire_rotation", "diagnostic", "warranty_repair"]
 Transport = Literal["loaner", "shuttle", "wait"]
@@ -54,6 +54,7 @@ DECISIONS: dict[RepairDecision, str] = {
     "declined": "Declined",
     "deferred": "Thinking it over",
 }
+URGENCY: dict[Urgency, str] = {"now": "Needs doing now", "next_visit": "Can wait"}
 ENDED_EARLY: dict[EndedEarly, str] = {
     "wrong_person": "Someone else answered",
     "call_back_later": "Asked to call back later",
@@ -1099,6 +1100,35 @@ class ServiceDesk:
             out.append("transportation")
         return out
 
+    def stage(self) -> str:
+        if self.visit is not None:
+            return self._visit_stage()
+        v = self.draft_vehicle()
+        if self.appointment:
+            return "booked"
+        if self.customer is None:
+            return "customer"
+        if v is None:
+            return "vehicle"
+        if not self.draft.services:
+            # the problem first, then the service that fits it
+            return "service" if self.draft.concern else "symptoms"
+        if v.vin not in self.recalls_checked or (v.recalls and self.draft.recall is None):
+            return "recalls"
+        if self.draft.slot_id is None or self.draft.transport is None:
+            return "time"
+        return "readback"
+
+    def _visit_stage(self) -> str:
+        v = self._shop()
+        if v.reached != "customer":
+            return "reach"
+        if self.undecided():
+            return "quote"
+        if v.summary_rev != v.rev:
+            return "pickup"
+        return "wrapup"
+
     def summary(self) -> str:
         v = self.require_vehicle()
         slot = self._slot(self.draft.slot_id or "")
@@ -1120,6 +1150,162 @@ class ServiceDesk:
         parts.append(TRANSPORT_LABELS[self.draft.transport or "shuttle"].lower())
         parts.append(f"estimate ${self.estimate():.0f}" if self.estimate() else "no charge")
         return "; ".join(parts) + "."
+
+    # ---- what the page shows ----
+
+    def snapshot(self) -> dict[str, Any]:
+        c = self.customer
+        v = self.draft_vehicle()
+        slot = next((s for s in self.slots if s.id == self.draft.slot_id), None)
+        recall = self.open_recall()
+        lines: list[dict[str, Any]] = []
+        for s in self.draft.services:
+            item = MENU[s]
+            note = {"menu": "", "fee": "Fee only · repair quoted after", "warranty": "Covered"}
+            lines.append(
+                {
+                    "id": s,
+                    "label": item.label,
+                    "price": item.price,
+                    "hours": item.hours,
+                    "note": note[item.kind],
+                }
+            )
+        return {
+            "today": self.today.isoformat(),
+            "customer": {"name": c.name, "phone": _phone(c.phone)} if c else None,
+            "vehicles": [self._vehicle_dict(x) for x in c.vehicles] if c else [],
+            "menu": [
+                {"id": m.id, "label": m.label, "price": m.price, "hours": m.hours, "kind": m.kind}
+                for m in MENU.values()
+            ],
+            "slots": [
+                {
+                    "id": s.id,
+                    "day": f"{s.start:%a}",
+                    "date": f"{s.start:%b} {s.start.day}",
+                    "time": clock(s.start),
+                    "advisor": s.advisor,
+                    "open": s.open,
+                    "fits": s.fits(self.visit_hours()),
+                }
+                for s in self.slots
+            ],
+            "quotes": [
+                {"asked": q.asked, "price": q.price, "answer": q.answer} for q in self.quotes
+            ],
+            "draft": {
+                "vin": v.vin if v else None,
+                "vehicle": v.label if v else None,
+                "mileage": v.miles if v else None,
+                "services": lines,
+                "concern": self.draft.concern,
+                "notes": [_note_dict(n) for n in self.draft.notes],
+                "likelyCause": _cause_dict(self.likely_cause()),
+                "recall": (
+                    {
+                        "id": recall.id,
+                        "title": recall.title,
+                        "hours": recall.hours,
+                        "decision": self.draft.recall,
+                    }
+                    if recall
+                    else None
+                ),
+                "recallChecked": bool(v and v.vin in self.recalls_checked),
+                "slot": (
+                    {"id": slot.id, "when": slot.spoken(), "advisor": slot.advisor}
+                    if slot
+                    else None
+                ),
+                "transport": self.draft.transport,
+                "transportLabel": TRANSPORT_LABELS.get(self.draft.transport or ""),
+                "loanerEligible": self.loaner_eligible(),
+                "hours": self.visit_hours(),
+                "estimate": self.estimate(),
+                "missing": self.missing(),
+                "revision": self.draft.revision,
+                "readBack": self.draft.read_back_revision == self.draft.revision
+                and self.draft.read_back_revision is not None,
+            },
+            "appointment": _appointment_dict(self.appointment),
+            "visit": self._visit_dict(),
+        }
+
+    def _visit_dict(self) -> dict[str, Any] | None:
+        v = self.visit
+        if v is None:
+            return None
+        a = v.appointment
+        ready = self.ready_at()
+        when = f"{self._day_word(ready).capitalize()}, " if ready else ""
+        return {
+            "confirmation": a.confirmation,
+            "vehicle": a.vehicle,
+            "advisor": a.advisor,
+            "droppedOff": clock(dt.datetime.combine(self.today, DROPPED_OFF)),
+            "concern": a.concern,
+            "notes": [_note_dict(n) for n in a.notes],
+            "reached": v.reached,
+            "endedEarly": ENDED_EARLY[v.ended_early] if v.ended_early else None,
+            # what the technician found stays off the page until the customer is on the line
+            "findings": [
+                {
+                    "id": f.id,
+                    "title": f.title,
+                    "found": f.found,
+                    "partsDetail": f.parts_detail,
+                    "parts": f.parts,
+                    "labor": f.labor,
+                    "laborHours": f.labor_hours,
+                    "price": f.price,
+                    "urgency": f.urgency,
+                    "urgencyLabel": URGENCY[f.urgency],
+                    "soon": f.soon,
+                    "decision": v.decisions.get(f.id),
+                    "decisionLabel": DECISIONS[d] if (d := v.decisions.get(f.id)) else None,
+                }
+                for f in v.findings
+            ]
+            if v.reached == "customer"
+            else [],
+            "nextVisit": list(v.next_visit),
+            "questions": list(v.questions),
+            "ticket": [{"label": label, "price": price} for label, price in self.ticket()],
+            "total": self.ticket_total(),
+            "readyAt": f"{when}{clock(ready)}" if ready else None,
+            "ride": v.ride,
+            "rideLabel": RIDES[v.ride] if v.ride else None,
+            "pickupFrom": v.pickup_from or None,
+            "shuttleAt": (
+                (f"{when}{clock(ready - SHUTTLE_LEAD)}" if ready else "In about 30 min")
+                if v.ride == "shuttle"
+                else None
+            ),
+            "summaryRead": v.summary_rev == v.rev,
+            "rev": v.rev,
+        }
+
+    def _vehicle_dict(self, v: Vehicle) -> dict[str, Any]:
+        checked = v.vin in self.recalls_checked
+        return {
+            "vin": v.vin,
+            "year": v.year,
+            "name": v.name,
+            "label": v.label,
+            "body": v.body,
+            "color": v.color,
+            "miles": v.miles,
+            "milesOnFile": v.miles_on_file,
+            "inWarranty": v.in_warranty(self.today),
+            "warranty": v.warranty_reason(self.today),
+            "recallsChecked": checked,
+            # recalls stay unknown on the page until the agent actually checks
+            "recalls": [{"id": r.id, "title": r.title, "hours": r.hours} for r in v.recalls]
+            if checked
+            else None,
+            "selected": v.vin == self.draft.vin,
+        }
 
     # ---- internals ----
 
@@ -1219,8 +1405,48 @@ def clock(t: dt.datetime) -> str:
     return t.strftime("%I:%M %p").lstrip("0")
 
 
-def local_today() -> dt.date:
-    return dt.datetime.now(TIMEZONE).date()
+def _phone(digits: str) -> str:
+    return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+
+
+def _appointment_dict(a: Appointment | None) -> dict[str, Any] | None:
+    if a is None:
+        return None
+    return {
+        "confirmation": a.confirmation,
+        "vin": a.vin,
+        "vehicle": a.vehicle,
+        "services": a.services,
+        "concern": a.concern,
+        "recallId": a.recall_id,
+        "recall": a.recall,
+        "slotId": a.slot_id,
+        "when": a.when,
+        "advisor": a.advisor,
+        "transport": a.transport,
+        "transportLabel": TRANSPORT_LABELS[a.transport],
+        "hours": a.hours,
+        "estimate": a.estimate,
+        "notes": [_note_dict(n) for n in a.notes],
+    }
+
+
+def _note_dict(n: TechNote) -> dict[str, str]:
+    return {"kind": n.kind, "label": n.label, "text": n.text}
+
+
+def _cause_dict(c: LikelyCause | None) -> dict[str, Any] | None:
+    return {"cause": c.cause, "unsafe": c.unsafe} if c else None
+
+
+def local_today(timezone: str | None = None) -> dt.date:
+    """Today where the caller is: `timezone` is an IANA name (a browser's, e.g.
+    "America/Toronto"); without one, or with one that's unknown, the dealership's today."""
+    try:
+        tz = ZoneInfo(timezone) if timezone else TIMEZONE
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = TIMEZONE
+    return dt.datetime.now(tz).date()
 
 
 def first_name(name: str) -> str:

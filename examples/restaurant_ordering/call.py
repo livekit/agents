@@ -1,5 +1,8 @@
 """Phone-call helpers: the speaking rules, the voice's pacing, the audio input, and hanging up
-or handing off without cutting the caller off."""
+or handing off without cutting the caller off.
+
+The helpers that take a RunContext expect its userdata to carry `page` (page.py), the demo
+page's view of the call, which hears about a hang-up before the room closes."""
 
 from __future__ import annotations
 
@@ -8,6 +11,8 @@ import logging
 import re
 from collections.abc import AsyncIterable
 from typing import Any
+
+from page import Page
 
 from livekit import rtc
 from livekit.agents import RunContext, get_job_context, room_io
@@ -92,8 +97,10 @@ def first_name(name: str) -> str:
     return name.split()[0] if name.strip() else "there"
 
 
-async def hang_up(reason: str) -> None:
+async def hang_up(reason: str, page: Page | None = None) -> None:
     logger.info("hanging up: %s", reason)
+    if page:
+        await page.ended(reason)
     try:
         ctx = get_job_context()
     except RuntimeError:
@@ -122,7 +129,7 @@ async def transfer(ctx: RunContext[Any], who: str, reason: str) -> None:
     # never a silent drop: if the caller spoke last, say where they're going first
     if _caller_spoke_last(ctx):
         await ctx.session.say(f"One moment, I'm connecting you with {who}.").wait_for_playout()
-    await hang_up(f"Transferred to {who}")
+    await hang_up(f"Transferred to {who}", ctx.userdata.page)
 
 
 _goodbyes: set[asyncio.Task[None]] = set()
@@ -140,13 +147,13 @@ async def end_after_reply(ctx: RunContext[Any], reason: str = "Call complete") -
             ),
             tool_choice="none",
         )
-        task = asyncio.create_task(_hang_up_after(bye, reason))
+        task = asyncio.create_task(_hang_up_after(bye, reason, ctx.userdata.page))
         _goodbyes.add(task)
         task.add_done_callback(_goodbyes.discard)
         return
-    await hang_up(reason)
+    await hang_up(reason, ctx.userdata.page)
 
 
-async def _hang_up_after(speech: SpeechHandle, reason: str) -> None:
+async def _hang_up_after(speech: SpeechHandle, reason: str, page: Page) -> None:
     await speech.wait_for_playout()
-    await hang_up(reason)
+    await hang_up(reason, page)

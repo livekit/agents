@@ -3,8 +3,10 @@ back when an item in their delivery runs out.
 
 Calls are inbound by default. `{"direction": "outbound"}` in the job metadata (or
 CALL_DIRECTION=outbound for `console`) places the delivery-update call instead: to a real phone
-when the metadata also has `"dial"` and SIP_OUTBOUND_TRUNK_ID is set, otherwise to whoever is in
-the room, who plays the customer.
+when the metadata also has `"dial"` and an outbound line (SIP_OUTBOUND_TRUNK_ID, or the
+metadata's `trunk` or `from`), otherwise to whoever is in the room, who plays the customer.
+
+The demo website watches calls through page.py; without it, the page hooks here do nothing.
 """
 
 from __future__ import annotations
@@ -15,8 +17,8 @@ import logging
 import os
 import re
 import time
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterable, Iterator
+from dataclasses import dataclass, field
 
 from backend import (
     DELIVERY_FEE,
@@ -44,6 +46,7 @@ from call import (
 )
 from dotenv import load_dotenv
 from grade import grade
+from page import Page, visitor_name
 
 from livekit import api
 from livekit.agents import (
@@ -79,6 +82,11 @@ PHONE = "phone"
 class Userdata:
     pos: Pos
     transferred: bool = False  # handed to a staff member: the call is theirs now
+    # the demo website's view of the call: inert unless a page is watching (page.py)
+    page: Page = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.page = Page(PERSONA, self.pos)
 
 
 Ctx = RunContext[Userdata]
@@ -86,10 +94,11 @@ Ctx = RunContext[Userdata]
 
 @contextlib.contextmanager
 def _pos_rules(ctx: Ctx) -> Iterator[Pos]:
-    """Run a POS call; a refusal goes back to the agent, as a tool error, to relay."""
+    """Run a POS call; a refusal shows on the page and goes back to the agent to relay."""
     try:
         yield ctx.userdata.pos
     except PosError as e:
+        ctx.userdata.page.record(ctx.function_call.name, f"Refused: {str(e).split('. ')[0]}")
         raise ToolError(str(e)) from e
 
 
@@ -101,6 +110,23 @@ def _line_note(pos: Pos, line: Line) -> str:
             "caller mentioned an allergy to. Tell them."
         )
     return ""
+
+
+_PEPPERONIS = re.compile(r"\b(p)epperonis\b", re.IGNORECASE)
+
+
+async def say_pepperoni_pizzas(text: AsyncIterable[str]) -> AsyncIterable[str]:
+    """The voice mangles "pepperonis", so it says "pepperoni pizzas" instead."""
+    buf = ""
+    async for chunk in text:
+        buf += chunk
+        # hold back the last word, which may continue in the next chunk
+        cut = max(buf.rfind(" "), buf.rfind("\n")) + 1
+        if cut:
+            yield _PEPPERONIS.sub(r"\1epperoni pizzas", buf[:cut])
+            buf = buf[cut:]
+    if buf:
+        yield _PEPPERONIS.sub(r"\1epperoni pizzas", buf)
 
 
 _MORE = re.compile(r"\b(more|another|add|extra|additional)\b")
@@ -132,6 +158,7 @@ class RosaAgent(Agent):
         self._warned = False
 
     async def on_enter(self) -> None:
+        self.session.userdata.page.push()
         self.session.generate_reply(
             instructions=(
                 f'Answer the phone: "Thanks for calling {BUSINESS}, this is {PERSONA}. '
@@ -147,6 +174,7 @@ class RosaAgent(Agent):
         the whole menu (then read every available item, category by category), or if you're
         unsure an item exists or is available."""
         pos = ctx.userdata.pos
+        ctx.userdata.page.record("get_menu", f"{len(pos.menu)} items")
         return "\n".join(
             m.describe() + ("" if m.available else " Sold out today: not available.")
             for m in pos.menu
@@ -161,6 +189,7 @@ class RosaAgent(Agent):
         """
         with _pos_rules(ctx) as pos:
             item = pos.check_availability(item_id)
+        ctx.userdata.page.record("check_availability", f"{item.name}: available")
         return f"{item.name} is available."
 
     @function_tool
@@ -178,6 +207,9 @@ class RosaAgent(Agent):
         with _pos_rules(ctx) as pos:
             tag, items = pos.with_allergen(allergen)
             pos.note_allergy(tag, severe)
+        ctx.userdata.page.record(
+            "items_with_allergen", f"{tag}: {', '.join(items) or 'none listed'}"
+        )
         found = (
             f"Per the menu data, these contain {tag}: {', '.join(items)}."
             if items
@@ -215,13 +247,17 @@ class RosaAgent(Agent):
             item_id: The menu id, e.g. "pepperoni".
             quantity: How many orders of it: "a dozen wings" is quantity 1, size dozen.
             size: Required for pizza (small, medium, large), wings (half dozen, dozen), and
-                drinks with sizes (e.g. can, 2-liter). Leave out for one-size items.
+                drinks with sizes (e.g. can, 2-liter). Leave out for one-size items. Only a
+                size the caller said for this item: never one carried over from another item
+                in the same sentence ("a large pepperoni and a Coke": the Coke has no size
+                yet), and never one you pick for them.
             toppings: Extra pizza toppings, e.g. ["mushrooms"]. Pizza only.
             sauce: Required for wings, e.g. "hot" or "Thai".
             without: What to leave off a pizza ("no olives"), e.g. ["olives"]. Same price.
         """
         with _pos_rules(ctx) as pos:
             line = pos.add(item_id, quantity, size, toppings, sauce, without)
+        ctx.userdata.page.record("add_item", line.describe(), stage="order")
         return f"Added {line.describe()}.{_line_note(pos, line)} {pos.cart_summary()}"
 
     @function_tool
@@ -241,7 +277,8 @@ class RosaAgent(Agent):
             line_id: The cart line, e.g. "L1".
             quantity: The new total for this line, not how many to add. "Two pepperonis"
                 when the line already has two is a repeat: no change.
-            size: The new size.
+            size: The new size, only as the caller said it for this item: never one
+                carried over from another item, and never one you pick for them.
             toppings: The full new list of extra toppings for this pizza.
             sauce: The new wing sauce.
             without: The full new list of what to leave off this pizza, e.g. ["olives"]; []
@@ -254,6 +291,8 @@ class RosaAgent(Agent):
         after = line.describe()
         if after == before:
             return f"No change: it's already {after}."
+        was, now = before.split(": ", 1)[1], after.split(": ", 1)[1]
+        ctx.userdata.page.record("update_item", f"{was} → {now}", stage="order")
         return f"Updated {after}.{_line_note(pos, line)} {pos.cart_summary()}"
 
     @function_tool
@@ -265,6 +304,7 @@ class RosaAgent(Agent):
         """
         with _pos_rules(ctx) as pos:
             line = pos.remove(line_id)
+        ctx.userdata.page.record("remove_item", line.describe(), stage="order")
         return f"Removed {line.describe()}. {pos.cart_summary()}"
 
     @function_tool
@@ -273,6 +313,7 @@ class RosaAgent(Agent):
         they were already offered or ordered, and then you mustn't suggest them."""
         with _pos_rules(ctx) as pos:
             item = pos.offer_upsell()
+        ctx.userdata.page.record("offer_breadsticks", "Upsell offered, once")
         return (
             f"Offer {item.name.lower()} ({item.blurb.lower()}, ${item.sizes[0].price}) in one "
             "short sentence. If they say no, drop it."
@@ -285,6 +326,7 @@ class RosaAgent(Agent):
         """The caller will pick the order up."""
         with _pos_rules(ctx) as pos:
             pos.set_pickup()
+        ctx.userdata.page.record("set_pickup", "Pickup", stage="details")
         return "Pickup it is."
 
     @function_tool
@@ -296,6 +338,7 @@ class RosaAgent(Agent):
         """
         with _pos_rules(ctx) as pos:
             pos.set_delivery(address)
+        ctx.userdata.page.record("set_delivery", address, stage="details")
         out = f"Delivery to {address}. The delivery fee is ${DELIVERY_FEE}."
         if short := pos.below_minimum():
             out += (
@@ -319,6 +362,8 @@ class RosaAgent(Agent):
             raise ToolError("The caller hasn't given a name or number yet. Ask for both first.")
         with _pos_rules(ctx) as pos:
             pos.set_contact(name, phone)
+        contact = " · ".join(x for x in (pos.name, pos.phone) if x)
+        ctx.userdata.page.record("set_contact", contact, stage="details")
         return f"Saved: name {pos.name or 'missing'}, phone {pos.phone or 'missing'}."
 
     # ---- read-back and submit ----
@@ -329,6 +374,7 @@ class RosaAgent(Agent):
         again after any change: an order can only be submitted at a total that's current."""
         with _pos_rules(ctx) as pos:
             q = pos.price()
+        ctx.userdata.page.record("price_order", f"Total ${q.total}", stage="readback")
         out = f"{pos.cart_summary()} {q.describe()} (tax is {TAX_RATE:.0%} of the subtotal)."
         if short := pos.below_minimum():
             out += f" Delivery is ${short} under the ${DELIVERY_MINIMUM} minimum."
@@ -340,6 +386,8 @@ class RosaAgent(Agent):
         from price_order and the caller said it's right."""
         with _pos_rules(ctx) as pos:
             order = pos.submit()
+        detail = f"Order #{order.number}, {order.ready_in}"
+        ctx.userdata.page.record("submit_order", detail, stage="submitted")
         self._submitted_at = time.time()
         return (
             f"Order number {order.number} is in, {order.ready_in}. Now tell the caller the "
@@ -356,6 +404,7 @@ class RosaAgent(Agent):
             reason: Why, in a few words.
         """
         ctx.userdata.transferred = True
+        ctx.userdata.page.transfer("restaurant_staff", reason)
         await transfer(ctx, "someone at the restaurant", reason)
         return "Transferred to restaurant staff."
 
@@ -372,6 +421,7 @@ class RosaAgent(Agent):
         ]
         # a submitted order isn't done until the caller has heard its number and pickup time
         if order and not any(t > (self._submitted_at or 0) for t in spoken):
+            ud.page.record("end_call", "Refused: order number not given yet")
             raise ToolError(
                 f"Tell the caller their order number, {order.number}, and that it'll be "
                 f"{order.ready_in}, then say goodbye before ending the call."
@@ -379,6 +429,7 @@ class RosaAgent(Agent):
         # a read-back order that never went in (e.g. submit_order refused): once, go back to it
         if not order and ud.pos.quote and not ud.transferred and not self._warned:
             self._warned = True
+            ud.page.record("end_call", "Refused: order read back but not submitted")
             raise ToolError(
                 "The order was read back but never submitted. Fix what submit_order refused "
                 "(ask the caller for anything missing) and submit it, unless they said they "
@@ -395,7 +446,9 @@ class DeliveryUpdateAgent(Agent):
         self._wrapped_at: float | None = None  # the read-back, or ending without the update
 
     async def on_enter(self) -> None:
-        pos: Pos = self.session.userdata.pos
+        ud: Userdata = self.session.userdata
+        pos = ud.pos
+        ud.page.push(stage="update")
         # a fixed opener: who's calling and for whom, and nothing about the order until the
         # customer has said it's them
         self.session.say(
@@ -415,6 +468,7 @@ class DeliveryUpdateAgent(Agent):
         """
         with _pos_rules(ctx) as pos:
             line = pos.swap_out_of_stock(line_id, item_id)
+        ctx.userdata.page.record("swap_out_of_stock_item", line.describe(), stage="changes")
         return f"Swapped: {line.describe()}, same price. Total ${_total(pos)}.{_money(pos)}"
 
     @function_tool
@@ -427,6 +481,8 @@ class DeliveryUpdateAgent(Agent):
         """
         with _pos_rules(ctx) as pos:
             line, refund = pos.remove_out_of_stock(line_id)
+        detail = f"{line.describe()} · refund ${refund}"
+        ctx.userdata.page.record("remove_out_of_stock_item", detail, stage="changes")
         return (
             f"Removed {line.describe()}. ${refund} goes back to their card (the item plus its "
             f"tax). New total ${_total(pos)}."
@@ -447,10 +503,15 @@ class DeliveryUpdateAgent(Agent):
         if not charge:
             return f"No change: it's already {line.describe()}. quantity is how many in all."
         if not quantity:
+            detail = f"Took off {line.item.name} · -${-charge}"
+            ctx.userdata.page.record("add_to_delivery", detail, stage="changes")
             return (
                 f"Took the {line.item.name.lower()} off; they won't be charged the ${-charge}. "
                 f"New total ${_total(pos)}."
             )
+        sign = "+" if charge > 0 else "-"
+        detail = f"{line.describe()} · {sign}${abs(charge)}"
+        ctx.userdata.page.record("add_to_delivery", detail, stage="changes")
         more = f"${charge} more" if charge > 0 else f"${-charge} less"
         return (
             f"{line.describe()} on the order; the driver has them. {more} on the same card "
@@ -467,6 +528,7 @@ class DeliveryUpdateAgent(Agent):
         """
         with _pos_rules(ctx) as pos:
             note = pos.set_driver_note(note)
+        ctx.userdata.page.record("save_driver_note", note, stage="changes")
         return f"Saved for {pos.delivery.driver if pos.delivery else 'the driver'}: {note}."
 
     @function_tool
@@ -487,6 +549,7 @@ class DeliveryUpdateAgent(Agent):
         """
         with _pos_rules(ctx) as pos:
             summary = pos.note_for_staff(summary)
+        ctx.userdata.page.record("note_for_manager", summary, stage="changes")
         return f"Noted for the manager, who will call them back at {pos.phone}: {summary}."
 
     @function_tool
@@ -496,6 +559,7 @@ class DeliveryUpdateAgent(Agent):
         with _pos_rules(ctx) as pos:
             d = pos.read_back()
         changes = "; ".join(d.changes.values()) or "no changes"
+        ctx.userdata.page.record("final_read_back", changes, stage="confirmed")
         self._wrapped_at = time.time()
         return (
             f"Changes: {changes}. Order total ${_total(pos)}.{_money(pos)} Read back, in one or "
@@ -515,6 +579,7 @@ class DeliveryUpdateAgent(Agent):
         """
         with _pos_rules(ctx) as pos:
             d = pos.end_without_update(reason)
+        ctx.userdata.page.record("end_without_update", ENDED_EARLY[reason])
         self._wrapped_at = time.time()
         if reason == "wrong_person":
             return (
@@ -543,6 +608,7 @@ class DeliveryUpdateAgent(Agent):
         # the call isn't done until the customer has heard what changed and when it arrives,
         # unless it ended without the update
         if not pos.call_done or not any(t > (self._wrapped_at or 0) for t in spoken):
+            ud.page.record("end_call", "Refused: changes not read back yet")
             raise ToolError(
                 "Call final_read_back, read the changes and the ETA back to the customer, and "
                 "say goodbye before ending the call. If it's the wrong person, or they can't or "
@@ -606,6 +672,10 @@ Say a price when they ask, and the total at the read-back.
 # Taking the order
 - Add each item with add_item as soon as the caller says it; don't wait for the whole order.
   Ask for anything required that's missing: pizza size, wing size and sauce, drink size.
+  Pass only a size the caller said for that item. Never carry one over from another item in
+  the same sentence ("a large pepperoni and a Coke": the Coke has no size yet, so ask), and
+  never pick one for them.
+- Say "pepperoni pizzas", never "pepperonis".
 - Confirm each item in a few words ("Large pepperoni, got it."), not the whole cart, and only
   after add_item has succeeded for it.
 - People repeat themselves and talk in bursts. An item they name again that's already in
@@ -719,10 +789,24 @@ async def entrypoint(ctx: JobContext) -> None:
         "direction": "outbound" if outbound else "inbound",
     }
 
+    await ctx.connect()
+    dial = None if sim else meta.get("dial")
+    trunk, from_number = _outbound_line(meta)
+    ring_phone = bool(outbound and dial and (trunk or from_number))
+    if outbound and dial and not ring_phone:
+        logger.warning(
+            "no outbound line (SIP_OUTBOUND_TRUNK_ID); the person in the room plays the callee"
+        )
+    caller = None
+    if not sim and not ring_phone:
+        # a phone call in, or someone in the room: on an outbound call, they play the customer
+        caller = await ctx.wait_for_participant()
+
     agent: Agent
     if outbound:
-        # order #214 is already placed, paid for, and out with the driver
-        pos = demo_pos("outbound", meta.get("name") or "")
+        # order #214 is already placed, paid for, and out with the driver, under the name the
+        # website's visitor gave (or the metadata's `name`)
+        pos = demo_pos("outbound", visitor_name(caller) or meta.get("name") or "")
         agent = DeliveryUpdateAgent(pos)
     else:
         # a restaurant doesn't know who's calling: Rosa asks for the name for the order
@@ -732,7 +816,12 @@ async def entrypoint(ctx: JobContext) -> None:
     tts = inference.TTS("cartesia/sonic-3.5", voice=VOICE, language="en")
     session = AgentSession[Userdata](
         userdata=Userdata(pos=pos),
-        tts_text_transforms=["filter_markdown", "filter_emoji", pause_between_sentences],
+        tts_text_transforms=[
+            "filter_markdown",
+            "filter_emoji",
+            say_pepperoni_pizzas,
+            pause_between_sentences,
+        ],
         stt=inference.STT("deepgram/nova-3", language="en"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=tts,
@@ -743,23 +832,28 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    await ctx.connect()
     if sim:
         await session.start(agent=agent, room=ctx.room, room_options=room_io.RoomOptions())
         return
 
     # the caller hung up, or the agent did: close the room, and the phone line with it
     session.on("close", lambda _: ctx.delete_room())
-    dial = meta.get("dial")
-    trunk = os.getenv("SIP_OUTBOUND_TRUNK_ID")
-    if outbound and dial and trunk:
-        await ring(ctx, session, agent, dial, trunk, tts)
+    # the demo website, if it's watching: the page that asked to ring a phone, the browser
+    # caller, or viewers of a call to the restaurant's number
+    session.userdata.page.watch(ctx.room, session, page=meta.get("page"), caller=caller)
+    if dial and ring_phone:
+        await ring(ctx, session, agent, dial, trunk, from_number, tts)
         return
-    if outbound and dial:
-        logger.warning("SIP_OUTBOUND_TRUNK_ID isn't set; the person in the room plays the callee")
-    # a phone call in, or someone in the room: on an outbound call, they play the customer
-    caller = await ctx.wait_for_participant()
+    assert caller is not None
     await session.start(agent=agent, room=ctx.room, room_options=room_options(caller.identity))
+
+
+def _outbound_line(meta: dict[str, str]) -> tuple[str, str]:
+    """The line a call to a real phone goes out on, as (trunk, from): the metadata's (a SIP
+    trunk, or a number of the project's own to dial from), else SIP_OUTBOUND_TRUNK_ID."""
+    if meta.get("trunk") or meta.get("from"):
+        return meta.get("trunk") or "", meta.get("from") or ""
+    return os.getenv("SIP_OUTBOUND_TRUNK_ID", ""), ""
 
 
 async def ring(
@@ -768,9 +862,11 @@ async def ring(
     agent: Agent,
     number: str,
     trunk: str,
+    from_number: str,
     tts: inference.TTS,
 ) -> None:
     """Rings a real phone; the agent joins only once a person has picked up."""
+    page = session.userdata.page
     # a listener of its own answers first, so nothing reaches the line until it's known who,
     # or what, picked up
     probe = AgentSession[None](tts=tts)
@@ -780,15 +876,19 @@ async def ring(
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
+                    # a carrier's trunk reaches any country; without one, LiveKit dials out
+                    # from one of the project's own numbers, US only
                     sip_trunk_id=trunk,
+                    sip_number=from_number,
                     sip_call_to=number,
                     participant_identity=PHONE,
                     wait_until_answered=True,
                 )
             )
-        except api.ServerError as e:
-            # busy, declined, no answer, or a trunk that can't place the call
+        except api.TwirpError as e:
+            # busy, declined, no answer, or a line that can't place the call
             logger.warning("outbound call failed: %s", e)
+            await page.dial_failed(e, number)
             ctx.delete_room()
             return
         result = await detector.execute()
@@ -796,11 +896,11 @@ async def ring(
     if result.category == "machine-vm":
         await probe.say(_voicemail(), allow_interruptions=False).wait_for_playout()
         await probe.aclose()
-        await hang_up("Reached voicemail; left a message")
+        await hang_up("Reached voicemail; left a message", page)
         return
     await probe.aclose()
     if result.category in ("machine-unavailable", "machine-ivr"):
-        await hang_up("No one answered")
+        await hang_up("No one answered", page)
         return
     await session.start(agent=agent, room=ctx.room, room_options=room_options(PHONE))
 

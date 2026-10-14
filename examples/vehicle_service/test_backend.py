@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from collections.abc import AsyncIterator
 
 import backend
@@ -50,6 +51,7 @@ def test_nothing_is_touched_before_the_customer_is_found() -> None:
     with pytest.raises(ServiceError, match="phone number first"):
         d.select_vehicle("X3")
     assert d.customer is None and d.draft.vin is None
+    assert d.snapshot()["customer"] is None and d.snapshot()["vehicles"] == []
 
 
 @pytest.mark.parametrize(
@@ -239,6 +241,7 @@ def test_no_price_for_anything_off_the_menu(desk: ServiceDesk, asked: str) -> No
     assert q.price is None
     assert "Don't estimate" in q.answer and "$159" in q.answer
     assert desk.quotes[-1] is q and q.asked == asked
+    assert desk.snapshot()["quotes"][-1] == {"asked": asked, "price": None, "answer": q.answer}
 
 
 # ---- recalls: always checked, and the decision is on the booking ----
@@ -296,6 +299,7 @@ def test_switching_cars_clears_the_recall_decision(desk: ServiceDesk) -> None:
     oil_change_on_x3(desk)
     desk.select_vehicle("330i")
     assert desk.draft.recall is None and desk.open_recall() is None
+    assert desk.snapshot()["draft"]["recall"] is None
 
 
 # ---- loaners ----
@@ -359,6 +363,14 @@ def test_the_cues_slots_are_open_whatever_day_it_is(days: int) -> None:
 def test_today_defaults_to_the_shops_today(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(backend, "local_today", lambda: dt.date(2026, 10, 2))
     assert demo_desk().today == dt.date(2026, 10, 2)
+
+
+def test_today_follows_the_callers_timezone() -> None:
+    tokyo, la = backend.local_today("Asia/Tokyo"), backend.local_today("America/Los_Angeles")
+    assert (tokyo - la).days in (0, 1)
+    # an unknown name keeps the dealership's today
+    assert backend.local_today("Not/AZone") == backend.local_today()
+    assert backend.local_today("") == backend.local_today()
 
 
 @pytest.mark.parametrize(
@@ -442,6 +454,7 @@ def test_a_correction_after_read_back_needs_another(desk: ServiceDesk) -> None:
     # "Tuesday at eight... no, make it Wednesday, first thing"
     desk.choose_slot("wed-0730")
     assert desk.draft.read_back_revision != desk.draft.revision
+    assert not desk.snapshot()["draft"]["readBack"]
     with pytest.raises(ServiceError, match="changed since it was read back"):
         desk.book()
     assert "Wednesday September 30, 7:30 AM" in desk.read_back()
@@ -483,6 +496,9 @@ def test_mileage_correction(desk: ServiceDesk) -> None:
     desk.set_mileage(31_000)  # "thirty-seven thousand, sorry, thirty-one"
     x3 = desk.require_vehicle()
     assert x3.miles == 31_000 and x3.in_warranty(TODAY)
+    snap = desk.snapshot()
+    assert snap["draft"]["mileage"] == 31_000
+    assert snap["vehicles"][0]["inWarranty"]
 
 
 def test_switching_cars_mid_call(desk: ServiceDesk) -> None:
@@ -506,6 +522,33 @@ def test_nothing_changes_after_booking(desk: ServiceDesk) -> None:
     desk.book()
     with pytest.raises(ServiceError, match="Already booked"):
         desk.choose_slot("thu-0800")
+
+
+def test_snapshot_is_json_safe_and_hides_unchecked_recalls(desk: ServiceDesk) -> None:
+    desk.select_vehicle("X3")
+    snap = json.loads(json.dumps(desk.snapshot()))
+    assert snap["vehicles"][0]["recalls"] is None
+    desk.check_recalls(X3_VIN)
+    assert desk.snapshot()["vehicles"][0]["recalls"][0]["id"] == "23V-418"
+
+
+def test_stages_follow_the_draft(desk: ServiceDesk) -> None:
+    assert desk.stage() == "vehicle"
+    desk.select_vehicle("X3")
+    assert desk.stage() == "symptoms"
+    desk.set_concern("due for an oil change")
+    assert desk.stage() == "service"
+    desk.set_services(["oil_change"])
+    assert desk.stage() == "recalls"
+    desk.check_recalls(X3_VIN)
+    desk.decide_recall(True)
+    assert desk.stage() == "time"
+    desk.choose_slot("wed-0730")
+    desk.choose_transport("wait")
+    assert desk.stage() == "readback"
+    desk.read_back()
+    desk.book()
+    assert desk.stage() == "booked"
 
 
 # ---- simulation grading ----
@@ -617,13 +660,16 @@ def test_no_likely_cause_until_the_notes_point_somewhere(desk: ServiceDesk) -> N
     assert desk.likely_cause() is None
     desk.add_note("warning_lights", "no warning lights")
     assert desk.likely_cause() is None
+    assert desk.snapshot()["draft"]["likelyCause"] is None
 
 
 def test_the_consultation_books_a_diagnostic_with_its_notes(desk: ServiceDesk) -> None:
     desk.select_vehicle("X3")
     desk.add_note("sound", "grinding")
     desk.add_note("when", "braking")
+    assert desk.stage() == "symptoms"
     desk.set_concern("Grinding from the front when braking")
+    assert desk.stage() == "service"
     # brakes are a wear item, even on a car in warranty
     with pytest.raises(ServiceError, match="wear items"):
         desk.set_services(["warranty_repair"])
@@ -640,6 +686,13 @@ def test_the_consultation_books_a_diagnostic_with_its_notes(desk: ServiceDesk) -
     ]
     cause = desk.likely_cause()
     assert cause is not None and cause.unsafe
+    snap = json.loads(json.dumps(desk.snapshot()))
+    assert snap["appointment"]["notes"][0] == {
+        "kind": "sound",
+        "label": "Sound",
+        "text": "grinding",
+    }
+    assert snap["draft"]["likelyCause"]["unsafe"] is True
     with pytest.raises(ServiceError, match="Already booked"):
         desk.add_note("since", "two weeks")
 
@@ -689,6 +742,15 @@ def test_the_follow_up_starts_from_the_consultation_visit(shop: ServiceDesk) -> 
         ("Rear-view camera software update recall", 0.0),
     ]
     assert shop.ready_at() is None
+    assert shop.stage() == "reach"
+    snap = json.loads(json.dumps(shop.snapshot()))["visit"]
+    # nothing the technician found shows until the customer is on the line
+    assert snap["findings"] == [] and snap["total"] == 159
+    assert snap["ticket"] == [
+        {"label": "Diagnostic", "price": 159.0},
+        {"label": "Rear-view camera software update recall", "price": 0.0},
+    ]
+    assert snap["readyAt"] is None
 
 
 def test_nothing_about_the_car_before_its_the_customer(shop: ServiceDesk) -> None:
@@ -710,6 +772,8 @@ def test_someone_else_hears_nothing(shop: ServiceDesk) -> None:
         shop.repair_details("is it the brakes?")
     assert shop.call_done and shop.visit is not None
     assert (shop.visit.reached, shop.visit.ended_early) == ("someone_else", "wrong_person")
+    assert shop.snapshot()["visit"]["findings"] == []
+    assert shop.snapshot()["visit"]["endedEarly"] == "Someone else answered"
 
 
 def test_findings_by_id_or_words(shop: ServiceDesk) -> None:
@@ -731,11 +795,15 @@ def test_prices_are_parts_plus_labor(shop: ServiceDesk) -> None:
 def test_approving_the_front_brakes(shop: ServiceDesk) -> None:
     reached(shop)
     assert shop.undecided() == [shop.finding("front_brakes")]
+    assert shop.stage() == "quote"
     f, notes = shop.decide_repair("front_brakes", "approved")
     assert f.id == "front_brakes" and notes == ["The car is now ready today at 5:30 PM."]
     assert shop.ticket_total() == 648
     assert shop.ready_when() == "today at 5:30 PM"
     assert shop.undecided() == [] and shop.approved() == [f]
+    assert shop.stage() == "pickup"
+    snap = shop.snapshot()["visit"]
+    assert snap["findings"][0]["decision"] == "approved" and snap["readyAt"] == "Today, 5:30 PM"
 
 
 def test_declining_leaves_the_car_ready_now(shop: ServiceDesk) -> None:
@@ -764,6 +832,7 @@ def test_the_shuttle_follows_the_ready_time(shop: ServiceDesk) -> None:
     _, notes = shop.decide_repair("front_brakes", "approved")
     assert "The shuttle now picks them up today at 5:00 PM, to match. Tell them." in notes
     assert shop.shuttle_when() == "today at 5:00 PM"
+    assert shop.snapshot()["visit"]["shuttleAt"] == "Today, 5:00 PM"
 
 
 def test_the_summary_needs_an_answer_and_a_ride(shop: ServiceDesk) -> None:
@@ -777,10 +846,10 @@ def test_the_summary_needs_an_answer_and_a_ride(shop: ServiceDesk) -> None:
     summary = shop.pickup_summary()
     assert summary.startswith("The X3 is ready now. Due at pickup: $159 (diagnostic $159,")
     assert "noted on the file while they think it over" in summary
-    assert shop.call_done
+    assert shop.stage() == "wrapup" and shop.call_done
     # a change after the summary needs a new one
     shop.decide_repair("front_brakes", "approved")
-    assert not shop.call_done
+    assert shop.stage() == "pickup" and not shop.call_done
 
 
 def test_next_visit_notes(shop: ServiceDesk) -> None:
@@ -791,6 +860,7 @@ def test_next_visit_notes(shop: ServiceDesk) -> None:
     shop.arrange_pickup("self")
     assert "For the next visit: Rear brake pads." in shop.pickup_summary()
     assert shop.visit is not None and shop.visit.next_visit == ["Rear brake pads"]
+    assert shop.snapshot()["visit"]["nextVisit"] == ["Rear brake pads"]
 
 
 def test_grade_passes_an_approved_follow_up(shop: ServiceDesk) -> None:

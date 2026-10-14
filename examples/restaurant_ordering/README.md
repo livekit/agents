@@ -62,6 +62,12 @@ A transfer to staff ends the call here, since there's no one to hand off to; see
 
 Things to try: order two large pepperonis, then say "yeah, two pepperonis" again. Say "make that a medium, and drop the Coke" during the read-back. Ask for the whole menu. On the delivery update, take the refund, then change your mind.
 
+## Demo page
+
+`page.py` is the layer for the telephony demo on livekit.io, which dispatches this agent by name. The page joins the room as the browser caller (`caller-*`) or as a viewer (`viewer-*`) of a phone call, and draws what the agent sends it over the `demo.set_state` RPC: the call's stage, the POS's state (the cart, the receipt), a log of the tool calls, and a suggested next line for the caller. A browser caller's name is who the delivery update's order is under. From the job metadata the site sends, a call to a real phone takes `dial`, the watching `page`, and the line to call from (`trunk` or `from`, which win over `SIP_OUTBOUND_TRUNK_ID`).
+
+Without a page watching (console, the playground, simulations, tests), it's inert: nothing is sent and no suggestions are written, so there are no extra LLM calls.
+
 ## Tests
 
 ```bash

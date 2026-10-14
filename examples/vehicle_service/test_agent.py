@@ -4,7 +4,7 @@ import datetime as dt
 import re
 
 import pytest
-from agent import LeoAgent, RepairCallAgent
+from agent import LeoAgent, RepairCallAgent, Userdata
 from backend import ServiceDesk, demo_desk
 
 from livekit.agents import AgentSession, inference, llm
@@ -28,7 +28,7 @@ async def _talk(turns: list[str], desk: ServiceDesk) -> list[str]:
     said: list[str] = []
     async with (
         _main_llm() as model,
-        AgentSession(llm=model, userdata=desk) as sess,
+        AgentSession(llm=model, userdata=Userdata(desk=desk)) as sess,
     ):
         await sess.start(LeoAgent(desk))
         for text in [*turns, *CONFIRMS]:
@@ -102,7 +102,7 @@ async def test_follow_up_approves_the_front_brakes() -> None:
     desk = demo_desk(today=TODAY, direction="outbound")
     async with (
         _main_llm() as model,
-        AgentSession(llm=model, userdata=desk) as sess,
+        AgentSession(llm=model, userdata=Userdata(desk=desk)) as sess,
     ):
         await sess.start(RepairCallAgent(desk))
         result: RunResult[None] = await sess.run(user_input="Speaking.")

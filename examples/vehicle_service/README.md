@@ -59,6 +59,12 @@ with `SIP_OUTBOUND_TRUNK_ID` set. Answering-machine detection decides who picked
 
 Things to try: describe a grinding when you brake, then correct where it comes from. Ask for a loaner on an oil change. On the follow-up, ask for a cheaper option, or say you'll think about it.
 
+## Demo page
+
+`page.py` is the layer for the telephony demo on livekit.io, which dispatches this agent by name. The page joins the room as the browser caller (`caller-*`) or as a viewer (`viewer-*`) of a phone call, and draws what the agent sends it over the `demo.set_state` RPC: the call's stage, the service desk's state (the customer's file, the booking, the findings), a log of the tool calls, and a suggested next line for the caller. A browser caller's name is who the file is under, and the visitor's `timezone` in the job metadata sets what "today" is. A call to a real phone takes `dial`, the watching `page`, and the line to call from (`trunk` or `from`, which win over `SIP_OUTBOUND_TRUNK_ID`).
+
+Without a page watching (console, the playground, simulations, tests), it's inert: nothing is sent and no suggestions are written, so there are no extra LLM calls.
+
 ## Tests
 
 ```bash

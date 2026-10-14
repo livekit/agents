@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from decimal import Decimal
 
 import pytest
-from agent import _line_note
+from agent import _line_note, say_pepperoni_pizzas
 from backend import Pos, PosError, demo_pos
 from call import pause_between_sentences, spoken_number
 from grade import grade
@@ -68,6 +68,8 @@ def test_ro02_corrections_mid_read_back_change_only_those_lines(pos: Pos) -> Non
         "L2: 1 × dozen Bone-in Wings, Thai chili peanut sauce",
     ]
     assert [ln.id for ln in pos.removed] == ["L3"]
+    assert pos.lines[0].was == "1 × large Pepperoni"
+    assert pos.lines[0].rev == 2
 
 
 def test_ro03_86d_item_is_refused_with_same_category_substitutes(pos: Pos) -> None:
@@ -158,6 +160,10 @@ def test_every_allergy_mentioned_is_kept_and_flagged(pos: Pos) -> None:
     pos.note_allergy("dairy", severe=False)
     pos.note_allergy("nuts", severe=False)  # asked again: still severe
     assert pos.allergies == {"nuts": True, "dairy": False}
+    assert pos.snapshot()["allergies"] == [
+        {"allergen": "dairy", "severe": False},
+        {"allergen": "nuts", "severe": True},
+    ]
     assert "dairy" in _line_note(pos, pos.add("cheese", 1, "large"))
     pesto = _line_note(pos, pos.add("pesto", 1, "small"))
     assert "dairy and nuts" in pesto
@@ -173,13 +179,14 @@ def test_leaving_a_topping_off(pos: Pos) -> None:
     assert line.describe() == "L1: 1 × large Garden Veggie, no black olives"
     assert line.total == Decimal("19.99")
     pos.update("L1", without=["olives", "hold the onions"])
-    assert line.without == ["black olives", "onions"]
+    assert line.without == ["black olives", "onions"] and line.rev == 2
     pos.update("L1", without=[])
     assert line.without == []
     # the same pizza without something is its own line
     pos.add("bbq_chicken", 1, "medium", without=["onion"])
     assert pos.add("bbq_chicken", 1, "medium").without == []
     assert pos.lines[1].modifiers() == ["no red onions"]
+    assert pos.snapshot()["cart"]["lines"][1]["modifiers"] == ["no red onions"]
     with pytest.raises(PosError, match="doesn't come with 'olives'"):
         pos.add("pepperoni", 1, "large", without=["olives"])
     with pytest.raises(PosError, match="leave off"):
@@ -395,7 +402,7 @@ def test_outbound_seeds_order_214_out_for_delivery(out: Pos) -> None:
 
 def test_swap_keeps_the_price(out: Pos) -> None:
     line = out.swap_out_of_stock("L3", "coke")
-    assert line.describe() == "L3: 1 × 2-liter Coke"
+    assert line.describe() == "L3: 1 × 2-liter Coke" and line.was == "1 × 2-liter Sprite"
     assert out.quote is not None and out.quote.total == Decimal("49.65")
     assert out.balance() == 0 and out.quote_current
     assert grade(out, {"cart": ["1 × large Pepperoni"]})  # not read back, cart differs
@@ -440,6 +447,7 @@ def test_cancel_is_always_refused_and_shown(out: Pos) -> None:
     assert out.order is not None
     out.note_for_staff("Order took too long,  wants a call back")
     assert out.delivery.staff_note == "Order took too long, wants a call back"
+    assert out.snapshot()["delivery"]["staffNote"].startswith("Order took")
 
 
 def test_driver_note_replaces_and_is_checked(out: Pos) -> None:
@@ -450,6 +458,7 @@ def test_driver_note_replaces_and_is_checked(out: Pos) -> None:
     out.set_driver_note("Gate code 4512")
     out.set_driver_note("Gate code 4512,  unit 3B")
     assert out.delivery is not None and out.delivery.note == "Gate code 4512, unit 3B"
+    assert out.snapshot()["delivery"]["note"] == "Gate code 4512, unit 3B"
 
 
 def test_read_back_needs_the_sprite_resolved_and_goes_stale(out: Pos) -> None:
@@ -481,7 +490,7 @@ def test_grade_flags_an_unresolved_outbound_call(out: Pos) -> None:
 def test_the_sprite_choice_can_change_after_a_swap(out: Pos) -> None:
     out.swap_out_of_stock("L3", "coke")
     line = out.swap_out_of_stock("L3", "diet_coke")
-    assert line.describe() == "L3: 1 × 2-liter Diet Coke"
+    assert line.describe() == "L3: 1 × 2-liter Diet Coke" and line.was == "1 × 2-liter Coke"
     assert out.balance() == 0
     assert out.delivery is not None
     swap = out.delivery.changes["swap"]
@@ -504,6 +513,7 @@ def test_a_refunded_sprite_can_become_a_coke(out: Pos) -> None:
     line = out.swap_out_of_stock("l3", "coke")
     assert [ln.id for ln in out.lines] == ["L1", "L2", "L3", "L4"] and not out.removed
     assert line.describe() == "L3: 1 × 2-liter Coke"
+    assert line.was == "1 × 2-liter Sprite"
     assert out.balance() == Decimal("6.53")  # the breadsticks, and no refund
     out.read_back()
     expect = {
@@ -523,7 +533,7 @@ def test_breadsticks_can_be_recounted_or_taken_off(out: Pos) -> None:
     out.swap_out_of_stock("L3", "coke")
     out.add_extra("breadsticks")
     line, charge = out.add_extra("breadsticks", 2)
-    assert line.quantity == 2
+    assert line.quantity == 2 and line.was == "1 × Breadsticks"
     assert charge == Decimal("6.53") and out.balance() == Decimal("13.06")
     assert out.quote is not None and out.quote.total == Decimal("62.71")
     assert out.delivery is not None
@@ -544,6 +554,7 @@ def test_wrong_person_ends_the_call_with_nothing_shared_or_changed(out: Pos) -> 
     out.end_without_update("wrong_person")
     assert out.call_done
     assert out.delivery is not None and out.delivery.ended_early == "wrong_person"
+    assert out.snapshot()["delivery"]["endedEarly"] == "Wrong person"
     # nothing about the order goes to whoever answered
     for act in (
         lambda: out.swap_out_of_stock("L3", "coke"),
@@ -570,6 +581,41 @@ def test_call_back_later_can_end_the_call_until_they_change_something(out: Pos) 
     assert out.call_done
 
 
+def test_snapshot_is_what_the_page_draws(pos: Pos) -> None:
+    pos.add("wings", 1, "dozen", sauce="hot")
+    pos.set_pickup()
+    pos.price()
+    snap = pos.snapshot()
+    wings = next(m for m in snap["menu"] if m["id"] == "wings")
+    assert wings["sauceAllergens"]["Thai chili peanut"] == ["nuts"]
+    cauli = next(m for m in snap["menu"] if m["id"] == "buffalo_cauliflower")
+    assert cauli["available"] is False
+    assert snap["cart"]["lines"][0]["modifiers"] == ["hot sauce"]
+    assert snap["quote"]["current"] is True
+    assert snap["quote"]["total"] == 18.52
+
+
+def test_the_page_shows_wings_by_the_count(pos: Pos) -> None:
+    pos.add("wings", 1, "dozen", sauce="hot")
+    pos.add("boneless", 1, "half dozen", sauce="BBQ")
+    pos.add("pepperoni", 1, "large")
+    sizes = [ln["size"] for ln in pos.snapshot()["cart"]["lines"]]
+    # "12 Bone-in Wings" on the page, while the agent still says "a dozen"
+    assert sizes == ["12", "6", "large"]
+    assert pos.lines[0].describe() == "L1: 1 × dozen Bone-in Wings, hot sauce"
+
+
+def test_a_soda_size_is_never_borrowed_from_a_pizza(pos: Pos) -> None:
+    # "a large pepperoni and a Coke": the pizza's "large" isn't the Coke's size
+    with pytest.raises(PosError, match="Coke comes in can or 2-liter, not 'large'"):
+        pos.add("coke", 1, "large")
+    with pytest.raises(PosError, match="Coke comes in can or 2-liter, not 'small'"):
+        pos.add("coke", 1, "small")
+    with pytest.raises(PosError, match="Coke needs a size: can or 2-liter"):
+        pos.add("coke")
+    assert not pos.lines
+
+
 # ---- the call helpers ----
 
 
@@ -580,6 +626,21 @@ async def test_pause_between_sentences() -> None:
 
     out = "".join([c async for c in pause_between_sentences(chunks())])
     assert out == 'Dr. Patel is free at nine a.m. tomorrow. <break time="300ms"/> Does that work?'
+
+
+async def test_pepperonis_are_said_as_pepperoni_pizzas() -> None:
+    async def chunks() -> AsyncIterator[str]:
+        for c in ["Two large pepper", "onis and a ", "Pepperonis", "."]:
+            yield c
+
+    out = "".join([c async for c in say_pepperoni_pizzas(chunks())])
+    assert out == "Two large pepperoni pizzas and a Pepperoni pizzas."
+    one = "".join([c async for c in say_pepperoni_pizzas(_one("A pepperoni, got it."))])
+    assert one == "A pepperoni, got it."
+
+
+async def _one(text: str) -> AsyncIterator[str]:
+    yield text
 
 
 def test_spoken_number() -> None:

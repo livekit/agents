@@ -4,7 +4,10 @@ cause. The hard rules live in backend.py.
 
 Inbound is the default. Dispatch with the job metadata `{"direction": "outbound"}` (or set
 CALL_DIRECTION=outbound for `console`) for the follow-up, where the person in the room plays the
-customer; add `"dial": "+1..."` with SIP_OUTBOUND_TRUNK_ID set to ring a real phone instead.
+customer; add `"dial": "+1..."` with an outbound line (SIP_OUTBOUND_TRUNK_ID, or the metadata's
+`trunk` or `from`) to ring a real phone instead.
+
+The demo website watches calls through page.py; without it, the page hooks here do nothing.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import logging
 import os
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import Literal
 
 from backend import (
@@ -32,6 +36,7 @@ from backend import (
     ServiceId,
     demo_desk,
     first_name,
+    local_today,
     spoken_span,
 )
 from call import (
@@ -45,6 +50,7 @@ from call import (
 )
 from dotenv import load_dotenv
 from grade import grade
+from page import Page, visitor_name
 
 from livekit import api
 from livekit.agents import (
@@ -74,18 +80,30 @@ SERVICE_DESK_NUMBER = os.getenv("SERVICE_DESK_NUMBER", "")
 # the participant identity of a phone the agent rings
 PHONE = "phone"
 
-Ctx = RunContext[ServiceDesk]
+
+@dataclass
+class Userdata:
+    desk: ServiceDesk
+    # the demo website's view of the call: inert unless a page is watching (page.py)
+    page: Page = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.page = Page(PERSONA, self.desk)
+
+
+Ctx = RunContext[Userdata]
 # what a good advisor asks about a problem, in order (backend.NoteKind)
 _QUESTIONS = ("sound", "where", "when", "since", "warning_lights", "recent")
 
 
 @contextlib.contextmanager
 def _desk_rules(ctx: Ctx) -> Iterator[ServiceDesk]:
-    """Run a desk call; a refusal goes back to the agent to relay."""
+    """Run a desk call; a refusal shows on the page and goes back to the agent to relay."""
     try:
-        yield ctx.userdata
+        yield ctx.userdata.desk
     except ServiceError as e:
         logger.info("desk refused %s: %s", ctx.function_call.name, e)
+        ctx.userdata.page.record(ctx.function_call.name, f"Refused: {str(e).split('. ')[0]}")
         raise ToolError(str(e)) from e
 
 
@@ -100,6 +118,7 @@ class LeoAgent(Agent):
         self._replies_at_booking: int | None = None
 
     async def on_enter(self) -> None:
+        self.session.userdata.page.push()
         self.session.generate_reply(
             instructions=(
                 f'Answer the phone: "Thanks for calling {BUSINESS} service, this is {PERSONA}. '
@@ -121,6 +140,9 @@ class LeoAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             c = desk.lookup_customer(phone, name)
+        ctx.userdata.page.record(
+            "lookup_customer", f"{c.name} · {len(c.vehicles)} vehicles on file"
+        )
         cars = "; ".join(
             f"{v.label}, VIN ending {v.vin[-6:]}, {v.miles:,} miles on file" for v in c.vehicles
         )
@@ -139,6 +161,7 @@ class LeoAgent(Agent):
         with _desk_rules(ctx) as desk:
             notes = desk.select_vehicle(vehicle)
             v = desk.require_vehicle()
+        ctx.userdata.page.record("select_vehicle", v.label)
         recall_hint = "" if v.vin in desk.recalls_checked else " Check its recalls."
         return _with_notes(
             f"Visit is for the {v.label} (VIN {v.vin}). {v.warranty_reason(desk.today)} "
@@ -157,6 +180,7 @@ class LeoAgent(Agent):
         with _desk_rules(ctx) as desk:
             notes = desk.set_mileage(miles)
             v = desk.require_vehicle()
+        ctx.userdata.page.record("update_mileage", f"{miles:,} miles")
         return _with_notes(
             f"Mileage is {miles:,}. {v.warranty_reason(desk.today)} (mention warranty only if "
             "it matters for this visit).",
@@ -179,6 +203,7 @@ class LeoAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             note = desk.add_note(kind, detail)
+        ctx.userdata.page.record("add_tech_note", f"{note.label}: {note.text}")
         out = f"Noted for the technician: {note.label.lower()}, {note.text}."
         asked = {n.kind for n in desk.draft.notes}
         left = [k.replace("_", " ") for k in _QUESTIONS if k not in asked]
@@ -202,6 +227,7 @@ class LeoAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             desk.set_concern(summary)
+        ctx.userdata.page.record("set_concern", desk.draft.concern)
         return f"Concern: {desk.draft.concern}. Now work out the service (set_services)."
 
     # ---- the service ----
@@ -217,6 +243,8 @@ class LeoAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             q = desk.quote(service)
+        shown = "no price" if q.price is None else f"${q.price:.0f}"
+        ctx.userdata.page.record("quote_price", f"{service} → {shown}")
         return q.answer
 
     @function_tool
@@ -233,6 +261,8 @@ class LeoAgent(Agent):
         with _desk_rules(ctx) as desk:
             notes = desk.set_services(list(services), concern)
         labels = ", ".join(MENU[s].label for s in desk.draft.services)
+        detail = labels + (f" · {desk.draft.concern}" if concern else "")
+        ctx.userdata.page.record("set_services", detail)
         cost = f"estimate ${desk.estimate():.0f}" if desk.estimate() else "no charge"
         return _with_notes(
             f"Services: {labels}. Visit is {spoken_span(desk.visit_hours())}, {cost}.", notes
@@ -248,8 +278,10 @@ class LeoAgent(Agent):
         with _desk_rules(ctx) as desk:
             recalls = desk.check_recalls(vin)
         if not recalls:
+            ctx.userdata.page.record("check_recalls", f"{vin[-6:]}: no open recalls")
             return "No open recalls on this car. Tell the caller."
         r = recalls[0]
+        ctx.userdata.page.record("check_recalls", f"{vin[-6:]}: {r.id} {r.title}")
         stock = "Parts are in stock." if r.parts_in_stock else "Parts are on order."
         return (
             f"Open recall: {r.title}, about {spoken_span(r.hours)}, no charge. {stock} (Its "
@@ -266,6 +298,7 @@ class LeoAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             desk.decide_recall(add_to_visit)
+        ctx.userdata.page.record("decide_recall", "Added to visit" if add_to_visit else "Declined")
         return f"Recall {desk.draft.recall}. Visit is {spoken_span(desk.visit_hours())}."
 
     # ---- when, and how they get around ----
@@ -280,6 +313,7 @@ class LeoAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             slots = desk.open_slots(day)
+        ctx.userdata.page.record("get_slots", f"{day or 'all days'}: {len(slots)} open")
         if not slots:
             return f"Nothing open that fits that day. Open days are {desk.open_days()}."
         return (
@@ -301,6 +335,7 @@ class LeoAgent(Agent):
         with _desk_rules(ctx) as desk:
             desk.choose_slot(slot_id)
         slot = next(s for s in desk.slots if s.id == desk.draft.slot_id)
+        ctx.userdata.page.record("choose_slot", f"{slot.spoken()} · {slot.advisor}")
         return (
             f"Held {slot.spoken()} with {slot.advisor}. Tell them who that is the first time you"
             f' name them: "{slot.advisor}, one of our service advisors, will meet you at the'
@@ -317,6 +352,7 @@ class LeoAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             desk.choose_transport(option)
+        ctx.userdata.page.record("choose_transport", option)
         return f"Transportation: {option}."
 
     # ---- confirm ----
@@ -327,6 +363,7 @@ class LeoAgent(Agent):
         right. If they change anything, update that one field and call this again."""
         with _desk_rules(ctx) as desk:
             summary = desk.read_back()
+        ctx.userdata.page.record("read_back", f"Revision {desk.draft.revision}")
         return (
             f"Read this back, in plain speech: {summary} It isn't booked yet, so say something "
             'like "here\'s what I have", not "booked", and ask if it\'s right.'
@@ -337,6 +374,7 @@ class LeoAgent(Agent):
         """Book the appointment. Only after the read-back, once the caller says it's right."""
         with _desk_rules(ctx) as desk:
             appt = desk.book()
+        ctx.userdata.page.record("book_service", f"{appt.confirmation} · {appt.when}")
         self._replies_at_booking = _agent_replies(ctx)
         return (
             f"Booked, confirmation {appt.confirmation} (give it only if they ask). Tell them "
@@ -368,6 +406,7 @@ async def transfer_to_advisor(ctx: Ctx, reason: str) -> str:
     Args:
         reason: A few words on why, for the advisor.
     """
+    ctx.userdata.page.transfer("service_advisor", reason)
     return await transfer(ctx, "a service advisor", reason)
 
 
@@ -454,7 +493,9 @@ class RepairCallAgent(Agent):
         self._wrapped_at: float | None = None  # the pickup summary, or ending without it
 
     async def on_enter(self) -> None:
-        desk: ServiceDesk = self.session.userdata
+        ud: Userdata = self.session.userdata
+        desk = ud.desk
+        ud.page.push(stage="reach")
         # a fixed opener: who's calling, and for whom; nothing about the car until it's them
         who = first_name(desk.customer.name if desk.customer else "")
         self.session.say(
@@ -467,6 +508,8 @@ class RepairCallAgent(Agent):
         Call it before saying anything about the car."""
         with _desk_rules(ctx) as desk:
             desk.confirm_customer()
+        who = desk.customer.name if desk.customer else ""
+        ctx.userdata.page.record("confirm_customer", f"Speaking with {who}")
         assert desk.visit is not None
         now = [f for f in desk.visit.findings if f.urgency == "now"]
         return (
@@ -488,6 +531,7 @@ class RepairCallAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             findings = desk.repair_details(question)
+        ctx.userdata.page.record("repair_details", question or "Findings")
         details = " ".join(
             f"{f.title} ({f.id}): {f.why} {f.covered} Cheaper option: {f.cheaper}" for f in findings
         )
@@ -502,6 +546,7 @@ class RepairCallAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             f, notes = desk.decide_repair(repair, "approved")
+        ctx.userdata.page.record("approve_repair", f"{f.title} · ${f.price:.0f}")
         return _decided(desk, f"Approved: {f.title}, ${f.price:.0f}.", notes)
 
     @function_tool
@@ -516,6 +561,8 @@ class RepairCallAgent(Agent):
         decision: RepairDecision = "deferred" if think_it_over else "declined"
         with _desk_rules(ctx) as desk:
             f, notes = desk.decide_repair(repair, decision)
+        said = "thinking it over" if think_it_over else "declined"
+        ctx.userdata.page.record("decline_repair", f"{f.title} · {said}")
         later = (
             " It's noted on their file; they can call to approve it whenever they're ready."
             if think_it_over
@@ -539,6 +586,7 @@ class RepairCallAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             note = desk.note_for_next_visit(note)
+        ctx.userdata.page.record("note_for_next_visit", note)
         return f"Noted for the next visit: {note}."
 
     @function_tool
@@ -555,7 +603,10 @@ class RepairCallAgent(Agent):
         with _desk_rules(ctx) as desk:
             v = desk.arrange_pickup(ride, where)
         if ride == "shuttle":
+            detail = f"Shuttle from {v.pickup_from}, {desk.shuttle_when()}"
+            ctx.userdata.page.record("arrange_pickup", detail)
             return f"The shuttle picks them up from {v.pickup_from} {desk.shuttle_when()}."
+        ctx.userdata.page.record("arrange_pickup", "Coming in themselves")
         return "They're coming in on their own."
 
     @function_tool
@@ -565,6 +616,8 @@ class RepairCallAgent(Agent):
         after any change."""
         with _desk_rules(ctx) as desk:
             summary = desk.pickup_summary()
+        detail = f"Ready {desk.ready_when()} · ${desk.ticket_total():.0f}"
+        ctx.userdata.page.record("pickup_summary", detail)
         self._wrapped_at = time.time()
         return (
             f"Tell them, in plain speech, in two or three sentences: {summary} Then ask if "
@@ -582,6 +635,7 @@ class RepairCallAgent(Agent):
         """
         with _desk_rules(ctx) as desk:
             desk.end_without_update(reason)
+        ctx.userdata.page.record("end_without_update", ENDED_EARLY[reason])
         self._wrapped_at = time.time()
         who = first_name(desk.customer.name if desk.customer else "")
         if reason == "wrong_person":
@@ -600,7 +654,8 @@ class RepairCallAgent(Agent):
         """Hang up, once you've told them when the car's ready and the total (or called
         end_without_update) and said goodbye."""
         await ctx.wait_for_playout()
-        desk = ctx.userdata
+        ud = ctx.userdata
+        desk = ud.desk
         spoken = [
             m.created_at
             for m in ctx.session.history.messages()
@@ -609,6 +664,7 @@ class RepairCallAgent(Agent):
         # the call isn't done until they've heard when the car's ready and what's due, unless
         # it ended without the update
         if not desk.call_done or not any(t > (self._wrapped_at or 0) for t in spoken):
+            ud.page.record("end_call", "Refused: ready time and total not given yet")
             raise ToolError(
                 "Get an answer on each repair that needs doing now, set the ride, call "
                 "pickup_summary, and tell them what it returns before ending the call. If it's "
@@ -731,8 +787,8 @@ server = AgentServer()
 
 async def on_simulation_end(sim: SimulationContext) -> None:
     """Fails a run whose final service desk state isn't what the scenario's `expect` says."""
-    desk: ServiceDesk = sim.job_context.primary_session.userdata
-    if (expect := sim.userdata().get("expect")) and (problems := grade(desk, expect)):
+    ud: Userdata = sim.job_context.primary_session.userdata
+    if (expect := sim.userdata().get("expect")) and (problems := grade(ud.desk, expect)):
         sim.fail(reason="; ".join(problems))
 
 
@@ -750,13 +806,30 @@ async def entrypoint(ctx: JobContext) -> None:
         "direction": "outbound" if outbound else "inbound",
     }
 
+    await ctx.connect()
+    dial = None if sim else meta.get("dial")
+    trunk, from_number = _outbound_line(meta)
+    ring_phone = bool(outbound and dial and (trunk or from_number))
+    if outbound and dial and not ring_phone:
+        logger.warning(
+            "no outbound line (SIP_OUTBOUND_TRUNK_ID); the person in the room plays the callee"
+        )
+    caller = None
+    if not sim and not ring_phone:
+        # wait for them, so an outbound opener isn't spoken to an empty room
+        caller = await ctx.wait_for_participant()
+
+    # "today" is the website visitor's (the metadata's `timezone`), else the dealership's; the
+    # file is under the name they gave, and the phone number is what finds it
+    today = local_today(meta.get("timezone"))
+    name = visitor_name(caller) or "Alex Morgan"
     agent: Agent
     if outbound:
         # the visit is already booked, and the car is in the shop
-        desk = demo_desk(direction="outbound")
+        desk = demo_desk(name, today, direction="outbound")
         agent = RepairCallAgent(desk)
     else:
-        desk = demo_desk()
+        desk = demo_desk(name, today)
         agent = LeoAgent(desk)
 
     tts = inference.TTS(
@@ -765,8 +838,8 @@ async def entrypoint(ctx: JobContext) -> None:
         language="en",
         extra_kwargs={"emotion": "enthusiastic"},
     )
-    session = AgentSession[ServiceDesk](
-        userdata=desk,
+    session = AgentSession[Userdata](
+        userdata=Userdata(desk=desk),
         tts_text_transforms=["filter_markdown", "filter_emoji", pause_between_sentences],
         stt=inference.STT("deepgram/nova-3", language="en"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
@@ -778,36 +851,41 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    await ctx.connect()
-    if not sim:
-        # the caller hung up, or the agent did: close the room, and the phone line with it
-        session.on("close", lambda _: ctx.delete_room())
-
-    dial = None if sim else meta.get("dial")
-    trunk = os.getenv("SIP_OUTBOUND_TRUNK_ID")
-    if outbound and dial and trunk:
-        await ring(ctx, session, agent, dial, trunk, tts)
-        return
-    if outbound and dial:
-        logger.warning("SIP_OUTBOUND_TRUNK_ID isn't set; the person in the room plays the callee")
-
     if sim:
         await session.start(agent=agent, room=ctx.room, room_options=room_options())
         return
-    # wait for them, so an outbound opener isn't spoken to an empty room
-    caller = await ctx.wait_for_participant()
+
+    # the caller hung up, or the agent did: close the room, and the phone line with it
+    session.on("close", lambda _: ctx.delete_room())
+    # the demo website, if it's watching: the page that asked to ring a phone, the browser
+    # caller, or viewers of a call to the service desk's number
+    session.userdata.page.watch(ctx.room, session, page=meta.get("page"), caller=caller)
+    if dial and ring_phone:
+        await ring(ctx, session, agent, dial, trunk, from_number, tts)
+        return
+    assert caller is not None
     await session.start(agent=agent, room=ctx.room, room_options=room_options(caller.identity))
+
+
+def _outbound_line(meta: dict[str, str]) -> tuple[str, str]:
+    """The line a call to a real phone goes out on, as (trunk, from): the metadata's (a SIP
+    trunk, or a number of the project's own to dial from), else SIP_OUTBOUND_TRUNK_ID."""
+    if meta.get("trunk") or meta.get("from"):
+        return meta.get("trunk") or "", meta.get("from") or ""
+    return os.getenv("SIP_OUTBOUND_TRUNK_ID", ""), ""
 
 
 async def ring(
     ctx: JobContext,
-    session: AgentSession[ServiceDesk],
+    session: AgentSession[Userdata],
     agent: Agent,
     dial: str,
     trunk: str,
+    from_number: str,
     tts: inference.TTS,
 ) -> None:
     """Rings a real phone; Leo joins only once a person has picked up."""
+    page = session.userdata.page
     # a listener of its own answers first, so nothing reaches the line until it's known who,
     # or what, picked up
     probe = AgentSession[None](tts=tts)
@@ -817,7 +895,10 @@ async def ring(
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
+                    # a carrier's trunk reaches any country; without one, LiveKit dials out
+                    # from one of the project's own numbers, US only
                     sip_trunk_id=trunk,
+                    sip_number=from_number,
                     sip_call_to=dial,
                     participant_identity=PHONE,
                     wait_until_answered=True,
@@ -831,6 +912,7 @@ async def ring(
                 sip.get("sip_status_code", ""),
                 sip.get("sip_status", e.message),
             )
+            await page.dial_failed(e, dial)
             ctx.delete_room()
             return
         result = await detector.execute()
@@ -838,11 +920,11 @@ async def ring(
     if result.category == "machine-vm":
         await probe.say(_voicemail(), allow_interruptions=False).wait_for_playout()
         await probe.aclose()
-        await hang_up("Reached voicemail; left a message")
+        await hang_up("Reached voicemail; left a message", page)
         return
     await probe.aclose()
     if result.category in ("machine-unavailable", "machine-ivr"):
-        await hang_up("No one answered")
+        await hang_up("No one answered", page)
         return
     await session.start(agent=agent, room=ctx.room, room_options=room_options(PHONE))
 

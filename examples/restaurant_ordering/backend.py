@@ -209,12 +209,12 @@ def _soda(id: str, name: str) -> MenuItem:
         name=name,
         category="drinks",
         sizes=(
-            Size("can", "can", Decimal("1.99"), ("12 oz", "a can", "small")),
+            Size("can", "can", Decimal("1.99"), ("12 oz", "a can")),
             Size(
                 "2L",
                 "2-liter",
                 Decimal("3.99"),
-                ("2l", "2 liter", "two liter", "2 litre", "two litre", "bottle", "large"),
+                ("2l", "2 liter", "two liter", "2 litre", "two litre", "bottle"),
             ),
         ),
     )
@@ -389,6 +389,8 @@ class Line:
     toppings: list[Option] = field(default_factory=list)
     sauce: Option | None = None
     without: list[str] = field(default_factory=list)  # ingredients left off: "black olives"
+    rev: int = 1  # bumped on every edit, so the page knows which line to flash
+    was: str | None = None  # the line before its last edit, for the page to strike through
 
     @property
     def unit_price(self) -> Decimal:
@@ -422,6 +424,27 @@ class Line:
         return f"{self.id}: {self.quantity} × {size}{self.item.name}" + (
             f", {mods}" if mods else ""
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "itemId": self.item.id,
+            "name": self.item.name,
+            # wings show their count ("12 Bone-in Wings"), though "a dozen" is how it's said
+            "size": (
+                (str(self.size.pieces) if self.size.pieces else self.size.label)
+                if self.item.needs_size
+                else None
+            ),
+            "quantity": self.quantity,
+            "modifiers": self.modifiers(),
+            "unitPrice": float(self.unit_price),
+            "total": float(self.total),
+            "allergens": sorted(self.allergens),
+            "rev": self.rev,
+            "was": self.was,
+            "out": not self.item.available,
+        }
 
 
 @dataclass
@@ -482,6 +505,7 @@ class Pos:
     version: int = 0
     quote: Quote | None = None
     order: Order | None = None
+    last_touched: str | None = None  # the line added or changed most recently
     delivery: Delivery | None = None  # set only for an order that's already out
     _next_line: int = 1
 
@@ -630,6 +654,7 @@ class Pos:
                 )
         self._next_line += 1
         self.lines.append(line)
+        self.last_touched = line.id
         self._touch()
         return line
 
@@ -653,6 +678,7 @@ class Pos:
                 "saying the item again is repeating it, so the count stays. If you're not "
                 "sure, ask how many they want in total."
             )
+        before = line.describe()
         new_size = line.item.size(size) if size else line.size
         new_tops, new_sauce = line.toppings, line.sauce
         if toppings is not None or sauce is not None:
@@ -685,6 +711,9 @@ class Pos:
         )
         if quantity is not None:
             line.quantity = quantity
+        line.was = before.split(": ", 1)[1]
+        line.rev += 1
+        self.last_touched = line.id
         self._touch()
         return line
 
@@ -889,7 +918,10 @@ class Pos:
             self.lines.sort(key=lambda ln: int(ln.id[1:]))
         elif line.item.id == new.id:
             return line  # already the one they picked
+        before = line.describe().split(": ", 1)[1]
         line.item, line.size = new, size
+        line.was, line.rev = before, line.rev + 1
+        self.last_touched = line.id
         self._touch()
         self.price()
         was = ordered.describe().split(": ", 1)[1]
@@ -905,6 +937,7 @@ class Pos:
         self.lines.remove(line)
         if line.item.id != ordered.item.id:
             # swapped earlier on this call: it comes off as what was ordered
+            line.was, line.rev = line.describe().split(": ", 1)[1], line.rev + 1
             line.item, line.size = ordered.item, ordered.size
         self.removed.append(line)
         self._touch()
@@ -938,7 +971,9 @@ class Pos:
         elif quantity == 0:
             self.lines.remove(line)
         else:
+            line.was, line.rev = line.describe().split(": ", 1)[1], line.rev + 1
             line.quantity = quantity
+        self.last_touched = line.id
         self._touch()
         charge = self.price().total - before
         if quantity:
@@ -1012,6 +1047,83 @@ class Pos:
             return "The cart is empty."
         return "Cart: " + "; ".join(ln.describe() for ln in self.lines) + "."
 
+    def snapshot(self) -> dict[str, Any]:
+        q = self.quote
+        short = self.below_minimum()
+        return {
+            "menu": [
+                {
+                    "id": m.id,
+                    "name": m.name,
+                    "category": m.category,
+                    "blurb": m.blurb,
+                    "sizes": [
+                        {"id": s.id, "label": s.label, "price": float(s.price)} for s in m.sizes
+                    ],
+                    "allergens": sorted(m.allergens),
+                    # wing sauces that carry an allergen, e.g. the Thai sauce's peanuts
+                    "sauceAllergens": (
+                        {s.label: sorted(s.allergens) for s in SAUCES if s.allergens}
+                        if m.needs_sauce
+                        else {}
+                    ),
+                    "available": m.available,
+                }
+                for m in self.menu
+            ],
+            "cart": {
+                "version": self.version,
+                "lines": [ln.to_dict() for ln in self.lines],
+                "removed": [ln.to_dict() for ln in self.removed],
+                "subtotal": float(self.subtotal()),
+                "lastTouched": self.last_touched,
+            },
+            "fulfillment": {
+                "mode": self.fulfillment.mode,
+                "address": self.fulfillment.address,
+                "zip": self.fulfillment.zip,
+                "shortOfMinimum": float(short) if short else None,
+            },
+            "customer": {"name": self.name, "phone": self.phone},
+            "allergies": [
+                {"allergen": a, "severe": severe} for a, severe in sorted(self.allergies.items())
+            ],
+            "upsellOffered": self.upsell_offered,
+            "quote": (
+                {
+                    "subtotal": float(q.subtotal),
+                    "tax": float(q.tax),
+                    "deliveryFee": float(q.delivery_fee),
+                    "total": float(q.total),
+                    "current": self.quote_current,
+                }
+                if q
+                else None
+            ),
+            "order": {"number": self.order.number, "readyIn": self.order.ready_in}
+            if self.order
+            else None,
+            "delivery": self._delivery_snapshot(),
+        }
+
+    def _delivery_snapshot(self) -> dict[str, Any] | None:
+        d = self.delivery
+        if d is None:
+            return None
+        return {
+            "driver": d.driver,
+            "etaMinutes": d.eta_minutes,
+            "charged": float(d.charged),
+            "balance": float(self.balance()),
+            "note": d.note,
+            "staffNote": d.staff_note,
+            "cancelRefused": d.cancel_refused,
+            "outOfStock": [ln.id for ln in self.out_of_stock()],
+            "changes": list(d.changes.values()),
+            "readBack": self.read_back_current,
+            "endedEarly": ENDED_EARLY[d.ended_early] if d.ended_early else None,
+        }
+
 
 def _check_quantity(quantity: int) -> None:
     if not 1 <= quantity <= MAX_QUANTITY:
@@ -1044,4 +1156,5 @@ def _seed_delivery(pos: Pos, name: str) -> None:
     q = pos.price()
     pos.order = Order(number="214", ready_in=f"out with {DRIVER}, about {ETA_MINUTES} minutes away")
     pos.item("sprite").available = False
+    pos.last_touched = None
     pos.delivery = Delivery(driver=DRIVER, eta_minutes=ETA_MINUTES, charged=q.total)
