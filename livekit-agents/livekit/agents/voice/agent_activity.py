@@ -89,6 +89,7 @@ from .generation import (
     _time_to_first_sentence,
     _TTSGenerationData,
     forward_generation,
+    mark_instructions_cache_boundary,
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
@@ -3512,6 +3513,10 @@ class AgentActivity(RecognitionHooks):
                 modality=turn_modality,
                 add_if_missing=False,
             )
+
+        # the instructions are the prefix every call shares; a breakpoint there lets the
+        # provider cache them even when a per-turn or expressive system message follows
+        mark_instructions_cache_boundary(chat_ctx)
 
         # inject expressive instructions (TTS markup guide + speaker context)
         _expr_opts = self._resolve_expressive_options()

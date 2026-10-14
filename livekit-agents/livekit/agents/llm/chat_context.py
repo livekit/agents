@@ -21,7 +21,7 @@ import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
 
-from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -53,11 +53,23 @@ class Instructions:
             text="Use markdown formatting.",
         )
 
+        # With per-call context kept out of the cached prefix
+        Instructions(
+            "You are a helpful assistant.",
+            dynamic=f"Current time: {now}. Caller: {caller_id}.",
+        )
+
     Rendering::
 
         instr.render()                              # → common text
         instr.render(modality="audio")               # → common + audio addition
         instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
+
+    ``dynamic`` holds text that changes from call to call, such as the time or the
+    caller's number. :meth:`render` appends it after a single newline. The voice pipeline
+    stores it as its own system message right after the instructions message, so the
+    instructions message stays identical across calls and can end a cached prompt prefix
+    (see :func:`livekit.agents.voice.generation.update_instructions`).
     """
 
     def __init__(
@@ -66,10 +78,12 @@ class Instructions:
         *,
         audio: str | None = None,
         text: str | None = None,
+        dynamic: str | None = None,
     ) -> None:
         self.common = common
         self.audio = audio
         self.text = text
+        self.dynamic = dynamic
 
     def render(
         self,
@@ -84,18 +98,24 @@ class Instructions:
             data: Template variables to fill. Missing placeholders log a warning
                 and are replaced with empty strings.
         """
-        parts = [self.common]
-        if modality is not None:
-            addition = self.audio if modality == "audio" else self.text
-            if addition:
-                parts.append(addition)
-
-        result = "\n\n".join(p for p in parts if p)
+        # one newline, not the section separator: the pipeline stores dynamic as the next
+        # message, and provider formatters join messages' text with one newline
+        parts = [self.render_static(modality=modality), self.dynamic or ""]
+        result = "\n".join(p for p in parts if p)
 
         if data:
             result = utils.misc.safe_render(result, data)
 
         return result
+
+    def render_static(self, *, modality: Literal["audio", "text"] | None = None) -> str:
+        """Render the common text and the modality addition, without ``dynamic``."""
+        parts = [self.common]
+        if modality is not None:
+            addition = self.audio if modality == "audio" else self.text
+            if addition:
+                parts.append(addition)
+        return "\n\n".join(p for p in parts if p)
 
     @staticmethod
     def resolve_template(template: str, **kwargs: object) -> Instructions:
@@ -104,6 +124,7 @@ class Instructions:
         If any kwarg value is an ``Instructions`` object, its ``common``/``audio``/``text``
         parts are substituted into the matching variant of the result. This is used by
         workflow tasks to build modality-aware instructions from a single template.
+        ``dynamic`` is not templated: the result never carries one.
         """
         any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
         if any_instructions:
@@ -135,10 +156,12 @@ class Instructions:
         return self.common
 
     def __repr__(self) -> str:
-        return f"Instructions({self.common!r})"
+        if self.dynamic is None:
+            return f"Instructions({self.common!r})"
+        return f"Instructions({self.common!r}, dynamic={self.dynamic!r})"
 
     def __hash__(self) -> int:
-        return hash((self.common, self.audio, self.text))
+        return hash((self.common, self.audio, self.text, self.dynamic))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Instructions):
@@ -146,9 +169,12 @@ class Instructions:
                 self.common == other.common
                 and self.audio == other.audio
                 and self.text == other.text
+                and self.dynamic == other.dynamic
             )
         if isinstance(other, str):
-            return self.common == other
+            # a plain string has no sections, so only section-free instructions equal it;
+            # the realtime handoff path reuses a session on this equality
+            return self.common == other and not self.audio and not self.text and not self.dynamic
         return NotImplemented
 
 
@@ -220,6 +246,31 @@ class AudioContent(BaseModel):
     type: Literal["audio_content"] = Field(default="audio_content")
     frame: list[rtc.AudioFrame]
     transcript: str | None = None
+
+
+class CacheBreakpoint(BaseModel):
+    """Marks the end of a reusable prompt prefix inside a message's content.
+
+    The content before the marker becomes its own cacheable segment on LLMs that
+    enable OpenAI prompt cache breakpoints (GPT-5.6 and later). Every other
+    provider format drops it, and it is never part of ``text_content``.
+
+    In a system or developer message, put the marker last and send per-call text
+    as a separate message. When the request carries tools, a marker partway through
+    a system message is not matched; one at the end of the message is, and so is one
+    partway through a user message.
+
+    Example::
+
+        chat_ctx.add_message(role="system", content=[STATIC_PROMPT, CacheBreakpoint()])
+        chat_ctx.add_message(role="system", content=f"Caller: {caller_id}")
+    """
+
+    # the only ChatContent member with no required field: without this, any typeless dict
+    # would validate as a marker and vanish from the request instead of failing validation
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["cache_breakpoint"] = Field(default="cache_breakpoint")
 
 
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
@@ -399,7 +450,7 @@ class ChatMessage(_ChatItemBase):
         return (self.role, self.interrupted, self.content)
 
 
-ChatContent: TypeAlias = ImageContent | AudioContent | str
+ChatContent: TypeAlias = ImageContent | AudioContent | CacheBreakpoint | str
 
 
 class FunctionCall(_ChatItemBase):
@@ -468,6 +519,13 @@ ChatItem = Annotated[
 ]
 
 
+DYNAMIC_INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions.dynamic"  #  value must not change
+"""
+The ID of the message holding ``Instructions.dynamic``, kept right after the instructions
+message. Formatters that extract one system preamble merge it back in.
+"""
+
+
 class ChatContext:
     def __init__(self, items: NotGivenOr[list[ChatItem]] = NOT_GIVEN):
         self._items: list[ChatItem] = items if is_given(items) else []
@@ -512,7 +570,7 @@ class ChatContext:
             kwargs["extra"] = extra
 
         if isinstance(content, Instructions):
-            message = ChatMessage(role=role, content=[str(content)], **kwargs)
+            message = ChatMessage(role=role, content=[content.render()], **kwargs)
         elif isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
         else:
@@ -627,11 +685,12 @@ class ChatContext:
         """Truncate the chat context to the last N items in place.
 
         Removes leading function calls to avoid partial function outputs.
-        Preserves the first instruction message (system/developer) by adding it back
-        to the beginning.
+        Preserves the first instruction message (system/developer), and the dynamic
+        instructions message right after it, by adding them back to the beginning.
 
-        A `max_items` of 0 leaves nothing but that instruction: it asks for no conversational
-        items, so none are kept. A negative value is a programming error and raises ValueError.
+        A `max_items` of 0 leaves nothing but those instructions: it asks for no
+        conversational items, so none are kept. A negative value is a programming error and
+        raises ValueError.
         """
 
         if max_items < 0:
@@ -640,14 +699,7 @@ class ChatContext:
         if len(self._items) <= max_items:
             return self
 
-        instructions = next(
-            (
-                item
-                for item in self._items
-                if item.type == "message" and item.role in ("system", "developer")
-            ),
-            None,
-        )
+        instructions = self._leading_instructions()
 
         # `-0` is `0` and `items[0:]` is the whole list, so a zero budget would otherwise
         # keep every item.
@@ -660,11 +712,28 @@ class ChatContext:
         ]:
             new_items.pop(0)
 
-        if instructions and not any(item.id == instructions.id for item in new_items):
-            new_items.insert(0, instructions)
+        for item in reversed(instructions):
+            if not any(existing.id == item.id for existing in new_items):
+                new_items.insert(0, item)
 
         self._items[:] = new_items
         return self
+
+    def _leading_instructions(self) -> list[ChatItem]:
+        idx = next(
+            (
+                i
+                for i, item in enumerate(self._items)
+                if item.type == "message" and item.role in ("system", "developer")
+            ),
+            None,
+        )
+        if idx is None:
+            return []
+        kept = self._items[idx : idx + 2]
+        if len(kept) == 2 and kept[1].id != DYNAMIC_INSTRUCTIONS_MESSAGE_ID:
+            return kept[:1]
+        return kept
 
     def merge(
         self,
@@ -763,6 +832,7 @@ class ChatContext:
         format: Literal["openai", "openai.responses"],
         *,
         inject_dummy_user_message: bool = True,
+        prompt_cache_breakpoints: bool = False,
     ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
@@ -772,6 +842,7 @@ class ChatContext:
         *,
         inject_dummy_user_message: bool = True,
         thought_signatures: dict[str, bytes] | None = None,
+        merge_dynamic_instructions: bool = True,
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload
