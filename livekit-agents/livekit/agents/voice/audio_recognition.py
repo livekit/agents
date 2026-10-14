@@ -1088,10 +1088,19 @@ class AudioRecognition:
             return fut
 
         async def _commit_user_turn() -> None:
-            if self._last_final_transcript_time is None or (
-                time.time() - self._last_final_transcript_time > 0.5
+            requested_at = time.time()
+            if (
+                self._turn_detection_mode == "manual"
+                and self._end_of_turn_task is not None
+                and not self._end_of_turn_task.done()
             ):
-                # if the last final transcript is received more than 0.5s ago
+                # A superseded commit must not cancel the pending delivery.
+                await asyncio.wait({self._end_of_turn_task})
+
+            if self._last_final_transcript_time is None or (
+                requested_at - self._last_final_transcript_time > 0.5
+            ):
+                # if the last final arrived more than 0.5s before the commit request
                 # append a silence frame to the stt to flush the buffer
 
                 self._final_transcript_received.clear()
@@ -1119,14 +1128,6 @@ class AudioRecognition:
                             },
                         )
 
-            if (
-                self._turn_detection_mode == "manual"
-                and self._end_of_turn_task is not None
-                and not self._end_of_turn_task.done()
-            ):
-                # A superseded commit must not cancel the pending delivery.
-                await asyncio.wait({self._end_of_turn_task})
-
             if self._audio_interim_transcript:
                 # emit interim transcript as final for frontend display
                 self._hooks.on_final_transcript(
@@ -1153,7 +1154,7 @@ class AudioRecognition:
                 skip_reply=skip_reply,
                 trigger="manual",
             )
-            self._user_turn_committed = bool(transcript)
+            self._user_turn_committed = self._turn_detection_mode != "manual" or bool(transcript)
             if not fut.done():
                 fut.set_result(transcript)
 
