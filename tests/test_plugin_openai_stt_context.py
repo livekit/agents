@@ -581,6 +581,76 @@ async def test_server_endpoint_without_acoustic_time_stays_untimed(turn_detectio
         await instance.aclose()
 
 
+@pytest.mark.parametrize("reconnect_reason", ["model_change", "session_rotation"])
+async def test_server_endpoint_reanchors_after_internal_reconnect(
+    monkeypatch: pytest.MonkeyPatch, reconnect_reason: str
+) -> None:
+    clock = 1000.0
+    monkeypatch.setattr(stt.time, "time", lambda: clock)
+    monkeypatch.setattr(stt, "_max_session_duration", 5)
+    instance = _offline_stt(
+        model="gpt-4o-mini-transcribe",
+        vad=None,
+        turn_detection={"silence_duration_ms": 500},
+    )
+    stream = instance.stream()
+    stream.start_time_offset = 7.0
+    frame = rtc.AudioFrame(
+        data=bytes(48000), sample_rate=24000, num_channels=1, samples_per_channel=24000
+    )
+    try:
+        first_ws = await _connected(stream)
+        clock = 1001.0
+        stream.push_frame(frame)
+        await _wait_for(
+            "first connection audio",
+            lambda: len(_of_type(first_ws, "input_audio_buffer.append")) == 20,
+        )
+        assert stream.start_time_offset == pytest.approx(7.0)
+
+        second_ws = _FakeWebSocket()
+        instance._session.ws = second_ws
+        clock = 1010.0
+        if reconnect_reason == "model_change":
+            instance.update_options(model="gpt-4o-transcribe", language="fr")
+        else:
+            first_ws.incoming.put_nowait(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "one",
+                    "transcript": "hello",
+                }
+            )
+        await _wait_for("second connection", lambda: stream._ws is second_ws)
+
+        clock = 1011.0
+        stream.push_frame(frame)
+        await _wait_for(
+            "second connection audio",
+            lambda: len(_of_type(second_ws, "input_audio_buffer.append")) == 20,
+        )
+        second_ws.incoming.put_nowait(
+            {"type": "input_audio_buffer.speech_started", "item_id": "two"}
+        )
+        second_ws.incoming.put_nowait(
+            {
+                "type": "input_audio_buffer.speech_stopped",
+                "item_id": "two",
+                "audio_end_ms": 900,
+            }
+        )
+        async with asyncio.timeout(2):
+            async for event in stream:
+                if event.type == SpeechEventType.END_OF_SPEECH:
+                    assert event.alternatives[0].end_time == pytest.approx(17.4)
+                    break
+            else:
+                pytest.fail("missing endpoint")
+    finally:
+        await stream.aclose()
+        await instance.aclose()
+
+
 async def test_local_vad_endpoint_preserves_speech_end(monkeypatch):
     monkeypatch.setattr(stt.time, "time", lambda: 1000.0)
     instance = _offline_stt(model="gpt-live-transcribe", vad=_OneShotVAD())
