@@ -58,6 +58,11 @@ _EOU_MAX_HISTORY_TURNS = 6
 # backoff before recreating the stt stream after an unrecoverable error
 _STT_RECONNECT_INTERVAL = 0.5
 
+# VAD speech shorter than this is often noise, so a missing transcript is not worth a warning
+_NO_TRANSCRIPT_MIN_SPEECH_DURATION = 1.0
+# how long after VAD end of speech the STT has to send any transcript before we warn
+_NO_TRANSCRIPT_WARNING_DELAY = 5.0
+
 
 @dataclass
 class _EndOfTurnMetrics:
@@ -355,6 +360,12 @@ class AudioRecognition:
         self._transcription_timeout_handle: asyncio.TimerHandle | None = None
         self._turn_speech_duration: float = 0.0
         self._turn_transcript_received: bool = False
+
+        # one-shot warning for VAD speech that gets no STT transcript at all
+        self._no_transcript_warning_handle: asyncio.TimerHandle | None = None
+        # per VAD segment: STT got silence in place of user audio, or STT sent any text
+        self._stt_audio_withheld = False
+        self._segment_transcribed = False
 
         # user turn limit tracking — accumulates across turns until agent speaks
         self._turn_tracker = _UserTurnTracker()
@@ -770,6 +781,8 @@ class AudioRecognition:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
             if self._stt_pipeline.input_started_at is None:
                 self._stt_pipeline.input_started_at = time.time() - frame.duration
+            if stt_frame is not None:
+                self._stt_audio_withheld = True
             self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
 
         if self._vad_ch is not None:
@@ -831,6 +844,7 @@ class AudioRecognition:
                 self._backchannel_boundary_callback = None
         finally:
             self._cancel_transcription_timeout()
+            self._cancel_no_transcript_warning()
             # EOU normally ends this span, but teardown cancels EOU before a
             # pending speech segment necessarily produces a transcript.
             self._end_user_turn_span()
@@ -877,6 +891,7 @@ class AudioRecognition:
             self._transcript_buffer.clear()
         else:
             self._cancel_transcription_timeout()
+            self._cancel_no_transcript_warning()
 
             if self._stt_consumer_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
@@ -1167,6 +1182,10 @@ class AudioRecognition:
             if speech_end_time <= ev.created_at:
                 ev = replace(ev, speech_end_time=speech_end_time)
 
+        if ev.alternatives and ev.alternatives[0].text:
+            self._segment_transcribed = True
+            self._cancel_no_transcript_warning()
+
         # Collect provider-known STT ids for this user turn. The actual attribute
         # is written once when the user_turn span ends (see _on_end_of_turn), to
         # avoid ordering issues with span creation.
@@ -1412,6 +1431,8 @@ class AudioRecognition:
                 self._vad_speech_started = True
 
             self._cancel_transcription_timeout()
+            self._stt_audio_withheld = False
+            self._segment_transcribed = False
             self._end_eou_wait_span("user_resumed", end_time=speech_start_time)
 
             with tracer.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
@@ -1468,6 +1489,7 @@ class AudioRecognition:
                     ev.speech_duration,
                     delay=ev.silence_duration + ev.inference_duration,
                 )
+                self._arm_no_transcript_warning(ev.speech_duration)
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
@@ -1968,8 +1990,38 @@ class AudioRecognition:
             handle.cancel()
             self._transcription_timeout_handle = None
 
+    def _cancel_no_transcript_warning(self) -> None:
+        # getattr: several tests build AudioRecognition with __new__, skipping __init__
+        if (handle := getattr(self, "_no_transcript_warning_handle", None)) is not None:
+            handle.cancel()
+            self._no_transcript_warning_handle = None
+
+    def _arm_no_transcript_warning(self, speech_duration: float) -> None:
+        # withheld audio (AEC warmup, uninterruptible speech) is expected to give no transcript
+        if (
+            speech_duration < _NO_TRANSCRIPT_MIN_SPEECH_DURATION
+            or self._stt_audio_withheld
+            or self._segment_transcribed
+        ):
+            return
+
+        self._cancel_no_transcript_warning()
+        self._no_transcript_warning_handle = asyncio.get_running_loop().call_later(
+            _NO_TRANSCRIPT_WARNING_DELAY, self._on_no_transcript_warning, speech_duration
+        )
+
+    def _on_no_transcript_warning(self, speech_duration: float) -> None:
+        self._no_transcript_warning_handle = None
+        stt_label = "/".join(p for p in (self._stt_provider, self._stt_model) if p) or None
+        logger.warning(
+            "no transcript for user speech",
+            extra={"stt": stt_label, "speech_duration": round(speech_duration, 2)},
+        )
+
     def _reset_transcription_timeout(self) -> None:
         self._cancel_transcription_timeout()
+        # a cleared turn drops in-flight STT results, so a warning would be misleading
+        self._cancel_no_transcript_warning()
         self._turn_speech_duration = 0.0
         self._turn_transcript_received = False
 
