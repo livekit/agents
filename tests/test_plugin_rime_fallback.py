@@ -54,3 +54,40 @@ async def test_prism_startup_uses_backup_after_primary_initialization_failure() 
                 await backup_peer.end(response_id)
                 await asyncio.wait_for(speech.wait_for_playout(), 3)
                 assert speech.exception() is None
+
+
+async def test_prism_restart_initialization_failure_opens_backup_once(monkeypatch) -> None:
+    async with peer_model() as (primary_peer, primary, _):
+        async with peer_model() as (backup_peer, backup, _):
+            created = []
+            create_session = backup.session
+
+            def counted_session(**kwargs):
+                child = create_session(**kwargs)
+                created.append(child)
+                return child
+
+            monkeypatch.setattr(backup, "session", counted_session)
+            adapter = llm.RealtimeModelFallbackAdapter([primary, backup])
+            session = adapter.session()
+            reconnected = []
+            session.on("session_reconnected", reconnected.append)
+            try:
+                await session.initialize(instructions="test")
+                primary_peer.refusals["session.update"] = ("invalid_session", "event")
+                await adapter.restart_session()
+                if session._swap_task is not None:
+                    await asyncio.wait_for(session._swap_task, 3)
+                assert len(created) == 1
+                assert len(reconnected) == 1
+                assert not created[0]._closed
+
+                await session.set_input_text("Use the backup")
+                reply = session.generate_reply()
+                request = await backup_peer.next()
+                assert request["response"]["prism_input_text"] == "Use the backup"
+                response_id = await backup_peer.start(request)
+                await backup_peer.end(response_id)
+                assert (await asyncio.wait_for(reply, 3)).response_id == response_id
+            finally:
+                await session.aclose()
