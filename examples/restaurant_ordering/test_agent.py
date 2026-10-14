@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from agent import RosaAgent, Userdata
+from agent import GabbyAgent, Userdata
 from backend import demo_pos
 
 from livekit.agents import AgentSession, inference, llm
@@ -27,7 +27,7 @@ async def test_ro02_corrections_during_the_read_back() -> None:
         _main_llm() as model,
         AgentSession[Userdata](llm=model, userdata=Userdata(pos=pos)) as sess,
     ):
-        await sess.start(RosaAgent(pos))
+        await sess.start(GabbyAgent(pos))
         await sess.run(
             user_input="Hi, can I get a large pepperoni, a dozen hot wings, and a large Coke?"
         )
@@ -55,7 +55,7 @@ async def test_a_large_pizza_and_a_coke_asks_the_coke_size() -> None:
         _judge_llm() as judge,
         AgentSession[Userdata](llm=model, userdata=Userdata(pos=pos)) as sess,
     ):
-        await sess.start(RosaAgent(pos))
+        await sess.start(GabbyAgent(pos))
         result: RunResult[None] = await sess.run(user_input="Large pepperoni and a Coke.")
         await result.expect.contains_message(role="assistant").judge(
             judge,
@@ -72,6 +72,62 @@ async def test_a_large_pizza_and_a_coke_asks_the_coke_size() -> None:
 
 
 @pytest.mark.asyncio
+async def test_things_we_dont_do_get_a_plain_counter_answer() -> None:
+    pos = demo_pos()
+    async with (
+        _main_llm() as model,
+        _judge_llm() as judge,
+        AgentSession[Userdata](llm=model, userdata=Userdata(pos=pos)) as sess,
+    ):
+        await sess.start(GabbyAgent(pos))
+        await sess.run(user_input="Can I get a large pepperoni?")
+        result: RunResult[None] = await sess.run(user_input="Can you cut it into squares?")
+        await result.expect.contains_message(role="assistant").judge(
+            judge,
+            intent=(
+                "Says briefly and naturally, like a pizzeria employee, that they don't do that "
+                "(offering the closest alternative is fine), without mentioning a system or "
+                "what it can or can't see, and without offering to pass the caller to anyone."
+            ),
+        )
+        result = await sess.run(user_input="Okay. Can you use code save twenty?")
+        await result.expect.contains_message(role="assistant").judge(
+            judge,
+            intent=(
+                "Says there are no discount codes, without offering to check with, transfer to, "
+                "or pass the caller to a staff member or anyone else."
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_half_and_half_is_one_pizza_and_no_drink_is_invented() -> None:
+    pos = demo_pos()
+    async with (
+        _main_llm() as model,
+        _judge_llm() as judge,
+        AgentSession[Userdata](llm=model, userdata=Userdata(pos=pos)) as sess,
+    ):
+        await sess.start(GabbyAgent(pos))
+        result: RunResult[None] = await sess.run(
+            user_input="Can I get a large pizza, half mushroom, half pepperoni?"
+        )
+        await result.expect.contains_message(role="assistant").judge(
+            judge,
+            intent=(
+                "Doesn't ask about or suggest a specific item the caller didn't mention, such "
+                "as a drink or a side (offering breadsticks, or asking 'anything else?', is fine)."
+            ),
+        )
+
+    assert len(pos.lines) == 1, pos.cart_summary()
+    line = pos.lines[0]
+    assert line.size.id == "L" and not line.toppings, pos.cart_summary()
+    halves = sorted(sorted(t.id for t in h) for h in line.halves)
+    assert halves == [["mushrooms"], ["pepperoni"]], pos.cart_summary()
+
+
+@pytest.mark.asyncio
 async def test_ro06_ro03_nut_allergy_and_the_86d_side() -> None:
     pos = demo_pos()
     async with (
@@ -79,7 +135,7 @@ async def test_ro06_ro03_nut_allergy_and_the_86d_side() -> None:
         _judge_llm() as judge,
         AgentSession[Userdata](llm=model, userdata=Userdata(pos=pos)) as sess,
     ):
-        await sess.start(RosaAgent(pos))
+        await sess.start(GabbyAgent(pos))
         result: RunResult[None] = await sess.run(
             user_input="My kid has a nut allergy. What's safe to order?"
         )
@@ -105,7 +161,7 @@ async def test_ro07_bursts_and_repeats_make_no_duplicates() -> None:
         _main_llm() as model,
         AgentSession[Userdata](llm=model, userdata=Userdata(pos=pos)) as sess,
     ):
-        await sess.start(RosaAgent(pos))
+        await sess.start(GabbyAgent(pos))
         await sess.run(user_input="Two large pepperonis, a medium margherita,")
         await sess.run(user_input="yeah two pepperonis, and a dozen wings, BBQ, and oh, two cokes")
         await sess.run(user_input="Small. Small is fine. And two pepperonis, right?")

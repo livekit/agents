@@ -10,11 +10,19 @@ from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Literal
 
-Category = Literal["pizza", "wings", "sides", "salads", "drinks", "desserts"]
+Category = Literal["pizza", "wings", "sides", "dips", "salads", "drinks", "desserts"]
 Mode = Literal["pickup", "delivery"]
 EndedEarly = Literal["wrong_person", "call_back_later", "declined"]
 
-CATEGORIES: tuple[Category, ...] = ("pizza", "wings", "sides", "salads", "drinks", "desserts")
+CATEGORIES: tuple[Category, ...] = (
+    "pizza",
+    "wings",
+    "sides",
+    "dips",
+    "salads",
+    "drinks",
+    "desserts",
+)
 DELIVERY_MINIMUM = Decimal("20.00")
 DELIVERY_FEE = Decimal("4.99")
 TAX_RATE = Decimal("0.09")
@@ -145,7 +153,7 @@ class MenuItem:
         if not self.needs_size:
             return self.sizes[0]
         labels = [s.label for s in self.sizes]
-        # "small, medium, or large", the way Rosa asks it
+        # "small, medium, or large", the way Gabby asks it
         options = (
             " or ".join(labels) if len(labels) < 3 else f"{', '.join(labels[:-1])}, or {labels[-1]}"
         )
@@ -295,6 +303,11 @@ def seed_menu() -> list[MenuItem]:
         ),
         _one("fries", "Fries", "sides", "4.49"),
         _one("cheesy_bread", "Cheesy Bread", "sides", "6.99", allergens=DAIRY_GLUTEN),
+        # dipping sauces, for the crusts, breadsticks, and wings
+        _one("garlic_sauce", "Garlic Sauce", "dips", "0.99", allergens=frozenset({"dairy"})),
+        _one("ranch", "Ranch", "dips", "0.99", allergens=frozenset({"dairy", "egg"})),
+        _one("marinara", "Marinara", "dips", "0.99"),
+        _one("blue_cheese", "Blue Cheese", "dips", "0.99", allergens=frozenset({"dairy", "egg"})),
         _one(
             "caesar",
             "Caesar Salad",
@@ -380,6 +393,11 @@ def _option(options: tuple[Option, ...], said: str, what: str) -> Option:
 # ---- the cart ----
 
 
+def _halves_key(halves: tuple[list[Option], list[Option]]) -> frozenset[frozenset[str]]:
+    # which half is which doesn't matter: half mushrooms, half pepperoni either way round
+    return frozenset(frozenset(t.id for t in h) for h in halves)
+
+
 @dataclass
 class Line:
     id: str
@@ -389,12 +407,15 @@ class Line:
     toppings: list[Option] = field(default_factory=list)
     sauce: Option | None = None
     without: list[str] = field(default_factory=list)  # ingredients left off: "black olives"
+    # half-and-half: each half's own toppings, at half a topping's price
+    halves: tuple[list[Option], list[Option]] = field(default_factory=lambda: ([], []))
     rev: int = 1  # bumped on every edit, so the page knows which line to flash
     was: str | None = None  # the line before its last edit, for the page to strike through
 
     @property
     def unit_price(self) -> Decimal:
-        return self.size.price + sum((t.price for t in self.toppings), Decimal("0"))
+        half = sum((t.price / 2 for t in (*self.halves[0], *self.halves[1])), Decimal("0"))
+        return self.size.price + sum((t.price for t in self.toppings), Decimal("0")) + half
 
     @property
     def total(self) -> Decimal:
@@ -402,7 +423,13 @@ class Line:
 
     @property
     def allergens(self) -> frozenset[str]:
-        extra = [o.allergens for o in (*self.toppings, *([self.sauce] if self.sauce else []))]
+        opts = (
+            *self.toppings,
+            *self.halves[0],
+            *self.halves[1],
+            *([self.sauce] if self.sauce else []),
+        )
+        extra = [o.allergens for o in opts]
         return self.item.allergens.union(*extra)
 
     def same_order_as(self, other: Line) -> bool:
@@ -412,11 +439,16 @@ class Line:
             and {t.id for t in self.toppings} == {t.id for t in other.toppings}
             and (self.sauce and self.sauce.id) == (other.sauce and other.sauce.id)
             and set(self.without) == set(other.without)
+            and _halves_key(self.halves) == _halves_key(other.halves)
         )
 
     def modifiers(self) -> list[str]:
         mods = [f"{self.sauce.label} sauce"] if self.sauce else []
-        return mods + [f"+ {t.label}" for t in self.toppings] + [f"no {w}" for w in self.without]
+        mods += [f"+ {t.label}" for t in self.toppings]
+        if any(self.halves):
+            first, second = (", ".join(t.label for t in h) or "plain" for h in self.halves)
+            mods += [f"half {first}", f"other half {second}"]
+        return mods + [f"no {w}" for w in self.without]
 
     def describe(self) -> str:
         size = f"{self.size.label} " if self.item.needs_size else ""
@@ -552,8 +584,10 @@ class Pos:
             raise PosError(f"That's {' and '.join(tags)}: look up one allergen per call.")
         if not tags:
             raise PosError(
-                f"The menu data doesn't track {said!r}. Say you can't check that from here, and "
-                "offer to transfer them to a staff member who can."
+                f"The menu data doesn't track {said!r}, so you can't tell them either way. Say "
+                "so plainly, and that everything's made in one shared kitchen, so with a serious "
+                "allergy they may want to skip anything they're unsure of. You handle this "
+                "yourself: don't offer to pass them to anyone."
             )
         tag = tags[0]
         found = [m.name for m in self.menu if tag in m.allergens]
@@ -603,6 +637,38 @@ class Pos:
             raise PosError(f"{item.name} doesn't come with a sauce choice.")
         return tops, None
 
+    def _halves(
+        self,
+        item: MenuItem,
+        first: list[str] | None,
+        second: list[str] | None,
+        tops: list[Option],
+    ) -> tuple[list[Option], list[Option]]:
+        # "half mushroom, half pepperoni": one pizza, each half with its own toppings
+        if not first and not second:
+            return [], []
+        if not item.takes_toppings:
+            raise PosError(f"{item.name} doesn't take toppings, so it can't be half-and-half.")
+        halves: list[list[Option]] = []
+        for said in (first or [], second or []):
+            half: list[Option] = []
+            for t in said:
+                opt = _option(TOPPINGS, t, "topping")
+                if opt in tops:
+                    raise PosError(
+                        f"{opt.label} is already on the whole pizza: take it out of toppings, "
+                        "or leave it off the half."
+                    )
+                if opt not in half:
+                    half.append(opt)
+            halves.append(half)
+        if both := [t.label for t in halves[0] if t in halves[1]]:
+            raise PosError(
+                f"{' and '.join(both)} on both halves is a topping on the whole pizza: put it in "
+                "toppings instead."
+            )
+        return halves[0], halves[1]
+
     def _left_off(self, item: MenuItem, without: list[str], tops: list[Option]) -> list[str]:
         # "no olives": only what that pizza comes with, as the menu names it
         out: list[str] = []
@@ -636,15 +702,18 @@ class Pos:
         toppings: list[str] | None = None,
         sauce: str | None = None,
         without: list[str] | None = None,
+        first_half: list[str] | None = None,
+        second_half: list[str] | None = None,
     ) -> Line:
         self._editable()
         item = self.check_availability(item_id)
         _check_quantity(quantity)
         tops, sc = self._modifiers(item, toppings, sauce)
+        halves = self._halves(item, first_half, second_half, tops)
         left_off = self._left_off(item, without or [], tops)
         chosen = item.size(size)
         _check_pieces(chosen, quantity)
-        line = Line(f"L{self._next_line}", item, chosen, quantity, tops, sc, left_off)
+        line = Line(f"L{self._next_line}", item, chosen, quantity, tops, sc, left_off, halves)
         # the same item said twice is one line, never two; changing how many is an explicit update
         for existing in self.lines:
             if existing.same_order_as(line):
@@ -670,6 +739,8 @@ class Pos:
         sauce: str | None = None,
         without: list[str] | None = None,
         more: bool = False,
+        first_half: list[str] | None = None,
+        second_half: list[str] | None = None,
     ) -> Line:
         # only the fields given change; raising a count needs `more`, since a repeated
         # "two pepperonis" is the most common way an order doubles by mistake
@@ -691,6 +762,14 @@ class Pos:
                 sauce if sauce is not None else (line.sauce.label if line.sauce else None),
             )
             new_tops, new_sauce = tops, sc
+        new_halves = line.halves
+        if first_half is not None or second_half is not None or toppings is not None:
+            new_halves = self._halves(
+                line.item,
+                first_half if first_half is not None else [t.label for t in line.halves[0]],
+                second_half if second_half is not None else [t.label for t in line.halves[1]],
+                new_tops,
+            )
         new_without = self._left_off(
             line.item, without if without is not None else line.without, new_tops
         )
@@ -702,15 +781,17 @@ class Pos:
             or new_tops != line.toppings
             or new_sauce != line.sauce
             or new_without != line.without
+            or new_halves != line.halves
             or (quantity is not None and quantity != line.quantity)
         )
         if not changed:
             return line  # a repeat of what's already there: nothing to do
-        line.size, line.toppings, line.sauce, line.without = (
+        line.size, line.toppings, line.sauce, line.without, line.halves = (
             new_size,
             new_tops,
             new_sauce,
             new_without,
+            new_halves,
         )
         if quantity is not None:
             line.quantity = quantity

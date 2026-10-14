@@ -27,7 +27,7 @@ def _ready_for_pickup(pos: Pos) -> None:
 
 
 def test_menu_is_the_seeded_day(pos: Pos) -> None:
-    assert len(pos.menu) == 27
+    assert len(pos.menu) == 31
     assert not pos.item("buffalo_cauliflower").available
     assert "nuts" in pos.item("pesto").allergens
 
@@ -203,6 +203,35 @@ def test_leaving_a_topping_off(pos: Pos) -> None:
     with pytest.raises(PosError, match="put it on that pizza's line") as e:
         pos.add("wings", 1, "dozen", sauce="hot", without=["olives"])
     assert "comes with" not in str(e.value)
+
+
+def test_half_and_half_is_one_pizza_with_two_halves(pos: Pos) -> None:
+    line = pos.add("cheese", 1, "large", first_half=["mushroom"], second_half=["pepperoni"])
+    assert line.describe() == "L1: 1 × large Cheese, half mushrooms, other half pepperoni"
+    # a half topping is half a topping's price
+    assert line.unit_price == line.size.price + Decimal("2.00")
+    assert pos.snapshot()["cart"]["lines"][0]["modifiers"] == [
+        "half mushrooms",
+        "other half pepperoni",
+    ]
+    # the same pizza said again, halves either way round, is a repeat
+    with pytest.raises(PosError, match="already in the cart"):
+        pos.add("cheese", 1, "large", first_half=["pepperoni"], second_half=["mushrooms"])
+    pos.update("L1", second_half=["sausage"])
+    assert pos.lines[0].modifiers() == ["half mushrooms", "other half sausage"]
+    assert pos.lines[0].was == "1 × large Cheese, half mushrooms, other half pepperoni"
+    with pytest.raises(PosError, match="on both halves"):
+        pos.update("L1", second_half=["mushrooms"])
+    with pytest.raises(PosError, match="already on the whole pizza"):
+        pos.update("L1", toppings=["mushrooms"])
+    with pytest.raises(PosError, match="can't be half-and-half"):
+        pos.add("wings", 1, "dozen", sauce="hot", first_half=["mushrooms"])
+
+
+def test_dipping_sauces_are_on_the_menu(pos: Pos) -> None:
+    assert pos.add("garlic_sauce", 2).describe() == "L1: 2 × Garlic Sauce"
+    assert pos.item("ranch").category == "dips"
+    assert pos.subtotal() == Decimal("1.98")
 
 
 def test_ro07_repeating_an_item_never_makes_a_second_line(pos: Pos) -> None:

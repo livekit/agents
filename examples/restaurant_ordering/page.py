@@ -106,7 +106,6 @@ class Page:
 
     def push(self, stage: str | None = None) -> None:
         """Copies the POS into the page's state, moves to `stage` if given, and sends it."""
-        # merged, so whatever else is in there (a transfer) stays
         self.data = {**self.data, **self._pos.snapshot()}
         if stage and self.stage != "ended":
             self.stage = stage
@@ -116,11 +115,6 @@ class Page:
         """Logs a tool call for the page, e.g. ("add_item", "L1: 1 × large Pepperoni")."""
         self._log(tool, detail)
         self.push(stage)
-
-    def transfer(self, queue: str, reason: str) -> None:
-        self.data["transfer"] = {"queue": queue, "reason": reason}
-        self._log("transfer", f"{queue} · {reason}")
-        self.push()
 
     async def ended(self, reason: str) -> None:
         """The agent is hanging up: the page leaves on this, before the room closes."""

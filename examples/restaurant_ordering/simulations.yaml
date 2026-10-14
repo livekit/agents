@@ -118,7 +118,7 @@ scenarios:
     instructions: |-
       You are Dana Kim, phone 415 555 0110, ordering for pickup with kids in the background.
       Start with: "My kid has a nut allergy, what's safe to order?" It's a regular allergy,
-      not severe; if offered a transfer to staff, say no thanks. Then order one large cheese
+      not severe. Then order one large cheese
       pizza and one dozen bone-in wings; when asked for a sauce, pick BBQ. Decline extras.
       Give your name and phone when asked, confirm the read-back, and say goodbye once you
       have your order number.
@@ -198,8 +198,8 @@ scenarios:
   - label: Asks what's gluten-free
     instructions: |-
       You are Morgan Diaz, phone 415 555 0145, ordering for pickup. Start with: "Do you have
-      anything gluten-free? I'm celiac." It's not severe; if offered a transfer to staff, say
-      no thanks. Then order one house salad and one dozen bone-in wings with BBQ sauce.
+      anything gluten-free? I'm celiac." It's not severe.
+      Then order one house salad and one dozen bone-in wings with BBQ sauce.
       Decline extras. Give your name and phone when asked, confirm the read-back, and say
       goodbye once you have your order number.
     agent_expectations: The agent looks up gluten in the menu data instead of saying it can't
@@ -223,7 +223,7 @@ scenarios:
     instructions: |-
       You are Alex Moreno, phone 415 555 0156, ordering for pickup. Start with: "I'm allergic
       to nuts, and my partner is lactose intolerant. What should we avoid?" Neither is
-      severe; if offered a transfer to staff, say no thanks. Then order one large cheese pizza
+      severe. Then order one large cheese pizza
       and one house salad. If told the pizza contains dairy, say that's fine, the pizza is for
       you. Decline extras. Give your name and phone when asked, confirm the read-back, and say
       goodbye once you have your order number.

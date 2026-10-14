@@ -87,16 +87,6 @@ async def test_a_viewer_who_joins_late_sees_the_call_so_far() -> None:
     assert [to for to, _ in room.local_participant.sent] == ["viewer-ab12", "viewer-ef56"]
 
 
-async def test_a_transfer_stays_on_the_page() -> None:
-    room = _Room("viewer-ab12")
-    ud = _watched(room)
-    ud.page.transfer("restaurant_staff", "severe nut allergy")
-    ud.page.push()
-    await asyncio.sleep(0)
-    data = room.local_participant.sent[-1][1]["data"]
-    assert data["transfer"] == {"queue": "restaurant_staff", "reason": "severe nut allergy"}
-
-
 def test_the_visitors_name_is_only_a_browser_callers() -> None:
     assert visitor_name(cast(Any, _Participant("caller-ab12", "Sam Carter"))) == "Sam Carter"
     assert visitor_name(cast(Any, _Participant("sip_+14155550142", "Phone"))) == ""

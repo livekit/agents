@@ -118,20 +118,6 @@ def _caller_spoke_last(ctx: RunContext[Any]) -> bool:
     return bool(heard) and not any(t > heard[-1] for t in spoken)
 
 
-async def transfer(ctx: RunContext[Any], who: str, reason: str) -> None:
-    """Hands the call to `who` ("someone at the restaurant"), saying so first.
-
-    This example has no one to hand off to, so the call ends there. To reach a real person,
-    move the caller with `ctx.api.sip.transfer_sip_participant` instead of hanging up.
-    """
-    logger.info("transferring to %s: %s", who, reason)
-    await ctx.wait_for_playout()
-    # never a silent drop: if the caller spoke last, say where they're going first
-    if _caller_spoke_last(ctx):
-        await ctx.session.say(f"One moment, I'm connecting you with {who}.").wait_for_playout()
-    await hang_up(f"Transferred to {who}", ctx.userdata.page)
-
-
 _goodbyes: set[asyncio.Task[None]] = set()
 
 

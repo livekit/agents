@@ -1,4 +1,4 @@
-"""Zappi's Pizzeria on the phone: Rosa takes pickup and delivery orders, and calls a customer
+"""Zappi's Pizzeria on the phone: Gabby takes pickup and delivery orders, and calls a customer
 back when an item in their delivery runs out.
 
 Calls are inbound by default. `{"direction": "outbound"}` in the job metadata (or
@@ -42,7 +42,6 @@ from call import (
     pause_between_sentences,
     room_options,
     spoken_number,
-    transfer,
 )
 from dotenv import load_dotenv
 from grade import grade
@@ -69,7 +68,7 @@ logger = logging.getLogger("restaurant-ordering")
 
 load_dotenv()
 
-PERSONA = "Rosa"
+PERSONA = "Gabby"
 BUSINESS = "Zappi's Pizzeria"
 VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"  # Cartesia "Katie"
 # the number a customer calls back on, said on voicemail
@@ -81,7 +80,6 @@ PHONE = "phone"
 @dataclass
 class Userdata:
     pos: Pos
-    transferred: bool = False  # handed to a staff member: the call is theirs now
     # the demo website's view of the call: inert unless a page is watching (page.py)
     page: Page = field(init=False)
 
@@ -201,7 +199,7 @@ def _asked_for_more(ctx: Ctx, total: int) -> bool:
     )
 
 
-class RosaAgent(Agent):
+class GabbyAgent(Agent):
     def __init__(self, pos: Pos) -> None:
         super().__init__(instructions=_instructions(pos))
         self._submitted_at: float | None = None
@@ -274,7 +272,11 @@ class RosaAgent(Agent):
             "every item."
         )
         if severe:
-            out += " It's a severe allergy: offer to transfer them to a staff member."
+            out += (
+                " It's a severe allergy: be serious and careful. You can't promise anything from "
+                "a shared kitchen, so they should skip whatever they're unsure of. You handle it "
+                "yourself: don't offer to pass them to anyone."
+            )
         return out
 
     # ---- the cart ----
@@ -289,6 +291,8 @@ class RosaAgent(Agent):
         toppings: list[str] | None = None,
         sauce: str | None = None,
         without: list[str] | None = None,
+        first_half: list[str] | None = None,
+        second_half: list[str] | None = None,
     ) -> str:
         """Add a new item to the cart. Don't call it for an item that's already there: a
         caller naming it again is repeating themselves, not ordering more.
@@ -304,10 +308,15 @@ class RosaAgent(Agent):
             toppings: Extra pizza toppings, e.g. ["mushrooms"]. Pizza only.
             sauce: Required for wings, e.g. "hot" or "Thai".
             without: What to leave off a pizza ("no olives"), e.g. ["olives"]. Same price.
+            first_half: Half-and-half only ("half mushroom, half pepperoni"): the toppings on
+                one half, e.g. ["mushrooms"]. One pizza, never two.
+            second_half: The toppings on the other half, e.g. ["pepperoni"].
         """
         with _pos_rules(ctx) as pos:
             _drink_size_said(ctx, pos, item_id, size)
-            line = pos.add(item_id, quantity, size, toppings, sauce, without)
+            line = pos.add(
+                item_id, quantity, size, toppings, sauce, without, first_half, second_half
+            )
         ctx.userdata.page.record("add_item", line.describe(), stage="order")
         return f"Added {line.describe()}.{_line_note(pos, line)} {pos.cart_summary()}"
 
@@ -321,6 +330,8 @@ class RosaAgent(Agent):
         toppings: list[str] | None = None,
         sauce: str | None = None,
         without: list[str] | None = None,
+        first_half: list[str] | None = None,
+        second_half: list[str] | None = None,
     ) -> str:
         """Change one line in the cart. Pass only what changed; the rest stays as it is.
 
@@ -334,12 +345,24 @@ class RosaAgent(Agent):
             sauce: The new wing sauce.
             without: The full new list of what to leave off this pizza, e.g. ["olives"]; []
                 puts everything back.
+            first_half: The full new list of toppings on one half, for half-and-half.
+            second_half: The full new list of toppings on the other half.
         """
         more = quantity is not None and _asked_for_more(ctx, quantity)
         with _pos_rules(ctx) as pos:
             before = pos.line(line_id).describe()
             _drink_size_said(ctx, pos, pos.line(line_id).item.id, size)
-            line = pos.update(line_id, quantity, size, toppings, sauce, without, more=more)
+            line = pos.update(
+                line_id,
+                quantity,
+                size,
+                toppings,
+                sauce,
+                without,
+                more=more,
+                first_half=first_half,
+                second_half=second_half,
+            )
         after = line.describe()
         if after == before:
             return f"No change: it's already {after}."
@@ -448,19 +471,6 @@ class RosaAgent(Agent):
         )
 
     @function_tool
-    async def transfer_to_staff(self, ctx: Ctx, reason: str) -> str:
-        """Hand the call to a staff member at the restaurant. Offer it for a severe allergy, or
-        if the caller asks for a person; transfer only after they say yes.
-
-        Args:
-            reason: Why, in a few words.
-        """
-        ctx.userdata.transferred = True
-        ctx.userdata.page.transfer("restaurant_staff", reason)
-        await transfer(ctx, "someone at the restaurant", reason)
-        return "Transferred to restaurant staff."
-
-    @function_tool
     async def end_call(self, ctx: Ctx) -> None:
         """Hang up, once you've said goodbye and the caller has nothing else."""
         ud = ctx.userdata
@@ -479,7 +489,7 @@ class RosaAgent(Agent):
                 f"{order.ready_in}, then say goodbye before ending the call."
             )
         # a read-back order that never went in (e.g. submit_order refused): once, go back to it
-        if not order and ud.pos.quote and not ud.transferred and not self._warned:
+        if not order and ud.pos.quote and not self._warned:
             self._warned = True
             ud.page.record("end_call", "Refused: order read back but not submitted")
             raise ToolError(
@@ -705,13 +715,13 @@ You're {PERSONA}, answering the phone at {BUSINESS}, a neighborhood pizzeria in 
 Francisco. You take pickup and delivery orders. Sound warm, quick, and lightly upbeat, like a
 capable neighborhood pizzeria employee during a busy shift: welcoming and helpful, never bubbly
 or salesy (about a 6 out of 10 for enthusiasm). For example: "Absolutely, I can help with
-that. Would you like a small, medium, or large Coke?" Drop the upbeat tone and be calm,
+that. What size would you like?" Drop the upbeat tone and be calm,
 plain, and careful whenever an allergy comes up, or there's a problem with a payment, a
 charge, or a refund.
 
 # The menu (ids for the tools)
 {menu}
-Pizza toppings, $2 each: {toppings}.
+Pizza toppings, $2 each ($1 on half a pizza): {toppings}.
 Wing sauces: {sauces}. "Thai" means Thai chili peanut.
 Only offer what's on this menu. Some items may be out today; the tools will tell you.
 The ids (menu ids, and cart lines like L1) are for the tools only: never say them.
@@ -727,7 +737,14 @@ Say a price when they ask, and the total at the read-back.
 
 # Taking the order
 - Add each item with add_item as soon as the caller says it; don't wait for the whole order.
-  Ask for anything required that's missing: pizza size, wing size and sauce, drink size.
+  Ask for anything required that's missing for what they ordered: pizza size, wing size and
+  sauce, the size of a drink they asked for, naming the choices ("Small, medium, or large?").
+  Never ask about or suggest anything they haven't mentioned (a drink, a side, an extra):
+  the breadsticks offer is the only suggestion.
+- Half-and-half ("half mushroom, half pepperoni"): one pizza, a cheese pizza unless they
+  name another, with each half's toppings in first_half and second_half. Don't make two
+  pizzas or put both on the whole pizza. Two different specialty pizzas on one pie isn't
+  something we do: offer half-and-half toppings instead.
   Pass only a size the caller said for that item. Never carry one over from another item in
   the same sentence ("a large pepperoni and a Coke": the Coke has no size yet, so ask), and
   never pick one for them.
@@ -746,8 +763,16 @@ Say a price when they ask, and the total at the read-back.
 - Leaving something off a pizza ("no olives", "hold the onions"): pass it in `without`.
   The price doesn't change.
 - Allergies: call items_with_allergen first. Name the items that contain it, per the menu.
-  Never say anything is safe or free of an allergen; the kitchen is shared. For a severe
-  allergy, offer to transfer them to a staff member (transfer_to_staff, once they say yes).
+  Never say anything is safe or free of an allergen; the kitchen is shared. A severe
+  allergy gets the same answer, said seriously.
+- Something we don't do (cutting it in squares, extra crispy, a crust or item
+  that isn't on the menu): say it the way someone at the counter would, briefly and kindly
+  ("Sorry, we don't do that, but I can..."), with the closest thing we do have, if there is
+  one. Never mention "the system", "options", or what you can or can't see.
+- Discount codes and coupons: we don't have any. Say so in a sentence ("Sorry, we don't
+  have any discount codes right now.") and carry on.
+- You handle the whole call yourself: never offer to pass them to a staff member or a
+  manager. If they ask for a person, say you're the one taking orders and can help with it.
 - Once, when the order sounds done and has no breadsticks, call offer_breadsticks and
   suggest them. That's the only upsell: don't push anything else.
 
@@ -867,9 +892,9 @@ async def entrypoint(ctx: JobContext) -> None:
         pos = demo_pos("outbound", visitor_name(caller) or meta.get("name") or "")
         agent = DeliveryUpdateAgent(pos)
     else:
-        # a restaurant doesn't know who's calling: Rosa asks for the name for the order
+        # a restaurant doesn't know who's calling: Gabby asks for the name for the order
         pos = demo_pos()
-        agent = RosaAgent(pos)
+        agent = GabbyAgent(pos)
 
     tts = inference.TTS(
         "cartesia/sonic-3.5",
