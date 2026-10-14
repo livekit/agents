@@ -391,6 +391,43 @@ class _RecordingSession:
         return self._ws
 
 
+class _URLRecordingSession:
+    """Hands out a fresh socket per connect and keeps every URL it was asked to open."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.urls: list[str] = []
+
+    async def ws_connect(self, url: str, **kwargs):
+        self.urls.append(url)
+        ws = _LiveWS()
+        ws._response = SimpleNamespace(headers={})  # read for the dg- response headers
+        return ws
+
+
+async def test_stt_update_options_reaches_open_streams_diarization_and_tags():
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.deepgram import STT
+
+    session = _URLRecordingSession()
+    instance = STT(api_key="test-key", language="en-US", http_session=session)
+    stream = instance.stream()
+    try:
+        await _wait_until(lambda: len(session.urls) == 1)
+        assert "diarize" not in parse_qs(urlparse(session.urls[0]).query)
+
+        instance.update_options(enable_diarization=True, tags=["prod"])
+
+        await _wait_until(lambda: len(session.urls) == 2)
+        query = parse_qs(urlparse(session.urls[1]).query)
+        assert query["diarize"] == ["true"]
+        assert query["tag"] == ["prod"]
+    finally:
+        await stream.aclose()
+        await instance.aclose()
+
+
 class _DeadSocket:
     """A socket that has silently gone away: writes fail, the read side never notices.
 
