@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import Agent, AgentSession, LanguageCode
+from livekit.agents import Agent, AgentSession, LanguageCode, llm
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
@@ -220,6 +220,33 @@ async def test_interim_after_snapshot_is_available_to_next_commit(
     assert _user_transcripts(agent) == [_TRANSCRIPT, "actually tomorrow"]
 
 
+async def test_queued_commit_waits_for_its_own_final_transcript(
+    running_session: tuple[AgentSession, Agent],
+) -> None:
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    assert await session.commit_user_turn(skip_reply=True) == _TRANSCRIPT
+    first_task = recognition._end_of_turn_task
+    assert first_task is not None
+    await recognition._on_stt_event(
+        SpeechEvent(
+            type=SpeechEventType.INTERIM_TRANSCRIPT,
+            alternatives=[SpeechData(text="next interim", language=LanguageCode("en"))],
+        )
+    )
+    queued = session.commit_user_turn(skip_reply=True, transcript_timeout=1.0)
+    await first_task
+    await asyncio.sleep(0.1)
+    assert not queued.done()
+    await recognition._on_stt_event(_final_transcript("next final"))
+    assert await queued == "next final"
+    await _await_delivery(session)
+    assert _user_transcripts(agent) == [_TRANSCRIPT, "next final"]
+
+
 async def test_empty_commit_does_not_request_reply_or_block_later_transcripts(
     running_session: tuple[AgentSession, Agent], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -242,6 +269,27 @@ async def test_empty_commit_does_not_request_reply_or_block_later_transcripts(
     assert await session.commit_user_turn(skip_reply=True) == "next turn"
     await _await_delivery(session)
     assert _user_transcripts(agent) == ["next turn"]
+
+
+async def test_empty_commit_keeps_stt_mode_ready_for_a_late_final(
+    running_session: tuple[AgentSession, Agent], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, agent = running_session
+    completed: list[str | None] = []
+
+    async def on_turn(chat_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
+        completed.append(new_message.text_content)
+
+    monkeypatch.setattr(agent, "on_user_turn_completed", on_turn)
+    session.update_options(turn_detection="stt")
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+    assert await session.commit_user_turn(skip_reply=True, transcript_timeout=0) == ""
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    await asyncio.sleep(0.6)
+    assert completed == [_TRANSCRIPT]
 
 
 @pytest.mark.parametrize("phase", ["scheduled", "waiting_for_stt"])
