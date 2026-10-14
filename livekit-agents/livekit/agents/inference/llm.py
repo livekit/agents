@@ -34,7 +34,7 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import is_given
-from ._realtime_models import is_gpt_live_model, is_realtime_model
+from ._realtime_models import is_duplex_model, is_realtime_model
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
@@ -696,16 +696,16 @@ class LLMStream(llm.LLMStream):
 def llm_from_model_string(model: str) -> llm.LLM | llm.RealtimeModel | llm.DuplexModel:
     """Create the inference model a ``llm=`` string names.
 
-    GPT-Live model strings resolve to :class:`livekit.agents.inference.GPTLiveModel`,
-    other realtime (speech-to-speech) model strings to
+    Duplex model strings resolve to :class:`livekit.agents.inference.DuplexModel`,
+    realtime (speech-to-speech) model strings to
     :class:`livekit.agents.inference.RealtimeModel`, every other string to
     :class:`livekit.agents.inference.LLM`.
     """
-    if is_gpt_live_model(model):
+    if is_duplex_model(model):
         # imported lazily: the realtime package imports this module
-        from .realtime import GPTLiveModel
+        from .realtime import DuplexModel
 
-        return GPTLiveModel.from_model_string(model)
+        return DuplexModel.from_model_string(model)
 
     if is_realtime_model(model):
         # imported lazily: the realtime package imports this module

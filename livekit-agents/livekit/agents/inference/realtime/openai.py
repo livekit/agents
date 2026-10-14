@@ -48,7 +48,7 @@ from ...llm._realtime.openai import (
     RealtimeSession as _RealtimeSession,
     _DiscardedGeneration,
 )
-from .._realtime_models import is_gpt_live_model
+from .._realtime_models import DEPRECATED_REALTIME_MODELS, RealtimeModels, is_duplex_model
 
 _XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(model="grok-transcribe")
 _XAI_DEFAULT_TURN_DETECTION = ServerVad(
@@ -66,7 +66,6 @@ class _InferenceOptions:
     provider: str | None
     api_key: str
     api_secret: str
-    inference_class: InferenceClass | None
     is_xai: bool = False
 
 
@@ -75,13 +74,13 @@ class RealtimeModel(_RealtimeModel):
 
     def __init__(
         self,
-        model: str,
+        model: RealtimeModels | str,
         *,
         provider: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
-        inference_class: InferenceClass | None = None,
+        inference_class: NotGivenOr[InferenceClass | None] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
@@ -103,12 +102,18 @@ class RealtimeModel(_RealtimeModel):
             provider (str, optional): Host that must serve the model, e.g. ``"azure"`` or
                 ``"openai"`` for OpenAI models. The session is refused if no host in the
                 region matches.
-            inference_class (InferenceClass, optional): Has no effect on realtime sessions.
         """
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")
-        if is_gpt_live_model(model):
-            raise ValueError(f"{model} speaks the GPT-Live protocol; use inference.GPTLiveModel")
+        if is_duplex_model(model):
+            raise ValueError(f"{model} is a duplex model; use inference.DuplexModel")
+        if replacement := DEPRECATED_REALTIME_MODELS.get(model):
+            logger.warning(f"{model} is deprecated, use {replacement} instead")
+        if is_given(inference_class):
+            logger.warning(
+                "inference_class is deprecated and will be removed in v2.0. "
+                "It has no effect on realtime sessions."
+            )
 
         resolved_api_key, resolved_api_secret = resolve_credentials(api_key, api_secret)
 
@@ -152,7 +157,6 @@ class RealtimeModel(_RealtimeModel):
             provider=provider,
             api_key=resolved_api_key,
             api_secret=resolved_api_secret,
-            inference_class=inference_class,
             is_xai=is_xai,
         )
         self._provider_label = "LiveKit Inference Realtime"
@@ -202,7 +206,7 @@ class RealtimeSession(_RealtimeSession):
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
         opts = self._inference_model._inference_opts
         url, _ = super()._create_ws_url_and_headers()
-        headers = get_inference_headers(inference_class=opts.inference_class)
+        headers = get_inference_headers()
         headers["Authorization"] = f"Bearer {create_access_token(opts.api_key, opts.api_secret)}"
         if opts.provider:
             headers[HEADER_INFERENCE_PROVIDER] = opts.provider

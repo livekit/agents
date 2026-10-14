@@ -1,9 +1,11 @@
-from .gpt_live import GPTLiveModel, GPTLiveSession
+from .gpt_live import DuplexModel, DuplexSession, OpenAIDuplexOptions, OpenAIResponsesOptions
 from .openai import RealtimeModel, RealtimeSession
 
 __all__ = [
-    "GPTLiveModel",
-    "GPTLiveSession",
+    "DuplexModel",
+    "DuplexSession",
+    "OpenAIDuplexOptions",
+    "OpenAIResponsesOptions",
     "RealtimeModel",
     "RealtimeSession",
 ]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -81,6 +82,38 @@ def paused_realtime_main(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_requires_provider_prefixed_model() -> None:
     with pytest.raises(ValueError, match="provider-prefixed"):
         RealtimeModel("gpt-realtime", api_key="key", api_secret="secret")
+
+
+def test_points_duplex_models_at_duplex_model() -> None:
+    with pytest.raises(ValueError, match="inference.DuplexModel"):
+        RealtimeModel("openai/gpt-live-1", api_key="key", api_secret="secret")
+
+
+@pytest.mark.parametrize(
+    ("model", "replacement"),
+    [
+        ("openai/gpt-realtime-2", "openai/gpt-realtime-2.1"),
+        ("openai/gpt-realtime-1.5", "openai/gpt-realtime-2.1"),
+        ("xai/grok-voice-think-fast-2.0", "xai/grok-voice-3.0"),
+    ],
+)
+def test_deprecated_models_still_connect_and_name_their_replacement(
+    model: str, replacement: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        resolved = RealtimeModel(model, api_key="key", api_secret="secret")
+
+    assert resolved.model == model
+    assert f"{model} is deprecated, use {replacement} instead" in caplog.text
+
+
+def test_inference_class_warns_that_it_has_no_effect(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        RealtimeModel(
+            "openai/gpt-realtime", api_key="key", api_secret="secret", inference_class="priority"
+        )
+
+    assert "inference_class is deprecated" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -162,11 +195,7 @@ async def test_connection_refreshes_livekit_auth_and_custom_headers(
         "create_access_token",
         lambda key, secret: f"{next(tokens)}:{key}:{secret}",
     )
-    monkeypatch.setattr(
-        inference_realtime,
-        "get_inference_headers",
-        lambda *, inference_class: {"X-Test-Class": inference_class or ""},
-    )
+    monkeypatch.setattr(inference_realtime, "get_inference_headers", lambda: {"X-Test": "custom"})
     http_session = _FakeHTTPSession()
     model = RealtimeModel(
         "openai/gpt-realtime",
@@ -174,7 +203,6 @@ async def test_connection_refreshes_livekit_auth_and_custom_headers(
         base_url="https://inference.example/v1",
         api_key="key",
         api_secret="secret",
-        inference_class="priority",
         http_session=http_session,  # type: ignore[arg-type]
     )
     session = model.session()
@@ -190,7 +218,7 @@ async def test_connection_refreshes_livekit_auth_and_custom_headers(
         "Bearer token-one:key:secret",
         "Bearer token-two:key:secret",
     ]
-    assert http_session.connections[0][1]["X-Test-Class"] == "priority"
+    assert http_session.connections[0][1]["X-Test"] == "custom"
     assert http_session.connections[0][1]["X-LiveKit-Inference-Provider"] == "openai"
     await session.aclose()
 

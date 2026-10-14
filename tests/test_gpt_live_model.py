@@ -1838,21 +1838,41 @@ def test_with_azure_does_not_accept_the_openai_key(monkeypatch: pytest.MonkeyPat
 _LK_SECRET = "secret-with-at-least-32-bytes-for-jwt"
 
 
-def _inference_model(**kwargs: Any) -> inference.GPTLiveModel:
-    return inference.GPTLiveModel(api_key="lk-key", api_secret=_LK_SECRET, **kwargs)
+def _inference_model(**kwargs: Any) -> inference.DuplexModel:
+    return inference.DuplexModel(
+        "openai/gpt-live-1", api_key="lk-key", api_secret=_LK_SECRET, **kwargs
+    )
 
 
 def test_the_plugin_and_inference_share_one_client() -> None:
     from livekit.plugins.openai.realtime import gpt_live_types
 
-    assert GPTLiveModel is gpt_live_model.GPTLiveModel
+    assert issubclass(GPTLiveModel, gpt_live_model.GPTLiveModel)
+    assert GPTLiveSession is gpt_live_model.GPTLiveSession
     assert gpt_live_types.ServiceTier is gpt_live_model.types.ServiceTier
-    assert issubclass(inference.GPTLiveModel, GPTLiveModel)
+    assert issubclass(inference.DuplexModel, gpt_live_model.GPTLiveModel)
+    assert not issubclass(inference.DuplexModel, GPTLiveModel)
     assert (
         GPTLiveModel(api_key="sk-test").label
         == "livekit.plugins.openai.realtime.gpt_live_model.GPTLiveModel"
     )
-    assert _inference_model().label == "livekit.agents.inference.realtime.gpt_live.GPTLiveModel"
+    assert (
+        GPTLiveModel.with_azure(
+            azure_deployment="gpt-live-1",
+            azure_endpoint="https://example.openai.azure.com",
+            api_key="az-key",
+            delegation="client",
+        ).label
+        == "livekit.plugins.openai.realtime.gpt_live_model.GPTLiveModel"
+    )
+    assert _inference_model().label == "livekit.agents.inference.realtime.gpt_live.DuplexModel"
+
+
+def test_inference_requires_a_model() -> None:
+    with pytest.raises(TypeError):
+        inference.DuplexModel(api_key="lk-key", api_secret=_LK_SECRET)  # type: ignore[call-overload]
+    with pytest.raises(ValueError, match="provider-prefixed"):
+        inference.DuplexModel("gpt-live-1", api_key="lk-key", api_secret=_LK_SECRET)
 
 
 @pytest.mark.usefixtures("_no_provider_env")
@@ -1904,11 +1924,44 @@ async def test_inference_refuses_hosted_tools_the_gateway_cannot_meter(
 
 
 def test_inference_accepts_only_the_default_delegation_tier() -> None:
-    _inference_model(responses_options={})
-    _inference_model(responses_options={"service_tier": "default"})
+    _inference_model(extra_kwargs={"responses_options": {}})
+    _inference_model(extra_kwargs={"responses_options": {"service_tier": "default"}})  # type: ignore[typeddict-unknown-key]
 
     with pytest.raises(ValueError, match="default tier"):
-        _inference_model(responses_options={"service_tier": "priority"})
+        _inference_model(extra_kwargs={"responses_options": {"service_tier": "priority"}})  # type: ignore[typeddict-unknown-key]
+
+
+@pytest.mark.usefixtures("_no_provider_env")
+async def test_inference_takes_gpt_live_options_through_extra_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _live_server() as (base, seen):
+        model = _inference_model(
+            base_url=f"{base}/v1",
+            voice="cedar",
+            extra_kwargs={
+                "delegation": "responses",
+                "responses_options": {"model": "gpt-4.1-mini", "instructions": "Be brief."},
+            },
+        )
+        await _connect(model, seen)
+
+    assert seen.start["session"]["audio"]["output"]["voice"] == "cedar"
+    assert seen.start["session"]["delegation"]["responses"]["model"] == "gpt-4.1-mini"
+    assert seen.start["session"]["delegation"]["responses"]["instructions"] == "Be brief."
+
+
+def test_inference_defaults_voice_and_delegation() -> None:
+    model = _inference_model()
+    assert model._opts.voice == gpt_live_model.DEFAULT_VOICE
+    assert model._opts.delegation == "responses"
+
+    assert _inference_model(extra_kwargs={"delegation": "client"})._opts.delegation == "client"
+
+
+def test_inference_rejects_unknown_extra_kwargs() -> None:
+    with pytest.raises(ValueError, match="service_tier"):
+        _inference_model(extra_kwargs={"service_tier": "priority"})  # type: ignore[typeddict-unknown-key]
 
 
 @pytest.mark.parametrize(
@@ -1931,6 +1984,6 @@ async def test_inference_does_not_retry_a_session_the_gateway_refused(
         await model.aclose()
 
 
-def test_inference_realtime_model_points_gpt_live_at_its_own_class() -> None:
-    with pytest.raises(ValueError, match="inference.GPTLiveModel"):
+def test_inference_realtime_model_points_gpt_live_at_duplex_model() -> None:
+    with pytest.raises(ValueError, match="inference.DuplexModel"):
         inference.RealtimeModel("openai/gpt-live-1", api_key="lk-key", api_secret=_LK_SECRET)

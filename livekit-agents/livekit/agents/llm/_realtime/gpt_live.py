@@ -5,9 +5,8 @@ import base64
 import contextlib
 import json
 import os
-import sys
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
@@ -205,9 +204,6 @@ class GPTLiveModel(llm.DuplexModel):
                 mutable_tools=delegation == "responses",
             )
         )
-        if type(self) is GPTLiveModel:
-            # Preserve the pre-move metrics label for direct OpenAI sessions.
-            self._label = "livekit.plugins.openai.realtime.gpt_live_model.GPTLiveModel"
         responses = (
             responses_options if is_given(responses_options) else ResponsesDelegationOptions()
         )
@@ -366,6 +362,10 @@ class GPTLiveModel(llm.DuplexModel):
     def audio_gate(self) -> llm.AudioGate:
         return llm.FixedGate(_SILENCE_RMS, min_silence_duration=_MIN_SILENCE_DURATION)
 
+    def _provider_tool_config(self, tool: llm.ProviderTool) -> dict[str, Any] | None:
+        """The Responses config of a hosted tool the backend model runs, or None to skip it."""
+        return None
+
     def session(self) -> GPTLiveSession:
         return GPTLiveSession(self)
 
@@ -448,7 +448,10 @@ class GPTLiveSession(
             responses=types.ResponsesConfig(
                 model=opts.get("model", DEFAULT_BACKEND_MODEL),
                 instructions=opts.get("instructions"),
-                tools=_build_delegation_tools(self._tools.flatten()) or None,
+                tools=_build_delegation_tools(
+                    self._tools.flatten(), self._live_model._provider_tool_config
+                )
+                or None,
                 tool_choice=_to_tool_choice(opts["tool_choice"]) if "tool_choice" in opts else None,
                 parallel_tool_calls=opts.get("parallel_tool_calls"),
                 reasoning=opts.get("reasoning"),
@@ -1150,7 +1153,11 @@ class GPTLiveSession(
                 )
             return
         self._send_delegation_update(
-            types.ResponsesConfig(tools=_build_delegation_tools(self._tools.flatten()))
+            types.ResponsesConfig(
+                tools=_build_delegation_tools(
+                    self._tools.flatten(), self._live_model._provider_tool_config
+                )
+            )
         )
 
     async def _append_items(self, items: list[llm.ChatItem]) -> None:
@@ -1260,10 +1267,10 @@ def _to_tool_choice(tool_choice: llm.ToolChoice | None) -> str | dict[str, Any]:
     return "auto"
 
 
-def _build_delegation_tools(tools: list[llm.Tool]) -> list[dict[str, Any]]:
-    # an OpenAITool can only exist once the plugin defining it is imported, and core cannot
-    # import the plugin; other providers' tools have a to_dict too, so duck typing is not enough
-    openai_tools = sys.modules.get("livekit.plugins.openai.tools")
+def _build_delegation_tools(
+    tools: list[llm.Tool],
+    provider_tool_config: Callable[[llm.ProviderTool], dict[str, Any] | None],
+) -> list[dict[str, Any]]:
     oai_tools: list[dict[str, Any]] = []
     for tool in tools:
         if isinstance(tool, llm.FunctionTool):
@@ -1273,8 +1280,8 @@ def _build_delegation_tools(tools: list[llm.Tool]) -> list[dict[str, Any]]:
             schema.pop("meta", None)
             schema["type"] = "function"
             oai_tools.append(schema)
-        elif openai_tools is not None and isinstance(tool, openai_tools.OpenAITool):
-            oai_tools.append(tool.to_dict())
+        elif isinstance(tool, llm.ProviderTool) and (config := provider_tool_config(tool)):
+            oai_tools.append(config)
         else:
             logger.debug(
                 "gpt-live delegation ignores unsupported tool", extra={"lk.pii.tool": tool}
