@@ -157,6 +157,13 @@ class FallbackAdapter(
         for stt_instance in self._stt_instances:
             stt_instance._push_conversation_item(ev)
 
+    def _next_label(self, remaining: range, all_failed: bool) -> str | None:
+        """Label of the first of ``remaining`` that a request tries next, or None if none is left."""
+        for i in remaining:
+            if all_failed or self._status[i].available:
+                return self._stt_instances[i].label
+        return None
+
     async def _try_recognize(
         self,
         *,
@@ -165,6 +172,7 @@ class FallbackAdapter(
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
         recovering: bool = False,
+        next_label: str | None = None,
     ) -> SpeechEvent:
         try:
             return await stt.recognize(
@@ -184,7 +192,7 @@ class FallbackAdapter(
 
             logger.warning(
                 f"{stt.label} timed out, switching to next STT",
-                extra={"streamed": False},
+                extra={"streamed": False, "next_stt": next_label},
             )
 
             raise
@@ -202,7 +210,7 @@ class FallbackAdapter(
                 "%s failed, switching to next STT: %s",
                 stt.label,
                 e,
-                extra={"streamed": False},
+                extra={"streamed": False, "next_stt": next_label},
             )
             raise
         except Exception:
@@ -214,7 +222,7 @@ class FallbackAdapter(
 
             logger.exception(
                 f"{stt.label} unexpected error, switching to next STT",
-                extra={"streamed": False},
+                extra={"streamed": False, "next_stt": next_label},
             )
             raise
 
@@ -248,8 +256,7 @@ class FallbackAdapter(
                         "stt_availability_changed",
                         AvailabilityChangedEvent(stt=stt, available=True),
                     )
-                except Exception as e:
-                    logger.debug("%s recovery attempt failed: %s", stt.label, e)
+                except Exception:  # exceptions already logged inside _try_recognize
                     return
 
             stt_status.recovering_recognize_task = asyncio.create_task(_recover_stt_task(stt))
@@ -277,6 +284,9 @@ class FallbackAdapter(
                         language=language,
                         conn_options=conn_options,
                         recovering=False,
+                        next_label=self._next_label(
+                            range(i + 1, len(self._stt_instances)), all_failed
+                        ),
                     )
                     self._active_instance = stt
                     return event
@@ -390,6 +400,9 @@ class FallbackRecognizeStream(RecognizeStream):
         for i, stt in enumerate(self._fallback_adapter._stt_instances):
             stt_status = self._fallback_adapter._status[i]
             if stt_status.available or all_failed:
+                next_label = self._fallback_adapter._next_label(
+                    range(i + 1, len(self._fallback_adapter._stt_instances)), all_failed
+                )
                 try:
                     main_stream = stt.stream(
                         language=self._language,
@@ -420,7 +433,7 @@ class FallbackRecognizeStream(RecognizeStream):
                     except asyncio.TimeoutError:
                         logger.warning(
                             f"{stt.label} timed out, switching to next STT",
-                            extra={"streamed": True},
+                            extra={"streamed": True, "next_stt": next_label},
                         )
                         raise
                     except APIError as e:
@@ -428,13 +441,13 @@ class FallbackRecognizeStream(RecognizeStream):
                             "%s failed, switching to next STT: %s",
                             stt.label,
                             e,
-                            extra={"streamed": True},
+                            extra={"streamed": True, "next_stt": next_label},
                         )
                         raise
                     except Exception:
                         logger.exception(
                             f"{stt.label} unexpected error, switching to next STT",
-                            extra={"streamed": True},
+                            extra={"streamed": True, "next_stt": next_label},
                         )
                         raise
 

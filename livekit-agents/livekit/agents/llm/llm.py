@@ -16,7 +16,7 @@ from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
 from .. import utils
-from .._exceptions import APIConnectionError, APIError, APIStatusError
+from .._exceptions import APIConnectionError, APIError, APIStatusError, error_log_fields
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, trace_types, tracer
@@ -367,7 +367,11 @@ class LLMStream(ABC):
                         f"failed to generate LLM completion: {e}, retrying in {retry_interval}s",  # noqa: E501
                         extra={
                             "llm": self._llm._label,
+                            "provider": self._llm.provider,
+                            "model": self._llm.model,
                             "attempt": i + 1,
+                            "max_retry": self._conn_options.max_retry,
+                            **error_log_fields(e),
                         },
                     )
 

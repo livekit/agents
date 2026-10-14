@@ -104,6 +104,13 @@ class FallbackAdapter(
             order.insert(0, selected)
         return order
 
+    def _next_label(self, remaining: list[int], all_failed: bool) -> str | None:
+        """Label of the first of ``remaining`` that a request tries next, or None if none is left."""
+        for i in remaining:
+            if all_failed or self._status[i].available:
+                return self._llm_instances[i].label
+        return None
+
     def _next_instance(self) -> LLM:
         """The first available instance in request order, or the primary if all are down."""
         for i in self._llm_order():
@@ -216,7 +223,7 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.tools
 
     async def _try_generate(
-        self, *, llm: LLM, check_recovery: bool = False
+        self, *, llm: LLM, check_recovery: bool = False, next_label: str | None = None
     ) -> AsyncIterable[ChatChunk]:
         """
         Try to generate with the given LLM.
@@ -226,6 +233,7 @@ class FallbackLLMStream(LLMStream):
             check_recovery: When True, indicates this is a background recovery check and the
                           result will not be used. Recovery checks verify if a previously
                           failed LLM has become available again.
+            next_label: Label of the LLM tried after this one fails, for the switch log.
         """
         try:
             async with llm.chat(
@@ -265,6 +273,7 @@ class FallbackLLMStream(LLMStream):
 
             logger.warning(
                 f"{llm.label} timed out, switching to next LLM",
+                extra={"next_llm": next_label},
             )
 
             raise
@@ -281,6 +290,7 @@ class FallbackLLMStream(LLMStream):
                 "%s failed, switching to next LLM: %s",
                 llm.label,
                 e,
+                extra={"next_llm": next_label},
             )
             raise
         except Exception:
@@ -292,6 +302,7 @@ class FallbackLLMStream(LLMStream):
 
             logger.exception(
                 f"{llm.label} unexpected error, switching to next LLM",
+                extra={"next_llm": next_label},
             )
             raise
 
@@ -324,17 +335,21 @@ class FallbackLLMStream(LLMStream):
         if all_failed:
             logger.error("all LLMs are unavailable, retrying..")
 
-        for i in self._fallback_adapter._llm_order():
+        order = self._fallback_adapter._llm_order()
+        for position, i in enumerate(order):
             llm = self._fallback_adapter._llm_instances[i]
             llm_status = self._fallback_adapter._status[i]
             if llm_status.available or all_failed:
+                next_label = self._fallback_adapter._next_label(order[position + 1 :], all_failed)
                 self._fallback_adapter._attempt_id += 1
                 attempt_id = self._fallback_adapter._attempt_id
                 llm_status.selection_id = attempt_id
                 text_sent: str = ""
                 tool_calls_sent: list[str] = []
                 try:
-                    async for result in self._try_generate(llm=llm, check_recovery=False):
+                    async for result in self._try_generate(
+                        llm=llm, check_recovery=False, next_label=next_label
+                    ):
                         if result.delta:
                             if result.delta.content:
                                 text_sent += result.delta.content
@@ -380,7 +395,10 @@ class FallbackLLMStream(LLMStream):
                         )
 
                     if text_sent or tool_calls_sent:
-                        extra = {"text_sent": text_sent, "tool_calls_sent": tool_calls_sent}
+                        extra = {
+                            "lk.pii.text_sent": text_sent,
+                            "tool_calls_sent": tool_calls_sent,
+                        }
                         if not self._fallback_adapter._retry_on_chunk_sent:
                             logger.error(
                                 f"{llm.label} failed after sending chunk, skip retrying. "

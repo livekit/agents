@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIConnectionError, APIError, error_log_fields
 from ..language import LanguageCode
 from ..log import logger
 from ..metrics import STTMetrics
@@ -259,8 +259,12 @@ class STT(
                         f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
                             "stt": self._label,
+                            "provider": self.provider,
+                            "model": self.model,
                             "attempt": i + 1,
+                            "max_retry": conn_options.max_retry,
                             "streamed": False,
+                            **error_log_fields(e),
                         },
                     )
 
@@ -486,7 +490,7 @@ class RecognizeStream(ABC):
                 elif self._num_retries == max_retries:
                     self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
-                        f"failed to recognize speech after {self._num_retries} attempts",
+                        f"failed to recognize speech after {self._num_retries + 1} attempts",
                     ) from e
                 else:
                     self._emit_error(e, recoverable=True)
@@ -496,8 +500,12 @@ class RecognizeStream(ABC):
                         f"failed to recognize speech: {e}, retrying in {retry_interval}s",
                         extra={
                             "stt": self._stt._label,
+                            "provider": self._stt.provider,
+                            "model": self._stt.model,
                             "attempt": self._num_retries,
+                            "max_retry": max_retries,
                             "streamed": True,
+                            **error_log_fields(e),
                         },
                     )
                     await asyncio.sleep(retry_interval)

@@ -1240,11 +1240,18 @@ class SpeechStream(stt.SpeechStream):
                         )
                     return
                 elif msg_type == "error":
+                    code = data.get("code", -1)
+                    # code and message are gateway diagnostics; the full event stays PII-tagged
                     logger.error(
                         "received error from LiveKit Inference STT",
-                        extra={"lk.pii.event": data},
+                        extra={
+                            "code": code,
+                            "error_message": data.get("message"),
+                            "session_id": data.get("session_id") or self._request_id,
+                            "model": self._opts.model,
+                            "lk.pii.event": data,
+                        },
                     )
-                    code = data.get("code", -1)
                     raise APIError(
                         "LiveKit Inference STT returned an error",
                         body={"code": code},

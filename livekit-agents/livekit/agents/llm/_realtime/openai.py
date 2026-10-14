@@ -5,6 +5,7 @@ import base64
 import contextlib
 import copy
 import json
+import logging
 import os
 import time
 import weakref
@@ -2394,6 +2395,18 @@ class RealtimeSession(
             )
             if not recoverable:
                 raise error
+            # the error event is not logged downstream, so a rate limit would go unseen.
+            # The error message names limits and parameters, not conversation content.
+            logger.warning(
+                "realtime response failed",
+                extra={
+                    "provider": provider_label,
+                    "response_id": event.response.id,
+                    "error_type": getattr(error_body, "type", None),
+                    "code": getattr(error_body, "code", None),
+                    "error_message": getattr(error_body, "message", None),
+                },
+            )
             self._emit_error(error, recoverable=True)
         elif event.response.status in {"cancelled", "incomplete"}:
             status_details = event.response.status_details
@@ -2403,7 +2416,10 @@ class RealtimeSession(
             else:
                 status_type = status_details.type if status_details else None
                 status_reason = status_details.reason if status_details else None
-            logger.debug(
+            # a cancel is usually an interruption; incomplete means the answer was cut short
+            level = logging.WARNING if event.response.status == "incomplete" else logging.DEBUG
+            logger.log(
+                level,
                 "%s response done but not complete with status: %s (type=%s, reason=%s)",
                 provider_label,
                 event.response.status,

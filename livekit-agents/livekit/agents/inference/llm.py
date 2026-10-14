@@ -455,6 +455,10 @@ class LLM(llm.LLM):
         return supports_prompt_cache_breakpoints(self._opts.model)
 
 
+# finish reasons where the provider stopped before the answer was complete
+_EARLY_FINISH_REASONS = ("length", "content_filter")
+
+
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
@@ -541,13 +545,20 @@ class LLMStream(llm.LLMStream):
                     self._model, (llm_utils.THINK_TAG_START, llm_utils.THINK_TAG_END)
                 )
             )
+            has_output = False
+            # the provider's raw finish_reason when it cut the answer short
+            early_finish_reason: str | None = None
+            completion_tokens: int | None = None
             async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
+                        if choice.finish_reason in _EARLY_FINISH_REASONS:
+                            early_finish_reason = choice.finish_reason
                         chat_chunk = self._parse_choice(chunk.id, choice, thinking_filter)
                         if chat_chunk is not None:
                             if chat_chunk.has_response():
                                 retryable = False
+                                has_output = True
                             self._event_ch.send_nowait(chat_chunk)
 
                     if chunk.usage is not None:
@@ -573,6 +584,27 @@ class LLMStream(llm.LLMStream):
                             ),
                         )
                         self._event_ch.send_nowait(usage_chunk)
+                        completion_tokens = chunk.usage.completion_tokens
+
+            if early_finish_reason is not None:
+                logger.warning(
+                    "LLM response stopped early",
+                    extra={
+                        "provider": self._llm.provider,
+                        "model": self._model,
+                        "finish_reason": early_finish_reason,
+                        "completion_tokens": completion_tokens,
+                    },
+                )
+            elif not has_output:
+                logger.warning(
+                    "LLM returned an empty completion",
+                    extra={
+                        "provider": self._llm.provider,
+                        "model": self._model,
+                        "completion_tokens": completion_tokens,
+                    },
+                )
 
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None

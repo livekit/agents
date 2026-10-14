@@ -12,7 +12,7 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import utils
-from .._exceptions import APIConnectionError
+from .._exceptions import APIConnectionError, error_log_fields
 from ..log import logger
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
@@ -124,6 +124,13 @@ class FallbackAdapter(
 
             t.on("metrics_collected", self._on_metrics_collected)
 
+    def _next_label(self, remaining: range, all_failed: bool) -> str | None:
+        """Label of the first of ``remaining`` that a request tries next, or None if none is left."""
+        for i in remaining:
+            if all_failed or self._status[i].available:
+                return self._tts_instances[i].label
+        return None
+
     def _next_instance(self) -> TTS:
         """The instance the next request goes to first: the first one marked available, or
         the primary once all are down (they are then all retried, primary first). A failed
@@ -230,7 +237,7 @@ class FallbackChunkedStream(ChunkedStream):
             pass
 
     async def _try_synthesize(
-        self, *, tts: TTS, recovering: bool = False
+        self, *, tts: TTS, recovering: bool = False, next_label: str | None = None
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         try:
             async with tts.synthesize(
@@ -260,7 +267,7 @@ class FallbackChunkedStream(ChunkedStream):
 
             logger.warning(
                 f"{tts.label} error, switching to next TTS",
-                extra={"streamed": False},
+                extra={"streamed": False, "next_tts": next_label, **error_log_fields(e)},
             )
             raise
 
@@ -319,7 +326,12 @@ class FallbackChunkedStream(ChunkedStream):
                         if tts_status.needs_resampling
                         else None
                     )
-                    async for synthesized_audio in self._try_synthesize(tts=tts, recovering=False):
+                    next_label = self._tts._next_label(
+                        range(i + 1, len(self._tts._tts_instances)), all_failed
+                    )
+                    async for synthesized_audio in self._try_synthesize(
+                        tts=tts, recovering=False, next_label=next_label
+                    ):
                         if texts := synthesized_audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
                             output_emitter.push_timed_transcript(texts)
 
@@ -380,6 +392,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         input_ch: aio.ChanReceiver[str | SynthesizeStream._FlushSentinel],
         conn_options: APIConnectOptions,
         recovering: bool = False,
+        next_label: str | None = None,
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         # If TTS doesn't support streaming, wrap it with StreamAdapter
         temporary_adapter: StreamAdapter | None = None
@@ -439,7 +452,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
             logger.exception(
                 f"{tts.label} error, switching to next TTS",
-                extra={"streamed": True},
+                extra={"streamed": True, "next_tts": next_label},
             )
             raise
         finally:
@@ -519,6 +532,10 @@ class FallbackSynthesizeStream(SynthesizeStream):
                                 retry_interval=self._conn_options.retry_interval,
                             ),
                             recovering=False,
+                            next_label=self._fallback_adapter._next_label(
+                                range(i + 1, len(self._fallback_adapter._tts_instances)),
+                                all_failed,
+                            ),
                         ):
                             if texts := synthesized_audio.frame.userdata.get(
                                 USERDATA_TIMED_TRANSCRIPT
