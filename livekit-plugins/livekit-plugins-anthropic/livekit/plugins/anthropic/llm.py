@@ -34,6 +34,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .log import logger
 from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL
 
@@ -288,6 +289,10 @@ class LLM(llm.LLM):
         )
 
 
+# stop reasons where Claude ended before the answer was complete
+_EARLY_STOP_REASONS = ("max_tokens", "refusal", "model_context_window_exceeded")
+
+
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
@@ -314,9 +319,12 @@ class LLMStream(llm.LLMStream):
         self._cache_creation_tokens = 0
         self._cache_read_tokens = 0
         self._output_tokens = 0
+        self._stop_reason: str | None = None
 
     async def _run(self) -> None:
         retryable = True
+        has_output = False
+        self._stop_reason = None
         try:
             async with await self._create_anthropic_stream() as stream:
                 async for event in stream:
@@ -324,6 +332,7 @@ class LLMStream(llm.LLMStream):
                     if chat_chunk is not None:
                         self._event_ch.send_nowait(chat_chunk)
                         retryable = False
+                        has_output = True
 
                 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
                 prompt_token = (
@@ -342,6 +351,27 @@ class LLMStream(llm.LLMStream):
                         ),
                     )
                 )
+
+                if self._stop_reason in _EARLY_STOP_REASONS:
+                    logger.warning(
+                        "LLM response stopped early",
+                        extra={
+                            "provider": self._llm.provider,
+                            "model": self._llm.model,
+                            "finish_reason": self._stop_reason,
+                            "completion_tokens": self._output_tokens,
+                        },
+                    )
+                elif not has_output:
+                    logger.warning(
+                        "LLM returned an empty completion",
+                        extra={
+                            "provider": self._llm.provider,
+                            "model": self._llm.model,
+                            "finish_reason": self._stop_reason,
+                            "completion_tokens": self._output_tokens,
+                        },
+                    )
         except anthropic.APITimeoutError as e:
             raise APITimeoutError(retryable=retryable) from e
         except anthropic.APIStatusError as e:
@@ -365,6 +395,8 @@ class LLMStream(llm.LLMStream):
                 self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":
             self._output_tokens += event.usage.output_tokens
+            if event.delta.stop_reason is not None:
+                self._stop_reason = event.delta.stop_reason
         elif event.type == "content_block_start":
             if event.content_block.type == "tool_use":
                 self._tool_call_id = event.content_block.id

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import types
 from unittest.mock import Mock
 
@@ -106,14 +107,16 @@ def test_response_done_handles_string_status_details(monkeypatch) -> None:
             status_details="incomplete",
         )
     )
-    debug = Mock()
-    monkeypatch.setattr(realtime_model.logger, "debug", debug)
+    log = Mock()
+    monkeypatch.setattr(realtime_model.logger, "log", log)
 
     session._handle_response_done_but_not_complete(event)
 
-    debug.assert_called_once()
-    assert debug.call_args.args[3] == "incomplete"
-    assert debug.call_args.args[4] is None
+    # an incomplete response was cut short, so it is a warning
+    log.assert_called_once()
+    assert log.call_args.args[0] == logging.WARNING
+    assert log.call_args.args[4] == "incomplete"
+    assert log.call_args.args[5] is None
 
 
 def test_long_call_id_is_shortened_consistently() -> None:

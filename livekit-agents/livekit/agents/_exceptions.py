@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 
 class UnexpectedModelBehavior(RuntimeError):
@@ -158,6 +159,23 @@ class APITimeoutError(APIConnectionError):
 
     def __init__(self, message: str = "Request timed out.", *, retryable: bool = True) -> None:
         super().__init__(message, retryable=retryable)
+
+
+def error_log_fields(error: Exception) -> dict[str, Any]:
+    """Structured log fields that identify a provider failure, for retry and failure WARNs.
+
+    The exception message is already in the log text; these fields make the failure
+    filterable across sessions. A request id inside the message is hidden by redaction,
+    so it must also be a field.
+    """
+    fields: dict[str, Any] = {"error_type": type(error).__name__}
+    if isinstance(error, APIError):
+        fields["retryable"] = error.retryable
+    if isinstance(error, APIStatusError):
+        fields["status_code"] = error.status_code
+        if error.request_id:
+            fields["request_id"] = error.request_id
+    return fields
 
 
 class CLIError(Exception):

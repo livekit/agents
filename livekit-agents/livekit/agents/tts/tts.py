@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
-from .._exceptions import APIError, APIStatusError
+from .._exceptions import APIError, APIStatusError, error_log_fields
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
@@ -283,6 +283,11 @@ def _attempt_span(name: str | None, tts: TTS) -> Iterator[trace.Span]:
         yield span
 
 
+def _no_audio_message(label: str, output_emitter: AudioEmitter) -> str:
+    # the retry WARN logs this message, so it names the request but never the text
+    return f"no audio frames were pushed (tts={label}, request_id={output_emitter._request_id})"
+
+
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
@@ -419,10 +424,11 @@ class ChunkedStream(ABC):
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
-                if self._input_text.strip() and output_emitter.pushed_duration() <= 0.0:
-                    raise APIError(f"no audio frames were pushed for text: {self._input_text}")
-
+                # set before the check so a failed request still records its text, PII-tagged
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
+                if self._input_text.strip() and output_emitter.pushed_duration() <= 0.0:
+                    raise APIError(_no_audio_message(self._tts.label, output_emitter))
+
                 return
             except APIError as e:
                 # 499 (Client Closed Request) - close gracefully without raising
@@ -450,7 +456,15 @@ class ChunkedStream(ABC):
                     "failed to synthesize speech: %s, retrying in %ss",
                     e,
                     retry_interval,
-                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                    extra={
+                        "tts": self._tts._label,
+                        "provider": self._tts.provider,
+                        "model": self._tts.model,
+                        "attempt": i + 1,
+                        "max_retry": self._conn_options.max_retry,
+                        "streamed": False,
+                        **error_log_fields(e),
+                    },
                 )
 
                 await asyncio.sleep(retry_interval)
@@ -622,9 +636,11 @@ class SynthesizeStream(ABC):
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
+                # set before the checks so a failed request still records its text, PII-tagged
+                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
                 if self._pushed_text.strip():
                     if output_emitter.pushed_duration(idx=-1) <= 0.0:
-                        raise APIError(f"no audio frames were pushed for text: {self._pushed_text}")
+                        raise APIError(_no_audio_message(self._tts.label, output_emitter))
 
                     if self._num_segments != output_emitter.num_segments:
                         raise APIError(
@@ -632,7 +648,6 @@ class SynthesizeStream(ABC):
                             f"but got {output_emitter.num_segments}"
                         )
 
-                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
                 return
             except APIError as e:
                 # 499 (Client Closed Request) - close gracefully without raising
@@ -666,7 +681,15 @@ class SynthesizeStream(ABC):
                     "failed to synthesize speech: %s, retrying in %ss",
                     e,
                     retry_interval,
-                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
+                    extra={
+                        "tts": self._tts._label,
+                        "provider": self._tts.provider,
+                        "model": self._tts.model,
+                        "attempt": i + 1,
+                        "max_retry": self._conn_options.max_retry,
+                        "streamed": True,
+                        **error_log_fields(e),
+                    },
                 )
 
                 await asyncio.sleep(retry_interval)

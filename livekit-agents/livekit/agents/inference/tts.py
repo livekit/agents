@@ -719,7 +719,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     raise APIStatusError(
-                        "Gateway connection closed unexpectedly", request_id=request_id
+                        f"Gateway connection closed unexpectedly (close_code={ws.close_code})",
+                        request_id=request_id,
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -769,6 +770,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.end_input()
                     break
                 elif data.get("type") == "error":
+                    # code and message are gateway diagnostics; the full event stays PII-tagged
+                    logger.error(
+                        "received error from LiveKit Inference TTS",
+                        extra={
+                            "code": data.get("code"),
+                            "error_message": data.get("message"),
+                            "session_id": current_session_id,
+                            "request_id": request_id,
+                            "model": self._opts.model,
+                            "lk.pii.event": data,
+                        },
+                    )
                     raise APIError(f"LiveKit Inference TTS returned error: {msg.data}")
 
         try:
