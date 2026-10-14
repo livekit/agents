@@ -334,9 +334,21 @@ class A2AService(Generic[S]):
         self, thread_id: str, message: StoredMessage, exts: Extensions
     ) -> ResponsePump[TurnOutcome]:
         """The turn in a task of its own, its frames through the pump (plan 6)."""
-        continued, created, db = await asyncio.gather(
-            self._continued(thread_id, message), self._next_stream(), self._storage.open(thread_id)
-        )
+        opening = asyncio.ensure_future(self._storage.open(thread_id))
+        try:
+            continued, created = await asyncio.gather(
+                self._continued(thread_id, message), self._next_stream()
+            )
+            db = await opening
+        except BaseException:
+            # a request that fails before its turn leaves no connection open behind it
+            def close(f: asyncio.Future[ThreadDb]) -> None:
+                if not f.cancelled() and f.exception() is None:
+                    f.result().close()
+
+            opening.cancel()
+            opening.add_done_callback(close)
+            raise
         stream_id = created.stream_id
         pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, stream_id)
         wire = WireHost(
