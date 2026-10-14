@@ -1013,7 +1013,17 @@ class AudioRecognition:
         self._turn_detector_prediction_fut = None
         return stream
 
-    def _clear_user_turn(self) -> None:
+    def _clear_user_turn(self) -> bool:
+        if self._turn_detection_mode == "manual" and (
+            (self._commit_user_turn_atask is not None and not self._commit_user_turn_atask.done())
+            or (
+                self._user_turn_committed
+                and self._end_of_turn_task is not None
+                and not self._end_of_turn_task.done()
+            )
+        ):
+            return False
+
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
@@ -1040,6 +1050,7 @@ class AudioRecognition:
         stt = self._stt
         self._update_stt(None)
         self._update_stt(stt)
+        return True
 
     def _commit_user_turn(
         self,
