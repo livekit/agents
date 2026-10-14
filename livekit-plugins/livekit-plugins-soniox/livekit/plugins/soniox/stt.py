@@ -48,6 +48,7 @@ BASE_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
 
 # WebSocket messages and tokens.
 KEEPALIVE_MESSAGE = '{"type": "keepalive"}'
+FINALIZE_MESSAGE = '{"type": "finalize"}'
 END_TOKEN = "<end>"
 FINALIZED_TOKEN = "<fin>"
 
@@ -437,6 +438,10 @@ class SpeechStream(stt.SpeechStream):
                 # Get the raw bytes from the audio frame.
                 pcm_data = data.data.tobytes()
                 self.audio_queue.put_nowait(pcm_data)
+            elif isinstance(data, self._FlushSentinel):
+                # Ask Soniox for the final transcript of the audio so far, instead of waiting
+                # for its own endpoint detection (it replies with a `<fin>` token).
+                self.audio_queue.put_nowait(FINALIZE_MESSAGE)
 
     async def _send_audio_task(self) -> None:
         """Take queued audio data and transmit it over the WebSocket."""

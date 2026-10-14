@@ -822,3 +822,14 @@ async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
     assert ws.receives == 1
     assert stream._reconnect_event.is_set()
     assert any("No PONG received" in r.getMessage() for r in caplog.records)
+
+
+async def test_flush_asks_soniox_to_finalize():
+    stream = _make_stream()
+    stream._ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+
+    stream.flush()
+    stream.end_input()
+    await stream._prepare_audio_task()
+
+    assert stream.audio_queue.get_nowait() == '{"type": "finalize"}'
