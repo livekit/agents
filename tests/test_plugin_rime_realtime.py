@@ -17,7 +17,8 @@ from rimelabs_sdk import Rime, RimeInputError
 from websockets.asyncio.server import serve
 
 from livekit.agents import Agent, AgentSession, function_tool, llm
-from livekit.plugins.rime.realtime import PrismUnsupported, RealtimeModel
+from livekit.plugins import rime
+from livekit.plugins.rime.realtime import PrismUnsupported
 
 from .fake_io import FakeAudioOutput
 
@@ -156,7 +157,7 @@ async def peer_model():
     async with serve(peer.handler, "127.0.0.1", 0) as server:
         endpoint = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1/realtime"
         async with Rime(api_key="test") as client:
-            model = RealtimeModel(endpoint=endpoint, client=client)
+            model = rime.realtime.RealtimeModel(endpoint=endpoint, client=client)
             try:
                 yield peer, model, client
             finally:
