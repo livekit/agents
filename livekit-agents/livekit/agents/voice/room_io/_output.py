@@ -31,6 +31,7 @@ from ...types import (
 )
 from .. import io
 from ..transcription import find_micro_track_id
+from ._echo_cancellation import _AdaptiveEchoCanceller
 
 
 class _ParticipantAudioOutput(io.AudioOutput):
@@ -42,6 +43,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         num_channels: int,
         track_publish_options: rtc.TrackPublishOptions,
         track_name: str = "roomio_audio",
+        echo_canceller: _AdaptiveEchoCanceller | None = None,
     ) -> None:
         super().__init__(
             label="RoomIO",
@@ -50,6 +52,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             capabilities=io.AudioOutputCapabilities(pause=True),
         )
         self._room = room
+        self._echo_canceller = echo_canceller
         self._track_name = track_name
         self._lock = asyncio.Lock()
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms=200)
@@ -117,6 +120,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
             await utils.aio.cancel_and_wait(self._forwarding_task)
 
         await self._audio_source.aclose()
+        if self._echo_canceller is not None:
+            self._echo_canceller.discard_render_after(time.monotonic())
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await self._subscribed_fut
@@ -261,7 +266,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             self._report_run(
                 offset=self._source_pushed_duration - queued_duration, ended_at=time.time()
             )
-            self._audio_source.clear_queue()
+            self._clear_source_queue()
             wait_for_playout.cancel()
         else:
             wait_for_interruption.cancel()
@@ -291,7 +296,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
                         ended_at=time.time(),
                         resumes_at=self._source_pushed_duration,
                     )
-                    self._audio_source.clear_queue()
+                    self._clear_source_queue()
                     await self._playback_enabled.wait()
                     # drop a paused frame when its original segment was interrupted.
                     if interruption_generation != self._interruption_generation:
@@ -313,10 +318,26 @@ class _ParticipantAudioOutput(io.AudioOutput):
                     self._report_run(offset=self._source_pushed_duration, ended_at=self._dry_at)
 
                 self._source_pushed_duration += frame.duration
-                await self._audio_source.capture_frame(frame)
+                render_started_at = time.monotonic() + self._audio_source.queued_duration
+                if self._echo_canceller is not None:
+                    self._echo_canceller.push_render(frame, started_at=render_started_at)
+                try:
+                    await self._audio_source.capture_frame(frame)
+                except BaseException:
+                    if self._echo_canceller is not None:
+                        # A cancelled submission can already have played part of this frame.
+                        self._echo_canceller.discard_render_after(
+                            max(render_started_at, time.monotonic())
+                        )
+                    raise
                 self._dry_at = time.time() + self._audio_source.queued_duration
             finally:
                 self._forwarding_idle.set()
+
+    def _clear_source_queue(self) -> None:
+        self._audio_source.clear_queue()
+        if self._echo_canceller is not None:
+            self._echo_canceller.discard_render_after(time.monotonic())
 
 
 def _legacy_transcription_needed(room: rtc.Room) -> bool:
