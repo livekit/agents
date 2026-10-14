@@ -694,6 +694,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         self._forward_audio_atask: asyncio.Task[None] | None = None
+        # the user's audio format, which input silence matches; known once a frame arrives
+        self._input_sample_rate: int | None = None
         self._forward_video_atask: asyncio.Task[None] | None = None
         self._update_activity_atask: asyncio.Task[None] | None = None
         self._activity_lock = asyncio.Lock()
@@ -2041,6 +2043,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         async for frame in audio_input:
+            self._input_sample_rate = frame.sample_rate
             if self._activity is not None:
                 self._activity.push_audio(frame)
 
@@ -2284,6 +2287,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_audio_enabled_changed(self, enabled: bool) -> None:
         """End user speaking state when audio is disabled by default."""
+        if self._activity is not None:
+            self._activity._on_input_audio_changed()
+
         if not enabled and self._user_state == "speaking":
             if self._activity is not None:
                 self._activity.on_end_of_speech(None)
@@ -2380,6 +2386,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_audio_input_changed(self) -> None:
         if not self._started:
             return
+
+        if self._activity is not None:
+            self._activity._on_input_audio_changed()
 
         if self._forward_audio_atask is not None:
             self._forward_audio_atask.cancel()

@@ -70,6 +70,8 @@ class RealtimeCapabilities:
     """Whether the model can produce audio output directly"""
     manual_function_calls: bool
     """Whether function call items already in the chat context can be resumed"""
+    continuous_input_required: bool = False
+    """Whether the model stops producing output while it receives no input audio"""
     can_disable_turn_detection: bool = False
     """Whether server-side turn detection can be disabled for a session so the client drives
     turn-taking. Set by plugins that implement ``session(turn_detection_disabled=True)``."""

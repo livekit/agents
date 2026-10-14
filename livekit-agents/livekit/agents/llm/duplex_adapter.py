@@ -276,6 +276,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
                 mutable_chat_context=caps.mutable_chat_context,
                 mutable_instructions=caps.mutable_instructions,
                 mutable_tools=caps.mutable_tools,
+                continuous_input_required=caps.continuous_input_required,
                 per_response_tool_choice=False,
                 supports_say=False,
             )

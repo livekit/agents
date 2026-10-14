@@ -83,6 +83,10 @@ def _merge_capabilities(models: list[RealtimeModel]) -> RealtimeCapabilities:
     merged = {name: getattr(first, name) for name in _HARD_CAPABILITIES}
     for name in _SOFT_CAPABILITIES:
         merged[name] = all(getattr(model.capabilities, name) for model in models)
+    # whichever model is live may stall without input, so silence is fed if any of them could
+    merged["continuous_input_required"] = any(
+        model.capabilities.continuous_input_required for model in models
+    )
 
     return RealtimeCapabilities(**merged)
 
