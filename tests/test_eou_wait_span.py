@@ -104,7 +104,6 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ar._user_silence_ev = asyncio.Event()  # backs the _speaking setter
     ar._speaking = False
     ar._end_of_turn_task = None
-    ar._manual_turn_tasks = {}
     ar._user_turn_committed = False
     ar._last_language = None
     ar._last_emitted_prediction = None

@@ -701,9 +701,6 @@ class AgentActivity(RecognitionHooks):
             # New speech must not fall back to the previous committed turn.
             if recognition._speech_start_time is not None:
                 return None
-            if self._turn_detection == "manual":
-                if (last_speaking_time := recognition.last_committed_speaking_time) is not None:
-                    return last_speaking_time
 
         if metrics := self._session._unanswered_user_metrics:
             return metrics.get("stopped_speaking_at")
@@ -1974,13 +1971,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             self._rt_session.clear_audio()
-            if not (
-                self._turn_detection == "manual"
-                and self._audio_recognition is not None
-                and self._audio_recognition._manual_turn_tasks
-            ):
-                self._realtime_user_input_answered_at = time.time()
-                self._session._unanswered_user_metrics = None
+            self._realtime_user_input_answered_at = time.time()
+            self._session._unanswered_user_metrics = None
 
     def commit_user_turn(
         self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
@@ -2732,17 +2724,13 @@ class AgentActivity(RecognitionHooks):
         if not info.skip_reply and not self._rt_turn_detection_enabled:
             self._cancel_false_interruption_timer()
 
-        if isinstance(self.llm, llm.RealtimeModel):
-            last_speaking_time = (
-                info.metrics.stopped_speaking_at
-                if self._turn_detection == "manual"
-                else self._last_user_speaking_time
-            )
-            if (
-                last_speaking_time is not None
-                and last_speaking_time > self._realtime_user_input_answered_at
-            ):
-                self._session._unanswered_user_metrics = {"stopped_speaking_at": last_speaking_time}
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and (last_speaking_time := self._last_user_speaking_time) is not None
+            and last_speaking_time > self._realtime_user_input_answered_at
+        ):
+            # AudioRecognition clears its turn timestamps after this hook returns.
+            self._session._unanswered_user_metrics = {"stopped_speaking_at": last_speaking_time}
 
         old_task = self._user_turn_completed_atask
         # the user turn ends after on_user_turn_completed (see _end_user_turn_span)

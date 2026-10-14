@@ -4,7 +4,6 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
-from unittest.mock import MagicMock
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -16,7 +15,6 @@ from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
-from .fake_realtime import FakeRealtimeModel
 from .fake_session import FakeActions, create_session
 from .trace_schema import assert_trace_well_formed
 
@@ -40,13 +38,11 @@ def span_exporter() -> Iterator[InMemorySpanExporter]:
 
 
 @pytest.fixture
-async def running_session(
-    request: pytest.FixtureRequest,
-) -> AsyncIterator[tuple[AgentSession, Agent]]:
+async def running_session() -> AsyncIterator[tuple[AgentSession, Agent]]:
     session = create_session(
         FakeActions(),
         turn_handling={
-            "turn_detection": getattr(request, "param", "manual"),
+            "turn_detection": "manual",
             "endpointing": {"min_delay": 0.5, "max_delay": 3.0},
         },
         can_pause_audio=True,
@@ -102,6 +98,8 @@ async def test_clear_preserves_committed_snapshot_and_resets_stt(
     recognition = activity._audio_recognition
     assert recognition is not None
     await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    speaking_time = recognition.last_speaking_time
+    final_time = recognition._last_final_transcript_time
     commit = session.commit_user_turn(skip_reply=True)
     if phase == "queued":
         await asyncio.sleep(0)
@@ -115,13 +113,26 @@ async def test_clear_preserves_committed_snapshot_and_resets_stt(
         assert recognition._end_of_turn_task is not None
         assert not recognition._end_of_turn_task.done()
 
+    if phase != "delivered":
+        assert recognition._current_transcript == _TRANSCRIPT
+        assert recognition._final_transcript_confidence == [0.9]
+        assert recognition.last_speaking_time == speaking_time
+        assert recognition._last_final_transcript_time == final_time
+
     stt_pipeline = recognition._stt_pipeline
     session.clear_user_turn()
 
     assert recognition._current_transcript == ""
     assert recognition._stt_pipeline is not stt_pipeline
+    await recognition._on_stt_event(
+        SpeechEvent(
+            type=SpeechEventType.INTERIM_TRANSCRIPT,
+            alternatives=[SpeechData(text="next turn", language=LanguageCode("en"))],
+        )
+    )
     if phase != "delivered":
         await _await_delivery(session)
+    assert recognition._audio_interim_transcript == "next turn"
     assert _user_transcripts(agent) == [_TRANSCRIPT]
     [message] = [
         item for item in agent.chat_ctx.items if item.type == "message" and item.role == "user"
@@ -162,152 +173,6 @@ async def test_later_final_does_not_change_snapshot_or_get_erased_by_delivery(
         assert _user_transcripts(agent) == [_TRANSCRIPT, "never mind"]
 
 
-async def test_later_interim_stays_live_during_manual_delivery(
-    running_session: tuple[AgentSession, Agent],
-) -> None:
-    session, agent = running_session
-    assert session._activity is not None
-    recognition = session._activity._audio_recognition
-    assert recognition is not None
-    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
-    assert await session.commit_user_turn(skip_reply=True) == _TRANSCRIPT
-    session.clear_user_turn()
-    await recognition._on_stt_event(
-        SpeechEvent(
-            type=SpeechEventType.INTERIM_TRANSCRIPT,
-            alternatives=[SpeechData(text="next turn", language=LanguageCode("en"))],
-        )
-    )
-    await _await_delivery(session)
-
-    assert _user_transcripts(agent) == [_TRANSCRIPT]
-    assert recognition._audio_interim_transcript == "next turn"
-
-
-async def test_overlapping_commits_deliver_each_snapshot(
-    running_session: tuple[AgentSession, Agent],
-) -> None:
-    session, agent = running_session
-    assert session._activity is not None
-    recognition = session._activity._audio_recognition
-    assert recognition is not None
-    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
-    assert await session.commit_user_turn(skip_reply=True) == _TRANSCRIPT
-    first_task = recognition._end_of_turn_task
-    assert first_task is not None and not first_task.done()
-    await recognition._on_stt_event(_final_transcript("next turn", confidence=0.3))
-    assert await session.commit_user_turn(skip_reply=True) == "next turn"
-    second_task = recognition._end_of_turn_task
-    assert second_task is not None and second_task is not first_task
-    session.clear_user_turn()
-
-    await _await_delivery(session)
-
-    assert not first_task.cancelled()
-    assert _user_transcripts(agent) == [_TRANSCRIPT, "next turn"]
-    assert not recognition._user_turn_committed
-    assert recognition._current_transcript == ""
-
-
-async def test_close_delivers_all_pending_manual_snapshots(
-    running_session: tuple[AgentSession, Agent],
-) -> None:
-    session, agent = running_session
-    assert session._activity is not None
-    recognition = session._activity._audio_recognition
-    assert recognition is not None
-    for text in (_TRANSCRIPT, "next turn"):
-        await recognition._on_stt_event(_final_transcript(text))
-        assert await session.commit_user_turn(skip_reply=True) == text
-    assert len(recognition._manual_turn_tasks) == 2
-
-    await session.aclose()
-
-    assert _user_transcripts(agent) == [_TRANSCRIPT, "next turn"]
-    assert not recognition._manual_turn_tasks
-
-
-async def test_empty_commit_does_not_replace_pending_snapshot(
-    running_session: tuple[AgentSession, Agent],
-) -> None:
-    session, agent = running_session
-    assert session._activity is not None
-    recognition = session._activity._audio_recognition
-    assert recognition is not None
-    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
-    assert await session.commit_user_turn(skip_reply=True) == _TRANSCRIPT
-    task = recognition._end_of_turn_task
-    assert task is not None and not task.done()
-
-    assert await session.commit_user_turn(skip_reply=True, transcript_timeout=0) == ""
-    assert recognition._end_of_turn_task is task
-    await _await_delivery(session)
-
-    assert _user_transcripts(agent) == [_TRANSCRIPT]
-
-
-async def test_mode_change_cancels_all_pending_manual_snapshots(
-    running_session: tuple[AgentSession, Agent],
-) -> None:
-    session, _ = running_session
-    assert session._activity is not None
-    recognition = session._activity._audio_recognition
-    assert recognition is not None
-    for text in (_TRANSCRIPT, "next turn"):
-        await recognition._on_stt_event(_final_transcript(text))
-        await session.commit_user_turn(skip_reply=True)
-    tasks = list(recognition._manual_turn_tasks)
-    assert len(tasks) == 2
-
-    recognition._update_options(turn_detection="vad")
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-    assert all(task.cancelled() for task in tasks)
-    assert not recognition._manual_turn_tasks
-    assert not recognition._user_turn_committed
-
-
-@pytest.mark.real_time
-@pytest.mark.parametrize("phase", ["queued", "pending_delivery"])
-async def test_cancelled_snapshot_ends_its_spans_and_preserves_live_data(
-    span_exporter: InMemorySpanExporter,
-    running_session: tuple[AgentSession, Agent],
-    phase: str,
-) -> None:
-    session, _ = running_session
-    assert session._activity is not None
-    recognition = session._activity._audio_recognition
-    assert recognition is not None
-    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT, request_id="first"))
-    commit = session.commit_user_turn(skip_reply=True)
-    if phase == "queued":
-        await asyncio.sleep(0)
-        assert commit.done()
-    else:
-        await commit
-    task = recognition._end_of_turn_task
-    assert task is not None and not task.done()
-    session.clear_user_turn()
-    await recognition._on_stt_event(_final_transcript("next turn", request_id="second"))
-    recognition._turn_backchannel_over_agent = True
-    recognition._overlap_in_current_turn = True
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    assert not recognition._user_turn_committed
-    assert recognition._current_transcript == "next turn"
-    assert recognition._stt_request_ids == ["second"]
-    assert recognition._turn_backchannel_over_agent
-    assert recognition._overlap_in_current_turn
-    [wait] = [span for span in span_exporter.get_finished_spans() if span.name == "eou_wait"]
-    assert wait.attributes[trace_types.ATTR_EOU_OUTCOME] == "dropped"
-    [turn] = [span for span in span_exporter.get_finished_spans() if span.name == "user_turn"]
-    assert turn.attributes[trace_types.ATTR_PROVIDER_REQUEST_IDS] == ("first",)
-    await session.aclose()
-    assert_trace_well_formed(span_exporter.get_finished_spans())
-
-
 @pytest.mark.parametrize("phase", ["scheduled", "waiting_for_stt"])
 async def test_clear_before_snapshot_discards_live_transcript(
     running_session: tuple[AgentSession, Agent], phase: str
@@ -332,87 +197,32 @@ async def test_clear_before_snapshot_discards_live_transcript(
     assert _user_transcripts(agent) == ["replacement"]
 
 
-async def test_clear_resets_realtime_buffer_during_manual_delivery(
-    running_session: tuple[AgentSession, Agent],
-) -> None:
-    session, _ = running_session
-    activity = session._activity
-    assert activity is not None
-    recognition = activity._audio_recognition
-    assert recognition is not None
-    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
-    await session.commit_user_turn(skip_reply=True)
-    realtime_session = MagicMock()
-    activity._rt_session = realtime_session
-    try:
-        session.clear_user_turn()
-
-        realtime_session.clear_audio.assert_called_once_with()
-        assert recognition._current_transcript == ""
-    finally:
-        activity._rt_session = None
-
-
-@pytest.mark.parametrize("new_speech", [False, True])
-async def test_realtime_delivery_uses_snapshot_timing(
-    running_session: tuple[AgentSession, Agent],
-    monkeypatch: pytest.MonkeyPatch,
-    new_speech: bool,
-) -> None:
-    session, agent = running_session
-    activity = session._activity
-    assert activity is not None
-    recognition = activity._audio_recognition
-    assert recognition is not None
-    recognition._speech_start_time = time.time() - 0.2
-    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
-    committed_speaking_time = recognition.last_speaking_time
-    assert committed_speaking_time is not None
-    assert await session.commit_user_turn(skip_reply=True) == _TRANSCRIPT
-    assert recognition.last_speaking_time is None
-    assert activity._last_user_speaking_time == committed_speaking_time
-
-    realtime_session = MagicMock()
-    activity._rt_session = realtime_session
-    try:
-        answered_at = activity._realtime_user_input_answered_at
-        session.clear_user_turn()
-        realtime_session.clear_audio.assert_called_once_with()
-        assert activity._realtime_user_input_answered_at == answered_at
-        assert activity._last_user_speaking_time == committed_speaking_time
-    finally:
-        activity._rt_session = None
-
-    if new_speech:
-        await asyncio.sleep(0.1)
-        recognition._speech_start_time = time.time()
-        await recognition._on_stt_event(_final_transcript("next turn"))
-        assert recognition.last_speaking_time > committed_speaking_time
-    live_speaking_time = recognition.last_speaking_time
-    model = FakeRealtimeModel()
-    monkeypatch.setattr(agent, "_llm", model)
-
-    await _await_delivery(session)
-
-    assert session._unanswered_user_metrics == {"stopped_speaking_at": committed_speaking_time}
-    assert recognition.last_speaking_time == live_speaking_time
-    await model.aclose()
-
-
 @pytest.mark.real_time
+@pytest.mark.parametrize("clear_before_final", [False, True])
+@pytest.mark.parametrize("next_request_id", ["first", "second"])
 async def test_snapshot_trace_does_not_consume_next_turn_metadata(
     span_exporter: InMemorySpanExporter,
     running_session: tuple[AgentSession, Agent],
+    clear_before_final: bool,
+    next_request_id: str,
 ) -> None:
     session, _ = running_session
     assert session._activity is not None
     recognition = session._activity._audio_recognition
     assert recognition is not None
+    await recognition._on_stt_event(
+        SpeechEvent(
+            type=SpeechEventType.INTERIM_TRANSCRIPT,
+            alternatives=[SpeechData(text="what's the weather", language=LanguageCode("en"))],
+            request_id="first",
+        )
+    )
     await recognition._on_stt_event(_final_transcript(_TRANSCRIPT, request_id="first"))
     assert await session.commit_user_turn(skip_reply=True) == _TRANSCRIPT
-    session.clear_user_turn()
+    if clear_before_final:
+        session.clear_user_turn()
     await recognition._on_stt_event(
-        _final_transcript("next turn", confidence=0.3, request_id="second")
+        _final_transcript("next turn", confidence=0.3, request_id=next_request_id)
     )
     await _await_delivery(session)
 
@@ -421,17 +231,17 @@ async def test_snapshot_trace_does_not_consume_next_turn_metadata(
     assert first_turn.attributes[trace_types.ATTR_PROVIDER_REQUEST_IDS] == ("first",)
     assert first_turn.attributes[trace_types.ATTR_USER_TRANSCRIPT] == _TRANSCRIPT
     assert first_turn.attributes[trace_types.ATTR_TRANSCRIPT_CONFIDENCE] == pytest.approx(0.9)
-    assert len(json.loads(first_turn.attributes[trace_types.ATTR_STT_EVENTS])) == 1
-    assert recognition._stt_request_ids == ["second"]
+    assert len(json.loads(first_turn.attributes[trace_types.ATTR_STT_EVENTS])) == 2
+    assert recognition._stt_request_ids == [next_request_id]
     assert len(recognition._stt_events) == 1
 
-    assert await session.commit_user_turn(skip_reply=True) == "next turn"
+    assert await session.commit_user_turn(skip_reply=True, transcript_timeout=0) == "next turn"
     await _await_delivery(session)
     first_turn, second_turn = [
         span for span in span_exporter.get_finished_spans() if span.name == "user_turn"
     ]
     assert second_turn.attributes is not None
-    assert second_turn.attributes[trace_types.ATTR_PROVIDER_REQUEST_IDS] == ("second",)
+    assert second_turn.attributes[trace_types.ATTR_PROVIDER_REQUEST_IDS] == (next_request_id,)
     assert second_turn.attributes[trace_types.ATTR_TRANSCRIPT_CONFIDENCE] == pytest.approx(0.3)
     waits = [span for span in span_exporter.get_finished_spans() if span.name == "eou_wait"]
     assert len(waits) == 2
@@ -440,21 +250,51 @@ async def test_snapshot_trace_does_not_consume_next_turn_metadata(
     assert_trace_well_formed(span_exporter.get_finished_spans())
 
 
-@pytest.mark.parametrize("running_session", ["vad", "stt"], indirect=True)
-async def test_clear_still_discards_non_manual_commit(
+@pytest.mark.real_time
+@pytest.mark.parametrize("phase", ["queued", "pending_delivery"])
+@pytest.mark.parametrize(
+    ("clear_before_cancel", "automatic_delay"), [(False, 0.5), (False, 0.0), (True, 0.5)]
+)
+async def test_mode_change_preserves_live_span_and_closes_detached_span(
+    span_exporter: InMemorySpanExporter,
     running_session: tuple[AgentSession, Agent],
+    phase: str,
+    clear_before_cancel: bool,
+    automatic_delay: float,
 ) -> None:
-    session, _ = running_session
+    session, agent = running_session
     assert session._activity is not None
     recognition = session._activity._audio_recognition
     assert recognition is not None
     await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
-    await session.commit_user_turn(skip_reply=True)
-    assert recognition._end_of_turn_task is not None
-    assert not recognition._end_of_turn_task.done()
-    stt_pipeline = recognition._stt_pipeline
+    commit = session.commit_user_turn(skip_reply=True)
+    if phase == "queued":
+        await asyncio.sleep(0)
+        assert commit.done()
+    assert await commit == _TRANSCRIPT
+    manual_task = recognition._end_of_turn_task
+    span = recognition._user_turn_span
+    assert manual_task is not None and not manual_task.done()
+    assert span is not None and span.is_recording()
+    if clear_before_cancel:
+        session.clear_user_turn()
 
-    session.clear_user_turn()
+    session.update_options(turn_detection="vad", endpointing_opts={"min_delay": automatic_delay})
+    if not clear_before_cancel:
+        recognition._run_eou_detection(agent.chat_ctx, trigger="vad", skip_reply=True)
+    with pytest.raises(asyncio.CancelledError):
+        await manual_task
 
-    assert recognition._current_transcript == ""
-    assert recognition._stt_pipeline is not stt_pipeline
+    if clear_before_cancel:
+        assert not span.is_recording()
+    elif automatic_delay > 0:
+        assert span.is_recording()
+        assert recognition._user_turn_span is span
+    if not clear_before_cancel:
+        await _await_delivery(session)
+        assert _user_transcripts(agent) == [_TRANSCRIPT]
+    else:
+        assert _user_transcripts(agent) == []
+    assert not span.is_recording()
+    await session.aclose()
+    assert_trace_well_formed(span_exporter.get_finished_spans())
