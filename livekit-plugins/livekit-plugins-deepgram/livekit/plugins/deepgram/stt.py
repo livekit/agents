@@ -35,6 +35,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    create_api_error_from_response,
     stt,
     utils,
 )
@@ -803,8 +804,11 @@ class SpeechStream(stt.SpeechStream):
         except aiohttp.ClientResponseError as e:
             # RequestInfo carries the request headers, so chaining this error or
             # formatting it puts the API key in the exception repr (#6739).
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+            raise create_api_error_from_response(
+                e.message,
+                status=e.status,
+                headers=e.headers,
+                request_id_header="dg-request-id",
             ) from None
         except Exception as e:
             raise APIConnectionError(
