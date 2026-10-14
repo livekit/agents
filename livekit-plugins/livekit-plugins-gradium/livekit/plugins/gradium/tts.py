@@ -260,6 +260,8 @@ class ChunkedStream(tts.ChunkedStream):
 
                 while True:
                     msg = await ws.receive()
+                    if msg.type == aiohttp.WSMsgType.ERROR:
+                        raise APIConnectionError("Gradium websocket error") from ws.exception()
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSED,
@@ -394,6 +396,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
                 msg = await ws.receive()
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError("Gradium websocket error") from ws.exception()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
