@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
@@ -365,9 +366,8 @@ class RecognizeStream(ABC):
     class _InputChan(aio.Chan[rtc.AudioFrame | _FlushSentinel]):
         """Input queue that places the provider's timestamps on the caller's timeline.
 
-        The provider counts audio from the first frame each connection reads. Frames are
-        pushed as they are captured, so that frame was captured at the last push minus
-        the audio still queued, and the offset is anchored there when it is read.
+        The provider counts audio from the first frame each connection reads, so the offset
+        is anchored on the capture time of that frame when it is read.
         """
 
         def __init__(self) -> None:
@@ -380,6 +380,8 @@ class RecognizeStream(ABC):
             self._start_time_offset = 0.0
             # capture time of the first frame read since the provider's clock restarted
             self._first_frame_at: float | None = None
+            # push time of each queued frame, in queue order
+            self._pushed_at: deque[float] = deque()
             self._queued_duration = 0.0
             self._last_pushed_at = 0.0
 
@@ -404,13 +406,20 @@ class RecognizeStream(ABC):
             super().send_nowait(value)
             if isinstance(value, rtc.AudioFrame):
                 self._last_pushed_at = time.time()
+                self._pushed_at.append(self._last_pushed_at)
                 self._queued_duration += value.duration
 
         def recv_nowait(self) -> rtc.AudioFrame | RecognizeStream._FlushSentinel:
             value = super().recv_nowait()
             if isinstance(value, rtc.AudioFrame):
+                pushed_at = self._pushed_at.popleft()
                 if self._first_frame_at is None:
-                    self._first_frame_at = self._last_pushed_at - self._queued_duration
+                    # a frame is pushed after it is captured, so its capture start is at most
+                    # its own push minus its duration (exact across pauses in the input) and
+                    # at most the last push minus all queued audio (exact for a burst)
+                    self._first_frame_at = min(
+                        pushed_at - value.duration, self._last_pushed_at - self._queued_duration
+                    )
                     if self.input_started_at is None:
                         self.input_started_at = self._first_frame_at
                     self._start_time_offset = self._first_frame_at - self.input_started_at

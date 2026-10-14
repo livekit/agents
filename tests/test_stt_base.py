@@ -395,6 +395,35 @@ async def test_start_time_offset_anchors_on_audio_queued_during_a_failed_connect
     await stream.aclose()
 
 
+@pytest.mark.parametrize("pause", [False, True])
+async def test_start_time_offset_anchors_on_the_capture_of_queued_audio(pause: bool) -> None:
+    """Queued audio is anchored on when its oldest frame was captured: a pause between
+    queued frames does not move it forward, and a burst of buffered audio moves it back."""
+    stream = _AudioStream(stt=_DummySTT(), fail_first_connect=True)
+    set_at = time.time()
+    stream.start_time_offset = 30.0
+    frame = silence_frame(0.02, 16000)
+
+    await asyncio.sleep(1.0)
+    first_pushed_at = time.time()
+    if pause:
+        # input pauses for a second between two queued frames
+        stream.push_frame(frame)
+        await asyncio.sleep(1.0)
+        stream.push_frame(frame)
+        captured_at = first_pushed_at - frame.duration
+    else:
+        # a second of buffered audio arrives at once
+        for _ in range(50):
+            stream.push_frame(frame)
+        captured_at = first_pushed_at - 50 * frame.duration
+    await _wait_for_offsets(stream, 1)
+
+    # the pushes themselves take a few microseconds
+    assert stream.offsets == [pytest.approx(30.0 + captured_at - set_at, abs=1e-3)]
+    await stream.aclose()
+
+
 async def test_undeclared_start_time_offset_counts_from_the_first_audio() -> None:
     """With no offset set the timeline starts with the first audio, so a late first frame
     adds nothing, and a retry continues that timeline from the next frame read."""
