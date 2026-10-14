@@ -2867,7 +2867,9 @@ class AgentActivity(RecognitionHooks):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
         elif self.llm is None:
-            return  # skip response if no llm is set
+            # debug, not warning: an agent without an LLM (an STT-only or echo agent) is valid
+            logger.debug("no LLM set on agent, not replying", extra={"agent_id": self._agent.id})
+            return
 
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
@@ -3973,7 +3975,9 @@ class AgentActivity(RecognitionHooks):
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
                 interrupted_calls.append(sanitized_out.fnc_call)
-                interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
+                interrupted_fnc_outputs.append(
+                    _interrupted_tool_output(sanitized_out, speech_id=speech_handle.id)
+                )
 
             if interrupted_tool_messages := interrupted_calls + interrupted_fnc_outputs:
                 self._session.emit(
@@ -4008,7 +4012,11 @@ class AgentActivity(RecognitionHooks):
                 logger.warning(
                     "maximum number of function calls steps reached, "
                     "generating final response with tool_choice='none'",
-                    extra={"speech_id": speech_handle.id},
+                    extra={
+                        "speech_id": speech_handle.id,
+                        "max_tool_steps": self._session.options.max_tool_steps,
+                        "functions": [out.fnc_call.name for out in tool_output.output],
+                    },
                 )
 
             speech_handle._num_steps += 1
@@ -4720,7 +4728,9 @@ class AgentActivity(RecognitionHooks):
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
                 interrupted_calls.append(sanitized_out.fnc_call)
-                interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
+                interrupted_fnc_outputs.append(
+                    _interrupted_tool_output(sanitized_out, speech_id=speech_handle.id)
+                )
 
             if interrupted_fnc_outputs:
                 self._session.emit(
@@ -4869,7 +4879,11 @@ class AgentActivity(RecognitionHooks):
                     logger.warning(
                         "maximum number of function calls steps reached, "
                         "generating final response with tool_choice='none'",
-                        extra={"speech_id": speech_handle.id},
+                        extra={
+                            "speech_id": speech_handle.id,
+                            "max_tool_steps": self._session.options.max_tool_steps,
+                            "functions": [out.fnc_call.name for out in tool_output.output],
+                        },
                     )
 
                 self._create_speech_task(
