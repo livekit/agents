@@ -126,6 +126,11 @@ NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VOICE = "marin"
 
+# max time to wait for an active response to finish before issuing a new
+# response.create when serialize_response_create is enabled; a stuck/never-done
+# generation falls through to the send and lets the fast-fail path handle it
+RESPONSE_CREATE_SERIALIZE_TIMEOUT = 15.0
+
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 # Azure OpenAI Realtime API uses old-style (beta) event names.
@@ -245,6 +250,9 @@ class _RealtimeOptions:
     """reset the connection after this many seconds if provided"""
     conn_options: APIConnectOptions
     speed: float = 1.0
+    serialize_response_create: bool = False
+    """opt-in: wait for an active response to finish before issuing a new
+    ``response.create``, instead of letting it collide and fast-fail"""
 
 
 @dataclass
@@ -366,6 +374,7 @@ class RealtimeModel(llm.RealtimeModel):
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        serialize_response_create: bool = False,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> None: ...
 
@@ -397,6 +406,7 @@ class RealtimeModel(llm.RealtimeModel):
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        serialize_response_create: bool = False,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> None: ...
 
@@ -427,6 +437,7 @@ class RealtimeModel(llm.RealtimeModel):
         entra_token: str | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        serialize_response_create: bool = False,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
         **kwargs: Any,
     ) -> None:
@@ -452,6 +463,7 @@ class RealtimeModel(llm.RealtimeModel):
             entra_token (str | None): Azure Entra token auth (alternative to api_key).
             max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
             conn_options (APIConnectOptions): Retry/backoff and connection settings.
+            serialize_response_create (bool): Opt-in. When True, a client-initiated ``generate_reply`` waits for an already-active response to finish before sending ``response.create``, instead of colliding and failing fast with ``conversation_already_has_active_response``. Defaults to False (unchanged behaviour). Does not cancel the active response; use ``interrupt()`` for that.
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Raises:
@@ -562,6 +574,7 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
             conn_options=conn_options,
+            serialize_response_create=serialize_response_create,
         )
         self._http_session = http_session
         self._http_session_owned = False
@@ -601,6 +614,7 @@ class RealtimeModel(llm.RealtimeModel):
         reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        serialize_response_create: bool = False,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
         **kwargs: Any,
     ) -> RealtimeModel:
@@ -623,6 +637,7 @@ class RealtimeModel(llm.RealtimeModel):
             reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models, e.g. ``RealtimeReasoning(effort="low")``.
             http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
             max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
+            serialize_response_create (bool): Opt-in. See :meth:`RealtimeModel.__init__`. Defaults to False.
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Returns:
@@ -739,6 +754,7 @@ class RealtimeModel(llm.RealtimeModel):
             entra_token=entra_token,
             base_url=base_url,
             max_session_duration=max_session_duration,
+            serialize_response_create=serialize_response_create,
         )
         model._capabilities.can_disable_turn_detection = can_disable_turn_detection
         return model
@@ -925,10 +941,19 @@ class RealtimeSession(
         self._instructions: str | None = None
         # set on aclose; trailing server events are ignored while it's set
         self._closing = False
+        # set while the connection is being torn down and replayed; a serialized response.create
+        # must not fire during this window or it would leak onto the reconnected connection
+        self._reconnecting = False
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
         self.send_event(self._create_session_update_event())
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        # deferred response.create sends waiting for an active response to finish
+        # (only used when serialize_response_create is enabled)
+        self._response_create_tasks: set[asyncio.Task[None]] = set()
+        # serializes those deferred sends so queued replies go out one at a time instead of
+        # all firing when the active response clears and colliding with each other
+        self._serialize_lock = asyncio.Lock()
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
@@ -1036,6 +1061,10 @@ class RealtimeSession(
                     ),
                 ) from e
 
+            # cancel any serialized response.create still waiting for the old connection's
+            # active response, so it can't fire a stale reply onto the reconnected session
+            for task in self._response_create_tasks:
+                task.cancel()
             for fut in self._response_created_futures.values():
                 if not fut.done():
                     fut.set_exception(
@@ -1056,9 +1085,13 @@ class RealtimeSession(
                     if reconnecting:
                         await _reconnect()
                         num_retries = 0  # reset the retry counter
+                    # the connection is live again; serialized sends may resume
+                    self._reconnecting = False
                     await self._run_ws(ws_conn)
 
                 except APIError as e:
+                    # the connection is gone; block serialized sends until it is back
+                    self._reconnecting = True
                     if max_retries == 0 or not e.retryable:
                         self._emit_error(e, recoverable=False)
                         raise
@@ -1310,6 +1343,9 @@ class RealtimeSession(
                 and wait_reconnect_task in done
                 and isinstance(self._current_generation, _ResponseGeneration)
             ):
+                # committing to reconnect: block serialized sends now, before the active
+                # response finishes, so a queued reply can't fire onto the next connection
+                self._reconnecting = True
                 # wait for the current generation to complete before reconnecting
                 await self._current_generation._done_fut
                 closing = True
@@ -1751,9 +1787,10 @@ class RealtimeSession(
         if is_given(tools):
             params.tools = self._convert_tools_to_oai(tools)  # type: ignore
 
-        self.send_event(
-            ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
-        )
+        # shared with the send/done callbacks; the timeout only starts once we actually
+        # send, which may be deferred when serialize_response_create is enabled
+        timeout_handle: asyncio.TimerHandle | None = None
+        create_sent = False
 
         def _on_timeout() -> None:
             self._response_created_futures.pop(event_id, None)
@@ -1762,12 +1799,19 @@ class RealtimeSession(
                 self._discarded_event_ids.add(event_id)
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
-        handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
+        def _send_response_create() -> None:
+            nonlocal timeout_handle, create_sent
+            create_sent = True
+            self.send_event(
+                ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
+            )
+            timeout_handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
 
         def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
-            handle.cancel()
+            if timeout_handle is not None:
+                timeout_handle.cancel()
             self._response_created_futures.pop(event_id, None)
-            if f.cancelled():
+            if f.cancelled() and create_sent:
                 # response.create was already sent; cancel the response server-side
                 self.send_event(ResponseCancelEvent(type="response.cancel"))
                 # the cancel above is a no-op if the response isn't created yet; discard it by id
@@ -1775,6 +1819,55 @@ class RealtimeSession(
                 self._discarded_event_ids.add(event_id)
 
         fut.add_done_callback(_on_fut_done)
+
+        active = self._current_generation
+        active_now = isinstance(active, _ResponseGeneration) and not active._done_fut.done()
+        if self._opts.serialize_response_create and (
+            # a response is active, or an earlier serialized reply hasn't sent/cleared yet, so
+            # this one has to queue behind it rather than race it
+            active_now or self._response_create_tasks or self._serialize_lock.locked()
+        ):
+            # opt-in serialization: hold this response.create until the channel is free instead
+            # of colliding and fast-failing with conversation_already_has_active_response. We
+            # only WAIT — cancelling an active response stays an explicit interrupt() decision by
+            # the caller. This cannot cover the in-transit race (a just-created server response
+            # whose response.created we haven't processed yet, so _current_generation is still
+            # None); that residual collision is still caught by the fast-fail in _handle_error.
+            async def _serialized_send() -> None:
+                async with self._serialize_lock:
+                    # the lock serializes queued replies; re-read the current generation each
+                    # turn (it may have changed while we waited) and wait out whatever is active
+                    while (
+                        isinstance(gen := self._current_generation, _ResponseGeneration)
+                        and not gen._done_fut.done()
+                    ):
+                        # bound the wait so a stuck/never-done generation can't hang this reply
+                        # forever; on timeout fall through and let the fast-fail handle it
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.shield(gen._done_fut), RESPONSE_CREATE_SERIALIZE_TIMEOUT
+                            )
+                        except asyncio.TimeoutError:
+                            break
+                        except Exception:
+                            # a failed/cancelled generation is no longer active; stop waiting
+                            break
+                    if fut.done() or self._reconnecting or self._closing:
+                        # cancelled / interrupted / discarded, or the connection is being torn
+                        # down (a send now would leak onto the reconnected connection)
+                        return
+                    _send_response_create()
+                    # keep the lock until our own response is created (fut resolves on
+                    # response.created) or settles, so the next queued reply waits for ours
+                    with contextlib.suppress(Exception):
+                        await asyncio.shield(fut)
+
+            task = asyncio.ensure_future(_serialized_send())
+            self._response_create_tasks.add(task)
+            task.add_done_callback(self._response_create_tasks.discard)
+        else:
+            _send_response_create()
+
         return fut
 
     @property
@@ -1830,6 +1923,8 @@ class RealtimeSession(
 
     async def aclose(self) -> None:
         self._closing = True
+        for task in self._response_create_tasks:
+            task.cancel()
         self._close_current_generation("session closed")
         self._msg_ch.close()
         await self._main_atask

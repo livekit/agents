@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
@@ -18,8 +19,10 @@ from openai.types.realtime import (
 from openai.types.realtime.audio_transcription import AudioTranscription
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
-from livekit.agents import AgentSession, llm
+from livekit.agents import AgentSession, llm, utils
 from livekit.agents._exceptions import APIError
+from livekit.agents.llm._realtime import openai as _openai_impl
+from livekit.agents.llm._realtime.openai import _ResponseGeneration
 from livekit.agents.llm._realtime.openai_types import RealtimeModels as CoreRealtimeModels
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
 from livekit.agents.metrics import STTMetrics
@@ -671,6 +674,209 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
             "output_tokens": 2,
         }
     ]
+
+
+# --- serialize_response_create (opt-in) --------------------------------------
+
+
+def _generate_reply_session(
+    *, serialize: bool, current_generation: object | None = None
+) -> tuple[RealtimeSession, list[object]]:
+    sent: list[object] = []
+    session = cast(
+        RealtimeSession,
+        SimpleNamespace(
+            _current_generation=current_generation,
+            _opts=SimpleNamespace(serialize_response_create=serialize),
+            _instructions=None,
+            _response_created_futures={},
+            _response_create_tasks=set(),
+            _serialize_lock=asyncio.Lock(),
+            _discarded_event_ids=set(),
+            _reconnecting=False,
+            _closing=False,
+            send_event=sent.append,
+        ),
+    )
+    return session, sent
+
+
+def _pending_generation() -> _ResponseGeneration:
+    return _ResponseGeneration(
+        message_ch=utils.aio.Chan(),
+        function_ch=utils.aio.Chan(),
+        messages={},
+        _done_fut=asyncio.Future(),
+        _created_timestamp=0.0,
+    )
+
+
+def _response_creates(sent: list[object]) -> list[object]:
+    return [e for e in sent if getattr(e, "type", None) == "response.create"]
+
+
+async def _until(cond: Callable[[], bool], *, turns: int = 50) -> None:
+    # spin the event loop until a condition driven by background tasks holds
+    for _ in range(turns):
+        if cond():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition was not met in time")
+
+
+def _resolve(fut: asyncio.Future[object]) -> None:
+    # stand in for response.created settling a reply's future
+    if not fut.done():
+        fut.set_result(cast(Any, object()))
+
+
+async def test_generate_reply_sends_immediately_by_default() -> None:
+    # flag OFF (default): response.create goes out synchronously even while a response is
+    # active — unchanged behaviour, the collision is left to the fast-fail path
+    session, sent = _generate_reply_session(
+        serialize=False, current_generation=_pending_generation()
+    )
+    RealtimeSession.generate_reply(session)
+    assert len(_response_creates(sent)) == 1
+    assert session._response_create_tasks == set()  # no deferred send spawned
+
+
+async def test_generate_reply_serialized_sends_immediately_without_active_response() -> None:
+    # flag ON but nothing active and nothing queued: no reason to wait, send right away
+    session, sent = _generate_reply_session(serialize=True, current_generation=None)
+    RealtimeSession.generate_reply(session)
+    assert len(_response_creates(sent)) == 1
+    assert session._response_create_tasks == set()
+
+
+async def test_generate_reply_waits_for_active_response_when_serialized() -> None:
+    # flag ON with an active response: hold response.create until it finishes, then send once
+    gen = _pending_generation()
+    session, sent = _generate_reply_session(serialize=True, current_generation=gen)
+
+    fut = cast("asyncio.Future[object]", RealtimeSession.generate_reply(session))
+    await asyncio.sleep(0)  # let the deferred send run its first step
+    assert _response_creates(sent) == []  # nothing sent while a response is active
+    assert not fut.done()
+
+    gen._done_fut.set_result(None)  # active response clears
+    await _until(lambda: len(_response_creates(sent)) == 1)  # sent once, after it cleared
+
+    _resolve(fut)  # the deferred task holds the lock until its own response.created
+    await _until(lambda: not session._response_create_tasks)
+
+
+async def test_generate_reply_serializes_concurrent_replies() -> None:
+    # two replies queued behind one active response must not both fire when it clears; the
+    # second waits for the first's own response instead of colliding with it (Devin #1)
+    gen = _pending_generation()
+    session, sent = _generate_reply_session(serialize=True, current_generation=gen)
+
+    fut1 = cast("asyncio.Future[object]", RealtimeSession.generate_reply(session))
+    fut2 = cast("asyncio.Future[object]", RealtimeSession.generate_reply(session))
+    assert len(session._response_create_tasks) == 2
+    await asyncio.sleep(0)
+    assert _response_creates(sent) == []  # both waiting
+
+    gen._done_fut.set_result(None)  # active response clears
+    await _until(lambda: len(_response_creates(sent)) == 1)
+    await asyncio.sleep(0)
+    assert len(_response_creates(sent)) == 1  # only the first fired; the second still queued
+
+    session._current_generation = None  # the first reply's response was created, then finished
+    _resolve(fut1)
+    await _until(lambda: len(_response_creates(sent)) == 2)  # now the second fires
+
+    _resolve(fut2)
+    await _until(lambda: not session._response_create_tasks)
+
+
+async def test_generate_reply_cancelled_on_reconnect_sends_nothing() -> None:
+    # _reconnect cancels pending serialized sends so a stale reply can't land on the new
+    # connection; a cancelled wait must not have sent anything (Devin #3)
+    gen = _pending_generation()
+    session, sent = _generate_reply_session(serialize=True, current_generation=gen)
+
+    RealtimeSession.generate_reply(session)
+    task = next(iter(session._response_create_tasks))
+    await asyncio.sleep(0)
+
+    task.cancel()  # as _reconnect does
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _response_creates(sent) == []
+
+
+async def test_generate_reply_not_sent_while_reconnecting() -> None:
+    # if the active response finishes while the connection is being torn down (graceful
+    # reconnect sets _reconnecting before awaiting the generation), the queued reply must not
+    # send — otherwise it would leak onto the reconnected connection (Devin reconnect-replay)
+    gen = _pending_generation()
+    session, sent = _generate_reply_session(serialize=True, current_generation=gen)
+
+    RealtimeSession.generate_reply(session)
+    task = next(iter(session._response_create_tasks))
+    await asyncio.sleep(0)
+
+    session._reconnecting = True  # committing to reconnect, before the generation finishes
+    gen._done_fut.set_result(None)  # the old response finishes during the teardown window
+    await task
+
+    assert _response_creates(sent) == []  # nothing queued onto the next connection
+
+
+async def test_generate_reply_guard_skips_send_when_future_already_failed() -> None:
+    # even without the explicit cancel, a reply whose future was failed (e.g. reconnect
+    # discarded it) before the active response cleared must not send (Devin #3, belt-and-braces)
+    gen = _pending_generation()
+    session, sent = _generate_reply_session(serialize=True, current_generation=gen)
+
+    fut = RealtimeSession.generate_reply(session)
+    task = next(iter(session._response_create_tasks))
+    await asyncio.sleep(0)
+
+    # reconnect order: fail the pending reply first, then clear the active generation
+    fut.set_exception(llm.RealtimeError("pending response discarded due to session reconnection"))
+    gen._done_fut.set_result(None)
+    await task
+
+    assert _response_creates(sent) == []
+    assert isinstance(fut.exception(), llm.RealtimeError)
+
+
+async def test_generate_reply_serialize_falls_through_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a stuck/never-done generation must not hang the reply forever: after the bounded wait
+    # we send anyway and let the fast-fail handle any resulting collision
+    monkeypatch.setattr(_openai_impl, "RESPONSE_CREATE_SERIALIZE_TIMEOUT", 0.02)
+    gen = _pending_generation()  # never resolved
+    session, sent = _generate_reply_session(serialize=True, current_generation=gen)
+
+    RealtimeSession.generate_reply(session)
+    task = next(iter(session._response_create_tasks))
+    await asyncio.sleep(0.05)  # let the real bounded timeout elapse
+    assert len(_response_creates(sent)) == 1  # sent anyway, despite the stuck generation
+
+    task.cancel()  # the task still holds the lock awaiting its own (absent) response.created
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+def test_with_azure_forwards_serialize_response_create() -> None:
+    # with_azure accepted the flag through **kwargs but never forwarded it to the model (Devin #2)
+    on = RealtimeModel.with_azure(
+        azure_deployment="dep",
+        api_key="fake",
+        base_url="https://example.com/openai",
+        serialize_response_create=True,
+    )
+    assert on._opts.serialize_response_create is True
+
+    off = RealtimeModel.with_azure(
+        azure_deployment="dep", api_key="fake", base_url="https://example.com/openai"
+    )
+    assert off._opts.serialize_response_create is False
 
 
 # --------------------------------------------------------------------------- #
