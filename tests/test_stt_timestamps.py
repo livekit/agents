@@ -2,9 +2,9 @@
 
 Both sides must agree on where zero is. The default ``stt_node`` shifts provider timestamps
 onto the session timeline through ``start_time_offset`` and anchors the pipeline on the same
-session input start. A custom node that forwards provider timestamps untouched is anchored
-on the pipeline's creation, when it opens its stream. The stream itself accounts for audio
-that starts after its creation. Either way ``input_started_at + end_time`` is the wall-clock
+session input start. A custom node that forwards provider timestamps untouched counts from
+its first audio: the pipeline is anchored on the first frame pushed, and a stream with no
+declared offset starts its timeline there too. Either way ``input_started_at + end_time`` is the wall-clock
 end of the recognized speech, also after a handoff (AGT-3678) and when the first audio
 arrives long after the stream opened.
 """
