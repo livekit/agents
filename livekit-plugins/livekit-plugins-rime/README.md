@@ -151,9 +151,14 @@ await session.start(agent=Agent(instructions="Give short, clear answers."), room
 session.generate_reply(user_input="Hello!")
 ```
 
-Set `RIME_API_KEY`. The endpoint must accept the SDK's Bearer API-key handshake.
-Use the full `wss://.../v1/realtime` URL. Local development also accepts
-`ws://localhost/...`. You can pass `client=Rime(...)` to reuse credentials; the
+Set `RIME_API_KEY` and configure the production Prism endpoint:
+
+```sh
+export PRISM_URL=wss://prism.api.rime.ai/v1/realtime
+```
+
+The endpoint must accept the SDK's Bearer API-key handshake. Local development
+also accepts `ws://localhost/...`. You can pass `client=Rime(...)` to reuse credentials; the
 plugin does not close an injected client. Create one model per AgentSession.
 
 The adapter initializes instructions, tools, and text history before it sends
