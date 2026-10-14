@@ -776,14 +776,20 @@ class SpeechStream(stt.SpeechStream):
                     # the close, raised as a generic "closed unexpectedly" carrying
                     # only code 1006, with the reason on `ws.exception()` dropped.
                     # Raising here keeps that reason as the cause, and stays
-                    # retryable so `_main_task` still reconnects.
-                    exc = ws.exception()
+                    # retryable so `_main_task` still reconnects. The reason is
+                    # read from `msg.data`: aiohttp puts it there for every ERROR,
+                    # but a protocol error (`WebSocketError`) only sets the close
+                    # code and never reaches `ws.exception()`.
+                    exc = msg.data if isinstance(msg.data, BaseException) else ws.exception()
                     logger.warning(
-                        "AssemblyAI WebSocket error frame session=%s error=%r",
+                        "AssemblyAI WebSocket error frame session=%s code=%s error=%r",
                         self._session_id,
+                        ws.close_code,
                         exc,
                     )
-                    raise APIConnectionError("AssemblyAI connection error") from exc
+                    raise APIConnectionError(
+                        f"AssemblyAI connection error (code={ws.close_code})"
+                    ) from exc
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error(
