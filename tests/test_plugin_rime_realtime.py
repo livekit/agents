@@ -13,7 +13,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 r = pytest.importorskip("rimelabs_sdk.realtime")
-from rimelabs_sdk import Rime
+from rimelabs_sdk import Rime, RimeInputError
 from websockets.asyncio.server import serve
 
 from livekit.agents import Agent, AgentSession, function_tool, llm
@@ -194,6 +194,29 @@ async def test_startup_seeds_history_before_first_request():
         await session.update_instructions("Be clear")
         with pytest.raises(PrismUnsupported):
             await session.update_instructions("Different")
+
+
+@pytest.mark.parametrize("invalid_item", ["system", "image", "tool", "blank", "long"])
+async def test_history_update_validates_all_new_items_before_sending(invalid_item):
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.initialize(instructions="test")
+        ctx = session.chat_ctx
+        ctx.add_message(role="user", content="Valid new history")
+        if invalid_item == "system":
+            ctx.add_message(role="system", content="Unsupported role")
+        elif invalid_item == "image":
+            ctx.add_message(role="user", content=[llm.ImageContent(image="https://test/image")])
+        elif invalid_item == "tool":
+            ctx.items.append(
+                llm.FunctionCallOutput(call_id="unknown", output="Result", is_error=False)
+            )
+        else:
+            ctx.add_message(role="user", content=" \t" if invalid_item == "blank" else "x" * 4001)
+        with pytest.raises((PrismUnsupported, RimeInputError)):
+            await session.update_chat_ctx(ctx)
+        assert peer.items == []
+        assert session.chat_ctx.items == []
 
 
 @pytest.mark.parametrize("instructions", ["", " \n\t"])
