@@ -21,9 +21,6 @@ XAIRealtimeModels = Literal[
     "xai/grok-voice",
     "xai/grok-voice-latest",
     "xai/grok-voice-3.0",
-    "xai/grok-voice-2.0",
-    "xai/grok-voice-think-fast-3.0",
-    "xai/grok-voice-think-fast-2.0",
 ]
 
 RealtimeModels = (

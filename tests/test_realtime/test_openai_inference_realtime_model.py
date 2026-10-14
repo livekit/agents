@@ -433,7 +433,7 @@ async def test_xai_session_emits_one_final_transcript_per_turn(
     paused_realtime_main: None,
 ) -> None:
     model = RealtimeModel(
-        "xai/grok-voice-think-fast-3.0",
+        "xai/grok-voice-3.0",
         api_key="key",
         api_secret="secret",
     )
@@ -485,7 +485,7 @@ async def test_xai_session_flushes_held_transcript_on_next_turn_and_close(
     paused_realtime_main: None,
 ) -> None:
     model = RealtimeModel(
-        "xai/grok-voice-think-fast-3.0",
+        "xai/grok-voice-3.0",
         api_key="key",
         api_secret="secret",
     )
@@ -528,7 +528,7 @@ async def test_xai_session_preserves_held_turn_in_chat_ctx_and_appends_unanchore
     paused_realtime_main: None,
 ) -> None:
     model = RealtimeModel(
-        "xai/grok-voice-think-fast-3.0",
+        "xai/grok-voice-3.0",
         api_key="key",
         api_secret="secret",
     )
@@ -586,7 +586,7 @@ async def test_xai_session_discards_abandoned_response(
     paused_realtime_main: None,
 ) -> None:
     model = RealtimeModel(
-        "xai/grok-voice-think-fast-3.0",
+        "xai/grok-voice-3.0",
         api_key="key",
         api_secret="secret",
     )
@@ -620,7 +620,7 @@ async def test_update_options_voice_omits_empty_audio_input_subobject(
     paused_realtime_main: None,
 ) -> None:
     model = RealtimeModel(
-        "xai/grok-voice-think-fast-2.0",
+        "xai/grok-voice-3.0",
         api_key="key",
         api_secret="secret",
     )

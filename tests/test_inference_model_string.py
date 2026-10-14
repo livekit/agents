@@ -34,9 +34,6 @@ def inference_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         "xai/grok-voice",
         "xai/grok-voice-latest",
         "xai/grok-voice-3.0",
-        "xai/grok-voice-2.0",
-        "xai/grok-voice-think-fast-3.0",
-        "xai/grok-voice-think-fast-2.0",
     ],
 )
 def test_realtime_model_strings(model: str) -> None:
