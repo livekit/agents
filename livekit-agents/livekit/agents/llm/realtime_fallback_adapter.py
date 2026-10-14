@@ -342,37 +342,6 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             else:
                 chat_ctx = self._active.chat_ctx
 
-            # bring up a fresh child on ``index``; on failure clean it up, cool it down, and
-            # return the error so the caller can try the next model
-            async def _bring_up(index: int) -> Exception | None:
-                self._initializing = True
-                self._initialization_error = None
-                try:
-                    self._active = self._adapter._models[index].session(
-                        turn_detection_disabled=self._turn_detection_disabled
-                    )
-                    self._active_index = index
-                    self._bind(self._active)
-                    await self._active.initialize(
-                        instructions=self._instructions, chat_ctx=chat_ctx, tools=self._tools
-                    )
-                    if is_given(self._tool_choice):
-                        self._active.update_options(tool_choice=self._tool_choice)
-                    if self._initialization_error is not None:
-                        raise self._initialization_error
-                    self._adapter._active_instance = self._adapter._models[index]
-                    return None
-                except Exception as e:
-                    logger.exception("failed to start realtime model on swap, trying next")
-                    self._unbind(self._active)
-                    with contextlib.suppress(Exception):
-                        await self._active.aclose()
-                    self._set_available(index, False)
-                    return e
-                finally:
-                    self._initializing = False
-                    self._initialization_error = None
-
             self._swapping = True
             try:
                 # close the old child; best-effort since the provider may already be dead
@@ -380,32 +349,18 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 with contextlib.suppress(Exception):
                     await self._active.aclose()
 
-                # cascade to further models if one fails to start
-                attempted = {target_index}
-                error = await _bring_up(target_index)
-                while error is not None:
-                    # Cooldown may expire during startup, or be zero. A failed
-                    # candidate is still tried only once during this swap.
-                    nxt = self._next_available_index(exclude=attempted)
-                    if nxt is None:
-                        break
-                    attempted.add(nxt)
-                    error = await _bring_up(nxt)
+                error = await self._start_with_fallback(
+                    index=target_index,
+                    reuse_active=False,
+                    instructions=self._instructions,
+                    chat_ctx=chat_ctx,
+                    tools=self._tools,
+                    report_attempt_errors=False,
+                )
             finally:
                 self._swapping = False
 
             if error is not None:
-                # every model failed to start; escalate so AgentSession can close instead of
-                # continuing on a broken session
-                self.emit(
-                    "error",
-                    RealtimeModelError(
-                        timestamp=time.time(),
-                        label=self._adapter.label,
-                        error=error,
-                        recoverable=False,
-                    ),
-                )
                 return
 
             # a swap is a reconnect from the caller's perspective
@@ -458,40 +413,74 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         tools: NotGivenOr[list[Tool]],
     ) -> None:
         async with self._swap_lock:
-            self._initializing = True
             self._swapping = True
-            history = chat_ctx.copy() if is_given(chat_ctx) else self._active.chat_ctx.copy()
-            attempted: set[int] = set()
-            index = self._active_index
             try:
-                while True:
-                    self._initialization_error = None
-                    try:
-                        replacing = bool(attempted)
-                        if replacing:
-                            self._active_index = index
-                            self._active = self._adapter._models[index].session(
-                                turn_detection_disabled=self._turn_detection_disabled
-                            )
-                            self._bind(self._active)
-                            instructions, chat_ctx, tools = self._instructions, history, self._tools
-                        attempted.add(index)
-                        await self._active.initialize(
-                            instructions=instructions, chat_ctx=chat_ctx, tools=tools
+                error = await self._start_with_fallback(
+                    index=self._active_index,
+                    reuse_active=True,
+                    instructions=instructions,
+                    chat_ctx=chat_ctx,
+                    tools=tools,
+                    report_attempt_errors=True,
+                )
+                if error is not None:
+                    raise error
+            finally:
+                self._swapping = False
+
+    async def _start_with_fallback(
+        self,
+        *,
+        index: int,
+        reuse_active: bool,
+        instructions: NotGivenOr[str],
+        chat_ctx: NotGivenOr[ChatContext],
+        tools: NotGivenOr[list[Tool]],
+        report_attempt_errors: bool,
+    ) -> Exception | None:
+        """Start each candidate at most once while the caller holds _swap_lock.
+
+        Initial setup can configure the existing child with omitted settings.
+        Replacements receive saved settings and history. Startup reports each
+        failure; swaps retain their existing single error on exhaustion.
+        """
+        history = chat_ctx if is_given(chat_ctx) else self._active.chat_ctx
+        if reuse_active:
+            # Snapshot before initial configuration can modify the current child.
+            history = history.copy()
+        attempted: set[int] = set()
+        self._initializing = True
+        try:
+            while True:
+                self._initialization_error = None
+                replacing = not reuse_active or bool(attempted)
+                attempted.add(index)
+                try:
+                    if replacing:
+                        self._active_index = index
+                        self._active = self._adapter._models[index].session(
+                            turn_detection_disabled=self._turn_detection_disabled
                         )
-                        if replacing and is_given(self._tool_choice):
-                            self._active.update_options(tool_choice=self._tool_choice)
-                        if self._initialization_error is not None:
-                            raise self._initialization_error
-                        self._adapter._active_instance = self._adapter._models[index]
-                        return
-                    except Exception as error:
-                        attempted.add(index)
-                        self._unbind(self._active)
-                        with contextlib.suppress(Exception):
-                            await self._active.aclose()
-                        self._set_available(index, False)
-                        target = self._next_available_index(exclude=attempted)
+                        self._bind(self._active)
+                        instructions, chat_ctx, tools = self._instructions, history, self._tools
+                    await self._active.initialize(
+                        instructions=instructions, chat_ctx=chat_ctx, tools=tools
+                    )
+                    if replacing and is_given(self._tool_choice):
+                        self._active.update_options(tool_choice=self._tool_choice)
+                    if self._initialization_error is not None:
+                        raise self._initialization_error
+                    self._adapter._active_instance = self._adapter._models[index]
+                    return None
+                except Exception as error:
+                    self._unbind(self._active)
+                    with contextlib.suppress(Exception):
+                        await self._active.aclose()
+                    self._set_available(index, False)
+                    # Cooldown may expire during startup, or be zero. Do not
+                    # retry a failed candidate during this operation.
+                    target = self._next_available_index(exclude=attempted)
+                    if report_attempt_errors or target is None:
                         self.emit(
                             "error",
                             RealtimeModelError(
@@ -501,17 +490,19 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                                 recoverable=target is not None,
                             ),
                         )
-                        if target is None:
-                            raise
-                        index = target
-            except asyncio.CancelledError:
-                self._unbind(self._active)
-                with contextlib.suppress(Exception):
-                    await self._active.aclose()
-                raise
-            finally:
-                self._initializing = self._swapping = False
-                self._initialization_error = None
+                    else:
+                        logger.exception("failed to start realtime model on swap, trying next")
+                    if target is None:
+                        return error
+                    index = target
+        except asyncio.CancelledError:
+            self._unbind(self._active)
+            with contextlib.suppress(Exception):
+                await self._active.aclose()
+            raise
+        finally:
+            self._initializing = False
+            self._initialization_error = None
 
     async def set_input_text(
         self, text: str, *, message_id: NotGivenOr[str] = NOT_GIVEN
