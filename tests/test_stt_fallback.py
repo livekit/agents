@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -18,8 +19,9 @@ from livekit.agents.stt import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import AudioBuffer
+from livekit.agents.vad import VAD
 
-from .fake_stt import FakeSTT
+from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_vad import FakeVAD
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -30,15 +32,21 @@ class FallbackAdapterTester(FallbackAdapter):
         self,
         stt: list[STT],
         *,
+        vad: VAD | None = None,
         attempt_timeout: float = 10.0,
         max_retry_per_stt: int = 1,
         retry_interval: float = 5,
+        stall_timeout: float | None = None,
+        stall_min_speech_duration: float = 1.0,
     ) -> None:
         super().__init__(
             stt,
+            vad=vad,
             attempt_timeout=attempt_timeout,
             max_retry_per_stt=max_retry_per_stt,
             retry_interval=retry_interval,
+            stall_timeout=stall_timeout,
+            stall_min_speech_duration=stall_min_speech_duration,
         )
 
         self.on("stt_availability_changed", self._on_stt_availability_changed)
@@ -408,3 +416,130 @@ async def test_manual_flush_requires_support_from_every_fallback(supports_flush)
         assert adapter.capabilities.manual_flush is True
     finally:
         await adapter.aclose()
+
+
+async def _push_audio(stream: RecognizeStream, duration: float, interval: float = 0.1) -> None:
+    frame = rtc.AudioFrame(
+        data=b"\x00\x00" * 1600,
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=1600,
+    )
+    for _ in range(round(duration / interval)):
+        stream.push_frame(frame)
+        await asyncio.sleep(interval)
+    stream.end_input()
+
+
+async def _run_stall_stream(
+    fallback: FallbackAdapter, duration: float
+) -> list[tuple[float, SpeechEvent]]:
+    """Stream `duration` seconds of audio, returning the events with their arrival time."""
+    events: list[tuple[float, SpeechEvent]] = []
+    async with fallback.stream() as stream:
+        start = time.perf_counter()
+        push_task = asyncio.create_task(_push_audio(stream, duration))
+        async for ev in stream:
+            events.append((time.perf_counter() - start, ev))
+        await push_task
+    return events
+
+
+def test_stall_timeout_requires_vad() -> None:
+    with pytest.raises(ValueError, match="requires a VAD"):
+        FallbackAdapter([FakeSTT()], stall_timeout=1.0)
+
+
+async def test_stt_stream_stall_falls_back() -> None:
+    """A stream that stays connected but stays silent through user speech is failed over."""
+    speeches = [FakeUserSpeech(start_time=0.5, end_time=2.5, transcript="", stt_delay=0.2)]
+    fake1 = FakeSTT(fake_user_speeches=speeches)  # connected, but never emits anything
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2],
+        vad=FakeVAD(fake_user_speeches=speeches),
+        stall_timeout=1.0,
+    )
+
+    events = await _run_stall_stream(fallback, duration=6.0)
+
+    assert [ev.alternatives[0].text for _, ev in events] == ["hello world"]
+    # VAD end of speech is at 2.5 + 0.55 (min silence); the stall is declared stall_timeout later
+    assert 3.05 + 1.0 <= events[0][0] < 3.05 + 1.0 + 0.2
+    assert not fallback.availability_changed_ch(fake1).recv_nowait().available
+    assert fallback._active_instance is fake2
+
+    await fallback.aclose()
+
+
+async def test_stt_stream_stall_ignores_silence() -> None:
+    """A stream that emits nothing while the user is silent must not be failed over."""
+    fake1 = FakeSTT()
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2], vad=FakeVAD(fake_user_speeches=[]), stall_timeout=1.0
+    )
+
+    events = await _run_stall_stream(fallback, duration=6.0)
+
+    assert events == []
+    with pytest.raises(ChanEmpty):
+        fake2.stream_ch.recv_nowait()
+    with pytest.raises(ChanEmpty):
+        fallback.availability_changed_ch(fake1).recv_nowait()
+
+    await fallback.aclose()
+
+
+async def test_stt_stream_stall_ignores_short_speech() -> None:
+    """Speech shorter than stall_min_speech_duration (e.g. a noise) may go untranscribed."""
+    speeches = [FakeUserSpeech(start_time=0.5, end_time=0.8, transcript="", stt_delay=0.2)]
+    fake1 = FakeSTT(fake_user_speeches=speeches)
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2],
+        vad=FakeVAD(fake_user_speeches=speeches),
+        stall_timeout=1.0,
+        stall_min_speech_duration=1.0,
+    )
+
+    events = await _run_stall_stream(fallback, duration=4.0)
+
+    assert events == []
+    with pytest.raises(ChanEmpty):
+        fake2.stream_ch.recv_nowait()
+    with pytest.raises(ChanEmpty):
+        fallback.availability_changed_ch(fake1).recv_nowait()
+
+    await fallback.aclose()
+
+
+@pytest.mark.parametrize("stt_delay", [0.3, 1.2])
+async def test_stt_stream_stall_keeps_transcribing_stream(stt_delay: float) -> None:
+    """A stream that transcribes the speech, before or after the VAD's end of speech, is kept."""
+    speeches = [
+        FakeUserSpeech(
+            start_time=0.5, end_time=2.5, transcript="hello there world", stt_delay=stt_delay
+        )
+    ]
+    fake1 = FakeSTT(fake_user_speeches=speeches)
+    fake2 = FakeSTT(fake_transcript="fallback")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2],
+        vad=FakeVAD(fake_user_speeches=speeches),
+        stall_timeout=1.0,
+    )
+
+    events = await _run_stall_stream(fallback, duration=6.0)
+
+    assert [ev.alternatives[0].text for _, ev in events] == ["hello there", "hello there world"]
+    with pytest.raises(ChanEmpty):
+        fake2.stream_ch.recv_nowait()
+    with pytest.raises(ChanEmpty):
+        fallback.availability_changed_ch(fake1).recv_nowait()
+
+    await fallback.aclose()
