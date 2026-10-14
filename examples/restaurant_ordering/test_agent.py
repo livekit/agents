@@ -29,7 +29,7 @@ async def test_ro02_corrections_during_the_read_back() -> None:
     ):
         await sess.start(RosaAgent(pos))
         await sess.run(
-            user_input="Hi, can I get a large pepperoni, a dozen hot wings, and a two liter Coke?"
+            user_input="Hi, can I get a large pepperoni, a dozen hot wings, and a large Coke?"
         )
         await sess.run(user_input="No thanks, that's it. It's for pickup.")
         await sess.run(user_input="Sam Carter, four one five, five five five, zero one four two.")
@@ -44,6 +44,31 @@ async def test_ro02_corrections_during_the_read_back() -> None:
         "L2: 1 × dozen Bone-in Wings, hot sauce",
     ]
     assert pos.quote_current
+
+
+@pytest.mark.asyncio
+async def test_a_large_pizza_and_a_coke_asks_the_coke_size() -> None:
+    # the pizza's "large" mustn't carry over: the Coke waits for its own size
+    pos = demo_pos()
+    async with (
+        _main_llm() as model,
+        _judge_llm() as judge,
+        AgentSession[Userdata](llm=model, userdata=Userdata(pos=pos)) as sess,
+    ):
+        await sess.start(RosaAgent(pos))
+        result: RunResult[None] = await sess.run(user_input="Large pepperoni and a Coke.")
+        await result.expect.contains_message(role="assistant").judge(
+            judge,
+            intent="Asks what size the Coke should be, offering small, medium, or large.",
+        )
+        assert not any(ln.item.id == "coke" for ln in pos.lines), pos.cart_summary()
+
+        await sess.run(user_input="Medium.")
+
+    assert [ln.describe() for ln in pos.lines] == [
+        "L1: 1 × large Pepperoni",
+        "L2: 1 × medium Coke",
+    ]
 
 
 @pytest.mark.asyncio
@@ -83,7 +108,7 @@ async def test_ro07_bursts_and_repeats_make_no_duplicates() -> None:
         await sess.start(RosaAgent(pos))
         await sess.run(user_input="Two large pepperonis, a medium margherita,")
         await sess.run(user_input="yeah two pepperonis, and a dozen wings, BBQ, and oh, two cokes")
-        await sess.run(user_input="cans. Cans are fine. And two pepperonis, right?")
+        await sess.run(user_input="Small. Small is fine. And two pepperonis, right?")
 
     by_item = {ln.item.id: ln for ln in pos.lines}
     assert sorted(by_item) == ["coke", "margherita", "pepperoni", "wings"], pos.cart_summary()
@@ -92,4 +117,4 @@ async def test_ro07_bursts_and_repeats_make_no_duplicates() -> None:
     assert by_item["pepperoni"].size.id == "L"
     assert by_item["margherita"].size.id == "M"
     assert by_item["wings"].sauce is not None and by_item["wings"].sauce.id == "bbq"
-    assert by_item["coke"].quantity == 2 and by_item["coke"].size.id == "can"
+    assert by_item["coke"].quantity == 2 and by_item["coke"].size.id == "S"

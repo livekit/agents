@@ -102,6 +102,50 @@ def _pos_rules(ctx: Ctx) -> Iterator[Pos]:
         raise ToolError(str(e)) from e
 
 
+_CLAUSE = re.compile(r"[.,;!?]")
+_TOKEN = re.compile(r"[a-z0-9]+")
+# words that name some other kind of item, or a drink in general
+_OTHER_KINDS = {"pizza", "pie", "wing", "salad", "side", "dessert"}
+_DRINK_WORDS = {"soda", "drink", "pop"}
+
+
+def _tokens(text: str) -> list[str]:
+    return [t[:-1] if len(t) > 3 and t.endswith("s") else t for t in _TOKEN.findall(text.lower())]
+
+
+def _drink_size_said(ctx: Ctx, pos: Pos, item_id: str, size: str | None) -> None:
+    """Refuses a drink size the caller didn't give for that drink. Sodas and pizzas share
+    small, medium, and large, so in "a large pepperoni and a Coke" the "large" is the
+    pizza's, and the model tends to borrow it, or to pick a size, instead of asking."""
+    item = pos.item(item_id)
+    if item.category != "drinks" or not item.needs_size or not size:
+        return
+    chosen = item.size(size)
+    sizes = {t for n in (chosen.id, chosen.label, *chosen.aliases) for t in _tokens(n)}
+    sizes = {t for t in sizes if len(t) > 1}
+    mine = {t for t in _tokens(item.name) if len(t) > 2} | _DRINK_WORDS
+    others = (
+        {t for m in pos.menu if m is not item for t in _tokens(m.name) if len(t) > 2} | _OTHER_KINDS
+    ) - mine
+    heard = [m.text_content or "" for m in ctx.session.history.messages() if m.role == "user"]
+    for said in heard[-2:]:
+        for clause in _CLAUSE.split(said):
+            words = _tokens(clause)
+            for i, w in enumerate(words):
+                if w not in sizes:
+                    continue
+                # the item it goes with is the nearest one named in the same clause, the
+                # one after it on a tie ("a large Coke"); none at all is an answer ("Small.")
+                named = [(abs(j - i), j < i, x) for j, x in enumerate(words) if x in mine | others]
+                if not named or min(named)[2] in mine:
+                    return
+    options = ", ".join(s.label for s in item.sizes)
+    raise PosError(
+        f"The caller hasn't said a size for the {item.name}: don't use another item's size or "
+        f"pick one. Ask which, naming each one ({options})."
+    )
+
+
 def _line_note(pos: Pos, line: Line) -> str:
     # every allergy the caller mentioned stays in play for everything added after it
     if hits := sorted(line.allergens.intersection(pos.allergies)):
@@ -129,7 +173,9 @@ async def say_pepperoni_pizzas(text: AsyncIterable[str]) -> AsyncIterable[str]:
         yield _PEPPERONIS.sub(r"\1epperoni pizzas", buf)
 
 
-_MORE = re.compile(r"\b(more|another|add|extra|additional)\b")
+_MORE = re.compile(r"\b(more|another|add|extra|additional|back)\b")
+# a yes to the agent's own "want one more?"
+_YES = re.compile(r"^\W*(yes|yeah|yep|yup|sure|ok|okay|please|absolutely|definitely)\b")
 _NUMBERS = (
     "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
     "fifteen sixteen seventeen eighteen nineteen twenty"
@@ -138,17 +184,21 @@ _NUMBERS = (
 
 def _asked_for_more(ctx: Ctx, total: int) -> bool:
     # whether the caller's last words ask for a bigger count ("two more", "another
-    # one") or state the new total ("make it three")
-    said = next(
-        (
-            m.text_content or ""
-            for m in reversed(ctx.session.history.messages())
-            if m.role == "user"
-        ),
-        "",
-    ).lower()
+    # one", "put the other one back"), state the new total ("make it three"), or say yes
+    # to the agent offering one more
+    said, offered = "", ""
+    for m in reversed(ctx.session.history.messages()):
+        if m.role == "user" and not said:
+            said = (m.text_content or "").lower()
+        elif m.role == "assistant" and said and m.text_content:
+            offered = m.text_content.lower()
+            break
     total_words = {str(total)} | ({_NUMBERS[total]} if total < len(_NUMBERS) else set())
-    return bool(_MORE.search(said)) or any(re.search(rf"\b{w}\b", said) for w in total_words)
+    return (
+        bool(_MORE.search(said))
+        or any(re.search(rf"\b{w}\b", said) for w in total_words)
+        or bool(_YES.match(said) and _MORE.search(offered))
+    )
 
 
 class RosaAgent(Agent):
@@ -247,7 +297,7 @@ class RosaAgent(Agent):
             item_id: The menu id, e.g. "pepperoni".
             quantity: How many orders of it: "a dozen wings" is quantity 1, size dozen.
             size: Required for pizza (small, medium, large), wings (half dozen, dozen), and
-                drinks with sizes (e.g. can, 2-liter). Leave out for one-size items. Only a
+                drinks (small, medium, large). Leave out for one-size items. Only a
                 size the caller said for this item: never one carried over from another item
                 in the same sentence ("a large pepperoni and a Coke": the Coke has no size
                 yet), and never one you pick for them.
@@ -256,6 +306,7 @@ class RosaAgent(Agent):
             without: What to leave off a pizza ("no olives"), e.g. ["olives"]. Same price.
         """
         with _pos_rules(ctx) as pos:
+            _drink_size_said(ctx, pos, item_id, size)
             line = pos.add(item_id, quantity, size, toppings, sauce, without)
         ctx.userdata.page.record("add_item", line.describe(), stage="order")
         return f"Added {line.describe()}.{_line_note(pos, line)} {pos.cart_summary()}"
@@ -287,6 +338,7 @@ class RosaAgent(Agent):
         more = quantity is not None and _asked_for_more(ctx, quantity)
         with _pos_rules(ctx) as pos:
             before = pos.line(line_id).describe()
+            _drink_size_said(ctx, pos, pos.line(line_id).item.id, size)
             line = pos.update(line_id, quantity, size, toppings, sauce, without, more=more)
         after = line.describe()
         if after == before:
@@ -681,8 +733,8 @@ Say a price when they ask, and the total at the read-back.
 - People repeat themselves and talk in bursts. An item they name again that's already in
   the cart is the same item, restated: leave it alone. "Two large pepperonis" and later
   "yeah, two pepperonis" is still two, not four. A count goes up only when they say
-  "another", "more", "add one", or a bigger total ("make it three"); then use update_item
-  with the new total.
+  "another", "more", "add one", "put the other one back", a bigger total ("make it
+  three"), or yes when you offered one more; then use update_item with the new total.
 - Corrections: change exactly the line they mean with update_item or remove_item. Never
   remove and re-add, and never rebuild the cart.
 - If an item is out, say so and offer one or two others from the same category.
@@ -734,7 +786,7 @@ The {out[0].item.name} ({out[0].id}) ran out after the order was placed.
 # What to handle
 You've already said who you are and asked for {first_name(pos.name or "")}. Once they say it's them,
 tell them {d.driver} is about {d.eta_minutes} minutes away and that the {out[0].item.name} ran
-out, and ask whether to replace it with a 2-liter Coke at the same price or remove it and refund
+out, and ask whether to replace it with a large Coke at the same price or remove it and refund
 it.
 If it isn't {pos.name} (a wrong number, or someone else who picked up), call
 end_without_update with wrong_person and say a polite goodbye: say nothing more about the

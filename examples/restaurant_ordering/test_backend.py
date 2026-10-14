@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
-from agent import _line_note, say_pepperoni_pizzas
+from agent import _asked_for_more, _drink_size_said, _line_note, say_pepperoni_pizzas
 from backend import Pos, PosError, demo_pos
 from call import pause_between_sentences, spoken_number
 from grade import grade
+
+from livekit.agents import llm
 
 pytestmark = pytest.mark.unit
 
@@ -31,7 +35,7 @@ def test_menu_is_the_seeded_day(pos: Pos) -> None:
 def test_ro01_pickup_order_matches_and_totals(pos: Pos) -> None:
     pos.add("pepperoni", 1, "large")
     pos.add("wings", 1, "a dozen", sauce="hot")
-    pos.add("coke", 1, "2 liter")
+    pos.add("coke", 1, "large")
     _ready_for_pickup(pos)
     q = pos.price()
     # 19.99 + 16.99 + 3.99, then 9% tax rounded to the cent
@@ -44,14 +48,14 @@ def test_ro01_pickup_order_matches_and_totals(pos: Pos) -> None:
     assert [ln.describe() for ln in pos.lines] == [
         "L1: 1 × large Pepperoni",
         "L2: 1 × dozen Bone-in Wings, hot sauce",
-        "L3: 1 × 2-liter Coke",
+        "L3: 1 × large Coke",
     ]
 
 
 def test_ro02_corrections_mid_read_back_change_only_those_lines(pos: Pos) -> None:
     pos.add("pepperoni", 1, "L")
     pos.add("wings", 1, "12", sauce="thai")
-    pos.add("coke", 1, "2L")
+    pos.add("coke", 1, "large")
     _ready_for_pickup(pos)
     pos.price()
     pos.update("L1", size="medium")
@@ -107,7 +111,7 @@ def test_ro05_delivery_under_minimum_submits_only_once_it_reaches_20(pos: Pos) -
     pos.price()
     with pytest.raises(PosError, match="short"):
         pos.submit()
-    pos.add("coke", 1, "can")  # $21.97
+    pos.add("coke", 1, "small")  # $21.97
     q = pos.price()
     assert q.delivery_fee == Decimal("4.99")
     assert q.total == Decimal("21.97") + Decimal("1.98") + Decimal("4.99")
@@ -193,8 +197,12 @@ def test_leaving_a_topping_off(pos: Pos) -> None:
         pos.add("pepperoni", 1, "large", toppings=["no olives"])
     with pytest.raises(PosError, match="added topping"):
         pos.add("veggie", 1, "small", toppings=["olives"], without=["olives"])
-    with pytest.raises(PosError, match="Only pizza"):
+    with pytest.raises(PosError, match="Only pizzas take changes"):
         pos.add("caesar", without=["croutons"])
+    # "a veggie, no olives, and wings": the olives were never on the wings
+    with pytest.raises(PosError, match="put it on that pizza's line") as e:
+        pos.add("wings", 1, "dozen", sauce="hot", without=["olives"])
+    assert "comes with" not in str(e.value)
 
 
 def test_ro07_repeating_an_item_never_makes_a_second_line(pos: Pos) -> None:
@@ -272,7 +280,7 @@ def test_submit_needs_a_read_back_and_details(pos: Pos) -> None:
     pos.price()
     pos.submit()
     with pytest.raises(PosError, match="already sent"):
-        pos.add("coke", 1, "can")
+        pos.add("coke", 1, "small")
 
 
 def test_upsell_at_most_once(pos: Pos) -> None:
@@ -331,7 +339,7 @@ def test_natural_names_for_items_sizes_and_sauces(pos: Pos) -> None:
     assert pos.add("margherita", 1, "a large", toppings=["extra mushrooms"]).describe() == (
         "L2: 1 × large Margherita, + mushrooms"
     )
-    assert pos.add("coke", 2, "2 liters").size.id == "2L"
+    assert pos.add("coke", 2, "large").size.id == "L"
     assert pos.add("boneless", 1, "six pieces", sauce="BBQ sauce").size.id == "6"
     # still refused: not on the menu, not a size, not a sauce
     with pytest.raises(PosError, match="isn't on the menu"):
@@ -361,7 +369,7 @@ def test_grade_passes_the_expected_order(pos: Pos) -> None:
 
 def test_grade_flags_a_wrong_cart_and_a_missing_order(pos: Pos) -> None:
     pos.add("pepperoni", 2, "large")
-    pos.add("coke", 1, "can")
+    pos.add("coke", 1, "small")
     _ready_for_pickup(pos)
     pos.price()
     problems = grade(
@@ -395,14 +403,14 @@ def test_outbound_seeds_order_214_out_for_delivery(out: Pos) -> None:
     assert out.delivery is not None and out.delivery.charged == Decimal("49.65")
     assert out.fulfillment.zip == "94107"
     assert [ln.item.id for ln in out.out_of_stock()] == ["sprite"]
-    assert out.same_price_swaps(out.line("L3"))[0] == "2-liter Coke"
+    assert out.same_price_swaps(out.line("L3"))[0] == "large Coke"
     # the inbound demo still starts empty, with the Sprite in stock
     assert demo_pos().item("sprite").available and not demo_pos().lines
 
 
 def test_swap_keeps_the_price(out: Pos) -> None:
     line = out.swap_out_of_stock("L3", "coke")
-    assert line.describe() == "L3: 1 × 2-liter Coke" and line.was == "1 × 2-liter Sprite"
+    assert line.describe() == "L3: 1 × large Coke" and line.was == "1 × large Sprite"
     assert out.quote is not None and out.quote.total == Decimal("49.65")
     assert out.balance() == 0 and out.quote_current
     assert grade(out, {"cart": ["1 × large Pepperoni"]})  # not read back, cart differs
@@ -471,7 +479,7 @@ def test_read_back_needs_the_sprite_resolved_and_goes_stale(out: Pos) -> None:
     assert not out.read_back_current
     out.read_back()
     expect = {
-        "cart": ["1 × large Pepperoni", "1 × dozen Bone-in Wings, hot sauce", "1 × 2-liter Coke"],
+        "cart": ["1 × large Pepperoni", "1 × dozen Bone-in Wings, hot sauce", "1 × large Coke"],
         "total": "49.65",
         "balance": "0",
         "driver_note": ["door"],
@@ -490,16 +498,16 @@ def test_grade_flags_an_unresolved_outbound_call(out: Pos) -> None:
 def test_the_sprite_choice_can_change_after_a_swap(out: Pos) -> None:
     out.swap_out_of_stock("L3", "coke")
     line = out.swap_out_of_stock("L3", "diet_coke")
-    assert line.describe() == "L3: 1 × 2-liter Diet Coke" and line.was == "1 × 2-liter Coke"
+    assert line.describe() == "L3: 1 × large Diet Coke" and line.was == "1 × large Coke"
     assert out.balance() == 0
     assert out.delivery is not None
     swap = out.delivery.changes["swap"]
-    assert swap == "1 × 2-liter Sprite → 1 × 2-liter Diet Coke, same price"
+    assert swap == "1 × large Sprite → 1 × large Diet Coke, same price"
     # "actually, just refund it": it comes off as the Sprite that was ordered
     _, refund = out.remove_out_of_stock("L3")
     assert refund == Decimal("4.35") and out.balance() == Decimal("-4.35")
-    assert [ln.describe() for ln in out.removed] == ["L3: 1 × 2-liter Sprite"]
-    assert out.delivery.changes["swap"] == "Removed 1 × 2-liter Sprite, refund $4.35"
+    assert [ln.describe() for ln in out.removed] == ["L3: 1 × large Sprite"]
+    assert out.delivery.changes["swap"] == "Removed 1 × large Sprite, refund $4.35"
     with pytest.raises(PosError, match="already removed"):
         out.remove_out_of_stock("L3")
     # the rest of the order still can't change
@@ -512,15 +520,15 @@ def test_a_refunded_sprite_can_become_a_coke(out: Pos) -> None:
     out.remove_out_of_stock("L3")
     line = out.swap_out_of_stock("l3", "coke")
     assert [ln.id for ln in out.lines] == ["L1", "L2", "L3", "L4"] and not out.removed
-    assert line.describe() == "L3: 1 × 2-liter Coke"
-    assert line.was == "1 × 2-liter Sprite"
+    assert line.describe() == "L3: 1 × large Coke"
+    assert line.was == "1 × large Sprite"
     assert out.balance() == Decimal("6.53")  # the breadsticks, and no refund
     out.read_back()
     expect = {
         "cart": [
             "1 × large Pepperoni",
             "1 × dozen Bone-in Wings, hot sauce",
-            "1 × 2-liter Coke",
+            "1 × large Coke",
             "1 × Breadsticks",
         ],
         "not_in_cart": ["sprite"],
@@ -605,15 +613,79 @@ def test_the_page_shows_wings_by_the_count(pos: Pos) -> None:
     assert pos.lines[0].describe() == "L1: 1 × dozen Bone-in Wings, hot sauce"
 
 
-def test_a_soda_size_is_never_borrowed_from_a_pizza(pos: Pos) -> None:
-    # "a large pepperoni and a Coke": the pizza's "large" isn't the Coke's size
-    with pytest.raises(PosError, match="Coke comes in can or 2-liter, not 'large'"):
-        pos.add("coke", 1, "large")
-    with pytest.raises(PosError, match="Coke comes in can or 2-liter, not 'small'"):
-        pos.add("coke", 1, "small")
-    with pytest.raises(PosError, match="Coke needs a size: can or 2-liter"):
+def test_a_soda_comes_small_medium_or_large(pos: Pos) -> None:
+    # "a large pepperoni and a Coke": the Coke has no size until the caller gives one
+    with pytest.raises(PosError, match="Coke needs a size: small, medium, or large. Ask"):
         pos.add("coke")
+    with pytest.raises(PosError, match="Coke comes in small, medium, or large, not '2 liter'"):
+        pos.add("coke", 1, "2 liter")
     assert not pos.lines
+    assert [
+        pos.add(d, 1, s).size.price
+        for d, s in [("coke", "a small"), ("sprite", "medium"), ("diet_coke", "large")]
+    ] == [Decimal("1.99"), Decimal("2.99"), Decimal("3.99")]
+
+
+def _said(*turns: tuple[str, str]) -> Any:
+    chat = llm.ChatContext()
+    for role, text in turns:
+        chat.add_message(role=role, content=text)  # type: ignore[arg-type]
+    return SimpleNamespace(session=SimpleNamespace(history=chat))
+
+
+@pytest.mark.parametrize(
+    "turns",
+    [
+        [("user", "Can I get another pepperoni?")],
+        [("user", "Make it three.")],
+        [("user", "No, the other pizza. Put it back.")],
+        [("assistant", "Want to add one more large pepperoni?"), ("user", "Yes")],
+        [("assistant", "Should I add another one?"), ("user", "yeah, please")],
+    ],
+)
+def test_asking_for_more_raises_the_count(turns: list[tuple[str, str]]) -> None:
+    assert _asked_for_more(_said(*turns), 3)
+
+
+@pytest.mark.parametrize(
+    "turns",
+    [
+        [("user", "Yeah, two pepperonis.")],
+        [("assistant", "Anything else?"), ("user", "Yes")],
+        [("assistant", "Want to add one more pepperoni?"), ("user", "No thanks")],
+    ],
+)
+def test_repeating_or_a_plain_yes_keeps_the_count(turns: list[tuple[str, str]]) -> None:
+    assert not _asked_for_more(_said(*turns), 3)
+
+
+@pytest.mark.parametrize(
+    "turns",
+    [
+        [("user", "A large Coke, please.")],
+        [("user", "Two cokes, small.")],
+        [("user", "Two Cokes."), ("assistant", "What size?"), ("user", "Small. Small is fine.")],
+        [("user", "Medium for the Coke, and a large pepperoni.")],
+        [("user", "And a large soda, Coke.")],
+    ],
+)
+def test_a_drink_size_the_caller_gave_is_taken(pos: Pos, turns: list[tuple[str, str]]) -> None:
+    size = next(w for w in ("small", "medium", "large") if w in str(turns).lower())
+    _drink_size_said(_said(*turns), pos, "coke", size)
+
+
+@pytest.mark.parametrize(
+    ("said", "size"),
+    [
+        ("Large pepperoni and a Coke.", "large"),
+        ("A large pizza and a coke", "large"),
+        ("Large pepperoni and a Coke.", "small"),
+        ("Yeah, a Coke.", "medium"),
+    ],
+)
+def test_a_drink_size_is_never_borrowed_or_picked(pos: Pos, said: str, size: str) -> None:
+    with pytest.raises(PosError, match="hasn't said a size for the Coke"):
+        _drink_size_said(_said(("user", said)), pos, "coke", size)
 
 
 # ---- the call helpers ----

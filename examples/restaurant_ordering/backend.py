@@ -87,7 +87,7 @@ def _words(s: str) -> set[str]:
 @dataclass(frozen=True)
 class Size:
     id: str
-    label: str  # how it's said: "large", "a dozen", "2-liter"
+    label: str  # how it's said: "large", "a dozen"
     price: Decimal
     aliases: tuple[str, ...] = ()
     pieces: int | None = None  # wings are sized by the count: a dozen is one order of 12
@@ -144,13 +144,17 @@ class MenuItem:
     def size(self, said: str | None) -> Size:
         if not self.needs_size:
             return self.sizes[0]
-        options = " or ".join(s.label for s in self.sizes)
+        labels = [s.label for s in self.sizes]
+        # "small, medium, or large", the way Rosa asks it
+        options = (
+            " or ".join(labels) if len(labels) < 3 else f"{', '.join(labels[:-1])}, or {labels[-1]}"
+        )
         if not said:
-            raise PosError(f"{self.name} needs a size: {options}. Ask which one.")
+            raise PosError(f"{self.name} needs a size: {options}. Ask which, naming each one.")
         for s in self.sizes:
             if s.matches(said):
                 return s
-        raise PosError(f"{self.name} comes in {options}, not {said!r}. Ask which one.")
+        raise PosError(f"{self.name} comes in {options}, not {said!r}. Ask which, naming each one.")
 
     def describe(self) -> str:
         if self.needs_size:
@@ -209,13 +213,9 @@ def _soda(id: str, name: str) -> MenuItem:
         name=name,
         category="drinks",
         sizes=(
-            Size("can", "can", Decimal("1.99"), ("12 oz", "a can")),
-            Size(
-                "2L",
-                "2-liter",
-                Decimal("3.99"),
-                ("2l", "2 liter", "two liter", "2 litre", "two litre", "bottle"),
-            ),
+            Size("S", "small", Decimal("1.99"), ("sm",)),
+            Size("M", "medium", Decimal("2.99"), ("med", "regular")),
+            Size("L", "large", Decimal("3.99"), ("lg", "big")),
         ),
     )
 
@@ -609,8 +609,10 @@ class Pos:
         for said in without:
             if not item.takes_toppings:
                 raise PosError(
-                    f"Only pizza toppings can be left off, not anything on the {item.name}. Tell "
-                    "them it comes as it is, and ask if they still want it."
+                    f"Only pizzas take changes, so nothing can be left off the {item.name}. If "
+                    f"{said!r} was meant for a pizza in the order, put it on that pizza's line. "
+                    f"Otherwise say the {item.name} comes as it's made, without saying what's "
+                    "in it: the menu doesn't list that."
                 )
             words = _words(said)
             ing = next((i for i in item.ingredients if words and words <= _words(i)), None)
@@ -649,8 +651,9 @@ class Pos:
                 raise PosError(
                     f"That's already in the cart as {existing.describe()}: the caller is "
                     "repeating themselves, so leave it as it is and don't add to the count. "
-                    'Only if they clearly asked for more ("another one", "make it three") '
-                    f"use update_item on {existing.id} with the new total."
+                    'Only if they asked for more ("another one", "make it three", "put the '
+                    'other one back", or yes to your offer of one more) use update_item on '
+                    f"{existing.id} with the new total."
                 )
         self._next_line += 1
         self.lines.append(line)
@@ -883,7 +886,7 @@ class Pos:
         return all(ln.id != line.id for ln in self.lines)
 
     def same_price_swaps(self, line: Line) -> list[str]:
-        # in stock, same category, a size at the same price: "2-liter Coke"
+        # in stock, same category, a size at the same price: "large Coke"
         out = []
         for m in self.substitutes(line.item):
             for s in m.sizes:
@@ -1150,7 +1153,7 @@ def _seed_delivery(pos: Pos, name: str) -> None:
     # order #214, placed earlier and paid by card; the Sprite ran out after it went in
     pos.add("pepperoni", 1, "large")
     pos.add("wings", 1, "dozen", sauce="hot")
-    pos.add("sprite", 1, "2-liter")
+    pos.add("sprite", 1, "large")
     pos.set_delivery("300 De Haro St, 94107")
     pos.set_contact(name, "4155550142")
     q = pos.price()

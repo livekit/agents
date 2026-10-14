@@ -7,11 +7,11 @@ scenarios:
     instructions: |-
       You are Sam Carter, phone 415 555 0142, calling Zappi's Pizzeria for pickup.
       Order exactly one large pepperoni pizza, one dozen bone-in wings with hot sauce, and
-      one 2-liter Coke. Decline any extras or suggestions. Give your name and phone when
+      one large Coke. Decline any extras or suggestions. Give your name and phone when
       asked, confirm the read-back if it's right, and once you've heard your order number,
       say thanks and goodbye.
     agent_expectations: The agent takes a pickup order for exactly one large pepperoni, a
-      dozen hot wings, and a 2-liter Coke, reads back the order with a total of $44.66 before
+      dozen hot wings, and a large Coke, reads back the order with a total of $44.66 before
       submitting, then tells the caller the order number and pickup time.
     tags:
       id: ro-01
@@ -23,7 +23,7 @@ scenarios:
         cart:
           - 1 × large Pepperoni
           - 1 × dozen Bone-in Wings, hot sauce
-          - 1 × 2-liter Coke
+          - 1 × large Coke
         total: "44.66"
         name: Sam Carter
         phone: (415) 555-0142
@@ -32,7 +32,7 @@ scenarios:
     instructions: |-
       You are Jordan Lee, phone 415 555 0199, in a hurry, ordering for pickup.
       Order one large pepperoni pizza, one dozen bone-in wings with hot sauce, and one
-      2-liter Coke, all in one breath. Decline any extras. Give your name and phone when
+      large Coke, all in one breath. Decline any extras. Give your name and phone when
       asked. When the agent starts reading the order back, cut in: "Wait, make the pizza a
       medium, and drop the Coke." Then confirm the corrected order, and once you've heard
       your order number, say goodbye.
@@ -145,7 +145,7 @@ scenarios:
       the agent's confirmations:
       - "Okay so two large pepperonis, and, uh, wings, a dozen, hot."
       - "Oh and a large meat lovers."
-      - "Yeah the two pepperonis, right? And two 2-liter Cokes."
+      - "Yeah the two pepperonis, right? And two large Cokes."
       Send all three messages, in that order, even if the agent moves on: the meat lovers is
       part of your order. Restating the pepperonis is a repeat, not an extra order. If the
       read-back is missing anything, correct it before confirming. Decline breadsticks. Give
@@ -153,7 +153,7 @@ scenarios:
       and say goodbye once you have your order number.
     agent_expectations: The agent captures every item once, keeps the pepperonis at two
       despite the repeat, and submits two large pepperonis, one large meat lovers, a dozen
-      hot wings, and two 2-liter Cokes at $94.76.
+      hot wings, and two large Cokes at $94.76.
     tags:
       id: ro-07
       suite: full
@@ -165,7 +165,7 @@ scenarios:
           - 2 × large Pepperoni
           - 1 × large Meat Lovers
           - 1 × dozen Bone-in Wings, hot sauce
-          - 2 × 2-liter Coke
+          - 2 × large Coke
         total: "94.76"
 
   - label: Corrects the first pizza late in a long call
@@ -247,12 +247,12 @@ scenarios:
   - label: Garden veggie, no olives
     instructions: |-
       You are Jamie Fox, phone 415 555 0167, ordering for pickup. Order one large garden
-      veggie pizza with no olives, and a can of Coke. Decline extras. Give your name and phone
+      veggie pizza with no olives, and a small Coke. Decline extras. Give your name and phone
       when asked, check the read-back says no olives, confirm it, and say goodbye once you
       have your order number.
     agent_expectations: The agent takes the garden veggie pizza with the olives left off at
-      the regular price, includes "no olives" in the read-back, and submits it with the can
-      of Coke at $23.96.
+      the regular price, includes "no olives" in the read-back, and submits it with the small
+      Coke at $23.96.
     tags:
       id: ro-10
       suite: full
@@ -262,20 +262,20 @@ scenarios:
         fulfillment: pickup
         cart:
           - 1 × large Garden Veggie, no black olives
-          - 1 × can Coke
+          - 1 × small Coke
         total: "23.96"
 
   # ---- the delivery-update call (outbound): order #214 is out with Marco, the Sprite ran out.
-  # Seeded: 1 large pepperoni, 1 dozen hot wings, 1 2-liter Sprite, delivery to 94107, $49.65.
+  # Seeded: 1 large pepperoni, 1 dozen hot wings, 1 large Sprite, delivery to 94107, $49.65.
 
   - label: Delivery update, swap the Sprite and leave a gate code
     instructions: |-
       You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
-      calling you. When asked about the Sprite, take the 2-liter Coke. When asked if the
+      calling you. When asked about the Sprite, take the large Coke. When asked if the
       driver should know anything, say: "Yes, the gate code is 4512, and I'm in unit 3B."
       Then say that's all, listen to the read-back, and say thanks and goodbye.
     agent_expectations: The agent introduces herself and Zappi's Pizzeria, gives the ETA,
-      swaps the Sprite for a 2-liter Coke at the same price, saves the gate code and unit as
+      swaps the Sprite for a large Coke at the same price, saves the gate code and unit as
       a driver note, reads back the changes with the unchanged $49.65 total, and repeats the
       ETA before ending the call.
     tags:
@@ -287,7 +287,7 @@ scenarios:
         cart:
           - 1 × large Pepperoni
           - 1 × dozen Bone-in Wings, hot sauce
-          - 1 × 2-liter Coke
+          - 1 × large Coke
         total: "49.65"
         balance: "0"
         driver_note: ["4512", "3B"]
@@ -325,11 +325,11 @@ scenarios:
       calling you. You're annoyed the Sprite ran out. Say: "Honestly, just cancel the whole
       order." When told it's too late, accept it, and say yes if offered a note for the
       manager: say the order took too long and you'd like a call back. Then take the
-      2-liter Coke instead of the Sprite. Nothing for the driver. Listen to the read-back and
+      large Coke instead of the Sprite. Nothing for the driver. Listen to the read-back and
       say goodbye.
     agent_expectations: The agent politely explains the order can't be cancelled because the
       driver is already on the way, offers and leaves a note for the manager to call back,
-      swaps the Sprite for a 2-liter Coke, reads back the changes, and gives the ETA before
+      swaps the Sprite for a large Coke, reads back the changes, and gives the ETA before
       ending.
     tags:
       id: ro-ob-cancel
@@ -340,7 +340,7 @@ scenarios:
         cart:
           - 1 × large Pepperoni
           - 1 × dozen Bone-in Wings, hot sauce
-          - 1 × 2-liter Coke
+          - 1 × large Coke
         total: "49.65"
         cancel_refused: true
         staff_note: true
@@ -352,7 +352,7 @@ scenarios:
       refund, change your mind: "Actually, I'll take the Coke instead." Nothing for the
       driver. Listen to the read-back and say goodbye.
     agent_expectations: The agent first removes the Sprite with a $4.35 refund, then, when
-      the customer changes their mind, puts a 2-liter Coke on the order at the same price
+      the customer changes their mind, puts a large Coke on the order at the same price
       and says there's no refund after all; the read-back has the Coke swap, the $49.65 total,
       and nothing charged or refunded, then the ETA before ending.
     tags:
@@ -364,7 +364,7 @@ scenarios:
         cart:
           - 1 × large Pepperoni
           - 1 × dozen Bone-in Wings, hot sauce
-          - 1 × 2-liter Coke
+          - 1 × large Coke
         not_in_cart: [sprite]
         total: "49.65"
         balance: "0"
@@ -372,10 +372,10 @@ scenarios:
   - label: Delivery update, breadsticks, then make it two
     instructions: |-
       You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
-      calling you. When asked about the Sprite, take the 2-liter Coke. Then ask to add an
+      calling you. When asked about the Sprite, take the large Coke. Then ask to add an
       order of breadsticks. Once it's added, say: "Actually, make it two orders of breadsticks."
       Nothing for the driver. Listen to the read-back and say goodbye.
-    agent_expectations: The agent swaps the Sprite for a 2-liter Coke, adds breadsticks,
+    agent_expectations: The agent swaps the Sprite for a large Coke, adds breadsticks,
       then changes them to two orders instead of refusing, says the extra charge, and reads
       back the new $62.71 total with $13.06 more on the card, then the ETA before ending.
     tags:
@@ -387,7 +387,7 @@ scenarios:
         cart:
           - 1 × large Pepperoni
           - 1 × dozen Bone-in Wings, hot sauce
-          - 1 × 2-liter Coke
+          - 1 × large Coke
           - 2 × Breadsticks
         total: "62.71"
         balance: "13.06"

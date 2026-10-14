@@ -32,9 +32,9 @@ The POS enforces the rest:
 
 ### The outbound delivery update
 
-Order #214 (a large pepperoni, a dozen hot wings, and a 2-liter Sprite) is with Marco, about 5 minutes away, and the Sprite ran out after the order went in. Rosa opens with who she is and asks for the customer, saying nothing about the order until they confirm. A wrong number, a bad time, or a "no thanks" ends the call with `end_without_update`, sharing nothing.
+Order #214 (a large pepperoni, a dozen hot wings, and a large Sprite) is with Marco, about 5 minutes away, and the Sprite ran out after the order went in. Rosa opens with who she is and asks for the customer, saying nothing about the order until they confirm. A wrong number, a bad time, or a "no thanks" ends the call with `end_without_update`, sharing nothing.
 
-With the customer on the line, she offers a same-price swap (a 2-liter Coke) or a refund of the item and its tax, and the customer can change their mind either way. She asks about drop-off details for the driver, can add breadsticks (the only thing the driver carries), refuses to cancel an order that's already out, and offers a note for the manager instead. `final_read_back` gives the changes, the new total, and the charge or refund; `end_call` refuses until the customer has heard it.
+With the customer on the line, she offers a same-price swap (a large Coke) or a refund of the item and its tax, and the customer can change their mind either way. She asks about drop-off details for the driver, can add breadsticks (the only thing the driver carries), refuses to cancel an order that's already out, and offers a note for the manager instead. `final_read_back` gives the changes, the new total, and the charge or refund; `end_call` refuses until the customer has heard it.
 
 ### Voice and turn-taking
 
