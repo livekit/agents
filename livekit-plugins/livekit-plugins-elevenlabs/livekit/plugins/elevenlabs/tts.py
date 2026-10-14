@@ -1083,16 +1083,13 @@ class _DialogueConnection(_Connection):
         super().__init__(opts, session)
         self._closing_contexts: set[str] = set()
         self._last_context_send: dict[str, float] = {}
-        self._close_task: asyncio.Task[None] | None = None
 
     def _connect_url(self) -> str:
         return _dialogue_multi_stream_url(self._opts)
 
-    def mark_non_current(self) -> None:
-        super().mark_non_current()
-        # a warmed-up socket never idles out, so close it now if nothing will drain it
-        if not self._context_data and not self._active_contexts and not self._closed:
-            self._close_task = asyncio.create_task(self.aclose())
+    def _is_drained(self) -> bool:
+        # a warmed-up socket never idles out, so a replaced one must close itself once unused
+        return not self._is_current and not self._context_data and not self._active_contexts
 
     def _next_keep_alive_delay(self) -> float:
         eligible = self._active_contexts - self._closing_contexts
@@ -1133,6 +1130,9 @@ class _DialogueConnection(_Connection):
                     )
                 except asyncio.TimeoutError:
                     if not self._ws or self._ws.closed:
+                        break
+                    if self._is_drained():
+                        logger.debug("replaced dialogue connection is unused, shutting down")
                         break
                     await self._send_due_keep_alives()
                     continue
