@@ -214,6 +214,36 @@ async def test_agent_session_typed_reply_and_playback_receipt():
             assert peer.items == []  # no duplicate history turn
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_empty_response_allows_next_typed_turn(wrapped):
+    async with peer_model() as (peer, model, _):
+        realtime = llm.RealtimeModelFallbackAdapter([model]) if wrapped else model
+        async with AgentSession(llm=realtime) as session:
+            session.output.audio = FakeAudioOutput()
+            await session.start(Agent(instructions="test"))
+            first = session.generate_reply(user_input="First question")
+            response_id = await peer.start(await peer.next())
+            await peer.end(response_id)
+            await asyncio.wait_for(first.wait_for_playout(), 3)
+            assert first.exception() is None
+            receipt = await asyncio.wait_for(peer.receipts.get(), 1)
+            assert receipt["response_id"] == response_id
+            assert receipt["played_ms"] == 0
+            assert not peer.cancel_received.is_set()
+
+            second = session.generate_reply(user_input="Next question")
+            request = await peer.next()
+            assert request["response"]["prism_input_text"] == "Next question"
+            next_id = await peer.start(request)
+            await peer.message(next_id)
+            await peer.end(next_id)
+            await asyncio.wait_for(second.wait_for_playout(), 3)
+            assert second.exception() is None
+            receipt = await asyncio.wait_for(peer.receipts.get(), 1)
+            assert receipt["response_id"] == next_id
+            assert peer.receipts.empty()
+
+
 async def test_agent_session_application_stop_reports_drain_not_truncate():
     async with peer_model() as (peer, model, _):
         output = FakeAudioOutput(can_pause=True)

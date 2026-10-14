@@ -4700,12 +4700,14 @@ class AgentActivity(RecognitionHooks):
                 "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"  # noqa: E501
             )
 
-        if speech_handle.interrupted and not message_outputs:
+        # Even a response with no messages can require a playback receipt before
+        # the provider admits the next turn.
+        if not message_outputs:
             playback_session.playback_finished(
                 response_id=generation_ev.response_id,
                 message_id=None,
                 audio_end_ms=0,
-                interrupted=True,
+                interrupted=speech_handle.interrupted,
                 interrupted_by_user=speech_handle._interrupt_source == "audio_activity",
             )
 

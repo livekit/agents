@@ -346,7 +346,8 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     ) -> None:
         """Report completed or permanently stopped playback, including skipped audio.
 
-        message_id=None means the response stopped before a message was played.
+        message_id=None means the response completed without messages or stopped
+        before a message was played.
         interrupted_by_user means caller audio, not typed input or an app stop.
         The default retains the previous message truncation behavior.
         """
