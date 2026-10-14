@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
+import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from types import SimpleNamespace
@@ -14,6 +16,7 @@ import pytest
 from livekit.agents import APIStatusError
 from livekit.agents.tts import AudioEmitter
 from livekit.agents.types import APIConnectOptions
+from livekit.agents.utils import connection_pool
 from livekit.plugins.sarvam import models as sarvam_models, tts as sarvam_tts
 
 pytestmark = pytest.mark.unit
@@ -222,6 +225,15 @@ def test_update_options_invalidates_the_pool_only_for_handshake_fields() -> None
     assert invalidated == [True, True]
 
 
+def test_max_session_duration_is_passed_to_the_pool() -> None:
+    assert _make_tts()._pool._max_session_duration == 3600
+    assert _make_tts(max_session_duration=0)._pool._max_session_duration == 0
+    assert _make_tts(max_session_duration=None)._pool._max_session_duration is None
+
+    with pytest.raises(ValueError, match="max_session_duration"):
+        _make_tts(max_session_duration=-1)
+
+
 class _FakeSocket:
     """A Sarvam TTS websocket that records the frames sent to it and answers each flush."""
 
@@ -381,6 +393,33 @@ async def test_config_only_update_applies_to_a_pending_stream_on_the_same_socket
         ("shubh", 1.0),
         ("ritu", 1.2),
     ]
+
+
+@pytest.mark.parametrize(
+    ("max_session_duration", "sockets_opened"),
+    [(3600, 1), (None, 1), (0, 2)],
+    ids=["default", "never-recycle", "fresh-per-request"],
+)
+async def test_max_session_duration_controls_socket_reuse(
+    socket_tts: _SocketTTS,
+    monkeypatch: pytest.MonkeyPatch,
+    max_session_duration: float | None,
+    sockets_opened: int,
+) -> None:
+    # advance the pool's clock by a second per read so a 0s session is always expired
+    clock = itertools.count(start=1000.0)
+    monkeypatch.setattr(
+        connection_pool,
+        "time",
+        SimpleNamespace(time=lambda: next(clock), perf_counter=time.perf_counter),
+    )
+    tts, session = socket_tts(max_session_duration=max_session_duration)
+
+    await _speak(_ws_stream(tts))
+    await _speak(_ws_stream(tts))
+
+    assert len(session.sockets) == sockets_opened
+    assert all(ws.configs() for ws in session.sockets)
 
 
 _TO_V4_FLASH = {"model": "bulbul:v4-flash", "speaker": "ritu_hi_medical"}

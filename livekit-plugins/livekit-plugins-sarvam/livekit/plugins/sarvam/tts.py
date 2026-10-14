@@ -384,6 +384,9 @@ class TTS(tts.TTS):
         ws_url: WebSocket endpoint URL
         http_session: Optional aiohttp session to use
         output_audio_codec: Optionally choose the output codec format (mp3)
+        max_session_duration: Seconds a pooled WebSocket connection may be reused before it is
+            replaced (default 3600). ``0`` opens a fresh connection for every request, which
+            also makes ``prewarm()`` ineffective; ``None`` never recycles connections.
     """
 
     def __init__(
@@ -410,6 +413,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         send_completion_event: bool = True,
         output_audio_codec: str = "mp3",
+        max_session_duration: float | None = 3600,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -458,6 +462,8 @@ class TTS(tts.TTS):
             raise ValueError(
                 f"output_audio_codec must be one of {','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
             )
+        if max_session_duration is not None and max_session_duration < 0:
+            raise ValueError("max_session_duration must be non-negative or None")
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
@@ -508,7 +514,7 @@ class TTS(tts.TTS):
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
-            max_session_duration=3600,  # 1 hour
+            max_session_duration=max_session_duration,
             mark_refreshed_on_get=False,
         )
 
