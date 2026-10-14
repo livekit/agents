@@ -195,6 +195,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         self._swap_task: asyncio.Task[None] | None = None
         self._swap_lock = asyncio.Lock()
+        self._initializing = False
+        self._initialization_error: Exception | None = None
         # bound by AgentActivity; used to read agent state and drive interrupt/generate_reply on swap
         self._agent_session: AgentSession | None = None
 
@@ -285,6 +287,11 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         )
 
     def _on_child_error(self, error: RealtimeModelError) -> None:
+        if self._initializing and not error.recoverable:
+            # initialize() owns startup fallback. Do not start a concurrent swap or
+            # close AgentSession before the remaining candidates have been tried.
+            self._initialization_error = error.error
+            return
         if error.recoverable:
             # surface it and let the plugin's own reconnect handle it
             self.emit("error", error)
@@ -429,7 +436,75 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             self._instructions = instructions
         if is_given(tools):
             self._tools = tools
-        await self._active.initialize(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
+        if self._swap_task is not None and not self._swap_task.done():
+            await self._swap_task
+        self._swap_task = asyncio.create_task(
+            self._initialize(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
+        )
+        await self._swap_task
+
+    async def _initialize(
+        self,
+        *,
+        instructions: NotGivenOr[str],
+        chat_ctx: NotGivenOr[ChatContext],
+        tools: NotGivenOr[list[Tool]],
+    ) -> None:
+        async with self._swap_lock:
+            self._initializing = True
+            self._swapping = True
+            history = chat_ctx.copy() if is_given(chat_ctx) else self._active.chat_ctx.copy()
+            attempted: set[int] = set()
+            index = self._active_index
+            try:
+                while True:
+                    self._initialization_error = None
+                    try:
+                        replacing = bool(attempted)
+                        if replacing:
+                            self._active_index = index
+                            self._active = self._adapter._models[index].session(
+                                turn_detection_disabled=self._turn_detection_disabled
+                            )
+                            self._bind(self._active)
+                            instructions, chat_ctx, tools = self._instructions, history, self._tools
+                        attempted.add(index)
+                        await self._active.initialize(
+                            instructions=instructions, chat_ctx=chat_ctx, tools=tools
+                        )
+                        if replacing and is_given(self._tool_choice):
+                            self._active.update_options(tool_choice=self._tool_choice)
+                        if self._initialization_error is not None:
+                            raise self._initialization_error
+                        self._adapter._active_instance = self._adapter._models[index]
+                        return
+                    except Exception as error:
+                        attempted.add(index)
+                        self._unbind(self._active)
+                        with contextlib.suppress(Exception):
+                            await self._active.aclose()
+                        self._set_available(index, False)
+                        target = self._next_available_index(exclude=attempted)
+                        self.emit(
+                            "error",
+                            RealtimeModelError(
+                                timestamp=time.time(),
+                                label=self._adapter.label,
+                                error=error,
+                                recoverable=target is not None,
+                            ),
+                        )
+                        if target is None:
+                            raise
+                        index = target
+            except asyncio.CancelledError:
+                self._unbind(self._active)
+                with contextlib.suppress(Exception):
+                    await self._active.aclose()
+                raise
+            finally:
+                self._initializing = self._swapping = False
+                self._initialization_error = None
 
     async def set_input_text(
         self, text: str, *, message_id: NotGivenOr[str] = NOT_GIVEN
