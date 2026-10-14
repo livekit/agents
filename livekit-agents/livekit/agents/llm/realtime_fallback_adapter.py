@@ -288,8 +288,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
     def _on_child_error(self, error: RealtimeModelError) -> None:
         if self._initializing and not error.recoverable:
-            # initialize() owns startup fallback. Do not start a concurrent swap or
-            # close AgentSession before the remaining candidates have been tried.
+            # The initialization loop owns startup fallback, including replacement
+            # startup. Do not start another swap or close AgentSession early.
             self._initialization_error = error.error
             return
         if error.recoverable:
@@ -345,6 +345,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             # bring up a fresh child on ``index``; on failure clean it up, cool it down, and
             # return the error so the caller can try the next model
             async def _bring_up(index: int) -> Exception | None:
+                self._initializing = True
+                self._initialization_error = None
                 try:
                     self._active = self._adapter._models[index].session(
                         turn_detection_disabled=self._turn_detection_disabled
@@ -356,6 +358,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                     )
                     if is_given(self._tool_choice):
                         self._active.update_options(tool_choice=self._tool_choice)
+                    if self._initialization_error is not None:
+                        raise self._initialization_error
                     self._adapter._active_instance = self._adapter._models[index]
                     return None
                 except Exception as e:
@@ -365,6 +369,9 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                         await self._active.aclose()
                     self._set_available(index, False)
                     return e
+                finally:
+                    self._initializing = False
+                    self._initialization_error = None
 
             self._swapping = True
             try:
