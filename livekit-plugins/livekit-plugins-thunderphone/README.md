@@ -28,7 +28,7 @@ from livekit.plugins import thunderphone
 session = AgentSession(llm=thunderphone.RealtimeModel(agent_id=12))
 
 # ...or configure the session inline: instructions and tools come from the LiveKit Agent
-session = AgentSession(llm=thunderphone.RealtimeModel(product="bolt", voice="olivia"))
+session = AgentSession(llm=thunderphone.RealtimeModel(model="bolt", voice="olivia"))
 await session.start(agent=Agent(instructions="You are Acme Dental's receptionist."), room=ctx.room)
 ```
 

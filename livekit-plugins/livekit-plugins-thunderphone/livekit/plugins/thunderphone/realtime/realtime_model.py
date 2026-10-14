@@ -79,7 +79,7 @@ class RealtimeModel(_openai.RealtimeModel):
       languages, tools, greeting and silence handling come from ThunderPhone;
       the LiveKit Agent's instructions and tools are not sent.
     * **Inline** — omit ``agent_id``. Instructions and tools come from the
-      LiveKit Agent, ``product`` picks the engine (``spark``, ``bolt`` or
+      LiveKit Agent, ``model`` picks the engine (``spark``, ``bolt`` or
       ``storm``) and ``voice`` the ThunderPhone voice. Function tools run in
       the LiveKit agent.
 
@@ -95,11 +95,11 @@ class RealtimeModel(_openai.RealtimeModel):
         *,
         api_key: str | None = None,
         agent_id: int | str | None = None,
-        product: str | None = None,
+        model: str | None = None,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: str | None = None,
-        from_number: str | None = None,
-        to_number: str | None = None,
+        caller_number: str | None = None,
+        callee_number: str | None = None,
         live_transcripts: bool = False,
         base_url: str = DEFAULT_BASE_URL,
         http_session: Any = None,
@@ -112,12 +112,13 @@ class RealtimeModel(_openai.RealtimeModel):
             api_key: ThunderPhone secret key (``sk_live_...``). Defaults to the
                 ``THUNDERPHONE_API_KEY`` environment variable.
             agent_id: Id of a saved ThunderPhone agent. Mutually exclusive with
-                ``product`` and ``voice``.
-            product: Engine for inline sessions: ``"spark"``, ``"bolt"`` or ``"storm"``.
+                ``model`` and ``voice``.
+            model: Engine for inline sessions: ``"spark"``, ``"bolt"`` or ``"storm"``.
             voice: ThunderPhone voice name for inline sessions.
             language: Primary language hint for inline sessions, e.g. ``"es"``.
-            from_number: Caller number to record on the call, if the session fronts a phone call.
-            to_number: Called number to record on the call.
+            caller_number: Phone number the call came from, when the session fronts a
+                phone call. Shown as the call's "from" number in ThunderPhone call history.
+            callee_number: Phone number that was dialed. Shown as the call's "to" number.
             live_transcripts: Stream caller transcript fragments while the caller is
                 still speaking (billed extra). Off by default: one transcript per turn.
             base_url: WebSocket endpoint. Defaults to the ThunderPhone API.
@@ -133,10 +134,10 @@ class RealtimeModel(_openai.RealtimeModel):
                 f"ThunderPhone needs a secret API key starting with '{API_KEY_PREFIX}' "
                 f"(pass api_key= or set {API_KEY_ENV})."
             )
-        if agent_id is not None and (product or is_given(voice)):
+        if agent_id is not None and (model or is_given(voice)):
             raise ValueError(
                 "agent_id sessions take their engine and voice from the saved agent; "
-                "drop product/voice or drop agent_id."
+                "drop model/voice or drop agent_id."
             )
 
         if agent_id is not None and not str(agent_id).strip():
@@ -145,15 +146,16 @@ class RealtimeModel(_openai.RealtimeModel):
             raise ValueError("agent_id must not be empty")
 
         self._tp_agent_id = str(agent_id).strip() if agent_id is not None else None
+        self._tp_engine = model
         self._tp_live_transcripts = bool(live_transcripts)
 
         url = _build_url(
             base_url,
             agent_id=self._tp_agent_id,
-            product=product,
+            product=model,
             language=language,
-            from_number=from_number,
-            to_number=to_number,
+            from_number=caller_number,
+            to_number=callee_number,
         )
         # The framework recycles an OpenAI socket after max_session_duration
         # (20 min by default) by closing it and reconnecting. On ThunderPhone
@@ -183,6 +185,11 @@ class RealtimeModel(_openai.RealtimeModel):
             turn_detection=True,
             can_disable_turn_detection=False,
         )
+
+    @property
+    def model(self) -> str:
+        # The engine when one was chosen; a saved agent's engine lives on ThunderPhone.
+        return self._tp_engine or SERVER_MODEL
 
     @property
     def provider(self) -> str:

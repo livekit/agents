@@ -52,13 +52,15 @@ def test_empty_agent_id_is_rejected() -> None:
 
 def test_agent_id_excludes_inline_options() -> None:
     with pytest.raises(ValueError, match="agent_id"):
-        RealtimeModel(api_key=KEY, agent_id=1, product="bolt")
+        RealtimeModel(api_key=KEY, agent_id=1, model="bolt")
     with pytest.raises(ValueError, match="agent_id"):
         RealtimeModel(api_key=KEY, agent_id=1, voice="olivia")
 
 
 def test_saved_agent_url_pins_audio_and_call_events() -> None:
-    model = RealtimeModel(api_key=KEY, agent_id=12, from_number="+15550001", to_number="+15550002")
+    model = RealtimeModel(
+        api_key=KEY, agent_id=12, caller_number="+15550001", callee_number="+15550002"
+    )
     parts = urlsplit(model._opts.base_url)
     assert f"{parts.scheme}://{parts.netloc}{parts.path}" == DEFAULT_BASE_URL
     assert parse_qs(parts.query) == {
@@ -73,10 +75,10 @@ def test_saved_agent_url_pins_audio_and_call_events() -> None:
     }
 
 
-def test_inline_url_carries_product_and_language_and_keeps_custom_query() -> None:
+def test_inline_url_carries_model_and_language_and_keeps_custom_query() -> None:
     model = RealtimeModel(
         api_key=KEY,
-        product="bolt",
+        model="bolt",
         voice="olivia",
         language="es",
         base_url="ws://localhost:8002/v1/realtime?debug=1",
@@ -89,11 +91,13 @@ def test_inline_url_carries_product_and_language_and_keeps_custom_query() -> Non
     assert query["debug"] == ["1"]
     assert "agent_id" not in query
     assert model._opts.voice == "olivia"
-    assert model.model == SERVER_MODEL
+    # the engine is the model name the framework reports; the wire keeps the server's
+    assert model.model == "bolt"
+    assert model._opts.model == SERVER_MODEL
 
 
 def test_model_freezes_instructions_and_tools_and_never_reconnects() -> None:
-    inline = RealtimeModel(api_key=KEY, product="bolt")
+    inline = RealtimeModel(api_key=KEY, model="bolt")
     assert inline.capabilities.mutable_instructions is False
     assert inline.capabilities.mutable_tools is False
     model = RealtimeModel(api_key=KEY, agent_id=1)
