@@ -235,11 +235,12 @@ async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
 
     stream = fallback_adapter.stream()
     # simulate that audio input started 30s before this stream was created
+    set_at = time.time()
     stream.start_time_offset = 30.0
     frame = utils.audio.silence_frame(0.02, 16000)
 
     async with stream:
-        # the first leg gets its first frame 5s after creation and anchors on it;
+        # the first leg reads its first frame 5s after creation and anchors on it;
         # fake1 fails once the input ends, and the second leg picks up the timeline there
         await asyncio.sleep(5.0)
         pushed_at = time.time()
@@ -251,12 +252,8 @@ async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
 
     leg1 = fake1.stream_ch.recv_nowait()
     leg2 = fake2.stream_ch.recv_nowait()
-    assert leg1.start_time_offset == pytest.approx(
-        30.0 + pushed_at - frame.duration - stream._created_at
-    )
-    assert leg2.start_time_offset == pytest.approx(
-        30.0 + switched_at - stream._created_at, abs=0.05
-    )
+    assert leg1.start_time_offset == pytest.approx(30.0 + pushed_at - frame.duration - set_at)
+    assert leg2.start_time_offset == pytest.approx(30.0 + switched_at - set_at, abs=0.05)
 
     await fallback_adapter.aclose()
 

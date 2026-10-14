@@ -27,7 +27,7 @@ def test_aws_endpoint_preserves_valid_result_timing(end_time: float | None) -> N
     events: list[stt.SpeechEvent] = []
     stream = object.__new__(aws_stt.SpeechStream)
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._opts = SimpleNamespace(
         language="en-US", identify_language=False, identify_multiple_languages=False
     )

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import aiohttp
 import pytest
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, stt, utils
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, stt
 from livekit.plugins.baseten.qwen3_stt import Qwen3SpeechStream
 
 pytestmark = pytest.mark.plugin("baseten")
@@ -18,10 +18,10 @@ pytestmark = pytest.mark.plugin("baseten")
 )
 async def test_qwen3_endpoint_preserves_segment_timing(end_time, empty_final):
     stream = object.__new__(Qwen3SpeechStream)
-    stream._start_time_offset = 7.0
     stream._conn_options = DEFAULT_API_CONNECT_OPTIONS
     stream._opts = SimpleNamespace(word_timestamps=True, handshake=lambda: {})
-    stream._input_ch = utils.aio.Chan()
+    stream._input_ch = stt.RecognizeStream._InputChan()
+    stream.start_time_offset = 7.0
     stream._input_ch.close()
     events = []
     stream._event_ch = SimpleNamespace(send_nowait=events.append)

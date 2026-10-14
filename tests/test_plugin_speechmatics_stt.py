@@ -126,7 +126,7 @@ def _segment_message(
 @pytest.mark.parametrize("end", [0.4, 0.0])
 async def test_endpoint_preserves_final_segment_timing_and_clears_it(end: float) -> None:
     stream = _stream()
-    stream._start_time_offset = 7.0
+    stream.start_time_offset = 7.0
     try:
         stream._handle_start_of_turn({})
         stream._handle_segment(_segment_message(start=0.1, end=end), is_final=True)

@@ -31,7 +31,7 @@ async def test_endpoint_does_not_use_processing_duration_as_speech_end(event_typ
 
     stream = object.__new__(SpeechStream)
     stream._opts = SimpleNamespace(language="en")
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     events = []
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
     await stream._recv_messages(messages())

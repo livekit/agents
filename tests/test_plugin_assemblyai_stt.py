@@ -1640,7 +1640,7 @@ def _turn_message(**overrides):
 @pytest.mark.parametrize("offset", [0.0, 8.5])
 async def test_eos_uses_last_word_end_time(offset):
     stream = _make_stream_for_unit_test()
-    stream._start_time_offset = offset
+    stream.start_time_offset = offset
     stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello"))
 
     endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
@@ -1651,7 +1651,7 @@ async def test_eos_uses_last_word_end_time(offset):
 @pytest.mark.parametrize("words", [[], [{"text": "hello", "confidence": 0.9}]])
 async def test_eos_without_word_timing_does_not_use_stream_offset(words):
     stream = _make_stream_for_unit_test()
-    stream._start_time_offset = 8.5
+    stream.start_time_offset = 8.5
     stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello", words=words))
 
     endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]

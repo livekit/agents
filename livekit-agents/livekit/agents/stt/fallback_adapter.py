@@ -400,11 +400,9 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
-                    # the inner stream continues this stream's timeline from its own creation;
-                    # it then adds the delay to its own first frame like any stream
-                    seed = self._timeline_offset_at(time.time())
-                    if seed is not None:
-                        main_stream.start_time_offset = seed
+                    # the inner stream continues this stream's timeline
+                    if (origin := self._input_ch.input_started_at) is not None:
+                        main_stream.start_time_offset = time.time() - origin
 
                     if forward_input_task is None or forward_input_task.done():
                         forward_input_task = asyncio.create_task(_forward_input_task())

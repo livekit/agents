@@ -181,7 +181,7 @@ def test_flush_reports_usage_without_transcript(stream: SpeechStream) -> None:
 
 
 def test_endpoint_preserves_word_end_instead_of_audio_processed(stream: SpeechStream) -> None:
-    stream._start_time_offset = 7.0
+    stream.start_time_offset = 7.0
     stream._stt._end_of_turn_confirm_delay_seconds = None
     emitted: list[stt.SpeechEvent] = []
     with patch.object(stream, "_emit", side_effect=emitted.append):

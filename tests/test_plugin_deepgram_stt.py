@@ -279,7 +279,7 @@ def _nova_result(*, speech_final=False, transcript="hello", words=None):
 @pytest.mark.parametrize("empty_endpoint", [False, True])
 async def test_nova_eos_uses_final_word_end_time(offset, empty_endpoint):
     stream = _live_stream(_LiveWS())
-    stream._start_time_offset = offset
+    stream.start_time_offset = offset
     try:
         stream._process_stream_event(_nova_result(speech_final=not empty_endpoint))
         if empty_endpoint:
@@ -326,7 +326,7 @@ async def test_nova_eos_drops_word_timing_from_a_previous_connection():
 
 async def test_nova_utterance_end_uses_last_word_end():
     stream = _live_stream(_LiveWS())
-    stream._start_time_offset = 8.5
+    stream.start_time_offset = 8.5
     try:
         stream._process_stream_event({"type": "SpeechStarted"})
         stream._process_stream_event({"type": "UtteranceEnd", "last_word_end": 2.4})
@@ -352,7 +352,7 @@ def test_flux_eos_uses_word_timing_instead_of_audio_window_end(last_word_end):
     stream._event_ch = Chan()
     stream._speaking = True
     stream._request_id = "req-1"
-    stream._start_time_offset = 8.5
+    stream._input_ch = SimpleNamespace(start_time_offset=8.5)
     word = {"word": "hello", "start": 1.0, "confidence": 0.9}
     if last_word_end is not None:
         word["end"] = last_word_end

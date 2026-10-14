@@ -151,7 +151,7 @@ def test_endpoint_preserves_word_timing(end_time):
     stream = object.__new__(telnyx_stt.SpeechStream)
     stream._speaking = False
     stream._language = LanguageCode("en")
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     events = []
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
     message = {"transcript": "hello", "is_final": True}

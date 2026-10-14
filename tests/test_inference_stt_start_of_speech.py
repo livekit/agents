@@ -32,7 +32,7 @@ def _stream() -> InferenceSpeechStream:
     stream._speaking = False
     stream._request_id = "req-1"
     stream._speech_duration = 0.0
-    stream._start_time_offset = 0.0
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._pending_extra = None
     stream._opts = SimpleNamespace(language="en", model="auto", fallback=NOT_GIVEN)
     return stream
@@ -133,7 +133,7 @@ def test_onset_resets_after_the_turn_ends() -> None:
 )
 def test_eos_reports_provider_speech_end_time(timing, end_time):
     stream = _stream()
-    stream._start_time_offset = 8.5
+    stream.start_time_offset = 8.5
     stream._process_transcript({"transcript": "hello", **timing}, is_final=True)
 
     assert stream._event_ch.recv_nowait().type == SpeechEventType.START_OF_SPEECH
@@ -163,7 +163,7 @@ async def test_eos_preserves_transcription_delay_in_stt_turn_detection(monkeypat
     monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     stream = _stream()
     stream._opts.model = model
-    stream._start_time_offset = 8.0
+    stream.start_time_offset = 8.0
     stream._process_transcript(
         {"transcript": "hello", "start": 0.0, "duration": 1.4, "words": words},
         is_final=True,
@@ -212,7 +212,7 @@ def test_eos_uses_duration_only_when_every_configured_model_reports_utterance_ti
     stream = _stream()
     stream._opts.model = model
     stream._opts.fallback = fallback
-    stream._start_time_offset = 8.5
+    stream.start_time_offset = 8.5
     stream._process_transcript(
         {"transcript": "hello", "start": 1.0, "duration": 1.4, "words": []}, is_final=True
     )
@@ -231,7 +231,7 @@ async def test_eos_without_utterance_timing_uses_arrival_time(monkeypatch):
     monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     stream = _stream()
     stream._opts.model = "cartesia/ink-2"
-    stream._start_time_offset = 8.5
+    stream.start_time_offset = 8.5
     stream._process_transcript(GATEWAY_INK2_FINAL, is_final=True)
     assert stream._event_ch.recv_nowait().type == SpeechEventType.START_OF_SPEECH
     recognition = _make_recognition(vad=None, input_started_at=now - 30.0, mode="stt")

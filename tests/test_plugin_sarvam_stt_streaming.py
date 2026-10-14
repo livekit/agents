@@ -57,7 +57,7 @@ def _make_stream(
     stream._utterance_speech_end_audio_pos = None
     stream._utterance_speech_end_wall = None
     stream._final_speech_end_time = 0.0
-    stream._start_time_offset = 0.0
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._final_received_for_utterance = False
     stream._eos_emitted_for_utterance = False
     stream._manual_speech_started = False
@@ -1724,7 +1724,7 @@ async def test_endpoint_does_not_treat_sent_audio_as_speech_timing(endpointing: 
 @pytest.mark.parametrize("end_s", [0.4, 0.0, None])
 async def test_endpoint_preserves_final_timestamp(endpointing, end_s):
     stream = _make_stream(endpointing=endpointing)
-    stream._start_time_offset = 7.0
+    stream.start_time_offset = 7.0
     await stream._handle_message({"event": "vad.speech_start"})
     await stream._handle_message({"event": "transcript.final", "text": "hello", "end_s": end_s})
     await stream._handle_message({"event": "vad.speech_end"})

@@ -22,7 +22,7 @@ def test_auto_endpoint_does_not_use_billed_duration_as_speech_end():
     stream._language = "en"
     stream._request_id = "test"
     stream._speech_duration = 100.0
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     events = []
     stream._event_ch = SimpleNamespace(send_nowait=events.append, closed=False)
     stream._process_stream_event({"type": "turn.start", "request_id": "test"})
@@ -39,7 +39,7 @@ def test_endpoint_uses_words_instead_of_billed_duration(end_time):
     stream._language = None
     stream._request_id = "test"
     stream._speech_duration = 0.0
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     events = []
     stream._event_ch = SimpleNamespace(send_nowait=events.append, closed=False)
     for turn in range(2):

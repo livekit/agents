@@ -68,7 +68,7 @@ def _new_stream(
     stream._speaking = False
     stream._last_partial_text = ""
     stream._final_alternatives = []
-    stream._start_time_offset = 0.0
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     return stream
 
 
@@ -104,7 +104,7 @@ def _partial_transcript(text: str) -> dict:
 @pytest.mark.parametrize("end_time", [0.4, 0.0])
 def test_elevenlabs_endpoint_preserves_timing_across_empty_commit(server_vad, end_time):
     stream = _new_stream(server_vad=server_vad, include_timestamps=True)
-    stream._start_time_offset = 7.0
+    stream.start_time_offset = 7.0
     final = _committed_transcript("hello", with_timestamps=True)
     final["words"][0]["end"] = end_time
     stream._process_stream_event(final)

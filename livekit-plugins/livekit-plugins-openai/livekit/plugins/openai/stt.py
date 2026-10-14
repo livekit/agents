@@ -1012,7 +1012,7 @@ class SpeechStream(stt.SpeechStream):
                     self._pool.last_acquire_time, self._pool.last_connection_reused
                 )
                 connection_audio_offset = self._audio_duration_by_ws.get(ws, 0.0)
-                self._first_frame_at = None
+                self._input_ch.restart_provider_clock()
                 # published before the config is sent, so a change made during the send lands
                 # after it rather than finding no live connection
                 self._ws = ws

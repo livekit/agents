@@ -15,7 +15,7 @@ pytestmark = pytest.mark.plugin("smallestai")
 def test_endpoint_preserves_speech_timing(endpoint, end_time):
     stream = object.__new__(smallestai_stt.SpeechStream)
     stream._opts = SimpleNamespace(language="en", diarize=False, vad_events=True)
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._session_id = "test"
     stream._speaking = False
     stream._final_alternatives = []

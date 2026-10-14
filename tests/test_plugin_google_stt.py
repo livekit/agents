@@ -132,7 +132,7 @@ async def test_google_endpoint_preserves_event_offset(version: int, offset: floa
         recognizer_cb=lambda _client: "",
         config=options,
     )
-    stream._start_time_offset = 7.0
+    stream.start_time_offset = 7.0
     try:
         events = [event async for event in stream]
         endpoint = next(event for event in events if event.type == SpeechEventType.END_OF_SPEECH)

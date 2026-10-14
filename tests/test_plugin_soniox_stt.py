@@ -357,7 +357,7 @@ END_TOKEN_FINAL: dict[str, Any] = {"text": "<end>", "is_final": True}
 @pytest.mark.parametrize("offset", [0.0, 8.5])
 async def test_eos_uses_final_token_end_time_and_resets_between_turns(offset):
     stream = _make_stream()
-    stream._start_time_offset = offset
+    stream.start_time_offset = offset
     events = await _drive_recv(
         stream,
         [
@@ -384,7 +384,7 @@ async def test_eos_prefers_source_token_timing_for_translation(source_end, trans
     from livekit.plugins.soniox.stt import TranslationConfig
 
     stream = _make_stream(translation=TranslationConfig(type="one_way", target_language="en"))
-    stream._start_time_offset = 8.5
+    stream.start_time_offset = 8.5
     events = await _drive_recv(
         stream,
         [

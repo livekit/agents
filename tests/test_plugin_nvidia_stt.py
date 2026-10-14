@@ -14,7 +14,7 @@ pytestmark = pytest.mark.plugin("nvidia")
 def test_endpoint_preserves_word_timing(end_time):
     stream = object.__new__(nvidia_stt.SpeechStream)
     stream._speaking = False
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._language = "en-US"
     stream._stt = SimpleNamespace(_opts=SimpleNamespace(enable_diarization=False))
     events = []

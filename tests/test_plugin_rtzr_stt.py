@@ -13,7 +13,7 @@ pytestmark = pytest.mark.plugin("rtzr")
 @pytest.mark.parametrize("duration", [300, 0, None])
 def test_endpoint_preserves_utterance_duration(duration):
     stream = object.__new__(rtzr_stt.SpeechStream)
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._rtzr_stt = SimpleNamespace(_params=SimpleNamespace(language=LanguageCode("ko")))
     message = {"start_at": 100, "final": True, "alternatives": [{"text": "안녕"}]}
     if duration is not None:

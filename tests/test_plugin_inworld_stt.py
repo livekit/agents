@@ -17,7 +17,7 @@ def test_endpoint_requests_and_preserves_word_timing(end_ms):
     stream._language = "en"
     stream._speaking = False
     stream._request_id = "test"
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     events = []
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
     assert stream._build_transcribe_config()["includeWordTimestamps"] is True

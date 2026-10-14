@@ -28,7 +28,7 @@ def _make_stream_under_test(
     instance._opts = SimpleNamespace(language="en-IN", sample_rate=16000)  # type: ignore[attr-defined]
     instance._speaking = False  # type: ignore[attr-defined]
     instance._should_flush = False  # type: ignore[attr-defined]
-    instance._start_time_offset = 0.0  # type: ignore[attr-defined]
+    instance._input_ch = SimpleNamespace(start_time_offset=0.0)  # type: ignore[attr-defined]
     instance._utterance_speech_start_wall = None  # type: ignore[attr-defined]
     instance._pending_final_data = None  # type: ignore[attr-defined]
     instance._final_alternatives = []
@@ -121,7 +121,7 @@ async def test_final_end_time_uses_speech_end_when_present() -> None:
 @pytest.mark.parametrize("end_first", [False, True])
 async def test_endpoint_preserves_provider_timing(end_time, end_first):
     instance, captured = _make_stream_under_test()
-    instance._start_time_offset = 7.0
+    instance.start_time_offset = 7.0
     await instance._handle_events(_event("START_SPEECH"))
     if end_first:
         await instance._handle_events(_event("END_SPEECH"))
@@ -140,7 +140,7 @@ async def test_final_timing_includes_start_time_offset() -> None:
     # Provider times are stream-relative; the base class accrues start_time_offset
     # across reconnects, so present speech_start/speech_end must be shifted by it.
     instance, captured = _make_stream_under_test()
-    instance._start_time_offset = 2.0  # type: ignore[attr-defined]
+    instance._input_ch = SimpleNamespace(start_time_offset=2.0)  # type: ignore[attr-defined]
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_transcript_data(_ws_message(speech_start=0.5, speech_end=1.7))

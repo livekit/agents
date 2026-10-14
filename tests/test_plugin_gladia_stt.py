@@ -26,7 +26,7 @@ def test_endpoint_preserves_source_timing(translate, end_time):
     stream._opts = gladia_stt.STT(api_key="test-key")._opts
     stream._opts.translation_config.enabled = translate
     stream._speaking = False
-    stream._start_time_offset = 7.0
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._request_id = "test"
     events = []
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
