@@ -98,6 +98,9 @@ WS_INACTIVITY_TIMEOUT = 180
 _DIALOGUE_VOICE_SETTINGS_FIELDS = frozenset({"stability"})
 # the text-to-dialogue server finalizes a context idle for 20s; keep-alives reset that
 _DIALOGUE_KEEP_ALIVE_INTERVAL = 10.0
+# the server closes a socket after 20s without input until it has seen a context;
+# an empty context opened and closed on connect lifts that limit
+_DIALOGUE_WARMUP_CONTEXT_ID = "lk-warmup"
 
 
 class TTS(tts.TTS):
@@ -1080,9 +1083,16 @@ class _DialogueConnection(_Connection):
         super().__init__(opts, session)
         self._closing_contexts: set[str] = set()
         self._last_context_send: dict[str, float] = {}
+        self._close_task: asyncio.Task[None] | None = None
 
     def _connect_url(self) -> str:
         return _dialogue_multi_stream_url(self._opts)
+
+    def mark_non_current(self) -> None:
+        super().mark_non_current()
+        # a warmed-up socket never idles out, so close it now if nothing will drain it
+        if not self._context_data and not self._active_contexts and not self._closed:
+            self._close_task = asyncio.create_task(self.aclose())
 
     def _next_keep_alive_delay(self) -> float:
         eligible = self._active_contexts - self._closing_contexts
@@ -1108,6 +1118,14 @@ class _DialogueConnection(_Connection):
     async def _send_loop(self) -> None:
         """Send loop - processes messages from input queue"""
         try:
+            if self._ws and not self._ws.closed:
+                await self._ws.send_json(
+                    {"context_id": _DIALOGUE_WARMUP_CONTEXT_ID, "voices": [self._opts.voice_id]}
+                )
+                await self._ws.send_json(
+                    {"context_id": _DIALOGUE_WARMUP_CONTEXT_ID, "close_context": True}
+                )
+
             while not self._closed:
                 try:
                     msg = await asyncio.wait_for(
