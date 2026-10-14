@@ -171,7 +171,9 @@ async def _drain_stream(tts, conn_options: APIConnectOptions) -> None:
 
 
 async def test_synthesize_emits_audio_and_sends_eos():
-    tts, _, ws = _make_tts([READY, AUDIO, AUDIO, EOS])
+    from livekit.plugins.gradium.tts import WS_HEARTBEAT_S
+
+    tts, session, ws = _make_tts([READY, AUDIO, AUDIO, EOS])
 
     duration = 0.0
     async for ev in tts.synthesize("hello world", conn_options=CONN_OPTS):
@@ -181,6 +183,9 @@ async def test_synthesize_emits_audio_and_sends_eos():
 
     assert [m["type"] for m in ws.sent] == ["setup", "text", "end_of_stream"]
     assert ws.sent[1]["text"] == "hello world"
+    # pings keep the receive timeout from firing while the server waits for text; the
+    # pong must land before the receive timer does, so the interval stays under timeout/2
+    assert session.connects[0][1]["heartbeat"] == min(WS_HEARTBEAT_S, CONN_OPTS.timeout / 2)
 
 
 async def test_synthesize_raises_on_error_frame():
