@@ -99,6 +99,37 @@ def _rows(
     return cols, counter
 
 
+def _changed_fields(
+    cols: list[str], expected_row: tuple[Any, ...], actual_row: tuple[Any, ...]
+) -> list[str]:
+    return [
+        f"{col}: {want!r} != {got!r}"
+        for col, want, got in zip(cols, expected_row, actual_row, strict=True)
+        if want != got
+    ]
+
+
+def _pair_rows(
+    cols: list[str], missing: list[tuple[Any, ...]], unexpected: list[tuple[Any, ...]]
+) -> list[tuple[tuple[Any, ...], tuple[Any, ...]]]:
+    """Greedily pair each missing row with its nearest unexpected row.
+
+    A row the agent got *almost* right is one row, not one missing plus one
+    unexpected: pairing keeps the reported diff at the field that actually differs.
+    """
+    pairs: list[tuple[tuple[Any, ...], tuple[Any, ...]]] = []
+    remaining = list(unexpected)
+    for want in list(missing):
+        if not remaining:
+            break
+        got = min(remaining, key=lambda row: len(_changed_fields(cols, want, row)))
+        remaining.remove(got)
+        missing.remove(want)
+        unexpected.remove(got)
+        pairs.append((want, got))
+    return pairs
+
+
 def diff_databases(
     expected: apsw.Connection,
     actual: apsw.Connection,
@@ -112,10 +143,17 @@ def diff_databases(
         ecols, exp = _rows(expected, sql)
         acols, act = _rows(actual, sql)
         cols = ecols or acols
-        for row, n in (exp - act).items():
-            diffs.append(f"{table}: missing {n}x {dict(zip(cols, row, strict=True))}")
-        for row, n in (act - exp).items():
-            diffs.append(f"{table}: unexpected {n}x {dict(zip(cols, row, strict=True))}")
+        # repr key: rows mix None with str/int in the same column, so tuples aren't
+        # directly orderable.
+        missing = sorted((exp - act).elements(), key=repr)
+        unexpected = sorted((act - exp).elements(), key=repr)
+        for want, got in _pair_rows(cols, missing, unexpected):
+            fields = "; ".join(_changed_fields(cols, want, got))
+            diffs.append(f"{table}: row differs on {fields}")
+        for row in missing:
+            diffs.append(f"{table}: missing {dict(zip(cols, row, strict=True))}")
+        for row in unexpected:
+            diffs.append(f"{table}: unexpected {dict(zip(cols, row, strict=True))}")
     return diffs
 
 
