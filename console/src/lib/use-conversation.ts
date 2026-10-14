@@ -448,7 +448,9 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
   const connect = useCallback(
     async (chosen: Example, sub: string) => {
       const minted = await getGrant(sub, chosen.agent, chosen.endpoint);
-      const cardResponse = await fetch(`${minted.endpoint}/.well-known/agent-card.json`);
+      const cardResponse = await fetch(`${minted.endpoint}/.well-known/agent-card.json`, {
+        headers: { Authorization: `Bearer ${minted.token}` },
+      });
       const agentCard = (await cardResponse.json()) as { name: string; description?: string };
       grantRef.current = minted;
       setGrant(minted);
