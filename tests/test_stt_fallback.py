@@ -223,7 +223,8 @@ async def test_stt_fallback() -> None:
     await fallback_adapter.aclose()
 
 
-async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
+@pytest.mark.parametrize("set_late", [False, True])
+async def test_stt_stream_fallback_propagates_start_time_offset(set_late: bool) -> None:
     # A mid-stream fallback must anchor each leg's timestamps to the original input
     # timeline by seeding start_time_offset; otherwise a leg created after the switch
     # emits timestamps relative to the switch moment, placing post-switch transcripts
@@ -234,6 +235,9 @@ async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
     fallback_adapter = FallbackAdapterTester([fake1, fake2])
 
     stream = fallback_adapter.stream()
+    if set_late:
+        # the first leg is created before the caller sets the offset
+        await asyncio.sleep(0.1)
     # simulate that audio input started 30s before this stream was created
     set_at = time.time()
     stream.start_time_offset = 30.0
