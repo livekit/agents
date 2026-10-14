@@ -79,7 +79,7 @@ load_dotenv()
 
 PERSONA = "Nick"
 BUSINESS = "Bayside BMW"
-VOICE = "Charon"  # Gemini TTS "Charon": informative, clear
+VOICE = "thread"  # Rime Coda "Thread"
 # the number a customer calls back on, said on the follow-up and on voicemail
 SERVICE_DESK_NUMBER = os.getenv("SERVICE_DESK_NUMBER", "")
 # the participant identity of a phone the agent rings
@@ -1196,7 +1196,7 @@ async def entrypoint(ctx: JobContext) -> None:
         desk = demo_desk(name or "Alex Morgan", today)
         agent = NickAgent(desk)
 
-    tts = inference.TTS("google/gemini-3.8-flash-tts", voice=VOICE, language="en")
+    tts = inference.TTS("rime/coda", voice=VOICE, language="en")
     session = AgentSession[Userdata](
         userdata=Userdata(desk=desk),
         tts_text_transforms=["filter_markdown", "filter_emoji"],
