@@ -1,0 +1,44 @@
+tests/test_plugin_azure_stt.py
+  s_785c98d77eb66c::t_735913d0ff3106 24
+tests/test_stt_base.py
+  s_785c98d77eb66c::t_52cfe1911d5e42 387-390
+  s_785c98d77eb66c::t_a76d498de68a98 288,290-292,295,301-304,315-319,323-324,326,335,339-340,346,348,356,359,366,373-386,391-394,400
+  s_785c98d77eb66c::t_d5ab6a015ed7fc 351
+livekit-agents/livekit/agents/stt/stt.py
+  s_785c98d77eb66c::t_07562e39260f97 365-374,380,383-419
+  s_785c98d77eb66c::t_5320b322c87f30 536-537
+  s_785c98d77eb66c::t_a79a6cf33be4d9 437
+  s_785c98d77eb66c::t_d4edbb0363a80d 475-478,480,486
+  s_785c98d77eb66c::t_d8322741041c7d 376-379,382
+  s_785c98d77eb66c::t_dfabd309b2df2f 375
+  s_785c98d77eb66c::t_1567fde704a1e7 381
+tests/test_plugin_elevenlabs_stt.py
+  s_785c98d77eb66c::t_735913d0ff3106 70
+tests/test_stt_fallback.py
+  s_785c98d77eb66c::t_d5ab6a015ed7fc 255-256
+  s_785c98d77eb66c::t_a76d498de68a98 238,243
+livekit-agents/livekit/agents/stt/fallback_adapter.py
+  s_785c98d77eb66c::t_9a1d47d6506908 403-405
+tests/test_inference_stt_aligned_transcript_claim.py
+  s_785c98d77eb66c::t_735913d0ff3106 127
+tests/test_inference_stt_start_of_speech.py
+  s_785c98d77eb66c::t_735913d0ff3106 31
+livekit-plugins/livekit-plugins-sarvam/tests/test_speech_timing.py
+  s_785c98d77eb66c::t_735913d0ff3106 31,123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9386a257f101d502eb9d7781d53d7021f16df3ca",
+  "prompts": {},
+  "sessions": {
+    "s_785c98d77eb66c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d9be1781-d4cf-43d1-92a4-5a1fabe06929",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
