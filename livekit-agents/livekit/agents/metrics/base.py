@@ -183,7 +183,7 @@ class RealtimeModelMetrics(_BaseMetrics):
     session_duration: float = 0.0
     """The duration of the session connection in seconds (for session-based billing like xAI)."""
     ttft: float = -1
-    """Time to first audio token in seconds. -1 if no audio token was sent."""
+    """Time to first audio token in seconds. -1 if unavailable or no audio token was sent."""
     cancelled: bool = False
     """Whether the request was cancelled."""
     input_tokens: int = 0

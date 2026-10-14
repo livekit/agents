@@ -293,6 +293,91 @@ async def test_flush_finalizes_after_the_buffered_audio():
         await stream.aclose()
 
 
+@pytest.mark.parametrize("audio_chunk_duration_ms", [0, -1, 1.5, True])
+def test_flux_rejects_invalid_chunk_size(audio_chunk_duration_ms):
+    from livekit.plugins.deepgram import STTv2
+
+    with pytest.raises(ValueError, match="audio_chunk_duration_ms"):
+        STTv2(api_key="test-key", audio_chunk_duration_ms=audio_chunk_duration_ms)
+
+
+def test_flux_rejects_chunk_size_smaller_than_one_sample():
+    from livekit.plugins.deepgram import STTv2
+
+    with pytest.raises(ValueError, match="audio_chunk_duration_ms"):
+        STTv2(api_key="test-key", sample_rate=100, audio_chunk_duration_ms=1)
+
+
+@pytest.mark.parametrize("audio_chunk_duration_ms", [None, 20, 80])
+@pytest.mark.parametrize("sample_rate", [8000, 16000, 48000])
+@pytest.mark.parametrize("duration_ms", [400, 410])
+async def test_flux_chunk_size_preserves_audio_and_flushes_tail(
+    audio_chunk_duration_ms, sample_rate, duration_ms
+):
+    from typing import Any, cast
+
+    from livekit import rtc
+    from livekit.plugins.deepgram import STTv2
+
+    class AudioWS(_LiveWS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.audio: list[bytes] = []
+
+        async def send_bytes(self, data: bytes) -> None:
+            self.audio.append(data)
+            await super().send_bytes(data)
+
+    ws = AudioWS()
+    # Omitting the argument exercises the public constructor's existing default.
+    options = (
+        {}
+        if audio_chunk_duration_ms is None
+        else {"audio_chunk_duration_ms": audio_chunk_duration_ms}
+    )
+    instance = STTv2(
+        api_key="test-key",
+        sample_rate=sample_rate,
+        http_session=cast(Any, SimpleNamespace(closed=False)),
+        **options,
+    )
+    stream = instance.stream()
+
+    async def connect():
+        return ws
+
+    # Replace only the network connection; exercise the real stream and send loop.
+    stream._connect_ws = connect
+    try:
+        assert "audio_chunk_duration_ms" not in stream._live_config()
+        input_samples = sample_rate // 100  # 10 ms RTC frames
+        input_bytes = input_samples * 2
+        pcm = bytes(i % 256 for i in range(sample_rate * duration_ms // 1000 * 2))
+        for offset in range(0, len(pcm), input_bytes):
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=pcm[offset : offset + input_bytes],
+                    sample_rate=sample_rate,
+                    num_channels=1,
+                    samples_per_channel=input_samples,
+                )
+            )
+        stream.end_input()
+        await _wait_until(lambda: "CloseStream" in ws.wire)
+
+        chunk_bytes = sample_rate * (audio_chunk_duration_ms or 50) // 1000 * 2
+        full_chunks, remainder = divmod(len(pcm), chunk_bytes)
+        expected_sizes = [chunk_bytes] * full_chunks
+        if remainder:
+            expected_sizes.append(remainder)
+        assert [len(data) for data in ws.audio] == expected_sizes
+        assert b"".join(ws.audio) == pcm
+        assert ws.sent() == ["audio"] * len(expected_sizes) + ["CloseStream"]
+    finally:
+        await stream.aclose()
+        await instance.aclose()
+
+
 class _RecordingSession:
     """Stands in for the aiohttp session so the connect kwargs are assertable."""
 

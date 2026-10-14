@@ -36,6 +36,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
+    from .generation import ToolExecutionOutput
     from .tool_executor import UpdatePromptArgs, _ToolExecutor
 
 
@@ -218,9 +219,10 @@ class RunContext(Generic[Userdata_T]):
 
         # first update keeps the original call_id
         update_step = len(self._updates)
-        pair = self._make_update_pair(
+        out = self._make_update_output(
             message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
         )
+        pair = (out.fnc_call, out.fnc_call_out)
         self._updates.append(pair)
 
         if self._executor is None:
@@ -268,10 +270,8 @@ class RunContext(Generic[Userdata_T]):
         except Exception:
             pass  # reply task's own errors aren't our concern
 
-    def _make_update_pair(
-        self, message: Any, *, call_id_suffix: str = ""
-    ) -> tuple[FunctionCall, FunctionCallOutput]:
-        """Synthesize a (FunctionCall, FunctionCallOutput) pair for a progress update.
+    def _make_update_output(self, message: Any, *, call_id_suffix: str = "") -> ToolExecutionOutput:
+        """Synthesize the tool output of a progress update, with a FunctionCall of its own.
 
         The new FunctionCall carries ``{call_id}{call_id_suffix}``; name/arguments/extra
         are copied. ``make_tool_output`` is reused so error handling matches dispatch.
@@ -284,8 +284,7 @@ class RunContext(Generic[Userdata_T]):
             arguments=self.function_call.arguments,
             extra=dict(self.function_call.extra),
         )
-        tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
-        return (fnc_call, tool_output.fnc_call_out)
+        return make_tool_output(fnc_call=fnc_call, output=message, exception=None)
 
 
 EventTypes = Literal[

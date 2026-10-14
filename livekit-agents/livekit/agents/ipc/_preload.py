@@ -88,10 +88,10 @@ def _openai_resources() -> None:
 def _httpx_client() -> None:
     # the first AsyncClient in a process image pays ~40 ms (the SSL context from the CA bundle
     # among other lazy setup); later ones take a few milliseconds. The inference LLM, STT and
-    # TTS each build one
-    import httpx
+    # TTS each build an httpx2 client (OpenAI SDK 3 / Anthropic SDK 1).
+    import httpx2
 
-    httpx.AsyncClient()
+    httpx2.AsyncClient()
 
 
 _step("av", _av)
