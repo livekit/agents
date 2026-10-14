@@ -111,7 +111,6 @@ class Page:
 
     def push(self, stage: str | None = None) -> None:
         """Copies the desk into the page's state, moves to `stage` if given, and sends it."""
-        # merged, so whatever else is in there (a transfer) stays
         self.data = {**self.data, **self._desk.snapshot()}
         if stage and self.stage != "ended":
             self.stage = stage
@@ -122,11 +121,6 @@ class Page:
         The stage follows the desk, so a correction that undoes a step moves it back too."""
         self._log(tool, detail)
         self.push(self._desk.stage())
-
-    def transfer(self, queue: str, reason: str) -> None:
-        self.data["transfer"] = {"queue": queue, "reason": reason}
-        self._log("transfer", f"{queue} · {reason}")
-        self.push()
 
     async def ended(self, reason: str) -> None:
         """The agent is hanging up: the page leaves on this, before the room closes."""

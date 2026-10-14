@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from agent import PERSONA, Userdata
-from backend import demo_desk
+from agent import PERSONA, NickAgent, RepairCallAgent, Userdata, _decided
+from backend import PAYMENT, demo_desk
+from call import NO_RESPONSE, SILENT_GOODBYE, STILL_THERE, hang_up_when_silent
 from page import STATE_RPC_METHOD, dial_error, visitor_name
 
 from livekit import api
@@ -70,7 +72,7 @@ async def test_the_browser_caller_and_viewers_get_every_push() -> None:
     room = _Room("caller-ab12", "viewer-cd34")
     ud = _watched(room, caller=room.remote_participants["caller-ab12"])
     ud.page.push()
-    ud.desk.lookup_customer("4155550142")
+    ud.desk.lookup_customer("4155550142", "Alex Morgan")
     ud.page.record("lookup_customer", "Alex Morgan · 2 vehicles on file")
     await asyncio.sleep(0)
     sent = room.local_participant.sent
@@ -94,14 +96,89 @@ async def test_a_viewer_who_joins_late_sees_the_call_so_far() -> None:
     assert [to for to, _ in room.local_participant.sent] == ["viewer-ab12", "viewer-ef56"]
 
 
-async def test_a_transfer_stays_on_the_page() -> None:
+class _Spoken:
+    async def wait_for_playout(self) -> None:
+        return None
+
+
+class _QuietLine:
+    """Just enough of AgentSession for hang_up_when_silent: its events, and what it says."""
+
+    def __init__(self) -> None:
+        self.handlers: dict[str, Any] = {}
+        self.said: list[str] = []
+        self.resets = 0
+
+    def on(self, event: str) -> Any:
+        def register(fn: Any) -> Any:
+            self.handlers[event] = fn
+            return fn
+
+        return register
+
+    def say(self, text: str, **_: Any) -> _Spoken:
+        self.said.append(text)
+        return _Spoken()
+
+    def reset_away_timer(self) -> None:
+        self.resets += 1
+
+    def user(self, state: str) -> None:
+        self.handlers["user_state_changed"](SimpleNamespace(new_state=state))
+
+
+async def test_a_silent_line_gets_one_check_then_a_goodbye() -> None:
     room = _Room("viewer-ab12")
     ud = _watched(room)
-    ud.page.transfer("service_advisor", "wants a tow")
-    ud.page.record("lookup_customer", "Alex Morgan · 2 vehicles on file")
+    line = _QuietLine()
+    hang_up_when_silent(cast(Any, line), ud.page)
+    line.user("away")
+    assert line.said == [STILL_THERE] and line.resets == 1
+    # the check itself flips them back to listening: that isn't the caller speaking
+    line.user("listening")
+    line.user("away")
     await asyncio.sleep(0)
-    data = room.local_participant.sent[-1][1]["data"]
-    assert data["transfer"] == {"queue": "service_advisor", "reason": "wants a tow"}
+    assert line.said == [STILL_THERE, SILENT_GOODBYE]
+    assert ud.page.stage == "ended" and ud.page.end_reason == NO_RESPONSE
+    # nothing was decided on the silence
+    assert ud.desk.appointment is None and ud.desk.pending is None
+
+
+async def test_speaking_again_starts_the_silence_count_over() -> None:
+    ud = _watched(_Room())
+    line = _QuietLine()
+    hang_up_when_silent(cast(Any, line), ud.page)
+    line.user("away")
+    line.user("speaking")
+    line.user("listening")
+    line.user("away")
+    await asyncio.sleep(0)
+    assert line.said == [STILL_THERE, STILL_THERE] and ud.page.stage != "ended"
+
+
+def test_neither_agent_hands_the_call_off() -> None:
+    inbound = NickAgent(demo_desk(today=TODAY))
+    outbound = RepairCallAgent(demo_desk(today=TODAY, direction="outbound"))
+    for agent in (inbound, outbound):
+        assert not [t.id for t in agent.tools if "transfer" in t.id]
+        said = str(agent.instructions)
+        assert "never offer" in said and "transfer" not in said.replace("to transfer to", "")
+        assert PAYMENT in said and "no discount codes" in said
+        # a phone call: nothing to look at
+        assert 'Ask "Does that sound right?" instead.' in said and "sees them" not in said
+    assert {"move_appointment", "cancel_appointment", "change_booking"} <= {
+        t.id for t in inbound.tools
+    }
+
+
+def test_a_decision_leads_with_the_new_total() -> None:
+    desk = demo_desk(today=TODAY, direction="outbound")
+    desk.confirm_customer()
+    f, notes = desk.decide_repair("front_brakes", "approved")
+    said = _decided(desk, f"Approved: {f.title}, ${f.price:.0f}.", notes)
+    assert said.startswith(
+        "TOTAL DUE AT PICKUP IS NOW $648 (diagnostic $159 + front brake pads and rotors $489)."
+    )
 
 
 def test_the_visitors_name_is_only_a_browser_callers() -> None:

@@ -1,5 +1,5 @@
 """What any phone agent here needs, whatever the business: how to talk on a call, pacing for the
-voice, and hanging up without cutting the caller off.
+voice, and hanging up without cutting the caller off, or once they've gone silent.
 
 The helpers that take a RunContext expect its userdata to carry `page` (page.py), the demo
 page's view of the call, which hears about a hang-up before the room closes."""
@@ -15,12 +15,27 @@ from typing import Any
 from page import Page
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, NotGivenOr, RunContext, get_job_context, room_io
+from livekit.agents import (
+    NOT_GIVEN,
+    AgentSession,
+    NotGivenOr,
+    RunContext,
+    UserStateChangedEvent,
+    get_job_context,
+    room_io,
+)
 from livekit.agents.voice import SpeechHandle
 from livekit.agents.voice.room_io.types import NoiseCancellationParams
 from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("vehicle-service")
+
+# a caller who's gone quiet: the session marks them away after this many seconds in which
+# neither side has spoken (AgentSession's user_away_timeout)
+USER_AWAY_TIMEOUT = 12.0
+STILL_THERE = "Are you still there?"
+SILENT_GOODBYE = "I'll let you go. Give us a call back anytime."
+NO_RESPONSE = "No response"
 
 VOICE_RULES = """\
 You're on a phone call. Speak in short, plain sentences: no markdown, lists, emoji, or symbols.
@@ -29,8 +44,8 @@ words, and quick acknowledgments ("Sure.", "Got it.", "Okay, so..."), and vary y
 you look something up, say so the way a person would ("Let me pull that up."). Don't
 over-apologize, over-thank, or repeat the caller's words back unless you're confirming a detail.
 Write numbers in digits, the way they're normally written ($79, $3,800, 7:30 a.m., Oct 14,
-2023, 26,200 miles), never spelled out as words: the voice reads them naturally, and the
-caller sees them on screen. Don't read out confirmation or reference numbers unless asked.
+2023, 26,200 miles), never spelled out as words: the voice reads them naturally.
+Don't read out confirmation or reference numbers unless asked.
 Take dates, times, and numbers however the caller says them, and convert them yourself for
 your tools. Never tell the caller what format to use.
 If they ask something you don't have the answer to (hours, parking, directions, policies), say
@@ -38,6 +53,7 @@ so plainly and offer what you can do; never make it up. Never read out internal 
 Keep each turn to one or two sentences. Ask one thing at a time: a single question per turn,
 never two requests bundled together ("your name and phone number", "the size and the sauce").
 Wait for the answer, then ask the next. If they give two things at once anyway, take both.
+The caller can't see anything: never say "look right", "looks good", "as you can see", or "on your screen". Ask "Does that sound right?" instead.
 People interrupt, correct themselves, and talk over you. When they do, stop, take the
 correction, and carry on from there: never repeat the old value, and never restart a list
 from the top when only one item changed. A short "mm-hm" or "yeah" while you talk means
@@ -106,19 +122,39 @@ async def hang_up(reason: str, page: Page | None = None) -> None:
     ctx.delete_room()
 
 
-async def transfer(ctx: RunContext[Any], to: str, reason: str) -> str:
-    """Hands the caller to a person. In this example the call ends there; a real deployment
-    would move the SIP participant over (see examples/warm-transfer)."""
-    logger.info("transferring to %s: %s", to, reason)
-    await ctx.wait_for_playout()
-    # never a silent drop: if the caller spoke last, say where they're going first
-    if _caller_spoke_last(ctx):
-        await ctx.session.say(f"One moment, I'm connecting you with {to}.").wait_for_playout()
-    await hang_up(f"Transferred to {to}", ctx.userdata.page)
-    return f"Transferred to {to}."
-
-
 _goodbyes: set[asyncio.Task[None]] = set()
+
+
+def hang_up_when_silent(session: AgentSession[Any], page: Page) -> None:
+    """Asks once if the caller's still there when they go quiet, and hangs up if the line stays
+    silent. Fixed lines, not the LLM, so silence never agrees to anything: nothing is booked,
+    approved, moved, or cancelled on it. For a live call only, never a simulation or a test.
+
+    The session sets the caller "away" after USER_AWAY_TIMEOUT seconds in which neither side has
+    spoken (its user_away_timeout); a second time in a row, with nothing from them since the
+    check, ends the call. Speaking again starts the count over."""
+    away = 0
+
+    @session.on("user_state_changed")
+    def _on_user_state(ev: UserStateChangedEvent) -> None:
+        nonlocal away
+        if ev.new_state == "speaking":
+            away = 0
+        elif ev.new_state == "away":
+            away += 1
+            if away == 1:
+                session.say(STILL_THERE)
+                # back to listening, so the silence after the check is timed afresh
+                session.reset_away_timer()
+            elif away == 2:
+                task = asyncio.create_task(_hang_up_on_silence(session, page))
+                _goodbyes.add(task)
+                task.add_done_callback(_goodbyes.discard)
+
+
+async def _hang_up_on_silence(session: AgentSession[Any], page: Page) -> None:
+    await session.say(SILENT_GOODBYE, allow_interruptions=False).wait_for_playout()
+    await hang_up(NO_RESPONSE, page)
 
 
 async def end_after_reply(ctx: RunContext[Any], reason: str = "Call complete") -> None:

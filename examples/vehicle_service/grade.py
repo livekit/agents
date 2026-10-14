@@ -16,6 +16,14 @@ expect keys (all optional):
     quoted_free: words (e.g. ["recall", "shuttle"]) that each need a quote_price answer of $0
     notes: the technician note kinds that must be logged, e.g. ["sound", "where", "when"]
     concern: words the concern summary must contain, e.g. ["grind", "brak"]
+    existing: what became of the appointment already on file: "kept" (the default), "moved",
+        or "cancelled"
+    existing_day: the weekday the appointment on file ends up on, e.g. "wed"
+    cancelled: true means an appointment booked on this call was then cancelled
+    stop_driving: true means the booked visit carries the not-safe-to-drive warning
+    approval_limit: the "call me before anything over" amount on the booking, e.g. 500
+    looked_up: false means the caller's file was never opened (a name that didn't match)
+A booking is what's still booked at the end: one booked and then cancelled doesn't count.
 
 The follow-up call (outbound) takes instead:
     reached: who picked up, "customer" or "someone_else"
@@ -26,6 +34,8 @@ The follow-up call (outbound) takes instead:
     ride: shuttle or self, or a list of the acceptable ones
     next_visit: true means something was noted for the next visit
     asked: true means repair_details answered a question
+    collected_by: true means someone else is collecting the car
+    concerns: true means something new they noticed was noted on the visit
 Every follow-up that doesn't end early must end with each repair that needs doing now
 decided, a ride, and the ready time and total told; one that reached someone else must have
 shared nothing.
@@ -35,23 +45,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend import LOANER_MIN_HOURS, MENU, ServiceDesk
+from backend import _NOT_A_DEFECT, _WEAR_ITEM, LOANER_MIN_HOURS, MENU, ServiceDesk
 
 
 def grade(desk: ServiceDesk, expect: dict[str, Any]) -> list[str]:
     if desk.visit is not None:
         return _grade_follow_up(desk, expect)
     problems: list[str] = []
-    appt = desk.appointment
+    made = desk.appointment
+    appt = made if made and made.status == "booked" else None
 
-    notes = appt.notes if appt else desk.draft.notes
+    notes = made.notes if made else desk.draft.notes
     logged = {n.kind for n in notes}
     problems += [
         f"no {kind} note for the technician"
         for kind in expect.get("notes", [])
         if kind not in logged
     ]
-    concern = (appt.concern if appt else desk.draft.concern).lower()
+    concern = (made.concern if made else desk.draft.concern).lower()
     problems += [
         f"concern {concern!r} doesn't mention {word!r}"
         for word in expect.get("concern", [])
@@ -68,6 +79,12 @@ def grade(desk: ServiceDesk, expect: dict[str, Any]) -> list[str]:
         if not any(q.price == 0 and word in q.answer.lower() for q in desk.quotes):
             problems.append(f"never looked up what the {word} costs with quote_price")
 
+    if expect.get("looked_up") is False and desk.customer is not None:
+        problems.append("opened the file for a caller whose name didn't match it")
+    problems += _grade_existing(desk, expect)
+    if expect.get("cancelled") and not (made and made.status == "cancelled"):
+        problems.append("never cancelled the appointment booked on this call")
+
     booked = expect.get("booked", True)
     if not booked:
         if appt:
@@ -77,8 +94,16 @@ def grade(desk: ServiceDesk, expect: dict[str, Any]) -> list[str]:
         return [*problems, "nothing was booked"]
 
     # the hard fails, whatever the scenario
+    e = desk.on_file
+    if e and e.status == "booked" and e.vin == appt.vin and set(e.services) & set(appt.services):
+        problems.append(f"booked a second {e.what}: it's already on file for {e.when}")
     if appt.vin not in desk.recalls_checked:
         problems.append("booked without checking recalls")
+    said = " ".join([appt.concern, *(n.text for n in appt.notes)])
+    if "Warranty repair" in appt.services and (
+        _WEAR_ITEM.search(said) or _NOT_A_DEFECT.search(said)
+    ):
+        problems.append(f"warranty repair booked for {appt.concern!r}, which isn't a defect")
     covered = "Warranty repair" in appt.services or appt.recall == "added"
     if appt.transport == "loaner" and not (covered and appt.hours > LOANER_MIN_HOURS):
         problems.append(f"loaner on a {appt.hours:g}-hour visit that isn't warranty or recall")
@@ -103,10 +128,28 @@ def grade(desk: ServiceDesk, expect: dict[str, Any]) -> list[str]:
         allowed = allowed if isinstance(allowed, list) else [allowed]
         if appt.transport not in allowed:
             problems.append(f"transport {appt.transport}, expected {' or '.join(allowed)}")
+    if expect.get("stop_driving") and not appt.stop_driving:
+        problems.append("booked without the not-safe-to-drive warning")
+    if (limit := expect.get("approval_limit")) is not None and appt.approval_limit != limit:
+        problems.append(f"approval limit {appt.approval_limit}, expected {limit}")
     if (miles := expect.get("miles")) is not None:
         v = desk.draft_vehicle()
         if v is None or v.miles != miles:
             problems.append(f"mileage {v.miles if v else 'unknown'}, expected {miles}")
+    return problems
+
+
+def _grade_existing(desk: ServiceDesk, expect: dict[str, Any]) -> list[str]:
+    e = desk.on_file
+    if e is None:
+        return []
+    got = "cancelled" if e.status == "cancelled" else "moved" if e.moved_from else "kept"
+    problems: list[str] = []
+    # left alone unless the scenario says otherwise: silence or a misunderstanding never moves it
+    if got != (want := expect.get("existing", "kept")):
+        problems.append(f"the appointment on file was {got}, expected {want}")
+    if (day := expect.get("existing_day")) and not e.slot_id.startswith(day.lower()[:3]):
+        problems.append(f"the appointment on file is {e.when}, expected a {day}")
     return problems
 
 
@@ -124,6 +167,8 @@ def _grade_follow_up(desk: ServiceDesk, expect: dict[str, Any]) -> list[str]:
     # the hard fails, whatever the scenario
     if v.reached == "someone_else" and (v.questions or v.decisions or v.next_visit):
         problems.append("went over the findings with someone who isn't the customer")
+    if v.ended_early and v.decisions:
+        problems.append("ended without the pickup summary after a repair was decided")
     if v.ended_early is None:
         if left := desk.undecided():
             problems.append(f"never got an answer on the {left[0].title.lower()}")
@@ -145,6 +190,10 @@ def _grade_follow_up(desk: ServiceDesk, expect: dict[str, Any]) -> list[str]:
         problems.append(
             f"next-visit notes {v.next_visit}, expected {'some' if expect['next_visit'] else 'none'}"
         )
+    if expect.get("collected_by") and not v.collected_by:
+        problems.append("never noted who's collecting the car")
+    if expect.get("concerns") and not v.concerns:
+        problems.append("never noted the new concern on the visit")
     if expect.get("asked") and not v.questions:
         problems.append("never looked up the repair with repair_details to answer a question")
     return problems

@@ -1,6 +1,6 @@
 # Vehicle Service Example
 
-A car dealership's service desk on the phone. Leo answers for Bayside BMW: he talks a caller through what their car is doing, turns each answer into a note for the technician, catches the open recall, keeps wear items out of warranty, and books the drop-off with the shuttle or a loaner. On the follow-up call he rings the customer back with what the technician found, the price, what can wait, and when the car will be ready.
+A car dealership's service desk on the phone. Nick answers for Bayside BMW: he talks a caller through what their car is doing, turns each answer into a note for the technician, catches the open recall, keeps wear items out of warranty, and books the drop-off with the shuttle or a loaner. He also moves or cancels what's already booked, and handles everything himself: there's no transfer to an advisor or anyone else. On the follow-up call he rings the customer back with what the technician found, the price, what can wait, and when the car will be ready.
 
 For setup instructions and more details, see the [main examples README](../README.md).
 
@@ -8,14 +8,14 @@ For setup instructions and more details, see the [main examples README](../READM
 
 The example is split so that the rules never depend on the model following its prompt:
 
-- `backend.py` is the mock system of record: the customer's file (an in-warranty 2023 X3 with an open recall, and a 2019 330i out of warranty), five business days of advisor slots, the price menu, and, for the follow-up, the repair order for the X3 that's in the shop. Every rule lives here and refuses with a `ServiceError` whose message tells the agent what to do instead.
-- `agent.py` defines `LeoAgent` (inbound) and `RepairCallAgent` (outbound), their tools, and the entrypoint. Each tool wraps one desk call; a refusal goes back to the LLM as a `ToolError` to relay.
-- `call.py` holds what any phone agent here needs: the speaking rules, sentence pacing for Cartesia, background noise and voice cancellation (BVC for browser callers, BVCTelephony on phone calls), and hanging up without cutting the caller off.
+- `backend.py` is the mock system of record: the customer's file (an in-warranty 2023 X3 with an open recall, a 2019 330i out of warranty, and a tire rotation already booked on the 330i next week), five business days of advisor slots, the price menu, and, for the follow-up, the repair order for the X3 that's in the shop. Every rule lives here and refuses with a `ServiceError` whose message tells the agent what to do instead.
+- `agent.py` defines `NickAgent` (inbound) and `RepairCallAgent` (outbound), their tools, and the entrypoint. Each tool wraps one desk call; a refusal goes back to the LLM as a `ToolError` to relay.
+- `call.py` holds what any phone agent here needs: the speaking rules, sentence pacing for Cartesia, background noise and voice cancellation (BVC for browser callers, BVCTelephony on phone calls), and hanging up without cutting the caller off, or once the line has gone silent (`hang_up_when_silent`: after 12 seconds with nobody speaking Nick asks "Are you still there?", and if it stays silent he says a short goodbye and hangs up, never agreeing to anything on silence; it isn't armed in simulations or tests).
 - `grade.py` scores a simulation run from the desk's final state.
 
 ### The inbound consultation
 
-Leo asks for a name and the phone number on the account, finds the file, and works out which car. For a problem, he asks one question at a time (the sound, where it comes from, when it happens, how long, any warning lights, anything recent) and logs each answer with `add_tech_note`. Once the sound and the moment point somewhere, the tool says what that often means and whether it's safe to drive, so Leo can say it as a possibility the technician will confirm, never a diagnosis.
+Nick asks for a name, then the phone number on the account, finds the file, and works out which car ("my 3" gets "the X3 or the 330i?"). The file opens only for the name on it: anyone else hears nothing from it, not even whose it is, and is asked to have the account holder call. For a problem, he asks one question at a time (the sound, where it comes from, when it happens, how long, any warning lights, anything recent) and logs each answer with `add_tech_note`. Once the sound and the moment point somewhere, the tool says what that often means and whether it's safe to drive, so Nick can say it as a possibility the technician will confirm, never a diagnosis.
 
 The desk enforces the rest:
 
@@ -23,23 +23,27 @@ The desk enforces the rest:
 - A warranty repair needs a car under 3 years and 36,000 miles, and never covers wear items like brakes, tires, or wipers.
 - Recalls must be checked before booking, and an open recall needs an answer.
 - Loaners are only for warranty or recall visits over three hours; anyone can take the free shuttle or wait in the lounge.
-- Every booking is read back first (`read_back`), and any change after the read-back needs another one.
+- Every booking is read back first (`read_back`), and any change after the read-back needs another one. A warning light the caller mentioned has to be in the concern before it's read back, and a spending limit ("don't do anything over $500 without calling me", `set_approval_limit`) is read back with the visit.
+- A warranty repair is only for a part that's failed, never a grinding, a wear item, maintenance, or the recall (the concern and every technician note are checked), and only once the caller asked for it or agreed.
+- Failing brakes, smoke or burning, losing steering, a red or flashing warning light, or overheating mean the car isn't safe to drive: the tool results tell Nick to say so before anything else, to have it towed in (he can't arrange the tow), and to offer the earliest slot, and the read-back and the booking repeat it.
+- A tire rotation already booked on the 330i is never booked twice. The caller can move it (`move_appointment`) or cancel it (`cancel_appointment`); both read the change back first and act only on a clear yes. The visit booked on the call can be moved or cancelled the same way, or changed (`change_booking`, then a new read-back, under the same confirmation).
+- Customers pay in person at the service desk when they pick the car up; nothing is taken over the phone, and there are no discount codes.
 
-A correction changes one field and re-checks what depends on it: a mileage that ends the warranty drops the warranty repair, a shorter visit drops the loaner, and a longer one drops a slot that no longer fits before closing. The tool result tells Leo what moved so he can say it.
+A correction changes one field and re-checks what depends on it: a mileage that ends the warranty drops the warranty repair, a shorter visit drops the loaner, and a longer one drops a slot that no longer fits before closing. The tool result tells Nick what moved so he can say it.
 
 Advisors are introduced by role ("Dana, one of our service advisors, will meet you at the service drive"), since the caller doesn't know who they are.
 
 ### The outbound follow-up
 
-The X3 came in this morning for the grinding noise; the technician found the front pads worn to the metal and the rotors scored ($489, needs doing now) and the rear pads at 4 mm ($214, can wait). Leo opens with who he is and asks for the customer, and says nothing about the car until `confirm_customer` succeeds. Someone else answering, or a bad time, ends the call with `end_without_update` and a callback number, sharing nothing.
+The X3 came in this morning for the grinding noise; the technician found the front pads worn to the metal and the rotors scored ($489, needs doing now) and the rear pads at 4 mm ($214, can wait). Nick opens with who he is and asks for the customer, and says nothing about the car until `confirm_customer` succeeds. Someone else answering, or a bad time, ends the call with `end_without_update` and a callback number, sharing nothing.
 
-With the customer on the line, he goes over the cause, the price, and when the car would be ready, then records `approve_repair` or `decline_repair` (including "let me think about it"). Questions go through `repair_details`, so every price, part, and time comes from the findings. Once the urgent repair has an answer, `arrange_pickup` sets the shuttle or a drive-in, and `pickup_summary` gives the ready time and total. `end_call` refuses until the customer has heard both.
+With the customer on the line, he goes over the cause, the price, and when the car would be ready, then records `approve_repair` or `decline_repair` (including "let me think about it"). Questions go through `repair_details`, so every price, part, and time comes from the findings. Once the urgent repair has an answer, `arrange_pickup` sets the shuttle or a drive-in, and `pickup_summary` gives the ready time and total. `end_call` refuses until the customer has heard both. Each decision's tool result leads with the new total due, so the agent never says a single repair's price as the total. Someone else can collect the car by giving the customer's name or the repair order number at the service desk (`arrange_pickup` with `collected_by`), and anything new the customer has noticed goes on the visit with `note_concern`, without admitting fault or promising free work.
 
 ### Voice and turn-taking
 
-The session runs on LiveKit Inference: Deepgram Nova-3, GPT-4.1 mini, and Cartesia Sonic 3.5 with a calm voice, plus the turn detector, adaptive interruption (so "mm-hm" doesn't stop Leo but "no, wait" does), and preemptive generation.
+The session runs on LiveKit Inference: Deepgram Nova-3, GPT-4.1 mini, and Cartesia Sonic 3.5 with a calm voice, plus the turn detector, adaptive interruption (so "mm-hm" doesn't stop Nick but "no, wait" does), and preemptive generation.
 
-Background noise is handled in two places. Before speech-to-text, enhanced noise cancellation removes background voices (a TV, people nearby) and noise: `BVC` for browser callers, and `BVCTelephony`, trained on narrowband call audio, for phone callers. Then adaptive interruption decides whether what's left is the caller cutting in or just a sound, so a cough or a passing voice doesn't stop Leo mid-sentence. Leave Krisp off on the SIP trunk, since the agent already cleans the audio.
+Background noise is handled in two places. Before speech-to-text, enhanced noise cancellation removes background voices (a TV, people nearby) and noise: `BVC` for browser callers, and `BVCTelephony`, trained on narrowband call audio, for phone callers. Then adaptive interruption decides whether what's left is the caller cutting in or just a sound, so a cough or a passing voice doesn't stop Nick mid-sentence. Leave Krisp off on the SIP trunk, since the agent already cleans the audio.
 
 ## Run it
 
@@ -55,13 +59,15 @@ In `dev`, the job metadata picks the direction: `{"direction": "outbound"}` star
 {"direction": "outbound", "dial": "+15105550100"}
 ```
 
-with `SIP_OUTBOUND_TRUNK_ID` set. Answering-machine detection decides who picked up: voicemail gets a short message with a callback number, and Leo joins only for a person. Set `SERVICE_DESK_NUMBER` to the number customers should call back on.
+with `SIP_OUTBOUND_TRUNK_ID` set. Answering-machine detection decides who picked up: voicemail gets a short message with a callback number, and Nick joins only for a person. Set `SERVICE_DESK_NUMBER` to the number customers should call back on.
 
-Things to try: describe a grinding when you brake, then correct where it comes from. Ask for a loaner on an oil change. On the follow-up, ask for a cheaper option, or say you'll think about it.
+Things to try: describe a grinding when you brake, then correct where it comes from. Ask for a loaner on an oil change. Say you think you're already booked, and move it. On the follow-up, ask for a cheaper option, or say you'll think about it.
 
 ## Demo page
 
-`page.py` is the layer for the telephony demo on livekit.io, which dispatches this agent by name. The page joins the room as the browser caller (`caller-*`) or as a viewer (`viewer-*`) of a phone call, and draws what the agent sends it over the `demo.set_state` RPC: the call's stage, the service desk's state (the customer's file, the booking, the findings), a log of the tool calls, and a suggested next line for the caller. A browser caller's name is who the file is under, and the visitor's `timezone` in the job metadata sets what "today" is. A call to a real phone takes `dial`, the watching `page`, and the line to call from (`trunk` or `from`, which win over `SIP_OUTBOUND_TRUNK_ID`).
+`page.py` is the layer for the telephony demo on livekit.io, which dispatches this agent by name. The page joins the room as the browser caller (`caller-*`) or as a viewer (`viewer-*`) of a phone call, and draws what the agent sends it over the `demo.set_state` RPC: the call's stage, the service desk's state (the customer's file, the booking, the appointment already on file, the findings), a log of the tool calls, and a suggested next line for the caller. A browser caller's name is who the file is under, and the visitor's `timezone` in the job metadata sets what "today" is. A call to a real phone takes `dial`, the watching `page`, and the line to call from (`trunk` or `from`, which win over `SIP_OUTBOUND_TRUNK_ID`).
+
+The snapshot's `appointment` (booked on this call) and `existingAppointment` (on file before the call) each carry `status` (`booked` or `cancelled`), `movedFrom` (the time before it was last moved, or null), `approvalLimit`, and `stopDriving` (why it shouldn't be driven in, or null). `pendingChange` is a move or cancellation read back and waiting for the caller's yes (`action`, `appointment`, `confirmation`, `to`), and `draft.changingBooking` is true while the booking made on the call is open for changes. On the follow-up, `visit.collectedBy` and `visit.concerns` show who's collecting the car and what new the customer noticed.
 
 Without a page watching (console, the playground, simulations, tests), it's inert: nothing is sent and no suggestions are written, so there are no extra LLM calls.
 
@@ -77,7 +83,7 @@ The evals need `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
 
 ## Simulations
 
-`simulations.yaml` holds 19 scenarios: the main bookings, the policy twists (a loaner refused, brakes under warranty, a lowered mileage), callers who correct an earlier detail, and the follow-up paths. A run passes only if the conversation meets the scenario's expectations and `grade.py` finds the desk in the state its `expect` block names.
+`simulations.yaml` holds 27 scenarios: the main bookings, the policy twists (a loaner refused, brakes under warranty, a lowered mileage), callers who correct an earlier detail, the appointment already on file (moved, cancelled), changes after booking, a car that isn't safe to drive, a caller whose name isn't on the account, and the follow-up paths. A run passes only if the conversation meets the scenario's expectations and `grade.py` finds the desk in the state its `expect` block names.
 
 ```bash
 lk agent simulate examples/vehicle_service/agent.py \

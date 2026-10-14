@@ -13,13 +13,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 ServiceId = Literal["oil_change", "tire_rotation", "diagnostic", "warranty_repair"]
 Transport = Literal["loaner", "shuttle", "wait"]
 RecallDecision = Literal["added", "declined"]
-# the consultation: what Leo asks about a problem, one technician note for each answer
+# the consultation: what Nick asks about a problem, one technician note for each answer
 NoteKind = Literal["sound", "where", "when", "since", "warning_lights", "recent", "other"]
 # the follow-up call: what the customer says about each repair the technician found
 RepairDecision = Literal["approved", "declined", "deferred"]
 Urgency = Literal["now", "next_visit"]
 EndedEarly = Literal["wrong_person", "call_back_later"]
 Ride = Literal["shuttle", "self"]
+# an appointment that's booked: the one on file from before the call, or the one booked on it
+Booking = Literal["existing", "new"]
+BookingStatus = Literal["booked", "cancelled"]
 
 WARRANTY_YEARS = 3
 WARRANTY_MILES = 36_000
@@ -67,8 +70,20 @@ _VEHICLE_STOPWORDS = {"bmw", "the", "my", "a", "an", "series", "car", "one"}
 
 
 _STOP_ADVICE = (
-    "A brake, oil, or temperature warning light means it shouldn't be driven: tell them "
-    "plainly to stop driving it, and offer to connect them with an advisor about a tow."
+    "Safety first, before anything else (no recall or other offers yet): tell them clearly "
+    "and seriously not to drive the car, and that it should be towed in, not driven. You "
+    "can't arrange a tow from the desk, so say that plainly. Offer the earliest open slot."
+)
+# where the car is picked up from on the follow-up, if not by the customer
+PICKUP_BY_SOMEONE_ELSE = (
+    "Anyone they send can collect the car: that person gives the customer's name or the repair "
+    "order number at the service desk, and pays there."
+)
+# how a customer pays, the only answer to "can I pay by card?" or "by text?"
+PAYMENT = (
+    "Customers pay in person at the service desk when they pick the car up, by cash or card; "
+    "recall work and warranty repairs are no charge. Nothing is paid over the phone or by text, and you never "
+    "ask for or take card details: if they start reading a card number, stop them politely."
 )
 
 
@@ -287,6 +302,53 @@ LIKELY_CAUSES = (
 # warning lights that mean stop driving, whatever the noise
 _STOP_LIGHTS = re.compile(r"\b(brake|oil|temperature|temp|coolant|overheat\w*)\b", re.IGNORECASE)
 _NO_LIGHTS = re.compile(r"^\s*(no|none|nothing|nope)\b", re.IGNORECASE)
+# what the caller says that means the car shouldn't be driven at all, in a note or the concern
+_CANT = r"(?:won'?t|doesn'?t|can'?t|didn'?t|isn'?t|not|barely)"
+_STOP_DRIVING = (
+    (
+        re.compile(
+            rf"\bbrakes?\b[^.]*\b(fail\w*|gone|went out|not working|{_CANT} work)\b|"
+            rf"\bno brakes\b|\bpedal\b[^.]*\b(floor|sink\w*)\b|"
+            rf"\b{_CANT}\s+stop(ping)?\s+(safely|properly|right|in time|well)\b|"
+            rf"\b(car|it)\s+{_CANT}\s+stop\b",
+            re.IGNORECASE,
+        ),
+        "the brakes aren't stopping it",
+    ),
+    (
+        re.compile(r"(?<!\bno )(?<!\bnot )\b(smok\w*|burning|fire|flames?)\b", re.IGNORECASE),
+        "smoke or burning",
+    ),
+    (
+        re.compile(
+            r"\b(lost|losing|lose|no|can'?t|couldn'?t)\s+(the\s+)?(power\s+)?steer\w*|"
+            r"\bsteer\w*\b[^.]*\b(went out|gave out|locked|locking|fail\w*|gone)\b",
+            re.IGNORECASE,
+        ),
+        "losing steering",
+    ),
+    (
+        re.compile(
+            r"\b(flash\w*|blink\w*|red)\b[^.]*\b(light|warning)\b|"
+            r"\b(light|warning)\b[^.]*\b(flash\w*|blink\w*|red)\b",
+            re.IGNORECASE,
+        ),
+        "a flashing or red warning light",
+    ),
+    (
+        re.compile(
+            r"\b(overheat\w*|steam\w*|temp(erature)?\s+(gauge|light|warning)|coolant light)\b",
+            re.IGNORECASE,
+        ),
+        "overheating",
+    ),
+)
+# what a warranty repair is never for: wear, a noise from the brakes, maintenance, the recall
+_NOT_A_DEFECT = re.compile(
+    r"\b(grind\w*|squeal\w*|squeak\w*|recall\w*|oil (change|service)|maintenance|rotation|"
+    r"tune.?up)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -298,6 +360,7 @@ class Draft:
     recall: RecallDecision | None = None
     slot_id: str | None = None
     transport: Transport | None = None
+    approval_limit: float | None = None  # "call me before anything over $500"
     revision: int = 0
     read_back_revision: int | None = None
 
@@ -318,6 +381,25 @@ class Appointment:
     hours: float
     estimate: float
     notes: list[TechNote] = field(default_factory=list)
+    status: BookingStatus = "booked"
+    moved_from: str | None = None  # when it was before it was last moved
+    approval_limit: float | None = None
+    stop_driving: str | None = None  # why it shouldn't be driven in, if it shouldn't
+
+    @property
+    def what(self) -> str:
+        """ "tire rotation on the 330i", the way it's said."""
+        # the label is "2019 BMW 330i": the model is the third word
+        return f"{' and '.join(self.services).lower()} on the {self.vehicle.split()[2]}"
+
+
+@dataclass(frozen=True)
+class Pending:
+    """A move or a cancellation that's been read back and waits for the caller's yes."""
+
+    action: Literal["move", "cancel"]
+    booking: Booking
+    slot_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -400,6 +482,8 @@ class ShopVisit:
     questions: list[str] = field(default_factory=list)  # asked about the repairs on this call
     ride: Ride | None = None
     pickup_from: str = ""  # where the shuttle picks them up
+    collected_by: str = ""  # someone else picking the car up for them
+    concerns: list[str] = field(default_factory=list)  # something new they've noticed
     rev: int = 0  # bumped on every change, so a stale summary can be told from a current one
     summary_rev: int | None = None
 
@@ -417,9 +501,14 @@ class ServiceDesk:
         self.recalls_checked: set[str] = set()  # VINs checked on this call
         self.draft = Draft()
         self.quotes: list[QuoteAsk] = []
-        self.appointment: Appointment | None = None
+        self.appointment: Appointment | None = None  # booked on this call
+        # already on the customer's file before the call, shown once they're looked up
+        self.on_file: Appointment | None = None
+        self.changing = False  # the booking made on this call is open for changes again
+        self.pending: Pending | None = None
         self.visit: ShopVisit | None = None  # set only for a car that's already in the shop
         self._ro_number = ro_number
+        self._bookings = 0  # on this call, so a booking after a cancellation gets a new number
 
     # ---- lookups ----
 
@@ -437,11 +526,23 @@ class ServiceDesk:
                 "That isn't a real phone number. Ask them for it again, with the area code; "
                 "never fill in or guess digits."
             )
-        # a demo: whatever number the caller gives is theirs, with the demo's two cars on it
+        if not name.strip():
+            raise ServiceError(
+                "Ask for their name first (on its own), then call lookup_customer with the "
+                "name and the number."
+            )
+        # a demo: whatever number the caller gives is the file's, with the demo's two cars on
+        # it, but only for the name on the account
         c = next((c for c in self._customers if c.phone == digits), self._customers[0])
+        if not same_person(name, c.name):
+            self.customer = None
+            raise ServiceError(
+                "The name they gave isn't the name on the account for that number. Share "
+                "nothing from the file: not whose it is, the cars, mileage, recalls, or "
+                "appointments. Ask them to check the number and name; if it's someone else's "
+                "account, the account holder needs to call."
+            )
         c.phone = digits
-        if name.strip():
-            c.name = " ".join(name.split()).title()
         self.customer = c
         return c
 
@@ -454,6 +555,11 @@ class ServiceDesk:
             if len(compact) >= 6 and v.vin.lower().endswith(compact):
                 return v
         words = [w for w in q.split() if w not in _VEHICLE_STOPWORDS]
+        # "my 3" or "the three" could be the X3 or a 3 series: ask, unless something else says
+        rest = [w for w in words if w not in {"3", "three"}]
+        if len(rest) < len(words) and not any(_score(v, rest) for v in c.vehicles):
+            names = " or the ".join(v.name.split()[0] for v in c.vehicles)
+            raise ServiceError(f'"3" could be the {names}. Ask which one.')
         # the car the most words point at, so "actually it's the 330i" still lands
         scores = {v.vin: _score(v, words) for v in c.vehicles}
         best = max(scores.values())
@@ -500,7 +606,7 @@ class ServiceDesk:
                 answer=(
                     f"No set price for {service!r}. Only the oil change ($79) and tire rotation "
                     "($39) have menu prices, and diagnostics are a $159 fee. Don't estimate. "
-                    "Offer to book a diagnostic, or to connect them with a service advisor."
+                    "Offer to book a diagnostic: the technician quotes any repair after it."
                 ),
             )
         elif item.kind == "warranty":
@@ -582,7 +688,9 @@ class ServiceDesk:
             self._changed()
         return self._revalidate()
 
-    def set_services(self, services: list[str], concern: str = "") -> list[str]:
+    def set_services(
+        self, services: list[str], concern: str = "", warranty_agreed: bool = False
+    ) -> list[str]:
         self._require_open()
         v = self.require_vehicle()
         if not services:
@@ -593,13 +701,32 @@ class ServiceDesk:
         services = list(dict.fromkeys(services))
         # the concern set_concern summed up, unless this call names its own
         concern = " ".join(concern.split()) or self.draft.concern
-        wear = _WEAR_ITEM.search(concern) if "warranty_repair" in services else None
+        warranty = "warranty_repair" in services
+        # the concern and every note: a grinding note doesn't become warranty work by being
+        # left out of the summary
+        said = " ; ".join([concern, *(n.text for n in self.draft.notes)])
+        wear = _WEAR_ITEM.search(said) if warranty else None
         if wear:
             noun = _WEAR_NOUN.get(wear[1].lower(), wear[1].lower())
             rotation = ", or a tire rotation ($39)" if noun in {"tire", "tyre"} else ""
             raise ServiceError(
                 f"{noun.capitalize()}s are wear items, never covered by warranty. Offer it "
-                f"as a regular visit at its price: a diagnostic ($159) to look at it{rotation}."
+                f"as a regular visit at its price: a diagnostic ($159) to look at it{rotation}. "
+                "Don't try warranty_repair again for this."
+            )
+        other = _NOT_A_DEFECT.search(said) if warranty else None
+        if other:
+            raise ServiceError(
+                f"A warranty repair is only for a part that's failed (a liftgate, a window, "
+                f"electronics, a leak), never for {other[0].lower()!r}: the recall goes on with "
+                "decide_recall, maintenance is a menu service, and a noise is a diagnostic "
+                "($159). Don't try warranty_repair again for this."
+            )
+        if warranty and not warranty_agreed and "warranty_repair" not in self.draft.services:
+            raise ServiceError(
+                "Only add a warranty repair once they've asked for warranty work, or you've "
+                "explained it would be covered at no charge and they've agreed. Then call "
+                "set_services again with warranty_agreed true."
             )
         if "warranty_repair" in services and not v.in_warranty(self.today):
             raise ServiceError(
@@ -616,7 +743,17 @@ class ServiceDesk:
             self.draft.services = services
             self.draft.concern = concern
             self._changed()
-        return self._revalidate()
+        return self._revalidate() + ([self._duplicate_reason()] if self.duplicates() else [])
+
+    def set_approval_limit(self, amount: float) -> None:
+        """ "Don't do anything over $500 without calling me": on the booking and its read-back.
+        It promises nothing about the price."""
+        self._require_open()
+        if not amount > 0:
+            raise ServiceError("Pass the dollar amount they gave, e.g. 500.")
+        if amount != self.draft.approval_limit:
+            self.draft.approval_limit = float(amount)
+            self._changed()
 
     def add_note(self, kind: str, text: str) -> TechNote:
         """A technician note: one per kind (a correction replaces it), any number of "other"."""
@@ -644,21 +781,47 @@ class ServiceDesk:
             self.draft.concern = summary
             self._changed()
 
+    def stop_driving(self) -> str | None:
+        """Why the car shouldn't be driven at all, from what the caller has said, if it
+        shouldn't: failing brakes, smoke, losing steering, a red or flashing light,
+        overheating, or a brake, oil, or temperature light."""
+        for text in [*(n.text for n in self.draft.notes), self.draft.concern]:
+            if not text or _NO_LIGHTS.search(text):
+                continue
+            for pattern, why in _STOP_DRIVING:
+                if pattern.search(text):
+                    return why
+        lights = next((n.text for n in self.draft.notes if n.kind == "warning_lights"), "")
+        if lights and not _NO_LIGHTS.search(lights) and _STOP_LIGHTS.search(lights):
+            return "a brake, oil, or temperature warning light"
+        return None
+
+    def concern_left_out(self) -> str | None:
+        """A warning light they mentioned that the concern summary doesn't."""
+        lights = next((n.text for n in self.draft.notes if n.kind == "warning_lights"), "")
+        concern = self.draft.concern.lower()
+        if lights and not _NO_LIGHTS.search(lights) and "light" not in concern:
+            return lights
+        return None
+
     def likely_cause(self) -> LikelyCause | None:
         """What the notes so far often point to, if they point anywhere."""
         notes = {n.kind: n.text.lower() for n in self.draft.notes}
         sound, moment = notes.get("sound", ""), notes.get("when", "")
-        lights = notes.get("warning_lights", "")
-        stop = bool(lights) and not _NO_LIGHTS.search(lights) and bool(_STOP_LIGHTS.search(lights))
+        why = self.stop_driving()
+        stop = why is not None
         for c in LIKELY_CAUSES:
             if any(w in sound for w in c.sounds) and any(w in moment for w in c.moments):
                 if stop and not c.unsafe:
                     return LikelyCause(c.sounds, c.moments, c.cause, True, _STOP_ADVICE)
                 return c
         if stop:
-            return LikelyCause(
-                (), (), "something the warning light is flagging", True, _STOP_ADVICE
+            cause = (
+                "something the warning light is flagging"
+                if why and "light" in why
+                else "something that needs looking at before it's driven again"
             )
+            return LikelyCause((), (), cause, True, _STOP_ADVICE)
         return None
 
     def decide_recall(self, add: bool) -> None:
@@ -674,8 +837,9 @@ class ServiceDesk:
             self._changed()
         self._revalidate()
 
-    def open_slots(self, day: str | None = None) -> list[Slot]:
-        hours = self.visit_hours()
+    def open_slots(self, day: str | None = None, hours: float | None = None) -> list[Slot]:
+        """Open slots that fit a visit of `hours` (this call's visit, by default)."""
+        hours = self.visit_hours() if hours is None else hours
         slots = [s for s in self.slots if s.open and s.fits(hours)]
         if day:
             date = self.resolve_day(day)
@@ -734,9 +898,25 @@ class ServiceDesk:
             return None
         for word in re.findall(r"[a-z]+", text):
             if word in _DAY_WORDS:
-                ahead = (_DAY_WORDS[word] - self.today.weekday() - 1) % 7 + 1
+                ahead = (_DAY_WORDS[word] - self.today.weekday()) % 7
+                # today only if it has an opening; "next wednesday" is never today
+                if ahead == 0 and ("next" in text or not self._open_on(self.today)):
+                    ahead = 7
                 return self.today + dt.timedelta(days=ahead)
         return None
+
+    def _open_on(self, day: dt.date) -> bool:
+        return any(s.open and s.start.date() == day for s in self.slots)
+
+    def day_word(self, day: dt.date) -> str:
+        """The day the way it's said relative to today: "today", "tomorrow", "this Friday",
+        "next Tuesday"."""
+        if day == self.today:
+            return "today"
+        if day == self.today + dt.timedelta(days=1):
+            return "tomorrow"
+        same_week = day.isocalendar()[:2] == self.today.isocalendar()[:2]
+        return f"{'this' if same_week else 'next'} {day:%A}"
 
     def _upcoming(self, month: int, day: int) -> dt.date:
         # a date without a year is the next one on or after today
@@ -746,7 +926,7 @@ class ServiceDesk:
     def choose_slot(self, slot_id: str) -> None:
         self._require_open()
         slot = self._slot(slot_id)
-        if not slot.open:
+        if not self._free(slot):
             raise ServiceError(f"{slot.spoken()} is taken. Offer another time.")
         hours = self.visit_hours()
         if not slot.fits(hours):
@@ -762,9 +942,11 @@ class ServiceDesk:
         self._require_open()
         if option not in TRANSPORT_LABELS:
             raise ServiceError("The options are a loaner, the shuttle, or waiting.")
-        # the ride depends on how long the visit is, which depends on the services
-        if not self.draft.services:
-            raise ServiceError("Set the services first: the ride depends on how long it takes.")
+        # a loaner depends on how long the visit is, which depends on the services
+        if option == "loaner" and not self.draft.services:
+            raise ServiceError(
+                "Set the services first: whether a loaner fits depends on how long it takes."
+            )
         if option == "loaner" and not self.loaner_eligible():
             raise ServiceError(self._no_loaner_reason())
         if self.draft.transport != option:
@@ -777,6 +959,12 @@ class ServiceDesk:
         missing = self.missing()
         if missing:
             raise ServiceError(f"Not ready to read back. Still need: {', '.join(missing)}.")
+        if left := self.concern_left_out():
+            raise ServiceError(
+                f"The concern leaves out the warning light they mentioned ({left}). Call "
+                "set_concern again with every problem they've raised, e.g. "
+                f'"{self.draft.concern}; {left}", then read_back.'
+            )
         self.draft.read_back_revision = self.draft.revision
         return self.summary()
 
@@ -792,8 +980,10 @@ class ServiceDesk:
             raise ServiceError(self._no_loaner_reason())
         if "warranty_repair" in self.draft.services and not v.in_warranty(self.today):
             raise ServiceError(f"The {v.name} isn't in warranty any more. Book a diagnostic.")
+        if self.duplicates():
+            raise ServiceError(self._duplicate_reason())
         slot = self._slot(self.draft.slot_id or "")
-        if not slot.open or not slot.fits(self.visit_hours()):
+        if not self._free(slot) or not slot.fits(self.visit_hours()):
             raise ServiceError("That time isn't available for this visit any more.")
         if self.draft.read_back_revision != self.draft.revision:
             raise ServiceError(
@@ -802,9 +992,22 @@ class ServiceDesk:
             )
         assert self.draft.transport is not None
         recall = v.recalls[0] if v.recalls else None
+        # a change to the booking made on this call keeps its number, and frees its old time
+        before = self.appointment if self.changing else None
+        if before:
+            self._slot(before.slot_id).open = True
+        else:
+            self._bookings += 1
         slot.open = False
+        moved_from = before.moved_from if before else None
+        if before and before.slot_id != slot.id:
+            moved_from = before.when
+        self.changing = False
+        self.pending = None
         self.appointment = Appointment(
-            confirmation=f"RO-{self._ro_number}",
+            confirmation=(
+                before.confirmation if before else f"RO-{self._ro_number + self._bookings - 1}"
+            ),
             vin=v.vin,
             vehicle=v.label,
             services=[MENU[s].label for s in self.draft.services],
@@ -818,8 +1021,127 @@ class ServiceDesk:
             hours=self.visit_hours(),
             estimate=self.estimate(),
             notes=list(self.draft.notes),
+            moved_from=moved_from,
+            approval_limit=self.draft.approval_limit,
+            stop_driving=self.stop_driving(),
         )
         return self.appointment
+
+    # ---- what's already booked: the appointment on file, or the one booked on this call ----
+
+    def booked(self, which: Booking) -> Appointment:
+        """A booked appointment that can still be moved or cancelled."""
+        self._require_customer()
+        a = self.on_file if which == "existing" else self.appointment
+        if a is None:
+            raise ServiceError(
+                "Nothing's been booked on this call yet: for the visit you're putting together, "
+                "set the time with choose_slot."
+                if which == "new"
+                else "There's no other appointment on their file."
+            )
+        if a.status == "cancelled":
+            raise ServiceError(f"The {a.what} on {a.when} is already cancelled.")
+        return a
+
+    def change_booking(self) -> Appointment:
+        """Opens the booking made on this call for changes: a service, the car, the ride. It's
+        booked again, under the same number, after a new read-back."""
+        a = self.booked("new")
+        self.changing = True
+        return a
+
+    def propose_move(self, which: Booking, slot_id: str) -> str:
+        """The move, as the agent reads it back before making it; nothing changes yet."""
+        a = self.booked(which)
+        slot = self._move_slot(a, slot_id)
+        self.pending = Pending("move", which, slot.id)
+        return (
+            f"Move the {a.what} from {a.when} to {slot.spoken()}, with {slot.advisor}? It's "
+            "the same visit otherwise."
+        )
+
+    def move(self, which: Booking, slot_id: str) -> Appointment:
+        """Makes a move the caller agreed to, once it's been read back."""
+        a = self.booked(which)
+        slot = self._move_slot(a, slot_id)
+        if self.pending != Pending("move", which, slot.id):
+            raise ServiceError(
+                "Read the move back first: call move_appointment without caller_confirmed, say "
+                "what it returns, and wait for a clear yes."
+            )
+        self._slot(a.slot_id).open = True
+        slot.open = False
+        a.moved_from, a.slot_id, a.when, a.advisor = a.when, slot.id, slot.spoken(), slot.advisor
+        if which == "new" and not self.changing:
+            # the draft is what was booked: keep it in step, already read back
+            self.draft.slot_id = slot.id
+            self._changed()
+            self.draft.read_back_revision = self.draft.revision
+        self.pending = None
+        return a
+
+    def propose_cancel(self, which: Booking) -> str:
+        a = self.booked(which)
+        self.pending = Pending("cancel", which)
+        return f"Cancel the {a.what} on {a.when}? Nothing is charged for cancelling."
+
+    def cancel(self, which: Booking) -> Appointment:
+        """Cancels an appointment the caller agreed to cancel, once it's been read back."""
+        a = self.booked(which)
+        if self.pending != Pending("cancel", which):
+            raise ServiceError(
+                "Read the cancellation back first: call cancel_appointment without "
+                "caller_confirmed, say what it returns, and wait for a clear yes."
+            )
+        self._slot(a.slot_id).open = True
+        a.status = "cancelled"
+        self.pending = None
+        if which == "new":
+            # booking the visit again is a new booking, read back again first
+            self.changing = False
+            self._changed()
+        return a
+
+    def duplicates(self) -> list[str]:
+        """Services on the draft that the appointment on file already has for the same car."""
+        e = self.on_file
+        if e is None or e.status != "booked" or e.vin != self.draft.vin:
+            return []
+        return [MENU[s].label for s in self.draft.services if MENU[s].label in e.services]
+
+    def _duplicate_reason(self) -> str:
+        e = self.on_file
+        assert e is not None
+        dup = " and ".join(self.duplicates()).lower()
+        return (
+            f"They already have the {e.what} booked for {e.when}, the appointment on their "
+            f"file. Never book it twice: tell them, and offer to move that appointment "
+            f"(move_appointment) instead, or leave the {dup} off this visit."
+        )
+
+    def _move_slot(self, a: Appointment, slot_id: str) -> Slot:
+        if a is self.appointment and self.changing:
+            raise ServiceError(
+                "This call's booking is open for changes: set the new time with choose_slot, "
+                "then read_back and book_service."
+            )
+        slot = self._slot(slot_id)
+        if slot.id == a.slot_id:
+            raise ServiceError(f"The {a.what} is already booked for {a.when}.")
+        if not slot.open:
+            raise ServiceError(f"{slot.spoken()} is taken. Offer another time.")
+        if not slot.fits(a.hours):
+            raise ServiceError(
+                f"A visit of {spoken_span(a.hours)} won't finish by closing if it starts at "
+                f"{clock(slot.start)}. Offer an earlier time."
+            )
+        return slot
+
+    def _free(self, slot: Slot) -> bool:
+        """Open, or the time the booking being changed already holds."""
+        mine = self.appointment.slot_id if self.changing and self.appointment else None
+        return slot.open or slot.id == mine
 
     # ---- a car in the shop (the follow-up call) ----
 
@@ -886,8 +1208,12 @@ class ServiceDesk:
             self._visit_changed()
         return note
 
-    def arrange_pickup(self, ride: str, where: str = "") -> ShopVisit:
+    def arrange_pickup(self, ride: str, where: str = "", collected_by: str = "") -> ShopVisit:
         v = self._with_customer()
+        collected_by = " ".join(collected_by.split())
+        if collected_by != v.collected_by:
+            v.collected_by = collected_by
+            self._visit_changed()
         if ride not in RIDES:
             raise ServiceError(
                 "The options are the free courtesy shuttle, or coming in themselves."
@@ -922,11 +1248,28 @@ class ServiceDesk:
         v.summary_rev = v.rev
         return self.ready_summary()
 
+    def note_concern(self, concern: str) -> str:
+        """Something new the customer has noticed, on the visit for the technician to check
+        when they come in. Nothing is admitted or promised by noting it."""
+        v = self._with_customer()
+        concern = " ".join(concern.split())
+        if not concern:
+            raise ServiceError('Pass what they noticed in a few words, e.g. "new rattle".')
+        if concern.lower() not in (c.lower() for c in v.concerns):
+            v.concerns.append(concern)
+        return concern
+
     def end_without_update(self, reason: EndedEarly) -> ShopVisit:
         """Wrong person, or a bad time: the car stays as it is, nothing decided."""
         v = self._shop()
         if reason not in ENDED_EARLY:
             raise ServiceError("The reason is wrong_person or call_back_later.")
+        if v.reached == "customer" and v.decisions:
+            raise ServiceError(
+                "You've already gone over the repairs with them, so finish the call: set the "
+                "ride with arrange_pickup if it isn't set, call pickup_summary, and say what it "
+                "returns. Then end_call."
+            )
         if reason == "wrong_person":
             v.reached = "someone_else"
         v.ended_early = reason
@@ -985,7 +1328,8 @@ class ServiceDesk:
         parts = [
             f"The {self._shop_car().name.split()[0]} is ready {self.ready_when()}"
             + (f", once the {done} are done." if done else "."),
-            f"Due at pickup: ${self.ticket_total():.0f} ({lines}).",
+            f"Due at pickup: ${self.ticket_total():.0f} ({lines}), paid in person at the service "
+            "desk when they collect the car; nothing is paid over the phone.",
         ]
         if v.ride == "shuttle":
             parts.append(
@@ -995,6 +1339,15 @@ class ServiceDesk:
         elif v.ride == "self":
             closes = clock(dt.datetime.combine(self.today, SHOP_CLOSES))
             parts.append(f"They're coming in themselves; the shop's open until {closes}.")
+        if v.collected_by:
+            parts.append(
+                f"{v.collected_by} is collecting it: they give {self._first_name()}'s name or "
+                f"the repair order number at the service desk, and pay there."
+            )
+        if v.concerns:
+            parts.append(
+                f"Noted for the technician to check when they come in: {'; '.join(v.concerns)}."
+            )
         for f in v.findings:
             d = v.decisions.get(f.id)
             if d == "deferred":
@@ -1104,7 +1457,7 @@ class ServiceDesk:
         if self.visit is not None:
             return self._visit_stage()
         v = self.draft_vehicle()
-        if self.appointment:
+        if self.appointment and self.appointment.status == "booked" and not self.changing:
             return "booked"
         if self.customer is None:
             return "customer"
@@ -1146,10 +1499,18 @@ class ServiceDesk:
                 parts.append(f"plus the {recall.title.lower()} recall, no charge")
             else:
                 parts.append("recall declined for now")
-        parts.append(f"{slot.spoken()} with {slot.advisor}")
+        parts.append(f"{slot.spoken()} ({self.day_word(slot.start.date())}) with {slot.advisor}")
         parts.append(TRANSPORT_LABELS[self.draft.transport or "shuttle"].lower())
         parts.append(f"estimate ${self.estimate():.0f}" if self.estimate() else "no charge")
-        return "; ".join(parts) + "."
+        if (limit := self.draft.approval_limit) is not None:
+            parts.append(f"we'll call before doing any work over ${limit:.0f}")
+        out = "; ".join(parts) + "."
+        if why := self.stop_driving():
+            out += (
+                f" It isn't safe to drive ({why}): have it towed in, not driven; the desk can't "
+                "arrange the tow."
+            )
+        return out
 
     # ---- what the page shows ----
 
@@ -1219,17 +1580,39 @@ class ServiceDesk:
                     else None
                 ),
                 "transport": self.draft.transport,
+                "approvalLimit": self.draft.approval_limit,
+                # why it shouldn't be driven in, from what the caller said, if it shouldn't
+                "stopDriving": self.stop_driving(),
                 "transportLabel": TRANSPORT_LABELS.get(self.draft.transport or ""),
                 "loanerEligible": self.loaner_eligible(),
                 "hours": self.visit_hours(),
                 "estimate": self.estimate(),
                 "missing": self.missing(),
+                # the booking made on this call is open for changes, to be booked again
+                "changingBooking": self.changing,
                 "revision": self.draft.revision,
                 "readBack": self.draft.read_back_revision == self.draft.revision
                 and self.draft.read_back_revision is not None,
             },
             "appointment": _appointment_dict(self.appointment),
+            # the appointment already on their file, once they're looked up
+            "existingAppointment": _appointment_dict(self.on_file) if c else None,
+            # a move or cancellation read back and waiting for the caller's yes
+            "pendingChange": self._pending_dict(),
             "visit": self._visit_dict(),
+        }
+
+    def _pending_dict(self) -> dict[str, Any] | None:
+        p = self.pending
+        if p is None:
+            return None
+        a = self.on_file if p.booking == "existing" else self.appointment
+        to = self._slot(p.slot_id) if p.slot_id else None
+        return {
+            "action": p.action,
+            "appointment": p.booking,
+            "confirmation": a.confirmation if a else None,
+            "to": to.spoken() if to else None,
         }
 
     def _visit_dict(self) -> dict[str, Any] | None:
@@ -1270,6 +1653,8 @@ class ServiceDesk:
             if v.reached == "customer"
             else [],
             "nextVisit": list(v.next_visit),
+            "collectedBy": v.collected_by or None,
+            "concerns": list(v.concerns),
             "questions": list(v.questions),
             "ticket": [{"label": label, "price": price} for label, price in self.ticket()],
             "total": self.ticket_total(),
@@ -1347,19 +1732,17 @@ class ServiceDesk:
 
     def _require_unbooked(self) -> None:
         # notes and the concern can come before the lookup: people start with the problem
-        if self.appointment:
+        a = self.appointment
+        if a and a.status == "booked" and not self.changing:
             raise ServiceError(
-                f"Already booked as {self.appointment.confirmation}. To add to it, offer to "
-                "connect them with a service advisor."
+                f"Already booked as {a.confirmation}. To add to it or change it, call "
+                "change_booking first; to move it or cancel it, use move_appointment or "
+                "cancel_appointment."
             )
 
     def _require_open(self) -> None:
         self._require_customer()
-        if self.appointment:
-            raise ServiceError(
-                f"Already booked as {self.appointment.confirmation}. To change it, offer to "
-                "connect them with a service advisor."
-            )
+        self._require_unbooked()
 
     def require_vehicle(self) -> Vehicle:
         v = self.draft_vehicle()
@@ -1428,6 +1811,10 @@ def _appointment_dict(a: Appointment | None) -> dict[str, Any] | None:
         "hours": a.hours,
         "estimate": a.estimate,
         "notes": [_note_dict(n) for n in a.notes],
+        "status": a.status,
+        "movedFrom": a.moved_from,
+        "approvalLimit": a.approval_limit,
+        "stopDriving": a.stop_driving,
     }
 
 
@@ -1447,6 +1834,15 @@ def local_today(timezone: str | None = None) -> dt.date:
     except (ZoneInfoNotFoundError, ValueError):
         tz = TIMEZONE
     return dt.datetime.now(tz).date()
+
+
+def same_person(said: str, on_file: str) -> bool:
+    """The name a caller gave is the account's: the same first name, and the same last name
+    if they gave one."""
+    a, b = said.lower().split(), on_file.lower().split()
+    if not a or not b or a[0] != b[0]:
+        return False
+    return len(a) == 1 or len(b) == 1 or a[-1] == b[-1]
 
 
 def first_name(name: str) -> str:
@@ -1496,6 +1892,8 @@ def _business_days(start: dt.date, n: int) -> list[dt.date]:
 # already taken: (weekday, slot index), so the same times are open whatever day it is. Never
 # Tuesday at 8:00 or Wednesday's first slot, which the README and the tests ask for.
 _BOOKED = {(0, 1), (2, 2), (3, 0), (3, 4), (4, 3)}
+# the appointment already on Alex's file: never one of _BOOKED's times
+UPCOMING_AT = dt.time(14, 30)
 
 
 def demo_desk(
@@ -1547,14 +1945,39 @@ def demo_desk(
     desk = ServiceDesk([customer], slots, today, ro_number=48_210 + today.toordinal() % 700)
     if direction == "outbound":
         _seed_shop_visit(desk)
+    else:
+        _seed_upcoming(desk, sedan)
     return desk
+
+
+def _seed_upcoming(desk: ServiceDesk, sedan: Vehicle) -> None:
+    # booked on an earlier call: a tire rotation on the 330i at 2:30 on the calendar's last
+    # day, which is always next week, and a time nothing else here asks for
+    slot = next(s for s in reversed(desk.slots) if s.start.time() == UPCOMING_AT)
+    slot.open = False
+    rotation = MENU["tire_rotation"]
+    desk.on_file = Appointment(
+        confirmation=f"RO-{desk._ro_number - 37}",
+        vin=sedan.vin,
+        vehicle=sedan.label,
+        services=[rotation.label],
+        concern="",
+        recall_id=None,
+        recall=None,
+        slot_id=slot.id,
+        when=slot.spoken(),
+        advisor=slot.advisor,
+        transport="wait",
+        hours=rotation.hours,
+        estimate=rotation.price,
+    )
 
 
 def _seed_shop_visit(desk: ServiceDesk) -> None:
     # booked earlier, the way the consultation call books it: a diagnostic for the grinding on
     # the X3, with the technician's notes, the open recall added, and the shuttle. It came in at
     # 7:30 this morning; the diagnostic and the recall are done.
-    c = desk.lookup_customer(desk._customers[0].phone)
+    c = desk.lookup_customer(desk._customers[0].phone, desk._customers[0].name)
     x3 = c.vehicles[0]
     desk.select_vehicle(x3.vin)
     for kind, text in (

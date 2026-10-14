@@ -1,4 +1,4 @@
-"""Bayside BMW's service desk on the phone. Inbound, Leo talks a caller through a problem with
+"""Bayside BMW's service desk on the phone. Inbound, Nick talks a caller through a problem with
 their car and books the drop-off; outbound, he calls back once the technician has found the
 cause. The hard rules live in backend.py.
 
@@ -26,7 +26,11 @@ from backend import (
     ENDED_EARLY,
     LOANER_MIN_HOURS,
     MENU,
+    PAYMENT,
+    PICKUP_BY_SOMEONE_ELSE,
     SHUTTLE_MILES,
+    TRANSPORT_LABELS,
+    Booking,
     EndedEarly,
     Finding,
     NoteKind,
@@ -40,13 +44,14 @@ from backend import (
     spoken_span,
 )
 from call import (
+    USER_AWAY_TIMEOUT,
     VOICE_RULES,
     end_after_reply,
     hang_up,
+    hang_up_when_silent,
     pause_between_sentences,
     room_options,
     spoken_number,
-    transfer,
 )
 from dotenv import load_dotenv
 from grade import grade
@@ -72,7 +77,7 @@ logger = logging.getLogger("vehicle-service")
 
 load_dotenv()
 
-PERSONA = "Leo"
+PERSONA = "Nick"
 BUSINESS = "Bayside BMW"
 VOICE = "228fca29-3a0a-435c-8728-5cb483251068"  # Cartesia "Kiefer"
 # the number a customer calls back on, said on the follow-up and on voicemail
@@ -108,13 +113,13 @@ def _desk_rules(ctx: Ctx) -> Iterator[ServiceDesk]:
 
 
 def _with_notes(result: str, notes: list[str]) -> str:
-    # what a correction knocked out (a loaner, a warranty repair, a slot), for Leo to say
+    # what a correction knocked out (a loaner, a warranty repair, a slot), for Nick to say
     return " ".join([result, *notes]) if notes else result
 
 
-class LeoAgent(Agent):
+class NickAgent(Agent):
     def __init__(self, desk: ServiceDesk) -> None:
-        super().__init__(instructions=_instructions(desk), tools=[transfer_to_advisor])
+        super().__init__(instructions=_instructions(desk))
         self._replies_at_booking: int | None = None
 
     async def on_enter(self) -> None:
@@ -129,14 +134,16 @@ class LeoAgent(Agent):
     # ---- who and what ----
 
     @function_tool
-    async def lookup_customer(self, ctx: Ctx, phone: str, name: str = "") -> str:
-        """Find the customer's file by the phone number they give. Do this before anything
-        else about their car.
+    async def lookup_customer(self, ctx: Ctx, phone: str, name: str) -> str:
+        """Find the customer's file by the phone number they give, under the name they gave.
+        Do this before anything else about their car. If it refuses over the name, share
+        nothing from the file.
 
         Args:
             phone: The phone number as digits, e.g. "4155550142": exactly the digits they
-                said. Never fill in, pad, or guess a digit; if it's short, ask again.
-            name: The caller's name, if they've said it.
+                said. Never fill in, pad, or guess a digit; if it's short or a part was
+                unclear, ask again for just that part.
+            name: The name the caller gave. Ask for it first if they haven't said it.
         """
         with _desk_rules(ctx) as desk:
             c = desk.lookup_customer(phone, name)
@@ -146,17 +153,30 @@ class LeoAgent(Agent):
         cars = "; ".join(
             f"{v.label}, VIN ending {v.vin[-6:]}, {v.miles:,} miles on file" for v in c.vehicles
         )
-        return (
-            f"Found {c.name}. Vehicles on file: {cars}. If they already said which car and "
-            "what it needs, call select_vehicle and set_services now; otherwise ask."
+        out = (
+            f"Found {c.name}. Vehicles on file: {cars}. If they've already named the car (\"my "
+            'X3") or what it needs, call select_vehicle (and set_services) now, without asking '
+            "again; otherwise ask which car."
         )
+        if (e := desk.on_file) and e.status == "booked":
+            out += (
+                f" Also on their file, already booked: a {e.what}, {e.when} with {e.advisor}, "
+                f"${e.estimate:.0f}, {TRANSPORT_LABELS[e.transport].lower()} (confirmation "
+                f"{e.confirmation}; say it only if they ask). Bring it up only if it's "
+                "relevant: they ask about an appointment, think they're already booked, or want "
+                "work on that car. Never book it again. If they've already asked to cancel it, "
+                "call cancel_appointment now: what it returns names the appointment, so don't "
+                "ask which one first."
+            )
+        return out
 
     @function_tool
     async def select_vehicle(self, ctx: Ctx, vehicle: str) -> str:
         """Set which of their cars the visit is for. Call it again if they switch cars.
 
         Args:
-            vehicle: The VIN, or the year and model as the caller said it, e.g. "the X3".
+            vehicle: The VIN, or the year and model in the caller's own words, e.g. "the X3".
+                Pass "my 3" as "my 3", never as the X3 or the 330i: the desk asks which.
         """
         with _desk_rules(ctx) as desk:
             notes = desk.select_vehicle(vehicle)
@@ -207,12 +227,17 @@ class LeoAgent(Agent):
         out = f"Noted for the technician: {note.label.lower()}, {note.text}."
         asked = {n.kind for n in desk.draft.notes}
         left = [k.replace("_", " ") for k in _QUESTIONS if k not in asked]
-        if cause := desk.likely_cause():
+        cause = desk.likely_cause()
+        if cause and cause.sounds:
             out += (
                 f" What they've described often points to {cause.cause}. If you haven't said "
                 "so yet, say it as a possibility the technician will confirm, never a "
-                f"diagnosis. {cause.advice}"
+                f"diagnosis."
             )
+        if why := desk.stop_driving():
+            return f"{out} {_stop_driving(why)}"
+        if cause:
+            out += f" {cause.advice}"
         if left:
             out += f" Not asked yet, if it helps narrow it down: {', '.join(left)}."
         return out
@@ -228,7 +253,10 @@ class LeoAgent(Agent):
         with _desk_rules(ctx) as desk:
             desk.set_concern(summary)
         ctx.userdata.page.record("set_concern", desk.draft.concern)
-        return f"Concern: {desk.draft.concern}. Now work out the service (set_services)."
+        out = f"Concern: {desk.draft.concern}. Now work out the service (set_services)."
+        if why := desk.stop_driving():
+            out += f" But first: {_stop_driving(why)}"
+        return out
 
     # ---- the service ----
 
@@ -248,18 +276,28 @@ class LeoAgent(Agent):
         return q.answer
 
     @function_tool
-    async def set_services(self, ctx: Ctx, services: list[ServiceId], concern: str = "") -> str:
+    async def set_services(
+        self,
+        ctx: Ctx,
+        services: list[ServiceId],
+        concern: str = "",
+        warranty_agreed: bool = False,
+    ) -> str:
         """Set the services on the visit, replacing what's there. To add or drop one, pass
         the whole new list.
 
         Args:
             services: oil_change, tire_rotation, diagnostic (any problem to look at, like a
-                noise), or warranty_repair (a defect on a car that's in warranty; never wear
-                items like brakes or tires).
+                noise), or warranty_repair (a part that's failed on a car that's in
+                warranty, like a liftgate or a window; never brakes, a grinding, tires,
+                maintenance, or the recall). An open recall is never a service here: it
+                goes on the visit with decide_recall.
             concern: Leave out to use the summary from set_concern.
+            warranty_agreed: True only if they asked for warranty work, or you explained it
+                would be covered and they agreed.
         """
         with _desk_rules(ctx) as desk:
-            notes = desk.set_services(list(services), concern)
+            notes = desk.set_services(list(services), concern, warranty_agreed)
         labels = ", ".join(MENU[s].label for s in desk.draft.services)
         detail = labels + (f" · {desk.draft.concern}" if concern else "")
         ctx.userdata.page.record("set_services", detail)
@@ -280,6 +318,11 @@ class LeoAgent(Agent):
         if not recalls:
             ctx.userdata.page.record("check_recalls", f"{vin[-6:]}: no open recalls")
             return "No open recalls on this car. Tell the caller."
+        if why := desk.stop_driving():
+            return (
+                f"There's an open recall, but first: {_stop_driving(why)} Bring the recall up "
+                "only after that, briefly, or not at all."
+            )
         r = recalls[0]
         ctx.userdata.page.record("check_recalls", f"{vin[-6:]}: {r.id} {r.title}")
         stock = "Parts are in stock." if r.parts_in_stock else "Parts are on order."
@@ -304,26 +347,52 @@ class LeoAgent(Agent):
     # ---- when, and how they get around ----
 
     @function_tool
-    async def get_slots(self, ctx: Ctx, day: str | None = None) -> str:
+    async def get_slots(
+        self, ctx: Ctx, day: str | None = None, moving: Booking | None = None
+    ) -> str:
         """Open advisor slots that fit this visit, over the next five business days.
 
         Args:
             day: The day to narrow to, as the caller said it, e.g. "wednesday", "tomorrow",
                 "Oct 8". Leave out for all days.
+            moving: To find a new time for an appointment that's already booked: existing
+                (the one on their file) or new (booked on this call). Leave out otherwise.
         """
         with _desk_rules(ctx) as desk:
-            slots = desk.open_slots(day)
+            hours = desk.booked(moving).hours if moving else None
+            slots = desk.open_slots(day, hours)
         ctx.userdata.page.record("get_slots", f"{day or 'all days'}: {len(slots)} open")
         if not slots:
             return f"Nothing open that fits that day. Open days are {desk.open_days()}."
-        return (
+        out = [
             "Open: "
-            + "; ".join(f"{s.id} = {s.spoken()} with {s.advisor}" for s in slots)
-            + ". Offer two or three times that suit what they asked for, not the whole list. Say"
-            " the times only, without the advisors' names: the caller doesn't know who they are"
-            ' ("I have tomorrow at seven thirty, eight, or ten thirty."). Name the advisor once'
-            " a time is picked, saying who they are."
-        )
+            + "; ".join(
+                f"{s.id} = {s.spoken()} ({desk.day_word(s.start.date())}) with {s.advisor}"
+                for s in slots
+            )
+            + ". These are the only times there are: never offer one that isn't listed. Offer"
+            " two or three that suit what they asked for, not the whole list, saying the day as"
+            " listed. Say the times only, without the advisors' names: the caller doesn't know"
+            ' who they are ("I have tomorrow at seven thirty, eight, or ten thirty."). Name the'
+            " advisor once a time is picked, saying who they are."
+        ]
+        date = desk.resolve_day(day) if day else None
+        if day and date and date != desk.today and f"{desk.today:%A}".lower() in day.lower():
+            out.append(
+                f"Today is {desk.today:%A} and nothing's open today: these are "
+                f"{desk.day_word(date)}, {date:%B} {_ordinal(date.day)}. Say so."
+            )
+        if day and date and "next" in day.lower():
+            out.append(
+                f'"Next {date:%A}" can mean two different weeks: confirm the date with them '
+                f'("{date:%A} the {_ordinal(date.day)}?").'
+            )
+        if not moving and (why := desk.stop_driving()):
+            out.append(
+                f"It isn't safe to drive ({why}): offer the earliest first, "
+                f"{slots[0].spoken()}, and remind them to have it towed in."
+            )
+        return " ".join(out)
 
     @function_tool
     async def choose_slot(self, ctx: Ctx, slot_id: str) -> str:
@@ -344,7 +413,9 @@ class LeoAgent(Agent):
 
     @function_tool
     async def choose_transport(self, ctx: Ctx, option: Literal["loaner", "shuttle", "wait"]) -> str:
-        """Set how the caller gets around during the visit.
+        """Set how the caller gets around during the visit, once they've picked one. "I'll
+        need a ride" isn't a pick: ask whether they'd like to wait, take the shuttle, or (only
+        if quote_price says this visit qualifies) a loaner.
 
         Args:
             option: loaner (only warranty or recall visits over three hours), shuttle (free,
@@ -356,6 +427,22 @@ class LeoAgent(Agent):
         return f"Transportation: {option}."
 
     # ---- confirm ----
+
+    @function_tool
+    async def set_approval_limit(self, ctx: Ctx, dollars: float) -> str:
+        """Note on the visit that they want a call before any work over an amount ("don't do
+        anything over $500 without calling me"). It's read back with the visit.
+
+        Args:
+            dollars: The amount they gave, e.g. 500.
+        """
+        with _desk_rules(ctx) as desk:
+            desk.set_approval_limit(dollars)
+        ctx.userdata.page.record("set_approval_limit", f"Call before work over ${dollars:,.0f}")
+        return (
+            f"Noted: we'll call before doing any work over ${dollars:,.0f}. Tell them that's on "
+            "the visit; promise nothing about what the work will cost."
+        )
 
     @function_tool
     async def read_back(self, ctx: Ctx) -> str:
@@ -371,17 +458,100 @@ class LeoAgent(Agent):
 
     @function_tool
     async def book_service(self, ctx: Ctx) -> str:
-        """Book the appointment. Only after the read-back, once the caller says it's right."""
+        """Book the appointment, as soon as the caller says the read-back is right, even if
+        they ask something in the same breath: book first, then answer it."""
         with _desk_rules(ctx) as desk:
+            changed = desk.changing
             appt = desk.book()
         ctx.userdata.page.record("book_service", f"{appt.confirmation} · {appt.when}")
         self._replies_at_booking = _agent_replies(ctx)
+        safety = (
+            f" Say again, plainly: it isn't safe to drive ({appt.stop_driving}), so have it "
+            "towed in, not driven; the desk can't arrange the tow."
+            if appt.stop_driving
+            else ""
+        )
+        if changed:
+            return (
+                f"Changed; it's still confirmation {appt.confirmation}. Tell them it's updated, "
+                f"answer anything else they asked, and ask if there's anything else.{safety}"
+            )
         return (
             f"Booked, confirmation {appt.confirmation} (give it only if they ask). Tell them "
             f"they're all set and that {appt.advisor}, one of our service advisors, will meet "
-            "them at the service drive, even if they've already said goodbye, and ask if "
-            "there's anything else. When there isn't (or they've already said goodbye), say "
-            "goodbye and call end_call in that same turn."
+            f"them at the service drive, even if they've already said goodbye.{safety} If they "
+            "asked something along with their yes, answer it now. Then ask if there's anything "
+            "else. When there isn't (or they've already said goodbye), say goodbye and call "
+            "end_call in that same turn."
+        )
+
+    # ---- what's already booked ----
+
+    @function_tool
+    async def change_booking(self, ctx: Ctx) -> str:
+        """Open the appointment booked on this call for a change other than the time: adding
+        or dropping a service, the car, the ride. Then update that field, call read_back, and
+        book_service once they say it's right. For a new time, use move_appointment."""
+        with _desk_rules(ctx) as desk:
+            appt = desk.change_booking()
+        ctx.userdata.page.record("change_booking", appt.confirmation)
+        return (
+            f"The {appt.what} on {appt.when} is open for changes. Make the change with the "
+            "usual tools, then read_back and book_service; it keeps its confirmation number."
+        )
+
+    @function_tool
+    async def move_appointment(
+        self, ctx: Ctx, appointment: Booking, slot_id: str, caller_confirmed: bool = False
+    ) -> str:
+        """Move a booked appointment to another open time (get_slots with moving first). As
+        soon as they pick a time, call it without caller_confirmed to get the move to read
+        back; only once they've clearly said yes to that, call it again with caller_confirmed
+        true.
+
+        Args:
+            appointment: existing (the one already on their file) or new (booked on this
+                call).
+            slot_id: An id from get_slots, like "thu-0900".
+            caller_confirmed: True only after reading the move back and hearing a clear yes.
+        """
+        with _desk_rules(ctx) as desk:
+            if not caller_confirmed:
+                said = desk.propose_move(appointment, slot_id)
+                ctx.userdata.page.record("move_appointment", f"Asked: {said}")
+                return f"Nothing's moved yet. Ask them, in plain speech: {said}"
+            appt = desk.move(appointment, slot_id)
+        ctx.userdata.page.record("move_appointment", f"{appt.confirmation} → {appt.when}")
+        return (
+            f"Moved: the {appt.what} is now {appt.when}, with {appt.advisor} (same confirmation "
+            f"{appt.confirmation}; give it only if asked). Tell them, naming {appt.advisor} as "
+            "one of our service advisors, and ask if there's anything else."
+        )
+
+    @function_tool
+    async def cancel_appointment(
+        self, ctx: Ctx, appointment: Booking, caller_confirmed: bool = False
+    ) -> str:
+        """Cancel a booked appointment. As soon as they ask, call it without caller_confirmed
+        to get the cancellation to read back; only once they've clearly said yes to that,
+        call it again with caller_confirmed true.
+
+        Args:
+            appointment: existing (the one already on their file) or new (booked on this
+                call).
+            caller_confirmed: True only after reading the cancellation back and hearing a
+                clear yes.
+        """
+        with _desk_rules(ctx) as desk:
+            if not caller_confirmed:
+                said = desk.propose_cancel(appointment)
+                ctx.userdata.page.record("cancel_appointment", f"Asked: {said}")
+                return f"Nothing's cancelled yet. Ask them, in plain speech: {said}"
+            appt = desk.cancel(appointment)
+        ctx.userdata.page.record("cancel_appointment", f"{appt.confirmation} cancelled")
+        return (
+            f"Cancelled: the {appt.what} on {appt.when}. Tell them it's cancelled and nothing "
+            "is due, and ask if there's anything else."
         )
 
     @function_tool
@@ -397,17 +567,19 @@ class LeoAgent(Agent):
         await end_after_reply(ctx)
 
 
-@function_tool
-async def transfer_to_advisor(ctx: Ctx, reason: str) -> str:
-    """Hand the call to a service advisor: for a price you don't have, a question you can't
-    answer, a change to a booked visit, a tow, or when the caller asks for a person. Tell them
-    you're connecting them first.
+def _stop_driving(why: str) -> str:
+    return (
+        f"NOT SAFE TO DRIVE ({why}). Say it now, clearly and seriously, before anything else: "
+        "they shouldn't drive the car, and it should be towed in, not driven. You can't "
+        "arrange a tow from the desk, so say that plainly. Offer the earliest open slot. "
+        "No recall pitch or other offers until you've said this."
+    )
 
-    Args:
-        reason: A few words on why, for the advisor.
-    """
-    ctx.userdata.page.transfer("service_advisor", reason)
-    return await transfer(ctx, "a service advisor", reason)
+
+def _ordinal(n: int) -> str:
+    """22 -> "22nd"."""
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 
 
 def _agent_replies(ctx: Ctx) -> int:
@@ -430,11 +602,23 @@ note on the grinding sound." Be more serious still, with no cheer at all, for a 
 anything that affects whether the car is safe to drive, and any price or warranty answer they
 won't like.
 
+Safety first: failing brakes (the car won't stop), smoke or burning, losing steering, a red
+or flashing warning light, or overheating mean the car isn't safe to drive. The moment a
+caller mentions one, before any other question, lookup, or offer, tell them clearly and
+seriously not to drive it and to have it towed in (you can't arrange a tow from the desk),
+and log it with add_tech_note. Then carry on, offering the earliest open slot.
+
 The flow (a price question can be answered at any point, even before the lookup):
-1. Ask for their name, then (once they've answered) the phone number on their account,
-   one at a time and skipping whatever they've already given, and call lookup_customer.
-   Then find out which car (select_vehicle). If they mention mileage, call update_mileage.
-   Don't ask for anything else about them.
+1. Ask for their name on its own ("Can I get your name?"); once they've answered, ask for
+   the phone number on their account. Never both in one turn, and skip whatever they've
+   already given. Don't read the number back, unless they said part of it was unclear
+   ("...maybe four two"): then confirm just that part. Then call lookup_customer with both. Don't use their name until they've said
+   it. If it refuses over the name, share nothing from the file (not whose it is, the cars,
+   mileage, recalls, or appointments), and do what it says. Then find out which car
+   (select_vehicle); if "the 3" could be either car, ask which. If they mention mileage,
+   call update_mileage. Don't ask for anything else about them. lookup_customer also says
+   what's already booked on their file: if they're calling about that (or think they're
+   already booked), see "Appointments already booked" below instead of booking anything.
 2. If something's wrong (a noise, a vibration, a warning light, a leak), narrow it down, one
    question at a time, skipping whatever they've already told you:
    - what it sounds like: grinding, squealing, a clunk, a rattle, a hum;
@@ -448,24 +632,61 @@ The flow (a price question can be answered at any point, even before the lookup)
 3. add_tech_note says what the notes so far often point to. Say it once, cautiously, as a
    possibility ("that often points to worn brake pads, but the technician will confirm"),
    never as a diagnosis. If it says it may not be safe to drive, say that plainly, once.
-4. Sum the problem up with set_concern, e.g. "grinding from the front when braking". Don't
-   ask them to describe it again.
+   Failing brakes, smoke or burning, losing steering, a red or flashing warning light, or
+   overheating mean NOT SAFE TO DRIVE: say so clearly and seriously the moment you hear it,
+   before anything else (no recall pitch first): don't drive it, have it towed in (you can't
+   arrange a tow from the desk), and offer the earliest open slot.
+4. Sum the problem up with set_concern, e.g. "grinding from the front when braking". If
+   they've raised more than one problem, put each one in it ("grinding from the front when
+   braking; check engine light on"). Don't ask them to describe it again.
 5. Work out what it needs (set_services). A problem to look at is a diagnostic ($159). But
    when the car is in warranty and a part has failed (a liftgate, a window, electronics, a
-   leak), it's a warranty_repair, not a diagnostic: no charge, and the warranty covers
-   finding the fault. Brakes, tires, and wipers are wear items and never warranty.
+   leak), it can be a warranty_repair: no charge, and the warranty covers finding the
+   fault. Add it only if they asked for warranty work, or you explained it and they agreed
+   (warranty_agreed). Brakes, a grinding, tires, wipers, maintenance, and the recall are
+   never warranty. If set_services refuses a warranty repair, don't try it again.
 6. Always call check_recalls for that car's VIN. If there's an open recall, offer to add it
    and call decide_recall with their answer.
-7. Offer times (get_slots, then choose_slot) and transportation (choose_transport). Offer
+7. Offer times (get_slots, then choose_slot) and transportation (choose_transport). Every
+   time you offer comes from get_slots on this call: never make one up, and never offer
+   "today". Say the day as get_slots gives it ("tomorrow", "next Wednesday, October 21"),
+   and if they said "next Thursday", confirm the date ("Thursday the 22nd?"). Offer
    two or three times, not the whole calendar; if they haven't said a day, ask what works.
    Offer the times alone, not the advisors' names (the caller doesn't know them); once they
    pick one, say who they'll meet: "Dana, one of our service advisors, will meet you there."
    If it may not be safe to drive, offer the soonest drop-off first.
+   For how they get around, ask: wait in the lounge, the free shuttle, or a loaner (only
+   if quote_price says the visit qualifies). "I'll need a ride" isn't an answer: ask which.
 8. Call read_back and say what it returns, the concern included. Never sum up the
    appointment from memory instead: the read-back the caller agrees to must come from
-   read_back. When they say it's right, call book_service.
+   read_back. When they say it's right, call book_service right away, even if they ask
+   something in the same breath: book it, then answer.
+
+Appointments already booked (the one on their file, or one you booked on this call):
+- Questions about it: answer from what lookup_customer (or the tool that booked or moved it)
+  returned. Never book it again: if they think they're booked, they are.
+- A new time: get_slots with moving, and offer two or three times. The moment they pick
+  one, call move_appointment (without caller_confirmed): it returns the move to read back.
+  Ask them that, and only on a clear yes call it again with caller_confirmed true.
+- Cancelling: the moment they ask, call cancel_appointment (without caller_confirmed); don't
+  ask which one or whether they're sure first. It returns the cancellation to read back
+  ("Cancel the tire rotation on ...?"); ask them that, and only on a clear yes call it again
+  with caller_confirmed true. A "hmm" or "maybe" isn't a yes: leave it booked.
+- Any other change to what you booked on this call (add or drop a service, the car, the
+  ride): call change_booking, update that field, call read_back, and book_service on a yes.
+  "Add a tire rotation to that" right after booking means the visit you just booked, even
+  though a tire rotation on another car is already on file.
 
 Rules:
+- You handle everything on this call yourself. There's nobody to transfer to: never offer
+  to pass them to an advisor, a technician, a manager, or anyone else. If they ask for a
+  person, say you can take care of it and carry on. If they want the technician to know
+  something, log it with add_tech_note (other): the technician reads the notes at drop-off.
+- A spending limit ("don't do anything over $500 without calling me"): call
+  set_approval_limit right away, and say it's noted. Never promise the work will come in
+  under it, or what anything will cost.
+- Payment: {PAYMENT} Answer "can I pay by card, cash, or text?" from that only.
+- There are no discount codes or coupons: if they ask, say so plainly.
 - Whenever the caller asks what anything costs, call quote_price first, every time, even
   when you expect there's no price, and answer only from what it returns. Never say a
   price you didn't get from it. For a repair with no set price, like a brake job, say the
@@ -485,7 +706,10 @@ Rules:
   it's a step you skipped, just do that step; don't mention it to the caller.
 - After book_service, always say the confirmation number before hanging up.
 - If the time they asked for isn't open, say so and offer the nearest ones before holding
-  one. If they haven't said how they'll get around, ask before calling choose_transport."""
+  one. If they haven't said how they'll get around, ask before calling choose_transport.
+- Never promise anything a tool didn't say: no same-day visits ("can I get it today?"
+  for recall parts: say what check_recalls said, and that the earliest opening is what
+  get_slots offers), no prices, no policies."""
 
 
 class RepairCallAgent(Agent):
@@ -493,7 +717,7 @@ class RepairCallAgent(Agent):
     and the technician has found the cause."""
 
     def __init__(self, desk: ServiceDesk) -> None:
-        super().__init__(instructions=_outbound_instructions(desk), tools=[transfer_to_advisor])
+        super().__init__(instructions=_outbound_instructions(desk))
         self._wrapped_at: float | None = None  # the pickup summary, or ending without it
 
     async def on_enter(self) -> None:
@@ -595,23 +819,48 @@ class RepairCallAgent(Agent):
 
     @function_tool
     async def arrange_pickup(
-        self, ctx: Ctx, ride: Literal["shuttle", "self"], where: str = ""
+        self,
+        ctx: Ctx,
+        ride: Literal["shuttle", "self"],
+        where: str = "",
+        collected_by: str = "",
     ) -> str:
-        """How the customer gets back to the dealership for the car.
+        """How the car gets picked up: the customer comes back for it, or sends someone.
 
         Args:
-            ride: shuttle (the free courtesy shuttle picks them up) or self (they'll come in
-                on their own).
+            ride: shuttle (the free courtesy shuttle picks them up) or self (they, or whoever
+                they send, come in on their own).
             where: For the shuttle, where to pick them up, as they said it, e.g. "home".
+            collected_by: Someone else collecting the car for them, e.g. "their friend
+                Sam". Leave out if it's the customer.
         """
         with _desk_rules(ctx) as desk:
-            v = desk.arrange_pickup(ride, where)
+            v = desk.arrange_pickup(ride, where, collected_by)
+        by = f" {PICKUP_BY_SOMEONE_ELSE}" if v.collected_by else ""
         if ride == "shuttle":
             detail = f"Shuttle from {v.pickup_from}, {desk.shuttle_when()}"
             ctx.userdata.page.record("arrange_pickup", detail)
-            return f"The shuttle picks them up from {v.pickup_from} {desk.shuttle_when()}."
-        ctx.userdata.page.record("arrange_pickup", "Coming in themselves")
-        return "They're coming in on their own."
+            return f"The shuttle picks them up from {v.pickup_from} {desk.shuttle_when()}.{by}"
+        detail = f"Collected by {v.collected_by}" if v.collected_by else "Coming in themselves"
+        ctx.userdata.page.record("arrange_pickup", detail)
+        return f"Coming in on their own.{by} Now call pickup_summary."
+
+    @function_tool
+    async def note_concern(self, ctx: Ctx, concern: str) -> str:
+        """Something new they've noticed with the car (a new noise since the repair, a
+        light), noted on the visit for the technician to check when they come in.
+
+        Args:
+            concern: What they noticed, in a few words, e.g. "new rattle from the back".
+        """
+        with _desk_rules(ctx) as desk:
+            concern = desk.note_concern(concern)
+        ctx.userdata.page.record("note_concern", concern)
+        return (
+            f"Noted on the visit: {concern}. Tell them it's noted and the technician can check "
+            "it when they come in. Stay neutral: don't say what caused it, admit fault, or "
+            "promise free work."
+        )
 
     @function_tool
     async def pickup_summary(self, ctx: Ctx) -> str:
@@ -670,9 +919,11 @@ class RepairCallAgent(Agent):
         if not desk.call_done or not any(t > (self._wrapped_at or 0) for t in spoken):
             ud.page.record("end_call", "Refused: ready time and total not given yet")
             raise ToolError(
-                "Get an answer on each repair that needs doing now, set the ride, call "
-                "pickup_summary, and tell them what it returns before ending the call. If it's "
-                "the wrong person, or a bad time, call end_without_update instead."
+                "Not yet: call pickup_summary now and say what it returns (the ready time and "
+                "the total come from it, never from memory). If a repair that needs doing now "
+                "has no answer or the ride isn't set, it says what to ask. Only if it's the "
+                "wrong person, or a bad time before anything was decided, call "
+                "end_without_update instead."
             )
         v = desk.visit
         reason = ENDED_EARLY[v.ended_early] if v and v.ended_early else "Call complete"
@@ -710,10 +961,15 @@ def _ready_choices(desk: ServiceDesk, now: list[Finding]) -> str:
 
 
 def _decided(desk: ServiceDesk, result: str, notes: list[str]) -> str:
+    total = desk.ticket_total()
+    lines = " + ".join(f"{label.lower()} ${price:.0f}" for label, price in desk.ticket() if price)
     out = [
+        # the total first, so a repair's own price is never said as what's due
+        f"TOTAL DUE AT PICKUP IS NOW ${total:.0f} ({lines}). If you say a total, it's "
+        f"${total:.0f}, never a single repair's price.",
         result,
         *notes,
-        f"Ticket total now ${desk.ticket_total():.0f}, ready {desk.ready_when()}.",
+        f"Ready {desk.ready_when()}.",
     ]
     if left := desk.undecided():
         out.append(f"Still to ask about: {', '.join(f.title.lower() for f in left)}.")
@@ -772,12 +1028,27 @@ rather not.
 - Something that can wait (like pads that are low but fine for now): say it's not urgent
   and fine to do at the next visit, and offer to note it (note_for_next_visit). If they'd
   rather do it today too, approve it.
+- Every price and total you say comes from the latest tool result. After approve_repair or
+  decline_repair, the total due is the "TOTAL DUE AT PICKUP" it leads with, never a single
+  repair's price or an earlier total.
+- Something new they've noticed (a new noise since the repair, a light): note_concern. Say
+  it's noted and the technician can check it when they come in; don't guess the cause,
+  admit fault, or promise free work.
+- You handle everything on this call yourself: never offer to pass them to an advisor, the
+  technician, a manager, or anyone else. If they want to talk to the technician, you have
+  the technician's findings: answer from repair_details, and if the answer isn't there, say
+  plainly you don't have that detail.
+- Payment: {PAYMENT} Answer "can I pay by card, cash, or text?" from that only.
+- There are no discount codes or coupons: if they ask, say so plainly.
 
 # Your car is ready
 When every repair that needs doing now has an answer, ask how they'll get back for the car:
 the free courtesy shuttle can pick them up (arrange_pickup with shuttle and where from), or
-they can come in on their own (arrange_pickup with self). Then call pickup_summary and say
-what it returns in two or three sentences: when it's ready, the total due, and the ride.
+they can come in on their own (arrange_pickup with self). If someone else is picking it
+up for them, pass collected_by: {PICKUP_BY_SOMEONE_ELSE} Never make up any other rule
+(no authorized drivers, no forms). Then call pickup_summary and say what it returns in two
+or three sentences: when it's ready, the total due, and the ride. Once a repair has an
+answer, always finish this way, never with end_without_update.
 Ask if there's anything else, say goodbye, and call end_call."""
 
 
@@ -837,7 +1108,7 @@ async def entrypoint(ctx: JobContext) -> None:
         agent = RepairCallAgent(desk)
     else:
         desk = demo_desk(name, today)
-        agent = LeoAgent(desk)
+        agent = NickAgent(desk)
 
     tts = inference.TTS(
         "cartesia/sonic-3.5",
@@ -852,6 +1123,7 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=inference.STT("deepgram/nova-3", language="en"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=tts,
+        user_away_timeout=USER_AWAY_TIMEOUT,
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(version="v1"),
             interruption={"mode": "adaptive"},
@@ -865,6 +1137,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # the caller hung up, or the agent did: close the room, and the phone line with it
     session.on("close", lambda _: ctx.delete_room())
+    # a line gone quiet: one check, then a goodbye and a hang-up (never in a simulation)
+    hang_up_when_silent(session, session.userdata.page)
     # the demo website, if it's watching: the page that asked to ring a phone, the browser
     # caller, or viewers of a call to the service desk's number
     session.userdata.page.watch(ctx.room, session, page=meta.get("page"), caller=caller)
@@ -892,7 +1166,7 @@ async def ring(
     from_number: str,
     tts: inference.TTS,
 ) -> None:
-    """Rings a real phone; Leo joins only once a person has picked up."""
+    """Rings a real phone; Nick joins only once a person has picked up."""
     page = session.userdata.page
     # a listener of its own answers first, so nothing reaches the line until it's known who,
     # or what, picked up

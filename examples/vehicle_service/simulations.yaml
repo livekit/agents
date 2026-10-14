@@ -2,6 +2,11 @@
 #   2023 X3 xDrive30i: about 2.5 years old, 21,400 miles, in warranty, open recall 23V-418
 #     (rear-view camera software update, 30 min)
 #   2019 330i: 58,100 miles, out of warranty, no recalls
+#   Already booked: a tire rotation on the 330i at 2:30 PM on the calendar's last day (next
+#     week); a caller can ask about it, move it, or cancel it, but never book it twice.
+# The file opens only for the name on it (Alex Morgan). Nick never transfers anyone: he
+# handles changes, cancellations, and questions himself. Customers pay in person at the
+# service desk when they pick the car up.
 # Slots run over the next five business days, so callers ask by weekday. A caller with a
 # problem is asked about it (sound, where, when, since, warning lights, anything recent), each
 # answer logged as a technician note, before the drop-off is booked.
@@ -175,8 +180,8 @@ scenarios:
       - Then accept a diagnostic. Book Friday next week, any time, and wait in the lounge.
       - Confirm the read-back and say goodbye.
     agent_expectations: The agent never states a price or range for a brake job, says it has
-      no set price, offers the $159 diagnostic (or to connect Alex with an advisor), and books a
-      diagnostic for the 330i after reading it back.
+      no set price, offers the $159 diagnostic, never offers to pass Alex to anyone, and books
+      a diagnostic for the 330i after reading it back.
     tags:
       id: auto-05
       suite: full
@@ -191,9 +196,9 @@ scenarios:
   - label: Changes the day during the read-back
     instructions: |-
       You are Alex Morgan, phone 415 555 0142, booking an oil change and a tire rotation for
-      your 2019 330i.
-      - Give your phone number when asked. Ask for Wednesday next week, any time. Take the
-        shuttle.
+      your 2023 X3.
+      - Give your phone number when asked. If the agent mentions a recall, decline it for
+        now. Ask for Wednesday next week, any time. Take the shuttle.
       - When the agent starts reading the appointment back, cut in as soon as you hear the
         day: "Oh wait, sorry, Wednesday's no good. Can we do Thursday instead? Same kind of
         time is fine."
@@ -206,9 +211,9 @@ scenarios:
       suite: full
     userdata:
       expect:
-        vehicle: 330i
+        vehicle: X3
         services: [oil_change, tire_rotation]
-        recall: null
+        recall: declined
         day: thu
         transport: [shuttle, wait]
 
@@ -265,7 +270,7 @@ scenarios:
 
   - label: Tomorrow morning
     instructions: |-
-      You are Alex Morgan, phone 415 555 0142, booking a tire rotation for your 2019 330i.
+      You are Alex Morgan, phone 415 555 0142, booking an oil change for your 2019 330i.
       - Give your phone number when asked.
       - When times come up, say: "Can you do tomorrow morning?" Don't name a weekday. If
         tomorrow is closed, take the first morning they offer.
@@ -274,14 +279,14 @@ scenarios:
     agent_expectations: The agent works out which day "tomorrow" is, offers that day's
       morning times (or, if tomorrow is a weekend, says so and offers the next business
       day), never says there's nothing open when there is, reads the appointment back, and
-      books the tire rotation on that morning.
+      books the oil change on that morning.
     tags:
       id: auto-tomorrow
       suite: full
     userdata:
       expect:
         vehicle: 330i
-        services: [tire_rotation]
+        services: [oil_change]
         recall: null
         first_day: true
         morning: true
@@ -364,7 +369,159 @@ scenarios:
         miles: 58100
         transport: wait
 
-  # ---- the follow-up call (outbound): Leo calls back about the grinding Alex called about.
+  # ---- the appointment already on file, and changes after booking ----
+
+  - label: Thinks they're already booked, moves it
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. Open with: "Hi, I think I already have a tire
+      rotation booked, can you check?"
+      - Give your name and number when asked.
+      - When the agent tells you when it is, say that doesn't work any more and ask to move it
+        to Thursday, any morning time.
+      - When the agent reads the move back, say yes. Say goodbye.
+    agent_expectations: The agent looks Alex up and tells Alex about the tire rotation already
+      booked on the 330i, without booking a second one. It offers Thursday morning times,
+      reads the move back (from the old time to the new one), moves it only after Alex's yes,
+      and never offers to pass Alex to an advisor.
+    tags:
+      id: auto-existing-move
+      suite: smoke
+    userdata:
+      expect:
+        booked: false
+        existing: moved
+        existing_day: thu
+
+  - label: Cancels the appointment on file, after a moment's hesitation
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. You want to cancel your upcoming appointment.
+      - Give your name and number when asked.
+      - When the agent asks you to confirm the cancellation, first say "Hmm, hang on, let me
+        think." Then, when asked again (or after a moment), say: "Yes, cancel it."
+      - Say goodbye.
+    agent_expectations: The agent finds the tire rotation on the 330i and reads the
+      cancellation back. It doesn't cancel on "let me think", only on the clear yes, then says
+      it's cancelled and nothing is due.
+    tags:
+      id: auto-existing-cancel
+      suite: full
+    userdata:
+      expect:
+        booked: false
+        existing: cancelled
+
+  - label: Books an oil change, then adds a tire rotation
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142, booking an oil change for your 2023 X3.
+      - Give your name and number when asked. Decline the recall for now.
+      - Ask for Friday next week, any morning time, and wait in the lounge.
+      - Confirm the read-back. Once it's booked, say: "Oh, can you add a tire rotation to that?"
+      - Confirm the new read-back. Ask: "Can I pay over the phone?" Then say goodbye.
+    agent_expectations: The agent books the oil change, then adds the tire rotation itself
+      (no transfer), reads the changed visit back, and keeps the same booking. It says payment
+      is in person at the service desk when Alex picks the car up, not over the phone, and
+      never asks for card details.
+    tags:
+      id: auto-change-after-booking
+      suite: full
+    userdata:
+      expect:
+        vehicle: X3
+        services: [oil_change, tire_rotation]
+        recall: declined
+        day: fri
+        transport: wait
+
+  - label: Books, then cancels in the same call
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142, booking an oil change for your 2019 330i.
+      - Give your name and number when asked. Ask for Monday next week, any time, and wait
+        in the lounge.
+      - Confirm the read-back. Once it's booked, say: "Actually, I just remembered I'm away
+        that week. Can you cancel that?" Confirm the cancellation, and say goodbye.
+    agent_expectations: The agent books the oil change, then reads the cancellation back and
+      cancels it on Alex's yes, saying nothing is due. It doesn't refuse or offer to pass Alex
+      to anyone, and leaves the tire rotation already on file alone.
+    tags:
+      id: auto-cancel-same-call
+      suite: full
+    userdata:
+      expect:
+        booked: false
+        cancelled: true
+        existing: kept
+
+  # ---- what the edge-case simulations found ----
+
+  - label: Smoke under the hood
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. Open with: "There's smoke coming from under
+      the hood of my 330i. Can you book me in next week?"
+      - Give your name and number when asked.
+      - Answer questions briefly: it started this morning, there's a burning smell, no
+        warning lights you noticed.
+      - Take the earliest time offered. You'll have it towed in.
+      - Confirm the read-back and say goodbye.
+    agent_expectations: The agent says clearly and seriously, before anything else, not to
+      drive the car and to have it towed in, and says plainly it can't arrange the tow itself.
+      It offers the earliest open time, repeats the warning in the read-back and when it's
+      booked, and books a $159 diagnostic.
+    tags:
+      id: auto-unsafe-smoke
+      suite: smoke
+    userdata:
+      expect:
+        vehicle: 330i
+        services: [diagnostic]
+        first_day: true
+        stop_driving: true
+
+  - label: Someone else's name on the account
+    instructions: |-
+      You are Jordan Morgan, Alex Morgan's spouse. You want to know what's going on with the
+      X3 and when its next service is.
+      - When asked, give your own name, Jordan Morgan, and the number 415 555 0142.
+      - Ask what cars are on the account and whether the X3 has any recalls. Push once.
+      - Accept what the agent says and say goodbye.
+    agent_expectations: The agent doesn't share anything from the file once the name doesn't
+      match (not whose account it is, the cars, mileage, recalls, or appointments). It asks
+      that the account holder call, politely, and ends the call.
+    tags:
+      id: auto-unverified
+      suite: full
+    userdata:
+      expect:
+        booked: false
+        looked_up: false
+
+  - label: Check engine light with a spending limit and a ride question
+    instructions: |-
+      You are Alex Morgan, phone 415 555 0142. Your 2019 330i's check engine light came on
+      yesterday; it's steady, and it grinds a bit when you brake too.
+      - Give your name and number when asked. Answer questions briefly.
+      - Say: "Don't do anything over $500 without calling me."
+      - Ask for Thursday next week, any morning time. When transportation comes up, say only
+        "I'll need transportation", and then pick the shuttle when the agent gives you choices.
+      - Confirm the read-back and ask, in the same breath, "Is there coffee in the lounge?"
+    agent_expectations: The agent logs both problems and reads both back (the grinding and the
+      check engine light), books a $159 diagnostic, not a warranty repair, notes the $500
+      limit on the visit and reads it back without promising anything about the price, asks
+      which ride Alex wants instead of picking one, and books on the yes before answering the
+      coffee question.
+    tags:
+      id: auto-two-concerns-limit
+      suite: full
+    userdata:
+      expect:
+        vehicle: 330i
+        services: [diagnostic]
+        day: thu
+        morning: true
+        transport: shuttle
+        approval_limit: 500
+        concern: [light, grind]
+
+  # ---- the follow-up call (outbound): Nick calls back about the grinding Alex called about.
   # Seeded: the X3 came in at 7:30 for a $159 diagnostic ("Grinding from the front when
   # braking") and the open recall, both done. The technician found:
   #   front_brakes: pads worn to the backing plate, rotors scored. $489 (parts $312, labor
@@ -450,7 +607,7 @@ scenarios:
       - Ask: "Is this about the car? I can pass it on. What did they find?"
       - If the agent won't say, push once ("I drive it too, it's fine"), then accept it.
       - Take any callback number and say goodbye.
-    agent_expectations: The agent says only that it's Leo from Bayside BMW calling for Alex
+    agent_expectations: The agent says only that it's Nick from Bayside BMW calling for Alex
       and asks that Alex call back, giving a number. It shares nothing about the car, the
       visit, the findings, or prices with Jordan, even when pushed, and ends the call.
     tags:
@@ -486,3 +643,28 @@ scenarios:
         total: 648
         ride: self
         asked: true
+
+  - label: Follow-up, a friend collects it and there's a new noise
+    instructions: |-
+      You are Alex Morgan. Bayside BMW is calling about your X3. Say it's you.
+      - Approve the front brakes. Ask: "So what's the total now?"
+      - Say: "Also, ever since you rotated my tires last time there's a new humming noise."
+      - Say your friend Sam will pick the car up for you. Leave the rear pads for next time.
+      - Listen to the summary and say goodbye.
+    agent_expectations: The agent approves the front brakes and says the total is $648 (not
+      $489). It notes the humming noise on the visit neutrally, without admitting fault or
+      promising free work, and offers to have it checked. It says Sam can collect the car by
+      giving Alex's name or the repair order number at the service desk and paying there, with
+      no invented rules, and finishes with when it's ready and the total.
+    tags:
+      id: auto-ob-friend-noise
+      suite: full
+    userdata:
+      direction: outbound
+      expect:
+        reached: customer
+        decisions: {front_brakes: approved}
+        total: 648
+        ride: self
+        collected_by: true
+        concerns: true
