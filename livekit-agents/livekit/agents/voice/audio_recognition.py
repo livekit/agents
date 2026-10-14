@@ -1552,6 +1552,8 @@ class AudioRecognition:
             last_speaking_time: float | None = None,
             last_final_transcript_time: float | None = None,
             speech_start_time: float | None = None,
+            committed_transcript: str = "",
+            committed_confidence: list[float] | None = None,
         ) -> None:
             endpointing_delay = self._endpointing.min_delay
             # a turn created here (no VAD/start-of-speech opened it) starts at the earliest
@@ -1749,11 +1751,17 @@ class AudioRecognition:
                     delay_completed = True
                     pass
 
-            confidence_avg = (
-                sum(self._final_transcript_confidence) / len(self._final_transcript_confidence)
-                if self._final_transcript_confidence
-                else 0
-            )
+            # a manual commit has already decided what the turn is: when
+            # `clear_user_turn()` ran during the endpointing delay, the live fields
+            # belong to the next turn, so deliver what was committed instead
+            cleared_after_commit = trigger == "manual" and not self._user_turn_committed
+            if cleared_after_commit:
+                transcript = committed_transcript
+                confidences = committed_confidence or []
+            else:
+                transcript = self._audio_transcript
+                confidences = self._final_transcript_confidence
+            confidence_avg = sum(confidences) / len(confidences) if confidences else 0
 
             # sometimes, we can't calculate the metrics because VAD was unreliable or
             # the speaking anchor is stale/out-of-order (see issue #6093). in this case,
@@ -1766,7 +1774,7 @@ class AudioRecognition:
             )
             end_of_turn = _EndOfTurnInfo(
                 skip_reply=skip_reply,
-                new_transcript=self._audio_transcript,
+                new_transcript=transcript,
                 transcript_confidence=confidence_avg,
                 metrics=metrics,
                 backchannel_over_agent=self._turn_backchannel_over_agent,
@@ -1788,7 +1796,7 @@ class AudioRecognition:
                 )
                 user_turn_span.set_attributes(
                     {
-                        trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
+                        trace_types.ATTR_USER_TRANSCRIPT: transcript,
                         trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
                         trace_types.ATTR_TRANSCRIPTION_DELAY: metrics.transcription_delay or 0,
                         trace_types.ATTR_END_OF_TURN_DELAY: metrics.end_of_turn_delay or 0,
@@ -1809,9 +1817,11 @@ class AudioRecognition:
                 self._reset_transcription_timeout()
 
                 # clear the transcript if the user turn was committed
-                self._audio_transcript = ""
-                self._final_transcript_confidence = []
-                self._last_final_transcript_time = None
+                # (already done by `clear_user_turn()`; what came after is the next turn's)
+                if not cleared_after_commit:
+                    self._audio_transcript = ""
+                    self._final_transcript_confidence = []
+                    self._last_final_transcript_time = None
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
@@ -1841,6 +1851,8 @@ class AudioRecognition:
                 self._last_speaking_time,
                 self._last_final_transcript_time,
                 self._user_turn_start,
+                committed_transcript=self._audio_transcript,
+                committed_confidence=list(self._final_transcript_confidence),
             )
         )
 

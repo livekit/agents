@@ -29,13 +29,16 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import LanguageCode, vad
+from livekit.agents import LanguageCode, llm, stt, vad
 from livekit.agents.utils import aio
+from livekit.agents.voice import AgentSession
 from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
     _StreamingTurnDetector,
@@ -714,3 +717,95 @@ class TestVadMinSilenceRequirement:
         # Aborted before building a stream — and without calling .stream().
         assert ar._turn_detector_stream is None
         detector.stream.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Manual commit followed by clear_user_turn (#7806)
+# ---------------------------------------------------------------------------
+
+
+class _ManualTurnHooks:
+    def __init__(self) -> None:
+        self.end_of_turn_transcripts: list[str] = []
+
+    def on_end_of_turn(self, info: object) -> bool:
+        self.end_of_turn_transcripts.append(info.new_transcript)  # type: ignore[attr-defined]
+        return True
+
+    def retrieve_chat_ctx(self) -> llm.ChatContext:
+        return llm.ChatContext.empty()
+
+    def __getattr__(self, _name: str) -> object:  # remaining hooks are unused here
+        return lambda *a, **k: None
+
+
+async def _idle_stt(audio: object, _settings: object) -> AsyncIterator[stt.SpeechEvent]:
+    async for _ in audio:  # type: ignore[attr-defined]
+        pass
+    return
+    yield
+
+
+@contextlib.asynccontextmanager
+async def _manual_recognition(
+    min_delay: float,
+) -> AsyncIterator[tuple[AudioRecognition, _ManualTurnHooks]]:
+    hooks = _ManualTurnHooks()
+    rec = AudioRecognition(
+        AgentSession(),
+        hooks=hooks,  # type: ignore[arg-type]
+        endpointing=BaseEndpointing(min_delay=min_delay, max_delay=3.0),
+        stt=_idle_stt,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="manual",
+    )
+    rec._start()
+    try:
+        yield rec, hooks
+    finally:
+        await rec._aclose()
+
+
+async def _commit_at_ptt_release(rec: AudioRecognition, transcript: str) -> str:
+    # state at push-to-talk release: a FINAL just landed and speech ended shortly before,
+    # so the commit takes its fast path and the bounce still sleeps out the endpointing delay
+    now = time.time()
+    rec._audio_transcript = transcript
+    rec._last_final_transcript_time = now
+    rec._last_speaking_time = now - 0.05
+    return await rec._commit_user_turn(
+        audio_detached=True, transcript_timeout=1.0, stt_flush_duration=2.0
+    )
+
+
+class TestManualCommitThenClearUserTurn:
+    async def test_clear_after_commit_keeps_committed_transcript(self) -> None:
+        async with _manual_recognition(min_delay=0.2) as (rec, hooks):
+            committed = await _commit_at_ptt_release(rec, "what's the weather tomorrow")
+            rec._clear_user_turn()
+            assert rec._end_of_turn_task is not None
+            await rec._end_of_turn_task
+
+        assert committed == "what's the weather tomorrow"
+        assert hooks.end_of_turn_transcripts == ["what's the weather tomorrow"]
+
+    async def test_clear_after_commit_leaves_next_turn_transcript_alone(self) -> None:
+        async with _manual_recognition(min_delay=0.2) as (rec, hooks):
+            await _commit_at_ptt_release(rec, "first turn")
+            rec._clear_user_turn()
+            rec._audio_transcript = "second turn"  # a FINAL for the next turn
+            assert rec._end_of_turn_task is not None
+            await rec._end_of_turn_task
+
+            assert hooks.end_of_turn_transcripts == ["first turn"]
+            assert rec._audio_transcript == "second turn"
+
+    async def test_commit_without_clear_still_delivers_live_transcript(self) -> None:
+        async with _manual_recognition(min_delay=0.2) as (rec, hooks):
+            await _commit_at_ptt_release(rec, "hello")
+            assert rec._end_of_turn_task is not None
+            await rec._end_of_turn_task
+
+            assert hooks.end_of_turn_transcripts == ["hello"]
+            assert rec._audio_transcript == ""
