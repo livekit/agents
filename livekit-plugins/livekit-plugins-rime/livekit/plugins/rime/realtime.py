@@ -343,9 +343,15 @@ class RealtimeSession(llm.RealtimeSession):
             elif parent is not None:
                 try:
                     ref = await sdk.continue_reply(parent)
-                except RimeInputError:
+                except (RimeInputError, r.RimeRealtimeError) as error:
+                    if isinstance(error, r.RimeRealtimeError) and (
+                        error.fault.scope != "event"
+                        or error.fault.code != "tool_continuation_unavailable"
+                    ):
+                        raise
                     # A new user turn can supersede the round between result acknowledgment
-                    # and this call. Reporting a result is a separate, explicit operation.
+                    # and this call, or the server's tool wait can expire. Reporting a
+                    # recorded result is a separate operation and never reruns the tool.
                     call = next(
                         (
                             c
@@ -429,10 +435,12 @@ class RealtimeSession(llm.RealtimeSession):
         generation = self._generations.get(response_id)
         if generation is None:
             return
+        if message_id is not None and message_id not in generation.outputs:
+            return
         if interrupted and interrupted_by_user:
             outputs = (
                 [generation.outputs[message_id]]
-                if message_id in generation.outputs
+                if message_id is not None
                 else list(generation.outputs.values())
             )
             generation.skipped_by_user = message_id is None

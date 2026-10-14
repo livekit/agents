@@ -645,3 +645,90 @@ async def test_cancel_before_acceptance_reports_zero_playback_after_terminal():
         assert (await next_reply).response_id == next_id
         assert peer.receipts.empty()
         assert not errors
+
+
+@pytest.mark.parametrize("code", ["tool_continuation_unavailable", "tool_continuation_not_ready"])
+async def test_expired_tool_continuation_reports_result_without_reexecution(code):
+    ran = []
+
+    @function_tool
+    async def lookup() -> str:
+        """Look up a value."""
+        ran.append(True)
+        return "42"
+
+    async with peer_model() as (peer, model, _):
+        async with AgentSession(llm=model) as session:
+            await session.start(Agent(instructions="test", tools=[lookup]))
+            speech = session.generate_reply()
+            parent = await peer.start(await peer.next())
+            peer.refusals["response.create"] = (code, "event")
+            await peer.emit(
+                "response.function_call_arguments.done",
+                response_id=parent,
+                item_id="tool",
+                call_id="call",
+                name="lookup",
+                arguments="{}",
+            )
+            await peer.end(parent)
+            await peer.emit("prism.typed_input.ready")
+            if code == "tool_continuation_unavailable":
+                report = await peer.next()
+                assert report["response"]["metadata"]["prism_cause"] == "proactive"
+                assert report["response"]["prism_call_id"] == "call"
+                response_id = await peer.start(report)
+                await peer.message(response_id, text="The result is 42.")
+                await peer.end(response_id)
+            await asyncio.wait_for(speech.wait_for_playout(), 3)
+            assert ran == [True]
+            assert len(peer.items) == 1
+            assert peer.items[0]["call_id"] == "call"
+            if code == "tool_continuation_unavailable":
+                assert speech.exception() is None
+                assert any(
+                    item.text_content == "The result is 42."
+                    for item in session.history.items
+                    if isinstance(item, llm.ChatMessage)
+                )
+            else:
+                assert speech.exception().code == code
+                assert peer.requests.empty()
+
+
+@pytest.mark.parametrize("interrupted,by_user", [(True, True), (True, False), (False, False)])
+async def test_stale_playback_message_is_ignored(interrupted, by_user):
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.initialize(instructions="test")
+        reply = session.generate_reply()
+        response_id = await peer.start(await peer.next())
+        item_id = await peer.message(response_id)
+        await peer.end(response_id)
+        await reply
+        async with session._generation_ready:
+            await asyncio.wait_for(
+                session._generation_ready.wait_for(lambda: session._generations[response_id].ended),
+                3,
+            )
+        session.playback_finished(
+            response_id=response_id,
+            message_id="stale-message",
+            audio_end_ms=999,
+            audio_transcript="wrong transcript",
+            interrupted=interrupted,
+            interrupted_by_user=by_user,
+        )
+        session.playback_finished(
+            response_id=response_id,
+            message_id=item_id,
+            audio_end_ms=20,
+            interrupted=False,
+            interrupted_by_user=False,
+        )
+        receipt = await asyncio.wait_for(peer.receipts.get(), 3)
+        assert receipt["played_ms"] == 20
+        assert peer.receipts.empty()
+        assert peer.truncations.empty()
+        assert not peer.cancel_received.is_set()
+        assert session.chat_ctx.get_by_id(item_id).text_content == "Hello"
