@@ -390,10 +390,15 @@ class _ToolExecutor:
 
             if isinstance(output, BaseException):
                 if isinstance(output, ToolError):
+                    # Keep detail out of the message body so redaction can
+                    # drop it (a log body cannot be redacted).
                     logger.warning(
-                        "ToolError while executing tool: %s",
-                        output.message,
-                        extra={"function": fnc_name, "call_id": call_id},
+                        "ToolError while executing tool",
+                        extra={
+                            "function": fnc_name,
+                            "call_id": call_id,
+                            "lk.pii.error": output.message,
+                        },
                     )
                 else:
                     logger.error(
