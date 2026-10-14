@@ -429,6 +429,78 @@ async def test_caller_skips_response_before_output_item_arrives(has_message):
         assert peer.receipts.empty()
 
 
+@pytest.mark.parametrize("delta_type", ["text", "audio"])
+@pytest.mark.parametrize(
+    "interruption", ["before_output", "all_outputs", "message", "unheard_message"]
+)
+async def test_caller_skipped_response_discards_late_output(delta_type, interruption):
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        errors = []
+        session.on("error", errors.append)
+        await session.initialize(instructions="test")
+        future = session.generate_reply()
+        response_id = await peer.start(await peer.next())
+        generation = await future
+        item_id = "skipped-message"
+        common = {
+            "response_id": response_id,
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+        }
+        if interruption != "before_output":
+            await peer.emit(
+                "response.output_item.added",
+                response_id=response_id,
+                output_index=0,
+                item={"id": item_id, "type": "message"},
+            )
+            output = await generation.message_stream.__anext__()
+            await peer.emit("response.text.delta", **common, delta="Initial transcript")
+            assert await output.text_stream.__anext__() == "Initial transcript"
+        session.playback_finished(
+            response_id=response_id,
+            message_id=item_id if interruption in ("message", "unheard_message") else None,
+            audio_end_ms=20 if interruption == "message" else 0,
+            interrupted=True,
+            interrupted_by_user=True,
+            **({"audio_transcript": "Heard"} if interruption == "message" else {}),
+        )
+        if interruption == "before_output":
+            await peer.emit(
+                "response.output_item.added",
+                response_id=response_id,
+                output_index=0,
+                item={"id": item_id, "type": "message"},
+            )
+        delta = "Unheard" if delta_type == "text" else base64.b64encode(b"\0\0" * 480).decode()
+        for _ in range(300):
+            await peer.emit(f"response.{delta_type}.delta", **common, delta=delta)
+            await asyncio.sleep(0.001)
+        await peer.emit("response.text.done", **common, text="Unheard final transcript")
+        await peer.emit("response.audio.done", **common)
+        report = await asyncio.wait_for(peer.truncations.get(), 3)
+        assert report["item_id"] == item_id
+        assert report["audio_end_ms"] == (20 if interruption == "message" else 0)
+        await peer.end(response_id, status="cancelled")
+        assert [message async for message in generation.message_stream] == []
+        message = session.chat_ctx.get_by_id(item_id)
+        if interruption == "message":
+            assert isinstance(message, llm.ChatMessage)
+            assert message.text_content == "Heard"
+        else:
+            assert message is None
+        assert not errors
+        await peer.emit("prism.typed_input.ready")
+        future = session.generate_reply()
+        next_id = await peer.start(await peer.next())
+        await peer.end(next_id)
+        assert (await future).response_id == next_id
+        assert peer.truncations.empty()
+        assert peer.receipts.empty()
+
+
 @pytest.mark.parametrize("max_tool_steps", [0, 1, 2])
 async def test_agent_session_tool_step_limit_reports_unsupported_tool_choice(max_tool_steps):
     ran = []

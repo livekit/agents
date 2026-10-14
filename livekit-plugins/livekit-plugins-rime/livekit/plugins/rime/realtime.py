@@ -93,6 +93,7 @@ class _Message:
     )
     transcript: str = ""
     played_transcript: str | None = None
+    discarded: bool = False
 
 
 @dataclass
@@ -309,6 +310,8 @@ class RealtimeSession(llm.RealtimeSession):
     def clear_audio(self) -> None:
         while not self._audio.empty():
             self._audio.get_nowait()
+        # The SDK holds its audio lock across sends and clears, so an in-flight
+        # chunk finishes before this clear reaches the server.
         self._spawn(self._require().clear_audio())
 
     def generate_reply(
@@ -447,16 +450,22 @@ class RealtimeSession(llm.RealtimeSession):
                 if message_id is not None
                 else list(generation.outputs.values())
             )
-            generation.skipped_by_user = message_id is None
+            if message_id is None:
+                generation.skipped_by_user = True
             for message in outputs:
-                if is_given(audio_transcript):
-                    message.played_transcript = audio_transcript
+                message.discarded = True
+                message.text.close()
+                message.audio.close()
+                if is_given(audio_transcript) or generation.skipped_by_user or audio_end_ms == 0:
+                    message.played_transcript = (
+                        audio_transcript if is_given(audio_transcript) else ""
+                    )
                     if generation.ended:
                         self._chat._upsert_item(
                             llm.ChatMessage(
                                 id=message.output.item_id,
                                 role="assistant",
-                                content=[audio_transcript],
+                                content=[message.played_transcript],
                             )
                         )
                 self._spawn(
@@ -581,6 +590,17 @@ class RealtimeSession(llm.RealtimeSession):
                 return
             message = _Message(payload.output)
             generation.outputs[payload.output.item_id] = message
+            if generation.skipped_by_user:
+                message.discarded = True
+                message.played_transcript = ""
+                message.text.close()
+                message.audio.close()
+                self._spawn(
+                    self._report_playback(
+                        r.PlaybackInterrupted(output=payload.output, audio_end_ms=0)
+                    )
+                )
+                return
             modalities: asyncio.Future[list[Literal["text", "audio"]]] = (
                 asyncio.get_running_loop().create_future()
             )
@@ -593,17 +613,13 @@ class RealtimeSession(llm.RealtimeSession):
                     modalities=modalities,
                 )
             )
-            if generation.skipped_by_user:
-                self._spawn(
-                    self._report_playback(
-                        r.PlaybackInterrupted(output=payload.output, audio_end_ms=0)
-                    )
-                )
         elif isinstance(payload, (r.TextDelta, r.TextDone, r.AudioDelta, r.AudioDone)):
             generation = self._generations[payload.output.response.response_id]
-            if generation.abandoned:
+            if generation.abandoned or generation.skipped_by_user:
                 return
             message = generation.outputs[payload.output.item_id]
+            if message.discarded:
+                return
             if isinstance(payload, r.TextDelta):
                 message.transcript += payload.delta
                 if len(message.transcript) > 65536:
