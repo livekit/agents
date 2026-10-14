@@ -177,11 +177,8 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
-        # Wall-clock time the node's relative timestamps count from, so that
-        # ``input_started_at + end_time`` is the wall-clock end of the recognized speech.
-        # The default ``stt_node`` sets it to the session input start it offsets its
-        # stream from. A node that forwards provider timestamps untouched counts from
-        # its first audio, so the first frame pushed stamps it instead.
+        # copy of the session start wall clock time; the first audio when unset
+        # input_started_at + end_time (session relative) = wall-clock end of the speech
         self.input_started_at: float | None = None
 
     @property
