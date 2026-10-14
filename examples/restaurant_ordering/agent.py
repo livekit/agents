@@ -1,4 +1,4 @@
-"""Nonna's Pizzeria on the phone: Rosa takes pickup and delivery orders, and calls a customer
+"""Zappi's Pizzeria on the phone: Rosa takes pickup and delivery orders, and calls a customer
 back when an item in their delivery runs out.
 
 Calls are inbound by default. `{"direction": "outbound"}` in the job metadata (or
@@ -67,7 +67,7 @@ logger = logging.getLogger("restaurant-ordering")
 load_dotenv()
 
 PERSONA = "Rosa"
-BUSINESS = "Nonna's Pizzeria"
+BUSINESS = "Zappi's Pizzeria"
 VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"  # Cartesia "Katie"
 # the number a customer calls back on, said on voicemail
 RESTAURANT_NUMBER = os.getenv("RESTAURANT_NUMBER", "")

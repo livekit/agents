@@ -1,6 +1,6 @@
 # Restaurant Ordering Example
 
-A pizzeria's phone line. Rosa answers for Nonna's Pizzeria: she takes pickup and delivery orders with sizes, sauces, toppings, and things left off, answers allergy questions from the menu data, steers around sold-out items, reads the whole menu when asked, offers breadsticks once, and reads back the total before the order goes to the kitchen. On the outbound call she rings a customer whose delivery is already on its way to say an item ran out, and sorts out the replacement or refund.
+A pizzeria's phone line. Rosa answers for Zappi's Pizzeria: she takes pickup and delivery orders with sizes, sauces, toppings, and things left off, answers allergy questions from the menu data, steers around sold-out items, reads the whole menu when asked, offers breadsticks once, and reads back the total before the order goes to the kitchen. On the outbound call she rings a customer whose delivery is already on its way to say an item ran out, and sorts out the replacement or refund.
 
 For setup instructions and more details, see the [main examples README](../README.md).
 

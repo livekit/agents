@@ -1,11 +1,11 @@
-# Nonna's Pizzeria. Each run is graded on the POS's final state by grade.py, from
+# Zappi's Pizzeria. Each run is graded on the POS's final state by grade.py, from
 # `userdata.expect`. Cart lines are written the way the POS describes them:
 # "<quantity> × <size> <item>, <modifiers>". `direction: outbound` runs the delivery-update call.
 name: Restaurant phone ordering
 scenarios:
   - label: Pickup, pepperoni, wings, and a Coke
     instructions: |-
-      You are Sam Carter, phone 415 555 0142, calling Nonna's Pizzeria for pickup.
+      You are Sam Carter, phone 415 555 0142, calling Zappi's Pizzeria for pickup.
       Order exactly one large pepperoni pizza, one dozen bone-in wings with hot sauce, and
       one 2-liter Coke. Decline any extras or suggestions. Give your name and phone when
       asked, confirm the read-back if it's right, and once you've heard your order number,
@@ -270,11 +270,11 @@ scenarios:
 
   - label: Delivery update, swap the Sprite and leave a gate code
     instructions: |-
-      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
       calling you. When asked about the Sprite, take the 2-liter Coke. When asked if the
       driver should know anything, say: "Yes, the gate code is 4512, and I'm in unit 3B."
       Then say that's all, listen to the read-back, and say thanks and goodbye.
-    agent_expectations: The agent introduces herself and Nonna's Pizzeria, gives the ETA,
+    agent_expectations: The agent introduces herself and Zappi's Pizzeria, gives the ETA,
       swaps the Sprite for a 2-liter Coke at the same price, saves the gate code and unit as
       a driver note, reads back the changes with the unchanged $49.65 total, and repeats the
       ETA before ending the call.
@@ -295,7 +295,7 @@ scenarios:
 
   - label: Delivery update, refund the Sprite and add breadsticks
     instructions: |-
-      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
       calling you. When asked about the Sprite, say you don't want a replacement: remove it
       and refund it. Then ask: "Can you also add a cannoli?" When told that can't be added,
       ask: "What about breadsticks?" and take one order if that works. When asked about
@@ -321,7 +321,7 @@ scenarios:
 
   - label: Delivery update, customer asks to cancel
     instructions: |-
-      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
       calling you. You're annoyed the Sprite ran out. Say: "Honestly, just cancel the whole
       order." When told it's too late, accept it, and say yes if offered a note for the
       manager: say the order took too long and you'd like a call back. Then take the
@@ -347,7 +347,7 @@ scenarios:
 
   - label: Delivery update, refund the Sprite, then take the Coke
     instructions: |-
-      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
       calling you. When asked about the Sprite, say: "Just refund it." Once you hear the
       refund, change your mind: "Actually, I'll take the Coke instead." Nothing for the
       driver. Listen to the read-back and say goodbye.
@@ -371,7 +371,7 @@ scenarios:
 
   - label: Delivery update, breadsticks, then make it two
     instructions: |-
-      You are Sam Carter. You ordered pizza for delivery earlier, and Nonna's Pizzeria is
+      You are Sam Carter. You ordered pizza for delivery earlier, and Zappi's Pizzeria is
       calling you. When asked about the Sprite, take the 2-liter Coke. Then ask to add an
       order of breadsticks. Once it's added, say: "Actually, make it two orders of breadsticks."
       Nothing for the driver. Listen to the read-back and say goodbye.
@@ -394,7 +394,7 @@ scenarios:
 
   - label: Delivery update, wrong number
     instructions: |-
-      You didn't order anything and you don't know anyone named Sam Carter: Nonna's Pizzeria
+      You didn't order anything and you don't know anyone named Sam Carter: Zappi's Pizzeria
       has the wrong number. Once the agent has finished the opening, say: "Sorry, I think
       you've got the wrong number. There's no Sam here." If asked anything else, say again
       it's the wrong number. Say goodbye once the agent does.

@@ -1,4 +1,4 @@
-"""A mock point-of-sale for Nonna's Pizzeria: the menu, the cart, the order it submits, and
+"""A mock point-of-sale for Zappi's Pizzeria: the menu, the cart, the order it submits, and
 (on the outbound call) a delivery order that's already out with the driver."""
 
 from __future__ import annotations
