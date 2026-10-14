@@ -75,9 +75,10 @@ def room_options(participant: str) -> room_io.RoomOptions:
 def _cancel_background_voices(
     params: NoiseCancellationParams,
 ) -> rtc.NoiseCancellationOptions | None:
-    # SIP audio is already narrowband; BVC is for browser mics
+    # removes background voices and noise; phone audio is narrowband, so it gets the model
+    # trained on calls
     if params.participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-        return None
+        return noise_cancellation.BVCTelephony()
     return noise_cancellation.BVC()
 
 

@@ -10,7 +10,7 @@ The example is split so that the rules never depend on the model following its p
 
 - `backend.py` is the mock point of sale: the menu (with today's sold-out Buffalo cauliflower), the cart, pricing with tax and the delivery fee, the order it submits, and, for the outbound call, order #214, already out with the driver. Every rule lives here and refuses with a `PosError` whose message tells the agent what to do instead.
 - `agent.py` defines `RosaAgent` (inbound) and `DeliveryUpdateAgent` (outbound), their tools, and the entrypoint. Each tool wraps one POS call; a refusal goes back to the LLM as a `ToolError` to relay.
-- `call.py` holds what any phone agent here needs: the speaking rules, sentence pacing for Cartesia, noise cancellation for browser callers, and hanging up or handing off without cutting the caller off.
+- `call.py` holds what any phone agent here needs: the speaking rules, sentence pacing for Cartesia, background noise and voice cancellation (BVC for browser callers, BVCTelephony on phone calls), and hanging up or handing off without cutting the caller off.
 - `grade.py` scores a simulation run from the POS's final state.
 
 ### Taking an order
@@ -39,6 +39,8 @@ With the customer on the line, she offers a same-price swap (a 2-liter Coke) or 
 ### Voice and turn-taking
 
 The session runs on LiveKit Inference: Deepgram Nova-3, GPT-4.1 mini, and Cartesia Sonic 3.5, plus the turn detector, adaptive interruption (so "mm-hm" doesn't stop Rosa but "no, wait" does), and preemptive generation. A short break after each sentence keeps Cartesia from running them together.
+
+Background noise is handled in two places. Before speech-to-text, enhanced noise cancellation removes background voices (a TV, people nearby) and noise: `BVC` for browser callers, and `BVCTelephony`, trained on narrowband call audio, for phone callers. Then adaptive interruption decides whether what's left is the caller cutting in or just a sound, so a cough or a passing voice doesn't stop Rosa mid-sentence. Leave Krisp off on the SIP trunk, since the agent already cleans the audio.
 
 ## Run it
 
