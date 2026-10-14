@@ -240,6 +240,11 @@ def test_update_chat_ctx_deletes_empty_remote_items() -> None:
 
 def test_is_fatal_error_matches_known_codes() -> None:
     assert _is_fatal_error(SimpleNamespace(code="insufficient_quota"))
+    # code is checked before type; credit_balance_exhausted must be listed or
+    # an insufficient_quota event with that code stays recoverable (#7805)
+    assert _is_fatal_error(
+        SimpleNamespace(code="credit_balance_exhausted", type="insufficient_quota")
+    )
     assert _is_fatal_error(SimpleNamespace(code=None, type="invalid_api_key"))
     assert not _is_fatal_error(SimpleNamespace(code="server_error"))
     assert not _is_fatal_error(SimpleNamespace())
