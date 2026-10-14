@@ -14,6 +14,10 @@
 
 from __future__ import annotations
 
+import asyncio
+from urllib.parse import urlencode
+
+import aiohttp
 import openai
 from openai.types.beta.realtime.transcription_session_update_param import (
     SessionTurnDetection,
@@ -22,7 +26,7 @@ from openai.types.beta.realtime.transcription_session_update_param import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.openai import STT as OpenAISTT
 
-from ._utils import SPRAG_BASE_URL, resolve_api_key, with_attribution
+from ._utils import ATTRIBUTION_HEADERS, SPRAG_BASE_URL, resolve_api_key, with_attribution
 from .models import STTModels
 
 
@@ -66,3 +70,12 @@ class STT(OpenAISTT):
     @property
     def provider(self) -> str:
         return "Sprag"
+
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        # the OpenAI STT connects to /realtime with fixed headers; Sprag serves streaming
+        # transcription on its own route
+        base_url = str(self._client.base_url).rstrip("/").replace("http", "ws", 1)
+        url = f"{base_url}/audio/transcriptions?{urlencode({'model': self._opts.model})}"
+        headers = {"Authorization": f"Bearer {self._client.api_key}", **ATTRIBUTION_HEADERS}
+        session = self._ensure_session()
+        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)

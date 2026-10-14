@@ -173,7 +173,7 @@ async def test_stt_realtime_opens_a_transcription_session() -> None:
                 first_event.set_result(json.loads(msg.data))
         return ws
 
-    test_server = await _serve({"/v1/realtime": realtime})
+    test_server = await _serve({"/v1/audio/transcriptions": realtime})
     async with http_context.open():
         stt = STT(
             base_url=str(test_server.make_url("/v1")),
@@ -195,8 +195,8 @@ async def test_stt_realtime_opens_a_transcription_session() -> None:
 
     request = handshakes[0]
     assert request.query["model"] == "rhythm"
-    assert request.query["intent"] == "transcription"
     assert request.headers["Authorization"] == "Bearer test-key"
+    assert request.headers["X-Sprag-Integration"] == ATTRIBUTION
     assert update["type"] == "session.update"
     session = update["session"]
     assert session["type"] == "transcription"

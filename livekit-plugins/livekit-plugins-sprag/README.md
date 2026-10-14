@@ -30,5 +30,6 @@ session = AgentSession(
 ```
 
 `STT` and `LLM` reuse the OpenAI plugin's transports with `base_url="https://api.sprag.ai/v1"`.
+Streaming `STT` connects to Sprag's streaming transcription socket.
 `TTS` streams speech over Sprag's streaming speech socket, keeping a warm connection between turns.
-LLM, TTS, and REST transcription requests carry an `X-Sprag-Integration` attribution header.
+Every request carries an `X-Sprag-Integration` attribution header.
