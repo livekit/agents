@@ -423,8 +423,9 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
     meta = metadata_from_wire(final_1["metadata"])
     assert meta[INTERRUPTED] is True and meta[INTERRUPTION_REASON] == "new-message"
     assert not any("artifactUpdate" in r for r in results_1)
-    artifacts = [r["artifactUpdate"] for r in results_2 if "artifactUpdate" in r]
-    assert [a["artifact"]["parts"][0]["text"] for a in artifacts] == ["both answered"]
+    artifacts = [r["artifactUpdate"]["artifact"] for r in results_2 if "artifactUpdate" in r]
+    # streamed in pieces as the model writes it, the last piece empty
+    assert "".join(p["text"] for a in artifacts for p in a.get("parts", [])) == "both answered"
     assert results_2[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
     items = await history_items(a, ctx_id, AGENT)
     assert [i.type for i in items] == [

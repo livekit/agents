@@ -22,12 +22,23 @@ LEASE_TTL = float(os.environ.get("LIVEKIT_AGENTDB_LEASE_TTL", "10"))
 """The lane lease's lifetime in seconds, as ``AgentDBStorage`` reads it from the environment."""
 LEASE_MARGIN = 1.0
 """What a test sleeps past ``LEASE_TTL`` before it counts a lease as lapsed."""
+PROJECT_URL = os.environ.get("LIVEKIT_URL", "")
+"""The project's URL, read at import: a test module may remove ``LIVEKIT_URL`` so that its
+servers address themselves locally, and the storage still needs it."""
+
+
+def project_storage(holder: str = "") -> AgentDBStorage:
+    """An ``AgentDBStorage`` on ``PROJECT_URL``, which it reads only while it is built."""
+    with pytest.MonkeyPatch.context() as mp:
+        if PROJECT_URL:
+            mp.setenv("LIVEKIT_URL", PROJECT_URL)
+        return AgentDBStorage(holder=holder)
 
 
 def agentstore_configured() -> str | None:
     """``None`` when the environment names a project, else why the tests skip."""
     try:
-        AgentDBStorage()
+        project_storage()
     except ValueError as e:
         return str(e)
     return None
@@ -49,7 +60,7 @@ async def agentdb_worker() -> AsyncIterator[Callable[[str], AgentDBStorage]]:
         pytest.skip(f"no agentstore project in the environment: {why}")
 
     def make(holder: str) -> AgentDBStorage:
-        return AgentDBStorage(holder=holder)
+        return project_storage(holder)
 
     yield make
 

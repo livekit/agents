@@ -482,8 +482,9 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
             ]
         await delegate.aclose()
     assert second[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
-    artifacts = [r["artifactUpdate"] for r in second if "artifactUpdate" in r]
-    assert artifacts[-1]["artifact"]["parts"][0]["text"] == "You are covered."
+    artifacts = [r["artifactUpdate"]["artifact"] for r in second if "artifactUpdate" in r]
+    # streamed in pieces as the model writes it, the last piece empty
+    assert "".join(p["text"] for a in artifacts for p in a.get("parts", [])) == "You are covered."
 
     db = await clinic_storage.open(thread_id)
     try:

@@ -26,7 +26,15 @@ from livekit.agents.llm import ChatMessage, FunctionToolCall
 from livekit.agents.storage import AgentDBStorage
 
 from .fake_llm import FakeLLM, FakeLLMResponse
-from .test_a2a_server import http_client, make_server, payloads, send, stock_client, user_message
+from .test_a2a_server import (
+    http_client,
+    make_server,
+    no_project_env,  # noqa: F401  (autouse: the demo environment must not shape the cards)
+    payloads,
+    send,
+    stock_client,
+    user_message,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -236,8 +244,10 @@ async def test_an_awaited_graph_asks_and_runs_the_asking_node_again_on_the_reply
         await client.close()
 
     assert done.state == pb.TaskState.TASK_STATE_COMPLETED
-    artifacts = [p for p in second if hasattr(p, "artifact")]
-    assert artifacts[-1].artifact.parts[0].text == "Welcome, Ada."
+    answer = "".join(
+        part.text for p in second if hasattr(p, "artifact") for part in p.artifact.parts
+    )
+    assert answer == "Welcome, Ada."  # streamed in pieces as the model writes it
 
 
 async def test_a_saved_node_that_no_longer_rebuilds_fails_the_graph() -> None:
