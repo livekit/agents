@@ -28,8 +28,6 @@ _DEFAULT_API_URL = "https://api.bey.dev"
 
 _AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
 _AVATAR_AGENT_NAME = "bey-avatar-agent"
-# Beyond Presence runs a session for up to 24 hours, so the avatar can still
-# rejoin the room late in a session
 _AVATAR_TOKEN_TTL = datetime.timedelta(hours=24)
 
 
