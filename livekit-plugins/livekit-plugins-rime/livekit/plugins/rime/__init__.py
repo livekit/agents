@@ -17,15 +17,17 @@
 See https://docs.livekit.io/agents/integrations/tts/rime/ for more information.
 """
 
-from typing import TYPE_CHECKING, Any
+from importlib import import_module
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .realtime import RealtimeModel
+    from . import realtime
 
 from .tts import TTS, ChunkedStream
 from .version import __version__
 
-__all__ = ["TTS", "ChunkedStream", "RealtimeModel", "__version__"]
+__all__ = ["TTS", "ChunkedStream", "realtime", "__version__"]
 
 from livekit.agents import Plugin
 
@@ -47,14 +49,15 @@ for n in NOT_IN_ALL:
     __pdoc__[n] = False
 
 
-def __getattr__(name: str) -> Any:
-    if name == "RealtimeModel":
+def __getattr__(name: str) -> ModuleType:
+    if name == "realtime":
         try:
-            from .realtime import RealtimeModel
+            module = import_module(".realtime", __name__)
         except ImportError as error:
             raise ImportError(
                 "Rime realtime requires Python 3.11+ and the Prism-enabled rimelabs-sdk. "
                 "Install livekit-plugins-rime[realtime]."
             ) from error
-        return RealtimeModel
+        globals()[name] = module
+        return module
     raise AttributeError(name)

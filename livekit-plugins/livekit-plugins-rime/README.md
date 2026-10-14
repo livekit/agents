@@ -142,7 +142,7 @@ from livekit.agents import Agent, AgentSession
 from livekit.plugins import rime
 
 session = AgentSession(
-    llm=rime.RealtimeModel(
+    llm=rime.realtime.RealtimeModel(
         endpoint=os.environ["PRISM_URL"],
         voice=os.environ["PRISM_VOICE"],
     ),
