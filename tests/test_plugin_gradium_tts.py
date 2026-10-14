@@ -119,9 +119,17 @@ class FakeSession:
         self._sockets = list(sockets)
         self.connects: list[tuple[str, dict[str, Any]]] = []
 
-    def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
         self.connects.append((url, kwargs))
         return self._sockets.pop(0) if len(self._sockets) > 1 else self._sockets[0]
+
+
+class HangingSession:
+    """A server that never completes the websocket handshake."""
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
 
 
 class RejectingSession:
@@ -130,7 +138,7 @@ class RejectingSession:
     def __init__(self, status: int) -> None:
         self.status = status
 
-    def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
         from unittest.mock import MagicMock
 
         import aiohttp
@@ -361,3 +369,12 @@ async def test_stream_send_failure_raises_connection_error():
     with pytest.raises(APIConnectionError) as excinfo:
         await asyncio.wait_for(_drain_stream(tts, CONN_OPTS), timeout=5)
     assert "closing transport" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("drain", [_drain, _drain_stream])
+async def test_hung_connect_times_out(drain):
+    from livekit.plugins.gradium import TTS
+
+    tts = TTS(api_key="test-key", http_session=HangingSession())  # type: ignore[arg-type]
+    with pytest.raises(APITimeoutError):
+        await drain(tts, APIConnectOptions(max_retry=0, timeout=0.2))
