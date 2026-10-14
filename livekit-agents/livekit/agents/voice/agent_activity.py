@@ -1068,7 +1068,7 @@ class AgentActivity(RecognitionHooks):
                     context=trace.set_span_in_context(start_span),
                     attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
                 )
-                @utils.log_exceptions(logger=logger)
+                @utils.log_exceptions(logger=logger, extra={"agent_label": self._agent.label})
                 async def _traceable_on_enter() -> None:
                     data = _OnEnterData(session=self._session, agent=self._agent)
                     # the turn this agent was entered on; a turn the user commits while on_enter
@@ -1391,7 +1391,7 @@ class AgentActivity(RecognitionHooks):
         @tracer.start_as_current_span(
             "on_exit", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
         )
-        @utils.log_exceptions(logger=logger)
+        @utils.log_exceptions(logger=logger, extra={"agent_label": self._agent.label})
         async def _traceable_on_exit() -> None:
             await self._agent.on_exit()
 
@@ -2023,7 +2023,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._scheduling_atask and self._scheduling_atask.done():
             logger.warning(
-                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running, the speech will be cancelled"
+                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running, the speech will be cancelled",
+                extra={"speech_id": speech.id},
             )
             speech.interrupt(force=True)
             return
@@ -4173,7 +4174,11 @@ class AgentActivity(RecognitionHooks):
             try:
                 generation_ev = await self._rt_session.say(text)
             except llm.RealtimeError as e:
-                logger.error("failed to say text: %s", str(e))
+                logger.error(
+                    "failed to say text: %s",
+                    str(e),
+                    extra={"speech_id": speech_handle.id, "error": str(e)},
+                )
                 speech_handle._mark_done(error=e)
                 return
 
@@ -4255,6 +4260,11 @@ class AgentActivity(RecognitionHooks):
                     "failed to generate a reply%s: %s",
                     " after tool execution" if tool_reply else "",
                     str(e),
+                    extra={
+                        "speech_id": speech_handle.id,
+                        "tool_reply": tool_reply,
+                        "error": str(e),
+                    },
                 )
                 speech_handle._mark_done(error=e)
                 self._session._update_agent_state("listening")

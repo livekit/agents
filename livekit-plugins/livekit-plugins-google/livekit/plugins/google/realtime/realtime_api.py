@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import time
 import weakref
@@ -1067,17 +1068,27 @@ class RealtimeSession(llm.RealtimeSession):
             except Exception as e:
                 # Provide a hint for 1008 errors (often model/API mismatch for unknown models)
                 hint = _get_1008_error_hint(str(e))
+                # Gemini Live closes with 1007 ("Request contains an invalid argument")
+                # when the session context is exhausted. Reconnecting replays the same
+                # oversized chat context and fails identically, producing a tight retry
+                # loop, so treat it as fatal to the session instead of retrying.
+                context_exhausted = getattr(e, "code", None) == 1007 or "1007" in str(e)
+                # mirrors the branches below; a retry logs its own WARN, so keep this at DEBUG
+                will_retry = (
+                    not self._msg_ch.closed
+                    and not context_exhausted
+                    and bool(session)
+                    and max_retries != 0
+                    and self._num_retries != max_retries
+                )
+                log_level = logging.DEBUG if will_retry else logging.ERROR
                 if hint:
-                    logger.error(f"Gemini Realtime API error: {e}{hint}", exc_info=e)
+                    logger.log(log_level, f"Gemini Realtime API error: {e}{hint}", exc_info=e)
                 else:
-                    logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
+                    logger.log(log_level, f"Gemini Realtime API error: {e}", exc_info=e)
 
                 if not self._msg_ch.closed:
-                    # Gemini Live closes with 1007 ("Request contains an invalid argument")
-                    # when the session context is exhausted. Reconnecting replays the same
-                    # oversized chat context and fails identically, producing a tight retry
-                    # loop, so treat it as fatal to the session instead of retrying.
-                    if getattr(e, "code", None) == 1007 or "1007" in str(e):
+                    if context_exhausted:
                         logger.error(
                             "Gemini Live closed the session: context exhausted (1007). "
                             "Reconnecting would replay the same context and fail again; "

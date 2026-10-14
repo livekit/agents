@@ -519,7 +519,10 @@ class RoomIO:
 
         participant = self._room.remote_participants.get(participant_identity)
         if not participant:
-            logger.warning("participant not found, ignoring text input")
+            logger.warning(
+                "participant not found, ignoring text input",
+                extra={trace_types.ATTR_PARTICIPANT_IDENTITY: participant_identity},
+            )
             return
 
         if self._text_input_cb is None:

@@ -159,6 +159,27 @@ def _strip_running_tool_calls(chat_ctx: ChatContext) -> None:
     ]
 
 
+def _log_inference_error(message: str, model: str | None, provider: str | None) -> None:
+    """Log a failed LLM or TTS inference, the main ERROR for a failed turn.
+
+    Must be called from an ``except`` block inside the llm_node / tts_node span, so the log
+    links to that span.
+    """
+    # deferred: agent_activity imports this module
+    from .agent_activity import _SpeechHandleContextVar
+
+    # the inference runs inside the speech task, which sets the speech handle
+    speech_handle = _SpeechHandleContextVar.get(None)
+    logger.exception(
+        message,
+        extra={
+            "speech_id": speech_handle.id if speech_handle else None,
+            "model": model,
+            "provider": provider,
+        },
+    )
+
+
 def perform_llm_inference(
     *,
     node: io.LLMNode,
@@ -186,7 +207,6 @@ def perform_llm_inference(
     return llm_task, data
 
 
-@utils.log_exceptions(logger=logger)
 @tracer.start_as_current_span("llm_node")
 async def _llm_inference_task(
     node: io.LLMNode,
@@ -196,6 +216,24 @@ async def _llm_inference_task(
     data: _LLMGenerationData,
     model: str | None = None,
     provider: str | None = None,
+) -> bool:
+    try:
+        return await _run_llm_inference(
+            node, chat_ctx, tool_ctx, model_settings, data, model, provider
+        )
+    except Exception:
+        _log_inference_error("Error in _llm_inference_task", model, provider)
+        raise
+
+
+async def _run_llm_inference(
+    node: io.LLMNode,
+    chat_ctx: ChatContext,
+    tool_ctx: ToolContext,
+    model_settings: ModelSettings,
+    data: _LLMGenerationData,
+    model: str | None,
+    provider: str | None,
 ) -> bool:
     start_time = time.perf_counter()
     data.started_at = start_time
@@ -469,7 +507,6 @@ def perform_tts_inference(
     return tts_task, data
 
 
-@utils.log_exceptions(logger=logger)
 @tracer.start_as_current_span("tts_node")
 async def _tts_inference_task(
     node: io.TTSNode,
@@ -479,6 +516,24 @@ async def _tts_inference_task(
     text_transforms: Sequence[TextTransforms] | None,
     model: str | None = None,
     provider: str | None = None,
+) -> bool:
+    try:
+        return await _run_tts_inference(
+            node, input, model_settings, data, text_transforms, model, provider
+        )
+    except Exception:
+        _log_inference_error("Error in _tts_inference_task", model, provider)
+        raise
+
+
+async def _run_tts_inference(
+    node: io.TTSNode,
+    input: AsyncIterable[str],
+    model_settings: ModelSettings,
+    data: _TTSGenerationData,
+    text_transforms: Sequence[TextTransforms] | None,
+    model: str | None,
+    provider: str | None,
 ) -> bool:
     current_span = trace.get_current_span()
     if model:

@@ -527,7 +527,9 @@ class _ParticipantLegacyTranscriptionOutput:
                 await self._room.local_participant.publish_transcription(transcription)
         except Exception as e:
             if self._room.isconnected():
-                logger.warning("failed to publish agent transcription to room: %s", e)
+                logger.warning(
+                    "failed to publish agent transcription to room: %s", e, extra={"error": str(e)}
+                )
 
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
@@ -708,7 +710,9 @@ class _ParticipantStreamTranscriptionOutput:
                     await tmp_writer.write(payload)
                     await tmp_writer.aclose()
         except Exception as e:
-            logger.warning("failed to publish agent transcription to room: %s", e)
+            logger.warning(
+                "failed to publish agent transcription to room: %s", e, extra={"error": str(e)}
+            )
 
     async def _flush_task(
         self,
@@ -734,7 +738,9 @@ class _ParticipantStreamTranscriptionOutput:
                     await tmp_writer.write(self._latest_text)
                     await tmp_writer.aclose()
         except Exception as e:
-            logger.warning("failed to publish agent transcription to room: %s", e)
+            logger.warning(
+                "failed to publish agent transcription to room: %s", e, extra={"error": str(e)}
+            )
 
     def flush(self) -> None:
         # only emit on a segment that captured text (keeps lk.transcription cadence intact).
