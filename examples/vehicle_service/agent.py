@@ -250,7 +250,9 @@ class NickAgent(Agent):
     @function_tool
     async def add_tech_note(self, ctx: Ctx, kind: NoteKind, detail: str) -> str:
         """Log one thing the caller said about the problem, for the technician, as soon as
-        they say it. One note per answer; a correction is the same kind again.
+        they say it. One note per answer; a correction is the same kind again. Call it in the
+        same reply as saying you'll note something, never a turn later; anything vague ("it feels weird")
+        is an "other" note, in their words.
 
         Args:
             kind: sound (what it sounds like), where (front or back, left or right), when
