@@ -928,11 +928,19 @@ class ServiceDesk:
                     return LikelyCause(c.sounds, c.moments, c.cause, True, _STOP_ADVICE)
                 return c
         if stop:
-            cause = (
-                "something the warning light is flagging"
-                if why and "light" in why
-                else "something that needs looking at before it's driven again"
-            )
+            # said cautiously ("…, to confirm"), named after what they described
+            causes = {
+                "the brakes aren't stopping it": "a brake system fault",
+                "smoke or burning": "something overheating or leaking",
+                "losing steering": "a steering fault",
+            }
+            cause = causes.get(why or "", "")
+            if not cause:
+                cause = (
+                    "the fault the warning light is flagging"
+                    if why and "light" in why
+                    else "a fault the technician needs to find"
+                )
             return LikelyCause((), (), cause, True, _STOP_ADVICE)
         return None
 
