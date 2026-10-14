@@ -196,6 +196,27 @@ async def test_startup_seeds_history_before_first_request():
             await session.update_instructions("Different")
 
 
+@pytest.mark.parametrize("instructions", ["", " \n\t"])
+async def test_blank_instructions_allow_startup_and_restart(instructions):
+    async with peer_model() as (peer, model, _):
+        adapter = llm.RealtimeModelFallbackAdapter([model])
+        async with AgentSession(llm=adapter) as session:
+            await session.start(Agent(instructions=instructions))
+            assert "instructions" not in peer.settings
+            await model._session.update_instructions(instructions)
+            await adapter.restart_session()
+            assert "instructions" not in peer.settings
+            await model._session.update_instructions(instructions)
+            speech = session.generate_reply(user_input="Hello")
+            request = await peer.next()
+            assert request["response"]["prism_input_text"] == "Hello"
+            response_id = await peer.start(request)
+            await peer.message(response_id)
+            await peer.end(response_id)
+            await asyncio.wait_for(speech.wait_for_playout(), 3)
+            assert speech.exception() is None
+
+
 async def test_agent_session_typed_reply_and_playback_receipt():
     async with peer_model() as (peer, model, _):
         async with AgentSession(llm=model) as session:
