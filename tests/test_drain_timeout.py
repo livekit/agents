@@ -137,6 +137,79 @@ class TestDrainTimeout:
             with pytest.raises(asyncio.TimeoutError):
                 asyncio.get_event_loop().run_until_complete(server.drain())
 
+    @staticmethod
+    def _drain_server(drain_timeout: int, *, running_job: bool = True) -> AgentServer:
+        """An AgentServer whose drain either waits forever or has nothing to wait for."""
+        server = _make_server(drain_timeout=drain_timeout)
+
+        server._draining = False
+        server._lock = asyncio.Lock()
+        server._job_lifecycle_tasks = set[asyncio.Task[object]]()
+
+        stuck_future: asyncio.Future[None] = asyncio.Future()
+
+        class StuckProc:
+            running_job = True
+
+            async def join(self) -> None:
+                await stuck_future  # never resolves
+
+        class FakeProcPool:
+            processes = [StuckProc()] if running_job else []
+
+        server._proc_pool = FakeProcPool()  # type: ignore[assignment]
+        return server
+
+    def test_zero_timeout_with_no_running_job_returns(self) -> None:
+        """Nothing left to wait for is a completed drain, not a timeout.
+
+        0 asks for an unbounded drain, so an idle worker has to return as soon as
+        the pool is observed to be empty - whatever the deadline.
+        """
+        server = self._drain_server(drain_timeout=0, running_job=False)
+
+        async def _scenario() -> None:
+            # bounded so a regression fails fast instead of hanging the suite
+            await asyncio.wait_for(server.drain(), 2.0)
+
+        with patch.object(server, "_update_worker_status", new_callable=AsyncMock):
+            asyncio.get_event_loop().run_until_complete(_scenario())
+
+    def test_zero_drain_timeout_waits_indefinitely(self) -> None:
+        """ServerOptions.drain_timeout is an int, so 0 is how "no deadline" is asked for.
+
+        It has always behaved that way through the truthiness check in drain(); the
+        docstring now says so, which also makes it the documented way to keep a worker
+        draining until its jobs finish.
+        """
+        self._assert_drain_keeps_waiting(self._drain_server(drain_timeout=0))
+
+    def test_explicit_zero_timeout_waits_indefinitely(self) -> None:
+        self._assert_drain_keeps_waiting(self._drain_server(drain_timeout=3600), timeout=0)
+
+    def test_none_timeout_keeps_waiting(self) -> None:
+        """None remains the other off-switch: no TimeoutError, drain keeps waiting."""
+        self._assert_drain_keeps_waiting(self._drain_server(drain_timeout=1), timeout=None)
+
+    @staticmethod
+    def _assert_drain_keeps_waiting(server: AgentServer, **kwargs: int | None) -> None:
+        """Drain a stuck server and require that it keeps waiting rather than failing.
+
+        The task is cancelled after the observation window, since "never returns" is
+        the expected outcome here.
+        """
+
+        async def _scenario() -> None:
+            task = asyncio.create_task(server.drain(**kwargs))
+            await asyncio.sleep(0.05)
+            assert not task.done(), f"drain{kwargs} returned; expected it to keep waiting"
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        with patch.object(server, "_update_worker_status", new_callable=AsyncMock):
+            asyncio.get_event_loop().run_until_complete(_scenario())
+
     def test_aclose_skipped_on_non_exitcli_non_timeout_exception(self) -> None:
         """Other exceptions from drain() still propagate (only TimeoutError
         is caught by the fix).
