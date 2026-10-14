@@ -77,6 +77,7 @@ from openai.types.realtime.realtime_session_create_response import (
 )
 from openai.types.realtime.realtime_truncation import RealtimeTruncation
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import Self
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
@@ -510,9 +511,6 @@ class RealtimeModel(llm.RealtimeModel):
                 per_response_tool_choice=True,
             )
         )
-        if type(self) is RealtimeModel:
-            # Preserve the pre-move metrics label for direct OpenAI sessions.
-            self._label = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
 
         is_azure = (
             api_version is not None or entra_token is not None or azure_deployment is not None
@@ -603,7 +601,7 @@ class RealtimeModel(llm.RealtimeModel):
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
         **kwargs: Any,
-    ) -> RealtimeModel:
+    ) -> Self:
         """
         Create a RealtimeModel configured for Azure OpenAI.
 
@@ -723,7 +721,7 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        model = RealtimeModel(
+        model = cls(
             voice=voice,
             modalities=modalities,
             input_audio_transcription=input_audio_transcription,

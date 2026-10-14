@@ -40,9 +40,19 @@ pytestmark = pytest.mark.unit
 
 
 def test_direct_model_preserves_public_label_and_model_types() -> None:
+    from livekit.agents import inference
+    from livekit.agents.llm._realtime import openai as core
+
     model = RealtimeModel(api_key="fake")
+    azure = RealtimeModel.with_azure(
+        azure_deployment="dep", api_key="fake", base_url="https://example.com/openai"
+    )
 
     assert model.label == "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
+    assert type(azure) is RealtimeModel
+    assert azure.label == model.label
+    assert RealtimeSession is core.RealtimeSession
+    assert not issubclass(inference.RealtimeModel, RealtimeModel)
     assert PluginRealtimeModels is CoreRealtimeModels
 
 
