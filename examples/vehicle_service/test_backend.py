@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from collections.abc import AsyncIterator
 
 import backend
 import pytest
 from backend import ServiceDesk, ServiceError, demo_desk
-from call import pause_between_sentences, spoken_number
+from call import spoken_number
 from grade import grade
 
 pytestmark = pytest.mark.unit
@@ -1127,15 +1126,6 @@ def test_a_number_that_cant_be_real_finds_no_file(desk: ServiceDesk, said: str) 
 
 
 # ---- the call ----
-
-
-async def test_pause_between_sentences() -> None:
-    async def chunks() -> AsyncIterator[str]:
-        for c in ["Dr. Patel is free at nine a.m. tomorrow. Does", " that work?"]:
-            yield c
-
-    out = "".join([c async for c in pause_between_sentences(chunks())])
-    assert out == 'Dr. Patel is free at nine a.m. tomorrow. <break time="300ms"/> Does that work?'
 
 
 def test_spoken_number() -> None:

@@ -10,7 +10,7 @@ The example is split so that the rules never depend on the model following its p
 
 - `backend.py` is the mock system of record: the customer's file (an in-warranty 2023 X3 with an open recall, a 2019 330i out of warranty, and a tire rotation already booked on the 330i next week), five business days of advisor slots, the price menu, and, for the follow-up, the repair order for the X3 that's in the shop. Every rule lives here and refuses with a `ServiceError` whose message tells the agent what to do instead.
 - `agent.py` defines `NickAgent` (inbound) and `RepairCallAgent` (outbound), their tools, and the entrypoint. Each tool wraps one desk call; a refusal goes back to the LLM as a `ToolError` to relay.
-- `call.py` holds what any phone agent here needs: the speaking rules, sentence pacing for Cartesia, background noise and voice cancellation (BVC for browser callers, BVCTelephony on phone calls), and hanging up without cutting the caller off, or once the line has gone silent (`hang_up_when_silent`: after 12 seconds with nobody speaking Nick asks "Are you still there?", and if it stays silent he says a short goodbye and hangs up, never agreeing to anything on silence; it isn't armed in simulations or tests).
+- `call.py` holds what any phone agent here needs: the speaking rules, background noise and voice cancellation (BVC for browser callers, BVCTelephony on phone calls), and hanging up without cutting the caller off, or once the line has gone silent (`hang_up_when_silent`: after 12 seconds with nobody speaking Nick asks "Are you still there?", and if it stays silent he says a short goodbye and hangs up, never agreeing to anything on silence; it isn't armed in simulations or tests).
 - `grade.py` scores a simulation run from the desk's final state.
 
 ### The inbound consultation
@@ -41,7 +41,7 @@ With the customer on the line, he goes over the cause, the price, and when the c
 
 ### Voice and turn-taking
 
-The session runs on LiveKit Inference: Deepgram Nova-3, GPT-4.1 mini, and Cartesia Sonic 3.5 with a calm voice, plus the turn detector, adaptive interruption (so "mm-hm" doesn't stop Nick but "no, wait" does), and preemptive generation.
+The session runs on LiveKit Inference: Deepgram Nova-3, GPT-4.1 mini, and Gemini 3.8 Flash TTS with the even, steady Schedar voice, plus the turn detector, adaptive interruption (so "mm-hm" doesn't stop Nick but "no, wait" does), and preemptive generation.
 
 Background noise is handled in two places. Before speech-to-text, enhanced noise cancellation removes background voices (a TV, people nearby) and noise: `BVC` for browser callers, and `BVCTelephony`, trained on narrowband call audio, for phone callers. Then adaptive interruption decides whether what's left is the caller cutting in or just a sound, so a cough or a passing voice doesn't stop Nick mid-sentence. Leave Krisp off on the SIP trunk, since the agent already cleans the audio.
 

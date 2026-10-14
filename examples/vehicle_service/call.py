@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterable
 from typing import Any
 
 from page import Page
@@ -63,24 +62,6 @@ day.") before you hang up. Never hang up on their last words.
 Once you've said goodbye ("Thanks for calling, have a great day!"), call end_call in that same
 turn: the call ends after your words finish. Don't wait for a reply to a goodbye, and don't say
 goodbye without ending the call."""
-
-
-_SENTENCE_END = re.compile(r"(?<=[.?!])\s+")
-# a period that ends an abbreviation ("Dr.", "a.m."), not a sentence
-_ABBREVIATION = re.compile(r"(?:\b(?:Dr|Mr|Mrs|Ms|St|Jr|Sr|vs|No)|\b[a-zA-Z]\.[a-zA-Z])\.\Z")
-
-
-async def pause_between_sentences(text: AsyncIterable[str]) -> AsyncIterable[str]:
-    """Cartesia runs sentences together; a short break after each one paces it like a person."""
-    buf = ""
-    async for chunk in text:
-        buf += chunk
-        while m := _SENTENCE_END.search(buf):
-            sentence, buf = buf[: m.start()], buf[m.end() :]
-            pause = "" if _ABBREVIATION.search(sentence) else ' <break time="300ms"/>'
-            yield f"{sentence}{pause} "
-    if buf:
-        yield buf
 
 
 def room_options(participant: NotGivenOr[str] = NOT_GIVEN) -> room_io.RoomOptions:

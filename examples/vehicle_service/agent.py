@@ -49,7 +49,6 @@ from call import (
     end_after_reply,
     hang_up,
     hang_up_when_silent,
-    pause_between_sentences,
     room_options,
     spoken_number,
 )
@@ -79,7 +78,7 @@ load_dotenv()
 
 PERSONA = "Nick"
 BUSINESS = "Bayside BMW"
-VOICE = "228fca29-3a0a-435c-8728-5cb483251068"  # Cartesia "Kiefer"
+VOICE = "Schedar"  # Gemini TTS "Schedar": even, steady
 # the number a customer calls back on, said on the follow-up and on voicemail
 SERVICE_DESK_NUMBER = os.getenv("SERVICE_DESK_NUMBER", "")
 # the participant identity of a phone the agent rings
@@ -1110,16 +1109,10 @@ async def entrypoint(ctx: JobContext) -> None:
         desk = demo_desk(name, today)
         agent = NickAgent(desk)
 
-    tts = inference.TTS(
-        "cartesia/sonic-3.5",
-        voice=VOICE,
-        language="en",
-        # attentive, not cheerful: repairs, safety, and money are serious to the caller
-        extra_kwargs={"emotion": "calm"},
-    )
+    tts = inference.TTS("google/gemini-3.8-flash-tts", voice=VOICE, language="en")
     session = AgentSession[Userdata](
         userdata=Userdata(desk=desk),
-        tts_text_transforms=["filter_markdown", "filter_emoji", pause_between_sentences],
+        tts_text_transforms=["filter_markdown", "filter_emoji"],
         stt=inference.STT("deepgram/nova-3", language="en"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=tts,
