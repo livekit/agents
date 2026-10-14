@@ -298,6 +298,8 @@ class AudioRecognition:
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
         self._audio_preflight_transcript = ""
         self._last_language: LanguageCode | None = None
+        # the end-of-turn check runs every turn, so log each unsupported language once
+        self._unsupported_languages_logged: set[LanguageCode | None] = set()
 
         self._stt_pipeline: _STTPipeline | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
@@ -1595,7 +1597,13 @@ class AudioRecognition:
 
             if turn_detector is not None:
                 if not await turn_detector.supports_language(self._last_language):
-                    logger.info("Turn detector does not support language %s", self._last_language)
+                    if self._last_language not in self._unsupported_languages_logged:
+                        self._unsupported_languages_logged.add(self._last_language)
+                        logger.info(
+                            "Turn detector does not support language %s",
+                            self._last_language,
+                            extra={"language": self._last_language},
+                        )
                 else:
                     # ended explicitly: _end_eou_wait_span closes it early if the user resumes
                     with (

@@ -123,6 +123,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._user_turn_committed = False
     ar._vad = None
     ar._last_language = None
+    ar._unsupported_languages_logged = set()
     ar._last_emitted_prediction = None
     ar._closing = asyncio.Event()
     return ar
@@ -162,6 +163,28 @@ class TestLanguageTracking:
         ar._update_last_language(LanguageCode("fr"), "bonjour")
 
         assert ar._last_language == LanguageCode("fr")
+
+    async def test_unsupported_language_logs_once_per_language(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The end-of-turn check runs every turn; an unsupported language is logged once."""
+        caplog.set_level(logging.INFO, logger="livekit.agents")
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_stream.supports_language = AsyncMock(return_value=False)
+
+        for language in ("xx", "xx", "yy"):
+            ar._last_language = LanguageCode(language)
+            ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+            await asyncio.sleep(0.05)
+            if ar._end_of_turn_task is not None:
+                await aio.cancel_and_wait(ar._end_of_turn_task)
+
+        records = [
+            r
+            for r in caplog.records
+            if r.getMessage().startswith("Turn detector does not support language")
+        ]
+        assert [r.language for r in records] == ["xx", "yy"]
 
 
 def _resolved_prediction(
