@@ -1457,7 +1457,9 @@ class AudioRecognition:
             self._turn_detector_prediction_fut = None
             self._turn_detector_flushed = False
 
-            if self._end_of_turn_task is not None:
+            if self._end_of_turn_task is not None and not (
+                self._turn_detection_mode == "manual" and self._user_turn_committed
+            ):
                 self._end_of_turn_task.cancel()
 
             if self._session.amd is not None:
