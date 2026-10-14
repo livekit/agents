@@ -25,10 +25,10 @@ from livekit.plugins import sprag
 session = AgentSession(
     stt=sprag.STT(model="rhythm"),
     llm=sprag.LLM(model="symphony"),
-    tts=sprag.TTS(model="chorus-clone", voice="wade"),
+    tts=sprag.TTS(model="chorus", voice="wade"),
 )
 ```
 
 `STT` and `LLM` reuse the OpenAI plugin's transports with `base_url="https://api.sprag.ai/v1"`.
-`TTS` streams speech over Sprag's realtime WebSocket, keeping a warm connection between turns.
+`TTS` streams speech over Sprag's streaming speech socket, keeping a warm connection between turns.
 LLM, TTS, and REST transcription requests carry an `X-Sprag-Integration` attribution header.

@@ -41,7 +41,6 @@ from ._utils import ATTRIBUTION_HEADERS, SPRAG_BASE_URL, resolve_api_key
 from .log import logger
 from .models import TTSModels
 
-SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
 # the server closes a socket that leaves its pings unanswered for 60s
@@ -51,15 +50,16 @@ SOCKET_MAX_LIFETIME = 3000
 _CLOSE_TIMEOUT = 2.0
 
 # error codes that describe a transient server fault rather than a bad request
-_RETRYABLE_ERROR_CODES = frozenset({"backend_error"})
+_RETRYABLE_ERROR_CODES = frozenset({"backend_error", "model_at_capacity"})
 _RETRYABLE_CLOSE_CODES = frozenset({1000, 1001, 1006, 1011, 1012, 1013})
+
+_SEGMENT_KEY = "segment_id"
 
 
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
     voice: str
-    instructions: NotGivenOr[str]
     tokenizer: tokenize.SentenceTokenizer
 
 
@@ -67,9 +67,9 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels | str = "chorus-clone",
+        model: TTSModels | str = "chorus",
         voice: str = "wade",
-        instructions: NotGivenOr[str] = NOT_GIVEN,
+        sample_rate: int = 24000,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: str = SPRAG_BASE_URL,
         tokenizer: tokenize.SentenceTokenizer | None = None,
@@ -78,12 +78,12 @@ class TTS(tts.TTS):
         """
         Create a new instance of Sprag TTS.
 
-        Speech streams over a realtime WebSocket that stays open across turns.
+        Speech streams over Sprag's streaming speech socket, which stays open across turns.
 
         Args:
-            model: The Sprag speech model, ``chorus-voices`` or ``chorus-clone``.
-            voice: A preset voice id for the chosen model.
-            instructions: Style guidance, for speech models that accept it.
+            model: The Sprag speech model.
+            voice: A voice the model lists, or the id of a voice you stored (``voice_...``).
+            sample_rate: The output sample rate in Hz.
             api_key: Your Sprag API key. If not provided, will use the SPRAG_API_KEY
                 environment variable.
             base_url: The Sprag API base URL.
@@ -93,7 +93,7 @@ class TTS(tts.TTS):
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
-            sample_rate=SAMPLE_RATE,
+            sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
         self._api_key = resolve_api_key(api_key)
@@ -103,7 +103,6 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
-            instructions=instructions,
             tokenizer=tokenizer or tokenize.blingfire.SentenceTokenizer(),
         )
         self._session = http_session
@@ -127,7 +126,7 @@ class TTS(tts.TTS):
         return "Sprag"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        url = f"{self._ws_url}/realtime?{urlencode({'model': self._opts.model})}"
+        url = f"{self._ws_url}/audio/speech?{urlencode({'model': self._opts.model})}"
         # the failure is raised outside the except blocks: aiohttp's RequestInfo carries the
         # request headers, so an exception left in the chain would expose the API key
         rejected: tuple[str, int] | None = None
@@ -162,12 +161,11 @@ class TTS(tts.TTS):
         return ws
 
     async def _configure(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        session: dict[str, Any] = {
-            "type": "realtime",
-            "audio": {"output": {"voice": self._opts.voice}},
+        output = {
+            "voice": self._opts.voice,
+            "format": {"type": "audio/pcm", "rate": self.sample_rate},
         }
-        if is_given(self._opts.instructions):
-            session["instructions"] = self._opts.instructions
+        session = {"type": "realtime", "audio": {"output": output}}
         await ws.send_str(json.dumps({"type": "session.update", "session": session}))
         while True:
             data = await _receive_event(ws, timeout=None)
@@ -200,24 +198,20 @@ class TTS(tts.TTS):
         *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options. Open connections are replaced on their next use.
 
         Args:
             model: The Sprag speech model.
-            voice: A preset voice id for the chosen model.
-            instructions: Style guidance, for speech models that accept it.
+            voice: A voice the model lists, or the id of a voice you stored (``voice_...``).
         """
-        before = (self._opts.model, self._opts.voice, self._opts.instructions)
+        before = (self._opts.model, self._opts.voice)
         if is_given(model):
             self._opts.model = model
         if is_given(voice):
             self._opts.voice = voice
-        if is_given(instructions):
-            self._opts.instructions = instructions
-        if (self._opts.model, self._opts.voice, self._opts.instructions) != before:
+        if (self._opts.model, self._opts.voice) != before:
             self._pool.invalidate()
 
     def prewarm(self) -> None:
@@ -248,7 +242,11 @@ class TTS(tts.TTS):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    """Streams synthesis over a Sprag realtime speech session, one sentence per response."""
+    """Streams synthesis over a Sprag speech session, one sentence per response.
+
+    Each sentence is sent as soon as the tokenizer produces it; the session queues
+    responses and speaks them in order.
+    """
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
@@ -259,7 +257,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
-            sample_rate=SAMPLE_RATE,
+            sample_rate=self._tts.sample_rate,
             num_channels=NUM_CHANNELS,
             stream=True,
             mime_type="audio/pcm",
@@ -310,7 +308,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             if not self._tts._expired(ws):
                 break
             pool.remove(ws)
-            self._tts._close_soon(ws)
         self._acquire_time = pool.last_acquire_time
         self._connection_reused = pool.last_connection_reused
         return ws
@@ -318,56 +315,102 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run_segment(
         self, input_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
     ) -> None:
-        output_emitter.start_segment(segment_id=utils.shortuuid())
-        ws: aiohttp.ClientWebSocketResponse | None = None
-        try:
-            async for sentence in input_stream:
-                text = sentence.token.strip()
-                if not text:
-                    continue
-                if ws is None:
-                    ws = await self._acquire()
+        segment_id = utils.shortuuid()
+        output_emitter.start_segment(segment_id=segment_id)
+        sentences = (sentence.token async for sentence in input_stream)
+        first = await anext(sentences, None)
+        if first is None:
+            output_emitter.end_segment()
+            return
+        ws = await self._acquire()
+        unfinished = 0
+        input_done = False
+        sent = asyncio.Event()
+
+        async def _send() -> None:
+            nonlocal unfinished, input_done
+            text: str | None = first
+            while text is not None:
                 self._mark_started()
-                await self._speak(ws, text, output_emitter)
+                unfinished += 1
+                sent.set()
+                await _request(ws, text, segment_id)
+                text = await anext(sentences, None)
+            input_done = True
+            sent.set()
+
+        async def _receive() -> None:
+            nonlocal unfinished
+            speaking = False
+            while True:
+                if unfinished == 0:
+                    if input_done:
+                        return
+                    sent.clear()
+                    await sent.wait()
+                    continue
+                data = await _receive_event(ws, timeout=self._conn_options.timeout)
+                event_type = data["type"]
+                if event_type == "response.created":
+                    speaking = _segment_of(data) == segment_id
+                elif event_type == "response.output_audio.delta":
+                    if speaking:
+                        output_emitter.push(base64.b64decode(data["delta"]))
+                elif event_type == "response.done":
+                    speaking = False
+                    if _segment_of(data) != segment_id:
+                        continue
+                    response = data.get("response") or {}
+                    status = response.get("status")
+                    if status != "completed":
+                        error = (response.get("status_details") or {}).get("error") or {}
+                        raise APIStatusError(
+                            f"Sprag speech response ended as {status}",
+                            status_code=-1,
+                            body=str(data),
+                            retryable=error.get("code") in _RETRYABLE_ERROR_CODES,
+                        )
+                    unfinished -= 1
+                elif event_type == "error":
+                    raise _event_error(data)
+
+        tasks = [asyncio.create_task(_send()), asyncio.create_task(_receive())]
+        try:
+            await asyncio.gather(*tasks)
         except BaseException:
-            if ws is not None:
-                # an interrupted socket may still be mid-response, so it is never reused
-                self._tts._pool.remove(ws)
-                self._tts._close_soon(ws)
+            # an interrupted socket may still hold queued responses, so it is never reused
+            self._tts._pool.remove(ws)
+            self._tts._close_soon(ws)
             raise
-        if ws is not None:
+        else:
             self._tts._pool.put(ws)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
         output_emitter.end_segment()
 
-    async def _speak(
-        self, ws: aiohttp.ClientWebSocketResponse, text: str, output_emitter: tts.AudioEmitter
-    ) -> None:
-        item = {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": text}],
-        }
-        await ws.send_str(json.dumps({"type": "conversation.item.create", "item": item}))
-        await ws.send_str(json.dumps({"type": "response.create"}))
-        while True:
-            data = await _receive_event(ws, timeout=self._conn_options.timeout)
-            event_type = data["type"]
-            if event_type == "response.output_audio.delta":
-                output_emitter.push(base64.b64decode(data["delta"]))
-            elif event_type == "response.done":
-                response = data.get("response") or {}
-                status = response.get("status")
-                if status != "completed":
-                    error = (response.get("status_details") or {}).get("error") or {}
-                    raise APIStatusError(
-                        f"Sprag speech response ended as {status}",
-                        status_code=-1,
-                        body=str(data),
-                        retryable=error.get("code") in _RETRYABLE_ERROR_CODES,
-                    )
-                return
-            elif event_type == "error":
-                raise _event_error(data)
+
+async def _request(ws: aiohttp.ClientWebSocketResponse, text: str, segment_id: str) -> None:
+    item = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": text}],
+    }
+    create = {"type": "response.create", "response": {"metadata": {_SEGMENT_KEY: segment_id}}}
+    await ws.send_str(json.dumps({"type": "conversation.item.create", "item": item}))
+    await ws.send_str(json.dumps(create))
+
+
+def _segment_of(data: dict[str, Any]) -> str:
+    metadata = (data.get("response") or {}).get("metadata") or {}
+    segment_id = metadata.get(_SEGMENT_KEY)
+    if not isinstance(segment_id, str):
+        raise APIStatusError(
+            "Sprag response is missing its segment_id metadata",
+            status_code=-1,
+            body=str(data),
+            retryable=False,
+        )
+    return segment_id
 
 
 async def _receive_event(
