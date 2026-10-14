@@ -14,7 +14,9 @@ from agent import (
     _cancel_needs_a_yes,
     _cancel_read_back_at,
     _drink_size_said,
+    _drop_off_unsaved,
     _line_note,
+    _money,
     _opener,
     _read_back_answer,
     _voicemail,
@@ -1117,6 +1119,25 @@ async def test_the_caller_speaking_resets_the_silence_count() -> None:
     await session.user("listening", "away")
     # a fresh quiet spell: another check-in, not a hang-up
     assert session.said == [STILL_THERE, STILL_THERE] and page.end_reason is None
+
+
+def _outbound_said(*turns: tuple[str, str]) -> Any:
+    ctx = _said(*turns)
+    ctx.userdata = SimpleNamespace(pos=demo_pos("outbound"))
+    return ctx
+
+
+def test_drop_off_details_must_be_saved_before_the_wrap_up() -> None:
+    ctx = _outbound_said(("user", "No, just leave it at the door, please."))
+    assert _drop_off_unsaved(ctx) == "No, just leave it at the door, please."
+    ctx.userdata.pos.set_driver_note("Leave at the door")
+    assert _drop_off_unsaved(ctx) is None
+    # a discount code isn't a drop-off detail
+    assert _drop_off_unsaved(_outbound_said(("user", "Can you use code save twenty?"))) is None
+
+
+def test_whats_due_doesnt_repeat_how_they_pay() -> None:
+    assert "cash or card" not in _money(demo_pos("outbound"))
 
 
 # ---- the call helpers ----

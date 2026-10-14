@@ -853,6 +853,13 @@ class DeliveryUpdateAgent(Agent):
     async def final_read_back(self, ctx: Ctx) -> str:
         """Get the final changes and ETA to read back. Call it once nothing else is changing,
         before saying goodbye; call it again after any later change."""
+        if (said := _drop_off_unsaved(ctx)) is not None:
+            # "leave it at the door" answered with "I'll pass that on", and nothing saved
+            ctx.userdata.page.record("final_read_back", "Refused: drop-off details not saved")
+            raise ToolError(
+                f'They gave drop-off details ("{said}"). Call save_driver_note with them first, '
+                "then final_read_back."
+            )
         with _pos_rules(ctx) as pos:
             d = pos.read_back()
         changes = "; ".join(d.changes.values()) or "no changes"
@@ -865,10 +872,11 @@ class DeliveryUpdateAgent(Agent):
                 "end_call."
             )
         return (
-            f"Changes: {changes}.{_money(pos)} Read back, in one or two sentences, each change "
-            "and what's due at the door (and how much more or less that is); then say "
-            f"{d.driver} will be there in about {d.eta_minutes} minutes, and say goodbye. "
-            "Then call end_call."
+            f"Changes: {changes}.{_money(pos)} This is the goodbye, said once: in one or two "
+            "sentences, each change (not the whole order) and what's due at the door, then "
+            f"that {d.driver} will be there in about {d.eta_minutes} minutes, and goodbye. "
+            "Leave out anything you said in your last turn, and don't ask them to confirm. "
+            "Then call end_call in the same turn."
         )
 
     @function_tool
@@ -930,16 +938,34 @@ class DeliveryUpdateAgent(Agent):
         )
 
 
+# what a customer says about where or how the driver should drop it off
+_DROP_OFF = re.compile(
+    r"\b(door|porch|doorstep|front desk|lobby|gate|(gate|door|access|entry|building) code|"
+    r"buzz\w*|ring|knock|unit|apt|"
+    r"apartment|suite|floor|call (me )?when|text (me )?when|side entrance|back entrance)\b",
+    re.IGNORECASE,
+)
+
+
+def _drop_off_unsaved(ctx: Ctx) -> str | None:
+    """Drop-off details the customer gave since the call began, if none were saved."""
+    d = ctx.userdata.pos.delivery
+    if d is None or d.note:
+        return None
+    heard = [m.text_content or "" for m in ctx.session.history.messages() if m.role == "user"]
+    return next((h for h in reversed(heard) if _DROP_OFF.search(h)), None)
+
+
 def _money(pos: Pos) -> str:
     # what's due at the door now, against what was due when the order went out
     if pos.order and pos.order.cancelled:
         return " Nothing is due: the order is cancelled."
     balance, due = pos.balance(), pos.due_now()
     if balance < 0:
-        return f" ${due} due at the door now, ${-balance} less than before; cash or card."
+        return f" ${due} due at the door now, ${-balance} less than before."
     if balance > 0:
-        return f" ${due} due at the door now, ${balance} more than before; cash or card."
-    return f" Still ${due} due at the door, cash or card."
+        return f" ${due} due at the door now, ${balance} more than before."
+    return f" Still ${due} due at the door."
 
 
 def _opener(pos: Pos) -> str:
@@ -1179,10 +1205,11 @@ backs. You handle the whole call yourself: never offer to pass them, transfer th
 a note for a manager or anyone else.
 
 # Wrapping up
-When nothing else is changing, call final_read_back and read back what it returns: each
-change, what's due at the door, and the ETA (or, if it's cancelled, that nothing is due).
-Then say goodbye and call end_call. If anything changes after the read-back, call
-final_read_back again."""
+When nothing else is changing, call final_read_back and say what it returns as your
+goodbye: each change (never the whole order again), what's due at the door, and the ETA
+(or, if it's cancelled, that nothing is due). Don't read a summary back yourself first, and
+don't ask "Does that sound right?" here. Then call end_call. If anything changes after the
+read-back, call final_read_back again."""
 
 
 server = AgentServer()

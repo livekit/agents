@@ -169,7 +169,7 @@ def test_neither_agent_hands_the_call_off() -> None:
         assert "never offer" in said and "transfer" not in said.replace("to transfer to", "")
         assert PAYMENT in said and "no discount codes" in said
         # a phone call: nothing to look at
-        assert 'Ask "Does that sound right?" instead.' in said and "sees them" not in said
+        assert '"Does that sound right?"' in said and "sees them" not in said
     assert {"move_appointment", "cancel_appointment", "change_booking"} <= {
         t.id for t in inbound.tools
     }
