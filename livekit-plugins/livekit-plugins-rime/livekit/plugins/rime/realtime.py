@@ -173,7 +173,11 @@ class RealtimeSession(llm.RealtimeSession):
             self._connection = self._model._client.realtime.connect(
                 endpoint=self._model._endpoint,
                 voice=self._model._voice,
-                instructions=self._instructions,
+                # The SDK treats omitted instructions as the deployment default
+                # and rejects blank strings. Preserve LiveKit's value locally.
+                instructions=self._instructions
+                if self._instructions and self._instructions.strip()
+                else None,
                 tools=[_tool(t) for t in self._tool_list],
             )
             self._sdk = await self._connection.__aenter__()
