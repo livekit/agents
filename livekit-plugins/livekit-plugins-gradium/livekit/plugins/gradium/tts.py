@@ -41,12 +41,14 @@ from .log import logger
 SUPPORTED_SAMPLE_RATE = 48000
 
 # Websocket close codes the server uses for requests it would reject again verbatim:
-# protocol error, unsupported data (unknown model, setup validation) and policy
-# violation (no credits, concurrency cap). Everything else is worth a retry: 1011
-# covers worker failures and "no worker available" (but also unknown voice ids, which
-# the server does not distinguish for clients), 1000/1001 before end_of_stream are
-# server-side idle or duration limits.
-_NON_RETRYABLE_CLOSE_CODES = frozenset({1002, 1003, 1008})
+# protocol error and unsupported data (unknown model, setup validation). Everything
+# else is worth a retry. 1008 (policy violation) covers the org's concurrency cap,
+# which frees up when another session ends, next to credits and API-key failures
+# that will not; the frame does not tell them apart, so the transient reading wins.
+# 1011 covers worker failures and "no worker available" (but also unknown voice ids,
+# which the server does not distinguish for clients either), 1000/1001 before
+# end_of_stream are server-side idle or duration limits.
+_NON_RETRYABLE_CLOSE_CODES = frozenset({1002, 1003})
 
 
 def _close_error(message: str, *, code: int | None, body: Any) -> APIStatusError:
