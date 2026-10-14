@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
 
 import aiohttp
@@ -27,6 +28,9 @@ _DEFAULT_API_URL = "https://api.bey.dev"
 
 _AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
 _AVATAR_AGENT_NAME = "bey-avatar-agent"
+# Beyond Presence runs a session for up to 24 hours, so the avatar can still
+# rejoin the room late in a session
+_AVATAR_TOKEN_TTL = datetime.timedelta(hours=24)
 
 
 class BeyException(Exception):
@@ -105,6 +109,7 @@ class AvatarSession(BaseAvatarSession):
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
             # allow the avatar agent to publish audio and video on behalf of your local agent
             .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
+            .with_ttl(_AVATAR_TOKEN_TTL)
             .to_jwt()
         )
 
