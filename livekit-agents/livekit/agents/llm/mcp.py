@@ -137,6 +137,10 @@ class MCPServer(ABC):
     def invalidate_cache(self) -> None:
         self._cache_dirty = True
 
+    def _server_label(self) -> str:
+        """Name the server in logs. Subclasses must leave out credentials."""
+        return type(self).__name__
+
     async def initialize(self) -> None:
         if self._client_task and self._ready_fut and not self._client_task.done():
             logger.warning("MCPServer is already initializing")
@@ -184,8 +188,12 @@ class MCPServer(ABC):
                 else:
                     ready_fut.set_exception(e)  # raising from `await initialize()`
             else:
+                # no retry here; only a later MCPToolset.setup (e.g. an agent handoff) reconnects
                 if isinstance(e, Exception):
-                    logger.exception("MCP client connection failed with unexpected error")
+                    logger.exception(
+                        "MCP client connection failed with unexpected error",
+                        extra={"server": self._server_label()},
+                    )
                 raise
         finally:
             self._client = None
@@ -324,7 +332,19 @@ class MCPServer(ABC):
         """
         client = self._client
         assert client is not None
-        result = await client.call_tool(name, arguments, progress_callback=progress_callback)
+        try:
+            result = await client.call_tool(name, arguments, progress_callback=progress_callback)
+        except mcp.MCPError as e:
+            if e.code == mcp.types.REQUEST_TIMEOUT:
+                logger.warning(
+                    "MCP tool call timed out",
+                    extra={
+                        "tool": name,
+                        "server": self._server_label(),
+                        "timeout_s": self._read_timeout,
+                    },
+                )
+            raise
         if not isinstance(result, mcp.types.CallToolResult):
             raise ToolError(
                 f"Tool '{name}' returned an unexpected MCP result ({type(result).__name__})."
@@ -502,6 +522,12 @@ class MCPServerHTTP(MCPServer):
 
         return filtered_tools
 
+    def _server_label(self) -> str:
+        # scheme and host only: userinfo, query, and some paths (e.g. Zapier) carry secrets
+        parsed = urlparse(self.url)
+        host = parsed.netloc.rpartition("@")[2]
+        return f"{parsed.scheme}://{host}"
+
     def __repr__(self) -> str:
         transport_type = "streamable_http" if self._use_streamable_http else "sse"
         allowed_str = f", allowed_tools={list(self._allowed_tools)}" if self._allowed_tools else ""
@@ -532,6 +558,10 @@ class MCPServerStdio(MCPServer):
         return stdio_client(  # type: ignore[no-any-return]
             StdioServerParameters(command=self.command, args=self.args, env=self.env, cwd=self.cwd)
         )
+
+    def _server_label(self) -> str:
+        # the command name only: args and env can carry secrets
+        return Path(self.command).name
 
     def __repr__(self) -> str:
         return f"MCPServerStdio(command={self.command}, args={self.args}, cwd={self.cwd})"
@@ -587,14 +617,37 @@ class MCPToolset(AsyncToolset):
             if not reload and self._initialized:
                 return self
 
-            if not self._mcp_server.initialized:
-                await self._mcp_server.initialize()
-            elif reload:
-                self._mcp_server.invalidate_cache()
+            server = self._mcp_server
+            connecting = not server.initialized
+            try:
+                if connecting:
+                    await server.initialize()
+                elif reload:
+                    server.invalidate_cache()
 
-            tools = await self._mcp_server.list_tools(tool_options=self._tool_options)
+                tools = await server.list_tools(tool_options=self._tool_options)
+            except Exception:
+                # AgentActivity skips its generic toolset log for MCPToolset, so log here
+                logger.exception(
+                    "failed to connect to MCP server; its tools are unavailable",
+                    extra={"server": server._server_label(), "toolset_id": self.id},
+                )
+                raise
+
             self._tools = list(tools)
             self._initialized = True
+            # only on connect: each agent handoff sets up the toolset again
+            if connecting:
+                tool_names = [tool.info.name for tool in tools]
+                logger.info(
+                    "MCP server connected",
+                    extra={
+                        "server": server._server_label(),
+                        "toolset_id": self.id,
+                        "tool_count": len(tool_names),
+                        "tools": tool_names,
+                    },
+                )
             return self
 
     def filter_tools(self, filter_fn: Callable[[MCPTool], bool]) -> Self:
