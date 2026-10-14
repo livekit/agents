@@ -1,0 +1,22 @@
+tests/test_stt_base.py
+  s_785c98d77eb66c::t_bb16e94d1a3dee 422-423
+  s_785c98d77eb66c::t_3c14d85932c9d3 398-421,424-426
+livekit-agents/livekit/agents/stt/stt.py
+  s_785c98d77eb66c::t_e596fed3a1d022 6,369-370,383-384,409,415,417-422
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ba998d381c9901f2985885d38b06e3aa516f186",
+  "prompts": {},
+  "sessions": {
+    "s_785c98d77eb66c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d9be1781-d4cf-43d1-92a4-5a1fabe06929",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
