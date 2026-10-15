@@ -4,12 +4,13 @@ import asyncio
 import time
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from livekit import rtc
 from livekit.agents import stt
+from livekit.plugins import sarvam
 from livekit.plugins.sarvam.stt import SpeechStream
 
 pytestmark = pytest.mark.unit
@@ -33,7 +34,7 @@ def _make_stream_under_test(
     instance._start_time_offset = 0.0  # type: ignore[attr-defined]
     instance._utterance_speech_start_wall = None  # type: ignore[attr-defined]
     instance._utterance_speech_end_wall = None  # type: ignore[attr-defined]
-    instance._audio_sent_duration = 0.0  # type: ignore[attr-defined]
+    instance._audio_pushed_duration = 0.0  # type: ignore[attr-defined]
     instance._utterance_speech_end_audio_pos = None  # type: ignore[attr-defined]
     instance._pending_final_data = None  # type: ignore[attr-defined]
     instance._pending_eos = False  # type: ignore[attr-defined]
@@ -131,16 +132,16 @@ async def test_speech_end_wall_clock_resets_on_new_utterance() -> None:
     assert instance._utterance_speech_end_audio_pos is None  # type: ignore[attr-defined]
 
 
-async def test_final_end_time_falls_back_to_audio_sent_at_end_speech() -> None:
+async def test_final_end_time_falls_back_to_audio_pushed_at_end_speech() -> None:
     # Sarvam streaming exposes no word timestamps and a null speech_end, so a final
-    # that follows END_SPEECH takes the audio sent when END_SPEECH arrived, not the
-    # audio sent by the time the final lands.
+    # that follows END_SPEECH takes the audio pushed when END_SPEECH arrived, not the
+    # audio pushed by the time the final lands.
     instance, captured = _make_stream_under_test()
-    instance._audio_sent_duration = 3.2  # type: ignore[attr-defined]
+    instance._audio_pushed_duration = 3.2  # type: ignore[attr-defined]
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
-    instance._audio_sent_duration = 3.4  # type: ignore[attr-defined]
+    instance._audio_pushed_duration = 3.4  # type: ignore[attr-defined]
     await instance._handle_transcript_data(_ws_message(speech_start=0.0, speech_end=0.0))
 
     final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
@@ -154,12 +155,12 @@ async def test_late_final_after_eos_fallback_keeps_the_end_speech_position() -> 
     # (with no local VAD a final without one re-anchors the turn at its arrival,
     # and transcription_delay collapses to ~0).
     instance, captured = _make_stream_under_test()
-    instance._audio_sent_duration = 3.2  # type: ignore[attr-defined]
+    instance._audio_pushed_duration = 3.2  # type: ignore[attr-defined]
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
     await asyncio.sleep(0.05)  # EOS fallback fires
-    instance._audio_sent_duration = 4.6  # type: ignore[attr-defined]  # audio kept flowing
+    instance._audio_pushed_duration = 4.6  # type: ignore[attr-defined]  # audio kept flowing
     await instance._handle_transcript_data(_ws_message())
 
     event_order = [
@@ -179,7 +180,7 @@ async def test_audio_position_fallback_includes_start_time_offset() -> None:
     # Same stream timeline as the provider times (see test_final_timing_includes_start_time_offset).
     instance, captured = _make_stream_under_test()
     instance._start_time_offset = 2.0  # type: ignore[attr-defined]
-    instance._audio_sent_duration = 3.2  # type: ignore[attr-defined]
+    instance._audio_pushed_duration = 3.2  # type: ignore[attr-defined]
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
@@ -191,7 +192,7 @@ async def test_audio_position_fallback_includes_start_time_offset() -> None:
 
 async def test_provider_speech_end_wins_over_the_audio_position() -> None:
     instance, captured = _make_stream_under_test()
-    instance._audio_sent_duration = 3.2  # type: ignore[attr-defined]
+    instance._audio_pushed_duration = 3.2  # type: ignore[attr-defined]
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
@@ -201,25 +202,39 @@ async def test_provider_speech_end_wins_over_the_audio_position() -> None:
     assert final.alternatives[0].end_time == pytest.approx(1.7)
 
 
-async def test_process_audio_counts_only_audio_actually_sent() -> None:
-    instance, _ = _make_stream_under_test()
-    instance._chunk_size = 800  # type: ignore[attr-defined]  # 50 ms at 16 kHz
-    instance._audio_encoding = "audio/wav"  # type: ignore[attr-defined]
-    instance._end_of_stream_msg = "{}"  # type: ignore[attr-defined]
-    ws = SimpleNamespace(send_str=AsyncMock())
+async def test_speech_end_position_follows_pushed_audio_while_sending_lags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The fallback sits on the pipeline's input clock: audio still queued behind a
+    # slow WebSocket was spoken already. With sending fully stalled, the position is
+    # everything pushed so far, so it still maps back to the END_SPEECH receipt.
+    async def _stalled_connection(self: SpeechStream) -> None:
+        await asyncio.Event().wait()
 
-    async def _frames() -> Any:
-        for _ in range(2):
-            yield rtc.AudioFrame(
-                data=b"\x00\x00" * 1000, sample_rate=16000, num_channels=1, samples_per_channel=1000
+    monkeypatch.setattr(SpeechStream, "_run", _stalled_connection)
+    stream = sarvam.STT(api_key="sk_test", language="hi-IN").stream()
+    try:
+        for _ in range(150):  # 3 s of 20 ms frames, none of it sent to Sarvam
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=b"\x00\x00" * 320,
+                    sample_rate=16000,
+                    num_channels=1,
+                    samples_per_channel=320,
+                )
             )
+        await stream._handle_events(_event("START_SPEECH"))
+        await stream._handle_events(_event("END_SPEECH"))
+        await stream._handle_transcript_data(_ws_message())
 
-    instance._input_ch = _frames()  # type: ignore[attr-defined]
-    await instance._process_audio(ws)  # type: ignore[arg-type]
-
-    # 2000 samples pushed: two full 800-sample chunks went out, 400 are still buffered
-    assert ws.send_str.await_count == 2
-    assert instance._audio_sent_duration == pytest.approx(0.1)  # type: ignore[attr-defined]
+        final = None
+        while final is None:
+            ev = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+            if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                final = ev
+        assert final.alternatives[0].end_time == pytest.approx(3.0 + stream.start_time_offset)
+    finally:
+        await stream.aclose()
 
 
 async def test_final_end_time_uses_speech_end_when_present() -> None:
@@ -368,7 +383,7 @@ async def test_occured_at_is_ignored() -> None:
     # never used: EOS stays bare and the final's end_time falls back to the audio
     # sent at END_SPEECH, even when END_SPEECH arrives before the final transcript.
     instance, captured = _make_stream_under_test()
-    instance._audio_sent_duration = 2.0  # type: ignore[attr-defined]
+    instance._audio_pushed_duration = 2.0  # type: ignore[attr-defined]
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH", occured_at=1_700_000_000.0))

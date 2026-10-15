@@ -904,9 +904,9 @@ class SpeechStream(stt.SpeechStream):
 
         self._utterance_speech_start_wall: float | None = None
         self._utterance_speech_end_wall: float | None = None
-        # seconds of audio sent on the current connection, and its value when Sarvam's
-        # END_SPEECH arrived: the final's end_time fallback (see _send_final_transcript)
-        self._audio_sent_duration = 0.0
+        # seconds of audio pushed into the stream, and its value when Sarvam's END_SPEECH
+        # arrived: the final's end_time fallback (see _send_final_transcript)
+        self._audio_pushed_duration = 0.0
         self._utterance_speech_end_audio_pos: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
         self._pending_eos = False
@@ -968,6 +968,11 @@ class SpeechStream(stt.SpeechStream):
         if request_id:
             self._server_request_id = str(request_id)
 
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        super().push_frame(frame)
+        # counted on input, not on send: the pipeline's input clock (see _send_final_transcript)
+        self._audio_pushed_duration += frame.duration
+
     def _positive_time(self, value: object) -> float | None:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
@@ -1006,11 +1011,14 @@ class SpeechStream(stt.SpeechStream):
         # Streaming reports timing via speech_start/speech_end (the batch
         # `timestamps` array is not sent over the socket), and today both come back
         # null. A final that follows Sarvam's END_SPEECH then falls back to the audio
-        # sent when END_SPEECH arrived: without an end_time, a final landing after the
-        # EOS fallback re-anchors the turn at its own arrival (no VAD in the session),
-        # collapsing transcription_delay to ~0. Like the EOS speech_end_time, this
-        # position includes Sarvam's VAD silence window. Otherwise end_time is 0.0
-        # and the pipeline falls back to wall-clock for EOU timing.
+        # pushed when END_SPEECH arrived: without an end_time, a final landing after
+        # the EOS fallback re-anchors the turn at its own arrival (no VAD in the
+        # session), collapsing transcription_delay to ~0. Pushed audio follows the
+        # pipeline's input clock, so the position maps back to the END_SPEECH receipt
+        # that EOS carries as speech_end_time, even when sending to Sarvam lags behind
+        # (a sent-audio count would shift it earlier). Like that anchor, it includes
+        # Sarvam's VAD silence window. Otherwise end_time is 0.0 and the pipeline falls
+        # back to wall-clock for EOU timing.
         end_time = self._positive_time(transcript_data.get("speech_end"))
         if end_time is None:
             end_time = self._positive_time(self._utterance_speech_end_audio_pos)
@@ -1244,9 +1252,6 @@ class SpeechStream(stt.SpeechStream):
         if _model_supports_prompt(self._opts.model) and self._opts.prompt:
             await self._send_initial_config(ws)
 
-        # provider times are relative to this connection's audio (see _positive_time)
-        self._audio_sent_duration = 0.0
-
         # Create tasks for audio processing and message handling
         self._audio_task = asyncio.create_task(self._process_audio(ws))
         self._message_task = asyncio.create_task(self._process_messages(ws))
@@ -1374,7 +1379,6 @@ class SpeechStream(stt.SpeechStream):
 
                             await ws.send_str(json.dumps(audio_message))
                             chunks_sent += 1
-                            self._audio_sent_duration += chunk_size / self._opts.sample_rate
 
                             # Remove sent data from buffer
                             audio_buffer = audio_buffer[chunk_size:]
@@ -1676,7 +1680,7 @@ class SpeechStream(stt.SpeechStream):
                     # speech_end_time, so transcription_delay measures
                     # Sarvam VAD speech end -> final transcript received.
                     self._utterance_speech_end_wall = time.time()
-                    self._utterance_speech_end_audio_pos = self._audio_sent_duration
+                    self._utterance_speech_end_audio_pos = self._audio_pushed_duration
                     self._pending_eos = True
                     self._try_commit_utterance()
                     if not self._eos_emitted_for_utterance and self._pending_final_data is None:
