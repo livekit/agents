@@ -4173,9 +4173,9 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
         # inside on_enter, hide flagged tools even when no tools= was passed (fall back to self.tools).
-        # skip that fallback when the model can neither take per-response tools nor update them
-        # mid-session: swapping them would restart the provider session and drop this reply
-        capabilities = self._rt_session.realtime_model.capabilities
+        # skip that fallback when the active model can neither take per-response tools nor update
+        # them mid-session: swapping them would restart the provider session and drop this reply
+        capabilities = self._rt_session.capabilities
         turn_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
         tool_ctx = llm.ToolContext(tools if tools is not None else self.tools)
         on_enter_ignored = (

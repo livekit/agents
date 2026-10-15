@@ -18,6 +18,7 @@ from livekit.agents.llm import (
     GenerationCreatedEvent,
     MessageGeneration,
     RealtimeCapabilities,
+    RealtimeModelFallbackAdapter,
     ToolFlag,
     function_tool,
 )
@@ -96,11 +97,20 @@ def _empty_generation() -> GenerationCreatedEvent:
     )
 
 
-async def _run_on_enter(capabilities: RealtimeCapabilities) -> _RecordingSession:
+async def _run_on_enter(
+    capabilities: RealtimeCapabilities,
+    *,
+    fallback_capabilities: RealtimeCapabilities | None = None,
+) -> _RecordingSession:
     model = _RecordingModel(capabilities=capabilities)
+    llm: _RecordingModel | RealtimeModelFallbackAdapter = model
+    if fallback_capabilities is not None:
+        llm = RealtimeModelFallbackAdapter(
+            [model, _RecordingModel(capabilities=fallback_capabilities)]
+        )
     agent = _GreetingAgent()
 
-    async with AgentSession(llm=model) as session:
+    async with AgentSession(llm=llm) as session:
         session.output.audio = FakeAudioOutput()
         await session.start(agent)
         rt_session = model.created_sessions[-1]
@@ -143,6 +153,31 @@ async def test_mutable_tools_hide_flagged_tools_during_on_enter() -> None:
 async def test_per_response_tools_hide_flagged_tools_during_on_enter() -> None:
     rt_session = await _run_on_enter(
         fake_capabilities(mutable_tools=False, per_response_tool_choice=True)
+    )
+
+    assert rt_session.tool_updates == []
+    assert rt_session.reply_tools == [{"visible"}, {"visible"}]
+
+
+async def test_fallback_adapter_uses_active_mutable_model() -> None:
+    # the adapter ANDs capabilities across children; the active primary can still update tools
+    rt_session = await _run_on_enter(
+        fake_capabilities(mutable_tools=True, per_response_tool_choice=False),
+        fallback_capabilities=fake_capabilities(
+            mutable_tools=False, per_response_tool_choice=False
+        ),
+    )
+
+    assert rt_session.tool_updates == [{"visible"}, {"flagged", "visible"}] * 2
+    assert set(rt_session.tools.function_tools) == {"flagged", "visible"}
+
+
+async def test_fallback_adapter_uses_active_per_response_model() -> None:
+    rt_session = await _run_on_enter(
+        fake_capabilities(mutable_tools=True, per_response_tool_choice=True),
+        fallback_capabilities=fake_capabilities(
+            mutable_tools=False, per_response_tool_choice=False
+        ),
     )
 
     assert rt_session.tool_updates == []
