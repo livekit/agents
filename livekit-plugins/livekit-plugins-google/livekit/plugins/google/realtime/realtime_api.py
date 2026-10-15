@@ -8,7 +8,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
 
@@ -33,6 +33,10 @@ from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModel
 from ..log import logger
 from ..utils import create_function_response, create_tools_config, get_tool_results_for_realtime
 from ..version import __version__
+from ._avatar_stream import AvatarStreamDecoder
+
+if TYPE_CHECKING:
+    from .avatar import AvatarSession
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
@@ -193,6 +197,7 @@ class _RealtimeOptions:
     tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
+    avatar_config: NotGivenOr[types.AvatarConfig] = NOT_GIVEN
     credentials: google.auth.credentials.Credentials | None = None
 
 
@@ -270,6 +275,7 @@ class RealtimeModel(llm.RealtimeModel):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
+        avatar_config: NotGivenOr[types.AvatarConfig] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
@@ -311,6 +317,9 @@ class RealtimeModel(llm.RealtimeModel):
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
                 thinking_level is not supported by gemini-3.8-live on the Gemini API.
+            avatar_config (AvatarConfig, optional): Live Avatar configuration (Gemini 3.8 Live on
+                VertexAI). The model renders a talking-head video along with its speech, and
+                modalities default to ["VIDEO"]. Publish it with `AvatarSession`.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
 
         Raises:
@@ -328,7 +337,14 @@ class RealtimeModel(llm.RealtimeModel):
             and realtime_input_config.automatic_activity_detection.disabled
         ):
             server_turn_detection = False
-        modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
+        if not is_given(modalities):
+            modalities = (
+                [types.Modality.VIDEO] if is_given(avatar_config) else [types.Modality.AUDIO]
+            )
+        if is_given(avatar_config) and types.Modality.VIDEO not in modalities:
+            raise ValueError("avatar_config requires the VIDEO modality")
+        if types.Modality.VIDEO in modalities and not is_given(avatar_config):
+            raise ValueError("the VIDEO modality requires avatar_config")
         use_vertexai = (
             vertexai
             if is_given(vertexai)
@@ -349,7 +365,8 @@ class RealtimeModel(llm.RealtimeModel):
                 turn_detection=server_turn_detection,
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=True,
-                audio_output=types.Modality.AUDIO in modalities,
+                audio_output=types.Modality.AUDIO in modalities
+                or types.Modality.VIDEO in modalities,
                 manual_function_calls=False,
                 mutable_chat_context=True,
                 mutable_instructions=True,
@@ -436,10 +453,12 @@ class RealtimeModel(llm.RealtimeModel):
             media_resolution=media_resolution,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
+            avatar_config=avatar_config,
             credentials=credentials,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
+        self._avatar_session: AvatarSession | None = None
 
     @property
     def model(self) -> str:
@@ -502,6 +521,7 @@ class RealtimeModel(llm.RealtimeModel):
 class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
+        self._gemini_model = realtime_model
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
@@ -545,6 +565,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._current_generation: _ResponseGeneration | None = None
         self._active_session: AsyncSession | None = None
+        self._avatar_decoder: AvatarStreamDecoder | None = None
         # indicates if the underlying session should end
         self._session_should_close = asyncio.Event()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
@@ -952,6 +973,7 @@ class RealtimeSession(llm.RealtimeSession):
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
 
+        await self._close_avatar_decoder()
         await self._close_active_session()
 
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -992,6 +1014,11 @@ class RealtimeSession(llm.RealtimeSession):
                     model=self._opts.model, config=config
                 ) as session:
                     self._report_connection_acquired(time.perf_counter() - t0)
+                    if is_given(self._opts.avatar_config):
+                        # each connection starts a new stream with its own init segment
+                        self._avatar_decoder = AvatarStreamDecoder(
+                            on_video=self._on_avatar_video, on_audio=self._on_avatar_audio
+                        )
                     async with self._session_lock:
                         self._active_session = session
 
@@ -1124,6 +1151,7 @@ class RealtimeSession(llm.RealtimeSession):
                     await asyncio.sleep(retry_interval)
                     self._num_retries += 1
             finally:
+                await self._close_avatar_decoder()
                 await self._close_active_session()
 
     async def _send_task(self, session: AsyncSession) -> None:
@@ -1192,6 +1220,9 @@ class RealtimeSession(llm.RealtimeSession):
                         break
 
                 async for response in session.receive():
+                    if self._avatar_decoder and not self._route_avatar_media(response):
+                        continue
+
                     if lk_google_debug:
                         resp_copy = response.model_dump(exclude_defaults=True)
                         # remove audio from debugging logs
@@ -1333,6 +1364,8 @@ class RealtimeSession(llm.RealtimeSession):
             conf.realtime_input_config = self._opts.realtime_input_config
         if is_given(self._opts.context_window_compression):
             conf.context_window_compression = self._opts.context_window_compression
+        if is_given(self._opts.avatar_config):
+            conf.avatar_config = self._opts.avatar_config
 
         return conf
 
@@ -1385,6 +1418,53 @@ class RealtimeSession(llm.RealtimeSession):
             self._handle_input_speech_started()
 
         self.emit("generation_created", generation_event)
+
+    def _route_avatar_media(self, response: types.LiveServerMessage) -> bool:
+        """Send the avatar stream to the decoder, and strip it from the response.
+
+        The avatar stream is continuous: the server keeps sending idle frames while the
+        model listens, so these parts must never open a generation. Returns False when
+        nothing else is left in the response.
+        """
+        sc = response.server_content
+        if not sc or not sc.model_turn or not sc.model_turn.parts:
+            return True
+
+        parts: list[types.Part] = []
+        for part in sc.model_turn.parts:
+            blob = part.inline_data
+            if blob and blob.mime_type and blob.mime_type.startswith("video/"):
+                if self._avatar_decoder and blob.data:
+                    self._avatar_decoder.push(blob.data)
+            else:
+                parts.append(part)
+
+        if parts:
+            sc.model_turn.parts = parts
+            return True
+
+        sc.model_turn = None
+        if not sc.model_dump(exclude_none=True):
+            response.server_content = None
+        return bool(response.model_dump(exclude_none=True))
+
+    def _on_avatar_video(self, frame: rtc.VideoFrame) -> None:
+        if self._gemini_model._avatar_session:
+            self._gemini_model._avatar_session._push_frame(frame)
+
+    def _on_avatar_audio(self, frame: rtc.AudioFrame) -> None:
+        # the session's audio output tracks playout and transcript timing; the audible
+        # audio is published with the video by AvatarSession
+        gen = self._current_generation
+        if gen and not gen._done and not gen.audio_ch.closed:
+            gen.audio_ch.send_nowait(frame)
+        if self._gemini_model._avatar_session:
+            self._gemini_model._avatar_session._push_frame(frame)
+
+    async def _close_avatar_decoder(self) -> None:
+        if self._avatar_decoder:
+            decoder, self._avatar_decoder = self._avatar_decoder, None
+            await decoder.aclose()
 
     def _handle_server_content(self, server_content: types.LiveServerContent) -> None:
         current_gen = self._current_generation
