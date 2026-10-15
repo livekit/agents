@@ -227,9 +227,10 @@ class SpeechSteeringOptions(TypedDict, total=False):
 
     A string replaces the built-in English filler guideline verbatim, e.g. to
     name language-appropriate fillers (``"Use natural Japanese fillers such as
-    えっと and あの, zero to two per turn."``). The string then owns all filler
-    prose: provider blocks drop their English filler examples and guidance.
-    An empty string adds no filler guideline at all."""
+    えっと and あの, zero to two per turn."``); braces in it are kept literally.
+    As with ``False``, Fish Audio's English filler examples and guidance are
+    dropped; the shared marker preamble and base examples are unchanged. An
+    empty string adds no filler guideline at all."""
     nonverbal_sounds: bool | NonverbalOptions
     """Which non-verbal sounds the TTS may make. ``True`` (and omitting the
     key) keeps the provider's full vocabulary, ``False`` disables every sound,
