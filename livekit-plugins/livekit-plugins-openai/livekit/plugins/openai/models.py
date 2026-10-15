@@ -308,8 +308,9 @@ class OpenRouterProviderPreferences(TypedDict, total=False):
     allow_fallbacks: bool
     require_parameters: bool
     data_collection: Literal["allow", "deny"]
+    zdr: bool
     only: list[str]
     ignore: list[str]
     quantizations: list[str]
-    sort: Literal["price", "throughput", "latency"]
+    sort: Literal["price", "throughput", "latency", "exacto"]
     max_price: dict[str, float]
