@@ -1554,6 +1554,10 @@ class AudioRecognition:
             speech_start_time: float | None = None,
             committed_transcript: str = "",
             committed_confidence: list[float] | None = None,
+            *,
+            belongs_to_manual_commit: bool = False,
+            committed_request_ids: list[str] | None = None,
+            committed_stt_events: list[dict[str, Any]] | None = None,
         ) -> None:
             endpointing_delay = self._endpointing.min_delay
             # a turn created here (no VAD/start-of-speech opened it) starts at the earliest
@@ -1753,8 +1757,10 @@ class AudioRecognition:
 
             # a manual commit has already decided what the turn is: when
             # `clear_user_turn()` ran during the endpointing delay, the live fields
-            # belong to the next turn, so deliver what was committed instead
-            cleared_after_commit = trigger == "manual" and not self._user_turn_committed
+            # belong to the next turn, so deliver what was committed instead.
+            # `belongs_to_manual_commit` survives STT rearms of the bounce so a late
+            # FINAL that replaces the task cannot drop the snapshot on clear.
+            cleared_after_commit = belongs_to_manual_commit and not self._user_turn_committed
             if cleared_after_commit:
                 transcript = committed_transcript
                 confidences = committed_confidence or []
@@ -1802,18 +1808,36 @@ class AudioRecognition:
                         trace_types.ATTR_END_OF_TURN_DELAY: metrics.end_of_turn_delay or 0,
                     }
                 )
-                if self._stt_request_ids:
-                    user_turn_span.set_attribute(
-                        trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
-                    )
-                self._stamp_stt_events(user_turn_span)
+                if cleared_after_commit:
+                    # clear already closed the committed span and rebuilt STT; stamp only
+                    # what this bounce snapshotted and leave the next turn's metadata alone
+                    request_ids = committed_request_ids or []
+                    if request_ids and user_turn_span.is_recording():
+                        user_turn_span.set_attribute(
+                            trace_types.ATTR_PROVIDER_REQUEST_IDS, request_ids
+                        )
+                    if committed_stt_events and user_turn_span.is_recording():
+                        user_turn_span.set_attribute(
+                            trace_types.ATTR_STT_EVENTS, json.dumps(committed_stt_events)
+                        )
+                else:
+                    if self._stt_request_ids:
+                        user_turn_span.set_attribute(
+                            trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
+                        )
+                    self._stamp_stt_events(user_turn_span)
                 self._end_eou_wait_span("committed")
                 self._stamp_user_turn_resumes(user_turn_span)
                 if not end_of_turn.user_turn_span_adopted:
                     user_turn_span.end()
-                self._user_turn_span = None
-                self._user_turn_start = None
-                self._stt_request_ids = []
+                if not cleared_after_commit:
+                    self._user_turn_span = None
+                    self._user_turn_start = None
+                    self._stt_request_ids = []
+                elif self._user_turn_span is user_turn_span:
+                    # clear usually already detached; only drop if we still own the span
+                    self._user_turn_span = None
+                    self._user_turn_start = None
                 self._reset_transcription_timeout()
 
                 # clear the transcript if the user turn was committed
@@ -1846,6 +1870,11 @@ class AudioRecognition:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
             self._end_of_turn_task.cancel()
         # copy the last_speaking_time before awaiting (the value can change)
+        # STT finals that rearm a pending manual commit must keep the manual identity
+        # so a later clear still delivers the snapshot instead of the live fields.
+        belongs_to_manual_commit = trigger == "manual" or (
+            self._turn_detection_mode == "manual" and self._user_turn_committed
+        )
         self._end_of_turn_task = asyncio.create_task(
             _bounce_eou_task(
                 self._last_speaking_time,
@@ -1853,6 +1882,9 @@ class AudioRecognition:
                 self._user_turn_start,
                 committed_transcript=self._audio_transcript,
                 committed_confidence=list(self._final_transcript_confidence),
+                belongs_to_manual_commit=belongs_to_manual_commit,
+                committed_request_ids=list(self._stt_request_ids),
+                committed_stt_events=list(self._stt_events),
             )
         )
 

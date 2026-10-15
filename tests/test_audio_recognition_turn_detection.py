@@ -809,3 +809,48 @@ class TestManualCommitThenClearUserTurn:
 
             assert hooks.end_of_turn_transcripts == ["hello"]
             assert rec._audio_transcript == ""
+
+    async def test_late_final_then_clear_keeps_committed_snapshot(self) -> None:
+        """A late FINAL during endpointing rearms the bounce as STT; clear must
+        still deliver the snapshot (committed text plus that late FINAL), not "".
+        """
+        async with _manual_recognition(min_delay=0.2) as (rec, hooks):
+            await _commit_at_ptt_release(rec, "weather")
+            assert rec._user_turn_committed
+            # late FINAL accepted while the manual bounce is pending
+            rec._audio_transcript = "weather never mind"
+            rec._final_transcript_confidence = [0.9, 0.8]
+            rec._last_final_transcript_time = time.time()
+            rec._run_eou_detection(llm.ChatContext.empty(), trigger="stt")
+            rec._clear_user_turn()
+            assert rec._end_of_turn_task is not None
+            await rec._end_of_turn_task
+
+        assert hooks.end_of_turn_transcripts == ["weather never mind"]
+
+    async def test_clear_after_commit_leaves_next_turn_stt_request_ids(self) -> None:
+        """After clear, a next-turn FINAL's request id must not be consumed by the
+        still-pending bounce for the previous turn.
+        """
+        async with _manual_recognition(min_delay=0.2) as (rec, hooks):
+            rec._stt_request_ids = ["req-A"]
+            rec._stt_events = [
+                {"received_at": time.time(), "type": "final_transcript", "transcript_length": 5}
+            ]
+            await _commit_at_ptt_release(rec, "first")
+            rec._clear_user_turn()
+            next_event = {
+                "received_at": time.time(),
+                "type": "final_transcript",
+                "transcript_length": 6,
+            }
+            rec._stt_request_ids = ["req-B"]
+            rec._stt_events = [next_event]
+            rec._audio_transcript = "second"
+            assert rec._end_of_turn_task is not None
+            await rec._end_of_turn_task
+
+            assert hooks.end_of_turn_transcripts == ["first"]
+            assert rec._stt_request_ids == ["req-B"]
+            assert rec._stt_events == [next_event]
+            assert rec._audio_transcript == "second"
