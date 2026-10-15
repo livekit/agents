@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import os
 import time
@@ -1450,9 +1451,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _on_avatar_video(self, frame: rtc.VideoFrame) -> None:
         if self._gemini_model._avatar_session:
-            gen = self._current_generation
-            idle = gen is None or gen._done
-            self._gemini_model._avatar_session._push_frame(frame, idle=idle)
+            self._gemini_model._avatar_session._push_frame(frame)
 
     def _on_avatar_audio(self, frame: rtc.AudioFrame) -> None:
         # the session's audio output tracks playout and transcript timing; the audible
@@ -1549,7 +1548,13 @@ class RealtimeSession(llm.RealtimeSession):
         # gemini delays turn_complete until it thinks client-side playback finished, so end
         # the output streams on generation_complete instead
         if server_content.generation_complete:
-            self._close_output_streams(current_gen)
+            if self._avatar_decoder:
+                # the reply's last fragments may still be decoding
+                self._avatar_decoder.call_when_drained(
+                    functools.partial(self._close_output_streams, current_gen)
+                )
+            else:
+                self._close_output_streams(current_gen)
 
         if server_content.interrupted and not self._pending_generation_fut:
             # interrupt agent if there is no pending user initiated generation

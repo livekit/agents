@@ -5,6 +5,8 @@ import time
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from livekit import rtc
 from livekit.agents import utils
 from livekit.agents.voice.avatar import AvatarSession as _BaseAvatarSession
@@ -20,6 +22,8 @@ if TYPE_CHECKING:
 AVATAR_VIDEO_FPS = 24
 _MAX_IDLE_BACKLOG = 4
 _IDLE_LOOP_FRAMES = AVATAR_VIDEO_FPS
+_QUIET_VIDEO_FRAMES = 6
+_SPEECH_PEAK = 300
 
 
 class AvatarSession(_BaseAvatarSession[Any]):
@@ -55,14 +59,15 @@ class AvatarSession(_BaseAvatarSession[Any]):
 
         self._model = model
         self._video_queue_size_ms = video_queue_size_ms
-        self._frame_ch = utils.aio.Chan[rtc.VideoFrame | rtc.AudioFrame]()
+        self._frame_ch = utils.aio.Chan[tuple[rtc.VideoFrame | rtc.AudioFrame, bool]]()
         self._forward_atask: asyncio.Task[None] | None = None
         self._audio_source: rtc.AudioSource | None = None
         self._video_source: rtc.VideoSource | None = None
         self._av_sync: rtc.AVSynchronizer | None = None
         self._audio_muted = False
         self._output_detached = False
-        self._speaking = False
+        self._quiet_frames = _QUIET_VIDEO_FRAMES
+        self._recent_quiet: deque[rtc.VideoFrame] = deque(maxlen=_QUIET_VIDEO_FRAMES)
         self._idle_frames: deque[rtc.VideoFrame] = deque(maxlen=_IDLE_LOOP_FRAMES)
         self._held_frames: list[rtc.VideoFrame] | None = None
         self._held_index = 0
@@ -112,29 +117,44 @@ class AvatarSession(_BaseAvatarSession[Any]):
             await self._audio_source.aclose()
         if self._video_source:
             await self._video_source.aclose()
+        # the base class removes avatar_identity from the room, which here is the agent itself
+        room, self._room = self._room, None
+        if room:
+            room.off("connection_state_changed", self._on_connection_state_changed)
         await super().aclose()
 
-    def _push_frame(self, frame: rtc.VideoFrame | rtc.AudioFrame, *, idle: bool = False) -> None:
+    def _push_frame(self, frame: rtc.VideoFrame | rtc.AudioFrame) -> None:
         if self._frame_ch.closed:
             return
         silenced = self._audio_muted or self._output_detached
-        if isinstance(frame, rtc.VideoFrame):
+        if isinstance(frame, rtc.AudioFrame):
+            idle = not _is_speech(frame)
+            if not idle:
+                self._quiet_frames = 0
+                self._recent_quiet.clear()
+            if silenced:
+                frame = rtc.AudioFrame(
+                    data=bytes(len(frame.data) * 2),
+                    sample_rate=frame.sample_rate,
+                    num_channels=frame.num_channels,
+                    samples_per_channel=frame.samples_per_channel,
+                )
+        else:
+            self._quiet_frames += 1
+            idle = self._quiet_frames > _QUIET_VIDEO_FRAMES
+            if idle:
+                # a frame joins the idle loop only once quiet frames follow it too, so the
+                # first frames of a reply never do
+                if len(self._recent_quiet) == _QUIET_VIDEO_FRAMES:
+                    self._idle_frames.append(self._recent_quiet[0])
+                self._recent_quiet.append(frame)
             if silenced and not idle and self._idle_frames:
                 # the server keeps rendering speech it was asked to stop, so show the
                 # avatar listening instead of mouthing words nobody can hear
                 frame = self._next_held_frame()
             else:
                 self._held_frames = None
-                if idle:
-                    self._idle_frames.append(frame)
-        elif silenced:
-            frame = rtc.AudioFrame(
-                data=bytes(len(frame.data) * 2),
-                sample_rate=frame.sample_rate,
-                num_channels=frame.num_channels,
-                samples_per_channel=frame.samples_per_channel,
-            )
-        self._frame_ch.send_nowait(frame)
+        self._frame_ch.send_nowait((frame, idle))
 
     def _next_held_frame(self) -> rtc.VideoFrame:
         if self._held_frames is None:
@@ -152,18 +172,15 @@ class AvatarSession(_BaseAvatarSession[Any]):
     def _set_output_detached(self, detached: bool) -> None:
         self._output_detached = detached
 
-    def _set_speaking(self, speaking: bool) -> None:
-        self._speaking = speaking
-
     @utils.log_exceptions(logger=logger)
     async def _forward_frames(self, room: rtc.Room) -> None:
-        async for frame in self._frame_ch:
+        async for frame, idle in self._frame_ch:
             if self._av_sync is None:
                 if not isinstance(frame, rtc.VideoFrame):
                     # nothing is published before the first video frame sets the size
                     continue
                 await self._publish_tracks(room, frame.width, frame.height)
-            elif not self._speaking and self._frame_ch.qsize() > _MAX_IDLE_BACKLOG:
+            elif idle and self._frame_ch.qsize() > _MAX_IDLE_BACKLOG:
                 # the synchronizer plays in real time, so a burst (such as the decoder's
                 # probe window) would otherwise remain as a permanent delay
                 continue
@@ -217,7 +234,6 @@ class _AvatarPlayoutOutput(AudioOutput):
         await super().capture_frame(frame)
         if self._started_at is None:
             self._avatar._set_audio_muted(False)
-            self._avatar._set_speaking(True)
             self._started_at = time.time()
             self.on_playback_started(created_at=self._started_at)
         self._pushed_duration += frame.duration
@@ -254,5 +270,9 @@ class _AvatarPlayoutOutput(AudioOutput):
             self._finish_handle = None
         self._started_at = None
         self._pushed_duration = 0.0
-        self._avatar._set_speaking(False)
         self.on_playback_finished(playback_position=position, interrupted=interrupted)
+
+
+def _is_speech(frame: rtc.AudioFrame) -> bool:
+    samples = np.frombuffer(frame.data, dtype=np.int16)
+    return samples.size > 0 and int(np.abs(samples.astype(np.int32)).max()) > _SPEECH_PEAK
