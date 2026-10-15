@@ -462,7 +462,8 @@ class TTS(tts.TTS):
             raise ValueError(
                 f"output_audio_codec must be one of {','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
             )
-        if max_session_duration is not None and max_session_duration < 0:
+        # written as `not >= 0` so NaN is rejected too
+        if max_session_duration is not None and not max_session_duration >= 0:
             raise ValueError("max_session_duration must be non-negative or None")
 
         # Validate model-speaker compatibility

@@ -232,6 +232,8 @@ def test_max_session_duration_is_passed_to_the_pool() -> None:
 
     with pytest.raises(ValueError, match="max_session_duration"):
         _make_tts(max_session_duration=-1)
+    with pytest.raises(ValueError, match="max_session_duration"):
+        _make_tts(max_session_duration=float("nan"))
 
 
 class _FakeSocket:
