@@ -9,6 +9,7 @@ from ._realtime_models import (
     is_realtime_model,
 )
 from ._utils import InferenceClass
+from .decision_model import DecisionModel, DecisionModels
 from .eot import TurnDetector, TurnDetectorModels, TurnDetectorVersions
 from .interruption import (
     AdaptiveInterruptionDetector,
@@ -49,6 +50,8 @@ __all__ = [
     "LLM",
     "VAD",
     "AvatarSession",
+    "DecisionModel",
+    "DecisionModels",
     "LemonSliceOptions",
     "LLMStream",
     "STTModels",
