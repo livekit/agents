@@ -65,7 +65,7 @@ async def test_email_with_verify_spelling_completes_immediately_over_text() -> N
 
 
 @pytest.mark.asyncio
-async def test_email_require_confirmation_false_overrides_verify_spelling() -> None:
+async def test_email_verify_spelling_takes_precedence_over_require_confirmation_on_audio() -> None:
     task = beta.workflows.GetEmailTask(verify_spelling=True, require_confirmation=False)
     ctx = SimpleNamespace(
         speech_handle=SimpleNamespace(input_details=SimpleNamespace(modality="audio"))
@@ -73,8 +73,9 @@ async def test_email_require_confirmation_false_overrides_verify_spelling() -> N
 
     result = await task._update_email_impl("alice@example.com", ctx)
 
-    assert result is None
-    assert task.done()
+    assert result is not None
+    assert " ".join("alice@example.com") in result
+    assert not task.done()
 
 
 @pytest.mark.asyncio
