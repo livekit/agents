@@ -7,7 +7,6 @@ import pytest
 
 from livekit.agents import beta
 from livekit.agents.llm.chat_context import Instructions
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 pytestmark = pytest.mark.unit
 
