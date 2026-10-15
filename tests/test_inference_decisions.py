@@ -111,9 +111,7 @@ class TestCredentials:
             DecisionModel(base_url="https://x/v1")
 
     def test_model_identity(self) -> None:
-        model = DecisionModel(
-            "openai/gpt-6-luna-decisions", api_key="k", api_secret="s", base_url="https://x/v1"
-        )
+        model = DecisionModel(api_key="k", api_secret="s", base_url="https://x/v1")
         assert model.model == "openai/gpt-6-luna-decisions"
         assert model.provider == "livekit"
         assert model.capabilities.decision_kinds == ["probability", "choice", "score"]
@@ -135,7 +133,7 @@ async def test_request_targets_gateway_with_minted_token() -> None:
 
     body = captured["body"]
     assert body == {
-        "model": "typesafe/jev",
+        "model": "openai/gpt-6-luna-decisions",
         "state": "user: Please book a table.",
         "questions": {
             "human": {"type": "noul", "instructions": "The caller wants a human."},

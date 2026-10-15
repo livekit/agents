@@ -35,11 +35,11 @@ from ._utils import (
 )
 
 DecisionModels = Literal[
+    "openai/gpt-6-luna-decisions",
     "typesafe/jev",
     "typesafe/jev-latest",
     "typesafe/jev-preview",
     "livekit/clef-omni",
-    "openai/gpt-6-luna-decisions",
 ]
 
 HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
@@ -109,7 +109,7 @@ class DecisionModel(BaseDecisionModel):
 
     Example::
 
-        model = inference.DecisionModel("typesafe/jev")
+        model = inference.DecisionModel("openai/gpt-6-luna-decisions")
         response = await model.evaluate(
             input=chat_ctx,
             decisions={"handoff": llm.Probability("The caller requests a human.")},
@@ -122,7 +122,7 @@ class DecisionModel(BaseDecisionModel):
 
     def __init__(
         self,
-        model: DecisionModels | str = "typesafe/jev",
+        model: DecisionModels | str = "openai/gpt-6-luna-decisions",
         *,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
