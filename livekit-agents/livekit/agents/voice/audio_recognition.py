@@ -562,8 +562,8 @@ class AudioRecognition:
 
         self._agent_speech_started_at = None
 
-    def _on_interruption_resolved(self, *, interrupted: bool) -> None:
-        self._endpointing.on_interruption_resolved(interrupted=interrupted)
+    def _on_pause_resolved(self, *, interrupted: bool) -> None:
+        self._endpointing.on_pause_resolved(interrupted=interrupted)
 
     def _on_start_of_speech(
         self,

@@ -467,7 +467,7 @@ async def test_dynamic_endpointing_waits_for_pause_resolution(
 
         expected = 0.435 if outcome == "interrupted" else 0.3
         assert endpointing.min_delay == pytest.approx(expected)
-        recognition._on_interruption_resolved(interrupted=True)
+        recognition._on_pause_resolved(interrupted=True)
         assert endpointing.min_delay == pytest.approx(expected)
     finally:
         activity._cancel_false_interruption_timer()

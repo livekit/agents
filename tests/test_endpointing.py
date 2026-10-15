@@ -491,8 +491,8 @@ class TestDynamicEndpointing:
 
         assert ep.min_delay == pytest.approx(0.3)
 
-        ep.on_interruption_resolved(interrupted=True)
-        ep.on_interruption_resolved(interrupted=True)
+        ep.on_pause_resolved(interrupted=True)
+        ep.on_pause_resolved(interrupted=True)
 
         assert ep.min_delay == pytest.approx(expected)
         assert not ep.overlapping
@@ -506,7 +506,7 @@ class TestDynamicEndpointing:
         ep.on_end_of_agent_speech(101.0, paused=True)
         ep.on_end_of_speech(101.2)
         ep.on_start_of_agent_speech(101.3, resumed=True)
-        ep.on_interruption_resolved(interrupted=True)
+        ep.on_pause_resolved(interrupted=True)
         ep.on_end_of_agent_speech(105.0)
         ep.on_start_of_speech(106.0)
         ep.on_end_of_speech(108.0)
@@ -534,7 +534,7 @@ class TestDynamicEndpointing:
 
         def resolve() -> None:
             if interrupted:
-                ep.on_interruption_resolved(interrupted=True)
+                ep.on_pause_resolved(interrupted=True)
             else:
                 ep.on_start_of_agent_speech(102.1, resumed=True)
 
@@ -548,7 +548,7 @@ class TestDynamicEndpointing:
 
         expected = 0.4675 if interrupted else 0.3
         assert ep.min_delay == pytest.approx(expected)
-        ep.on_interruption_resolved(interrupted=True)
+        ep.on_pause_resolved(interrupted=True)
         assert ep.min_delay == pytest.approx(expected)
 
     def test_duplicate_agent_speech_end_does_not_restore_consumed_marker(self) -> None:

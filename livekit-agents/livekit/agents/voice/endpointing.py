@@ -60,7 +60,7 @@ class BaseEndpointing:
     def on_end_of_agent_speech(self, ended_at: float, *, paused: bool = False) -> None:
         pass
 
-    def on_interruption_resolved(self, *, interrupted: bool) -> None:
+    def on_pause_resolved(self, *, interrupted: bool) -> None:
         """Resolve a provisional speech pause, independently of audible playout."""
         pass
 
@@ -150,7 +150,7 @@ class DynamicEndpointing(BaseEndpointing):
 
     def on_start_of_agent_speech(self, started_at: float, *, resumed: bool = False) -> None:
         if resumed:
-            self.on_interruption_resolved(interrupted=False)
+            self.on_pause_resolved(interrupted=False)
         elif self._pending_pause is not None:
             logger.debug("discarding unresolved endpointing pause on new agent speech")
         self._pending_pause = None
@@ -187,7 +187,7 @@ class DynamicEndpointing(BaseEndpointing):
         self._agent_speaking = False
         self._overlapping = False
 
-    def on_interruption_resolved(self, *, interrupted: bool) -> None:
+    def on_pause_resolved(self, *, interrupted: bool) -> None:
         pending, self._pending_pause = self._pending_pause, None
         if pending is None:
             return

@@ -4987,7 +4987,7 @@ class AgentActivity(RecognitionHooks):
         paused_speech, self._paused_speech = self._paused_speech, None
         self._cancel_false_interruption_timer()
         if paused_speech is not None and self._audio_recognition is not None:
-            self._audio_recognition._on_interruption_resolved(interrupted=interrupted)
+            self._audio_recognition._on_pause_resolved(interrupted=interrupted)
         return paused_speech
 
     def _restore_paused_speech_state(self, paused_speech: _PausedSpeechInfo) -> None:
