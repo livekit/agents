@@ -1,0 +1,20 @@
+REVIEW.md
+  s_c9a198615594a3::t_8ce98e5849f49f 20-23
+  s_c9a198615594a3::t_55eb71d440f3a4 12-14,16-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "541bb900404ddc8d164a59c9bf76ba5e33f0810c",
+  "prompts": {},
+  "sessions": {
+    "s_c9a198615594a3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e4b75848-869b-4b26-b684-e3bbfa49abcf",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
