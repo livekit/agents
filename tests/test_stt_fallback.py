@@ -707,10 +707,12 @@ async def test_stt_stream_stall_survives_end_input() -> None:
 
 class _UnendedSpeechVAD(VAD):
     """VAD detecting speech from the first frame on, until a flush hard-resets it without an
-    end of speech, as the shipped VADs do."""
+    end of speech, as the shipped VADs do. With a ``lag``, it only starts processing the audio
+    queued to it that long after the first frame, as a VAD behind the audio."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, lag: float = 0.0) -> None:
         super().__init__(capabilities=VADCapabilities(update_interval=0.1))
+        self.lag = lag
 
     def stream(self) -> VADStream:
         return _UnendedSpeechVADStream(self)
@@ -718,8 +720,14 @@ class _UnendedSpeechVAD(VAD):
 
 class _UnendedSpeechVADStream(VADStream):
     async def _main_task(self) -> None:
+        assert isinstance(self._vad, _UnendedSpeechVAD)
         speech_duration: float | None = None
+        lagged = False
         async for data in self._input_ch:
+            if not lagged and self._vad.lag > 0:
+                lagged = True
+                await asyncio.sleep(self._vad.lag)
+
             if isinstance(data, self._FlushSentinel):
                 speech_duration = None
                 continue
@@ -871,5 +879,150 @@ async def test_stt_stream_stall_ignores_short_speech_interrupted_by_flush() -> N
         fake2.stream_ch.recv_nowait()
     with pytest.raises(ChanEmpty):
         fallback.availability_changed_ch(fake1).recv_nowait()
+
+    await fallback.aclose()
+
+
+async def _push_queued_speech_then_flush(stream: RecognizeStream, *, end_input: bool) -> None:
+    """Queue 2s of speech and a flush or end_input() at once, as a VAD can't keep up with."""
+    frame = rtc.AudioFrame(
+        data=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1, samples_per_channel=1600
+    )
+    for _ in range(20):
+        stream.push_frame(frame)
+    if end_input:
+        stream.end_input()
+        return
+    stream.flush()
+    await asyncio.sleep(5.0)
+    stream.end_input()
+
+
+@pytest.mark.parametrize("end_input", [False, True])
+async def test_stt_stream_stall_checks_queued_speech_interrupted_by_flush(end_input: bool) -> None:
+    """A speech the VAD only detects after the flush was forwarded is still checked."""
+    fake1 = _HangingSTT()
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2], vad=_UnendedSpeechVAD(lag=0.5), stall_timeout=1.0
+    )
+
+    events: list[tuple[float, SpeechEvent]] = []
+    async with fallback.stream() as stream:
+        start = time.perf_counter()
+        push_task = asyncio.create_task(_push_queued_speech_then_flush(stream, end_input=end_input))
+
+        async def _collect() -> None:
+            async for ev in stream:
+                events.append((time.perf_counter() - start, ev))
+
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(_collect(), timeout=10.0)
+        await push_task
+
+    assert [ev.alternatives[0].text for _, ev in events] == ["hello world"]
+    # the VAD reaches the flush after its lag, the stall is declared stall_timeout later
+    assert 0.5 + 1.0 <= events[0][0] < 0.5 + 1.0 + 0.2
+    assert not fallback.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback.aclose()
+
+
+async def test_stt_stream_stall_keeps_stream_finalizing_queued_speech_on_flush() -> None:
+    """A transcript of the flush counts for a speech the VAD only detects afterwards."""
+    fake1 = _FinalizeOnFlushSTT()
+    fake2 = FakeSTT(fake_transcript="fallback")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2], vad=_UnendedSpeechVAD(lag=0.5), stall_timeout=1.0
+    )
+
+    events: list[SpeechEvent] = []
+    async with fallback.stream() as stream:
+        push_task = asyncio.create_task(_push_queued_speech_then_flush(stream, end_input=False))
+        # the stream hangs after its input ended, so stop listening once the stall would show
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(_collect_events(stream, events), timeout=6.0)
+        await push_task
+
+    assert events and all(ev.alternatives[0].text == "hello world" for ev in events)
+    with pytest.raises(ChanEmpty):
+        fake2.stream_ch.recv_nowait()
+    with pytest.raises(ChanEmpty):
+        fallback.availability_changed_ch(fake1).recv_nowait()
+
+    await fallback.aclose()
+
+
+async def test_stt_stream_stall_keeps_earliest_check() -> None:
+    """Further speech doesn't postpone the check of an earlier unanswered speech."""
+    speeches = [
+        FakeUserSpeech(start_time=0.5, end_time=2.0, transcript="", stt_delay=0.2),
+        FakeUserSpeech(start_time=2.7, end_time=3.8, transcript="", stt_delay=0.2),
+    ]
+    fake1 = FakeSTT(fake_user_speeches=speeches)  # connected, but never emits anything
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2], vad=FakeVAD(fake_user_speeches=speeches), stall_timeout=2.0
+    )
+
+    events = await _run_stall_stream(fallback, duration=8.0)
+
+    assert [ev.alternatives[0].text for _, ev in events] == ["hello world"]
+    # the first end of speech is at 2.0 + 0.55 (min silence), the second one at 3.8 + 0.55
+    # comes before the first check
+    assert 2.55 + 2.0 <= events[0][0] < 2.55 + 2.0 + 0.2
+    assert not fallback.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback.aclose()
+
+
+class _EmptyFinalsSTT(FakeSTT):
+    """STT emitting only empty finals, some without any alternative."""
+
+    def stream(
+        self,
+        *,
+        language: str | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> RecognizeStream:
+        return _EmptyFinalsStream(stt=self, conn_options=conn_options)
+
+
+class _EmptyFinalsStream(RecognizeStream):
+    async def _run(self) -> None:
+        nb_frames = 0
+        async for data in self._input_ch:
+            if isinstance(data, rtc.AudioFrame):
+                nb_frames += 1
+                if nb_frames % 5 == 0:
+                    alternatives = [] if nb_frames % 10 else [SpeechData(language="en", text="")]
+                    self._event_ch.send_nowait(
+                        SpeechEvent(
+                            type=SpeechEventType.FINAL_TRANSCRIPT, alternatives=alternatives
+                        )
+                    )
+
+
+async def test_stt_stream_stall_ignores_empty_transcripts() -> None:
+    """Transcripts without text don't show the STT is transcribing."""
+    speeches = [FakeUserSpeech(start_time=0.5, end_time=2.5, transcript="", stt_delay=0.2)]
+    fake1 = _EmptyFinalsSTT()
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2], vad=FakeVAD(fake_user_speeches=speeches), stall_timeout=1.0
+    )
+
+    events = await _run_stall_stream(fallback, duration=6.0)
+
+    texts = [ev.alternatives[0].text for _, ev in events if ev.alternatives]
+    assert texts[-1] == "hello world" and all(not text for text in texts[:-1])
+    hello_time = next(t for t, ev in events if ev.alternatives and ev.alternatives[0].text)
+    assert 3.05 + 1.0 <= hello_time < 3.05 + 1.0 + 0.2
+    assert not fallback.availability_changed_ch(fake1).recv_nowait().available
+    assert fallback._active_instance is fake2
 
     await fallback.aclose()
