@@ -393,6 +393,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         # the gate is the one boundary: a burst is open exactly while the model is audibly
         # producing output, its own pauses inside an utterance included
         if self._gate.update(f.frame):
+            if self._burst is None and f.start_ms is not None:
+                self._release_unvoiced(f.start_ms)
             burst = self._burst = self._burst or self._open_burst()
             if not burst.audio_ch.closed:
                 burst.audio_ch.send_nowait(f.frame)
@@ -462,6 +464,22 @@ class _DuplexRealtimeSession(RealtimeSession):
             if (message := burst.close()) is not None:
                 self._chat_ctx.insert(message)
         self._waiting_since_ms = self._audio_ms
+
+    def _release_unvoiced(self, onset_ms: int) -> None:
+        # stamped audio and spans share the model's clock, so words due before the sound that
+        # opens a burst are for sound the provider never sent (the model was cut): they go out
+        # first, as text on their own, rather than become that burst's first words and anchor
+        unvoiced = 0
+        for fragment in self._fragments:
+            if fragment.start_ms is None or fragment.start_ms + _ATTACH_LEAD_MS >= onset_ms:
+                break
+            unvoiced += 1
+        if unvoiced:
+            burst = self._open_burst(kind="text")
+            for _ in range(unvoiced):
+                burst.attach(self._fragments.popleft())
+            if (message := burst.close()) is not None:
+                self._chat_ctx.insert(message)
 
     def _attach_fragments(self, burst: _Burst) -> None:
         # the first fragment anchors the span clock to the audio clock; a later one is due when

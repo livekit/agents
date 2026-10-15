@@ -629,6 +629,35 @@ async def test_late_words_do_not_join_the_burst_that_is_already_sounding(duplex)
     assert (await asyncio.wait_for(_read(generations[1]), timeout=1))[1] == "Next."
 
 
+async def test_words_for_sound_never_sent_do_not_anchor_the_next_burst(duplex) -> None:
+    """The model is cut after its words went out but before their sound did, and the provider
+    sends nothing until it speaks again. By the stamps those words were due long before the next
+    sound, so they go out as text on their own and the next utterance keeps its words and anchor."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20, start_ms=0)
+    fake.push(0.3, count=3, start_ms=2000)
+    await _settle()
+    fake.say("Hello", start_ms=2000, end_ms=2200)
+    fake.say(" there.", start_ms=3500, end_ms=3800)  # its sound never comes
+    fake.push(0.001, count=8, start_ms=2300)
+    await _settle()
+    assert len(generations) == 1
+    assert len(session._fragments) == 1
+
+    fake.say("Next.", start_ms=6000, end_ms=6200)  # ahead of its sound, as usual
+    fake.push(0.3, count=3, start_ms=6000)
+    fake.push(0.001, count=8, start_ms=6300)
+    await _settle()
+
+    assert len(generations) == 3
+    assert not session._fragments
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Hello"
+    assert (await asyncio.wait_for(_read(generations[1]), timeout=1)) == (0, " there.")
+    (first,) = await _chunks(generations[2])
+    assert first == "Next."
+    assert isinstance(first, TimedString) and first.start_time == pytest.approx(0.0)
+
+
 async def test_transcript_no_audio_ever_claims_is_emitted_rather_than_lost(duplex, caplog) -> None:
     """Losing transcript is worse than an odd chat item; the model's silence is the clock."""
     fake, session, generations = duplex
