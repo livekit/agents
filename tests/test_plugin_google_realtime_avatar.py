@@ -82,7 +82,7 @@ class _FakeAvatar:
     def __init__(self) -> None:
         self.frames: list[rtc.VideoFrame | rtc.AudioFrame] = []
 
-    def _push_frame(self, frame: rtc.VideoFrame | rtc.AudioFrame) -> None:
+    def _push_frame(self, frame: rtc.VideoFrame | rtc.AudioFrame, *, idle: bool = False) -> None:
         self.frames.append(frame)
 
 
@@ -226,3 +226,42 @@ async def test_avatar_is_silent_while_the_session_audio_output_is_disabled(
     avatar._push_frame(speech)
     restored = avatar._frame_ch.recv_nowait()
     assert isinstance(restored, rtc.AudioFrame) and bytes(restored.data) == bytes(speech.data)
+
+
+def _solid_frame(value: int) -> rtc.VideoFrame:
+    return rtc.VideoFrame(
+        _WIDTH, _HEIGHT, rtc.VideoBufferType.RGBA, bytes([value]) * (_WIDTH * _HEIGHT * 4)
+    )
+
+
+async def test_silenced_avatar_shows_idle_frames_instead_of_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """While the session audio is off, the server still renders the reply. The avatar must
+    loop recent idle frames instead of publishing the speech it cannot be heard saying."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    model = RealtimeModel(avatar_config=types.AvatarConfig(avatar_name="Kira"))
+    avatar = AvatarSession(model)
+    output = _AvatarPlayoutOutput(avatar)
+
+    def published() -> list[int]:
+        frames: list[int] = []
+        while not avatar._frame_ch.empty():
+            frame = avatar._frame_ch.recv_nowait()
+            if isinstance(frame, rtc.VideoFrame):
+                frames.append(bytes(frame.data)[0])
+        return frames
+
+    for value in (1, 2, 3):
+        avatar._push_frame(_solid_frame(value), idle=True)
+    assert published() == [1, 2, 3]
+
+    output.on_detached()
+    for _ in range(6):
+        avatar._push_frame(_solid_frame(200))
+    avatar._push_frame(_solid_frame(4), idle=True)
+    assert published() == [1, 2, 3, 2, 1, 2, 4]
+
+    output.on_attached()
+    avatar._push_frame(_solid_frame(200))
+    assert published() == [200]

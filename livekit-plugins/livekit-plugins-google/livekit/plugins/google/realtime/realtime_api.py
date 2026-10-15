@@ -1450,7 +1450,9 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _on_avatar_video(self, frame: rtc.VideoFrame) -> None:
         if self._gemini_model._avatar_session:
-            self._gemini_model._avatar_session._push_frame(frame)
+            gen = self._current_generation
+            idle = gen is None or gen._done
+            self._gemini_model._avatar_session._push_frame(frame, idle=idle)
 
     def _on_avatar_audio(self, frame: rtc.AudioFrame) -> None:
         # the session's audio output tracks playout and transcript timing; the audible
