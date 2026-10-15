@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from typing import TYPE_CHECKING, Any
 
 from livekit import rtc
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 
 AVATAR_VIDEO_FPS = 24
 _MAX_IDLE_BACKLOG = 4
+_IDLE_LOOP_FRAMES = AVATAR_VIDEO_FPS
 
 
 class AvatarSession(_BaseAvatarSession[Any]):
@@ -61,6 +63,9 @@ class AvatarSession(_BaseAvatarSession[Any]):
         self._audio_muted = False
         self._output_detached = False
         self._speaking = False
+        self._idle_frames: deque[rtc.VideoFrame] = deque(maxlen=_IDLE_LOOP_FRAMES)
+        self._held_frames: list[rtc.VideoFrame] | None = None
+        self._held_index = 0
 
     @property
     def avatar_identity(self) -> str:
@@ -109,10 +114,20 @@ class AvatarSession(_BaseAvatarSession[Any]):
             await self._video_source.aclose()
         await super().aclose()
 
-    def _push_frame(self, frame: rtc.VideoFrame | rtc.AudioFrame) -> None:
+    def _push_frame(self, frame: rtc.VideoFrame | rtc.AudioFrame, *, idle: bool = False) -> None:
         if self._frame_ch.closed:
             return
-        if isinstance(frame, rtc.AudioFrame) and (self._audio_muted or self._output_detached):
+        silenced = self._audio_muted or self._output_detached
+        if isinstance(frame, rtc.VideoFrame):
+            if silenced and not idle and self._idle_frames:
+                # the server keeps rendering speech it was asked to stop, so show the
+                # avatar listening instead of mouthing words nobody can hear
+                frame = self._next_held_frame()
+            else:
+                self._held_frames = None
+                if idle:
+                    self._idle_frames.append(frame)
+        elif silenced:
             frame = rtc.AudioFrame(
                 data=bytes(len(frame.data) * 2),
                 sample_rate=frame.sample_rate,
@@ -120,6 +135,16 @@ class AvatarSession(_BaseAvatarSession[Any]):
                 samples_per_channel=frame.samples_per_channel,
             )
         self._frame_ch.send_nowait(frame)
+
+    def _next_held_frame(self) -> rtc.VideoFrame:
+        if self._held_frames is None:
+            self._held_frames = list(self._idle_frames)
+            self._held_index = 0
+        frames = self._held_frames
+        period = max(2 * len(frames) - 2, 1)
+        position = self._held_index % period
+        self._held_index += 1
+        return frames[position if position < len(frames) else period - position]
 
     def _set_audio_muted(self, muted: bool) -> None:
         self._audio_muted = muted
