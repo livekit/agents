@@ -193,8 +193,13 @@ class DynamicEndpointing(BaseEndpointing):
             return
 
         if interrupted:
-            if pending.interruption is not None:
-                self._learn_interruption_pause(pending.interruption)
+            if (candidate := pending.interruption) is not None:
+                self._learn_pause(
+                    candidate.pause,
+                    reason="immediate interruption",
+                    interruption_delay=candidate.interruption_delay,
+                    turn_delay=candidate.turn_delay,
+                )
             for pause in pending.utterance_pauses:
                 self._learn_pause(pause, reason="pause between utterances")
         else:
@@ -263,7 +268,12 @@ class DynamicEndpointing(BaseEndpointing):
         ):  # this is an interruption (agent is still speaking)
             # If this is an immediate interruption, update the min delay (case 2)
             if (candidate := self._get_interruption_pause()) is not None:
-                self._learn_interruption_pause(candidate)
+                self._learn_pause(
+                    candidate.pause,
+                    reason="immediate interruption",
+                    interruption_delay=candidate.interruption_delay,
+                    turn_delay=candidate.turn_delay,
+                )
 
         else:
             # Only learn an intra-user pause when no agent turn occurred between utterances.
@@ -307,14 +317,6 @@ class DynamicEndpointing(BaseEndpointing):
         ):
             return _InterruptionPause(pause, turn_delay, interruption_delay)
         return None
-
-    def _learn_interruption_pause(self, candidate: _InterruptionPause) -> None:
-        self._learn_pause(
-            candidate.pause,
-            reason="immediate interruption",
-            interruption_delay=candidate.interruption_delay,
-            turn_delay=candidate.turn_delay,
-        )
 
     def update_options(
         self,
