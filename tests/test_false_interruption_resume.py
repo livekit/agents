@@ -572,9 +572,10 @@ async def test_scheduler_resolves_dynamic_endpointing_pause(
 
         assert endpointing.min_delay == pytest.approx(0.3)
 
-        activity.on_start_of_speech(None, speech_start_time=now + 0.3)
+        activity.on_start_of_speech(None, speech_start_time=now + 0.7)
         recognition._speaking = True
         end_user_speech(now + 1)
+        assert endpointing.min_delay == pytest.approx(0.3)
         previous_delay = endpointing.min_delay
         activity.on_start_of_speech(None, speech_start_time=now + 1.5)
         recognition._speaking = True

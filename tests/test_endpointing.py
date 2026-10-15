@@ -518,6 +518,29 @@ class TestDynamicEndpointing:
 
         assert ep.min_delay == pytest.approx(0.4)
 
+    @pytest.mark.parametrize("resolve_before_eos", [False, True])
+    def test_discarded_utterance_cannot_seed_the_next_pause(self, resolve_before_eos: bool) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.4, alpha=0.5)
+        ep.on_start_of_speech(99.0)
+        ep.on_end_of_speech(100.0)
+        ep.on_start_of_agent_speech(100.3)
+        ep.on_start_of_speech(100.57, overlapping=True)
+        ep.on_end_of_agent_speech(101.0, paused=True)
+
+        if resolve_before_eos:
+            ep.on_pause_resolved(interrupted=False)
+        ep.on_end_of_speech(101.2)
+        if not resolve_before_eos:
+            ep.on_pause_resolved(interrupted=False)
+
+        ep.on_start_of_speech(101.7)
+        ep.on_end_of_speech(102.0)
+        assert ep.min_delay == pytest.approx(0.3)
+
+        ep.on_start_of_speech(102.5)
+        ep.on_end_of_speech(103.0)
+        assert ep.min_delay == pytest.approx(0.4)
+
     @pytest.mark.parametrize("interrupted", [False, True])
     @pytest.mark.parametrize("resolve_before_eos", [False, True])
     def test_user_pauses_while_agent_is_paused_wait_for_resolution(

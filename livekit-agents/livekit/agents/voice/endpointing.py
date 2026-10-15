@@ -234,10 +234,13 @@ class DynamicEndpointing(BaseEndpointing):
         self._speaking = True
 
     def on_end_of_speech(self, ended_at: float, interruption: NotGivenOr[bool] = NOT_GIVEN) -> None:
+        # Keep an ongoing discarded utterance's EOS out of pause history.
+        discarded = self._speaking and self._utterance_started_at is None
+
         # user finishes speaking when agent is already paused
         # record EOS now; defer learning until the speech pause is resolved.
         if self._pending_pause is not None:
-            self._utterance_ended_at = ended_at
+            self._utterance_ended_at = None if discarded else ended_at
             self._speaking = False
             self._overlapping = False
             return
@@ -289,7 +292,7 @@ class DynamicEndpointing(BaseEndpointing):
             ):
                 self._learn_pause(pause, reason="pause between utterances")
 
-        self._utterance_ended_at = ended_at
+        self._utterance_ended_at = None if discarded else ended_at
         # Preserve an active agent interval until its end is recorded.
         if not self._agent_speaking:
             self._agent_speech_started_at = None
