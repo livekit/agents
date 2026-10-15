@@ -397,6 +397,8 @@ async def test_config_only_update_applies_to_a_pending_stream_on_the_same_socket
     ]
 
 
+# patches the module-global pool clock, so it must not overlap other async tests
+@pytest.mark.no_concurrent
 @pytest.mark.parametrize(
     ("max_session_duration", "sockets_opened"),
     [(3600, 1), (None, 1), (0, 2)],
