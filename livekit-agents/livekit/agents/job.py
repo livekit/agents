@@ -924,7 +924,7 @@ class JobContext:
         response = await self._room.local_participant.perform_rpc(
             destination_identity=identity, method="lk.sip.GetRemoteHeaders", payload="{}"
         )
-        return {k.lower(): v for k, v in json.loads(response)["headers"].items()}
+        return {k.lower(): v for k, v in json.loads(response).get("headers", {}).items()}
 
     def shutdown(self, reason: str = "user requested") -> None:
         self._on_shutdown(reason)
