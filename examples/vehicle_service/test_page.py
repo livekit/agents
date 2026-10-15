@@ -169,7 +169,9 @@ def test_neither_agent_hands_the_call_off() -> None:
         assert "never offer" in said and "transfer" not in said.replace("to transfer to", "")
         assert PAYMENT in said and "no discount codes" in said
         # a phone call: nothing to look at
-        assert '"Does that sound right?"' in said and "sees them" not in said
+        assert '"on\nyour screen"' in said and "sees them" not in said
+        # the check-in varies, the way it would on the phone, never one fixed line
+        assert '"Does that work?", "Sound right?"' in said and "it's \"Does" not in said
     assert {"move_appointment", "cancel_appointment", "change_booking"} <= {
         t.id for t in inbound.tools
     }
@@ -177,7 +179,6 @@ def test_neither_agent_hands_the_call_off() -> None:
 
 def test_a_decision_leads_with_the_new_total() -> None:
     desk = demo_desk(today=TODAY, direction="outbound")
-    desk.confirm_customer()
     f, notes = desk.decide_repair("front_brakes", "approved")
     said = _decided(desk, f"Approved: {f.title}, ${f.price:.0f}.", notes)
     assert said.startswith(
@@ -185,14 +186,22 @@ def test_a_decision_leads_with_the_new_total() -> None:
     )
 
 
-def test_the_follow_up_asks_for_the_customer_by_name() -> None:
+def test_the_follow_up_goes_straight_into_the_findings() -> None:
     desk = demo_desk("Jordan Lee", today=TODAY, direction="outbound")
-    assert (
-        _opener(desk)
-        == "Hi, this is Nick calling from Bayside BMW service. May I speak with Jordan?"
+    assert _opener(desk) == (
+        "Hi, Jordan, this is Nick from Bayside BMW service, calling about your X3. The "
+        "technician found what's causing the grinding: the front brake pads are worn through to "
+        "the metal, and that's scored both rotors. New front brake pads and rotors come to $489, "
+        "and it'd be ready today at 5:30 PM. Would you like us to go ahead?"
     )
-    said = str(RepairCallAgent(desk).instructions)
-    assert "outbound call to Jordan Lee" in said and "asked for Jordan." in said
+    agent = RepairCallAgent(desk)
+    said = str(agent.instructions)
+    assert "outbound call to Jordan Lee" in said and "never ask who they are" in said
+    # whoever picks up is the customer: no question about who they are, and no tool to confirm
+    for spoken in (_opener(desk), said):
+        assert "May I speak" not in spoken and "the person who dropped it off" not in spoken
+    assert "confirm_customer" not in said and "confirm_customer" not in [t.id for t in agent.tools]
+    assert "front_brakes" in said and "ready today at 5:30 PM" in said
     assert _voicemail(desk).startswith(
         "Hi, this is Nick from Bayside BMW service, calling for Jordan Lee."
     )
@@ -203,8 +212,10 @@ def test_without_a_name_the_follow_up_names_nobody() -> None:
     assert desk.customer is not None and desk.customer.name == ""
     assert desk.snapshot()["customer"]["name"] == "Customer"
     assert _opener(desk) == (
-        "Hi, this is Nick from Bayside BMW service, calling about a car you left with us this "
-        "morning. Is this the person who dropped it off?"
+        "Hi, this is Nick from Bayside BMW service, calling about your X3. The technician found "
+        "what's causing the grinding: the front brake pads are worn through to the metal, and "
+        "that's scored both rotors. New front brake pads and rotors come to $489, and it'd be "
+        "ready today at 5:30 PM. Would you like us to go ahead?"
     )
     agent = RepairCallAgent(desk)
     said = str(agent.instructions)
@@ -214,14 +225,9 @@ def test_without_a_name_the_follow_up_names_nobody() -> None:
     for spoken in (_opener(desk), said, voicemail):
         assert "Alex" not in spoken and "Morgan" not in spoken
         assert "with there" not in spoken and "for there" not in spoken
-    # the read-backs say "the customer", never a name, and a name they give goes on the file
-    desk.confirm_customer()
+    # the read-backs say "the customer", never a name
     desk.arrange_pickup("self", collected_by="their friend Sam")
     assert "the customer's name" in desk.ready_summary()
-    desk.confirm_customer("jordan  lee")
-    assert desk.customer.name == "jordan lee"
-    desk.confirm_customer("Someone Else")
-    assert desk.customer.name == "jordan lee"
 
 
 async def test_without_a_name_the_wrong_person_hears_no_name() -> None:

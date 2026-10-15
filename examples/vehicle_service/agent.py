@@ -777,31 +777,9 @@ class RepairCallAgent(Agent):
     async def on_enter(self) -> None:
         ud: Userdata = self.session.userdata
         desk = ud.desk
-        ud.page.push(stage="reach")
+        # whoever picks up is the customer: the opener goes straight into the findings
+        ud.page.push(stage=desk.stage())
         self.session.say(_opener(desk))
-
-    @function_tool
-    async def confirm_customer(self, ctx: Ctx, name: str = "") -> str:
-        """Whoever picked up said they're the customer. Returns what the technician found.
-        Call it before saying anything about the car.
-
-        Args:
-            name: Their name, only if they said it on this call, e.g. "Jordan Lee". Leave
-                out otherwise; never guess one.
-        """
-        with _desk_rules(ctx) as desk:
-            desk.confirm_customer(name)
-        who = desk.customer.name if desk.customer else ""
-        ctx.userdata.page.record("confirm_customer", f"Speaking with {who or 'the customer'}")
-        assert desk.visit is not None
-        now = [f for f in desk.visit.findings if f.urgency == "now"]
-        return (
-            f"It's them. {_findings(desk)} Start with what explains the noise: what the "
-            "technician found, the price, how long it takes, and when the car would be "
-            f"ready ({_ready_choices(desk, now)}). Then ask whether they'd like it done, or "
-            "would rather not. Bring up anything that can wait after that, honestly, as "
-            "something for the next visit."
-        )
 
     @function_tool
     async def repair_details(self, ctx: Ctx, question: str) -> str:
@@ -934,8 +912,8 @@ class RepairCallAgent(Agent):
 
     @function_tool
     async def end_without_update(self, ctx: Ctx, reason: EndedEarly) -> str:
-        """End the call without going through the findings: whoever answered isn't the
-        customer, or it's a bad time. The car stays as it is.
+        """End the call without going through the findings: they say it's a wrong number or
+        someone else picked up, or it's a bad time. The car stays as it is.
 
         Args:
             reason: wrong_person (a wrong number, or someone else picked up) or
@@ -1041,17 +1019,21 @@ def _decided(desk: ServiceDesk, result: str, notes: list[str]) -> str:
 
 
 def _opener(desk: ServiceDesk) -> str:
-    # a fixed opener: who's calling, and for whom; nothing about the car until it's them.
-    # Without a name, it asks about the car instead: never a made-up name
+    # a fixed opener: who's calling and why, then straight into what the technician found.
+    # Whoever picks up is the customer, so it never asks who they are; their name only if
+    # it's known, never a made-up one
+    v = desk.visit
+    assert v is not None
     name = desk.customer.name if desk.customer else ""
-    if name:
-        return (
-            f"Hi, this is {PERSONA} calling from {BUSINESS} service. May I speak with "
-            f"{first_name(name)}?"
-        )
+    hi = f"Hi, {first_name(name)}" if name else "Hi"
+    car = desk.vehicle(v.appointment.vin).name.split()[0]
+    front = next(f for f in v.findings if f.urgency == "now")
     return (
-        f"Hi, this is {PERSONA} from {BUSINESS} service, calling about a car you left with us "
-        "this morning. Is this the person who dropped it off?"
+        f"{hi}, this is {PERSONA} from {BUSINESS} service, calling about your {car}. The "
+        "technician found what's causing the grinding: the front brake pads are worn through "
+        f"to the metal, and that's scored both rotors. New {front.title.lower()} come to "
+        f"${front.price:.0f}, and it'd be ready {desk.ready_when([front])}. Would you like us "
+        "to go ahead?"
     )
 
 
@@ -1061,30 +1043,16 @@ def _outbound_instructions(desk: ServiceDesk) -> str:
     name = desk.customer.name
     car = desk.vehicle(v.appointment.vin).name.split()[0]
     today = desk.today
+    now = [f for f in v.findings if f.urgency == "now"]
     if name:
         who = first_name(name)
-        reach = f"""You've already said who you are and asked for {who}.
-- Once they say it's them, call confirm_customer: it returns what the technician found.
-  Until it succeeds, say nothing about the car, the visit, or why you're calling.
-- If it's someone else, or {who} can't come to the phone: say only that it's {PERSONA} from
-  {BUSINESS} calling for {who}, and ask that {who} call back at {_callback()}. If they ask what
-  it's about, say you can only discuss it with {who}. Call end_without_update with
-  wrong_person, say goodbye, and call end_call.
-- If it's {who} but a bad time"""
+        named = ""
     else:
         # no name to go on: never one made up
-        name = "the customer who dropped off their car"
-        reach = f"""You've already said who you are, that you're calling about a car they left
-with you this morning, and asked if this is the person who dropped it off. You don't have
-their name: never say or guess one, and don't ask for it. If they give it, use it, and pass
-it to confirm_customer.
-- Once they say yes, call confirm_customer: it returns what the technician found.
-  Until it succeeds, say nothing more about the car, the visit, or why you're calling.
-- If it's a wrong number, or someone else: say only that it's {PERSONA} from {BUSINESS}, and
-  ask that whoever dropped off the car call back at {_callback()}. If they ask what it's
-  about, say you can only discuss it with the person who dropped it off. Call
-  end_without_update with wrong_person, say goodbye, and call end_call.
-- If it's them but a bad time"""
+        who, name = "whoever dropped off the car", "the customer who dropped off their car"
+        named = """
+You don't have their name: never say or guess one, and don't ask for it. If they give it,
+use it."""
     return f"""\
 {VOICE_RULES}
 
@@ -1097,16 +1065,26 @@ of 10 for enthusiasm), never a salesperson. Be more serious for what's unsafe to
 repair approval, and any cost they didn't expect: say it clearly and give them room to
 decide.
 
-# Who picked up
-{reach} (driving, at work, "call me later"): don't push. Call
+# The call so far
+You've already said who you are, that you're calling about their {car}, what the technician
+found that explains the noise, its price, and when the car would be ready with it, and asked
+whether they'd like it done. Whoever picked up is the customer: never ask who they are, or
+whether they dropped off the car.{named}
+- If they say it's a wrong number, or that someone else picked up and the customer can't come
+  to the phone: say nothing more about the car, the visit, or the repairs, even if they ask,
+  and ask that {who} call back at {_callback()}. Call end_without_update with wrong_person,
+  say goodbye, and call end_call.
+- If it's a bad time (driving, at work, "call me later"): don't push. Call
   end_without_update with call_back_later, say they can call back at {_callback()} whenever
   suits, say goodbye, and call end_call.
 
 # What the technician found
-Go over it a sentence or two at a time, not all at once: what they found that explains the
-noise, the price, how long it takes, and when the car would be ready. Break the price into
-parts and labor only if they ask. Then ask plainly whether they'd like it done, or would
-rather not.
+{_findings(desk)}
+When the car would be ready: {_ready_choices(desk, now)}.
+Go over it a sentence or two at a time, not all at once, and don't repeat what you've already
+said unless they ask. Break the price into parts and labor only if they ask. Bring up
+anything that can wait once the repair that needs doing now has an answer, honestly, as
+something for the next visit.
 - Any question about a repair (what it is, why, the cost, how long, warranty, whether it can
   wait, a cheaper option): call repair_details and answer only from what it returns. Never
   guess a price, a part, or a time. Offer a cheaper option only if it says there is one.

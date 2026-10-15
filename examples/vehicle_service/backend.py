@@ -507,8 +507,8 @@ class ShopVisit:
 
     appointment: Appointment
     findings: list[Finding]
-    # who picked up: unknown until they say, then the customer or someone else
-    reached: Literal["unknown", "customer", "someone_else"] = "unknown"
+    # who picked up: the customer, unless they say it's a wrong number or someone else
+    reached: Literal["customer", "someone_else"] = "customer"
     ended_early: EndedEarly | None = None
     decisions: dict[str, RepairDecision] = field(default_factory=dict)  # finding id -> decision
     next_visit: list[str] = field(default_factory=list)  # notes for the next visit
@@ -1266,22 +1266,6 @@ class ServiceDesk:
 
     # ---- a car in the shop (the follow-up call) ----
 
-    def confirm_customer(self, name: str = "") -> ShopVisit:
-        """Whoever picked up said they're the customer: the visit can be talked about now. A
-        name they gave goes on a file that had none."""
-        v = self._shop()
-        if v.reached == "someone_else":
-            who = self._first_name()
-            raise ServiceError(
-                f"Whoever answered already said they aren't {who}, so share nothing about the "
-                f"car or the visit. Ask that {who} call back, say goodbye, and call end_call."
-            )
-        v.reached = "customer"
-        v.ended_early = None
-        if self.customer and not self.customer.name and (said := " ".join(name.split())):
-            self.customer.name = said
-        return v
-
     def repair_details(self, question: str = "") -> list[Finding]:
         v = self._with_customer()
         if asked := " ".join(question.split()):
@@ -1503,18 +1487,13 @@ class ServiceDesk:
         return self.visit
 
     def _with_customer(self) -> ShopVisit:
-        """The visit, once whoever picked up has said they're the customer."""
+        """The visit, unless whoever picked up said it's a wrong number or someone else."""
         v = self._shop()
-        who = self._first_name()
         if v.reached == "someone_else":
+            who = self._first_name()
             raise ServiceError(
-                f"Whoever answered isn't {who}: share nothing about the car, the visit, or the "
-                f"repairs. Ask them to have {who} call back, say goodbye, and call end_call."
-            )
-        if v.reached == "unknown":
-            raise ServiceError(
-                f"You don't know it's {who} yet. Once they've said it's them, call "
-                "confirm_customer; until then, say nothing about the car."
+                f"Whoever answered isn't {who}: share nothing more about the car, the visit, or "
+                f"the repairs. Ask them to have {who} call back, say goodbye, and call end_call."
             )
         return v
 
@@ -1763,7 +1742,7 @@ class ServiceDesk:
             "notes": [_note_dict(n) for n in a.notes],
             "reached": v.reached,
             "endedEarly": ENDED_EARLY[v.ended_early] if v.ended_early else None,
-            # what the technician found stays off the page until the customer is on the line
+            # what the technician found, off the page if someone else picked up
             "findings": [
                 {
                     "id": f.id,

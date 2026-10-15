@@ -27,7 +27,8 @@ expect keys (all optional):
 A booking is what's still booked at the end: one booked and then cancelled doesn't count.
 
 The follow-up call (outbound) takes instead:
-    reached: who picked up, "customer" or "someone_else"
+    reached: who picked up: "customer" (whoever answers is, from the start) or
+        "someone_else" (they said it's a wrong number, or someone else picked up)
     ended_early: wrong_person or call_back_later; leave it out when the call must go through
         the findings
     decisions: finding id -> approved, declined, or deferred, e.g. {front_brakes: approved}
@@ -39,7 +40,7 @@ The follow-up call (outbound) takes instead:
     concerns: true means something new they noticed was noted on the visit
 Every follow-up that doesn't end early must end with each repair that needs doing now
 decided, a ride, and the ready time and total told; one that reached someone else must have
-shared nothing.
+gone over nothing more with them.
 """
 
 from __future__ import annotations

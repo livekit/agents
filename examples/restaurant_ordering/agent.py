@@ -881,11 +881,11 @@ class DeliveryUpdateAgent(Agent):
 
     @function_tool
     async def end_without_update(self, ctx: Ctx, reason: EndedEarly) -> str:
-        """End the call without going through the update, when whoever answered isn't the
-        customer, can't talk now, or doesn't want to. The order stays as it is.
+        """End the call without going through the update: they say it's a wrong number (or
+        not their order), can't talk now, or don't want to. The order stays as it is.
 
         Args:
-            reason: wrong_person (a wrong number, or it isn't the customer), call_back_later
+            reason: wrong_person (a wrong number, or not their order), call_back_later
                 (driving, busy, "call me later"), or declined (not interested).
         """
         with _pos_rules(ctx) as pos:
@@ -969,17 +969,18 @@ def _money(pos: Pos) -> str:
 
 
 def _opener(pos: Pos) -> str:
-    # a fixed opener: who's calling and for whom, and nothing about the order until the
-    # customer has said it's them. Without a name, it asks about the order instead: never a
-    # made-up name
-    if pos.name:
-        return (
-            f"Hi, this is {PERSONA} from {BUSINESS}, calling about a delivery. "
-            f"Am I speaking with {first_name(pos.name)}?"
-        )
+    # a fixed opener: who's calling and why, then straight into the update. Whoever picks up
+    # is the customer, so it never asks who they are; their name only if it's known, never a
+    # made-up one
+    d, out = pos.delivery, pos.out_of_stock()
+    assert d is not None and out
+    hi = f"Hi, {first_name(pos.name)}" if pos.name else "Hi"
+    swap = pos.same_price_swaps(out[0])[0]
     return (
-        f"Hi, this is {PERSONA} from {BUSINESS}, calling about a delivery order. Did you place "
-        "an order with us tonight?"
+        f"{hi}, this is {PERSONA} from {BUSINESS}, calling about your delivery order. "
+        f"{d.driver}'s on the way with it, about {d.eta_minutes} minutes out, but the "
+        f"{out[0].item.name} ran out after it went in. Would a {swap} at the same price work "
+        "instead, or should I take it off?"
     )
 
 
@@ -1127,18 +1128,17 @@ def _outbound_instructions(pos: Pos) -> str:
     out = pos.out_of_stock()
     assert d is not None and pos.order is not None and out
     lines = "; ".join(ln.describe() for ln in pos.lines)
-    swaps = ", ".join(pos.same_price_swaps(out[0]))
+    options = pos.same_price_swaps(out[0])
+    swaps = ", ".join(options)
     if pos.name:
         to = pos.name
-        reached = f"asked for {first_name(pos.name)}. Once they say it's them,"
-        not_them = f"it isn't {pos.name}"
+        named = ""
     else:
         # no name to go on: never one made up
         to = "the customer who placed it"
-        reached = """asked whether they placed an order with us
-tonight. You don't have their name: never say or guess one, and don't ask for it; if they
-give it, use it. Once they say yes, it was their order,"""
-        not_them = "they didn't place an order"
+        named = """
+You don't have their name: never say or guess one, and don't ask for it; if they give it,
+use it."""
     return f"""\
 {VOICE_RULES}
 
@@ -1155,15 +1155,15 @@ ${d.due} is due at the door: they pay {d.driver}, the driver, cash or card, when
 The {out[0].item.name} ({out[0].id}) ran out after the order was placed.
 
 # What to handle
-You've already said who you are and {reached}
-tell them {d.driver} is about {d.eta_minutes} minutes away and that the {out[0].item.name} ran
-out, and ask whether to replace it with a large Coke at the same price
-or take it off the order (it comes off what they pay at the door).
-Once they've said it's them, it's their order: when they ask, read them what's on it, the
-address, and what's due, plainly.
-If {not_them} (a wrong number, or someone else who picked up), call
-end_without_update with wrong_person and say a polite goodbye: say nothing more about the
-order, the address, or who it's for.
+You've already said who you are, that you're calling about their delivery order, that
+{d.driver} is about {d.eta_minutes} minutes away, and that the {out[0].item.name} ran out, and
+asked whether a {options[0]} at the same price works instead or to take it off the
+order (it comes off what they pay at the door). Whoever picked up is the customer: never ask
+who they are, or whether they placed the order.{named}
+It's their order: when they ask, read them what's on it, the address, and what's due, plainly.
+If they say it's a wrong number, or that it isn't their order, call end_without_update with
+wrong_person and say a polite goodbye: say nothing more about the order, the address, or who
+it's for.
 If they're driving, busy, ask you to call later, or aren't interested, don't push: call
 end_without_update (call_back_later or declined), then say goodbye and call end_call in that
 same turn.
@@ -1208,7 +1208,7 @@ a note for a manager or anyone else.
 When nothing else is changing, call final_read_back and say what it returns as your
 goodbye: each change (never the whole order again), what's due at the door, and the ETA
 (or, if it's cancelled, that nothing is due). Don't read a summary back yourself first, and
-don't ask "Does that sound right?" here. Then call end_call. If anything changes after the
+don't check in with them about it here. Then call end_call. If anything changes after the
 read-back, call final_read_back again."""
 
 

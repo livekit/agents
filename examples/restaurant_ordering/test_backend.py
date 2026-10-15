@@ -612,28 +612,34 @@ def test_outbound_seeds_order_214_out_for_delivery(out: Pos) -> None:
     assert demo_pos().item("sprite").available and not demo_pos().lines
 
 
-def test_the_opener_asks_for_the_customer_by_name(out: Pos) -> None:
+def test_the_opener_goes_straight_into_the_update(out: Pos) -> None:
     assert _opener(out) == (
-        "Hi, this is Gabby from Zappi's Pizzeria, calling about a delivery. Am I speaking with Sam?"
+        "Hi, Sam, this is Gabby from Zappi's Pizzeria, calling about your delivery order. "
+        "Marco's on the way with it, about 5 minutes out, but the Sprite ran out after it went "
+        "in. Would a large Coke at the same price work instead, or should I take it off?"
     )
     said = str(DeliveryUpdateAgent(out).instructions)
-    assert "outbound call to\nSam Carter" in said and "asked for Sam." in said
-    assert "If it isn't Sam Carter" in said
+    assert "outbound call to\nSam Carter" in said and "never ask\nwho they are" in said
+    # whoever picks up is the customer: no question about who they are, to open or after
+    for spoken in (_opener(out), said):
+        assert "speaking with" not in spoken.lower() and "Did you place" not in spoken
+        assert "Once they say it's them" not in spoken
 
 
 def test_without_a_name_nobody_is_named() -> None:
     pos = demo_pos("outbound")
     assert not pos.name and pos.snapshot()["customer"]["name"] == "Customer"
     assert _opener(pos) == (
-        "Hi, this is Gabby from Zappi's Pizzeria, calling about a delivery order. Did you "
-        "place an order with us tonight?"
+        "Hi, this is Gabby from Zappi's Pizzeria, calling about your delivery order. Marco's on "
+        "the way with it, about 5 minutes out, but the Sprite ran out after it went in. Would a "
+        "large Coke at the same price work instead, or should I take it off?"
     )
     said = str(DeliveryUpdateAgent(pos).instructions)
     assert "the customer who placed it" in said and "never say or guess one" in said
-    assert "If they didn't place an order" in said
+    assert "Did you place" not in _opener(pos) and "never ask\nwho they are" in said
     for spoken in (_opener(pos), said, _voicemail()):
         assert "Sam" not in spoken and "Carter" not in spoken
-        assert "with there" not in spoken and "for there" not in spoken
+        assert "with there" not in spoken and "for there" not in spoken and "there," not in spoken
     # the inbound order has no name until the caller gives one, and the page shows none
     assert demo_pos().snapshot()["customer"]["name"] is None
 

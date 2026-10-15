@@ -111,10 +111,8 @@ async def test_follow_up_approves_the_front_brakes() -> None:
         AgentSession(llm=model, userdata=Userdata(desk=desk)) as sess,
     ):
         await sess.start(RepairCallAgent(desk))
-        result: RunResult[None] = await sess.run(user_input="Speaking.")
-        result.expect.contains_function_call(name="confirm_customer")
-
-        result = await sess.run(user_input="Yes, go ahead with the front brakes.")
+        # the opener asks whether to go ahead: the tools work from the first turn
+        result: RunResult[None] = await sess.run(user_input="Yes, go ahead with the front brakes.")
         result.expect.contains_function_call(name="approve_repair")
     assert desk.visit is not None
     assert desk.visit.decisions == {"front_brakes": "approved"}
@@ -401,7 +399,6 @@ async def test_follow_up_says_the_new_total_and_a_friend_collects() -> None:
     calls: list[str] = []
     said = await _say(
         [
-            "Speaking.",
             "Yes, go ahead with the front brakes. So what's the total now?",
             "Since the last time you worked on it there's been a new rattle, by the way.",
             "My friend Sam will pick up the car for me.",

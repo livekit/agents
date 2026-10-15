@@ -779,28 +779,24 @@ def shop() -> ServiceDesk:
     return demo_desk(today=TODAY, direction="outbound")
 
 
-def reached(d: ServiceDesk) -> ServiceDesk:
-    d.confirm_customer()
-    return d
-
-
 def test_the_follow_up_starts_from_the_consultation_visit(shop: ServiceDesk) -> None:
     v = shop.visit
     assert v is not None and shop.appointment is v.appointment
     assert v.appointment.services == ["Diagnostic"] and v.appointment.recall == "added"
     assert v.appointment.concern == "Grinding from the front when braking"
     assert [n.kind for n in v.appointment.notes][:3] == ["sound", "where", "when"]
-    assert v.reached == "unknown"
+    # whoever picks up is the customer, from the first turn
+    assert v.reached == "customer"
     assert shop.ticket_total() == 159
     assert shop.ticket() == [
         ("Diagnostic", 159.0),
         ("Rear-view camera software update recall", 0.0),
     ]
     assert shop.ready_at() is None
-    assert shop.stage() == "reach"
+    assert shop.stage() == "quote"
     snap = json.loads(json.dumps(shop.snapshot()))["visit"]
-    # nothing the technician found shows until the customer is on the line
-    assert snap["findings"] == [] and snap["total"] == 159
+    assert snap["reached"] == "customer" and snap["total"] == 159
+    assert [f["id"] for f in snap["findings"]] == ["front_brakes", "rear_brakes"]
     assert snap["ticket"] == [
         {"label": "Diagnostic", "price": 159.0},
         {"label": "Rear-view camera software update recall", "price": 0.0},
@@ -808,23 +804,21 @@ def test_the_follow_up_starts_from_the_consultation_visit(shop: ServiceDesk) -> 
     assert snap["readyAt"] is None
 
 
-def test_nothing_about_the_car_before_its_the_customer(shop: ServiceDesk) -> None:
+def test_the_tools_work_from_the_first_turn(shop: ServiceDesk) -> None:
+    shop.decide_repair("front_brakes", "approved")
+    shop.arrange_pickup("self")
+    assert shop.pickup_summary().startswith("The X3 is ready today at 5:30 PM,")
+
+
+def test_someone_else_hears_nothing_more(shop: ServiceDesk) -> None:
+    shop.end_without_update("wrong_person")
     for call in (
-        lambda: shop.repair_details("what's wrong"),
+        lambda: shop.repair_details("is it the brakes?"),
         lambda: shop.decide_repair("front_brakes", "approved"),
         lambda: shop.arrange_pickup("self"),
-        lambda: shop.pickup_summary(),
     ):
-        with pytest.raises(ServiceError, match="confirm_customer"):
+        with pytest.raises(ServiceError, match="share nothing more"):
             call()
-
-
-def test_someone_else_hears_nothing(shop: ServiceDesk) -> None:
-    shop.end_without_update("wrong_person")
-    with pytest.raises(ServiceError, match="aren't Alex"):
-        shop.confirm_customer()
-    with pytest.raises(ServiceError, match="share nothing"):
-        shop.repair_details("is it the brakes?")
     assert shop.call_done and shop.visit is not None
     assert (shop.visit.reached, shop.visit.ended_early) == ("someone_else", "wrong_person")
     assert shop.snapshot()["visit"]["findings"] == []
@@ -840,7 +834,7 @@ def test_findings_by_id_or_words(shop: ServiceDesk) -> None:
 
 
 def test_prices_are_parts_plus_labor(shop: ServiceDesk) -> None:
-    front, rear = reached(shop).repair_details("how much")
+    front, rear = shop.repair_details("how much")
     assert (front.parts, front.labor, front.price) == (312, 177, 489)
     assert (rear.parts, rear.labor, rear.price) == (96, 118, 214)
     assert (front.urgency, rear.urgency) == ("now", "next_visit")
@@ -848,7 +842,6 @@ def test_prices_are_parts_plus_labor(shop: ServiceDesk) -> None:
 
 
 def test_approving_the_front_brakes(shop: ServiceDesk) -> None:
-    reached(shop)
     assert shop.undecided() == [shop.finding("front_brakes")]
     assert shop.stage() == "quote"
     f, notes = shop.decide_repair("front_brakes", "approved")
@@ -862,13 +855,13 @@ def test_approving_the_front_brakes(shop: ServiceDesk) -> None:
 
 
 def test_declining_leaves_the_car_ready_now(shop: ServiceDesk) -> None:
-    reached(shop).decide_repair("front", "declined")
+    shop.decide_repair("front", "declined")
     assert shop.ticket_total() == 159 and shop.ready_at() is None
     assert shop.ready_when() == "now"
 
 
 def test_both_repairs_run_into_the_next_morning(shop: ServiceDesk) -> None:
-    reached(shop).decide_repair("front_brakes", "approved")
+    shop.decide_repair("front_brakes", "approved")
     _, notes = shop.decide_repair("rear_brakes", "approved")
     assert notes == ["The car is now ready tomorrow at 10:00 AM."]
     assert shop.ticket_total() == 862
@@ -879,7 +872,6 @@ def test_both_repairs_run_into_the_next_morning(shop: ServiceDesk) -> None:
 
 
 def test_the_shuttle_follows_the_ready_time(shop: ServiceDesk) -> None:
-    reached(shop)
     with pytest.raises(ServiceError, match="where the shuttle"):
         shop.arrange_pickup("shuttle")
     shop.arrange_pickup("shuttle", "home")
@@ -891,7 +883,6 @@ def test_the_shuttle_follows_the_ready_time(shop: ServiceDesk) -> None:
 
 
 def test_the_summary_needs_an_answer_and_a_ride(shop: ServiceDesk) -> None:
-    reached(shop)
     with pytest.raises(ServiceError, match="front brake pads and rotors yet"):
         shop.pickup_summary()
     shop.decide_repair("front_brakes", "deferred")
@@ -908,7 +899,6 @@ def test_the_summary_needs_an_answer_and_a_ride(shop: ServiceDesk) -> None:
 
 
 def test_next_visit_notes(shop: ServiceDesk) -> None:
-    reached(shop)
     shop.note_for_next_visit("Rear brake pads")
     shop.note_for_next_visit("rear brake pads")  # said twice, noted once
     shop.decide_repair("front_brakes", "approved")
@@ -919,7 +909,7 @@ def test_next_visit_notes(shop: ServiceDesk) -> None:
 
 
 def test_grade_passes_an_approved_follow_up(shop: ServiceDesk) -> None:
-    reached(shop).repair_details("why the rotors")
+    shop.repair_details("why the rotors")
     shop.decide_repair("front_brakes", "approved")
     shop.note_for_next_visit("rear brake pads")
     shop.arrange_pickup("shuttle", "work")
@@ -936,7 +926,6 @@ def test_grade_passes_an_approved_follow_up(shop: ServiceDesk) -> None:
 
 
 def test_grade_fails_an_unfinished_or_leaky_follow_up(shop: ServiceDesk) -> None:
-    reached(shop)
     assert grade(shop, {"decisions": {"front_brakes": "declined"}, "total": 159}) == [
         "never got an answer on the front brake pads and rotors",
         "never arranged how they get back for the car",
@@ -1143,7 +1132,7 @@ def test_nobody_is_offered_a_handoff(desk: ServiceDesk) -> None:
 def test_payment_is_at_the_service_desk_on_pickup(shop: ServiceDesk) -> None:
     assert "in person at the service desk when they pick the car up" in backend.PAYMENT
     assert "never ask for or take card details" in backend.PAYMENT
-    reached(shop).decide_repair("front_brakes", "approved")
+    shop.decide_repair("front_brakes", "approved")
     shop.arrange_pickup("self")
     assert (
         "Due at pickup: $648 (diagnostic $159, rear-view camera software update recall no "
@@ -1332,7 +1321,7 @@ def test_the_3_could_be_either_car(desk: ServiceDesk, said: str) -> None:
 
 
 def test_a_friend_can_collect_the_car(shop: ServiceDesk) -> None:
-    reached(shop).decide_repair("front_brakes", "approved")
+    shop.decide_repair("front_brakes", "approved")
     shop.arrange_pickup("self", collected_by="their friend Sam")
     said = shop.pickup_summary()
     assert "their friend Sam is collecting it: they give Alex's name or the repair order" in said
@@ -1341,7 +1330,7 @@ def test_a_friend_can_collect_the_car(shop: ServiceDesk) -> None:
 
 
 def test_no_early_end_once_a_repair_is_decided(shop: ServiceDesk) -> None:
-    reached(shop).decide_repair("front_brakes", "approved")
+    shop.decide_repair("front_brakes", "approved")
     with pytest.raises(ServiceError, match="pickup_summary"):
         shop.end_without_update("call_back_later")
     assert shop.visit is not None and shop.visit.ended_early is None
@@ -1350,7 +1339,6 @@ def test_no_early_end_once_a_repair_is_decided(shop: ServiceDesk) -> None:
 
 
 def test_a_new_noise_is_noted_neutrally(shop: ServiceDesk) -> None:
-    reached(shop)
     shop.note_concern("new rattle since the repair")
     shop.note_concern("New rattle since the repair")
     shop.decide_repair("front_brakes", "declined")
@@ -1378,7 +1366,7 @@ def test_grade_checks_the_new_expectations(desk: ServiceDesk) -> None:
 
 
 def test_grade_checks_the_follow_ups_pickup_and_concerns(shop: ServiceDesk) -> None:
-    reached(shop).decide_repair("front_brakes", "approved")
+    shop.decide_repair("front_brakes", "approved")
     shop.arrange_pickup("self", collected_by="Sam")
     shop.pickup_summary()
     assert grade(shop, {"collected_by": True, "concerns": True}) == [

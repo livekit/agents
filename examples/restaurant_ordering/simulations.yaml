@@ -338,8 +338,9 @@ scenarios:
       calling you. When asked about the Sprite, take the large Coke. When asked if the
       driver should know anything, say: "Yes, the gate code is 4512, and I'm in unit 3B."
       Then say that's all, listen to the read-back, and say thanks and goodbye.
-    agent_expectations: The agent introduces herself and Zappi's Pizzeria, gives the ETA,
-      swaps the Sprite for a large Coke at the same price, saves the gate code and unit as
+    agent_expectations: The agent introduces herself and Zappi's Pizzeria and goes straight
+      into the update without asking who it's speaking to, gives the ETA, swaps the Sprite for
+      a large Coke at the same price, saves the gate code and unit as
       a driver note, reads back the changes with the same $49.65 due at the door, and repeats
       the ETA before ending the call.
     tags:

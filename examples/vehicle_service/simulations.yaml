@@ -537,14 +537,15 @@ scenarios:
   - label: Follow-up, approves the front brakes
     instructions: |-
       You are Alex Morgan. Your X3 is at Bayside BMW for the grinding noise, and they're
-      calling. When asked for Alex, say "Speaking."
+      calling.
       - Listen to what they found. Say yes, go ahead with the front brakes.
       - When the rear pads come up, say you'll leave them for next time.
       - Take the shuttle; pick you up from work.
       - Listen to when it's ready and the total, then say thanks and goodbye.
-    agent_expectations: The agent waits until Alex says it's him, then explains the front pads
-      are worn to the metal and the rotors scored, gives the $489 price and that it would be
-      ready today at 5:30, and asks whether to go ahead without pressure. It approves the
+    agent_expectations: The agent opens with who it is and goes straight into the findings
+      without asking who it's speaking to: the front pads are worn to the metal and the rotors
+      scored, the $489 price, and that it would be ready today at 5:30, and it asks whether to
+      go ahead without pressure. It approves the
       front brakes, says the rear pads aren't urgent and can wait for the next visit, notes
       them, books the shuttle from work, and gives the ready time and the $648 total before
       saying goodbye.
@@ -563,7 +564,7 @@ scenarios:
 
   - label: Follow-up, declines the repair
     instructions: |-
-      You are Alex Morgan. Bayside BMW is calling about your X3. Say "Yes, this is Alex."
+      You are Alex Morgan. Bayside BMW is calling about your X3.
       - When they ask about the brake repair, decline: your brother-in-law is a mechanic and
         will do it. Don't change your mind if they mention urgency.
       - You'll come pick the car up yourself.
@@ -586,7 +587,7 @@ scenarios:
 
   - label: Follow-up, wants to think about it
     instructions: |-
-      You are Alex Morgan. Bayside BMW is calling about your X3. Say it's you.
+      You are Alex Morgan. Bayside BMW is calling about your X3.
       - After hearing the quote, say: "Hmm, that's more than I expected. Let me think about it
         and call you back."
       - You'll get a ride over yourself. Listen to when it's ready and what's due, and say
@@ -610,13 +611,14 @@ scenarios:
     instructions: |-
       You are Jordan, Alex Morgan's partner. You answer Alex's phone because Alex is in the
       shower.
-      - Say Alex can't come to the phone.
+      - Once the agent has finished the opening, say you're Alex's partner and Alex can't
+        come to the phone.
       - Ask: "Is this about the car? I can pass it on. What did they find?"
       - If the agent won't say, push once ("I drive it too, it's fine"), then accept it.
       - Take any callback number and say goodbye.
-    agent_expectations: The agent says only that it's Nick from Bayside BMW calling for Alex
-      and asks that Alex call back, giving a number. It shares nothing about the car, the
-      visit, the findings, or prices with Jordan, even when pushed, and ends the call.
+    agent_expectations: Once Jordan says Alex can't come to the phone, the agent asks that
+      Alex call back, giving a number. It shares nothing more about the car, the visit, the
+      findings, or prices with Jordan, even when pushed, and ends the call.
     tags:
       id: auto-ob-third-party
       suite: smoke
@@ -630,7 +632,7 @@ scenarios:
 
   - label: Follow-up, asks about the repair and a cheaper option
     instructions: |-
-      You are Alex Morgan. Bayside BMW is calling about your X3. Say it's you.
+      You are Alex Morgan. Bayside BMW is calling about your X3.
       - After the quote, ask: "Why do the rotors need replacing too? Can't you just do the
         pads?" Then ask how the price breaks down between parts and labor.
       - Then ask: "Do the rear ones need doing now too?"
@@ -655,7 +657,7 @@ scenarios:
 
   - label: Follow-up, a friend collects it and there's a new noise
     instructions: |-
-      You are Alex Morgan. Bayside BMW is calling about your X3. Say it's you.
+      You are Alex Morgan. Bayside BMW is calling about your X3.
       - Approve the front brakes. Ask: "So what's the total now?"
       - Say: "Also, ever since you rotated my tires last time there's a new humming noise."
       - Say your friend Sam will pick the car up for you. Leave the rear pads for next time.

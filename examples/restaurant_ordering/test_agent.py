@@ -299,7 +299,6 @@ async def test_the_delivery_can_be_cancelled_on_the_update_call() -> None:
         AgentSession[Userdata](llm=model, userdata=Userdata(pos=pos)) as sess,
     ):
         await sess.start(DeliveryUpdateAgent(pos))
-        await sess.run(user_input="Yes, this is Sam.")
         result: RunResult[None] = await sess.run(
             user_input="Ugh. Honestly, just cancel the whole order."
         )
@@ -409,7 +408,6 @@ async def test_the_customer_hears_their_order_and_a_note_cant_reroute_it() -> No
         AgentSession[Userdata](llm=model, userdata=Userdata(pos=pos)) as sess,
     ):
         await sess.start(DeliveryUpdateAgent(pos))
-        await sess.run(user_input="Yes, this is Sam.")
         result: RunResult[None] = await sess.run(
             user_input="Wait, before that, what's on my order again?"
         )
