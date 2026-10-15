@@ -933,9 +933,10 @@ def steering_instructions(provider: str, steering: SpeechSteeringOptions) -> str
 
     disfluencies = steering.get("disfluencies")
     if isinstance(disfluencies, str):
-        # a caller-supplied guideline (e.g. non-English fillers) replaces the default line
+        # a caller-supplied guideline (e.g. non-English fillers) replaces the default line;
+        # braces are escaped since the result is appended to a template rendered later
         if disfluencies:
-            lines.append(disfluencies)
+            lines.append(disfluencies.replace("{", "{{").replace("}", "}}"))
     elif disfluencies is not None:
         lines.append(
             "Sprinkle in natural fillers (um, uh) and openers (oh, well, so), "
@@ -1218,8 +1219,8 @@ def llm_instructions(provider: str, steering: SpeechSteeringOptions | None = Non
     if provider == "fishaudio":
         return _fishaudio_expr_llm_instructions(
             _allowed_sounds(provider, steering),
-            # a custom disfluencies string owns all filler prose, so the English
-            # filler few-shots and register guidance only ride along with True
+            # a custom disfluencies string replaces the English filler guideline, so the
+            # English filler few-shots and register guidance only ride along with True
             disfluencies=(steering.get("disfluencies", True) is True) if steering else True,
         )
     if provider == "gemini":

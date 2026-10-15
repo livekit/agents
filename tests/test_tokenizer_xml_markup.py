@@ -534,6 +534,34 @@ class TestFishAudioDialect:
         )
         assert "No fillers (um, uh)" in pf.steering_instructions("xai", {"disfluencies": False})
 
+    @pytest.mark.parametrize(
+        "custom",
+        [
+            "Use one of {えっと, あの}.",
+            'Fillers as JSON: {"ja": ["えっと", "あの"]}',
+            "a lone { brace",
+            "a lone } brace",
+            "{0} {x!r:>3}",
+        ],
+    )
+    def test_custom_disfluency_text_keeps_braces_literal(self, custom: str) -> None:
+        from livekit.agents.voice.agent_session import (
+            DEFAULT_EXPRESSIVE_OPTIONS,
+            resolve_expressive_options,
+        )
+
+        # the guideline is appended to a template that is rendered with placeholder
+        # data, so braces must survive verbatim instead of being dropped or raising
+        tmpl = resolve_expressive_options(
+            {"speech_steering": {"disfluencies": custom}},
+            provider_key="xai",
+            default=DEFAULT_EXPRESSIVE_OPTIONS,
+        )["tts_instructions_template"]
+        assert not isinstance(tmpl, str)
+        rendered = tmpl.render(data={"tts": {"markup": {"llm_instructions": "MARKUP"}}})
+        assert "MARKUP" in rendered
+        assert f"- {custom}" in rendered
+
     def test_normalize_closes_unclosed_tags(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 
