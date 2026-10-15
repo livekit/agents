@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -34,8 +35,8 @@ def _make_stream_under_test(
     instance._start_time_offset = 0.0  # type: ignore[attr-defined]
     instance._utterance_speech_start_wall = None  # type: ignore[attr-defined]
     instance._utterance_speech_end_wall = None  # type: ignore[attr-defined]
-    instance._audio_pushed_duration = 0.0  # type: ignore[attr-defined]
-    instance._utterance_speech_end_audio_pos = None  # type: ignore[attr-defined]
+    instance._input_started_wall = None  # type: ignore[attr-defined]
+    instance._input_start_offset = 0.0  # type: ignore[attr-defined]
     instance._pending_final_data = None  # type: ignore[attr-defined]
     instance._pending_eos = False  # type: ignore[attr-defined]
     instance._eos_fallback_task = None  # type: ignore[attr-defined]
@@ -63,6 +64,38 @@ def _ws_message(**transcript_overrides: Any) -> dict[str, Any]:
     }
     transcript_data.update(transcript_overrides)
     return {"type": "data", "data": transcript_data}
+
+
+def _input_started(instance: SpeechStream, seconds_ago: float, *, offset: float = 0.0) -> None:
+    # what push_frame stamps on the first frame
+    instance._input_started_wall = time.time() - seconds_ago  # type: ignore[attr-defined]
+    instance._input_start_offset = offset  # type: ignore[attr-defined]
+
+
+def _frame() -> rtc.AudioFrame:
+    return rtc.AudioFrame(
+        data=b"\x00\x00" * 320, sample_rate=16000, num_channels=1, samples_per_channel=320
+    )
+
+
+async def _final_from(stream: SpeechStream) -> stt.SpeechEvent:
+    while True:
+        ev = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+        if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+            return ev
+
+
+@pytest.fixture
+async def stalled_stream(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SpeechStream]:
+    """A real stream whose connection never sends: no audio reaches Sarvam."""
+
+    async def _stalled_connection(self: SpeechStream) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(SpeechStream, "_run", _stalled_connection)
+    stream = sarvam.STT(api_key="sk_test", language="hi-IN").stream()
+    yield stream
+    await stream.aclose()
 
 
 def _events_of_type(captured: list[Any], event_type: stt.SpeechEventType) -> list[stt.SpeechEvent]:
@@ -129,24 +162,27 @@ async def test_speech_end_wall_clock_resets_on_new_utterance() -> None:
 
     await instance._handle_events(_event("START_SPEECH"))
     assert instance._utterance_speech_end_wall is None  # type: ignore[attr-defined]
-    assert instance._utterance_speech_end_audio_pos is None  # type: ignore[attr-defined]
 
 
-async def test_final_end_time_falls_back_to_audio_pushed_at_end_speech() -> None:
+async def test_final_end_time_falls_back_to_end_speech_receipt_on_input_clock() -> None:
     # Sarvam streaming exposes no word timestamps and a null speech_end, so a final
-    # that follows END_SPEECH takes the audio pushed when END_SPEECH arrived, not the
-    # audio pushed by the time the final lands.
+    # that follows END_SPEECH takes the END_SPEECH receipt on the input clock: the
+    # instant EOS carries as speech_end_time, as an offset from the first input frame.
     instance, captured = _make_stream_under_test()
-    instance._audio_pushed_duration = 3.2  # type: ignore[attr-defined]
+    _input_started(instance, 3.2)
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
-    instance._audio_pushed_duration = 3.4  # type: ignore[attr-defined]
     await instance._handle_transcript_data(_ws_message(speech_start=0.0, speech_end=0.0))
 
     final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
+    end = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)[0]
     assert final.alternatives[0].start_time == 0.0
-    assert final.alternatives[0].end_time == pytest.approx(3.2)
+    assert final.alternatives[0].end_time == pytest.approx(3.2, abs=0.05)
+    assert end.speech_end_time is not None
+    assert final.alternatives[0].end_time == pytest.approx(
+        end.speech_end_time - instance._input_started_wall  # type: ignore[attr-defined]
+    )
 
 
 async def test_late_final_after_eos_fallback_keeps_the_end_speech_position() -> None:
@@ -155,12 +191,11 @@ async def test_late_final_after_eos_fallback_keeps_the_end_speech_position() -> 
     # (with no local VAD a final without one re-anchors the turn at its arrival,
     # and transcription_delay collapses to ~0).
     instance, captured = _make_stream_under_test()
-    instance._audio_pushed_duration = 3.2  # type: ignore[attr-defined]
+    _input_started(instance, 3.2)
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
-    await asyncio.sleep(0.05)  # EOS fallback fires
-    instance._audio_pushed_duration = 4.6  # type: ignore[attr-defined]  # audio kept flowing
+    await asyncio.sleep(0.2)  # EOS fallback fires; the final lands 0.2 s after END_SPEECH
     await instance._handle_transcript_data(_ws_message())
 
     event_order = [
@@ -173,26 +208,25 @@ async def test_late_final_after_eos_fallback_keeps_the_end_speech_position() -> 
         stt.SpeechEventType.FINAL_TRANSCRIPT,
     ]
     final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
-    assert final.alternatives[0].end_time == pytest.approx(3.2)
+    assert final.alternatives[0].end_time == pytest.approx(3.2, abs=0.05)
 
 
-async def test_audio_position_fallback_includes_start_time_offset() -> None:
+async def test_speech_end_fallback_includes_start_time_offset() -> None:
     # Same stream timeline as the provider times (see test_final_timing_includes_start_time_offset).
     instance, captured = _make_stream_under_test()
-    instance._start_time_offset = 2.0  # type: ignore[attr-defined]
-    instance._audio_pushed_duration = 3.2  # type: ignore[attr-defined]
+    _input_started(instance, 3.2, offset=2.0)
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
     await instance._handle_transcript_data(_ws_message())
 
     final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
-    assert final.alternatives[0].end_time == pytest.approx(5.2)
+    assert final.alternatives[0].end_time == pytest.approx(5.2, abs=0.05)
 
 
-async def test_provider_speech_end_wins_over_the_audio_position() -> None:
+async def test_provider_speech_end_wins_over_the_fallback() -> None:
     instance, captured = _make_stream_under_test()
-    instance._audio_pushed_duration = 3.2  # type: ignore[attr-defined]
+    _input_started(instance, 3.2)
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
@@ -202,39 +236,49 @@ async def test_provider_speech_end_wins_over_the_audio_position() -> None:
     assert final.alternatives[0].end_time == pytest.approx(1.7)
 
 
-async def test_speech_end_position_follows_pushed_audio_while_sending_lags(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_input_ahead_of_real_time_does_not_push_the_speech_end_ahead(
+    stalled_stream: SpeechStream,
 ) -> None:
-    # The fallback sits on the pipeline's input clock: audio still queued behind a
-    # slow WebSocket was spoken already. With sending fully stalled, the position is
-    # everything pushed so far, so it still maps back to the END_SPEECH receipt.
-    async def _stalled_connection(self: SpeechStream) -> None:
-        await asyncio.Event().wait()
+    # 5 s of audio pushed at once (a pre-connect buffer, a flush) while none of it
+    # has reached Sarvam: an audio count would put the speech end ~5 s into the
+    # future, where the pipeline clamps it to the final's arrival (~0 delay).
+    stream = stalled_stream
+    for _ in range(250):
+        stream.push_frame(_frame())
+    await stream._handle_events(_event("START_SPEECH"))
+    await stream._handle_events(_event("END_SPEECH"))
+    await stream._handle_transcript_data(_ws_message())
 
-    monkeypatch.setattr(SpeechStream, "_run", _stalled_connection)
-    stream = sarvam.STT(api_key="sk_test", language="hi-IN").stream()
-    try:
-        for _ in range(150):  # 3 s of 20 ms frames, none of it sent to Sarvam
-            stream.push_frame(
-                rtc.AudioFrame(
-                    data=b"\x00\x00" * 320,
-                    sample_rate=16000,
-                    num_channels=1,
-                    samples_per_channel=320,
-                )
-            )
-        await stream._handle_events(_event("START_SPEECH"))
-        await stream._handle_events(_event("END_SPEECH"))
-        await stream._handle_transcript_data(_ws_message())
+    final = await _final_from(stream)
+    assert final.alternatives[0].end_time < 1.0
+    expected = (
+        stream._utterance_speech_end_wall  # type: ignore[attr-defined]
+        - stream._input_started_wall  # type: ignore[attr-defined]
+        + stream._input_start_offset  # type: ignore[attr-defined]
+    )
+    assert final.alternatives[0].end_time == pytest.approx(expected)
 
-        final = None
-        while final is None:
-            ev = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
-            if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-                final = ev
-        assert final.alternatives[0].end_time == pytest.approx(3.0 + stream.start_time_offset)
-    finally:
-        await stream.aclose()
+
+async def test_retry_offset_does_not_shift_the_speech_end(stalled_stream: SpeechStream) -> None:
+    # The base retry loop advances start_time_offset for provider-relative times; the
+    # input clock started with the first frame and must not move with it.
+    stream = stalled_stream
+    stream.push_frame(_frame())
+    initial_offset = stream.start_time_offset
+    stream.start_time_offset = initial_offset + 3.0  # what a retry would add
+
+    await stream._handle_events(_event("START_SPEECH"))
+    await stream._handle_events(_event("END_SPEECH"))
+    await stream._handle_transcript_data(_ws_message())
+
+    final = await _final_from(stream)
+    assert final.alternatives[0].end_time < 1.0
+    expected = (
+        stream._utterance_speech_end_wall  # type: ignore[attr-defined]
+        - stream._input_started_wall  # type: ignore[attr-defined]
+        + initial_offset
+    )
+    assert final.alternatives[0].end_time == pytest.approx(expected)
 
 
 async def test_final_end_time_uses_speech_end_when_present() -> None:
@@ -379,11 +423,11 @@ async def test_aclose_cancels_pending_eos_fallback(monkeypatch: pytest.MonkeyPat
 
 
 async def test_occured_at_is_ignored() -> None:
-    # `occured_at` is a wall-clock epoch, not an audio-relative offset, so it is
-    # never used: EOS stays bare and the final's end_time falls back to the audio
-    # sent at END_SPEECH, even when END_SPEECH arrives before the final transcript.
+    # `occured_at` is a wall-clock epoch from the server's clock, so it is never
+    # used: EOS stays bare and the final's end_time falls back to the END_SPEECH
+    # receipt on the input clock, even when END_SPEECH arrives before the final.
     instance, captured = _make_stream_under_test()
-    instance._audio_pushed_duration = 2.0  # type: ignore[attr-defined]
+    _input_started(instance, 2.0)
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH", occured_at=1_700_000_000.0))
@@ -391,7 +435,7 @@ async def test_occured_at_is_ignored() -> None:
 
     final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
     end = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)[0]
-    assert final.alternatives[0].end_time == pytest.approx(2.0)
+    assert final.alternatives[0].end_time == pytest.approx(2.0, abs=0.05)
     assert end.alternatives == []
     # The wall-clock anchor still rides on the EOS event itself.
     assert end.speech_end_time is not None

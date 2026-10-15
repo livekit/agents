@@ -42,8 +42,8 @@ def _make_sarvam_stream(*, eos_fallback_timeout: float) -> tuple[SpeechStream, l
     stream._start_time_offset = 0.0
     stream._utterance_speech_start_wall = None
     stream._utterance_speech_end_wall = None
-    stream._audio_pushed_duration = 0.0
-    stream._utterance_speech_end_audio_pos = None
+    stream._input_started_wall = None
+    stream._input_start_offset = 0.0
     stream._pending_final_data = None
     stream._pending_eos = False
     stream._eos_fallback_task = None
@@ -95,9 +95,9 @@ async def test_transcription_delay_measures_sarvam_speech_end_to_final(
     stream, captured = _make_sarvam_stream(eos_fallback_timeout=grace)
     seen = 0
 
+    # the first input frame reached the stream when it reached the pipeline
+    stream._input_started_wall = input_started_at
     await stream._handle_message(_signal("START_SPEECH"))
-    # live input: the audio pushed so far matches the wall clock
-    stream._audio_pushed_duration = time.time() - input_started_at
     await stream._handle_message(_signal("END_SPEECH"))
     speech_end = time.time()
     seen = await _deliver(ar, captured, seen)
@@ -105,7 +105,6 @@ async def test_transcription_delay_measures_sarvam_speech_end_to_final(
     # input keeps flowing while Sarvam finalizes; the EOS fallback may fire meanwhile
     await asyncio.sleep(FINAL_LATENCY)
     seen = await _deliver(ar, captured, seen)
-    stream._audio_pushed_duration = time.time() - input_started_at
     await stream._handle_message(_transcript())
     seen = await _deliver(ar, captured, seen)
 
