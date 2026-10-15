@@ -367,7 +367,8 @@ class AvatarSession(BaseAvatarSession):
                     room_join=True,
                     room=room_name,
                     can_subscribe=False,
-                    can_publish_data=False,
+                    # The egress also publishes data, so the token must allow it.
+                    can_publish_data=True,
                     can_publish_sources=LIVEKIT_AVATAR_PUBLISH_SOURCES,
                 )
             )
