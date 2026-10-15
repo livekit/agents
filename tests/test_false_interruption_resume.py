@@ -380,7 +380,9 @@ async def test_handing_over_a_paused_speech_does_not_end_the_agent_turn(
 
 @pytest.mark.parametrize("adaptive", [False, True])
 @pytest.mark.parametrize("resolve_before_eos", [False, True])
-@pytest.mark.parametrize("outcome", ["interrupted", "resumed", "closed", "finished"])
+@pytest.mark.parametrize(
+    "outcome", ["interrupted", "externally_interrupted", "resumed", "closed", "finished"]
+)
 async def test_dynamic_endpointing_waits_for_pause_resolution(
     adaptive: bool, resolve_before_eos: bool, outcome: str
 ) -> None:
@@ -417,6 +419,9 @@ async def test_dynamic_endpointing_waits_for_pause_resolution(
             await activity._cancel_speech_pause()
             await activity._cancel_speech_pause()
             assert handle.interrupted
+        elif outcome == "externally_interrupted":
+            handle.interrupt(force=True)
+            await activity._cancel_speech_pause()
         elif outcome == "resumed":
             if resolve_before_eos:
                 activity._disallow_interruptions(handle)
@@ -475,10 +480,19 @@ async def test_dynamic_endpointing_waits_for_pause_resolution(
         await session.aclose()
 
 
-@pytest.mark.parametrize("complete_before_eos", [False, True])
-@pytest.mark.parametrize("outcome", ["session_interrupt", "handle_interrupt", "completed"])
+@pytest.mark.parametrize("completion", ["before_eos", "after_eos", "after_timeout"])
+@pytest.mark.parametrize(
+    ("outcome", "force"),
+    [
+        ("session_interrupt", False),
+        ("session_interrupt", True),
+        ("handle_interrupt", False),
+        ("handle_interrupt", True),
+        ("completed", False),
+    ],
+)
 async def test_scheduler_resolves_dynamic_endpointing_pause(
-    monkeypatch: pytest.MonkeyPatch, complete_before_eos: bool, outcome: str
+    monkeypatch: pytest.MonkeyPatch, completion: str, outcome: str, force: bool
 ) -> None:
     session = AgentSession(
         llm=FakeLLM(),
@@ -487,7 +501,7 @@ async def test_scheduler_resolves_dynamic_endpointing_pause(
         turn_handling=TurnHandlingOptions(
             turn_detection="vad",
             endpointing={"mode": "dynamic", "min_delay": 0.3, "max_delay": 1.4, "alpha": 0.5},
-            interruption={"mode": "vad"},
+            interruption={"mode": "vad", "false_interruption_timeout": 0.01},
         ),
     )
     session.output.audio = FakeAudioOutput(can_pause=True)
@@ -527,29 +541,36 @@ async def test_scheduler_resolves_dynamic_endpointing_pause(
                 activity.on_end_of_speech(None)
             recognition._speaking = False
 
-        if not complete_before_eos:
+        if completion != "before_eos":
             end_user_speech(now + 0.2)
 
+        if force:
+            handle.allow_interruptions = False
         interruption = None
         if outcome == "session_interrupt":
-            interruption = session.interrupt()
+            interruption = session.interrupt(force=force)
         elif outcome == "handle_interrupt":
-            handle.interrupt()
+            handle.interrupt(force=force)
+
+        if completion == "after_timeout":
+            await asyncio.sleep(0.02)
+            assert activity._paused_speech is None
+            assert endpointing.min_delay == pytest.approx(0.3)
 
         # Acknowledge generation completion through the real scheduler.
         activity._scheduling_paused = True
         handle._mark_done()
+        activity._on_pipeline_reply_done(MagicMock())
         await activity._scheduling_atask
         if interruption is not None:
             await interruption
 
         assert activity._paused_speech is None
         assert activity._false_interruption_timer is None
-        if complete_before_eos:
+        if completion == "before_eos":
             end_user_speech(now + 0.2)
 
-        expected = 0.3 if outcome == "completed" else 0.435
-        assert endpointing.min_delay == pytest.approx(expected)
+        assert endpointing.min_delay == pytest.approx(0.3)
 
         activity.on_start_of_speech(None, speech_start_time=now + 0.3)
         recognition._speaking = True

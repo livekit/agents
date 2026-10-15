@@ -61,7 +61,10 @@ class BaseEndpointing:
         pass
 
     def on_pause_resolved(self, *, interrupted: bool) -> None:
-        """Resolve a provisional speech pause, independently of audible playout."""
+        """Resolve a provisional speech pause, independently of audible playout.
+
+        ``interrupted`` confirms a user interruption, not a programmatic cancellation.
+        """
         pass
 
 

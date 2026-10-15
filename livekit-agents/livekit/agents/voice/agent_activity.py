@@ -2055,8 +2055,8 @@ class AgentActivity(RecognitionHooks):
                 await speech._wait_for_generation()
 
                 if self._paused_speech and self._paused_speech.handle is self._current_speech:
-                    # clear paused speech after generation done
-                    self._finish_speech_pause(interrupted=speech.interrupted)
+                    # User interruptions resolve the pause before waiting for generation.
+                    self._finish_speech_pause(interrupted=False)
                     if (audio_output := self._session.output.audio) and audio_output.can_pause:
                         audio_output.resume()
                 self._current_speech = None
@@ -5089,7 +5089,7 @@ class AgentActivity(RecognitionHooks):
         if should_interrupt:
             # a final transcript or a committed turn ended the pause
             handle.interrupt(source="user_turn")
-        self._finish_speech_pause(interrupted=interrupt and handle.interrupted)
+        self._finish_speech_pause(interrupted=should_interrupt and handle.interrupted)
         if should_interrupt:
             # ensure the generation is done — but only if a generation
             # was actually started; a paused speech that was never
