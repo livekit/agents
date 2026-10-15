@@ -631,8 +631,8 @@ async def test_late_words_do_not_join_the_burst_that_is_already_sounding(duplex)
 
 async def test_words_for_sound_never_sent_do_not_anchor_the_next_burst(duplex) -> None:
     """The model is cut after its words went out but before their sound did, and the provider
-    sends nothing until it speaks again. By the stamps those words were due long before the next
-    sound, so they go out as text on their own and the next utterance keeps its words and anchor."""
+    sends nothing until it speaks again. By the stamps those words end long before the next sound,
+    so they go out as text on their own and the next utterance keeps its words and anchor."""
     fake, session, generations = duplex
     fake.push(0.001, count=20, start_ms=0)
     fake.push(0.3, count=3, start_ms=2000)
@@ -653,6 +653,63 @@ async def test_words_for_sound_never_sent_do_not_anchor_the_next_burst(duplex) -
     assert not session._fragments
     assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Hello"
     assert (await asyncio.wait_for(_read(generations[1]), timeout=1)) == (0, " there.")
+    (first,) = await _chunks(generations[2])
+    assert first == "Next."
+    assert isinstance(first, TimedString) and first.start_time == pytest.approx(0.0)
+
+
+async def test_words_for_sound_never_sent_that_arrive_after_the_burst_opened_do_not_anchor_it(
+    duplex,
+) -> None:
+    """The cut words reach the adapter only once the next burst is sounding; until a fragment
+    anchors that burst the same check applies, so they still go out as text on their own."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20, start_ms=0)
+    fake.push(0.3, count=3, start_ms=2000)
+    await _settle()
+    fake.say("Hello", start_ms=2000, end_ms=2200)
+    fake.push(0.001, count=8, start_ms=2300)
+    fake.push(0.3, count=1, start_ms=6000)
+    await _settle()
+    assert len(generations) == 2
+
+    fake.say(" there.", start_ms=3500, end_ms=3800)  # late, and its sound never came
+    fake.say("Next.", start_ms=6000, end_ms=6200)
+    fake.push(0.3, count=2, start_ms=6100)
+    fake.push(0.001, count=8, start_ms=6300)
+    await _settle()
+
+    assert len(generations) == 3
+    assert not session._fragments
+    (first,) = await _chunks(generations[1])
+    assert first == "Next."
+    assert isinstance(first, TimedString) and first.start_time == pytest.approx(0.0)
+    assert (await asyncio.wait_for(_read(generations[2]), timeout=1)) == (0, " there.")
+
+
+async def test_a_cut_span_that_runs_past_the_next_sound_still_goes_out_as_text(duplex) -> None:
+    """A cut span is the model's plan for words it never said, so it can run past the moment the
+    model speaks again; where those words would have started decides."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20, start_ms=0)
+    fake.push(0.3, count=3, start_ms=2000)
+    await _settle()
+    fake.say("Hello", start_ms=2000, end_ms=2200)
+    fake.say(" there, and the rest of it.", start_ms=3500, end_ms=6500)  # never sent
+    fake.push(0.001, count=8, start_ms=2300)
+    await _settle()
+
+    fake.say("Next.", start_ms=6000, end_ms=6200)
+    fake.push(0.3, count=3, start_ms=6000)
+    fake.push(0.001, count=8, start_ms=6300)
+    await _settle()
+
+    assert len(generations) == 3
+    assert not session._fragments
+    assert (await asyncio.wait_for(_read(generations[1]), timeout=1)) == (
+        0,
+        " there, and the rest of it.",
+    )
     (first,) = await _chunks(generations[2])
     assert first == "Next."
     assert isinstance(first, TimedString) and first.start_time == pytest.approx(0.0)

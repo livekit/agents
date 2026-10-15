@@ -325,6 +325,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._audio_timeout = audio_timeout
         # the adapter's clock: output audio heard so far, which arrives at playback pace
         self._audio_ms = 0
+        # whether the provider stamps its audio, which puts this clock on the spans' clock
+        self._stamped = False
         # the model's words waiting for the sound that carries them, and since when
         self._fragments: deque[DuplexOutputTranscriptDelta] = deque()
         self._waiting_since_ms = 0
@@ -388,13 +390,15 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._close_burst()
 
     def _on_audio_frame(self, f: DuplexAudioFrame) -> None:
+        self._stamped = f.start_ms is not None
         if f.start_ms is not None:
             self._audio_ms = f.start_ms
         # the gate is the one boundary: a burst is open exactly while the model is audibly
         # producing output, its own pauses inside an utterance included
         if self._gate.update(f.frame):
-            if self._burst is None and f.start_ms is not None:
-                self._release_unvoiced(f.start_ms)
+            if self._burst is None and self._stamped:
+                # before the burst's generation, so these words keep their place ahead of it
+                self._release_unvoiced(self._audio_ms)
             burst = self._burst = self._burst or self._open_burst()
             if not burst.audio_ch.closed:
                 burst.audio_ch.send_nowait(f.frame)
@@ -468,7 +472,9 @@ class _DuplexRealtimeSession(RealtimeSession):
     def _release_unvoiced(self, onset_ms: int) -> None:
         # stamped audio and spans share the model's clock, so words due before the sound that
         # opens a burst are for sound the provider never sent (the model was cut): they go out
-        # first, as text on their own, rather than become that burst's first words and anchor
+        # as text on their own rather than become that burst's first words and anchor. Their
+        # start decides, since a cut span is the plan for words never said and can run past
+        # the moment the model speaks again
         unvoiced = 0
         for fragment in self._fragments:
             if fragment.start_ms is None or fragment.start_ms + _ATTACH_LEAD_MS >= onset_ms:
@@ -484,6 +490,9 @@ class _DuplexRealtimeSession(RealtimeSession):
     def _attach_fragments(self, burst: _Burst) -> None:
         # the first fragment anchors the span clock to the audio clock; a later one is due when
         # the audio reaches its span, and one this burst never reaches waits for the next
+        if burst.anchor_ms is None and self._stamped:
+            # words for sound never sent can also arrive after the burst opened
+            self._release_unvoiced(burst.audio_start_ms)
         while self._fragments:
             fragment = self._fragments[0]
             if fragment.start_ms is not None:
