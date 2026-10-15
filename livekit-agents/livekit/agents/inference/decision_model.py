@@ -38,7 +38,7 @@ DecisionModels = Literal[
     "typesafe/jev",
     "typesafe/jev-latest",
     "typesafe/jev-preview",
-    "livekit/clef-flash",
+    "livekit/clef-omni",
     "openai/gpt-6-luna-decisions",
 ]
 
@@ -61,8 +61,15 @@ class _ScoreAnswer(BaseModel):
     type: Literal["score"]
     score: float
     probabilities: dict[int, float]
-    legend: dict[int, str]
+    # TypeSafe and Clef key the legend by level index; the gateway's OpenAI
+    # adapter sends it positionally.
+    legend: dict[int, str] | list[str]
     confidence: float | None = None
+
+    def legend_by_index(self) -> dict[int, str]:
+        if isinstance(self.legend, dict):
+            return self.legend
+        return dict(enumerate(self.legend))
 
 
 class _RefusalAnswer(BaseModel):
@@ -247,11 +254,12 @@ def _decode_answer(answer: _Answer) -> DecisionResult:
             probabilities=answer.probabilities,
             provider_data={"confidence": answer.confidence},
         )
-    if answer.legend.keys() != answer.probabilities.keys():
+    legend = answer.legend_by_index()
+    if legend.keys() != answer.probabilities.keys():
         raise APIError("score legend does not match distribution", retryable=False)
     return ScoreResult(
         value=answer.score,
         probabilities=answer.probabilities,
-        levels=[answer.legend[index] for index in sorted(answer.legend)],
+        levels=[legend[index] for index in sorted(legend)],
         provider_data={"confidence": answer.confidence},
     )

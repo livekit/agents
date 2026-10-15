@@ -177,9 +177,28 @@ async def test_model_falls_back_to_configured_model() -> None:
     body = response_body()
     del body["model"]
     async with _gateway(_json_handler(body)) as (url, session):
-        model = _model(url, session, model="livekit/clef-flash")
+        model = _model(url, session, model="livekit/clef-omni")
         response = await model.evaluate(input="", decisions=QUESTIONS)
-    assert response.model == "livekit/clef-flash"
+    assert response.model == "livekit/clef-omni"
+
+
+async def test_positional_legend_is_accepted() -> None:
+    # The gateway's OpenAI adapter sends the legend as an array, not keyed by index.
+    body = response_body()
+    body["answers"]["frustration"]["legend"] = ["Calm", "Annoyed", "Angry"]
+    async with _gateway(_json_handler(body)) as (url, session):
+        response = await _model(url, session).evaluate(input="", decisions=QUESTIONS)
+    assert response.errors == {}
+    assert response.results["frustration"].levels == ["Calm", "Annoyed", "Angry"]
+
+
+@pytest.mark.parametrize("legend", [["Calm", "Annoyed"], ["Angry", "Annoyed", "Calm"]])
+async def test_positional_legend_must_match_levels(legend: list[str]) -> None:
+    body = response_body()
+    body["answers"]["frustration"]["legend"] = legend
+    async with _gateway(_json_handler(body)) as (url, session):
+        response = await _model(url, session).evaluate(input="", decisions=QUESTIONS)
+    assert set(response.errors) == {"frustration"}
 
 
 async def test_refusal_is_a_per_decision_error() -> None:
