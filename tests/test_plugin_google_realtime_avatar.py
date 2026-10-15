@@ -82,7 +82,7 @@ class _FakeAvatar:
     def __init__(self) -> None:
         self.frames: list[rtc.VideoFrame | rtc.AudioFrame] = []
 
-    def _push_frame(self, frame: rtc.VideoFrame | rtc.AudioFrame, *, idle: bool = False) -> None:
+    def _push_frame(self, frame: rtc.VideoFrame | rtc.AudioFrame) -> None:
         self.frames.append(frame)
 
 
@@ -196,13 +196,13 @@ async def test_interrupted_reply_is_silenced_until_the_next_reply(
     avatar._push_frame(speech)
 
     assert finished and finished[0].interrupted
-    muted = avatar._frame_ch.recv_nowait()
+    muted, _ = avatar._frame_ch.recv_nowait()
     assert isinstance(muted, rtc.AudioFrame) and not any(bytes(muted.data))
 
     output.flush()
     await output.capture_frame(speech)
     avatar._push_frame(speech)
-    unmuted = avatar._frame_ch.recv_nowait()
+    unmuted, _ = avatar._frame_ch.recv_nowait()
     assert isinstance(unmuted, rtc.AudioFrame) and bytes(unmuted.data) == bytes(speech.data)
 
 
@@ -219,12 +219,12 @@ async def test_avatar_is_silent_while_the_session_audio_output_is_disabled(
 
     output.on_detached()
     avatar._push_frame(speech)
-    silenced = avatar._frame_ch.recv_nowait()
+    silenced, _ = avatar._frame_ch.recv_nowait()
     assert isinstance(silenced, rtc.AudioFrame) and not any(bytes(silenced.data))
 
     output.on_attached()
     avatar._push_frame(speech)
-    restored = avatar._frame_ch.recv_nowait()
+    restored, _ = avatar._frame_ch.recv_nowait()
     assert isinstance(restored, rtc.AudioFrame) and bytes(restored.data) == bytes(speech.data)
 
 
@@ -234,34 +234,103 @@ def _solid_frame(value: int) -> rtc.VideoFrame:
     )
 
 
-async def test_silenced_avatar_shows_idle_frames_instead_of_speech(
+def _audio(peak: int) -> rtc.AudioFrame:
+    return rtc.AudioFrame(
+        data=np.full(240, peak, dtype=np.int16).tobytes(),
+        sample_rate=_SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=240,
+    )
+
+
+def _published_video(avatar: AvatarSession) -> list[int]:
+    values: list[int] = []
+    while not avatar._frame_ch.empty():
+        frame, _ = avatar._frame_ch.recv_nowait()
+        if isinstance(frame, rtc.VideoFrame):
+            values.append(bytes(frame.data)[0])
+    return values
+
+
+async def test_silenced_avatar_loops_listening_frames_instead_of_speech(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """While the session audio is off, the server still renders the reply. The avatar must
-    loop recent idle frames instead of publishing the speech it cannot be heard saying."""
+    """While the session audio is off, the server can keep rendering the reply, even after
+    the turn completed. Video that comes with speech audio is replaced by a loop of frames
+    rendered while the avatar was quiet."""
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     model = RealtimeModel(avatar_config=types.AvatarConfig(avatar_name="Kira"))
     avatar = AvatarSession(model)
     output = _AvatarPlayoutOutput(avatar)
 
-    def published() -> list[int]:
-        frames: list[int] = []
-        while not avatar._frame_ch.empty():
-            frame = avatar._frame_ch.recv_nowait()
-            if isinstance(frame, rtc.VideoFrame):
-                frames.append(bytes(frame.data)[0])
-        return frames
-
-    for value in (1, 2, 3):
-        avatar._push_frame(_solid_frame(value), idle=True)
-    assert published() == [1, 2, 3]
+    for value in range(1, 10):
+        avatar._push_frame(_audio(0))
+        avatar._push_frame(_solid_frame(value))
+    assert _published_video(avatar) == list(range(1, 10))
 
     output.on_detached()
-    for _ in range(6):
+    for _ in range(4):
+        avatar._push_frame(_audio(8000))
         avatar._push_frame(_solid_frame(200))
-    avatar._push_frame(_solid_frame(4), idle=True)
-    assert published() == [1, 2, 3, 2, 1, 2, 4]
+    assert _published_video(avatar) == [1, 2, 3, 2]
 
     output.on_attached()
+    avatar._push_frame(_audio(8000))
     avatar._push_frame(_solid_frame(200))
-    assert published() == [200]
+    assert _published_video(avatar) == [200]
+
+
+async def test_closing_the_avatar_leaves_the_agent_in_the_room(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The avatar is published by the agent participant, so closing it must not remove
+    that participant from the room."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    model = RealtimeModel(avatar_config=types.AvatarConfig(avatar_name="Kira"))
+    avatar = AvatarSession(model)
+    removed: list[object] = []
+
+    class _Room:
+        name = "room"
+        local_participant = type("P", (), {"identity": "agent"})()
+
+        def isconnected(self) -> bool:
+            return True
+
+        def off(self, *_: object) -> None:
+            pass
+
+    class _JobContext:
+        class api:
+            class room:
+                @staticmethod
+                async def remove_participant(request: object) -> None:
+                    removed.append(request)
+
+    avatar._room = _Room()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        "livekit.agents.voice.avatar._types.get_job_context", lambda required=False: _JobContext()
+    )
+    await avatar.aclose()
+    assert not removed
+
+
+async def test_reply_audio_closes_only_after_its_fragments_are_decoded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """generation_complete can arrive while the reply's last fragments are still decoding.
+    The generation's audio must stay open until they are delivered."""
+    async with _avatar_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+        chunks = _fragmented_mp4_chunks()
+        for chunk in chunks:
+            assert not session._route_avatar_media(_video_message(chunk))
+        session._handle_server_content(types.LiveServerContent(generation_complete=True))
+
+        await _wait_for(lambda: gen.audio_ch.closed)
+        received = 0.0
+        while not gen.audio_ch.empty():
+            received += gen.audio_ch.recv_nowait().duration
+        assert received >= 1.5

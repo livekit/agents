@@ -37,6 +37,10 @@ class AvatarStreamDecoder:
         self._on_audio = on_audio
         self._loop = asyncio.get_running_loop()
         self._buffer = StreamBuffer()
+        self._lock = threading.Lock()
+        self._written = 0
+        self._read = 0
+        self._drain_waiters: list[tuple[int, Callable[[], None]]] = []
         self._closed = False
         self._thread = threading.Thread(
             target=self._decode_loop, name="gemini-avatar-decoder", daemon=True
@@ -45,7 +49,17 @@ class AvatarStreamDecoder:
 
     def push(self, data: bytes) -> None:
         if not self._closed:
+            with self._lock:
+                self._written += len(data)
             self._buffer.write(data)
+
+    def call_when_drained(self, callback: Callable[[], None]) -> None:
+        """Run `callback` on the event loop once every frame pushed so far is dispatched."""
+        if self._closed:
+            callback()
+            return
+        with self._lock:
+            self._drain_waiters.append((self._written, callback))
 
     async def aclose(self) -> None:
         if self._closed:
@@ -53,6 +67,28 @@ class AvatarStreamDecoder:
         self._closed = True
         self._buffer.close()
         await asyncio.to_thread(self._thread.join)
+        with self._lock:
+            waiters, self._drain_waiters = self._drain_waiters, []
+        for _, callback in waiters:
+            callback()
+
+    def read(self, size: int = -1) -> bytes:
+        # the demuxer reads again only after it has yielded every packet it already read
+        with self._lock:
+            ready = [cb for target, cb in self._drain_waiters if target <= self._read]
+            self._drain_waiters = [w for w in self._drain_waiters if w[0] > self._read]
+        for callback in ready:
+            self._schedule(callback)
+        data = self._buffer.read(size)
+        with self._lock:
+            self._read += len(data)
+        return data
+
+    def _schedule(self, callback: Callable[[], None]) -> None:
+        try:
+            self._loop.call_soon_threadsafe(callback)
+        except RuntimeError:
+            self._closed = True
 
     def _dispatch(self, callback: Callable[[_FrameT], None], frame: _FrameT) -> None:
         if self._closed:
@@ -68,7 +104,7 @@ class AvatarStreamDecoder:
         try:
             # default probing holds back about the first second of the stream, which is
             # idle frames; a smaller probe size loses the first keyframe instead
-            container = av.open(self._buffer, mode="r", format="mp4", buffer_size=4096)
+            container = av.open(self, mode="r", format="mp4", buffer_size=4096)
             streams = [*container.streams.video[:1], *container.streams.audio[:1]]
             for stream in container.streams.video[:1]:
                 # frame threading adds one frame of latency per thread
