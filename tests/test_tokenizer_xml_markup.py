@@ -608,6 +608,23 @@ class TestStreamingTokenizer:
         _assert_wrapping_tag_intact(tokens, "outer")
 
     @pytest.mark.asyncio
+    async def test_stray_closing_tag_does_not_unbalance_a_later_wrapping_tag(self) -> None:
+        """Regression: a closing tag whose opener was already emitted (or never sent)
+        drove the depth counter negative, so the next opening tag looked closed and
+        its sentences were split across chunks."""
+        from livekit.agents.tokenize.token_stream import _has_unclosed_xml_tags
+
+        assert _has_unclosed_xml_tags("</b> Now <emotion value='sad'>I am sorry.")
+
+        text = "Okay then.</b> Now <emotion value='sad'>I am sorry. Truly sorry.</emotion> Bye."
+        stream = self.tok.stream()
+        for word in text.split(" "):
+            stream.push_text(word + " ")
+        stream.end_input()
+        tokens = [ev.token async for ev in stream]
+        _assert_wrapping_tag_intact(tokens, "emotion")
+
+    @pytest.mark.asyncio
     async def test_standalone_expression_tag_streaming(self) -> None:
         """Regression: streaming must never emit a tag-only chunk."""
         text = (
