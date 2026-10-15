@@ -11,6 +11,7 @@ import contextlib
 from typing import Any
 
 import aiohttp
+import jwt
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -126,8 +127,11 @@ async def test_request_targets_gateway_with_minted_token() -> None:
         response = await model.evaluate(input=context, decisions=QUESTIONS)
 
     headers = captured["headers"]
-    assert headers["Authorization"].startswith("Bearer ")
-    assert headers["Authorization"] != "Bearer test-key"
+    scheme, token = headers["Authorization"].split(" ", 1)
+    assert scheme == "Bearer"
+    claims = jwt.decode(token, "test-secret", algorithms=["HS256"])
+    assert claims["iss"] == "test-key"
+    assert claims["inference"] == {"perform": True}
     assert headers[HEADER_USER_AGENT].startswith("LiveKit Agents/")
     assert headers["Content-Type"] == "application/json"
 

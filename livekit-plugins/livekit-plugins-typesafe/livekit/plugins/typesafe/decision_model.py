@@ -3,10 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
 
 import aiohttp
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -16,59 +14,14 @@ from livekit.agents import (
     llm,
     utils,
 )
-from livekit.agents.llm.decisions import (
-    Choice,
-    ChoiceResult,
-    Decision,
-    DecisionCapabilities,
-    DecisionResponse,
-    DecisionResult,
-    Probability,
-    ProbabilityResult,
-    ScoreResult,
-)
+from livekit.agents.llm import _systemone as systemone
+from livekit.agents.llm.decisions import Decision, DecisionCapabilities, DecisionResponse
 from livekit.agents.types import APIConnectOptions
 
 from .models import DecisionModels, OpenRouterDecisionModels
 
 TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
-
-
-class _NoulAnswer(BaseModel):
-    type: Literal["noul"]
-    noul: float
-
-
-class _ChoiceAnswer(BaseModel):
-    type: Literal["choice"]
-    choice: str
-    probabilities: dict[str, float]
-    confidence: float | None = None
-
-
-class _ScoreAnswer(BaseModel):
-    type: Literal["score"]
-    score: float
-    probabilities: dict[int, float]
-    legend: dict[int, str]
-    confidence: float | None = None
-
-
-class _Usage(BaseModel):
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-
-
-_Answer = Annotated[_NoulAnswer | _ChoiceAnswer | _ScoreAnswer, Field(discriminator="type")]
-_answer_adapter = TypeAdapter[_Answer](_Answer)
-
-
-class _Response(BaseModel):
-    answers: dict[str, Any]
-    model: str = ""
-    usage: _Usage = Field(default_factory=_Usage)
-    id: str = ""
 
 
 class DecisionModel(llm.DecisionModel):
@@ -135,7 +88,7 @@ class DecisionModel(llm.DecisionModel):
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
     ) -> DecisionResponse:
-        questions = {name: _encode_question(definition) for name, definition in decisions.items()}
+        questions = {name: systemone.encode_question(d) for name, d in decisions.items()}
         session = self._session or utils.http_context.http_session()
         try:
             async with session.post(
@@ -150,17 +103,11 @@ class DecisionModel(llm.DecisionModel):
                         status_code=response.status,
                         request_id=response.headers.get("x-request-id"),
                     )
-                parsed = _Response.model_validate(await response.json())
+                parsed = systemone.Response.model_validate(await response.json())
                 request_id = parsed.id or response.headers.get("x-request-id", "")
-            results: dict[str, DecisionResult] = {}
-            errors: dict[str, str] = {}
-            for name, raw_answer in parsed.answers.items():
-                try:
-                    results[name] = _decode_answer(_answer_adapter.validate_python(raw_answer))
-                except ValidationError:
-                    errors[name] = "invalid Jev decision answer"
-                except APIError as error:
-                    errors[name] = error.message
+            results, errors = systemone.decode_answers(
+                parsed.answers, invalid="invalid Jev decision answer"
+            )
             return DecisionResponse(
                 results=results,
                 errors=errors,
@@ -178,33 +125,3 @@ class DecisionModel(llm.DecisionModel):
             raise APIConnectionError("TypeSafe connection failed") from exc
         except ValueError as exc:
             raise APIError("invalid TypeSafe decision response", retryable=False) from exc
-
-
-def _encode_question(definition: Decision) -> dict[str, Any]:
-    question: dict[str, Any] = {"instructions": definition.prompt}
-    if isinstance(definition, Probability):
-        question["type"] = "noul"
-    elif isinstance(definition, Choice):
-        question.update(type="choice", criteria=definition.options)
-    else:
-        question.update(type="score", criteria=definition.levels)
-    return question
-
-
-def _decode_answer(answer: _Answer) -> DecisionResult:
-    if isinstance(answer, _NoulAnswer):
-        return ProbabilityResult(value=answer.noul)
-    if isinstance(answer, _ChoiceAnswer):
-        return ChoiceResult(
-            value=answer.choice,
-            probabilities=answer.probabilities,
-            provider_data={"confidence": answer.confidence},
-        )
-    if answer.legend.keys() != answer.probabilities.keys():
-        raise APIError("score legend does not match distribution", retryable=False)
-    return ScoreResult(
-        value=answer.score,
-        probabilities=answer.probabilities,
-        levels=[answer.legend[index] for index in sorted(answer.legend)],
-        provider_data={"confidence": answer.confidence},
-    )

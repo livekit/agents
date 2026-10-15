@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
+from typing import Literal
 
 import aiohttp
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from .._exceptions import (
     APIConnectionError,
@@ -13,17 +13,12 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from ..llm import _systemone as systemone
 from ..llm.decisions import (
-    Choice,
-    ChoiceResult,
     Decision,
     DecisionCapabilities,
     DecisionModel as BaseDecisionModel,
     DecisionResponse,
-    DecisionResult,
-    Probability,
-    ProbabilityResult,
-    ScoreResult,
 )
 from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import http_context, is_given
@@ -43,55 +38,6 @@ DecisionModels = Literal[
 ]
 
 HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
-
-
-class _NoulAnswer(BaseModel):
-    type: Literal["noul"]
-    noul: float
-
-
-class _ChoiceAnswer(BaseModel):
-    type: Literal["choice"]
-    choice: str
-    probabilities: dict[str, float]
-    confidence: float | None = None
-
-
-class _ScoreAnswer(BaseModel):
-    type: Literal["score"]
-    score: float
-    probabilities: dict[int, float]
-    # TypeSafe and Clef key the legend by level index; the gateway's OpenAI
-    # adapter sends it positionally.
-    legend: dict[int, str] | list[str]
-    confidence: float | None = None
-
-    def legend_by_index(self) -> dict[int, str]:
-        if isinstance(self.legend, dict):
-            return self.legend
-        return dict(enumerate(self.legend))
-
-
-class _RefusalAnswer(BaseModel):
-    type: Literal["refusal"]
-
-
-class _Usage(BaseModel):
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-
-
-_Answer = Annotated[
-    _NoulAnswer | _ChoiceAnswer | _ScoreAnswer | _RefusalAnswer, Field(discriminator="type")
-]
-_answer_adapter = TypeAdapter[_Answer](_Answer)
-
-
-class _Response(BaseModel):
-    answers: dict[str, Any]
-    model: str = ""
-    usage: _Usage = Field(default_factory=_Usage)
-    id: str = ""
 
 
 class _GatewayError(BaseModel):
@@ -173,7 +119,7 @@ class DecisionModel(BaseDecisionModel):
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
     ) -> DecisionResponse:
-        questions = {name: _encode_question(definition) for name, definition in decisions.items()}
+        questions = {name: systemone.encode_question(d) for name, d in decisions.items()}
         session = self._session or http_context.http_session()
         url = f"{self._base_url.rstrip('/')}/decisions"
         try:
@@ -188,16 +134,8 @@ class DecisionModel(BaseDecisionModel):
                     raise _error_from_response(
                         await response.text(), status=response.status, request_id=request_id
                     )
-                parsed = _Response.model_validate(await response.json())
-            results: dict[str, DecisionResult] = {}
-            errors: dict[str, str] = {}
-            for name, raw_answer in parsed.answers.items():
-                try:
-                    results[name] = _decode_answer(_answer_adapter.validate_python(raw_answer))
-                except ValidationError:
-                    errors[name] = "invalid decision answer"
-                except APIError as error:
-                    errors[name] = error.message
+                parsed = systemone.Response.model_validate(await response.json())
+            results, errors = systemone.decode_answers(parsed.answers)
             return DecisionResponse(
                 results=results,
                 errors=errors,
@@ -230,36 +168,3 @@ def _error_from_response(text: str, *, status: int, request_id: str | None) -> A
         if detail:
             message = f"{message}: {detail}"
     return create_api_error_from_http(message, status=status, request_id=request_id, body=body)
-
-
-def _encode_question(definition: Decision) -> dict[str, Any]:
-    question: dict[str, Any] = {"instructions": definition.prompt}
-    if isinstance(definition, Probability):
-        question["type"] = "noul"
-    elif isinstance(definition, Choice):
-        question.update(type="choice", criteria=definition.options)
-    else:
-        question.update(type="score", criteria=definition.levels)
-    return question
-
-
-def _decode_answer(answer: _Answer) -> DecisionResult:
-    if isinstance(answer, _RefusalAnswer):
-        raise APIError("the model declined this decision", retryable=False)
-    if isinstance(answer, _NoulAnswer):
-        return ProbabilityResult(value=answer.noul)
-    if isinstance(answer, _ChoiceAnswer):
-        return ChoiceResult(
-            value=answer.choice,
-            probabilities=answer.probabilities,
-            provider_data={"confidence": answer.confidence},
-        )
-    legend = answer.legend_by_index()
-    if legend.keys() != answer.probabilities.keys():
-        raise APIError("score legend does not match distribution", retryable=False)
-    return ScoreResult(
-        value=answer.score,
-        probabilities=answer.probabilities,
-        levels=[legend[index] for index in sorted(legend)],
-        provider_data={"confidence": answer.confidence},
-    )
