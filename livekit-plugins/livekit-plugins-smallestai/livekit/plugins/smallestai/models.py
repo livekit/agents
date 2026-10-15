@@ -15,6 +15,8 @@ TTSEncoding = Literal[
 
 STTModels = Literal["pulse"]
 
+LLMModels = Literal["electron", "electron-2.0"]
+
 STTEncoding = Literal[
     "linear16",
     "linear32",
