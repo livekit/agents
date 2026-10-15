@@ -892,6 +892,11 @@ class JobContext:
 
         Returns:
             Lowercase header names mapped to their values
+
+        Raises:
+            rtc.RpcError: If the ``lk.sip.GetRemoteHeaders`` RPC fails. The RPC runs when
+                ``force_fetch`` is set, or when the call is active but ``sip.callIDFull``
+                is not set
         """
         if self.is_fake_job():
             logger.warning("job_ctx.get_sip_headers() is not executed while in console mode")
