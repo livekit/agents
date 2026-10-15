@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 from ..log import logger
@@ -13,6 +14,12 @@ class _InterruptionPause(NamedTuple):
     pause: float
     turn_delay: float
     interruption_delay: float
+
+
+@dataclass
+class _PendingPause:
+    interruption: _InterruptionPause | None
+    utterance_pauses: list[float] = field(default_factory=list)
 
 
 class BaseEndpointing:
@@ -95,9 +102,7 @@ class DynamicEndpointing(BaseEndpointing):
         self._agent_speech_ended_at: float | None = None
         self._agent_speaking = False
         self._speaking = False
-        self._agent_speech_paused = False
-        self._pending_interruption_pause: _InterruptionPause | None = None
-        self._pending_utterance_pauses: list[float] = []
+        self._pending_pause: _PendingPause | None = None
 
     @property
     def min_delay(self) -> float:
@@ -146,9 +151,9 @@ class DynamicEndpointing(BaseEndpointing):
     def on_start_of_agent_speech(self, started_at: float, *, resumed: bool = False) -> None:
         if resumed:
             self.on_interruption_resolved(interrupted=False)
-        self._agent_speech_paused = False
-        self._pending_interruption_pause = None
-        self._pending_utterance_pauses = []
+        elif self._pending_pause is not None:
+            logger.debug("discarding unresolved endpointing pause on new agent speech")
+        self._pending_pause = None
 
         # Agent speech started before the current user utterance ended, so the stored
         # end still belongs to the previous utterance. Move it just before agent speech
@@ -175,29 +180,26 @@ class DynamicEndpointing(BaseEndpointing):
         # Keep the agent speech timestamps until the next user utterance ends so
         # the pause across an agent turn is not learned as an intra-user pause.
         if self._agent_speaking:
-            self._agent_speech_paused = paused
-            if paused and self._speaking:
-                self._pending_interruption_pause = self._get_interruption_pause()
+            if paused:
+                candidate = self._get_interruption_pause() if self._speaking else None
+                self._pending_pause = _PendingPause(interruption=candidate)
             self._agent_speech_ended_at = ended_at
         self._agent_speaking = False
         self._overlapping = False
 
     def on_interruption_resolved(self, *, interrupted: bool) -> None:
-        if not self._agent_speech_paused:
+        pending, self._pending_pause = self._pending_pause, None
+        if pending is None:
             return
 
-        candidate = self._pending_interruption_pause
-        utterance_pauses = self._pending_utterance_pauses
-        self._pending_interruption_pause = None
-        self._pending_utterance_pauses = []
-        self._agent_speech_paused = False
         if interrupted:
-            if candidate is not None:
-                self._learn_interruption_pause(candidate)
-            for pause in utterance_pauses:
-                self._learn_utterance_pause(pause)
+            if pending.interruption is not None:
+                self._learn_interruption_pause(pending.interruption)
+            for pause in pending.utterance_pauses:
+                self._learn_pause(pause, reason="pause between utterances")
         else:
-            # A false interruption must not seed the next intra-user pause either.
+            # Clear an ongoing false interruption's onset too, so its eventual EOS
+            # cannot train endpointing from that utterance.
             self._utterance_started_at = None
             self._utterance_ended_at = None
 
@@ -211,19 +213,19 @@ class DynamicEndpointing(BaseEndpointing):
             return
 
         if (
-            self._agent_speech_paused
+            self._pending_pause is not None
             and not self._speaking
             and self._utterance_ended_at is not None
             and (pause := started_at - self._utterance_ended_at) > 0
         ):
-            self._pending_utterance_pauses.append(pause)
+            self._pending_pause.utterance_pauses.append(pause)
 
         self._utterance_started_at = started_at
         self._overlapping = overlapping
         self._speaking = True
 
     def on_end_of_speech(self, ended_at: float, interruption: NotGivenOr[bool] = NOT_GIVEN) -> None:
-        if self._agent_speech_paused:
+        if self._pending_pause is not None:
             # EOS can precede the decision to interrupt or resume the paused speech.
             self._utterance_ended_at = ended_at
             self._speaking = False
@@ -270,7 +272,7 @@ class DynamicEndpointing(BaseEndpointing):
                 and self._agent_speech_ended_at is None
                 and self._agent_speech_started_at is None
             ):
-                self._learn_utterance_pause(pause)
+                self._learn_pause(pause, reason="pause between utterances")
 
         self._utterance_ended_at = ended_at
         # Preserve an active agent interval until its end is recorded.
@@ -280,7 +282,7 @@ class DynamicEndpointing(BaseEndpointing):
         self._speaking = False
         self._overlapping = False
 
-    def _learn_utterance_pause(self, pause: float) -> None:
+    def _learn_pause(self, pause: float, *, reason: str, **timing: float) -> None:
         prev_val = self.min_delay
         self._utterance_pause.apply(1.0, pause)
         logger.debug(
@@ -288,8 +290,9 @@ class DynamicEndpointing(BaseEndpointing):
             prev_val,
             self.min_delay,
             extra={
-                "reason": "pause between utterances",
+                "reason": reason,
                 "pause": pause,
+                **timing,
                 "max_delay": self.max_delay,
                 "min_delay": self.min_delay,
             },
@@ -306,20 +309,11 @@ class DynamicEndpointing(BaseEndpointing):
         return None
 
     def _learn_interruption_pause(self, candidate: _InterruptionPause) -> None:
-        prev_val = self.min_delay
-        self._utterance_pause.apply(1.0, candidate.pause)
-        logger.debug(
-            "min endpointing delay updated: %s -> %s",
-            prev_val,
-            self.min_delay,
-            extra={
-                "reason": "immediate interruption",
-                "pause": candidate.pause,
-                "interruption_delay": candidate.interruption_delay,
-                "turn_delay": candidate.turn_delay,
-                "max_delay": self.max_delay,
-                "min_delay": self.min_delay,
-            },
+        self._learn_pause(
+            candidate.pause,
+            reason="immediate interruption",
+            interruption_delay=candidate.interruption_delay,
+            turn_delay=candidate.turn_delay,
         )
 
     def update_options(
