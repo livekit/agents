@@ -155,7 +155,7 @@ class CartesiaOptions(TypedDict, total=False):
 
 
 class DeepgramOptions(TypedDict, total=False):
-    mip_opt_out: bool  # default: False
+    mip_opt_out: bool  # always True: the gateway forces it and ignores this value
 
 
 class RimeOptions(TypedDict, total=False):
