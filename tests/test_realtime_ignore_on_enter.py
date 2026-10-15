@@ -97,10 +97,17 @@ def _empty_generation() -> GenerationCreatedEvent:
     )
 
 
+async def _wait_for_reply(rt_session: _RecordingSession, index: int) -> None:
+    # sleep with a real delay so virtual time can advance and the caller's timeout fires
+    while len(rt_session._reply_futs) <= index:
+        await asyncio.sleep(0.01)
+
+
 async def _run_on_enter(
     capabilities: RealtimeCapabilities,
     *,
     fallback_capabilities: RealtimeCapabilities | None = None,
+    nested: bool = False,
 ) -> _RecordingSession:
     model = _RecordingModel(capabilities=capabilities)
     llm: _RecordingModel | RealtimeModelFallbackAdapter = model
@@ -108,6 +115,11 @@ async def _run_on_enter(
         llm = RealtimeModelFallbackAdapter(
             [model, _RecordingModel(capabilities=fallback_capabilities)]
         )
+        if nested:
+            # the inner adapter is itself the primary of an outer adapter
+            llm = RealtimeModelFallbackAdapter(
+                [llm, _RecordingModel(capabilities=fallback_capabilities)]
+            )
     agent = _GreetingAgent()
 
     async with AgentSession(llm=llm) as session:
@@ -120,8 +132,7 @@ async def _run_on_enter(
 
         await asyncio.wait_for(agent.entered.wait(), timeout=5)
         for i, handle in enumerate(agent.handles):
-            while len(rt_session._reply_futs) <= i:
-                await asyncio.sleep(0)
+            await asyncio.wait_for(_wait_for_reply(rt_session, i), timeout=5)
             rt_session._reply_futs[i].set_result(_empty_generation())
             await asyncio.wait_for(handle.wait_for_playout(), timeout=5)
 
@@ -182,3 +193,17 @@ async def test_fallback_adapter_uses_active_per_response_model() -> None:
 
     assert rt_session.tool_updates == []
     assert rt_session.reply_tools == [{"visible"}, {"visible"}]
+
+
+async def test_nested_fallback_adapter_uses_active_mutable_model() -> None:
+    # outer adapter -> inner adapter -> capable primary: caps must follow the active leaf
+    rt_session = await _run_on_enter(
+        fake_capabilities(mutable_tools=True, per_response_tool_choice=False),
+        fallback_capabilities=fake_capabilities(
+            mutable_tools=False, per_response_tool_choice=False
+        ),
+        nested=True,
+    )
+
+    assert rt_session.tool_updates == [{"visible"}, {"flagged", "visible"}] * 2
+    assert set(rt_session.tools.function_tools) == {"flagged", "visible"}
