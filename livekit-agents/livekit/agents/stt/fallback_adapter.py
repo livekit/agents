@@ -71,15 +71,18 @@ class FallbackAdapter(
             retry_interval: Interval between retries on the same STT instance.
             stall_timeout: Opt-in detection of a streaming STT that stays connected but stops
                 transcribing. When set, ``vad`` runs on the streamed audio, and if the active
-                STT emits no event (other than ``RECOGNITION_USAGE``) between the start of a
+                STT emits no transcript (interim, preflight or final) between the start of a
                 detected speech and ``stall_timeout`` seconds after its end, the stream is
-                treated as failed and the next STT takes over. The end of speech is reported
-                by the VAD after its min silence duration, so a stall is detected that long
-                plus ``stall_timeout`` after the user stops talking. Must cover the STT's normal
-                transcription latency, including the recognize call of STTs wrapped by
-                ``stt.StreamAdapter``. Each stream runs its own VAD stream, in addition to the
-                one of the session. Speech of the agent itself picked up by the VAD (e.g.
-                without echo cancellation) is counted too. Defaults to None (disabled).
+                treated as failed and the next STT takes over. Speech boundaries don't count,
+                as they can come from a VAD (e.g. the one of ``stt.StreamAdapter``). The end
+                of speech is reported by the VAD after its min silence duration, so a stall is
+                detected that long plus ``stall_timeout`` after the user stops talking. Must
+                cover the STT's normal transcription latency, including the recognize call of
+                STTs wrapped by ``stt.StreamAdapter``. Each stream runs its own VAD stream, in
+                addition to the one of the session; if it fails, the error is logged and stall
+                detection is disabled for that stream. Speech of the agent itself picked up by
+                the VAD (e.g. without echo cancellation) is counted too. Defaults to None
+                (disabled).
             stall_min_speech_duration: Minimum duration in seconds of a detected speech for
                 ``stall_timeout`` to apply, so short noises the STT legitimately ignores
                 don't trigger a fallback.
@@ -395,8 +398,8 @@ class FallbackRecognizeStream(RecognizeStream):
         self._fallback_adapter = stt
         self._recovering_streams: list[RecognizeStream] = []
         # stall detection (see FallbackAdapter's stall_timeout): when the active stream last
-        # emitted an event, and the future resolved once it is considered stalled
-        self._last_event_time = 0.0
+        # emitted a transcript, and the future resolved once it is considered stalled
+        self._last_transcript_time = 0.0
         self._stall_fut: asyncio.Future[None] | None = None
 
     async def _run(self) -> None:
@@ -425,9 +428,13 @@ class FallbackRecognizeStream(RecognizeStream):
 
         async def _forward_input_task() -> None:
             async for data in self._input_ch:
-                if vad_stream is not None and isinstance(data, rtc.AudioFrame):
+                if vad_stream is not None:
                     with contextlib.suppress(RuntimeError):
-                        vad_stream.push_frame(data)
+                        if isinstance(data, rtc.AudioFrame):
+                            vad_stream.push_frame(data)
+                        elif isinstance(data, self._FlushSentinel):
+                            # a hard segment boundary for the VAD, as in stt.StreamAdapter
+                            vad_stream.flush()
 
                 for stream in list(self._recovering_streams):
                     try:
@@ -532,13 +539,19 @@ class FallbackRecognizeStream(RecognizeStream):
             if should_set_active:
                 should_set_active = False
                 self._fallback_adapter._active_instance = stt
-            if ev.type != SpeechEventType.RECOGNITION_USAGE:
-                self._last_event_time = time.perf_counter()
+            # only transcripts show the STT is transcribing: speech boundaries can come from a
+            # VAD (e.g. the one of stt.StreamAdapter) before any recognition happened
+            if ev.type in (
+                SpeechEventType.INTERIM_TRANSCRIPT,
+                SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                SpeechEventType.FINAL_TRANSCRIPT,
+            ):
+                self._last_transcript_time = time.perf_counter()
             self._event_ch.send_nowait(ev)
 
     async def _forward_events_until_stalled(self, stt: STT, stream: RecognizeStream) -> None:
         """Forward the events of ``stream``, raising a retryable error once it stalls."""
-        self._last_event_time = time.perf_counter()
+        self._last_transcript_time = time.perf_counter()
         self._stall_fut = stall_fut = asyncio.Future[None]()
         forward_task = asyncio.create_task(self._forward_events(stt, stream))
         try:
@@ -551,7 +564,7 @@ class FallbackRecognizeStream(RecognizeStream):
             await aio.cancel_and_wait(forward_task)
 
         raise APIConnectionError(
-            f"{stt.label} stopped transcribing: no event within "
+            f"{stt.label} stopped transcribing: no transcript within "
             f"{self._fallback_adapter._stall_timeout}s after detected speech"
         )
 
@@ -561,10 +574,10 @@ class FallbackRecognizeStream(RecognizeStream):
 
         async def _check_stall(speech_start_time: float) -> None:
             await asyncio.sleep(stall_timeout)
-            # _last_event_time is reset when a new STT stream starts, so a speech that began
+            # _last_transcript_time is reset when a new STT stream starts, so a speech that began
             # before a fallback never counts against the new stream
             if (
-                self._last_event_time < speech_start_time
+                self._last_transcript_time < speech_start_time
                 and self._stall_fut is not None
                 and not self._stall_fut.done()
             ):
@@ -588,6 +601,15 @@ class FallbackRecognizeStream(RecognizeStream):
                             check_task.cancel()
                         check_task = asyncio.create_task(_check_stall(speech_start_time))
                     speech_start_time = None
+
+            # the input ended, but the STT may still owe the transcript of the last speech
+            if check_task is not None:
+                await check_task
+        except Exception:
+            logger.exception(
+                "stall detection failed, disabled for the rest of the stream",
+                extra={"streamed": True},
+            )
         finally:
             if check_task is not None:
                 await aio.cancel_and_wait(check_task)
