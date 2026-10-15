@@ -23,6 +23,7 @@ from ..llm.decisions import (
 from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import http_context, is_given
 from ._utils import (
+    HEADER_REQUEST_ID,
     create_access_token,
     get_default_inference_url,
     get_inference_headers,
@@ -36,8 +37,6 @@ DecisionModels = Literal[
     "typesafe/jev-preview",
     "livekit/clef-omni",
 ]
-
-HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
 
 
 class _GatewayError(BaseModel):
