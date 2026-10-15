@@ -31,13 +31,18 @@ Wire contract of the Pulse streaming API, as this plugin relies on it:
 
 ``pulse-2`` is a separate, streaming-only, English-only model on the same WebSocket
 endpoint (``?model=pulse-2``). It replaces Pulse's silence/word-count finalization
-with built-in end-of-turn detection (``endpointing``, ``eou_timeout_ms``,
-``finalize_on_words``, and ``max_words`` have no effect on it) and adds per-final
-``emotion`` and ``gender`` objects, on by default. A final closed by the built-in
-end-of-turn model carries ``eot_finalized: true``; the terminal final from
-``close_stream`` / ``finalize`` carries ``is_last: true`` instead and has no
-``eot_finalized`` field. ``language`` other than ``"en"`` (or unset) is rejected
-with a ``LANGUAGE_NOT_SUPPORTED_BY_MODEL`` error that closes the socket.
+with built-in end-of-turn detection, which has no tuning knobs, and adds per-final
+``emotion`` and ``gender`` objects, on by default. Per docs.smallest.ai, Pulse's
+finalization params ``eou_timeout_ms``, ``finalize_on_words``, and ``max_words`` are
+ignored by the server by default on ``pulse-2`` -- but if sent, they still take
+effect and compete with end-of-turn detection, fragmenting finals. Don't set them on
+an ``STT`` configured with ``model="pulse-2"``; if you're migrating from ``"pulse"``,
+remove them first. A final closed by the built-in end-of-turn model carries
+``eot_finalized: true``; the terminal final from ``close_stream`` / ``finalize``
+carries ``is_last: true`` instead and has no ``eot_finalized`` field. ``language``
+other than ``"en"`` is rejected client-side before connecting, since the server's
+own rejection is a ``LANGUAGE_NOT_SUPPORTED_BY_MODEL`` error frame followed by an
+unceremonious close.
 """
 
 from __future__ import annotations
@@ -91,6 +96,18 @@ _BATCH_MODELS: frozenset[str] = frozenset({"pulse"})
 
 # Any letter or digit in any script; a transcript with none is punctuation only.
 _WORD_RE = re.compile(r"\w")
+
+
+def _validate_pulse_2_language(model: str, language: str) -> None:
+    """Reject non-English languages on the English-only ``pulse-2`` model.
+
+    The server closes the socket with a ``LANGUAGE_NOT_SUPPORTED_BY_MODEL`` error
+    frame in this case; raise here instead so the failure is immediate and the
+    message is clear, rather than surfacing later as a generic connection error.
+    """
+    if model == "pulse-2" and language != "en":
+        raise ValueError(f"model 'pulse-2' is English-only, got language={language!r}")
+
 
 T = TypeVar("T")
 
@@ -190,7 +207,11 @@ class STT(stt.STT):
                 gender; ``recognize()`` raises ``ValueError`` for it. Other models
                 are batch-only; ``stream()`` raises ``ValueError`` for them.
             language: BCP-47 language code (e.g. "en", "hi", "fr"). Use "multi" for
-                automatic language detection.
+                automatic language detection. ``"pulse-2"`` is English-only: anything
+                other than ``"en"`` raises ``ValueError`` here (and in
+                ``update_options()``) instead of connecting, since the server's own
+                rejection is a ``LANGUAGE_NOT_SUPPORTED_BY_MODEL`` error frame
+                followed by closing the socket.
             sample_rate: Audio sample rate in Hz. Supported: 8000, 16000, 22050,
                 24000, 44100, 48000. Defaults to 16000. Telephony audio should be sent
                 at its native 8000 Hz rather than upsampled.
@@ -228,7 +249,9 @@ class STT(stt.STT):
             eou_timeout_ms: Silence (ms) for the transducer's blank-token endpoint.
                 Unset uses the server default (800). Values below the ~1.1 s decode
                 chunk make the server cut finals inside utterances; prefer
-                ``endpointing`` for low latency.
+                ``endpointing`` for low latency. Don't set this with ``model="pulse-2"``:
+                it still takes effect there and competes with that model's built-in
+                end-of-turn detection, fragmenting finals.
             vad_events: Ask the server for ``speech_started`` / ``speech_ended``
                 messages and map them to START_OF_SPEECH / END_OF_SPEECH. This is the
                 only reliable end-of-speech signal: finals alone are also emitted
@@ -237,8 +260,10 @@ class STT(stt.STT):
                 the stream, so buffered speech is returned as a final immediately. Defaults to True.
             finalize_on_words: Cut a final every ``max_words`` words during long
                 continuous speech. Unset uses the server default (on). The cut is not a
-                turn end; END_OF_SPEECH still follows the VAD.
-            max_words: Word count for ``finalize_on_words``. Unset uses the server default.
+                turn end; END_OF_SPEECH still follows the VAD. Don't set this with
+                ``model="pulse-2"``; see ``eou_timeout_ms``.
+            max_words: Word count for ``finalize_on_words``. Unset uses the server
+                default. Don't set this with ``model="pulse-2"``; see ``eou_timeout_ms``.
             emotion_detection: ``pulse-2`` only. Adds a six-class ``emotion`` object
                 (``neutral``, ``happy``, ``angry``, ``sad``, ``fear``, ``disgust``) with
                 confidence and score distribution to ``SpeechData.metadata["emotion"]``
@@ -274,6 +299,8 @@ class STT(stt.STT):
                 "Smallest AI API key is required, either as argument or set "
                 "SMALLEST_API_KEY environment variable"
             )
+
+        _validate_pulse_2_language(model, language)
 
         self._opts = _STTOptions(
             model=model,
@@ -415,6 +442,10 @@ class STT(stt.STT):
         gender_detection: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update STT options; propagates to all active streams (triggers reconnect)."""
+        prospective_model = model if is_given(model) else self._opts.model
+        prospective_language = language if is_given(language) else self._opts.language
+        _validate_pulse_2_language(prospective_model, prospective_language)
+
         if is_given(model):
             self._opts.model = model
             self._capabilities.streaming = model in _STREAMING_MODELS
