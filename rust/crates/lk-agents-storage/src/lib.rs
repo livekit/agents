@@ -76,7 +76,7 @@ pub enum StorageError {
     TooLarge { what: String, limit: usize },
     /// Retryable: a connection lost mid-request, a transaction a reconnect discarded, a severed
     /// database, a closed connection, a lease that lapsed.
-    #[error("storage unavailable: {0}")]
+    #[error("agent-store unavailable: {0}")]
     Unavailable(String),
     /// `Lane::open` with `wait: false` found the lease held.
     #[error("lease held: {0}")]

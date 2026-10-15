@@ -204,10 +204,10 @@ class A2AService(Generic[S]):
             )
         except StorageError as e:
             logger.warning(
-                "a storage error ended an A2A request",
+                "an agent-store error ended an A2A request",
                 extra={"endpoint": self._endpoint.name, "error": str(e)},
             )
-            yield build_error_response(request_id, InternalError(message=f"storage: {e}"))
+            yield build_error_response(request_id, InternalError(message=str(e)))
         except Exception as e:
             logger.exception("an A2A request failed", extra={"endpoint": self._endpoint.name})
             yield build_error_response(
@@ -438,7 +438,7 @@ class A2AService(Generic[S]):
         """The turn's save could not be written: the task fails ``storage-unavailable`` in the
         answer, unpersisted, and the client resends (docs/a2a.md)."""
         logger.warning(
-            "a storage error ended a turn",
+            "an agent-store error ended a turn",
             extra={"endpoint": self._endpoint.name, "threadId": thread_id, "error": str(error)},
         )
         record = _failed_record(shortuuid("AST_"), self.lane, message, REASON_STORAGE_UNAVAILABLE)
