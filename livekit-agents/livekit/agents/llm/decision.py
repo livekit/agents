@@ -14,11 +14,11 @@ from pydantic import BaseModel, Field
 from livekit import rtc
 
 from .._exceptions import APIError, APITimeoutError
-from ..llm import ChatContext
 from ..metrics import DecisionMetrics
 from ..metrics.base import Metadata
 from ..telemetry import gen_ai, trace_types, tracer
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from .chat_context import ChatContext
 
 DecisionKind = Literal["probability", "choice", "score"]
 _Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
@@ -98,7 +98,7 @@ class DecisionResponse(BaseModel):
     output_tokens: int | None = Field(default=None, ge=0)
 
 
-def format_transcript(chat_ctx: ChatContext, *, include_context_events: bool = False) -> str:
+def _format_transcript(chat_ctx: ChatContext, *, include_context_events: bool = False) -> str:
     """Convert a conversation into the transcript decision models receive.
 
     Only user and assistant text is kept, one ``role: text`` line per message, with
@@ -196,9 +196,8 @@ def _validate_result(result: DecisionResult, decision: Decision) -> None:
 class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     """Provider-neutral batched decisions over a text input or conversation.
 
-    A ChatContext is converted with :func:`format_transcript`, so every provider receives
-    the same text. Call it directly to include tool calls and handoffs. In
-    ``on_user_turn_completed``, add the new message to the context first.
+    A ChatContext is converted to a ``role: text`` transcript, so every provider receives
+    the same text. In ``on_user_turn_completed``, add the new message to the context first.
     """
 
     def __init__(self, *, capabilities: DecisionCapabilities) -> None:
@@ -233,8 +232,8 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         """Evaluate a batch of decisions.
 
         Args:
-            input: Text to evaluate, sent as-is, or a conversation converted with
-                :func:`format_transcript`.
+            input: Text to evaluate, sent as-is, or a conversation converted to a
+                transcript of user and assistant text.
             decisions: Decisions keyed by name.
             conn_options: Retry and per-attempt timeout settings.
 
@@ -251,7 +250,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         )
         definitions = copy.deepcopy(dict(decisions))
         _validate_decisions(definitions, capabilities=self.capabilities)
-        text = input if isinstance(input, str) else format_transcript(input)
+        text = input if isinstance(input, str) else _format_transcript(input)
         if not definitions:
             return DecisionResponse(results={}, model=self.model, provider=self.provider)
 

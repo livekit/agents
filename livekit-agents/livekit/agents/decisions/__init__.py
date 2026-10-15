@@ -1,6 +1,6 @@
 """Batched probability estimates, choices, and scores over a conversation snapshot."""
 
-from .model import (
+from ..llm.decision import (
     Choice,
     ChoiceResult,
     Decision,
@@ -13,7 +13,6 @@ from .model import (
     ProbabilityResult,
     Score,
     ScoreResult,
-    format_transcript,
 )
 
 __all__ = [
@@ -29,5 +28,4 @@ __all__ = [
     "ProbabilityResult",
     "Score",
     "ScoreResult",
-    "format_transcript",
 ]

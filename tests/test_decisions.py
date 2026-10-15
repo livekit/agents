@@ -22,6 +22,7 @@ from livekit.agents.llm import (
     FunctionCallOutput,
     ImageContent,
 )
+from livekit.agents.llm.decision import _format_transcript
 from livekit.agents.metrics import DecisionMetrics
 from livekit.agents.types import APIConnectOptions
 
@@ -331,13 +332,13 @@ def conversation() -> ChatContext:
 
 
 def test_transcript_keeps_only_user_and_assistant_text_by_default() -> None:
-    assert decisions.format_transcript(conversation()) == (
+    assert _format_transcript(conversation()) == (
         "user: Book a table.\nassistant: I can offer seven."
     )
 
 
 def test_transcript_includes_context_events_when_asked() -> None:
-    assert decisions.format_transcript(conversation(), include_context_events=True) == (
+    assert _format_transcript(conversation(), include_context_events=True) == (
         "user: Book a table.\n"
         '[function call: book({"party_size": 2})]\n'
         "[function error: No tables]\n"
