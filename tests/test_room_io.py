@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import defaultdict
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.room_io._echo_cancellation import _AdaptiveEchoCanceller
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
@@ -219,6 +221,7 @@ def _make_track_available_args(
 def _make_audio_input_stream(
     room: _FakeRoom,
     noise_cancellation,
+    echo_canceller=None,
 ) -> _ParticipantAudioInputStream:
     return _ParticipantAudioInputStream(
         room,
@@ -227,6 +230,7 @@ def _make_audio_input_stream(
         noise_cancellation=noise_cancellation,
         auto_gain_control=False,
         pre_connect_audio_handler=None,
+        echo_canceller=echo_canceller,
     )
 
 
@@ -682,6 +686,146 @@ async def test_roomio_resolves_auto_gain_control(
 
 
 # -- frame processor lifecycle tests ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("input_options", "audio_output", "error"),
+    [
+        ({}, False, "requires RoomIO audio output"),
+        ({"num_channels": 2}, True, "requires mono"),
+        ({"frame_size_ms": 15}, True, "multiple of 10"),
+        ({"sample_rate": 44100}, True, "requires a sample rate"),
+        (
+            {"noise_cancellation": rtc.NoiseCancellationOptions(module_id="bvc", options={})},
+            True,
+            "requires FrameProcessor",
+        ),
+    ],
+)
+async def test_echo_cancellation_rejects_unsupported_options_before_start(
+    input_options, audio_output, error
+) -> None:
+    room = _FakeRoom()
+    room_io = RoomIO(
+        MagicMock(),
+        room,
+        options=RoomOptions(
+            audio_input=AudioInputOptions(echo_cancellation=True, **input_options),
+            audio_output=audio_output,
+            text_input=False,
+        ),
+    )
+    with pytest.raises(ValueError, match=error):
+        await room_io.start()
+    assert room_io._audio_input is None
+    assert room_io._audio_output is None
+    assert room_io._pre_connect_audio_handler is None
+
+
+@pytest.mark.parametrize("use_selector", [False, True])
+async def test_echo_cancellation_precedes_nc_and_preserves_processor_lifecycle(
+    use_selector,
+) -> None:
+    room = _FakeRoom()
+    aec = MagicMock(spec=_AdaptiveEchoCanceller)
+    raw = rtc.AudioFrame(b"\x01\x00" * 1200, 24000, 1, 1200)
+    cleaned = rtc.AudioFrame(b"\x02\x00" * 1200, 24000, 1, 1200)
+    aec.process_capture.return_value = cleaned
+    processors = []
+
+    def make_processor(_params=None):
+        processor = _MockFrameProcessor()
+        processor._process = MagicMock(side_effect=lambda frame: frame)
+        processors.append(processor)
+        return processor
+
+    nc = make_processor if use_selector else make_processor()
+    stream = _make_audio_input_stream(room, nc, echo_canceller=aec)
+    stream.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    with patch(
+        "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
+    ) as create:
+        stream._on_track_available(track, publication, participant)
+        wrapper = create.call_args.kwargs["noise_cancellation"]
+        assert wrapper._process(raw) is cleaned
+        processors[0]._process.assert_called_once_with(cleaned)
+        wrapper._on_stream_info_updated(
+            room_name="test-room", participant_identity="test-user", publication_sid="TR_123"
+        )
+        wrapper._on_credentials_updated(token="test-token", url="test-url")
+        assert processors[0].stream_info_calls[-1]["publication_sid"] == "TR_123"
+        assert processors[0].credentials_calls[-1]["token"] == "test-token"
+
+        processors[0].enabled = False
+        assert wrapper._process(raw) is cleaned
+        assert processors[0]._process.call_count == 1
+        processors[0].enabled = True
+
+        # Historical pre-connect audio has no local playout timestamp.
+        aec.process_capture.reset_mock()
+        assert list(stream._apply_audio_processor([raw])) == [raw]
+        aec.process_capture.assert_not_called()
+
+        resets = aec.reset_capture.call_count
+        stream._on_track_available(MagicMock(), publication, participant)
+        assert not wrapper.enabled
+        wrapper._on_credentials_cleared()
+        assert aec.reset_capture.call_count == resets + 1
+        current_wrapper = create.call_args.kwargs["noise_cancellation"]
+        assert current_wrapper.enabled
+
+    await stream.aclose()
+    assert not current_wrapper.enabled
+    assert all(p.close_calls == 1 for p in processors)
+
+
+async def test_echo_cancellation_rejects_legacy_nc_from_selector() -> None:
+    stream = _make_audio_input_stream(
+        _FakeRoom(),
+        lambda _params: rtc.NoiseCancellationOptions(module_id="bvc", options={}),
+        echo_canceller=MagicMock(spec=_AdaptiveEchoCanceller),
+    )
+    try:
+        with pytest.raises(ValueError, match="requires FrameProcessor"):
+            stream._create_stream(MagicMock(), MagicMock())
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_roomio_shares_echo_reference_between_input_and_output(enabled) -> None:
+    session = SimpleNamespace(
+        on=MagicMock(),
+        off=MagicMock(),
+        input=SimpleNamespace(audio=None, video=None),
+        output=SimpleNamespace(audio=None, transcription=None),
+    )
+    room_io = RoomIO(
+        session,
+        _FakeRoom(),
+        options=RoomOptions(
+            audio_input=AudioInputOptions(echo_cancellation=enabled, pre_connect_audio=False),
+            video_input=False,
+            text_output=False,
+        ),
+    )
+    with (
+        patch(
+            "livekit.agents.voice.room_io.room_io._ParticipantAudioInputStream",
+            return_value=SimpleNamespace(aclose=AsyncMock()),
+        ) as create_input,
+        patch(
+            "livekit.agents.voice.room_io.room_io._ParticipantAudioOutput",
+            return_value=SimpleNamespace(aclose=AsyncMock()),
+        ) as create_output,
+        patch.object(room_io, "_init_task", new_callable=AsyncMock),
+    ):
+        await room_io.start()
+        input_aec = create_input.call_args.kwargs["echo_canceller"]
+        assert input_aec is create_output.call_args.kwargs["echo_canceller"]
+        assert isinstance(input_aec, _AdaptiveEchoCanceller) if enabled else input_aec is None
+        await room_io.aclose()
 
 
 @pytest.mark.asyncio
@@ -1148,6 +1292,74 @@ class _BlockingAudioSource(_QueuedAudioSource):
         self.playout_started.set()
         await self.playout_allowed.wait()
         await super().wait_for_playout()
+
+
+async def test_echo_reference_is_available_during_source_submission() -> None:
+    aec = MagicMock(spec=_AdaptiveEchoCanceller)
+    with patch("livekit.rtc.AudioSource", _BlockingAudioSource):
+        output = _ParticipantAudioOutput(
+            _FakeRoom(),
+            sample_rate=24000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(),
+            echo_canceller=aec,
+        )
+    output._subscribed_fut.set_result(None)
+    output._audio_source.queued_duration = 0.2
+    output._forwarding_task = asyncio.create_task(output._forward_audio())
+    frame = rtc.AudioFrame(b"\x01\x00" * 2400, 24000, 1, 2400)
+    try:
+        before = time.monotonic()
+        await output.capture_frame(frame)
+        await output._audio_source.capture_started.wait()
+        after = time.monotonic()
+        aec.push_render.assert_called_once()
+        submitted = aec.push_render.call_args.args[0]
+        assert submitted.duration == 0.05
+        assert bytes(submitted.data) == bytes(frame.data)[:2400]
+        started_at = aec.push_render.call_args.kwargs["started_at"]
+        assert before + 0.2 <= started_at <= after + 0.2
+        # The other 50 ms is still in the Python buffer and has no reference yet.
+        assert not output._audio_buf.empty()
+    finally:
+        await output.aclose()
+    assert aec.discard_render_after.call_args_list[0].args == (started_at,)
+
+
+@pytest.mark.parametrize("action", ["pause", "interrupt", "close"])
+async def test_echo_reference_discards_unplayed_audio_when_output_stops(action) -> None:
+    aec = MagicMock(spec=_AdaptiveEchoCanceller)
+    with patch("livekit.rtc.AudioSource", _QueuedAudioSource):
+        output = _ParticipantAudioOutput(
+            _FakeRoom(),
+            sample_rate=24000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(),
+            echo_canceller=aec,
+        )
+    output._subscribed_fut.set_result(None)
+    output._forwarding_task = asyncio.create_task(output._forward_audio())
+    frame = rtc.AudioFrame(b"\x01\x00" * 1200, 24000, 1, 1200)
+    try:
+        await output.capture_frame(frame)
+        await output._audio_source.frame_queued.wait()
+        aec.push_render.assert_called_once()
+        before = time.monotonic()
+        if action == "pause":
+            output.pause()
+            await output.capture_frame(frame)
+            await asyncio.sleep(0)
+            aec.push_render.assert_called_once()
+        elif action == "interrupt":
+            output.flush()
+            output.clear_buffer()
+            await output.wait_for_playout()
+        else:
+            await output.aclose()
+        aec.discard_render_after.assert_called_once()
+        assert before <= aec.discard_render_after.call_args.args[0] <= time.monotonic()
+    finally:
+        await output.aclose()
 
 
 @pytest.mark.asyncio

@@ -74,6 +74,14 @@ class AudioInputOptions:
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
+    echo_cancellation: bool = False
+    """Experimental adaptive echo cancellation using the room's audio output as reference.
+    Estimates echo delays from 20 ms to 2.48 s. Requires mono input at 8, 16, 24, 32, or
+    48 kHz, 10 ms frame-size multiples, and RoomIO audio output.
+    Runs before noise cancellation; NC must be a FrameProcessor
+    (or a selector returning one), not legacy NoiseCancellationOptions.
+    Audio passes through while the delay is unknown. Pre-connect audio bypasses AEC.
+    """
 
 
 @dataclass

@@ -16,6 +16,7 @@ from ...log import logger
 from ...telemetry import trace_types, tracer
 from ...utils import aio, log_exceptions
 from ..io import AudioInput, VideoInput
+from ._echo_cancellation import _AdaptiveEchoCanceller, _EchoCancellationProcessor
 from ._pre_connect_audio import PreConnectAudioHandler
 from .types import NoiseCancellationParams, NoiseCancellationSelector
 
@@ -341,6 +342,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         auto_gain_control: bool = True,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
+        echo_canceller: _AdaptiveEchoCanceller | None = None,
     ) -> None:
         _ParticipantInputStream.__init__(
             self,
@@ -356,6 +358,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             raise ValueError("frame_size_ms must be greater than 0")
 
         self._sample_rate = sample_rate
+        self._echo_canceller = echo_canceller
+        self._echo_processor: _EchoCancellationProcessor | None = None
         self._num_channels = num_channels
         self._frame_size_ms = frame_size_ms
         self._noise_cancellation = noise_cancellation
@@ -380,6 +384,17 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             else:
                 self._update_processor(None)
 
+        if self._echo_canceller is not None:
+            if isinstance(noise_cancellation, rtc.NoiseCancellationOptions):
+                raise ValueError(
+                    "echo cancellation requires FrameProcessor noise cancellation, "
+                    "not legacy NoiseCancellationOptions"
+                )
+            self._echo_processor = _EchoCancellationProcessor(
+                self._echo_canceller, noise_cancellation
+            )
+            noise_cancellation = self._echo_processor
+
         return rtc.AudioStream.from_track(
             track=track,
             sample_rate=self._sample_rate,
@@ -388,6 +403,22 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             noise_cancellation=noise_cancellation,
             auto_close_noise_cancellation=False,
         )
+
+    @override
+    def _close_stream(self) -> None:
+        if self._echo_processor is not None:
+            self._echo_processor._close()
+            self._echo_processor = None
+        super()._close_stream()
+        if self._echo_canceller is not None:
+            self._echo_canceller.reset_capture()
+
+    @override
+    async def aclose(self) -> None:
+        if self._echo_processor is not None:
+            self._echo_processor._close()
+            self._echo_processor = None
+        await super().aclose()
 
     @override
     async def _forward_task(

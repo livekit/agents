@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 
 from ...job import DEFAULT_PARTICIPANT_KINDS
+from ._echo_cancellation import _AdaptiveEchoCanceller
 from ._input import _ParticipantAudioInputStream, _ParticipantVideoInputStream
 from ._output import _ParticipantAudioOutput, _ParticipantTranscriptionOutput
 from .types import (
@@ -110,6 +111,21 @@ class RoomIO:
         self._start_trace_context = trace_context
         # -- create inputs --
         input_audio_options = self._options.get_audio_input_options()
+        output_audio_options = self._options.get_audio_output_options()
+        echo_canceller: _AdaptiveEchoCanceller | None = None
+        if input_audio_options and input_audio_options.echo_cancellation:
+            if output_audio_options is None:
+                raise ValueError("echo cancellation requires RoomIO audio output")
+            if input_audio_options.num_channels != 1:
+                raise ValueError("echo cancellation requires mono audio input")
+            if input_audio_options.frame_size_ms <= 0 or input_audio_options.frame_size_ms % 10:
+                raise ValueError("echo cancellation requires frame_size_ms to be a multiple of 10")
+            if isinstance(input_audio_options.noise_cancellation, rtc.NoiseCancellationOptions):
+                raise ValueError(
+                    "echo cancellation requires FrameProcessor noise cancellation, "
+                    "not legacy NoiseCancellationOptions"
+                )
+            echo_canceller = _AdaptiveEchoCanceller(sample_rate=input_audio_options.sample_rate)
         if input_audio_options and input_audio_options.pre_connect_audio:
             self._pre_connect_audio_handler = PreConnectAudioHandler(
                 room=self._room,
@@ -137,10 +153,10 @@ class RoomIO:
                     )
                 ),
                 pre_connect_audio_handler=self._pre_connect_audio_handler,
+                echo_canceller=echo_canceller,
             )
 
         # -- create outputs --
-        output_audio_options = self._options.get_audio_output_options()
         if output_audio_options:
             self._audio_output = _ParticipantAudioOutput(
                 self._room,
@@ -152,6 +168,7 @@ class RoomIO:
                     if utils.is_given(output_audio_options.track_name)
                     else "roomio_audio"
                 ),
+                echo_canceller=echo_canceller,
             )
 
         output_text_options = self._options.get_text_output_options()
