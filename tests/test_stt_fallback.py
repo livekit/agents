@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from typing import Any
@@ -14,6 +15,7 @@ from livekit.agents.stt import (
     AvailabilityChangedEvent,
     FallbackAdapter,
     RecognizeStream,
+    SpeechData,
     SpeechEvent,
     SpeechEventType,
     STTCapabilities,
@@ -21,7 +23,7 @@ from livekit.agents.stt import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import AudioBuffer
-from livekit.agents.vad import VAD, VADCapabilities, VADStream
+from livekit.agents.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
 
 from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_vad import FakeVAD
@@ -699,5 +701,175 @@ async def test_stt_stream_stall_survives_end_input() -> None:
     assert [ev.alternatives[0].text for _, ev in events] == ["hello world"]
     assert 3.05 + 1.0 <= events[0][0] < 3.05 + 1.0 + 0.2
     assert not fallback.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback.aclose()
+
+
+class _UnendedSpeechVAD(VAD):
+    """VAD detecting speech from the first frame on, until a flush hard-resets it without an
+    end of speech, as the shipped VADs do."""
+
+    def __init__(self) -> None:
+        super().__init__(capabilities=VADCapabilities(update_interval=0.1))
+
+    def stream(self) -> VADStream:
+        return _UnendedSpeechVADStream(self)
+
+
+class _UnendedSpeechVADStream(VADStream):
+    async def _main_task(self) -> None:
+        speech_duration: float | None = None
+        async for data in self._input_ch:
+            if isinstance(data, self._FlushSentinel):
+                speech_duration = None
+                continue
+
+            if speech_duration is None:
+                speech_duration = 0.0
+                self._send_event(VADEventType.START_OF_SPEECH, speech_duration)
+            speech_duration += data.duration
+            self._send_event(VADEventType.INFERENCE_DONE, speech_duration)
+
+    def _send_event(self, type: VADEventType, speech_duration: float) -> None:
+        self._event_ch.send_nowait(
+            VADEvent(
+                type=type,
+                samples_index=0,
+                timestamp=0.0,
+                speech_duration=speech_duration,
+                silence_duration=0.0,
+                speaking=True,
+            )
+        )
+
+
+class _FinalizeOnFlushSTT(FakeSTT):
+    """STT transcribing the audio received so far when flushed."""
+
+    def stream(
+        self,
+        *,
+        language: str | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> RecognizeStream:
+        return _FinalizeOnFlushStream(stt=self, conn_options=conn_options)
+
+
+class _FinalizeOnFlushStream(RecognizeStream):
+    async def _run(self) -> None:
+        async for data in self._input_ch:
+            if isinstance(data, self._FlushSentinel):
+                self._event_ch.send_nowait(
+                    SpeechEvent(
+                        type=SpeechEventType.FINAL_TRANSCRIPT,
+                        alternatives=[SpeechData(language="en", text="hello world")],
+                    )
+                )
+        await asyncio.Event().wait()
+
+
+async def _push_speech_then_flush(
+    stream: RecognizeStream, *, end_input: bool, speech_duration: float = 2.0
+) -> None:
+    """Push speech and interrupt it with a flush or end_input(), then 3s of silence."""
+    frame = rtc.AudioFrame(
+        data=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1, samples_per_channel=1600
+    )
+    for _ in range(round(speech_duration / 0.1)):
+        stream.push_frame(frame)
+        await asyncio.sleep(0.1)
+    if end_input:
+        stream.end_input()
+        return
+    stream.flush()
+    for _ in range(30):
+        await asyncio.sleep(0.1)
+    stream.end_input()
+
+
+@pytest.mark.parametrize("end_input", [False, True])
+async def test_stt_stream_stall_checks_speech_interrupted_by_flush(end_input: bool) -> None:
+    """A speech the VAD drops on a flush is checked as if it ended at the flush."""
+    fake1 = _HangingSTT()
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester([fake1, fake2], vad=_UnendedSpeechVAD(), stall_timeout=1.0)
+
+    events: list[tuple[float, SpeechEvent]] = []
+    async with fallback.stream() as stream:
+        start = time.perf_counter()
+        push_task = asyncio.create_task(_push_speech_then_flush(stream, end_input=end_input))
+
+        async def _collect() -> None:
+            async for ev in stream:
+                events.append((time.perf_counter() - start, ev))
+
+        await asyncio.wait_for(_collect(), timeout=30.0)
+        await push_task
+
+    assert [ev.alternatives[0].text for _, ev in events] == ["hello world"]
+    # the flush is at 2.0s, the stall is declared stall_timeout later
+    assert 2.0 + 1.0 <= events[0][0] < 2.0 + 1.0 + 0.2
+    assert not fallback.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback.aclose()
+
+
+async def test_stt_stream_stall_keeps_stream_finalizing_on_flush() -> None:
+    """A stream transcribing the speech interrupted by a flush on that flush is kept."""
+    fake1 = _FinalizeOnFlushSTT()
+    fake2 = FakeSTT(fake_transcript="fallback")
+
+    fallback = FallbackAdapterTester([fake1, fake2], vad=_UnendedSpeechVAD(), stall_timeout=1.0)
+
+    events: list[SpeechEvent] = []
+    async with fallback.stream() as stream:
+        push_task = asyncio.create_task(_push_speech_then_flush(stream, end_input=False))
+        # the stream hangs after its input ended, so stop listening once the stall would show
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(_collect_events(stream, events), timeout=6.0)
+        await push_task
+
+    assert events and all(ev.alternatives[0].text == "hello world" for ev in events)
+    with pytest.raises(ChanEmpty):
+        fake2.stream_ch.recv_nowait()
+    with pytest.raises(ChanEmpty):
+        fallback.availability_changed_ch(fake1).recv_nowait()
+
+    await fallback.aclose()
+
+
+async def _collect_events(stream: RecognizeStream, events: list[SpeechEvent]) -> None:
+    async for ev in stream:
+        events.append(ev)
+
+
+async def test_stt_stream_stall_ignores_short_speech_interrupted_by_flush() -> None:
+    """A speech shorter than stall_min_speech_duration interrupted by a flush isn't checked."""
+    fake1 = _HangingSTT()
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2],
+        vad=_UnendedSpeechVAD(),
+        stall_timeout=1.0,
+        stall_min_speech_duration=1.0,
+    )
+
+    events: list[SpeechEvent] = []
+    async with fallback.stream() as stream:
+        push_task = asyncio.create_task(
+            _push_speech_then_flush(stream, end_input=False, speech_duration=0.5)
+        )
+        # the stream hangs after its input ended, so stop listening once the stall would show
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(_collect_events(stream, events), timeout=6.0)
+        await push_task
+
+    assert events == []
+    with pytest.raises(ChanEmpty):
+        fake2.stream_ch.recv_nowait()
+    with pytest.raises(ChanEmpty):
+        fallback.availability_changed_ch(fake1).recv_nowait()
 
     await fallback.aclose()
