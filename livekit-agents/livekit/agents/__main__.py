@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 from .plugin import Plugin
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from .worker import AgentServer
 
 logger = logging.getLogger("livekit.agents")
@@ -87,11 +89,79 @@ def _discover_server(entrypoint: str | None) -> AgentServer:
     """
     from pathlib import Path
 
-    from .cli.discover import get_import_data
+    from ._exceptions import CLIError
+    from .cli.discover import get_default_path, get_import_data
 
-    import_data = get_import_data(path=Path(entrypoint) if entrypoint else None)
+    path = Path(entrypoint) if entrypoint else get_default_path()
+    try:
+        import_data = get_import_data(path=path)
+    except CLIError:
+        server = _server_from_main(path)
+        if server is None:
+            raise
+        return server
     mod = importlib.import_module(import_data.module_data.module_import_str)
     return getattr(mod, import_data.app_name)  # type: ignore[no-any-return]
+
+
+def _server_from_main(path: Path) -> AgentServer | None:
+    """The server an entrypoint written for ``python agent.py start`` hands to
+    ``cli.run_app`` from its ``if __name__ == "__main__":`` block, where
+    discovery cannot see it.
+
+    The block runs in the imported module's namespace, so the functions it
+    registers stay importable by job processes, with ``run_app`` capturing its
+    argument instead of starting the legacy CLI."""
+    import ast
+
+    from . import cli
+    from .cli import cli as cli_module
+    from .cli.discover import get_module_data_from_path
+    from .worker import AgentServer, WorkerOptions
+
+    def is_main_guard(test: ast.expr) -> bool:
+        if not (isinstance(test, ast.Compare) and len(test.ops) == 1):
+            return False
+        sides = [test.left, test.comparators[0]]
+        return (
+            isinstance(test.ops[0], ast.Eq)
+            and any(isinstance(s, ast.Name) and s.id == "__name__" for s in sides)
+            and any(isinstance(s, ast.Constant) and s.value == "__main__" for s in sides)
+        )
+
+    guards = [
+        node
+        for node in ast.parse(path.read_text(), str(path)).body
+        if isinstance(node, ast.If) and is_main_guard(node.test)
+    ]
+    if not guards:
+        return None
+    mod = importlib.import_module(get_module_data_from_path(path).module_import_str)
+
+    class _Captured(BaseException):
+        def __init__(self, server: AgentServer | WorkerOptions) -> None:
+            self.server = server
+
+    def capture(server: AgentServer | WorkerOptions) -> None:
+        raise _Captured(server)
+
+    originals = (cli.run_app, cli_module.run_app)
+    cli.run_app = cli_module.run_app = capture
+    try:
+        for guard in guards:
+            exec(
+                compile(ast.Module(body=guard.body, type_ignores=[]), str(path), "exec"),
+                mod.__dict__,
+            )
+    except _Captured as captured:
+        server = captured.server
+    else:
+        return None
+    finally:
+        cli.run_app, cli_module.run_app = originals
+    if isinstance(server, WorkerOptions):
+        return AgentServer.from_server_options(server)
+    return server
 
 
 def main(argv: list[str] | None = None) -> int:
