@@ -103,7 +103,7 @@ class DeepgramOptions(TypedDict, total=False):
     keyterm: str | list[str]
     profanity_filter: bool
     numerals: bool
-    mip_opt_out: bool  # always True: the gateway forces it and ignores this value
+    mip_opt_out: bool  # always True for LiveKit Inference; the passed value is ignored
     vad_events: bool  # default: False
     diarize: bool  # when True, enables speaker diarization (default off)
     dictation: bool
@@ -126,7 +126,7 @@ class DeepgramFluxOptions(TypedDict, total=False):
     eot_threshold: float  # range 0.5-0.9
     eot_timeout_ms: int
     keyterm: str | list[str]
-    mip_opt_out: bool  # always True: the gateway forces it and ignores this value
+    mip_opt_out: bool  # always True for LiveKit Inference; the passed value is ignored
     tag: str | list[str]
     detect_language: bool
     # flux-general-multi only: biases toward these languages without restricting
