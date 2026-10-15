@@ -1,3 +1,5 @@
+"""Batched probability estimates, choices, and scores over a conversation snapshot."""
+
 from __future__ import annotations
 
 import asyncio
@@ -314,3 +316,19 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
 
     async def aclose(self) -> None:
         """Release resources owned by this model, if any."""
+
+
+__all__ = [
+    "Choice",
+    "ChoiceResult",
+    "Decision",
+    "DecisionCapabilities",
+    "DecisionKind",
+    "DecisionModel",
+    "DecisionResponse",
+    "DecisionResult",
+    "Probability",
+    "ProbabilityResult",
+    "Score",
+    "ScoreResult",
+]

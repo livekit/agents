@@ -20,7 +20,7 @@ documentation, and examples.
 
 import typing
 
-from . import cli, decisions, inference, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
+from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -30,7 +30,6 @@ from ._exceptions import (
     UnexpectedModelBehavior,
     create_api_error_from_http,
 )
-from .decisions import DecisionModel
 from .job import (
     AutoSubscribe,
     JobContext,
@@ -51,6 +50,7 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
+from .llm.decisions import DecisionModel
 from .llm.tool_context import (
     FunctionTool,
     ProviderTool,
@@ -168,7 +168,6 @@ def __getattr__(name: str) -> typing.Any:
 
 
 __all__ = [
-    "decisions",
     "DecisionModel",
     "__version__",
     "AgentServer",

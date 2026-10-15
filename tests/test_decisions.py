@@ -6,13 +6,7 @@ from collections.abc import Mapping
 import pytest
 from pydantic import ValidationError
 
-from livekit.agents import APIError, APIStatusError, APITimeoutError, decisions
-from livekit.agents.decisions import (
-    ChoiceResult,
-    DecisionResponse,
-    ProbabilityResult,
-    ScoreResult,
-)
+from livekit.agents import APIError, APIStatusError, APITimeoutError
 from livekit.agents.llm import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -21,8 +15,15 @@ from livekit.agents.llm import (
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
+    decisions,
 )
-from livekit.agents.llm.decision import _format_transcript
+from livekit.agents.llm.decisions import (
+    ChoiceResult,
+    DecisionResponse,
+    ProbabilityResult,
+    ScoreResult,
+    _format_transcript,
+)
 from livekit.agents.metrics import DecisionMetrics
 from livekit.agents.types import APIConnectOptions
 
