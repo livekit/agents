@@ -139,9 +139,10 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        is_audio = ctx.speech_handle.input_details.modality == "audio"
         read_back = (
             f"Repeat the email character by character: {separated_email}"
-            if self._spell_read_back
+            if self._spell_read_back and is_audio
             else "Repeat the email back to the user."
         )
         self._spell_read_back = True
