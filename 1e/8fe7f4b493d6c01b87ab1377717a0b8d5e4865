@@ -1,0 +1,27 @@
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_6d6e5558bb3060::t_7693791b039278 4990
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_6d6e5558bb3060::t_7693791b039278 565-566
+tests/test_endpointing.py
+  s_6d6e5558bb3060::t_7693791b039278 494-495,509,537,551
+tests/test_false_interruption_resume.py
+  s_6d6e5558bb3060::t_7693791b039278 470
+livekit-agents/livekit/agents/voice/endpointing.py
+  s_6d6e5558bb3060::t_63c9c2842f50ca 63,153,190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1e8fe7f4b493d6c01b87ab1377717a0b8d5e4865",
+  "prompts": {},
+  "sessions": {
+    "s_6d6e5558bb3060": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13cc6-3181-7e50-ae91-447bc8fc1d6e",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
