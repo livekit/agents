@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -14,12 +15,13 @@ from livekit.agents.stt import (
     FallbackAdapter,
     RecognizeStream,
     SpeechEvent,
+    SpeechEventType,
     STTCapabilities,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import AudioBuffer
-from livekit.agents.vad import VAD
+from livekit.agents.vad import VAD, VADCapabilities, VADStream
 
 from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_vad import FakeVAD
@@ -524,5 +526,161 @@ async def test_stt_stream_stall_keeps_transcribing_stream(stt_delay: float) -> N
         fake2.stream_ch.recv_nowait()
     with pytest.raises(ChanEmpty):
         fallback.availability_changed_ch(fake1).recv_nowait()
+
+    await fallback.aclose()
+
+
+class _BoundariesOnlySTT(FakeSTT):
+    """STT reporting the boundaries of a speech (0.5s to 2.5s, as a VAD would, like the one of
+    stt.StreamAdapter), but never transcribing it."""
+
+    def stream(
+        self,
+        *,
+        language: str | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> RecognizeStream:
+        return _BoundariesOnlyStream(stt=self, conn_options=conn_options)
+
+
+class _BoundariesOnlyStream(RecognizeStream):
+    async def _run(self) -> None:
+        await self._input_ch.recv()
+        await asyncio.sleep(0.55)
+        self._event_ch.send_nowait(SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+        await asyncio.sleep(2.5)
+        self._event_ch.send_nowait(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+        async for _ in self._input_ch:
+            pass
+
+
+async def test_stt_stream_stall_ignores_speech_boundaries() -> None:
+    """Speech boundaries emitted by the STT don't show it is transcribing."""
+    speeches = [FakeUserSpeech(start_time=0.5, end_time=2.5, transcript="", stt_delay=0.2)]
+    fake1 = _BoundariesOnlySTT()
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2], vad=FakeVAD(fake_user_speeches=speeches), stall_timeout=1.0
+    )
+
+    events = await _run_stall_stream(fallback, duration=6.0)
+
+    transcripts = [(t, ev) for t, ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for _, ev in transcripts] == ["hello world"]
+    assert 3.05 + 1.0 <= transcripts[0][0] < 3.05 + 1.0 + 0.2
+    assert not fallback.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback.aclose()
+
+
+class _FlushCountingVAD(VAD):
+    """VAD detecting nothing, counting the flushes pushed to its streams."""
+
+    def __init__(self) -> None:
+        super().__init__(capabilities=VADCapabilities(update_interval=0.1))
+        self.flush_count = 0
+
+    def stream(self) -> VADStream:
+        return _FlushCountingVADStream(self)
+
+
+class _FlushCountingVADStream(VADStream):
+    async def _main_task(self) -> None:
+        assert isinstance(self._vad, _FlushCountingVAD)
+        async for data in self._input_ch:
+            if isinstance(data, self._FlushSentinel):
+                self._vad.flush_count += 1
+
+
+async def test_stt_stream_stall_forwards_flush_to_vad() -> None:
+    """A flush is a hard segment boundary for the stall detection VAD too."""
+    vad = _FlushCountingVAD()
+    fallback = FallbackAdapterTester([FakeSTT()], vad=vad, stall_timeout=1.0)
+
+    frame = rtc.AudioFrame(
+        data=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1, samples_per_channel=1600
+    )
+    async with fallback.stream() as stream:
+        stream.push_frame(frame)
+        stream.flush()
+        await asyncio.sleep(0.1)
+        assert vad.flush_count == 1
+
+        stream.end_input()
+        assert [ev async for ev in stream] == []
+
+    await fallback.aclose()
+
+
+class _FailingVAD(VAD):
+    """VAD whose streams fail on the first frame."""
+
+    def __init__(self) -> None:
+        super().__init__(capabilities=VADCapabilities(update_interval=0.1))
+
+    def stream(self) -> VADStream:
+        return _FailingVADStream(self)
+
+
+class _FailingVADStream(VADStream):
+    async def _main_task(self) -> None:
+        await self._input_ch.recv()
+        raise RuntimeError("vad failed")
+
+
+async def test_stt_stream_stall_vad_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """A failing stall detection VAD is reported, and the STT keeps transcribing."""
+    caplog.set_level(logging.ERROR, logger="livekit.agents")
+    speeches = [
+        FakeUserSpeech(start_time=0.5, end_time=2.5, transcript="hello there world", stt_delay=0.3)
+    ]
+    fallback = FallbackAdapterTester(
+        [FakeSTT(fake_user_speeches=speeches)], vad=_FailingVAD(), stall_timeout=1.0
+    )
+
+    events = await _run_stall_stream(fallback, duration=4.0)
+
+    assert [ev.alternatives[0].text for _, ev in events] == ["hello there", "hello there world"]
+    assert any("stall detection failed" in r.getMessage() for r in caplog.records)
+
+    await fallback.aclose()
+
+
+class _HangingSTT(FakeSTT):
+    """STT that stays connected, without transcribing, even after its input ended."""
+
+    def stream(
+        self,
+        *,
+        language: str | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> RecognizeStream:
+        return _HangingStream(stt=self, conn_options=conn_options)
+
+
+class _HangingStream(RecognizeStream):
+    async def _run(self) -> None:
+        async for _ in self._input_ch:
+            pass
+        await asyncio.Event().wait()
+
+
+async def test_stt_stream_stall_survives_end_input() -> None:
+    """A speech that ended right before end_input() is still checked."""
+    speeches = [FakeUserSpeech(start_time=0.5, end_time=2.5, transcript="", stt_delay=0.2)]
+    fake1 = _HangingSTT()
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2], vad=FakeVAD(fake_user_speeches=speeches), stall_timeout=1.0
+    )
+
+    # the input ends at 3.5s, after the VAD's end of speech (3.05s) but before the stall (4.05s)
+    events = await asyncio.wait_for(_run_stall_stream(fallback, duration=3.5), timeout=30.0)
+
+    assert [ev.alternatives[0].text for _, ev in events] == ["hello world"]
+    assert 3.05 + 1.0 <= events[0][0] < 3.05 + 1.0 + 0.2
+    assert not fallback.availability_changed_ch(fake1).recv_nowait().available
 
     await fallback.aclose()
