@@ -35,6 +35,15 @@ class AvailabilityChangedEvent:
     available: bool
 
 
+@dataclass(eq=False)
+class _VADSegment:
+    """The audio between two flushes, which a VAD stream of its own runs on."""
+
+    vad_stream: VADStream
+    end_time: float | None = None
+    """When the segment ended (flush or end of input), so any speech in it began before."""
+
+
 @dataclass
 class _STTStatus:
     available: bool
@@ -71,19 +80,24 @@ class FallbackAdapter(
             retry_interval: Interval between retries on the same STT instance.
             stall_timeout: Opt-in detection of a streaming STT that stays connected but stops
                 transcribing. When set, ``vad`` runs on the streamed audio, and if the active
-                STT emits no transcript (interim, preflight or final) between the start of a
-                detected speech and ``stall_timeout`` seconds after its end, the stream is
-                treated as failed and the next STT takes over. A flush (or ``end_input()``)
-                during a speech ends it there, as the STT is flushed too. Speech boundaries
-                don't count, as they can come from a VAD (e.g. the one of
-                ``stt.StreamAdapter``). The end of speech is reported by the VAD after its min
-                silence duration, so a stall is detected that long plus ``stall_timeout`` after
-                the user stops talking. Must cover the STT's normal transcription latency,
-                including the recognize call of STTs wrapped by ``stt.StreamAdapter``. Each
-                stream runs its own VAD stream, in addition to the one of the session; if it
-                fails, the error is logged and stall detection is disabled for that stream.
-                Speech of the agent itself picked up by the VAD (e.g. without echo
-                cancellation) is counted too. Defaults to None (disabled).
+                STT emits no transcript (interim, preflight or final) with a non-empty text
+                between the start of a detected speech and ``stall_timeout`` seconds after its
+                end, the stream is treated as failed and the next STT takes over. Each detected
+                speech is checked, so further speech never postpones the check of an earlier
+                one. A flush (or ``end_input()``) during a speech ends it there, once the VAD
+                processed the audio before it, as the STT is flushed too. Empty transcripts
+                (e.g. empty finals of an STT that heard nothing intelligible) and speech
+                boundaries don't count, as the latter can come from a VAD (e.g. the one of
+                ``stt.StreamAdapter``): a detected speech the STT only reports as empty counts
+                towards a stall, ``stall_min_speech_duration`` keeping short noises out of it.
+                The end of speech is reported by the VAD after its min silence duration, so a
+                stall is detected that long plus ``stall_timeout`` after the user stops talking.
+                Must cover the STT's normal transcription latency, including the recognize call
+                of STTs wrapped by ``stt.StreamAdapter``. Each stream runs its own VAD stream (a
+                new one after each flush), in addition to the one of the session; if it fails,
+                the error is logged and stall detection is disabled for that stream. Speech of
+                the agent itself picked up by the VAD (e.g. without echo cancellation) is
+                counted too. Defaults to None (disabled).
             stall_min_speech_duration: Minimum duration in seconds of a detected speech for
                 ``stall_timeout`` to apply, so short noises the STT legitimately ignores
                 don't trigger a fallback.
@@ -393,29 +407,63 @@ class FallbackRecognizeStream(RecognizeStream):
         # emitted a transcript, and the future resolved once it is considered stalled
         self._last_transcript_time = 0.0
         self._stall_fut: asyncio.Future[None] | None = None
-        # start and duration so far of the speech the VAD is detecting, and the check of the
-        # last ended speech
-        self._speech_start_time: float | None = None
-        self._speech_duration = 0.0
-        self._stall_check_task: asyncio.Task[None] | None = None
+        # the current audio segment (None once stall detection stopped), the segments to
+        # monitor in order, the ones whose VAD stream is open, and the pending checks
+        self._vad_segment: _VADSegment | None = None
+        self._vad_segment_ch = aio.Chan[_VADSegment]()
+        self._open_vad_segments: set[_VADSegment] = set()
+        self._stall_check_tasks: set[asyncio.Task[None]] = set()
 
     async def _run(self) -> None:
         if self._fallback_adapter._stall_timeout is None:
-            await self._run_streams(vad_stream=None)
+            await self._run_streams(stall_detection=False)
             return
 
-        assert self._fallback_adapter._vad is not None
-        vad_stream = self._fallback_adapter._vad.stream()
-        stall_monitor_task = asyncio.create_task(self._stall_monitor_task(vad_stream))
+        self._start_vad_segment()
+        stall_monitor_task = asyncio.create_task(self._stall_monitor_task())
         try:
-            await self._run_streams(vad_stream=vad_stream)
+            await self._run_streams(stall_detection=True)
         finally:
-            await aio.cancel_and_wait(stall_monitor_task)
-            if self._stall_check_task is not None:
-                await aio.cancel_and_wait(self._stall_check_task)
-            await vad_stream.aclose()
+            self._vad_segment = None
+            self._vad_segment_ch.close()
+            await aio.cancel_and_wait(stall_monitor_task, *self._stall_check_tasks)
+            await asyncio.gather(*(seg.vad_stream.aclose() for seg in self._open_vad_segments))
+            self._open_vad_segments.clear()
 
-    async def _run_streams(self, *, vad_stream: VADStream | None) -> None:
+    def _start_vad_segment(self) -> None:
+        """Run the VAD on a new segment of audio, after a flush or at the start.
+
+        A flush is a hard segment boundary for the VAD, as in stt.StreamAdapter, dropping an
+        ongoing speech without an end of speech. Pushing frames and flushes to a VAD only queues
+        them, so instead of flushing the VAD stream, its input is ended: the stall monitor then
+        sees its events end once the VAD processed all the audio before the flush, and so knows
+        whether a speech was still ongoing there.
+        """
+        self._end_vad_segment()
+
+        assert self._fallback_adapter._vad is not None
+        try:
+            vad_stream = self._fallback_adapter._vad.stream()
+        except Exception:
+            logger.exception(
+                "stall detection failed, disabled for the rest of the stream",
+                extra={"streamed": True},
+            )
+            self._vad_segment_ch.close()
+            return
+
+        self._vad_segment = segment = _VADSegment(vad_stream=vad_stream)
+        self._open_vad_segments.add(segment)
+        self._vad_segment_ch.send_nowait(segment)
+
+    def _end_vad_segment(self) -> None:
+        if (segment := self._vad_segment) is not None:
+            self._vad_segment = None
+            segment.end_time = time.perf_counter()
+            with contextlib.suppress(RuntimeError):
+                segment.vad_stream.end_input()
+
+    async def _run_streams(self, *, stall_detection: bool) -> None:
         start_time = time.time()
 
         all_failed = all(not stt_status.available for stt_status in self._fallback_adapter._status)
@@ -427,18 +475,12 @@ class FallbackRecognizeStream(RecognizeStream):
 
         async def _forward_input_task() -> None:
             async for data in self._input_ch:
-                if vad_stream is not None:
-                    with contextlib.suppress(RuntimeError):
-                        if isinstance(data, rtc.AudioFrame):
-                            vad_stream.push_frame(data)
-                        elif isinstance(data, self._FlushSentinel):
-                            # a hard segment boundary for the VAD, as in stt.StreamAdapter
-                            vad_stream.flush()
-                            # the VAD drops an ongoing speech without an end of speech, while
-                            # the STT is asked to finalize it: check it as if it ended here
-                            if (speech_start_time := self._speech_start_time) is not None:
-                                self._speech_start_time = None
-                                self._schedule_stall_check(speech_start_time, self._speech_duration)
+                if (segment := self._vad_segment) is not None:
+                    if isinstance(data, rtc.AudioFrame):
+                        with contextlib.suppress(RuntimeError):
+                            segment.vad_stream.push_frame(data)
+                    elif isinstance(data, self._FlushSentinel):
+                        self._start_vad_segment()
 
                 for stream in list(self._recovering_streams):
                     try:
@@ -460,9 +502,9 @@ class FallbackRecognizeStream(RecognizeStream):
                             "error happened in forwarding input", extra={"streamed": True}
                         )
 
-            if vad_stream is not None:
-                with contextlib.suppress(RuntimeError):
-                    vad_stream.end_input()
+            if stall_detection:
+                self._end_vad_segment()
+                self._vad_segment_ch.close()
 
             if main_stream is not None:
                 with contextlib.suppress(RuntimeError):
@@ -491,7 +533,7 @@ class FallbackRecognizeStream(RecognizeStream):
 
                     try:
                         async with main_stream:
-                            if vad_stream is None:
+                            if not stall_detection:
                                 await self._forward_events(stt, main_stream)
                             else:
                                 await self._forward_events_until_stalled(stt, main_stream)
@@ -543,12 +585,18 @@ class FallbackRecognizeStream(RecognizeStream):
             if should_set_active:
                 should_set_active = False
                 self._fallback_adapter._active_instance = stt
-            # only transcripts show the STT is transcribing: speech boundaries can come from a
-            # VAD (e.g. the one of stt.StreamAdapter) before any recognition happened
-            if ev.type in (
-                SpeechEventType.INTERIM_TRANSCRIPT,
-                SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                SpeechEventType.FINAL_TRANSCRIPT,
+            # only transcripts with some text show the STT is transcribing: speech boundaries
+            # can come from a VAD (e.g. the one of stt.StreamAdapter) before any recognition
+            # happened, and some STTs emit empty finals for audio they didn't recognize
+            if (
+                ev.type
+                in (
+                    SpeechEventType.INTERIM_TRANSCRIPT,
+                    SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                    SpeechEventType.FINAL_TRANSCRIPT,
+                )
+                and ev.alternatives
+                and ev.alternatives[0].text
             ):
                 self._last_transcript_time = time.perf_counter()
             self._event_ch.send_nowait(ev)
@@ -591,42 +639,64 @@ class FallbackRecognizeStream(RecognizeStream):
             ):
                 self._stall_fut.set_result(None)
 
-        # replacing a pending check can only delay a detection, never cause one
-        if self._stall_check_task is not None:
-            self._stall_check_task.cancel()
-        self._stall_check_task = asyncio.create_task(_check_stall())
+        # every pending check is kept: a later speech never postpones the check of an earlier one
+        task = asyncio.create_task(_check_stall())
+        self._stall_check_tasks.add(task)
+        task.add_done_callback(self._stall_check_tasks.discard)
 
-    async def _stall_monitor_task(self, vad_stream: VADStream) -> None:
+    async def _stall_monitor_task(self) -> None:
         try:
-            async for ev in vad_stream:
-                if ev.type == VADEventType.START_OF_SPEECH:
-                    # the VAD only reports speech after some of it was heard, while the STT may
-                    # already have reacted, so date the speech back to when it began
-                    self._speech_start_time = time.perf_counter() - ev.speech_duration
-                    self._speech_duration = ev.speech_duration
-                elif ev.type == VADEventType.INFERENCE_DONE:
-                    if self._speech_start_time is not None:
-                        # without the trailing silence, as in the duration of the end of speech
-                        self._speech_duration = max(
-                            0.0, ev.speech_duration - ev.raw_accumulated_silence
-                        )
-                elif ev.type == VADEventType.END_OF_SPEECH:
-                    if self._speech_start_time is not None:
-                        self._schedule_stall_check(self._speech_start_time, ev.speech_duration)
-                    self._speech_start_time = None
+            async for segment in self._vad_segment_ch:
+                await self._monitor_vad_segment(segment)
+                await segment.vad_stream.aclose()
+                self._open_vad_segments.discard(segment)
 
             # the input ended, but the STT may still owe the transcript of the last speech
-            if self._stall_check_task is not None:
-                await self._stall_check_task
+            if self._stall_check_tasks:
+                await asyncio.gather(*self._stall_check_tasks)
         except Exception:
             logger.exception(
                 "stall detection failed, disabled for the rest of the stream",
                 extra={"streamed": True},
             )
+            self._vad_segment = None
+            self._vad_segment_ch.close()
         finally:
-            self._speech_start_time = None
-            if self._stall_check_task is not None:
-                await aio.cancel_and_wait(self._stall_check_task)
+            await aio.cancel_and_wait(*self._stall_check_tasks)
+
+    async def _monitor_vad_segment(self, segment: _VADSegment) -> None:
+        """Schedule the stall checks of the speeches the VAD detects in a segment of audio."""
+
+        def _schedule_stall_check(speech_start_time: float, speech_duration: float) -> None:
+            # a VAD lagging behind the audio dates a speech late, while a speech of a segment
+            # was pushed before the segment ended (and the STT possibly finalized it there)
+            if segment.end_time is not None:
+                speech_start_time = min(speech_start_time, segment.end_time)
+            self._schedule_stall_check(speech_start_time, speech_duration)
+
+        # start and duration so far of the speech the VAD is detecting
+        speech_start_time: float | None = None
+        speech_duration = 0.0
+        async for ev in segment.vad_stream:
+            if ev.type == VADEventType.START_OF_SPEECH:
+                # the VAD only reports speech after some of it was heard, while the STT may
+                # already have reacted, so date the speech back to when it began
+                speech_start_time = time.perf_counter() - ev.speech_duration
+                speech_duration = ev.speech_duration
+            elif ev.type == VADEventType.INFERENCE_DONE:
+                if speech_start_time is not None:
+                    # without the trailing silence, as in the duration of the end of speech
+                    speech_duration = max(0.0, ev.speech_duration - ev.raw_accumulated_silence)
+            elif ev.type == VADEventType.END_OF_SPEECH:
+                if speech_start_time is not None:
+                    _schedule_stall_check(speech_start_time, ev.speech_duration)
+                speech_start_time = None
+
+        # the VAD processed all the audio up to the flush (or end of input) ending the segment,
+        # and dropped an ongoing speech there without an end of speech, while the STT is asked
+        # to finalize it: check it as if it ended here
+        if speech_start_time is not None:
+            _schedule_stall_check(speech_start_time, speech_duration)
 
     def _try_recovery(self, stt: STT) -> None:
         stt_status = self._fallback_adapter._status[
