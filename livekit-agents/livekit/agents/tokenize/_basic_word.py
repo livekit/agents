@@ -5,12 +5,16 @@ from . import tokenizer
 # full-width clause and sentence punctuation. CJK text has no spaces, so with
 # split_cjk_clauses these are the only word boundaries a run of it has
 _CJK_CLAUSE_PUNCTUATION = frozenset("，。！？；：、")
+# ideographs and kana, the scripts written without spaces between words
+_CJK_SCRIPTS = r"\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
+# split_character makes each of these characters a word
+_CHAR_BASED_CODES = re.compile(rf"[{_CJK_SCRIPTS}\u0e00-\u0e7f]")  # + thai
 # such a mark only ends a word after CJK text, so it never splits markup that a TTS
 # rejoins with spaces, e.g. an SSML attribute like ph="..."
 _CJK_TEXT = re.compile(
-    r"[\u3000-\u303f"  # cjk symbols and punctuation, e.g. 」
-    r"\u3040-\u30ff"  # hiragana, katakana
-    r"\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"  # cjk ideographs
+    rf"[{_CJK_SCRIPTS}"
+    r"\u3000-\u303f"  # cjk symbols and punctuation, e.g. 」
+    r"\uf900-\ufaff"  # cjk compatibility ideographs
     r"\uac00-\ud7af"  # hangul syllables
     r"\uff00-\uffef]"  # halfwidth and fullwidth forms
 )
@@ -37,16 +41,7 @@ def split_words(
     """
     words: list[tuple[str, int, int]] = []
 
-    # CJK: \u4e00-\u9fff, \u3040-\u30ff, \u3400-\u4dbf
-    # Thai: \u0E00-\u0E7F
-    char_based_codes = (
-        re.compile(
-            r"[\u4e00-\u9fff\u3040-\u30ff\u3400-\u4dbf"  # CJK scripts
-            r"\u0E00-\u0E7F]"  # Thai
-        )
-        if split_character
-        else None
-    )
+    char_based_codes = _CHAR_BASED_CODES if split_character else None
 
     pos = 0
     word_start = 0
