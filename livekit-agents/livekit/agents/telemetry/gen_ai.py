@@ -114,8 +114,9 @@ def set_llm_request_attributes(attributes: Mapping[str, AttributeValue]) -> None
                 yield chunk
 
     The attributes apply to every LLM call started later in the current context. Each
-    ``llm_node`` runs in its own asyncio task, so they do not outlive the node. Repeated
-    calls merge, with later values taking precedence.
+    ``llm_node`` runs in its own asyncio task, so they do not outlive the node, and a
+    ``FallbackAdapter``'s background recovery probes, which are never served, do not get
+    them. Repeated calls merge, with later values taking precedence.
 
     Args:
         attributes: The span attributes to set on each ``llm_request`` span.
