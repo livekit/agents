@@ -50,7 +50,6 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
-from .llm.decisions import DecisionModel
 from .llm.tool_context import (
     FunctionTool,
     ProviderTool,
@@ -168,7 +167,6 @@ def __getattr__(name: str) -> typing.Any:
 
 
 __all__ = [
-    "DecisionModel",
     "__version__",
     "AgentServer",
     "WorkerOptions",
