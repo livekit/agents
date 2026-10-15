@@ -1,0 +1,24 @@
+tests/test_false_interruption_resume.py
+  s_6d6e5558bb3060::t_3175bda0682cd7 575,578
+tests/test_endpointing.py
+  s_6d6e5558bb3060::t_3175bda0682cd7 521-542
+  s_6d6e5558bb3060::t_cc61fd9afcec66 520
+livekit-agents/livekit/agents/voice/endpointing.py
+  s_6d6e5558bb3060::t_f8750672d9d971 237-239,243,295
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cf3d23f9e041946e8733123bfacc375e758c6539",
+  "prompts": {},
+  "sessions": {
+    "s_6d6e5558bb3060": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13cc6-3181-7e50-ae91-447bc8fc1d6e",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
