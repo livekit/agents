@@ -452,7 +452,11 @@ class STT(stt.STT):
         # Streams may carry their own language override from stream(language=...); a
         # model change must be validated against each of those too, not just the
         # parent's language, and before anything is mutated so this stays atomic.
+        # Closed streams are skipped: _streams is a weak set, so one lingers here only
+        # if the caller still holds a reference, and a closed stream can't reconnect.
         for stream in self._streams:
+            if stream._event_ch.closed:
+                continue
             stream_language = language if is_given(language) else stream._opts.language
             _validate_pulse_2_language(prospective_model, stream_language)
 
@@ -480,6 +484,8 @@ class STT(stt.STT):
             gender_detection=gender_detection,
         )
         for stream in self._streams:
+            if stream._event_ch.closed:
+                continue
             stream.update_options(
                 model=model,
                 language=language,
