@@ -24,6 +24,8 @@ from .log import logger
 
 EGE_STOCK_AVATAR_ID = "b9be11b8-89fb-4227-8f86-4a881393cbdb"
 _DEFAULT_API_URL = "https://api.bey.dev"
+# The avatar worker renders and publishes 16 kHz audio
+SAMPLE_RATE = 16000
 
 _AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
 _AVATAR_AGENT_NAME = "bey-avatar-agent"
@@ -116,6 +118,7 @@ class AvatarSession(BaseAvatarSession):
                 room=room,
                 destination_identity=self._avatar_participant_identity,
                 wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                sample_rate=SAMPLE_RATE,
             ),
         )
 
