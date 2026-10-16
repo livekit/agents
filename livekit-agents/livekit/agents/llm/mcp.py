@@ -139,6 +139,18 @@ class MCPServer(ABC):
         self._cache_dirty = True
 
     async def initialize(self) -> None:
+        # a detected disconnect clears `_client` at once, but `_run_client` still has to wake and
+        # unwind. Its `_ready_fut` already succeeded, so joining it would report a connection that
+        # does not exist. Wait for that cleanup and connect afresh instead.
+        while (
+            self._client_task
+            and self._ready_fut
+            and self._client is None
+            and self._ready_fut.done()
+            and not self._client_task.done()
+        ):
+            await asyncio.wait([self._client_task])
+
         if self._client_task and self._ready_fut and not self._client_task.done():
             logger.warning("MCPServer is already initializing")
         else:

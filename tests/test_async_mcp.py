@@ -464,3 +464,41 @@ async def test_a_call_failing_after_the_connection_was_torn_down_does_not_break_
     await asyncio.sleep(0.1)
     assert server.initialized
     await server.aclose()
+
+
+class _ReconnectSession(_DyingSession):
+    """The first connection is dead; every later one is alive."""
+
+    created = 0
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        type(self).created += 1
+        self.alive = type(self).created > 1
+
+    async def call_tool(self, name: str, arguments: Any, **kwargs: Any) -> Any:
+        if not self.alive:
+            raise MCPError(mcp.types.CONNECTION_CLOSED, "Connection closed")
+        return mcp.types.CallToolResult(content=[], isError=False)
+
+
+@pytest.mark.asyncio
+async def test_initialize_right_after_a_detected_death_opens_a_new_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A detected death clears ``_client`` at once, but ``_run_client`` still has to unwind. An
+    ``initialize()`` in that window used to join the old, already-successful ready future and
+    return without connecting."""
+    _ReconnectSession.created = 0
+    monkeypatch.setattr(mcp_module, "ClientSession", _ReconnectSession)
+    server = _ConnectableServer()
+    await server.initialize()
+
+    with pytest.raises(ToolError):
+        await _tool_named(server, "echo")({})
+
+    # no await in between: `_run_client` has not had a turn to finish unwinding yet
+    await server.initialize()
+
+    assert _ReconnectSession.created == 2
+    assert server.initialized
+    await server.aclose()
