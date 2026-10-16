@@ -4592,10 +4592,8 @@ class AgentActivity(RecognitionHooks):
         # _process_messages handles its own playout waits and interrupt cleanup
         await process_msg_task
 
+        self._session._update_agent_state("thinking" if self._background_speeches else "listening")
         if audio_output is not None:
-            self._session._update_agent_state(
-                "thinking" if self._background_speeches else "listening"
-            )
             self._on_end_of_agent_speech(ended_at=time.time())
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
