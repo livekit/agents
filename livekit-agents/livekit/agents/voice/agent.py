@@ -387,6 +387,9 @@ class Agent:
 
         You can override this node with your own implementation for more flexibility (e.g.,
         custom pre-processing of audio, additional buffering, or alternative STT strategies).
+        Timestamps in the yielded ``SpeechData`` are relative to the first audio frame the
+        node consumes, unless the node sets ``start_time_offset`` on its stream; the default
+        implementation sets it so they are relative to the session start.
 
         Args:
             audio (AsyncIterable[rtc.AudioFrame]): An asynchronous stream of audio frames.
@@ -525,10 +528,17 @@ class Agent:
             try:
                 conn_options = activity.session.conn_options.stt_conn_options
                 async with wrapped_stt.stream(conn_options=conn_options) as stream:
-                    _audio_input_started_at: float = (
-                        activity._audio_recognition._input_started_at
+                    # Timestamps are offset onto the session timeline: a new pipeline counts
+                    # from the recording or session start, a recreated stream continues the
+                    # pipeline's timeline. The pipeline anchors them on the same instant.
+                    pipeline = (
+                        activity._audio_recognition._stt_pipeline
                         if activity._audio_recognition is not None
-                        and activity._audio_recognition._input_started_at is not None
+                        else None
+                    )
+                    _audio_input_started_at: float = (
+                        pipeline.input_started_at
+                        if pipeline is not None and pipeline.input_started_at is not None
                         else (
                             activity.session._recorder_io.recording_started_at
                             if activity.session._recorder_io
@@ -539,6 +549,8 @@ class Agent:
                         )
                     )
                     stream.start_time_offset = time.time() - _audio_input_started_at
+                    if pipeline is not None:
+                        pipeline.input_started_at = _audio_input_started_at
 
                     @utils.log_exceptions(logger=logger)
                     async def _forward_input() -> None:

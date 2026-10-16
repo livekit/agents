@@ -359,7 +359,16 @@ class FallbackRecognizeStream(RecognizeStream):
             logger.error("all STTs are unavailable, retrying..")
 
         main_stream: RecognizeStream | None = None
+        # the leg that continues this stream's timeline; a leg created before the timeline
+        # has a start is seeded when its first frame is forwarded
+        seeded_stream: RecognizeStream | None = None
         forward_input_task: asyncio.Task[None] | None = None
+
+        def _seed(stream: RecognizeStream) -> None:
+            nonlocal seeded_stream
+            if (origin := self._input_ch.input_started_at) is not None:
+                stream.start_time_offset = time.time() - origin
+                seeded_stream = stream
 
         async def _forward_input_task() -> None:
             async for data in self._input_ch:
@@ -375,6 +384,8 @@ class FallbackRecognizeStream(RecognizeStream):
                 if main_stream is not None:
                     try:
                         if isinstance(data, rtc.AudioFrame):
+                            if main_stream is not seeded_stream:
+                                _seed(main_stream)
                             main_stream.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
                             main_stream.flush()
@@ -400,10 +411,7 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
-                    # update main_stream start time offset so transcript timestamps are properly adjusted
-                    main_stream.start_time_offset = self.start_time_offset + (
-                        time.time() - self._start_time
-                    )
+                    _seed(main_stream)
 
                     if forward_input_task is None or forward_input_task.done():
                         forward_input_task = asyncio.create_task(_forward_input_task())

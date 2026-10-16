@@ -177,7 +177,8 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
-        # wall-clock anchor for stream-based (STT and barge-in) timestamps
+        # copy of the session start wall clock time; the first audio when unset
+        # input_started_at + end_time (session relative) = wall-clock end of the speech
         self.input_started_at: float | None = None
 
     @property
@@ -767,7 +768,7 @@ class AudioRecognition:
         """
         self._sample_rate = frame.sample_rate
         if self._stt_pipeline is not None:
-            # stamp the wall-clock anchor on the first frame to reach the pipeline
+            # a node that declared no timeline counts from this frame (see input_started_at)
             if self._stt_pipeline.input_started_at is None:
                 self._stt_pipeline.input_started_at = time.time() - frame.duration
             self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
