@@ -1279,13 +1279,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        pool = await self._tts._get_pool()
-        context_id, waiter, connection = await pool.acquire_context(
-            emitter=output_emitter,
-            opts=self._opts,
-            timeout=self._conn_options.timeout,
-        )
-
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
@@ -1294,34 +1287,54 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sent_tokenizer_stream.push_text(data)
             sent_tokenizer_stream.end_input()
 
-        async def _send_task() -> None:
-            async for ev in sent_tokenizer_stream:
-                text = ev.token
+        async def _send_task(conn: _InworldConnection, ctx_id: str, first: str) -> None:
+            def _send(text: str) -> None:
                 # Chunk to stay within Inworld's 1000 char limit
                 for i in range(0, len(text), 1000):
-                    connection.send_text(context_id, text[i : i + 1000])
+                    conn.send_text(ctx_id, text[i : i + 1000])
                     self._mark_started()
-            connection.flush_context(context_id)
-            connection.close_context(context_id)
 
-        tasks = [
-            asyncio.create_task(_input_task()),
-            asyncio.create_task(_send_task()),
-        ]
+            _send(first)
+            async for ev in sent_tokenizer_stream:
+                _send(ev.token)
+            conn.flush_context(ctx_id)
+            conn.close_context(ctx_id)
+
+        tasks = [asyncio.create_task(_input_task())]
+        context_id: str | None = None
+        connection: _InworldConnection | None = None
+
+        def _close_context() -> None:
+            if connection is not None and context_id is not None:
+                connection.close_context(context_id)
 
         try:
+            # The context is created with the first sentence so it doesn't sit
+            # idle on the server while the LLM is still generating.
+            first = await anext(sent_tokenizer_stream, None)
+            if first is None:
+                return
+
+            pool = await self._tts._get_pool()
+            context_id, waiter, connection = await pool.acquire_context(
+                emitter=output_emitter,
+                opts=self._opts,
+                timeout=self._conn_options.timeout,
+            )
+            tasks.append(asyncio.create_task(_send_task(connection, context_id, first.token)))
+
             await asyncio.wait_for(waiter, timeout=self._conn_options.timeout + 60)
         except asyncio.TimeoutError:
-            connection.close_context(context_id)
+            _close_context()
             raise APITimeoutError() from None
         except asyncio.CancelledError:
-            connection.close_context(context_id)
+            _close_context()
             raise
         except APIError:
             raise
         except Exception as e:
             logger.error("Inworld stream error", extra={"context_id": context_id, "error": e})
-            connection.close_context(context_id)
+            _close_context()
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
