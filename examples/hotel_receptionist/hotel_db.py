@@ -323,17 +323,6 @@ TransferDestination = Literal[
 ]
 
 
-@dataclass
-class Followup:
-    id: int
-    code: str
-    kind: FollowupKind
-    caller_name: str
-    caller_phone: str
-    summary: str
-    status: Literal["open", "resolved"]
-
-
 # the predominant room-share arrangement for a group block
 GroupShareType = Literal["twin", "double", "single", "mixed"]
 
