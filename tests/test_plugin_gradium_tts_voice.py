@@ -13,6 +13,8 @@ def test_default_voice_id_when_neither_is_given():
 
     tts = TTS(api_key="test-key")
     assert tts._opts.voice_id == DEFAULT_VOICE_ID
+    # pinned on purpose: the default speaker is user-visible behaviour
+    assert DEFAULT_VOICE_ID == "vjFyp2BcCyTlUmYb"
     assert tts._opts.voice is None
 
 
