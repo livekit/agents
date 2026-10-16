@@ -1178,7 +1178,10 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
         "Hello from LiveKit today. ",
         "Next sentence. ",
     ]
-    start = server.requests[0]["start"]
+    start = dict(server.requests[0]["start"])
+    # rime-api 0.4 adds this repeated field. The test server prints empty repeated
+    # fields, even though the plugin does not send them on the wire.
+    assert start.pop("customLexicon", []) == []
     assert start == {
         "speaker": "lyra",
         "language": "eng",
@@ -2737,7 +2740,11 @@ async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> No
             websocket.send_str.assert_awaited_once()
             assert json.loads(websocket.send_str.call_args.args[0]) == expected
         assert json_format.MessageToDict(proto.WebSocketRequest.FromString(binary)) == expected
-        if request.HasField("start"):
+        # rime-api 0.4 removed the legacy Arcana field; older schemas retain it.
+        if (
+            request.HasField("start")
+            and "arcana_parameters" in request.start.DESCRIPTOR.fields_by_name
+        ):
             assert not request.start.HasField("arcana_parameters")
     else:
         message = aiohttp.WSMessage(

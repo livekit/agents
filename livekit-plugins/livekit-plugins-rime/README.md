@@ -1,10 +1,13 @@
 # Rime plugin for LiveKit Agents
 
-Support for voice synthesis with the [Rime](https://rime.ai/) API.
+Support for voice synthesis and speech recognition with [Rime](https://rime.ai/).
 
 See [https://docs.livekit.io/agents/integrations/tts/rime/](https://docs.livekit.io/agents/integrations/tts/rime/) for more information.
 
 ## Installation
+
+Requires Python 3.11 or newer for both TTS and STT. Applications using Python 3.10
+must upgrade Python or keep a compatible older plugin release.
 
 ```bash
 pip install livekit-plugins-rime
@@ -13,6 +16,49 @@ pip install livekit-plugins-rime
 ## Pre-requisites
 
 You'll need an API key from Rime. It can be set as an environment variable: `RIME_API_KEY`
+
+## Speech recognition
+
+STT uses the Rime Python SDK. Install the `stt` extra:
+
+```bash
+pip install 'livekit-plugins-rime[stt]'
+```
+
+The extra installs `rimelabs-sdk>=0.1.0a16`, which provides `stt.transcribe()`.
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import rime, silero
+
+session = AgentSession(
+    vad=silero.VAD.load(),
+    stt=rime.STT(
+        language="en",
+        mode="written",  # or "verbatim" for spoken forms
+        context_terms=["LiveKit", "Rime"],
+    ),
+    # Configure your LLM and TTS as usual.
+)
+```
+
+Install `livekit-plugins-silero` to use the VAD in this example. LiveKit automatically wraps
+this non-streaming recognizer with `stt.StreamAdapter`: VAD detects each completed speech
+segment, then the adapter submits that segment for transcription. Results arrive after the
+segment ends; this integration does not expose native Rime streaming or interim transcripts.
+
+For an existing recording, call `await recognizer.recognize(buffer=audio_frame)` with a
+`rtc.AudioFrame` or a list of frames in the same format. The plugin mixes channels to mono,
+resamples to 16 kHz, and sends PCM16 WAV bytes to the SDK. Rime accepts at most 16 MiB of WAV
+audio per request. The result is a `FINAL_TRANSCRIPT` speech event containing the text, resolved
+language, and request ID. Word timestamps, speaker labels, and confidence scores are not supplied.
+
+`language` is explicit (English by default); it is not automatic language detection. Use
+`update_options(language=..., mode=..., context_terms=...)` to change subsequent requests, or
+`recognize(..., language=...)` to override the language for a single request. Session keyterms
+are merged with `context_terms`. LiveKit's STT connection options control the request timeout
+and retries; only SDK timeouts and service-unavailable errors are retried. Close standalone
+recognizers with `await recognizer.aclose()` or use `async with rime.STT(...) as recognizer`.
 
 ## Streaming WebSocket v1 API
 
