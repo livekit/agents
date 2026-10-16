@@ -91,8 +91,10 @@ DEFAULT_STREAM_PATH = "/stt/live"
 # Models that support real-time streaming. All others are batch-only and will be
 # wrapped with a StreamAdapter by the agent framework automatically.
 _STREAMING_MODELS: frozenset[str] = frozenset({"pulse", "pulse-2"})
-# Models that support pre-recorded (batch) transcription. "pulse-2" is streaming-only.
-_BATCH_MODELS: frozenset[str] = frozenset({"pulse"})
+# "pulse-2" is the only model known to lack a batch/pre-recorded endpoint. A deny
+# list (rather than an allow list of "pulse") keeps batch transcription working for
+# any other model string the caller passes, including future or server-specific ones.
+_BATCH_UNSUPPORTED_MODELS: frozenset[str] = frozenset({"pulse-2"})
 
 # Any letter or digit in any script; a transcript with none is punctuation only.
 _WORD_RE = re.compile(r"\w")
@@ -287,6 +289,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=model in _STREAMING_MODELS,
+                offline_recognize=model not in _BATCH_UNSUPPORTED_MODELS,
                 interim_results=True,
                 diarization=diarize,
                 aligned_transcript="word" if word_timestamps else False,
@@ -360,7 +363,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
-        if config.model not in _BATCH_MODELS:
+        if config.model in _BATCH_UNSUPPORTED_MODELS:
             raise ValueError(
                 f"{config.model} does not support batch transcription; use stream() instead"
             )
@@ -411,6 +414,7 @@ class STT(stt.STT):
                 f"{self._opts.model} does not support streaming; use recognize() for batch transcription"
             )
         config = self._sanitize_options(language=language)
+        _validate_pulse_2_language(config.model, config.language)
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -445,10 +449,17 @@ class STT(stt.STT):
         prospective_model = model if is_given(model) else self._opts.model
         prospective_language = language if is_given(language) else self._opts.language
         _validate_pulse_2_language(prospective_model, prospective_language)
+        # Streams may carry their own language override from stream(language=...); a
+        # model change must be validated against each of those too, not just the
+        # parent's language, and before anything is mutated so this stays atomic.
+        for stream in self._streams:
+            stream_language = language if is_given(language) else stream._opts.language
+            _validate_pulse_2_language(prospective_model, stream_language)
 
         if is_given(model):
             self._opts.model = model
             self._capabilities.streaming = model in _STREAMING_MODELS
+            self._capabilities.offline_recognize = model not in _BATCH_UNSUPPORTED_MODELS
         self._opts = _apply_updates(
             self._opts,
             language=language,
@@ -549,7 +560,7 @@ class SpeechStream(stt.SpeechStream):
         emotion_detection: NotGivenOr[bool] = NOT_GIVEN,
         gender_detection: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        self._opts = _apply_updates(
+        updated = _apply_updates(
             self._opts,
             model=model,
             language=language,
@@ -569,6 +580,10 @@ class SpeechStream(stt.SpeechStream):
             emotion_detection=emotion_detection,
             gender_detection=gender_detection,
         )
+        # Validated here too (not just on the parent STT), so a stream-level
+        # language override, or a direct call on this stream, can't bypass it.
+        _validate_pulse_2_language(updated.model, updated.language)
+        self._opts = updated
         self._reconnect_event.set()
 
     async def _run(self) -> None:
