@@ -115,10 +115,16 @@ def test_model_capabilities(
             {"websocket_url": "wss://api.rime.ai/coda/ws"}, "coda", "lyra", id="v1-default"
         ),
         pytest.param(
-            {"websocket_url": "wss://api.rime.ai/ws", "model": "coda"},
+            {"websocket_url": "wss://coda.api.rime.ai/ws", "model": "coda"},
             "coda",
             "lyra",
-            id="v1-dedicated",
+            id="v1-public-coda",
+        ),
+        pytest.param(
+            {"websocket_url": "wss://mist.api.rime.ai/ws", "model": "mistv3"},
+            "mistv3",
+            "cove",
+            id="v1-public-mist",
         ),
         pytest.param({"model": "mistv3"}, "mistv3", "cove", id="http-mist"),
         pytest.param({"use_websocket": True, "model": "mistv3"}, "mistv3", "cove", id="ws3-mist"),
@@ -426,13 +432,21 @@ def test_dedicated_websocket_url_uses_explicit_model() -> None:
     assert tts.model == "coda"
 
 
-def test_dedicated_websocket_url_requires_model() -> None:
+@pytest.mark.parametrize(
+    "websocket_url",
+    [
+        "wss://coda.api.rime.ai/ws",
+        "wss://mist.api.rime.ai:443/ws",
+        "wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws",
+    ],
+)
+def test_dedicated_websocket_url_requires_model(websocket_url: str) -> None:
     from livekit.plugins.rime import TTS
 
     with pytest.raises(ValueError, match="model is required"):
         TTS(
             api_key="test-key",
-            websocket_url=("wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"),
+            websocket_url=websocket_url,
         )
 
 
@@ -685,25 +699,42 @@ def test_v1_dedicated_endpoint_updates_connection_url_for_same_model() -> None:
     assert adapter._pools.current is not previous_pool
 
 
-def test_v1_dedicated_endpoint_allows_model_change_with_new_url() -> None:
+@pytest.mark.parametrize(
+    ("coda_url", "mist_url"),
+    [
+        ("wss://coda.api.rime.ai/ws", "wss://mist.api.rime.ai/ws"),
+        (
+            "wss://coda.aws-us-east-1.whiteglove.rime.ai/ws",
+            "wss://mist.aws-us-east-1.whiteglove.rime.ai/ws",
+        ),
+    ],
+)
+def test_v1_dedicated_endpoint_allows_model_change_with_new_url(
+    coda_url: str, mist_url: str
+) -> None:
     from livekit.plugins.rime import TTS
 
     tts = TTS(
         api_key="test-key",
-        websocket_url="wss://coda.aws-us-east-1.whiteglove.rime.ai/ws",
+        websocket_url=coda_url,
         model="coda",
     )
 
     tts.update_options(
-        websocket_url="wss://mist.aws-us-east-1.whiteglove.rime.ai/ws",
+        websocket_url=mist_url,
         model="mistv3",
+        pause_between_brackets=True,
     )
 
     assert tts.model == "mistv3"
+    assert tts._opts.mist_options is not None
+    assert tts._opts.mist_options.pause_between_brackets is True
+    assert tts._websocket_v1_adapter is not None
+    assert tts._websocket_v1_adapter._websocket_v1_url == mist_url
 
     with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
         tts.update_options(
-            websocket_url="wss://mist.aws-us-east-1.whiteglove.rime.ai/ws",
+            websocket_url=mist_url,
             model="coda",
         )
 

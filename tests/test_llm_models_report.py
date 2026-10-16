@@ -214,7 +214,7 @@ async def test_openai_realtime_reports_safe_nested_settings(hosted: bool) -> Non
         if hosted:
             assert reported["provider"] == "livekit"
             assert reported["inference_provider"] == "openai"
-            assert reported["inference_class"] == "standard"
+            assert "inference_class" not in reported
         assert "private-" not in json.dumps(reported)
         model.update_options(
             tool_choice="auto", turn_detection=None, input_audio_transcription=None
@@ -268,23 +268,34 @@ async def test_google_nested_configs_exclude_customer_content() -> None:
             await model.aclose()
 
 
-async def test_duplex_model_is_reported_through_session_adapter() -> None:
+@pytest.mark.parametrize("hosted", [False, True])
+async def test_duplex_model_is_reported_through_session_adapter(hosted: bool) -> None:
     plugin = pytest.importorskip("livekit.plugins.openai")
-    model = plugin.realtime.GPTLiveModel(
-        api_key="private-key",
-        voice="marin",
-        responses_options={
-            "model": "gpt-4.1",
-            "max_output_tokens": 64,
-            "instructions": "private-prompt",
-            "tool_choice": {"type": "function", "function": {"name": "private-function"}},
-            "reasoning": {"effort": "low", "future_setting": "private-unknown"},
-            "text": {
-                "verbosity": "low",
-                "format": {"schema": {"private-schema": "private-content"}},
-            },
-            "future_setting": "private-unknown",
+    responses_options = {
+        "model": "gpt-4.1",
+        "max_output_tokens": 64,
+        "instructions": "private-prompt",
+        "tool_choice": {"type": "function", "function": {"name": "private-function"}},
+        "reasoning": {"effort": "low", "future_setting": "private-unknown"},
+        "text": {
+            "verbosity": "low",
+            "format": {"schema": {"private-schema": "private-content"}},
         },
+        "future_setting": "private-unknown",
+    }
+    model = (
+        inference.DuplexModel(
+            "openai/gpt-live-1",
+            provider="openai",
+            api_key="private-key",
+            api_secret="private-secret",
+            voice="marin",
+            extra_kwargs={"responses_options": responses_options},
+        )
+        if hosted
+        else plugin.realtime.GPTLiveModel(
+            api_key="private-key", voice="marin", responses_options=responses_options
+        )
     )
     try:
         reported = _snapshot(model)
@@ -297,6 +308,9 @@ async def test_duplex_model_is_reported_through_session_adapter() -> None:
             "reasoning": {"effort": "low"},
             "text": {"verbosity": "low"},
         }
+        if hosted:
+            assert reported["llm"]["provider"] == "livekit"
+            assert reported["llm"]["inference_provider"] == "openai"
         assert "private-" not in json.dumps(reported)
     finally:
         await model.aclose()

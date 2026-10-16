@@ -161,6 +161,11 @@ def test_report_options_filters_nested_schemas_and_unset_values() -> None:
                 "transcript_filtering_config": {"payload": "private-payload"},
             },
         ),
+        (
+            "openai/gpt-live-transcribe",
+            {"languages": ["en"], "delay": "low", "noise_reduction": "near_field"},
+            {"prompt": "private-prompt", "keywords": ["private-name"]},
+        ),
     ],
 )
 def test_inference_omits_sensitive_primary_and_fallback_options(
@@ -446,6 +451,8 @@ async def test_deepgram_reports_settings_without_tags_or_keyterms(version: int) 
         reported = _report(AgentSession(vad=None, stt=model)).models["stt"]
         assert reported["model"] == model.model
         assert reported["sample_rate"] == 24000
+        if version == 2:
+            assert reported["audio_chunk_duration_ms"] == 50
         assert "private-" not in json.dumps(reported)
     finally:
         await model.aclose()

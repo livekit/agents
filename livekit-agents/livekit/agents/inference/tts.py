@@ -156,7 +156,7 @@ class CartesiaOptions(TypedDict, total=False):
 
 
 class DeepgramOptions(TypedDict, total=False):
-    mip_opt_out: bool  # default: False
+    mip_opt_out: bool  # always True for LiveKit Inference; the passed value is ignored
 
 
 class RimeOptions(TypedDict, total=False):
