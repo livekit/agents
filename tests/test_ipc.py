@@ -254,8 +254,11 @@ async def _job_entrypoint_raises_after_shutdown(job_ctx: JobContext) -> None:
         await asyncio.sleep(0)
         fut.set_exception(RuntimeError("room disconnected while waiting for participant"))
 
-    asyncio.create_task(_trigger())
-    await fut
+    trigger_task = asyncio.create_task(_trigger())
+    try:
+        await fut
+    finally:
+        trigger_task.cancel()
 
 
 async def _poll_until(
@@ -607,6 +610,107 @@ async def test_job_graceful_shutdown():
     assert start_args.shutdown_counter.value == 1
 
 
+def _create_thread_proc(
+    *,
+    close_timeout: float,
+    job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
+) -> tuple[ipc.job_thread_executor.ThreadJobExecutor, _StartArgs]:
+    # the runner is a thread of the test process, so the mp primitives of _StartArgs are plain
+    # in-process synchronization here
+    start_args = _new_start_args(mp.get_context("spawn"))
+    loop = asyncio.get_running_loop()
+    proc = ipc.job_thread_executor.ThreadJobExecutor(
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=job_entrypoint_fnc,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        inference_executor=None,
+        initialize_timeout=20.0,
+        close_timeout=close_timeout,
+        session_end_timeout=300.0,
+        ping_interval=2.5,
+        high_ping_threshold=1.0,
+        http_proxy=None,
+        loop=loop,
+    )
+    proc.user_arguments = start_args
+    return proc, start_args
+
+
+async def test_thread_shutdown_no_job():
+    proc, start_args = _create_thread_proc(close_timeout=10.0)
+    await proc.start()
+    await proc.initialize()
+    # bounded: a thread runner can't be killed, so a regression here would otherwise hang
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.shutdown_counter.value == 0, "shutdown_cb isn't called when there is no job"
+
+
+async def test_thread_shutdown_no_job_join_before_ack_is_read():
+    """Regression test: an idle thread runner acks the ShutdownRequest, sends ShuttingDown
+    and exits at once. When the loop is busy at that moment, the join is observed before those
+    two messages are read, and aclose() used to cancel their only reader: the ack was reported
+    missing after close_timeout, and the wait for ShuttingDown never returned."""
+    proc, start_args = _create_thread_proc(close_timeout=2.0)
+    await proc.start()
+    await proc.initialize()
+
+    close_task = asyncio.create_task(proc.aclose())
+    await asyncio.sleep(0)  # aclose() has sent the ShutdownRequest and awaits the ack
+    time.sleep(0.5)  # block the loop while the runner acks, sends ShuttingDown and exits
+
+    started_at = time.monotonic()
+    await asyncio.wait_for(close_task, timeout=5.0)
+    assert time.monotonic() - started_at < 1.0, "aclose() waited for an ack that was sent"
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.shutdown_counter.value == 0
+
+
+async def test_thread_job_graceful_shutdown():
+    proc, start_args = _create_thread_proc(close_timeout=10.0)
+    start_args.shutdown_simulate_work_time = 0.3
+    await proc.start()
+    await proc.initialize()
+
+    fake_job = _generate_fake_job()
+    await proc.launch_job(fake_job)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.shutdown_counter.value == 1
+
+
+_job_loops: list[asyncio.AbstractEventLoop] = []
+
+
+async def _job_entrypoint_records_loop(job_ctx: JobContext) -> None:
+    _job_loops.append(asyncio.get_running_loop())
+    await _job_entrypoint(job_ctx)
+
+
+async def test_thread_job_loop_is_closed_after_the_runner_exits():
+    """The thread runner owns its job loop, so it must close it the way asyncio.run() does.
+    An unclosed loop keeps its selector, self-pipe sockets and scheduled handles until the
+    next full garbage collection of the worker process."""
+    _job_loops.clear()
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0, job_entrypoint_fnc=_job_entrypoint_records_loop
+    )
+    await proc.start()
+    await proc.initialize()
+
+    await proc.launch_job(_generate_fake_job())
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert len(_job_loops) == 1
+    assert _job_loops[0].is_closed()
+
+
 def test_log_queue_drains_before_stop():
     """All log records must be received by the listener even when stop() is
     called right after the sender closes its end.  This reproduces a race where
@@ -654,3 +758,16 @@ def test_log_queue_drains_before_stop():
         f"Expected {NUM_LOGS} records, got {len(received)}. "
         f"Lost {NUM_LOGS - len(received)} tail log records."
     )
+
+
+def test_inference_executor_is_alive_after_proc_closed() -> None:
+    from livekit.agents.ipc.inference_proc_executor import InferenceProcExecutor
+
+    # after the supervise task exits it closes the process object; is_alive must
+    # report dead instead of raising (the health check endpoint relies on this)
+    executor = InferenceProcExecutor.__new__(InferenceProcExecutor)
+    proc = mp.get_context("spawn").Process(target=None)
+    proc.close()
+    executor._proc = proc
+
+    assert executor.is_alive() is False

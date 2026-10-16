@@ -32,6 +32,9 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
         eager_eot_threshold=opts_kwargs.get("eager_eot_threshold", NOT_GIVEN),
         eot_timeout_ms=opts_kwargs.get("eot_timeout_ms", NOT_GIVEN),
         language_hint=opts_kwargs.get("language_hint", []),
+        numerals=opts_kwargs.get("numerals", False),
+        profanity_filter=opts_kwargs.get("profanity_filter", False),
+        redact=opts_kwargs.get("redact", NOT_GIVEN),
     )
     opts.keyterm = opts_kwargs.get("keyterm", [])
     stream = SimpleNamespace(
@@ -105,6 +108,38 @@ async def test_flux_reconnect_fields_skip_inband_configure():
     assert ws.sent == []
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("numerals", True), ("profanity_filter", True), ("redact", "numbers")],
+)
+async def test_flux_connection_time_fields_trigger_reconnect_not_configure(field, value):
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    ws = _FakeWS()
+    stream = _make_flux_stream(ws=ws)
+    SpeechStreamv2.update_options(stream, **{field: value})
+
+    # Flux can't toggle these via Configure, only at connection time
+    assert getattr(stream._opts, field) == value
+    assert stream._reconnect_event.is_set()
+    assert stream._reconfigure_atask is None
+    assert ws.sent == []
+
+
+async def test_flux_connection_config_includes_formatting_fields():
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    config = SpeechStreamv2._live_config(
+        _make_flux_stream(numerals=True, profanity_filter=True, redact="aggressive_numbers")
+    )
+    assert config["numerals"] is True
+    assert config["profanity_filter"] is True
+    assert config["redact"] == "aggressive_numbers"
+
+    default_config = SpeechStreamv2._live_config(_make_flux_stream())
+    assert not {"numerals", "profanity_filter", "redact"} & default_config.keys()
+
+
 async def test_flux_configure_sends_only_changed_fields():
     from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
 
@@ -154,3 +189,340 @@ async def test_flux_configure_noop_when_disconnected():
     await stream._reconfigure_atask
 
     assert stream._opts.keyterm == ["LiveKit"]
+
+
+class _LiveWS:
+    """Records what the send loop writes. receive() parks so recv_task stays alive."""
+
+    def __init__(self) -> None:
+        # a single ordered log, so "Finalize came after the audio" is assertable
+        self.wire: list[str] = []
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        self.wire.append(json.loads(data)["type"])
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.wire.append("audio")
+
+    async def receive(self):
+        await self._closed.wait()
+        raise AssertionError("the test should never let recv_task resume")
+
+    async def close(self) -> None:
+        self._closed.set()
+
+    def sent(self) -> list[str]:
+        """The wire log without the periodic KeepAlive noise."""
+        return [msg for msg in self.wire if msg != "KeepAlive"]
+
+
+def _live_stream(ws: _LiveWS):
+    """A real SpeechStream running its real _run loop against a fake socket."""
+    import dataclasses
+    from typing import Any, cast
+
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.deepgram.stt import STT, SpeechStream
+
+    instance = STT(api_key="test-key", language="en-US", sample_rate=16000)
+    stream = SpeechStream(
+        stt=instance,
+        opts=dataclasses.replace(instance._opts, sample_rate=16000),
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        api_key="test-key",
+        http_session=cast(Any, SimpleNamespace(closed=False)),
+        base_url="wss://api.deepgram.com/v1/listen",
+    )
+
+    async def _fake_connect() -> Any:
+        return ws
+
+    # patched before the _run task gets its first tick, so no real socket is opened
+    stream._connect_ws = _fake_connect
+    return stream
+
+
+def _frame(ms: int, sample_rate: int = 16000):
+    from livekit import rtc
+
+    samples = sample_rate * ms // 1000
+    return rtc.AudioFrame(
+        data=b"\x00\x00" * samples,
+        sample_rate=sample_rate,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def _wait_until(predicate, *, timeout: float = 5.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "timed out waiting for the stream to send"
+        await asyncio.sleep(0.01)
+
+
+async def test_flush_finalizes_the_turn_when_no_audio_is_left_to_send():
+    # 50ms is exactly one repack chunk, so AudioByteStream.flush() returns no frames.
+    # Finalize must still go out, otherwise the turn waits on Deepgram's own endpointing
+    # and has_ended leaks into the next utterance.
+    ws = _LiveWS()
+    stream = _live_stream(ws)
+    try:
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: ws.sent() == ["audio"])
+
+        stream.flush()
+        await _wait_until(lambda: ws.sent() == ["audio", "Finalize"])
+    finally:
+        await stream.aclose()
+
+
+async def test_flush_finalizes_after_the_buffered_audio():
+    # a partial chunk is still pending: it has to reach the server before Finalize,
+    # otherwise the tail of the turn is transcribed against the next one
+    ws = _LiveWS()
+    stream = _live_stream(ws)
+    try:
+        stream.push_frame(_frame(30))
+        stream.flush()
+        await _wait_until(lambda: ws.sent() == ["audio", "Finalize"])
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("audio_chunk_duration_ms", [0, -1, 1.5, True])
+def test_flux_rejects_invalid_chunk_size(audio_chunk_duration_ms):
+    from livekit.plugins.deepgram import STTv2
+
+    with pytest.raises(ValueError, match="audio_chunk_duration_ms"):
+        STTv2(api_key="test-key", audio_chunk_duration_ms=audio_chunk_duration_ms)
+
+
+def test_flux_rejects_chunk_size_smaller_than_one_sample():
+    from livekit.plugins.deepgram import STTv2
+
+    with pytest.raises(ValueError, match="audio_chunk_duration_ms"):
+        STTv2(api_key="test-key", sample_rate=100, audio_chunk_duration_ms=1)
+
+
+@pytest.mark.parametrize("audio_chunk_duration_ms", [None, 20, 80])
+@pytest.mark.parametrize("sample_rate", [8000, 16000, 48000])
+@pytest.mark.parametrize("duration_ms", [400, 410])
+async def test_flux_chunk_size_preserves_audio_and_flushes_tail(
+    audio_chunk_duration_ms, sample_rate, duration_ms
+):
+    from typing import Any, cast
+
+    from livekit import rtc
+    from livekit.plugins.deepgram import STTv2
+
+    class AudioWS(_LiveWS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.audio: list[bytes] = []
+
+        async def send_bytes(self, data: bytes) -> None:
+            self.audio.append(data)
+            await super().send_bytes(data)
+
+    ws = AudioWS()
+    # Omitting the argument exercises the public constructor's existing default.
+    options = (
+        {}
+        if audio_chunk_duration_ms is None
+        else {"audio_chunk_duration_ms": audio_chunk_duration_ms}
+    )
+    instance = STTv2(
+        api_key="test-key",
+        sample_rate=sample_rate,
+        http_session=cast(Any, SimpleNamespace(closed=False)),
+        **options,
+    )
+    stream = instance.stream()
+
+    async def connect():
+        return ws
+
+    # Replace only the network connection; exercise the real stream and send loop.
+    stream._connect_ws = connect
+    try:
+        assert "audio_chunk_duration_ms" not in stream._live_config()
+        input_samples = sample_rate // 100  # 10 ms RTC frames
+        input_bytes = input_samples * 2
+        pcm = bytes(i % 256 for i in range(sample_rate * duration_ms // 1000 * 2))
+        for offset in range(0, len(pcm), input_bytes):
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=pcm[offset : offset + input_bytes],
+                    sample_rate=sample_rate,
+                    num_channels=1,
+                    samples_per_channel=input_samples,
+                )
+            )
+        stream.end_input()
+        await _wait_until(lambda: "CloseStream" in ws.wire)
+
+        chunk_bytes = sample_rate * (audio_chunk_duration_ms or 50) // 1000 * 2
+        full_chunks, remainder = divmod(len(pcm), chunk_bytes)
+        expected_sizes = [chunk_bytes] * full_chunks
+        if remainder:
+            expected_sizes.append(remainder)
+        assert [len(data) for data in ws.audio] == expected_sizes
+        assert b"".join(ws.audio) == pcm
+        assert ws.sent() == ["audio"] * len(expected_sizes) + ["CloseStream"]
+    finally:
+        await stream.aclose()
+        await instance.aclose()
+
+
+class _RecordingSession:
+    """Stands in for the aiohttp session so the connect kwargs are assertable."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.kwargs: dict = {}
+        self._ws = _LiveWS()
+
+    async def ws_connect(self, url: str, **kwargs):
+        self.kwargs = kwargs
+        return self._ws
+
+
+class _DeadSocket:
+    """A socket that has silently gone away: writes fail, the read side never notices.
+
+    This is the half-open case (no FIN, no RST). recv_task can only park, so the
+    keepalive write is the one place the drop can surface.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        import aiohttp
+
+        raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    async def send_bytes(self, data: bytes) -> None:
+        import aiohttp
+
+        raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    async def receive(self):
+        await self._closed.wait()
+        raise AssertionError("the test should never let recv_task resume")
+
+    async def close(self) -> None:
+        self._closed.set()
+
+
+def _v1_stream(*, http_session=None, connect=None):
+    """A real v1 SpeechStream running its real _run loop."""
+    import dataclasses
+    from typing import Any, cast
+
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.deepgram.stt import STT, SpeechStream
+
+    instance = STT(api_key="test-key", language="en-US", sample_rate=16000)
+    stream = SpeechStream(
+        stt=instance,
+        opts=dataclasses.replace(instance._opts, sample_rate=16000),
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        api_key="test-key",
+        http_session=cast(Any, http_session or SimpleNamespace(closed=False)),
+        base_url="wss://api.deepgram.com/v1/listen",
+    )
+    if connect is not None:
+        stream._connect_ws = connect
+    return stream
+
+
+async def test_v1_socket_is_opened_with_a_heartbeat():
+    # aiohttp defaults heartbeat and receive_timeout to None, so without this the
+    # read side of a half-open socket parks forever and the reconnect loop in _run,
+    # which only runs when something raises, never gets a turn. stt_v2 already does
+    # this; v1 is the Nova-3 path and was the only Deepgram stream left unbounded.
+    session = _RecordingSession()
+    stream = _v1_stream(http_session=session)
+    try:
+        await _wait_until(lambda: "heartbeat" in session.kwargs)
+        assert session.kwargs["heartbeat"] == 30.0
+    finally:
+        await stream.aclose()
+
+
+async def test_keepalive_write_drop_reconnects_instead_of_stalling():
+    # the keepalive used to swallow every exception and return, which left send_task
+    # parked on the input channel and recv_task parked on receive(): _run stayed
+    # alive on a socket that was gone, and the session went quiet with no error.
+    sockets: list[_DeadSocket] = []
+
+    async def _connect():
+        ws = _DeadSocket()
+        sockets.append(ws)
+        return ws
+
+    stream = _v1_stream(connect=_connect)
+    try:
+        await _wait_until(lambda: len(sockets) > 1)
+    finally:
+        await stream.aclose()
+
+
+class _HeartbeatTimeoutSocket:
+    """A socket in the state aiohttp leaves it in when a ping goes unanswered.
+
+    The heartbeat closes the connection itself, so this arrives as WSMsgType.ERROR
+    rather than as a close frame, and the reason lives only on ws.exception().
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.receives = 0
+
+    async def send_str(self, data: str) -> None:
+        pass
+
+    async def send_bytes(self, data: bytes) -> None:
+        pass
+
+    def exception(self):
+        import aiohttp
+
+        return aiohttp.ServerTimeoutError("No PONG received after 15.0s")
+
+    async def receive(self):
+        import aiohttp
+
+        self.receives += 1
+        # yield, so that a recv loop which steps over this rather than ending
+        # fails the test instead of starving the event loop and hanging it
+        await asyncio.sleep(0)
+        return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, self.exception(), None)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_heartbeat_timeout_reconnects_without_spinning():
+    # the ERROR has to end the recv loop. logging it as an unexpected type and
+    # continuing only works because aiohttp happens to report CLOSED next, and it
+    # throws away the one value that says why the socket went away.
+    sockets: list[_HeartbeatTimeoutSocket] = []
+
+    async def _connect():
+        ws = _HeartbeatTimeoutSocket()
+        sockets.append(ws)
+        return ws
+
+    stream = _v1_stream(connect=_connect)
+    try:
+        await _wait_until(lambda: len(sockets) > 1)
+        assert sockets[0].receives == 1
+    finally:
+        await stream.aclose()

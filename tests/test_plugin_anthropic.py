@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from livekit.agents import APIConnectOptions, llm
@@ -15,6 +15,13 @@ def _make_llm(**kwargs):
     from livekit.plugins.anthropic import LLM
 
     return LLM(api_key="sk-ant-test", **kwargs)
+
+
+class TestSDKRetries:
+    def test_disabled_by_default(self) -> None:
+        """The framework owns retries, so Anthropic SDK retries must default to disabled."""
+        llm = _make_llm()
+        assert llm._client.max_retries == 0
 
 
 class TestHttpxTimeoutDefaults:

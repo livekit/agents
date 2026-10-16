@@ -127,6 +127,7 @@ class SupervisedProc(ABC):
         self._memory_baseline_mb: float | None = None
         self._last_memory_warn_time: float = 0.0
         self._last_memory_warn_mb: float = 0.0
+        self._psutil_process: psutil.Process | None = None
 
         self._start_atask: asyncio.Task[None] | None = None
         self._supervise_atask: asyncio.Task[None] | None = None
@@ -547,11 +548,13 @@ class SupervisedProc(ABC):
             return True
         return False
 
-    def _memory_logging_extra(self, memory_mb: float) -> dict[str, Any]:
+    def _memory_logging_extra(self, memory_mb: float, memory_metric: str) -> dict[str, Any]:
         """Diagnostic context for the memory logs: tells a process that started
-        heavy from one that grew over time (uptime, baseline RSS, growth)."""
+        heavy from one that grew over time (uptime, baseline, growth). memory_metric
+        records which footprint metric the number reflects (pss/uss/rss)."""
         extra: dict[str, Any] = {
             "memory_usage_mb": round(memory_mb, 1),
+            "memory_metric": memory_metric,
             "memory_warn_mb": self._opts.memory_warn_mb,
             "memory_limit_mb": self._opts.memory_limit_mb,
             "uptime": round(self.uptime, 1),
@@ -564,6 +567,36 @@ class SupervisedProc(ABC):
         extra.update(self.logging_extra())
         return extra
 
+    def _sample_memory_mb(self) -> tuple[float, str]:
+        """Real footprint of the process, preferring metrics that don't
+        double-count shared pages. RSS counts copy-on-write pages inherited
+        from the forkserver and file-backed library pages at memory_info weight, so it
+        overstates what the process actually consumes and oversums across
+        processes. PSS (proportional, Linux only) divides shared pages among
+        their sharers and sums correctly to physical use; USS (private only) is
+        the cross-platform fallback since psutil exposes no PSS on macOS/Windows.
+        RSS is a last resort if the extended metrics are unavailable.
+
+        Synchronous and blocking: the PSS/USS path walks the target process's
+        page tables in the kernel, which scales with its mapping count and is
+        ~ms for a large child. Run via run_in_executor so that walk overlaps
+        with the event loop rather than stalling it (the read syscall releases
+        the GIL, so the offload pays off even on a single core)."""
+        process = self._psutil_process
+        if process is None:
+            process = self._psutil_process = psutil.Process(self._pid)
+
+        try:
+            memory_info: Any = process.memory_full_info()
+        except (psutil.AccessDenied, NotImplementedError):
+            memory_info = process.memory_info()
+
+        for metric in "pss", "uss", "rss":
+            if memory_bytes := getattr(memory_info, metric, 0):
+                return memory_bytes / (1024 * 1024), metric
+
+        return 0, "unknown"
+
     @log_exceptions(logger=logger)
     async def _memory_monitor_task(self) -> None:
         """Monitor memory usage and kill the process if it exceeds the limit."""
@@ -573,10 +606,9 @@ class SupervisedProc(ABC):
                     await asyncio.sleep(_MEMORY_MONITOR_INTERVAL)
                     continue
 
-                # get process memory info
-                process = psutil.Process(self._pid)
-                memory_info = process.memory_info()
-                memory_mb = memory_info.rss / (1024 * 1024)  # Convert to MB
+                memory_mb, memory_metric = await self._loop.run_in_executor(
+                    None, self._sample_memory_mb
+                )
 
                 # the first sample (taken shortly after initialization) is treated as the
                 # post-prewarm baseline, so later samples can report growth since startup
@@ -586,7 +618,7 @@ class SupervisedProc(ABC):
                 if self._opts.memory_limit_mb > 0 and memory_mb > self._opts.memory_limit_mb:
                     logger.error(
                         f"{self.process_kind} process exceeded memory limit, killing it",
-                        extra=self._memory_logging_extra(memory_mb),
+                        extra=self._memory_logging_extra(memory_mb, memory_metric),
                     )
                     await self._send_dump_signal()
                     await self._send_kill_signal()
@@ -606,7 +638,7 @@ class SupervisedProc(ABC):
                                 if advisory
                                 else ""
                             ),
-                            extra=self._memory_logging_extra(memory_mb),
+                            extra=self._memory_logging_extra(memory_mb, memory_metric),
                         )
 
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:

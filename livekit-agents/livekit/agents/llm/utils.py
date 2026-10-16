@@ -2,19 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import bisect
+import copy
 import inspect
 import json
 import re
-import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
-    Union,
     cast,
-    get_args,
     get_origin,
     get_type_hints,
 )
@@ -22,7 +20,7 @@ from typing import (
 import json_repair
 import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
-from pydantic.fields import Field, FieldInfo
+from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined, from_json
 from typing_extensions import TypeVar
 
@@ -46,9 +44,14 @@ THINK_TAG_END = "</think>"
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
     """
-    Standard dynamic-programming LCS to get the common subsequence
-    of IDs (in order) that appear in both old_ids and new_ids.
+    Get the longest common subsequence of IDs (in order) that appear in both
+    old_ids and new_ids.
     """
+    lcs_ids = _compute_unique_ids_lcs(old_ids, new_ids)
+    if lcs_ids is not None:
+        return lcs_ids
+
+    # Standard dynamic-programming LCS, O(n*m), for IDs that repeat.
     n, m = len(old_ids), len(new_ids)
     dp = [[0] * (m + 1) for _ in range(n + 1)]
 
@@ -73,6 +76,42 @@ def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
         else:
             j -= 1
 
+    return list(reversed(lcs_ids))
+
+
+def _compute_unique_ids_lcs(old_ids: list[str], new_ids: list[str]) -> list[str] | None:
+    """
+    LCS in O(n log n) when neither list repeats an ID, else None.
+
+    Without repeats, the LCS is the longest increasing subsequence of the
+    positions in new_ids, taken in the order of old_ids.
+    """
+    new_index = {item_id: i for i, item_id in enumerate(new_ids)}
+    if len(new_index) != len(new_ids) or len(set(old_ids)) != len(old_ids):
+        return None
+
+    positions = [new_index[item_id] for item_id in old_ids if item_id in new_index]
+    # tails[k] is the smallest last position of an increasing run of length
+    # k + 1, and tail_at[k] is the index in `positions` that ends that run
+    tails: list[int] = []
+    tail_at: list[int] = []
+    previous = [-1] * len(positions)
+    for at, position in enumerate(positions):
+        k = bisect.bisect_left(tails, position)
+        if k:
+            previous[at] = tail_at[k - 1]
+        if k == len(tails):
+            tails.append(position)
+            tail_at.append(at)
+        else:
+            tails[k] = position
+            tail_at[k] = at
+
+    lcs_ids: list[str] = []
+    at = tail_at[-1] if tail_at else -1
+    while at != -1:
+        lcs_ids.append(new_ids[positions[at]])
+        at = previous[at]
     return list(reversed(lcs_ids))
 
 
@@ -239,7 +278,7 @@ def build_strict_openai_schema(
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
-    schema = _strict.to_strict_json_schema(model)
+    schema = _strict.to_strict_json_schema(model, null_sentinel_for_defaults=True)
 
     return {
         "type": "function",
@@ -299,6 +338,9 @@ def to_response_format_param(
 def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[str, Any]:
     name, json_schema_type = to_response_format_param(response_format)
 
+    # No null sentinel here: nothing resolves it on the decode side (users validate
+    # the raw payload themselves), so the schema must be exactly what validation
+    # accepts. Defaulted fields stay required; the model produces their values.
     schema = _strict.to_strict_json_schema(json_schema_type)
     return {
         "type": "json_schema",
@@ -308,6 +350,182 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
             "strict": True,
         },
     }
+
+
+def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[str, Any]) -> Any:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict):
+            schema = {**resolved, **schema}
+
+    if value is None:
+        if "default" in schema and not _json_schema_allows_null(schema, root=root):
+            return copy.deepcopy(schema["default"])
+        return None
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list):
+        for variant in all_of:
+            if isinstance(variant, dict):
+                value = _inject_schema_defaults(value, schema=variant, root=root)
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list):
+            for variant in variants:
+                if isinstance(variant, dict) and _json_schema_matches(value, variant, root=root):
+                    return _inject_schema_defaults(value, schema=variant, root=root)
+
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        additional = schema.get("additionalProperties")
+        if isinstance(properties, dict) or isinstance(additional, dict):
+            # additionalProperties only governs keys not declared in properties
+            def _inject_entry(key: str, item: Any) -> Any:
+                prop = properties.get(key) if isinstance(properties, dict) else None
+                if isinstance(prop, dict):
+                    return _inject_schema_defaults(item, schema=prop, root=root)
+                if isinstance(additional, dict):
+                    return _inject_schema_defaults(item, schema=additional, root=root)
+                return item
+
+            return {key: _inject_entry(key, item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        prefix_items = schema.get("prefixItems")
+        items = schema.get("items")
+        if isinstance(prefix_items, list) or isinstance(items, dict):
+            # prefixItems covers positional slots (fixed tuples); items the rest
+            def _inject_item(i: int, item: Any) -> Any:
+                if (
+                    isinstance(prefix_items, list)
+                    and i < len(prefix_items)
+                    and isinstance(prefix_items[i], dict)
+                ):
+                    return _inject_schema_defaults(item, schema=prefix_items[i], root=root)
+                if isinstance(items, dict):
+                    return _inject_schema_defaults(item, schema=items, root=root)
+                return item
+
+            return [_inject_item(i, item) for i, item in enumerate(value)]
+
+    return value
+
+
+def _json_schema_allows_null(
+    schema: dict[str, Any], *, root: dict[str, Any], seen_refs: set[str] | None = None
+) -> bool:
+    """Whether ``null`` is a valid instance of ``schema``.
+
+    JSON schema keywords are conjunctive: null must satisfy every constraint
+    present (type, enum, const, allOf, unions, $ref), so any keyword that
+    rejects null makes the whole schema reject it.
+    """
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        if ref in (seen_refs or set()):
+            return False
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict) and not _json_schema_allows_null(
+            resolved, root=root, seen_refs={*(seen_refs or set()), ref}
+        ):
+            return False
+
+    typ = schema.get("type")
+    if isinstance(typ, str) and typ != "null":
+        return False
+    if isinstance(typ, list) and "null" not in typ:
+        return False
+
+    if "const" in schema and schema["const"] is not None:
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and None not in enum:
+        return False
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list) and not all(
+        _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
+        for variant in all_of
+        if isinstance(variant, dict)
+    ):
+        return False
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list) and not any(
+            isinstance(variant, dict)
+            and _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
+            for variant in variants
+        ):
+            return False
+
+    return True
+
+
+def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, Any]) -> bool:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict):
+            schema = {**resolved, **schema}
+
+    if value is None and "default" in schema and not _json_schema_allows_null(schema, root=root):
+        return True
+
+    if "const" in schema and value != schema["const"]:
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value not in enum:
+        return False
+
+    typ = schema.get("type")
+    if isinstance(typ, list):
+        return any(_json_type_matches(value, item) for item in typ if isinstance(item, str))
+    if isinstance(typ, str) and not _json_type_matches(value, typ):
+        return False
+
+    if isinstance(value, dict):
+        required = schema.get("required")
+        if isinstance(required, list) and not all(key in value for key in required):
+            return False
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            # the strict wire schema closes objects (additionalProperties: false),
+            # so a key outside the declared properties rules this variant out;
+            # otherwise a payload meant for a sibling union variant matches any
+            # variant that merely ignores the extra keys
+            if schema.get("additionalProperties") in (None, False) and any(
+                key not in properties for key in value
+            ):
+                return False
+            for key, item in value.items():
+                property_schema = properties.get(key)
+                if isinstance(property_schema, dict) and not _json_schema_matches(
+                    item, property_schema, root=root
+                ):
+                    return False
+
+    return True
+
+
+def _json_type_matches(value: Any, typ: str) -> bool:
+    if typ == "null":
+        return value is None
+    if typ == "object":
+        return isinstance(value, dict)
+    if typ == "array":
+        return isinstance(value, list)
+    if typ == "boolean":
+        return isinstance(value, bool)
+    if typ == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if typ == "number":
+        return isinstance(value, int | float) and not isinstance(value, bool)
+    if typ == "string":
+        return isinstance(value, str)
+    return True
 
 
 def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
@@ -335,46 +553,15 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
             continue
 
         default_value = param.default if param.default is not param.empty else ...
-        field_info: FieldInfo | None = None
-        field_attrs: dict[str, Any] = {}
+        field_info = FieldInfo.from_annotation(type_hint)
 
-        # Annotated[str, Field(description="...")]
-        if get_origin(type_hint) is Annotated:
-            annotated_args = get_args(type_hint)
-            type_hint = annotated_args[0]
-            annotated_field = next(
-                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), None
-            )
-            if annotated_field and hasattr(annotated_field, "asdict"):
-                # `asdict` is available after pydantic 2.12
-                field_dict = annotated_field.asdict()
-                field_attrs = field_dict["attributes"]
-                # Constraints (ge/le/gt/lt/multiple_of/min_length/pattern/...) live
-                # in `metadata`, not `attributes`. Re-attach them to the annotation
-                # so `Field(...)` constraints on a tool argument are preserved.
-                if field_dict["metadata"]:
-                    type_hint = Annotated[(type_hint, *field_dict["metadata"])]
-            elif annotated_field:
-                field_attrs["default"] = annotated_field.default
-                field_attrs["description"] = annotated_field.description
-                field_info = annotated_field
+        if default_value is not ... and field_info.default is PydanticUndefined:
+            field_info.default = default_value
 
-        if (
-            default_value is not ...
-            and field_attrs.get("default", PydanticUndefined) is PydanticUndefined
-        ):
-            field_attrs["default"] = default_value
+        if field_info.description is None:
+            field_info.description = param_docs.get(param_name)
 
-        if field_attrs.get("description") is None:
-            field_attrs["description"] = param_docs.get(param_name, None)
-
-        if not field_info:
-            field_info = Field(**field_attrs)
-        else:
-            for k, v in field_attrs.items():
-                setattr(field_info, k, v)
-
-        fields[param_name] = (type_hint, field_info)
+        fields[param_name] = (field_info.annotation, field_info)
 
     return create_model(model_name, **fields)
 
@@ -440,9 +627,9 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
         logger.warning(
             "repaired malformed function-call JSON arguments",
             extra={
-                "raw_arguments": json_arguments[:500],
-                "repaired": cleaned,
-                "error": str(strict_err),
+                "lk.pii.raw_arguments": json_arguments[:500],
+                "lk.pii.repaired": cleaned,
+                "lk.pii.error": str(strict_err),
             },
         )
         args_dict = cleaned
@@ -495,7 +682,7 @@ def prepare_function_arguments(
         except ValueError as e:
             logger.error(
                 f"error parsing arguments for `{fnc.info.name}`",
-                extra={"function": fnc.info.name, "arguments": json_arguments},
+                extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
             )
             raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
 
@@ -514,15 +701,44 @@ def prepare_function_arguments(
     except (pydantic.ValidationError, ValueError, TypeError) as e:
         logger.error(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
     except Exception:
         logger.exception(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise
+
+
+def validated_arguments(
+    fnc: FunctionTool | RawFunctionTool, args_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """A tool call's arguments after schema validation, keyed by parameter name.
+
+    Every declared parameter is present — an omitted one carries its default — and
+    values are coerced to their annotated types, so ``{"order_id": "5"}`` and
+    ``{"order_id": "5", "locale": None}`` produce the same mapping, as do ``1`` and
+    ``1.0`` for a ``float`` parameter. That makes this the form to compare two calls
+    on (see ``DuplicateScope``), not the raw arguments the LLM emitted.
+
+    Raises the same validation errors as calling the tool would. Raw function tools
+    have no per-parameter schema, so their arguments are returned exactly as sent.
+    """
+    if isinstance(fnc, RawFunctionTool):
+        return args_dict
+
+    model_type = function_arguments_to_pydantic_model(fnc)
+
+    # Strict LLM schemas represent defaulted fields as nullable (see
+    # _ensure_strict_json_schema): null means "use the default". Resolve
+    # the sentinel, including in nested models, before validation.
+    schema = model_type.model_json_schema()
+    args_dict = _inject_schema_defaults(args_dict, schema=schema, root=schema)
+
+    model = model_type.model_validate(args_dict)  # can raise ValidationError
+    return _shallow_model_dump(model)
 
 
 def _prepare_function_arguments(
@@ -535,27 +751,7 @@ def _prepare_function_arguments(
     type_hints = get_type_hints(fnc, include_extras=True)
 
     if isinstance(fnc, FunctionTool):
-        model_type = function_arguments_to_pydantic_model(fnc)
-
-        # Function arguments with default values are treated as optional
-        # when converted to strict LLM function descriptions. (e.g., we convert default
-        # parameters to type: ["string", "null"]).
-        # The following make sure to use the default value when we receive None.
-        # (Only if the type can't be Optional)
-        for param_name, param in signature.parameters.items():
-            type_hint = type_hints[param_name]
-            if param_name in args_dict and args_dict[param_name] is None:
-                if not _is_optional_type(type_hint):
-                    if param.default is not inspect.Parameter.empty:
-                        args_dict[param_name] = param.default
-                    else:
-                        raise ValueError(
-                            f"Received no value for required parameter '{param_name}': "
-                            "this argument cannot be None and no default is available."
-                        )
-
-        model = model_type.model_validate(args_dict)  # can raise ValidationError
-        raw_fields = _shallow_model_dump(model)
+        raw_fields = validated_arguments(fnc, args_dict)
     elif isinstance(fnc, RawFunctionTool):
         # e.g async def open_gate(self, raw_arguments: dict[str, object]):
         # raw_arguments is required when using raw function tools
@@ -584,18 +780,6 @@ def _prepare_function_arguments(
     bound = signature.bind(**{**raw_fields, **context_dict})
     bound.apply_defaults()
     return bound.args, bound.kwargs
-
-
-def _is_optional_type(hint: Any) -> bool:
-    if get_origin(hint) is Annotated:
-        hint = get_args(hint)[0]
-
-    origin = get_origin(hint)
-
-    is_union = origin is Union
-    is_union = is_union or origin is types.UnionType
-
-    return is_union and type(None) in get_args(hint)
 
 
 def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
@@ -628,9 +812,39 @@ def _partial_marker_length(content: str, markers: tuple[str, ...]) -> int:
     )
 
 
+def _flatten_delta_content(content: Any) -> str | None:
+    """Flatten list-shaped streaming delta content to its concatenated text.
+
+    The OpenAI-compatible ecosystem allows ``delta.content`` to be a list of
+    typed content parts (``[{"type": "text", "text": ...}]``) instead of a
+    plain string — Mistral emits this shape on some streamed chunks — and the
+    openai SDK constructs stream models without validation, so the list
+    reaches us as-is when the plugin points at such a provider (#6323).
+    """
+    if content is None or isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+        # no text part at all carries no content, unlike a part that carries an
+        # empty string - that one is kept, like a plain "" delta
+        return "".join(parts) if parts else None
+    logger.warning(
+        "unexpected streaming delta content type %s; dropping the chunk", type(content).__name__
+    )
+    return None
+
+
 def strip_thinking_tokens(
-    content: str | None, state: ThinkingTokenFilter, *, final: bool = False
+    content: str | list[Any] | None, state: ThinkingTokenFilter, *, final: bool = False
 ) -> str | None:
+    content = _flatten_delta_content(content)
     if content is not None:
         state._buffer += content
 
@@ -692,7 +906,7 @@ def _is_valid_function_output(value: Any) -> bool:
 @dataclass
 class FunctionCallResult:
     fnc_call: FunctionCall
-    fnc_call_out: FunctionCallOutput | None
+    fnc_call_out: FunctionCallOutput
     raw_output: Any
     raw_exception: BaseException | None
     fnc_call_updates: list[tuple[FunctionCall, FunctionCallOutput]] = field(default_factory=list)
@@ -708,7 +922,7 @@ def make_function_call_output(
 ) -> FunctionCallResult:
     """Create a FunctionCallResult, handling ToolError, StopResponse, and validation."""
     from .chat_context import FunctionCallOutput
-    from .tool_context import StopResponse, ToolError
+    from .tool_context import StopResponse, ToolError, ToolResult
 
     if isinstance(output, BaseException):
         exception = output
@@ -728,9 +942,16 @@ def make_function_call_output(
         )
 
     if isinstance(exception, StopResponse):
+        # StopResponse asks for silence, not for the call to go unanswered
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="",
+                is_error=False,
+                reply_required=False,
+            ),
             raw_output=output,
             raw_exception=exception,
         )
@@ -748,15 +969,27 @@ def make_function_call_output(
             raw_exception=exception,
         )
 
+    raw_output = output
+    reply_required = True
+    if isinstance(output, ToolResult):
+        reply_required = output.reply_required
+        output = output.output
+
     if not _is_valid_function_output(output):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={"call_id": fnc_call.call_id, "output": output},
+            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
         )
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
-            raw_output=output,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="the tool returned an invalid output",
+                is_error=True,
+                reply_required=reply_required,
+            ),
+            raw_output=raw_output,
             raw_exception=None,
         )
 
@@ -765,10 +998,11 @@ def make_function_call_output(
         fnc_call_out=FunctionCallOutput(
             name=fnc_call.name,
             call_id=fnc_call.call_id,
-            output=str(output or ""),
+            output="" if output is None else str(output),
             is_error=False,
+            reply_required=reply_required,
         ),
-        raw_output=output,
+        raw_output=raw_output,
         raw_exception=None,
     )
 
@@ -827,7 +1061,7 @@ async def execute_function_call(
         if not isinstance(e, ToolError):
             logger.exception(
                 f"exception executing AI function `{tool_call.name}`",
-                extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+                extra={"call_id": tool_call.call_id, "lk.pii.arguments": tool_call.arguments},
             )
         out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
 

@@ -33,6 +33,7 @@ class _FakeTransport:
     def __init__(self) -> None:
         self.events: list[tuple[str, ...]] = []
         self._stream: _BaseStreamingTurnDetectorStream | None = None
+        self.session_id: str | None = None
 
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream = stream
@@ -93,6 +94,16 @@ class TestAudioTurnDetectionRequests:
             assert s._request_id is not None
             assert not fut.done()
             assert s.events == [("run_inference", s._request_id)]
+        finally:
+            await s.aclose()
+
+    async def test_predict_links_request_to_inference_session(self) -> None:
+        s = _make_stream()
+        s._fake_transport.session_id = "inference_connection"
+        try:
+            s.predict()
+            assert s._request_id is not None
+            assert s._request_id.startswith("inference_connection_eot_")
         finally:
             await s.aclose()
 

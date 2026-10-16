@@ -64,6 +64,7 @@ EVALUATED_STT_MODELS: set[str] = {
 
 _SIP_CALL_STATUS_ATTR = "sip.callStatus"
 _SIP_CALL_STATUS_ACTIVE = "active"
+_TRACK_PUBLICATION_TIMEOUT = 5.0
 
 
 class DetectionOptions(TypedDict, total=False):
@@ -101,10 +102,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     - ``machine-unavailable``: the mailbox is full or not set up; leaving a message is not possible.
     - ``uncertain``: the transcript is ambiguous and could not be classified.
 
-    AMD should be started before the SIP participant is created so no audio
-    is missed. The overall detection-timeout budget starts when the
-    participant's audio track is subscribed (so AMD cannot hang if the call
-    never connects).
+    Start AMD before creating the SIP participant so no audio is missed. Its
+    detection timeout begins only after listening starts; SIP settings bound
+    the pre-answer phase. If the call ends before audio arrives, AMD settles
+    immediately with an ``uncertain`` verdict (``reason="participant_missing"``).
 
     For SIP participants, the no-speech timer and
     audio/transcript processing are deferred until ``sip.callStatus ==
@@ -114,8 +115,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     The recommended pattern is the async context manager::
 
         async with AMD(session, llm="openai/gpt-4.1-mini") as detector:
-            await ctx.api.sip.create_sip_participant(...)
-            await ctx.wait_for_participant(identity=participant_identity)
+            await ctx.api.sip.create_sip_participant(...)  # wait_until_answered=True
             result = await detector.execute()
 
     Args:
@@ -126,20 +126,22 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             if LiveKit inference credentials are available in the environment
             it uses ``"google/gemini-3.1-flash-lite"`` via the
             inference gateway; otherwise it falls back to the session's own
-            LLM.
+            LLM. Pass ``None`` to always reuse the session's LLM.
         interrupt_on_machine: If ``True`` (default), interrupt any pending
             agent speech immediately when a machine is detected.
         ivr_detection: If ``True`` (default), automatically start IVR
             navigation when a ``machine-ivr`` result is returned.
         participant_identity: If set, AMD listens only to this participant's
-            audio track. If omitted, the first remote audio track wins and
-            the publisher is resolved from the track sid.
+            audio track, and settles immediately if that participant
+            disconnects before publishing audio. If omitted, the first remote
+            audio track wins and the publisher is resolved from the track sid.
         stt: STT used for transcript generation. Accepts an :class:`STT`
             instance or an inference model string (e.g.
             ``"cartesia/ink-whisper"``). When omitted, AMD auto-selects:
             if LiveKit inference credentials are available it uses
             ``"cartesia/ink-whisper"`` via the inference gateway; otherwise
-            it reuses the session's existing STT transcripts.
+            it reuses the session's existing STT transcripts. Pass ``None`` to
+            always reuse the session's STT transcripts.
         suppress_compatibility_warning: If ``True``, do not log a warning when
             the resolved STT or LLM is not among the bundled AMD-tested model
             strings. Has no effect on classification behavior.
@@ -168,8 +170,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self,
         session: AgentSession,
         *,
-        llm: NotGivenOr[LLM | LLMModels | str] = NOT_GIVEN,
-        stt: NotGivenOr[STT | str] = NOT_GIVEN,
+        llm: NotGivenOr[LLM | LLMModels | str | None] = NOT_GIVEN,
+        stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
         interrupt_on_machine: bool = True,
         ivr_detection: bool = True,
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
@@ -188,18 +190,18 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 is_cloud(os.getenv("LIVEKIT_URL", "")) and bool(api_key) and bool(api_secret)
             )
             if not is_given(llm):
-                llm = self._DEFAULT_LLM_MODEL if auto_select else NOT_GIVEN
+                llm = self._DEFAULT_LLM_MODEL if auto_select else None
             if not is_given(stt):
-                stt = self._DEFAULT_STT_MODEL if auto_select else NOT_GIVEN
+                stt = self._DEFAULT_STT_MODEL if auto_select else None
 
-        self._llm_config: NotGivenOr[LLM | LLMModels | str] = llm
+        self._llm_config: LLM | LLMModels | str | None = llm
         self._session: AgentSession = session
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
         self._wait_until_finished = wait_until_finished
         self._suppress_compatibility_warning = suppress_compatibility_warning
         self._participant_identity: NotGivenOr[str] = participant_identity
-        self._stt: NotGivenOr[_STT] = _InferenceSTT(stt) if isinstance(stt, str) else stt
+        self._stt: _STT | None = _InferenceSTT(stt) if isinstance(stt, str) else stt
 
         self._classifier: _AMDClassifier | None = None
         self._result: AMDPredictionEvent | None = None
@@ -215,7 +217,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         }
 
         if not self._suppress_compatibility_warning:
-            if is_given(self._stt):
+            if self._stt is not None:
                 _warn_if_not_evaluated(
                     self._stt.model,
                     EVALUATED_STT_MODELS,
@@ -289,7 +291,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             "skipping auto reply: AMD already returned a machine verdict",
             extra={
                 "category": self._result.category.value,
-                "transcript": info.new_transcript,
+                "lk.pii.transcript": info.new_transcript,
             },
         )
         return True
@@ -400,26 +402,27 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             logger.warning(
                 "session room_io unavailable, starting amd timers immediately as fallback"
             )
-            if self._classifier:
-                self._classifier.start_detection_timer()
-                self._classifier.start_listening()
+            self._start_listening()
         else:
-            # Start the outer budget before waiting for a publication, so AMD
-            # can settle even if the participant never publishes audio.
-            if self._classifier:
-                self._classifier.start_detection_timer()
             room = session._room_io.room
-            publication = await wait_for_track_publication(
-                room=room,
-                identity=self._participant_identity or None,
-                kind=rtc.TrackKind.KIND_AUDIO,
-                wait_for_subscription=True,
-            )
+            try:
+                publication = await asyncio.wait_for(
+                    wait_for_track_publication(
+                        room=room,
+                        identity=self._participant_identity or None,
+                        kind=rtc.TrackKind.KIND_AUDIO,
+                        wait_for_subscription=True,
+                    ),
+                    timeout=_TRACK_PUBLICATION_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                self._settle_participant_missing("timed out waiting for participant audio track")
+                return
+            except RuntimeError as e:
+                self._settle_participant_missing(str(e))
+                return
             if self._closed or not self._classifier:
                 return
-            # Reset the budget at track-up so normal AMD timing runs from the
-            # subscribed publication, matching the active audio source.
-            self._classifier.start_detection_timer()
 
             if self._participant_identity:
                 publisher = room.remote_participants.get(self._participant_identity)
@@ -433,8 +436,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     None,
                 )
             if publisher is None:
-                # publisher gone start listening so the no-speech timer settles faster
-                self._start_listening()
+                self._settle_participant_missing("participant disappeared after track subscription")
                 return
 
             if publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
@@ -445,15 +447,25 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             else:
                 self._start_listening()
 
-        if is_given(self._stt) and not self._closed:
+        if self._stt is not None and not self._closed:
             logger.debug("starting amd stt pipeline")
             await self._run_stt()
 
     def _start_listening(self) -> None:
         if self._closed or not self._classifier:
             return
+        self._classifier.start_detection_timer()
         self._classifier.start_listening()
-        logger.debug("call has been answered, AMD starts listening")
+        logger.debug("AMD starts listening")
+
+    def _settle_participant_missing(self, error: str) -> None:
+        if self._closed or not self._classifier:
+            return
+        logger.debug(
+            "AMD: call ended before detection could run, settling",
+            extra={"error": error},
+        )
+        self._classifier.settle(AMDCategory.UNCERTAIN, reason="participant_missing")
 
     async def _wait_for_sip_answer(self, room: rtc.Room, identity: str) -> None:
         try:
@@ -464,16 +476,14 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 value=_SIP_CALL_STATUS_ACTIVE,
             )
         except RuntimeError as e:
-            # SIP participant disconnected before going active, default to detection timeout
-            logger.debug(
-                "AMD: SIP answer wait failed; starting to listen", extra={"reason": str(e)}
-            )
+            self._settle_participant_missing(str(e))
+            return
 
         if not self._closed:
             self._start_listening()
 
     async def _run_stt(self) -> None:
-        assert is_given(self._stt)
+        assert self._stt is not None
         assert self._classifier
 
         self._audio_ch = aio.Chan[rtc.AudioFrame]()
@@ -516,7 +526,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 "reason": result.reason,
                 "speech_duration": result.speech_duration,
                 "delay": result.delay,
-                "transcript": result.transcript,
+                "lk.pii.transcript": result.transcript,
             },
         )
         if self._classifier:
@@ -545,7 +555,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     "category": result.category.value,
                     "speech_duration": result.speech_duration,
                     "reason": result.reason,
-                    "transcript": result.transcript,
+                    trace_types.ATTR_AMD_TRANSCRIPT: result.transcript,
                     "delay": result.delay,
                 },
             )
@@ -605,7 +615,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 no_speech_threshold=self._opts["no_speech_threshold"],
                 timeout=self._opts["timeout"],
                 prompt=self._opts["prompt"],
-                source="amd_stt" if is_given(self._stt) else "stt",
+                source="amd_stt" if self._stt is not None else "stt",
                 wait_until_finished=self._wait_until_finished,
                 max_endpointing_delay=max_endpointing_delay,
             )

@@ -14,18 +14,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import textwrap
 import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
 
-from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import utils
+from .._proto import encode_chat_item
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -50,11 +53,23 @@ class Instructions:
             text="Use markdown formatting.",
         )
 
+        # With per-call context kept out of the cached prefix
+        Instructions(
+            "You are a helpful assistant.",
+            dynamic=f"Current time: {now}. Caller: {caller_id}.",
+        )
+
     Rendering::
 
         instr.render()                              # → common text
         instr.render(modality="audio")               # → common + audio addition
         instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
+
+    ``dynamic`` holds text that changes from call to call, such as the time or the
+    caller's number. :meth:`render` appends it after a single newline. The voice pipeline
+    stores it as its own system message right after the instructions message, so the
+    instructions message stays identical across calls and can end a cached prompt prefix
+    (see :func:`livekit.agents.voice.generation.update_instructions`).
     """
 
     def __init__(
@@ -63,10 +78,12 @@ class Instructions:
         *,
         audio: str | None = None,
         text: str | None = None,
+        dynamic: str | None = None,
     ) -> None:
         self.common = common
         self.audio = audio
         self.text = text
+        self.dynamic = dynamic
 
     def render(
         self,
@@ -81,18 +98,24 @@ class Instructions:
             data: Template variables to fill. Missing placeholders log a warning
                 and are replaced with empty strings.
         """
-        parts = [self.common]
-        if modality is not None:
-            addition = self.audio if modality == "audio" else self.text
-            if addition:
-                parts.append(addition)
-
-        result = "\n\n".join(p for p in parts if p)
+        # one newline, not the section separator: the pipeline stores dynamic as the next
+        # message, and provider formatters join messages' text with one newline
+        parts = [self.render_static(modality=modality), self.dynamic or ""]
+        result = "\n".join(p for p in parts if p)
 
         if data:
             result = utils.misc.safe_render(result, data)
 
         return result
+
+    def render_static(self, *, modality: Literal["audio", "text"] | None = None) -> str:
+        """Render the common text and the modality addition, without ``dynamic``."""
+        parts = [self.common]
+        if modality is not None:
+            addition = self.audio if modality == "audio" else self.text
+            if addition:
+                parts.append(addition)
+        return "\n\n".join(p for p in parts if p)
 
     @staticmethod
     def resolve_template(template: str, **kwargs: object) -> Instructions:
@@ -101,6 +124,7 @@ class Instructions:
         If any kwarg value is an ``Instructions`` object, its ``common``/``audio``/``text``
         parts are substituted into the matching variant of the result. This is used by
         workflow tasks to build modality-aware instructions from a single template.
+        ``dynamic`` is not templated: the result never carries one.
         """
         any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
         if any_instructions:
@@ -132,10 +156,12 @@ class Instructions:
         return self.common
 
     def __repr__(self) -> str:
-        return f"Instructions({self.common!r})"
+        if self.dynamic is None:
+            return f"Instructions({self.common!r})"
+        return f"Instructions({self.common!r}, dynamic={self.dynamic!r})"
 
     def __hash__(self) -> int:
-        return hash((self.common, self.audio, self.text))
+        return hash((self.common, self.audio, self.text, self.dynamic))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Instructions):
@@ -143,9 +169,12 @@ class Instructions:
                 self.common == other.common
                 and self.audio == other.audio
                 and self.text == other.text
+                and self.dynamic == other.dynamic
             )
         if isinstance(other, str):
-            return self.common == other
+            # a plain string has no sections, so only section-free instructions equal it;
+            # the realtime handoff path reuses a session on this equality
+            return self.common == other and not self.audio and not self.text and not self.dynamic
         return NotImplemented
 
 
@@ -182,7 +211,8 @@ class ImageContent(BaseModel):
 
     id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
     """
-    Unique identifier for the image
+    Unique identifier for the image. Use a new id when replacing inline image data
+    or a video frame; input-delta telemetry uses this id instead of hashing media bytes.
     """
 
     type: Literal["image_content"] = Field(default="image_content")
@@ -216,6 +246,31 @@ class AudioContent(BaseModel):
     type: Literal["audio_content"] = Field(default="audio_content")
     frame: list[rtc.AudioFrame]
     transcript: str | None = None
+
+
+class CacheBreakpoint(BaseModel):
+    """Marks the end of a reusable prompt prefix inside a message's content.
+
+    The content before the marker becomes its own cacheable segment on LLMs that
+    enable OpenAI prompt cache breakpoints (GPT-5.6 and later). Every other
+    provider format drops it, and it is never part of ``text_content``.
+
+    In a system or developer message, put the marker last and send per-call text
+    as a separate message. When the request carries tools, a marker partway through
+    a system message is not matched; one at the end of the message is, and so is one
+    partway through a user message.
+
+    Example::
+
+        chat_ctx.add_message(role="system", content=[STATIC_PROMPT, CacheBreakpoint()])
+        chat_ctx.add_message(role="system", content=f"Caller: {caller_id}")
+    """
+
+    # the only ChatContent member with no required field: without this, any typeless dict
+    # would validate as a marker and vanish from the request instead of failing validation
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["cache_breakpoint"] = Field(default="cache_breakpoint")
 
 
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
@@ -268,6 +323,22 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
+    llm_node_tps: float
+    """LLM output tokens per second for this turn, measured at the `llm_node` over the
+    streaming window (first to last text chunk). Absent for a reply that arrived in a
+    single chunk, which has no measurable rate
+
+    Assistant `ChatMessage` only
+    """
+
+    llm_node_ttfs: float
+    """Time from LLM generation start until the first sentence reached the TTS provider, as
+    segmented by that TTS. Absent when no audio came from a LiveKit TTS this turn: no TTS,
+    an interruption before the first frame, or a `tts_node` synthesizing audio on its own
+
+    Assistant `ChatMessage` only
+    """
+
     tts_node_ttfb: float
     """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
 
@@ -302,7 +373,50 @@ class MetricsReport(TypedDict, total=False):
     stt_metadata: MetricsMetadata
 
 
-class ChatMessage(BaseModel):
+class _ChatItemBase(BaseModel):
+    """Shared by every :data:`ChatItem` type; adds no fields."""
+
+    def _essential_fields(self) -> tuple[Any, ...]:
+        """What identifies this item's content beyond its id and type: what
+        :meth:`ChatContext.is_equivalent` compares and :meth:`_fingerprint` hashes.
+        Timestamps, metrics and other metadata are left out."""
+        return ()
+
+    def _fingerprint(self) -> bytes:
+        """A short digest of :meth:`_essential_fields`, to tell whether an item changed
+        without keeping a copy of it."""
+        payload = json.dumps(
+            [type(self).__name__, *self._essential_fields()],
+            ensure_ascii=False,
+            default=_fingerprint_default,
+        )
+        return hashlib.blake2b(payload.encode(), digest_size=8).digest()
+
+
+def _fingerprint_default(value: Any) -> Any:
+    # Avoid hashing inline media payloads. Their object identity detects replacement
+    # within a running session; callers should also give replacements a new image id.
+    if isinstance(value, ImageContent):
+        image_source = (
+            value.image
+            if isinstance(value.image, str) and not value.image.startswith("data:")
+            else id(value.image)
+        )
+        return [
+            "image",
+            value.id,
+            image_source,
+            value.inference_width,
+            value.inference_height,
+            value.inference_detail,
+            value.mime_type,
+        ]
+    if isinstance(value, AudioContent):
+        return ["audio", value.transcript]
+    return str(value)
+
+
+class ChatMessage(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
     role: ChatRole
@@ -344,11 +458,14 @@ class ChatMessage(BaseModel):
             return None
         return "\n".join(text_parts)
 
+    def _essential_fields(self) -> tuple[Any, ...]:
+        return (self.role, self.interrupted, self.content)
 
-ChatContent: TypeAlias = ImageContent | AudioContent | str
+
+ChatContent: TypeAlias = ImageContent | AudioContent | CacheBreakpoint | str
 
 
-class FunctionCall(BaseModel):
+class FunctionCall(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["function_call"] = "function_call"
     call_id: str
@@ -363,8 +480,11 @@ class FunctionCall(BaseModel):
     should be grouped together (e.g., parallel tool calls from a single API response),
     set this to a shared value. If not set, falls back to using id for grouping."""
 
+    def _essential_fields(self) -> tuple[Any, ...]:
+        return (self.name, self.call_id, self.arguments)
 
-class FunctionCallOutput(BaseModel):
+
+class FunctionCallOutput(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["function_call_output"] = Field(default="function_call_output")
     name: str = Field(default="")
@@ -372,9 +492,18 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    reply_required: bool = Field(default=True)
+    """Whether the model should answer once it receives this output.
+
+    AgentSession uses it to decide whether to generate a follow-up reply.
+    Realtime models can also use it to schedule their response.
+    """
+
+    def _essential_fields(self) -> tuple[Any, ...]:
+        return (self.name, self.call_id, self.output, self.is_error)
 
 
-class AgentHandoff(BaseModel):
+class AgentHandoff(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_handoff"] = Field(default="agent_handoff")
     old_agent_id: str | None = None
@@ -382,7 +511,7 @@ class AgentHandoff(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-class AgentConfigUpdate(BaseModel):
+class AgentConfigUpdate(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_config_update"] = Field(default="agent_config_update")
 
@@ -400,6 +529,13 @@ ChatItem = Annotated[
     ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
     Field(discriminator="type"),
 ]
+
+
+DYNAMIC_INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions.dynamic"  #  value must not change
+"""
+The ID of the message holding ``Instructions.dynamic``, kept right after the instructions
+message. Formatters that extract one system preamble merge it back in.
+"""
 
 
 class ChatContext:
@@ -446,7 +582,7 @@ class ChatContext:
             kwargs["extra"] = extra
 
         if isinstance(content, Instructions):
-            message = ChatMessage(role=role, content=[str(content)], **kwargs)
+            message = ChatMessage(role=role, content=[content.render()], **kwargs)
         elif isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
         else:
@@ -512,6 +648,13 @@ class ChatContext:
                     continue
 
         valid_tools = set(get_tool_names(tools)) if tools else set()
+        # FunctionCallOutput.name is optional, so an output that has none is paired with its
+        # call by call_id instead
+        valid_call_ids = {
+            item.call_id
+            for item in self.items
+            if item.type == "function_call" and item.name in valid_tools
+        }
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",
@@ -535,12 +678,16 @@ class ChatContext:
             if exclude_config_update and item.type == "agent_config_update":
                 continue
 
-            if (
-                is_given(tools)
-                and (item.type == "function_call" or item.type == "function_call_output")
-                and item.name not in valid_tools
-            ):
-                continue
+            if is_given(tools):
+                if item.type == "function_call" and item.name not in valid_tools:
+                    continue
+
+                if item.type == "function_call_output" and (
+                    item.name not in valid_tools
+                    if item.name
+                    else item.call_id not in valid_call_ids
+                ):
+                    continue
 
             items.append(item)
 
@@ -550,23 +697,25 @@ class ChatContext:
         """Truncate the chat context to the last N items in place.
 
         Removes leading function calls to avoid partial function outputs.
-        Preserves the first instruction message (system/developer) by adding it back
-        to the beginning.
+        Preserves the first instruction message (system/developer), and the dynamic
+        instructions message right after it, by adding them back to the beginning.
+
+        A `max_items` of 0 leaves nothing but those instructions: it asks for no
+        conversational items, so none are kept. A negative value is a programming error and
+        raises ValueError.
         """
+
+        if max_items < 0:
+            raise ValueError("max_items must be non-negative")
 
         if len(self._items) <= max_items:
             return self
 
-        instructions = next(
-            (
-                item
-                for item in self._items
-                if item.type == "message" and item.role in ("system", "developer")
-            ),
-            None,
-        )
+        instructions = self._leading_instructions()
 
-        new_items = self._items[-max_items:]
+        # `-0` is `0` and `items[0:]` is the whole list, so a zero budget would otherwise
+        # keep every item.
+        new_items = self._items[-max_items:] if max_items else []
 
         # chat_ctx shouldn't start with function_call or function_call_output
         while new_items and new_items[0].type in [
@@ -575,11 +724,28 @@ class ChatContext:
         ]:
             new_items.pop(0)
 
-        if instructions and not any(item.id == instructions.id for item in new_items):
-            new_items.insert(0, instructions)
+        for item in reversed(instructions):
+            if not any(existing.id == item.id for existing in new_items):
+                new_items.insert(0, item)
 
         self._items[:] = new_items
         return self
+
+    def _leading_instructions(self) -> list[ChatItem]:
+        idx = next(
+            (
+                i
+                for i, item in enumerate(self._items)
+                if item.type == "message" and item.role in ("system", "developer")
+            ),
+            None,
+        )
+        if idx is None:
+            return []
+        kept = self._items[idx : idx + 2]
+        if len(kept) == 2 and kept[1].id != DYNAMIC_INSTRUCTIONS_MESSAGE_ID:
+            return kept[:1]
+        return kept
 
     def merge(
         self,
@@ -678,6 +844,7 @@ class ChatContext:
         format: Literal["openai", "openai.responses"],
         *,
         inject_dummy_user_message: bool = True,
+        prompt_cache_breakpoints: bool = False,
     ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
@@ -687,6 +854,7 @@ class ChatContext:
         *,
         inject_dummy_user_message: bool = True,
         thought_signatures: dict[str, bytes] | None = None,
+        merge_dynamic_instructions: bool = True,
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload
@@ -701,7 +869,7 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["mistralai"]
+        self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
     ) -> tuple[list[dict], _provider_format.mistralai.MistralFormatData]: ...
 
     @overload
@@ -736,7 +904,9 @@ class ChatContext:
         elif format == "anthropic":
             return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
         elif format == "mistralai":
-            return _provider_format.mistralai.to_conversations_ctx(self)
+            return _provider_format.mistralai.to_conversations_ctx(
+                self, inject_dummy_user_message=inject_dummy_user_message
+            )
         else:
             raise ValueError(f"Unsupported provider format: {format}")
 
@@ -754,14 +924,14 @@ class ChatContext:
         return 0
 
     def _upsert_item(self, item: ChatItem, *, allow_type_mismatch: bool = False) -> None:
-        """Update an item with the same ID if it exists, otherwise append it."""
+        """Update an item with the same ID if it exists, otherwise insert it by creation time."""
         idx = self.index_by_id(item.id)
         if idx is not None:
             if not allow_type_mismatch and item.type != self._items[idx].type:
                 raise ValueError(f"Item type mismatch: {item.type} != {self._items[idx].type}")
             self._items[idx] = item
         else:
-            self._items.append(item)
+            self.insert(item)
 
     async def _summarize(
         self,
@@ -868,8 +1038,9 @@ class ChatContext:
         preserved: list[ChatItem] = []
         for it in head_items:
             if isinstance(it, ChatMessage) and it.role in ("user", "assistant"):
-                continue
-            if isinstance(it, (FunctionCall, FunctionCallOutput)):
+                if it.extra.get("is_summary") is not True:
+                    continue
+            elif isinstance(it, (FunctionCall, FunctionCallOutput)):
                 continue
             preserved.append(it)
 
@@ -896,9 +1067,7 @@ class ChatContext:
         return cls(items)
 
     def to_proto(self) -> agent_pb.ChatContext:
-        from ..voice.remote_session import _chat_item_to_proto
-
-        return agent_pb.ChatContext(items=[_chat_item_to_proto(item) for item in self.items])
+        return agent_pb.ChatContext(items=[encode_chat_item(item) for item in self.items])
 
     @property
     def readonly(self) -> bool:
@@ -914,7 +1083,8 @@ class ChatContext:
           - Function calls: compares `name`, `call_id`, and `arguments`.
           - Function call outputs: compares `name`, `call_id`, `output`, and `is_error`.
 
-        Does not consider timestamps or other metadata.
+        Does not consider timestamps or other metadata. Each item type declares its fields
+        in ``_essential_fields``, which item fingerprints hash as well.
         """
         if self is other:
             return True
@@ -922,28 +1092,10 @@ class ChatContext:
         if len(self.items) != len(other.items):
             return False
 
-        for a, b in zip(self.items, other.items, strict=False):
-            if a.id != b.id or a.type != b.type:
-                return False
-
-            if a.type == "message" and b.type == "message":
-                if a.role != b.role or a.interrupted != b.interrupted or a.content != b.content:
-                    return False
-
-            elif a.type == "function_call" and b.type == "function_call":
-                if a.name != b.name or a.call_id != b.call_id or a.arguments != b.arguments:
-                    return False
-
-            elif a.type == "function_call_output" and b.type == "function_call_output":
-                if (
-                    a.name != b.name
-                    or a.call_id != b.call_id
-                    or a.output != b.output
-                    or a.is_error != b.is_error
-                ):
-                    return False
-
-        return True
+        return all(
+            a.id == b.id and a.type == b.type and a._essential_fields() == b._essential_fields()
+            for a, b in zip(self.items, other.items, strict=True)
+        )
 
 
 class _ReadOnlyChatContext(ChatContext):
@@ -960,7 +1112,7 @@ class _ReadOnlyChatContext(ChatContext):
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
         # override all mutating methods to raise errors
-        append = extend = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
+        append = extend = insert = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
         __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error  # type: ignore
 
         def copy(self) -> list[ChatItem]:
@@ -968,6 +1120,15 @@ class _ReadOnlyChatContext(ChatContext):
 
     def __init__(self, items: list[ChatItem]):
         self._items = self._ImmutableList(items)
+
+    @property
+    def items(self) -> list[ChatItem]:
+        return self._items
+
+    @items.setter
+    def items(self, items: list[ChatItem]) -> None:
+        logger.error(_ReadOnlyChatContext.error_msg)
+        raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
     @property
     def readonly(self) -> bool:

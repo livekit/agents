@@ -37,18 +37,25 @@ def test_first_interim_delay_is_unavailable_without_interim() -> None:
     assert metrics.first_interim_status == "absent"
 
 
-async def test_blank_interim_does_not_capture_first_interim_time() -> None:
-    recognition = AudioRecognition.__new__(AudioRecognition)
-    recognition._turn_detection_mode = "vad"
-    recognition._interruption_enabled = False
-    recognition._first_interim_time = None
+@pytest.mark.parametrize("blank_text", ["", "  \t\n"])
+async def test_blank_interim_does_not_capture_first_interim_time(blank_text: str) -> None:
+    session = MagicMock()
+    session.options.interruption = {}
+    recognition = AudioRecognition(
+        session,
+        hooks=MagicMock(),
+        endpointing=MagicMock(),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
     recognition._speech_start_time = 10.0
-    recognition._hooks = MagicMock()
-    recognition._vad = None
 
     blank_interim = SpeechEvent(
         type=SpeechEventType.INTERIM_TRANSCRIPT,
-        alternatives=[SpeechData(language="", text="")],
+        alternatives=[SpeechData(language="", text=blank_text)],
+        created_at=11.0,
     )
     with patch("livekit.agents.voice.audio_recognition.time.time", return_value=11.0):
         await recognition._on_stt_event(blank_interim)
@@ -58,8 +65,34 @@ async def test_blank_interim_does_not_capture_first_interim_time() -> None:
     populated_interim = SpeechEvent(
         type=SpeechEventType.INTERIM_TRANSCRIPT,
         alternatives=[SpeechData(language="", text="hello")],
+        created_at=12.0,
     )
     with patch("livekit.agents.voice.audio_recognition.time.time", return_value=12.0):
         await recognition._on_stt_event(populated_interim)
 
     assert recognition._first_interim_time == 12.0
+
+    # Processing a buffered first update uses receipt time, not replay time.
+    recognition._first_interim_time = None
+    with patch("livekit.agents.voice.audio_recognition.time.time", return_value=20.0):
+        recognition._process_stt_event(populated_interim)
+    assert recognition._first_interim_time == 12.0
+
+    # A later update cannot replace the first receipt.
+    populated_interim.created_at = 13.0
+    with patch("livekit.agents.voice.audio_recognition.time.time", return_value=20.0):
+        recognition._process_stt_event(populated_interim)
+    assert recognition._first_interim_time == 12.0
+
+
+def test_existing_eou_payload_remains_valid() -> None:
+    from livekit.agents.metrics import EOUMetrics
+
+    metrics = EOUMetrics(
+        timestamp=1.0,
+        end_of_utterance_delay=0.1,
+        transcription_delay=0.2,
+        on_user_turn_completed_delay=0.3,
+    )
+    assert metrics.first_interim_delay is None
+    assert metrics.first_interim_status is None

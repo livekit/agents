@@ -11,6 +11,7 @@ from hotel_db import (
     RoomExtra,
     RoomType,
     Unavailable,
+    describe_room_options,
     speak_usd,
 )
 from persona import COMMON_INSTRUCTIONS
@@ -136,7 +137,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         if check_in < TODAY and check_in != self._existing.check_in:
             raise ToolError("check-in can't be in the past")
 
-        avail = await self._db.list_room_types_available(
+        avail = await self._db.list_room_options(
             check_in=check_in,
             check_out=check_out,
             guests=guests,
@@ -181,22 +182,22 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         A stated view moves the guest to a room with that view (this is how you resolve "I booked a garden view but my room has none"). The view is a property of specific rooms, NOT a separate type - if the requested view isn't available for the chosen type, this errors with where that view IS available, so you can offer the right type. Omit view entirely unless the caller asks for one.
 
         Args:
-            room_type: Room type for the booking (king / queen_2beds / double_queen / suite / penthouse).
+            room_type: Room type for the booking (king / queen_2beds / suite / penthouse).
             extras: Full new list of extras after the caller's change.
             smoking_room: True if the caller wants a smoking-permitted room.
             view: The view the caller asked for (city / garden / ocean), ONLY if they stated one - omit entirely otherwise.
         """
-        avail = await self._db.list_room_types_available(
+        avail = await self._db.list_room_options(
             check_in=self._check_in,
             check_out=self._check_out,
             guests=self._guests,
             smoking=smoking_room,
             exclude_booking_code=self._existing.code,
         )
-        chosen = next((a for a in avail if a.type == room_type), None)
-        if chosen is None:
+        for_type = [a for a in avail if a.type == room_type]
+        if not for_type:
             kind = "smoking " if smoking_room else ""
-            offer = ", ".join(sorted(a.type for a in avail)) or "nothing for those dates"
+            offer = ", ".join(sorted({a.type for a in avail})) or "nothing for those dates"
             raise ToolError(f"no {kind}{room_type} available; offer one of: {offer}")
         # Models sometimes send placeholder strings for optional args they
         # should omit - normalize those to "no view preference".
@@ -204,8 +205,8 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
             view = view.strip().casefold()
             if view in ("", "null", "none", "any", "no preference", "unspecified"):
                 view = None
-        if view is not None and view not in chosen.views:
-            matching = [a.type for a in avail if view in a.views]
+        if view is not None and view not in {a.view for a in for_type}:
+            matching = sorted({a.type for a in avail if a.view == view})
             if matching:
                 rec = " or ".join(t.replace("_", " ") for t in matching)
                 raise ToolError(
@@ -215,10 +216,10 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
                     f"as a downgrade), then call choose_room again with that type and view to "
                     f"complete the move. Do NOT give up to a manager callback - this flow can do it."
                 )
-            where = ", ".join(f"{a.type.replace('_', ' ')} ({' or '.join(a.views)})" for a in avail)
             raise ToolError(
-                f"no {view}-view room of any type for those dates - the views by room type are: "
-                f"{where}. Be honest that the exact view isn't open, and offer the closest option."
+                f"no {view}-view room of any type for those dates - the pairings open are:\n"
+                f"{describe_room_options(avail)}\n"
+                "Be honest that the exact view isn't open, and offer the closest option."
             )
         self._room_type = room_type
         self._view = view

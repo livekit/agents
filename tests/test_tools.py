@@ -3,7 +3,7 @@ import json
 from typing import Annotated, Any, Literal
 
 import pytest
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PositiveInt, ValidationError
 
 from livekit.agents import Agent
 from livekit.agents.llm import (
@@ -12,11 +12,13 @@ from livekit.agents.llm import (
     ToolContext,
     ToolError,
     ToolFlag,
+    ToolResult,
     Toolset,
     function_tool,
 )
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
+    _json_schema_allows_null,
     build_legacy_openai_schema,
     build_strict_openai_schema,
     function_arguments_to_pydantic_model,
@@ -415,6 +417,114 @@ class TestToolExecution:
             with pytest.raises(ValidationError):
                 model(count=bad)
 
+    @pytest.mark.parametrize("with_field", [False, True])
+    def test_annotated_type_constraints_preserved(self, with_field: bool):
+        annotation = (
+            Annotated[PositiveInt, Field(description="how many")] if with_field else PositiveInt
+        )
+
+        @function_tool
+        async def book(count: annotation) -> str:
+            """Book a thing."""
+            return str(count)
+
+        model = function_arguments_to_pydantic_model(book)
+        assert model.model_json_schema()["properties"]["count"]["exclusiveMinimum"] == 0
+        for bad in (0, -1):
+            with pytest.raises(ValidationError):
+                model(count=bad)
+        assert prepare_function_arguments(fnc=book, json_arguments='{"count": 2}')[0] == (2,)
+
+    @pytest.mark.parametrize("with_field", [False, True])
+    async def test_annotated_validators_run_in_order(self, with_field: bool):
+        calls: list[str] = []
+
+        def before(value: str) -> str:
+            calls.append("before")
+            return value.strip()
+
+        def after(value: str) -> str:
+            calls.append("after")
+            return value.upper()
+
+        annotation = Annotated[
+            str,
+            BeforeValidator(before),
+            AfterValidator(after),
+        ]
+        if with_field:
+            annotation = Annotated[annotation, Field(description="label")]
+
+        @function_tool
+        async def label(value: annotation) -> str:
+            """Normalize a label."""
+            return value
+
+        args, kwargs = prepare_function_arguments(
+            fnc=label, json_arguments='{"value": "  hello  "}'
+        )
+        assert await label(*args, **kwargs) == "HELLO"
+        assert calls == ["before", "after"]
+
+    def test_annotated_field_constraint_runs_after_validator(self):
+        @function_tool
+        async def label(
+            value: Annotated[str, AfterValidator(lambda value: ""), Field(min_length=1)],
+        ) -> str:
+            """Require a nonempty normalized label."""
+            return value
+
+        model = function_arguments_to_pydantic_model(label)
+        with pytest.raises(ValidationError, match="at least 1"):
+            model(value="hello")
+
+    def test_annotated_field_attributes_and_defaults_preserved(self):
+        metadata = Field(default="ready", description="status", alias="status")
+
+        @function_tool
+        async def label(value: Annotated[str, metadata] = "fallback") -> str:
+            """Label a thing."""
+            return value
+
+        model = function_arguments_to_pydantic_model(label)
+        assert model().value == "ready"
+        assert model(status="done").value == "done"
+        assert model.model_json_schema()["properties"]["status"]["description"] == "status"
+        assert metadata.default == "ready"
+        assert metadata.description == "status"
+
+    def test_annotated_field_default_factory_preserved(self):
+        @function_tool
+        async def label(value: Annotated[list[str], Field(default_factory=list)]) -> list[str]:
+            """Label a thing."""
+            return value
+
+        model = function_arguments_to_pydantic_model(label)
+        first = model()
+        first.value.append("one")
+        assert model().value == []
+
+    def test_annotated_field_docstring_and_default_fallbacks(self):
+        metadata = Field(gt=0)
+
+        @function_tool
+        async def book(count: Annotated[int, metadata] = 2) -> str:
+            """Book items.
+
+            Args:
+                count: Number of items.
+            """
+            return str(count)
+
+        for _ in range(2):
+            model = function_arguments_to_pydantic_model(book)
+            assert model().count == 2
+            prop = model.model_json_schema()["properties"]["count"]
+            assert prop["description"] == "Number of items."
+            assert prop["exclusiveMinimum"] == 0
+        assert metadata.is_required()
+        assert metadata.description is None
+
     async def test_tool_execution(self):
         args, kwargs = prepare_function_arguments(
             fnc=mock_tool_1, json_arguments='{"arg1": "test", "opt_arg2": "test2"}'
@@ -466,11 +576,41 @@ class TestToolExecution:
         output = await agent.mock_tool_in_agent(*args, **kwargs)
         assert output == {"arg1": "test", "opt_arg2": None}
 
+    async def test_null_uses_default_for_non_optional_param(self):
+        @function_tool
+        async def tool(arg1: str, count: int = 5) -> int:
+            """Tool with a defaulted non-optional parameter"""
+            return count
+
+        args, kwargs = prepare_function_arguments(
+            fnc=tool, json_arguments='{"arg1": "test", "count": null}'
+        )
+        assert args == ("test", 5)
+        assert kwargs == {}
+
+    async def test_null_uses_default_in_nested_model_arg(self):
+        class Preferences(BaseModel):
+            color: str = "red"
+            note: str | None = None
+
+        @function_tool
+        async def set_prefs(prefs: Preferences) -> str:
+            """Tool with a nested model argument"""
+            return prefs.color
+
+        args, kwargs = prepare_function_arguments(
+            fnc=set_prefs, json_arguments='{"prefs": {"color": null, "note": null}}'
+        )
+        assert args == (Preferences(color="red", note=None),)
+        assert kwargs == {}
+
     def test_unexpected_arguments(self):
         with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"opt_arg2": "test2"}')
 
-        with pytest.raises(ToolError, match="Received no value for required parameter"):
+        # a null for a required parameter with no default stays null and is
+        # rejected by pydantic validation
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": null}')
 
         with pytest.raises(ToolError, match="validation error"):
@@ -697,6 +837,87 @@ class TestStrictJsonSchema:
         assert "null" not in status.get("type", []), f"type should not contain 'null': {status}"
 
 
+class _SentinelChildModel(BaseModel):
+    x: int = 1
+
+
+class _DefaultedFieldsModel(BaseModel):
+    count: int = 5
+    label: Literal["a", "b"] = "a"
+    value: int | str = 5
+    child: _SentinelChildModel = _SentinelChildModel()
+
+
+class _DefaultedConstModel(BaseModel):
+    tag: Literal["only"] = "only"
+
+
+class TestNullSentinelForDefaults:
+    """Tool schemas advertise null for defaulted fields — the tool-args pipeline
+    resolves the sentinel in _prepare_function_arguments. Without the flag,
+    defaults are dropped and fields stay required and non-nullable."""
+
+    def test_sentinel_flag_advertises_null_for_all_defaulted_shapes(self):
+        schema = to_strict_json_schema(_DefaultedFieldsModel, null_sentinel_for_defaults=True)
+        for field in ("count", "label", "value", "child"):
+            prop = schema["properties"][field]
+            assert _json_schema_allows_null(prop, root=schema), f"{field}: {prop}"
+            assert "default" not in prop
+
+    def test_const_field_gets_no_sentinel(self):
+        # a const has one legal value, which the model can always produce; a null branch
+        # would contradict it and lose the only information the field carries
+        schema = to_strict_json_schema(_DefaultedConstModel, null_sentinel_for_defaults=True)
+        prop = schema["properties"]["tag"]
+        assert prop == {"const": "only", "type": "string"}
+        assert not _json_schema_allows_null(prop, root=schema)
+
+    def test_no_flag_keeps_defaulted_fields_required_and_non_nullable(self):
+        schema = to_strict_json_schema(_DefaultedFieldsModel)
+        assert schema["required"] == ["count", "label", "value", "child"]
+        for field in ("count", "label", "value", "child"):
+            prop = schema["properties"][field]
+            assert not _json_schema_allows_null(prop, root=schema), f"{field}: {prop}"
+            assert "default" not in prop
+
+    def test_described_ref_default_keeps_ref_free_of_siblings(self):
+        # a documented tool param whose type is a nested model and that has a
+        # default arrives as {"$ref", "default", "description"}; strict mode
+        # forbids siblings on $ref, so the description must stay on the wrapper
+        @function_tool
+        async def tool_with_documented_model_arg(
+            query: str,
+            config: _SentinelChildModel = _SentinelChildModel(),  # noqa: B008
+        ) -> str:
+            """Does a thing.
+
+            Args:
+                query: What to search for.
+                config: Optional configuration for the search.
+            """
+            return "ok"
+
+        schema = build_strict_openai_schema(tool_with_documented_model_arg)["function"][
+            "parameters"
+        ]
+
+        def assert_no_ref_siblings(node, path="$"):
+            if isinstance(node, dict):
+                if "$ref" in node:
+                    assert len(node) == 1, f"$ref with siblings at {path}: {sorted(node)}"
+                for key, value in node.items():
+                    assert_no_ref_siblings(value, f"{path}.{key}")
+            elif isinstance(node, list):
+                for i, value in enumerate(node):
+                    assert_no_ref_siblings(value, f"{path}[{i}]")
+
+        assert_no_ref_siblings(schema)
+
+        config = schema["properties"]["config"]
+        assert config["description"] == "Optional configuration for the search."
+        assert _json_schema_allows_null(config, root=schema)
+
+
 class _CarModel(BaseModel):
     vehicle: Literal["Car"]
     brand: str
@@ -715,6 +936,17 @@ class _DiscriminatedUnionModel(BaseModel):
 
 class _NestedDiscriminatedUnionModel(BaseModel):
     items: list[Annotated[_CarModel | _BikeModel, Field(discriminator="vehicle")]]
+
+
+# tags carrying a default, i.e. how discriminated unions are usually written
+class _DefaultedTagCelsius(BaseModel):
+    unit: Literal["celsius"] = "celsius"
+    value: float
+
+
+class _DefaultedTagFahrenheit(BaseModel):
+    unit: Literal["fahrenheit"] = "fahrenheit"
+    value: float
 
 
 def _has_one_of(schema: object) -> bool:
@@ -766,6 +998,36 @@ class TestDiscriminatedUnionSchema:
             f"strict openai schema should not contain oneOf: {json.dumps(schema, indent=2)}"
         )
 
+    def test_defaulted_tag_stays_pinned_and_resolves_to_its_variant(self):
+        """`discriminator` is unsupported by strict mode, so the per-variant tag const is
+        all that resolves the variant. A nulled tag makes variants that differ only in
+        their tag collide, and the first one silently wins."""
+
+        @function_tool
+        async def set_thermostat(
+            temp: Annotated[
+                _DefaultedTagCelsius | _DefaultedTagFahrenheit, Field(discriminator="unit")
+            ],
+        ) -> str:
+            """Set the thermostat."""
+            return str(temp)
+
+        schema = build_strict_openai_schema(set_thermostat)["function"]["parameters"]
+        for name, tag in (
+            ("_DefaultedTagCelsius", "celsius"),
+            ("_DefaultedTagFahrenheit", "fahrenheit"),
+        ):
+            unit = schema["$defs"][name]["properties"]["unit"]
+            assert unit == {"const": tag, "type": "string"}
+            assert not _json_schema_allows_null(unit, root=schema)
+            assert "unit" in schema["$defs"][name]["required"]
+
+        args, _ = prepare_function_arguments(
+            fnc=set_thermostat,
+            json_arguments=json.dumps({"temp": {"unit": "fahrenheit", "value": 70.0}}),
+        )
+        assert isinstance(args[0], _DefaultedTagFahrenheit)
+
 
 class _OpenEnumModel(BaseModel):
     """Simulates a codegen'd "open enum" pattern (e.g. Fern Python SDK).
@@ -814,6 +1076,61 @@ class TestEmptySchemaStripping:
             assert len(any_of) != 1, (
                 f"single-element anyOf should be unwrapped: {json.dumps(pref, indent=2)}"
             )
+
+
+class TestExecuteFunctionCallToolResult:
+    @pytest.mark.parametrize("reply_required", [True, False])
+    @pytest.mark.parametrize(
+        "output, expected_output",
+        [("ok", "ok"), ({"sent": "1"}, "{'sent': '1'}"), (None, "")],
+    )
+    async def test_tool_result_preserves_output_and_reply_required(
+        self, output: Any, expected_output: str, reply_required: bool
+    ) -> None:
+        from livekit.agents.llm import FunctionToolCall, execute_function_call
+
+        tool_result = ToolResult(output, reply_required=reply_required)
+
+        @function_tool
+        async def send_dtmf() -> ToolResult:
+            """Send DTMF events."""
+            return tool_result
+
+        result = await execute_function_call(
+            FunctionToolCall(name="send_dtmf", arguments="{}", call_id="dtmf-1"),
+            ToolContext([send_dtmf]),
+        )
+
+        assert result.fnc_call_out.call_id == "dtmf-1"
+        assert result.fnc_call_out.output == expected_output
+        assert result.fnc_call_out.reply_required is reply_required
+        assert not result.fnc_call_out.is_error
+        assert result.raw_output is tool_result
+        assert result.raw_exception is None
+
+    @pytest.mark.parametrize("reply_required", [True, False])
+    async def test_invalid_wrapped_output_preserves_reply_required(
+        self, reply_required: bool
+    ) -> None:
+        from livekit.agents.llm import FunctionToolCall, execute_function_call
+
+        tool_result = ToolResult(object(), reply_required=reply_required)
+
+        @function_tool
+        async def invalid_output() -> ToolResult:
+            """Return an invalid output."""
+            return tool_result
+
+        result = await execute_function_call(
+            FunctionToolCall(name="invalid_output", arguments="{}", call_id="invalid-1"),
+            ToolContext([invalid_output]),
+        )
+
+        assert result.fnc_call_out.is_error
+        assert result.fnc_call_out.output == "the tool returned an invalid output"
+        assert result.fnc_call_out.reply_required is reply_required
+        assert result.raw_output is tool_result
+        assert result.raw_exception is None
 
 
 class TestExecuteFunctionCallValidationErrors:
@@ -1307,12 +1624,49 @@ class TestHasCancellableTool:
         assert has_cancellable_tool([mock_tool_1, ts]) is True
 
 
+@function_tool(
+    raw_schema={
+        "name": "_key_probe",
+        "description": "Argument sink for key-derivation tests.",
+        "parameters": {"type": "object", "properties": {}},
+    }
+)
+async def _key_probe(raw_arguments: dict[str, object]) -> str:
+    return ""
+
+
+def _key(
+    name: str, args: dict[str, Any] | None = None, *, fnc: Any = _key_probe
+) -> tuple[str, str | None]:
+    """Derive a duplicate key the same way the executor does, so these tests can't
+    drift from production canonicalization. ``args=None`` → name-scoped key.
+
+    Defaults to a raw tool, whose arguments are keyed as sent; pass ``fnc`` to key
+    against a typed tool's validated arguments.
+    """
+    from livekit.agents.voice.tool_executor import _duplicate_key
+
+    return _duplicate_key(
+        fnc=fnc,
+        fnc_name=name,
+        scope="name_and_args" if args is not None else "name",
+        raw_arguments=args or {},
+    )
+
+
 def _register_fake(
-    executor, call_id: str, name: str, *, allow_cancellation: bool, allow_interruptions: bool = True
+    executor,
+    call_id: str,
+    name: str,
+    *,
+    allow_cancellation: bool,
+    allow_interruptions: bool = True,
+    args: dict[str, Any] | None = None,
 ):
     """Stub a _RunningTask into the executor so policy methods can be tested
     without choreographing real execute() lifetimes. Caller must clean up the
-    returned task via _cleanup_fakes."""
+    returned task via _cleanup_fakes. ``args`` registers the task under an
+    argument-scoped key, mirroring scope="name_and_args"."""
     import asyncio as _asyncio
 
     from livekit.agents.voice.tool_executor import _RunningTask
@@ -1330,6 +1684,7 @@ def _register_fake(
         exe_task=exe_task,
         executor=executor,
         allow_cancellation=allow_cancellation,
+        duplicate_key=_key(name, args),
     )
     return exe_task
 
@@ -1355,7 +1710,7 @@ class TestCheckDuplicate:
         try:
             assert (
                 await executor._check_duplicate(
-                    "tool_x", on_duplicate="allow", confirm_duplicate=None
+                    _key("tool_x"), on_duplicate="allow", confirm_duplicate=None
                 )
                 is None
             )
@@ -1370,7 +1725,7 @@ class TestCheckDuplicate:
         t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
         try:
             result = await executor._check_duplicate(
-                "tool_x", on_duplicate="reject", confirm_duplicate=None
+                _key("tool_x"), on_duplicate="reject", confirm_duplicate=None
             )
             assert isinstance(result, str) and "already running" in result
         finally:
@@ -1384,13 +1739,13 @@ class TestCheckDuplicate:
         t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
         try:
             result = await executor._check_duplicate(
-                "tool_x", on_duplicate="confirm", confirm_duplicate=False
+                _key("tool_x"), on_duplicate="confirm", confirm_duplicate=False
             )
             assert isinstance(result, str) and "confirm duplicate" in result.lower()
             # with confirm=True, the policy lets the new call through
             assert (
                 await executor._check_duplicate(
-                    "tool_x", on_duplicate="confirm", confirm_duplicate=True
+                    _key("tool_x"), on_duplicate="confirm", confirm_duplicate=True
                 )
                 is None
             )
@@ -1406,7 +1761,7 @@ class TestCheckDuplicate:
         try:
             assert (
                 await executor._check_duplicate(
-                    "tool_x", on_duplicate="replace", confirm_duplicate=None
+                    _key("tool_x"), on_duplicate="replace", confirm_duplicate=None
                 )
                 is None
             )
@@ -1425,9 +1780,128 @@ class TestCheckDuplicate:
         try:
             with pytest.raises(ToolError, match="not cancellable"):
                 await executor._check_duplicate(
-                    "tool_x", on_duplicate="replace", confirm_duplicate=None
+                    _key("tool_x"), on_duplicate="replace", confirm_duplicate=None
                 )
             assert not t.cancelled()  # the running tool was left alone
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_args_scope_rejects_same_args(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True, args={"order_id": "5"})
+        try:
+            result = await executor._check_duplicate(
+                _key("tool_x", {"order_id": "5"}), on_duplicate="reject", confirm_duplicate=None
+            )
+            assert isinstance(result, str) and "already running" in result
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_args_scope_allows_different_args(self):
+        """The whole point: a concurrent call of the same tool with different
+        arguments is not a duplicate."""
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True, args={"order_id": "5"})
+        try:
+            for mode in ("reject", "replace", "confirm"):
+                assert (
+                    await executor._check_duplicate(
+                        _key("tool_x", {"order_id": "7"}),
+                        on_duplicate=mode,
+                        confirm_duplicate=False,
+                    )
+                    is None
+                )
+            assert not t.cancelled()  # replace left the unrelated call alone
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_args_scope_is_key_order_insensitive(self):
+        """Providers don't guarantee argument emission order; the same arguments
+        must produce the same key regardless."""
+        assert _key("tool_x", {"a": 1, "b": {"c": 2, "d": 3}}) == _key(
+            "tool_x", {"b": {"d": 3, "c": 2}, "a": 1}
+        )
+
+    def test_args_scope_never_collides_across_tools(self):
+        assert _key("tool_x", {"order_id": "5"}) != _key("tool_y", {"order_id": "5"})
+
+    def test_args_scope_keys_on_validated_arguments(self):
+        """Arguments are compared post-validation, so how the LLM spelled an optional
+        parameter doesn't split one call into two. Keying on the raw arguments made
+        every pair below distinct."""
+
+        @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+        async def check_order(order_id: str, qty: float = 1.0, locale: str | None = None) -> str:
+            """Check an order.
+
+            Args:
+                order_id: the order to check
+                qty: how many
+                locale: optional locale
+            """
+            return "done"
+
+        def key(args: dict[str, Any]) -> tuple[str, str | None]:
+            return _key("check_order", args, fnc=check_order)
+
+        # an omitted optional parameter carries its default, so these are one call
+        assert key({"order_id": "5"}) == key({"order_id": "5", "locale": None})
+        assert key({"order_id": "5"}) == key({"order_id": "5", "qty": 1.0})
+        # ...as are equal numbers spelled differently for a float parameter
+        assert key({"order_id": "5", "qty": 1}) == key({"order_id": "5", "qty": 1.0})
+        # genuinely different arguments stay distinct
+        assert key({"order_id": "5"}) != key({"order_id": "6"})
+        # invalid arguments fail open here rather than raising — the call itself is what
+        # reports the error to the LLM
+        assert key({"order_id": "5", "qty": "nope"})[1] is not None
+        # raw tools have no per-parameter schema, so their arguments are keyed as sent
+        assert _key("raw", {"order_id": "5"}) != _key("raw", {"order_id": "5", "qty": 1})
+
+    @pytest.mark.asyncio
+    async def test_args_scope_replace_cancels_only_matching_call(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        same = _register_fake(
+            executor, "a", "tool_x", allow_cancellation=True, args={"order_id": "5"}
+        )
+        other = _register_fake(
+            executor, "b", "tool_x", allow_cancellation=True, args={"order_id": "7"}
+        )
+        try:
+            assert (
+                await executor._check_duplicate(
+                    _key("tool_x", {"order_id": "5"}),
+                    on_duplicate="replace",
+                    confirm_duplicate=None,
+                )
+                is None
+            )
+            assert same.cancelled() or same.done()
+            assert not other.cancelled()
+        finally:
+            await _cleanup_fakes(same, other)
+
+    @pytest.mark.asyncio
+    async def test_name_scope_ignores_args(self):
+        """Default scope is unchanged: any in-flight call of the tool collides."""
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
+        try:
+            result = await executor._check_duplicate(
+                _key("tool_x"), on_duplicate="reject", confirm_duplicate=None
+            )
+            assert isinstance(result, str) and "already running" in result
         finally:
             await _cleanup_fakes(t)
 
@@ -1443,7 +1917,9 @@ class TestCheckDuplicate:
         try:
             await executor._duplicate_check_lock.acquire()
             pending = _asyncio.create_task(
-                executor._check_duplicate("tool_x", on_duplicate="reject", confirm_duplicate=None)
+                executor._check_duplicate(
+                    _key("tool_x"), on_duplicate="reject", confirm_duplicate=None
+                )
             )
             await _asyncio.sleep(0)
             assert not pending.done()  # blocked on the lock
@@ -1452,6 +1928,100 @@ class TestCheckDuplicate:
             assert isinstance(result, str) and "already running" in result
         finally:
             await _cleanup_fakes(t)
+
+
+class TestDuplicateScopeThroughExecute:
+    """scope="name_and_args" driven through execute(), where the key derivation
+    order relative to the CONFIRM_DUPLICATE_PARAM pop matters."""
+
+    @pytest.mark.asyncio
+    async def test_confirm_param_excluded_from_key(self, _clear_running_tasks):
+        """The confirm flag is harness state, not a tool argument. Were the key
+        derived before the pop, a re-call carrying the flag would key differently
+        from the call it confirms and the guard would silently never match."""
+        import asyncio as _asyncio
+
+        from livekit.agents.llm.tool_context import CONFIRM_DUPLICATE_PARAM
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        gate = _asyncio.Event()
+
+        @function_tool(on_duplicate="confirm", duplicate_scope="name_and_args")
+        async def check_order(order_id: str) -> str:
+            """Check an order.
+
+            Args:
+                order_id: the order to check
+            """
+            await gate.wait()
+            return "done"
+
+        executor = _ToolExecutor()
+        first = _asyncio.create_task(
+            executor.execute(
+                tool=check_order,
+                run_ctx=_make_run_context(call_id="c1", name="check_order"),
+                raw_arguments={"order_id": "5"},
+            )
+        )
+        try:
+            await _asyncio.sleep(0)  # let the first call register
+            assert "c1" in executor._running_tasks
+
+            # identical args with the confirm flag present-but-false is still a
+            # duplicate. wait_for so a regression fails instead of hanging on the gate.
+            blocked = await _asyncio.wait_for(
+                executor.execute(
+                    tool=check_order,
+                    run_ctx=_make_run_context(call_id="c2", name="check_order"),
+                    raw_arguments={"order_id": "5", CONFIRM_DUPLICATE_PARAM: False},
+                ),
+                timeout=5,
+            )
+            assert isinstance(blocked, str) and "already running" in blocked
+            assert "c2" not in executor._running_tasks
+        finally:
+            gate.set()
+            await _asyncio.gather(first, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_different_args_run_concurrently(self, _clear_running_tasks):
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        gate = _asyncio.Event()
+
+        @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+        async def check_order(order_id: str) -> str:
+            """Check an order.
+
+            Args:
+                order_id: the order to check
+            """
+            await gate.wait()
+            return f"done {order_id}"
+
+        executor = _ToolExecutor()
+        calls = [
+            _asyncio.create_task(
+                executor.execute(
+                    tool=check_order,
+                    run_ctx=_make_run_context(call_id=cid, name="check_order"),
+                    raw_arguments={"order_id": oid},
+                )
+            )
+            for cid, oid in (("c1", "5"), ("c2", "7"))
+        ]
+        try:
+            await _asyncio.sleep(0)
+            # both admitted — neither was treated as a duplicate of the other
+            assert set(executor._running_tasks) == {"c1", "c2"}
+            gate.set()
+            assert sorted(await _asyncio.gather(*calls)) == ["done 5", "done 7"]
+        finally:
+            gate.set()
+            await _asyncio.gather(*calls, return_exceptions=True)
 
 
 class TestCancelAll:
@@ -1558,15 +2128,14 @@ class TestAgentSessionWaitForIdle:
 
 
 def _emitted_items(session: Any) -> list[Any]:
-    """Updates carried by tool_execution_updated events emitted on a mocked session."""
+    """Updates carried by tool_execution_updated events reported on a mocked session."""
     from livekit.agents.voice.events import ToolExecutionUpdatedEvent
 
     items = []
-    for call in session.emit.call_args_list:
-        name, ev = call.args
-        if name == "tool_execution_updated":
-            assert isinstance(ev, ToolExecutionUpdatedEvent)
-            items.append(ev.update)
+    for call in session._tool_execution_updated.call_args_list:
+        (ev,) = call.args
+        assert isinstance(ev, ToolExecutionUpdatedEvent)
+        items.append(ev.update)
     return items
 
 
@@ -1635,25 +2204,34 @@ class TestToolCallEvents:
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
     @pytest.mark.asyncio
-    async def test_sync_tool_started_then_done(self):
+    @pytest.mark.parametrize(
+        "output, message",
+        [
+            ("ok", "ok"),
+            (ToolResult("ok", reply_required=True), "ok"),
+            (ToolResult("ok", reply_required=False), "ok"),
+            (ToolResult(None, reply_required=False), None),
+        ],
+    )
+    async def test_sync_tool_started_then_done(self, output: Any, message: str | None):
         from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool
-        async def quick_tool() -> str:
+        async def quick_tool() -> Any:
             """q"""
-            return "ok"
+            return output
 
         executor = _ToolExecutor()
         run_ctx = _make_run_context(call_id="c1", name="quick_tool")
         result = await executor.execute(tool=quick_tool, run_ctx=run_ctx, raw_arguments={})
-        assert result == "ok"
+        assert result is output
         await _drain_executor(executor)
 
         items = _emitted_items(run_ctx.session)
         assert isinstance(items[0], ToolCallStarted)
         assert items[0].function_call.call_id == "c1"
-        assert items[1] == ToolCallEnded(id="c1", call_id="c1", message="ok", status="done")
+        assert items[1] == ToolCallEnded(id="c1", call_id="c1", message=message, status="done")
 
     @pytest.mark.asyncio
     async def test_error_before_update_uses_plain_call_id(self):
@@ -1816,6 +2394,82 @@ class TestToolCallEvents:
         assert isinstance(completed, ToolReplyUpdated)
         assert completed.status == "completed"
         assert completed.update_ids == ["c5_update_1", "c5_final"]
+
+    @pytest.mark.parametrize("reply_flags", [(False,), (True,), (False, True), (True, False)])
+    @pytest.mark.parametrize(
+        "output, expected_output",
+        [("Sent", "Sent"), (object(), "the tool returned an invalid output")],
+    )
+    async def test_deferred_tool_results_honor_reply_required(
+        self, reply_flags: tuple[bool, ...], output: Any, expected_output: str
+    ) -> None:
+        import asyncio
+
+        from livekit.agents.llm import ChatContext
+        from livekit.agents.voice.events import RunContext, ToolReplyUpdated
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def send_dtmf(ctx: RunContext, reply_required: bool) -> ToolResult:
+            """Send DTMF events."""
+            await ctx.update("Sending digits")
+            return ToolResult(output, reply_required=reply_required)
+
+        session = _make_reply_session(_make_fake_speech())
+        agent = Agent(instructions="test", tools=[send_dtmf])
+        session.current_agent = agent
+        session.history = ChatContext.empty()
+        activity = session.wait_for_idle.return_value
+        activity.agent = agent
+        idle = asyncio.Event()
+
+        async def wait_for_idle():
+            await idle.wait()
+            return activity
+
+        session.wait_for_idle = wait_for_idle
+        executor = _ToolExecutor()
+        try:
+            for index, reply_required in enumerate(reply_flags):
+                ctx = _make_run_context_with_session(session, call_id=str(index), name="send_dtmf")
+                first = await executor.execute(
+                    tool=send_dtmf, run_ctx=ctx, raw_arguments={"reply_required": reply_required}
+                )
+                assert "Sending digits" in first
+
+            await _drain_executor(executor)
+            idle.set()
+            if executor._reply_task is not None:
+                await executor._reply_task
+
+            for chat_ctx in (agent.chat_ctx, session.history):
+                calls = [item.call_id for item in chat_ctx.items if item.type == "function_call"]
+                assert set(calls) == {f"{index}_final" for index in range(len(reply_flags))}
+                outputs = {
+                    item.call_id: (item.output, item.reply_required)
+                    for item in chat_ctx.items
+                    if item.type == "function_call_output"
+                }
+                assert outputs == {
+                    f"{index}_final": (expected_output, flag)
+                    for index, flag in enumerate(reply_flags)
+                }
+
+            replies = [
+                item for item in _emitted_items(session) if isinstance(item, ToolReplyUpdated)
+            ]
+            if any(reply_flags):
+                session.generate_reply.assert_called_once()
+                assert len(replies) == 1
+                assert replies[0].status == "scheduled"
+                assert set(replies[0].update_ids) == {
+                    f"{index}_final" for index, flag in enumerate(reply_flags) if flag
+                }
+            else:
+                session.generate_reply.assert_not_called()
+                assert not replies
+        finally:
+            await executor.aclose()
 
     @pytest.mark.asyncio
     async def test_interrupted_and_skipped_reply_outcomes(self):

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -14,6 +16,9 @@ from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils.audio import AudioByteStream
 from .stt import STT, RecognizeStream, SpeechData, SpeechEvent, SpeechEventType
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 
 class MultiSpeakerAdapter(STT):
@@ -56,6 +61,39 @@ class MultiSpeakerAdapter(STT):
         self._primary_format = primary_format
         self._background_format = background_format
 
+        self._stt.on("metrics_collected", self._on_metrics_collected)
+        # the wrapped STT's metrics are the accurate ones (its own label, model/provider and
+        # provider-reported usage), so they are re-emitted here and this adapter does not add a
+        # second measurement for the same audio -- same split as the stream and fallback adapters
+        self._recognize_metrics_needed = False
+
+    @property
+    def wrapped_stt(self) -> STT:
+        return self._stt
+
+    @property
+    def model(self) -> str:
+        return self._stt.model
+
+    @property
+    def provider(self) -> str:
+        return self._stt.provider
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        self._stt._update_session_keyterms(keyterms)
+
+    def _push_conversation_item(self, item: ConversationItemAddedEvent) -> None:
+        self._stt._push_conversation_item(item)
+
+    def prewarm(self) -> None:
+        self._stt.prewarm()
+
+    def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("metrics_collected", *args, **kwargs)
+
+    async def aclose(self) -> None:
+        self._stt.off("metrics_collected", self._on_metrics_collected)
+
     async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,
@@ -96,6 +134,15 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
             primary_format=stt._primary_format,
             background_format=stt._background_format,
         )
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
+        # the wrapped stream already reports usage for this audio and the adapter re-emits it,
+        # so measuring the forwarded events here would count every recognition twice. the
+        # retry-count reset still has to happen, otherwise hiccups spread over a long call
+        # accumulate instead of being forgiven by a successful transcript.
+        async for ev in event_aiter:
+            if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
+                self._num_retries = 0
 
     async def _run(self) -> None:
         async def _forward_input(stream: RecognizeStream) -> None:

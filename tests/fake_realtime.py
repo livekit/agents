@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from typing import Literal
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, NotGivenOr
+from livekit.agents import NOT_GIVEN, Agent, AgentSession, NotGivenOr, utils
 from livekit.agents.llm import (
     ChatContext,
+    FunctionCall,
     GenerationCreatedEvent,
+    MessageGeneration,
     RealtimeCapabilities,
     RealtimeModel,
     RealtimeModelError,
     RealtimeSession,
 )
 from livekit.agents.llm.tool_context import Tool, ToolChoice, ToolContext
+from livekit.agents.metrics import RealtimeModelMetrics
+
+from .fake_io import FakeAudioOutput
 
 
 def fake_capabilities(**overrides: bool) -> RealtimeCapabilities:
@@ -32,6 +37,8 @@ def fake_capabilities(**overrides: bool) -> RealtimeCapabilities:
         "mutable_tools": True,
         "per_response_tool_choice": True,
         "supports_say": True,
+        # a different interruption model rather than a richer one, so it stays off
+        "supports_overlapping_speech": False,
     }
     defaults.update(overrides)
     return RealtimeCapabilities(**defaults)
@@ -40,8 +47,9 @@ def fake_capabilities(**overrides: bool) -> RealtimeCapabilities:
 class FakeRealtimeSession(RealtimeSession):
     """A hermetic RealtimeSession that records calls and can be scripted to fail."""
 
-    def __init__(self, model: FakeRealtimeModel) -> None:
+    def __init__(self, model: FakeRealtimeModel, *, turn_detection_disabled: bool = False) -> None:
         super().__init__(model)
+        self.turn_detection_disabled = turn_detection_disabled
         self._chat_ctx = ChatContext.empty()
         self._tools = ToolContext.empty()
         self.closed = False
@@ -55,10 +63,13 @@ class FakeRealtimeSession(RealtimeSession):
         self.say_calls: list[str | AsyncIterable[str]] = []
         self.user_activity_started = False
         self._reply_futs: list[asyncio.Future[GenerationCreatedEvent]] = []
+        self.say_futs: list[asyncio.Future[GenerationCreatedEvent]] = []
         # test hooks to pause or fail aclose() mid-swap
         self.aclose_entered = asyncio.Event()
         self.block_aclose: asyncio.Event | None = None
         self.aclose_error: Exception | None = None
+        # a provider that only learns its usage as the connection drains reports it here
+        self.closing_metrics: RealtimeModelMetrics | None = None
         # test hook to fail bring-up (raised from update_chat_ctx during _update_session)
         self.update_error: Exception | None = None
 
@@ -126,7 +137,9 @@ class FakeRealtimeSession(RealtimeSession):
 
     def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
         self.say_calls.append(text)
-        return asyncio.get_event_loop().create_future()
+        fut: asyncio.Future[GenerationCreatedEvent] = asyncio.get_event_loop().create_future()
+        self.say_futs.append(fut)
+        return fut
 
     async def aclose(self) -> None:
         self.aclose_entered.set()
@@ -134,6 +147,8 @@ class FakeRealtimeSession(RealtimeSession):
             await self.block_aclose.wait()
         if self.aclose_error is not None:
             raise self.aclose_error
+        if self.closing_metrics is not None:
+            self.emit("metrics_collected", self.closing_metrics)
         self.closed = True
 
     # --- test helpers -------------------------------------------------------
@@ -171,11 +186,90 @@ class FakeRealtimeModel(RealtimeModel):
     def active_session(self) -> FakeRealtimeSession:
         return self.created_sessions[-1]
 
-    def session(self) -> FakeRealtimeSession:
-        sess = FakeRealtimeSession(self)
+    def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
+        sess = FakeRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         sess.update_error = self.bring_up_error
         self.created_sessions.append(sess)
         return sess
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+_SAMPLE_RATE = 24000
+
+
+def _audio_frame(duration: float) -> rtc.AudioFrame:
+    samples = int(_SAMPLE_RATE * duration)
+    return rtc.AudioFrame(
+        data=b"\x00\x01" * samples,
+        sample_rate=_SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def run_realtime_tool_turn(
+    agent: Agent,
+    *,
+    tool_executed: asyncio.Event,
+    interrupt: bool = False,
+    on_session: Callable[[AgentSession], None] | None = None,
+) -> tuple[AgentSession, FakeRealtimeModel]:
+    """Drive one realtime turn that speaks a second of audio and calls the agent's first tool.
+
+    With ``interrupt`` the turn is cut short as soon as the tool returns; otherwise it plays out.
+    """
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        if on_session is not None:
+            on_session(session)
+        await session.start(agent)
+
+        speech_handle = session.generate_reply()
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+
+        message_ch = utils.aio.Chan[MessageGeneration]()
+        function_ch = utils.aio.Chan[FunctionCall]()
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        modalities = asyncio.Future[list[str]]()
+        modalities.set_result(["audio", "text"])
+
+        message_ch.send_nowait(
+            MessageGeneration(
+                message_id="message-id",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        message_ch.close()
+        text_ch.send_nowait("let me check")
+        text_ch.close()
+        # a full second of audio, so the turn is still playing when the tool returns
+        audio_ch.send_nowait(_audio_frame(1.0))
+        audio_ch.close()
+        function_ch.send_nowait(
+            FunctionCall(call_id="1", name=agent.tools[0].info.name, arguments="{}")
+        )
+        function_ch.close()
+
+        model.active_session._reply_futs[0].set_result(
+            GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=True,
+                response_id="response-id",
+            )
+        )
+
+        await asyncio.wait_for(tool_executed.wait(), timeout=5)
+        if interrupt:
+            session.interrupt()
+        await asyncio.wait_for(speech_handle.wait_for_playout(), timeout=5)
+
+    return session, model

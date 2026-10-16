@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 import aiohttp
 
-from livekit import api, rtc
+from livekit import rtc
 
 from .._exceptions import (
     APIConnectionError,
@@ -18,7 +18,6 @@ from .._exceptions import (
 from ..job import get_job_context
 from ..log import logger
 from ..types import (
-    ATTRIBUTE_PUBLISH_ON_BEHALF,
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
@@ -45,10 +44,6 @@ _DEFAULT_SAMPLE_RATE = 16000
 # accepts the connection but never responds can't hang start()/aclose()
 # indefinitely. Matches the BYOK lemonslice plugin's request timeout.
 _REQUEST_TIMEOUT = 60.0
-# lk.avatar_provider tags the avatar worker participant with its provider so
-# server-side (participant-lifetime) avatar-minutes metering can attribute the
-# worker's room time to the right SKU.
-_ATTRIBUTE_AVATAR_PROVIDER = "lk.avatar_provider"
 
 
 class LemonSliceOptions(TypedDict, total=False):
@@ -113,16 +108,20 @@ class AvatarSession(BaseAvatarSession):
         await avatar.start(session, room=ctx.room)
         await avatar.wait_for_join()
 
-    Credentials come from two independent sources:
+    Unlike the BYOK plugins, this does **not** mint the avatar worker's room
+    token. The gateway mints it, scoped to this room and identity and stamped
+    with ``lk.publish_on_behalf`` and ``lk.avatar_provider``; a token the client
+    signed could not be trusted to carry those. The room fields this class sends
+    (``room_name`` / ``avatar_identity`` / ``agent_identity``) are the inputs to
+    that mint, so all three are required.
 
-    - Gateway auth (``api_key`` / ``api_secret``): resolved from the arguments,
-      then ``LIVEKIT_INFERENCE_API_KEY`` / ``LIVEKIT_INFERENCE_API_SECRET``,
-      then ``LIVEKIT_API_KEY`` / ``LIVEKIT_API_SECRET``.
-    - The avatar worker's room token: minted locally from the room project's
-      credentials, resolved from ``start()`` arguments then ``LIVEKIT_URL`` /
-      ``LIVEKIT_API_KEY`` / ``LIVEKIT_API_SECRET``. These may differ from the
-      gateway credentials when ``LIVEKIT_INFERENCE_*`` points at a different
-      project.
+    Credentials are gateway auth only (``api_key`` / ``api_secret``): resolved
+    from the arguments, then ``LIVEKIT_INFERENCE_API_KEY`` /
+    ``LIVEKIT_INFERENCE_API_SECRET``, then ``LIVEKIT_API_KEY`` /
+    ``LIVEKIT_API_SECRET``. Because the gateway signs the worker token with the
+    key it authenticated, the project that serves inference must be the project
+    that owns the room — pointing ``LIVEKIT_INFERENCE_*`` at a different project
+    than the room is no longer supported.
     """
 
     def __init__(
@@ -241,8 +240,6 @@ class AvatarSession(BaseAvatarSession):
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
-        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if self._session_id is not None or self._provider_session_id is not None:
             raise RuntimeError(
@@ -252,14 +249,12 @@ class AvatarSession(BaseAvatarSession):
 
         await super().start(agent_session, room)
 
+        # Only the URL is needed: the provider dials it with the token the
+        # gateway mints, so no room-project key/secret is resolved here.
         lk_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
-        lk_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
-        lk_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
-        if not lk_url or not lk_key or not lk_secret:
+        if not lk_url:
             raise ValueError(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or the LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET "
-                "environment variables"
+                "livekit_url must be set by argument or the LIVEKIT_URL environment variable"
             )
 
         # Usable inside an agent job or standalone (scripts/tests). The base
@@ -278,28 +273,10 @@ class AvatarSession(BaseAvatarSession):
                 "connect the room before calling start()"
             )
 
-        # Mint the avatar worker's room token locally, identical to the BYOK
-        # plugins, plus an lk.avatar_provider attribute for server-side metering.
-        worker_token = (
-            api.AccessToken(api_key=lk_key, api_secret=lk_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            .with_attributes(
-                {
-                    ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity,
-                    _ATTRIBUTE_AVATAR_PROVIDER: self._provider,
-                }
-            )
-            .to_jwt()
-        )
-
         create_resp = await self._create_session(
             room_name=room.name,
             room_sid=room_sid,
             livekit_url=lk_url,
-            worker_token=worker_token,
             agent_identity=local_participant_identity,
         )
 
@@ -412,16 +389,19 @@ class AvatarSession(BaseAvatarSession):
         room_name: str,
         room_sid: str,
         livekit_url: str,
-        worker_token: str,
         agent_identity: str,
     ) -> dict[str, Any]:
+        # room_name / avatar_identity / agent_identity are the inputs the
+        # gateway mints the worker room token from, not just attribution: it
+        # scopes the roomJoin grant to room_name, joins as avatar_identity, and
+        # sets lk.publish_on_behalf to agent_identity.
         payload: dict[str, Any] = {
             "provider": self._provider,
             "livekit_url": livekit_url,
-            "livekit_token": worker_token,
             "room_name": room_name,
             "room_sid": room_sid,
             "avatar_identity": self._avatar_participant_identity,
+            "avatar_name": self._avatar_participant_name,
             "agent_identity": agent_identity,
         }
         if self._avatar_id:

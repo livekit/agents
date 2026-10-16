@@ -17,8 +17,9 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
+from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import numpy as np
 
@@ -29,9 +30,6 @@ from .. import utils, vad
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-
-if TYPE_CHECKING:
-    from concurrent.futures import Executor
 
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
 _MODEL_SAMPLE_RATE = 16000
@@ -54,8 +52,8 @@ class VAD(vad.VAD):
 
     The native model singleton is loaded once at module import (via the
     pybind11 ``.so`` constructor); each stream allocates its own per-instance
-    LSTM/context state. Pass ``executor`` to isolate inference from the event
-    loop's default executor; the caller remains responsible for shutting it down.
+    LSTM/context state. Each stream uses a dedicated one-worker executor by default.
+    When an executor is provided, the caller remains responsible for shutting it down.
     """
 
     def __init__(
@@ -149,13 +147,24 @@ class _VADStream(vad.VADStream):
     def __init__(self, parent: VAD, opts: _VADOptions, *, executor: Executor | None) -> None:
         super().__init__(parent)
         self._opts = opts
+        self._owns_executor = executor is None
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference.vad")
         self._executor = executor
         self._native_vad = _NativeVAD()
 
         self._input_sample_rate = 0
         self._speech_buffer: np.ndarray | None = None
+        self._speech_buffer_index = 0
         self._speech_buffer_max_reached = False
         self._prefix_padding_samples = 0  # (input_sample_rate)
+
+    async def aclose(self) -> None:
+        try:
+            await super().aclose()
+        finally:
+            if self._owns_executor:
+                self._executor.shutdown(wait=False, cancel_futures=True)
 
     def update_options(
         self,
@@ -194,12 +203,14 @@ class _VADStream(vad.VADStream):
                 + self._prefix_padding_samples
             )
 
+            # Resizing may discard samples that the write cursor still counted.
+            self._speech_buffer_index = min(self._speech_buffer_index, len(self._speech_buffer))
+
             if self._opts.max_buffered_speech > old_max_buffered_speech:
                 self._speech_buffer_max_reached = False
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        speech_buffer_index: int = 0
 
         # "pub_" means public, these values are exposed to the users through events
         pub_speaking = False
@@ -221,7 +232,6 @@ class _VADStream(vad.VADStream):
         extra_inference_time = 0.0
 
         def _reset_state() -> None:
-            nonlocal speech_buffer_index
             nonlocal pub_speaking, pub_speech_duration, pub_silence_duration
             nonlocal pub_current_sample, pub_timestamp
             nonlocal speech_threshold_duration, silence_threshold_duration
@@ -230,7 +240,7 @@ class _VADStream(vad.VADStream):
 
             self._native_vad.reset()
 
-            speech_buffer_index = 0
+            self._speech_buffer_index = 0
             self._speech_buffer_max_reached = False
             if self._speech_buffer is not None:
                 self._speech_buffer.fill(0)
@@ -335,13 +345,13 @@ class _VADStream(vad.VADStream):
                 input_copy_remaining_fract = to_copy - to_copy_int
 
                 # copy the inference window to the speech buffer
-                available_space = len(self._speech_buffer) - speech_buffer_index
+                available_space = len(self._speech_buffer) - self._speech_buffer_index
                 to_copy_buffer = min(to_copy_int, available_space)
                 if to_copy_buffer > 0:
                     self._speech_buffer[
-                        speech_buffer_index : speech_buffer_index + to_copy_buffer
+                        self._speech_buffer_index : self._speech_buffer_index + to_copy_buffer
                     ] = input_frame.data[:to_copy_buffer]
-                    speech_buffer_index += to_copy_buffer
+                    self._speech_buffer_index += to_copy_buffer
                 elif not self._speech_buffer_max_reached:
                     # reached self._opts.max_buffered_speech (padding is included)
                     self._speech_buffer_max_reached = True
@@ -356,34 +366,34 @@ class _VADStream(vad.VADStream):
                 )
                 if inference_duration > SLOW_INFERENCE_THRESHOLD:
                     logger.warning(
-                        "inference is slower than realtime",
+                        "VAD inference is slower than realtime",
                         extra={"delay": extra_inference_time},
                     )
 
                 def _reset_write_cursor() -> None:
-                    nonlocal speech_buffer_index
                     assert self._speech_buffer is not None
 
-                    if speech_buffer_index <= self._prefix_padding_samples:
+                    if self._speech_buffer_index <= self._prefix_padding_samples:
                         return
 
                     padding_data = self._speech_buffer[
-                        speech_buffer_index - self._prefix_padding_samples : speech_buffer_index
+                        self._speech_buffer_index
+                        - self._prefix_padding_samples : self._speech_buffer_index
                     ]
 
                     self._speech_buffer_max_reached = False
                     self._speech_buffer[: self._prefix_padding_samples] = padding_data
-                    speech_buffer_index = self._prefix_padding_samples
+                    self._speech_buffer_index = self._prefix_padding_samples
 
                 def _copy_speech_buffer() -> rtc.AudioFrame:
                     # copy the data from speech_buffer
                     assert self._speech_buffer is not None
-                    speech_data = self._speech_buffer[:speech_buffer_index].tobytes()  # noqa: B023
+                    speech_data = self._speech_buffer[: self._speech_buffer_index].tobytes()
 
                     return rtc.AudioFrame(
                         sample_rate=self._input_sample_rate,
                         num_channels=1,
-                        samples_per_channel=speech_buffer_index,  # noqa: B023
+                        samples_per_channel=self._speech_buffer_index,
                         data=speech_data,
                     )
 

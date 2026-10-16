@@ -57,7 +57,6 @@ class STTOptions:
     buffer_size_seconds: float = 0.08
     encoding: str = "pcm_s16le"
     temperature: float | None = None
-    # TODO(laurent): support language detection
     language: LanguageCode = LanguageCode("en")
     vad_threshold: float = 0.6
     vad_bucket: int | None = 2
@@ -71,7 +70,7 @@ class STT(stt.STT):
         self,
         *,
         api_key: str | None = None,
-        model_endpoint: str | None = "wss://api.gradium.ai/api/speech/asr",
+        model_endpoint: str | None = None,
         model_name: str = "default",
         sample_rate: int = SUPPORTED_SAMPLE_RATE,
         encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
@@ -106,12 +105,11 @@ class STT(stt.STT):
 
         self._api_key = api_key
 
-        model_endpoint = model_endpoint or os.environ.get("GRADIUM_MODEL_ENDPOINT")
-
-        if not model_endpoint:
-            raise ValueError(
-                "The model endpoint is required, you can find it in the Gradium dashboard"
-            )
+        model_endpoint = (
+            model_endpoint
+            or os.environ.get("GRADIUM_MODEL_ENDPOINT")
+            or "wss://api.gradium.ai/api/speech/asr"
+        )
 
         self._model_endpoint = model_endpoint
         self._model_name = model_name

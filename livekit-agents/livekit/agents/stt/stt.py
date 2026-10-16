@@ -29,6 +29,7 @@ from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
     from ..voice.events import ConversationItemAddedEvent
 
 
@@ -121,6 +122,10 @@ class SpeechEvent:
     speech_start_time: float | None = None
     """server-reported wall-clock time of speech onset, when the provider sends
     a separate speech-start signal carrying onset timing."""
+    created_at: float = field(default_factory=lambda: time.time())
+    """Wall-clock time when this event was created."""
+    speech_end_time: float | None = None
+    """Wall-clock time when the recognized speech ended, when known."""
 
 
 @dataclass
@@ -191,6 +196,11 @@ class STT(
         return "unknown"
 
     @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this STT instance."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
+    @property
     def capabilities(self) -> STTCapabilities:
         return self._capabilities
 
@@ -235,7 +245,7 @@ class STT(
 
             except APIError as e:
                 retry_interval = conn_options._interval_for_retry(i)
-                if conn_options.max_retry == 0:
+                if conn_options.max_retry == 0 or not e.retryable:
                     self._emit_error(e, recoverable=False)
                     raise
                 elif i == conn_options.max_retry:
@@ -465,7 +475,12 @@ class RecognizeStream(ABC):
                 last_start_time = time.time()
                 return await self._run()
             except APIError as e:
-                if max_retries == 0:
+                # an attempt that outlived the connect timeout had connected, so this failure
+                # is not consecutive with the previous one and the budget starts over
+                if time.time() - last_start_time > self._conn_options.timeout:
+                    self._num_retries = 0
+
+                if not e.retryable or max_retries == 0:
                     self._emit_error(e, recoverable=False)
                     raise
                 elif self._num_retries == max_retries:

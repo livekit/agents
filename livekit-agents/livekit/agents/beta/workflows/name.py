@@ -95,7 +95,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._collect_first_name = first_name
         self._collect_last_name = last_name
         self._collect_middle_name = middle_name
-        self._verify_spelling = verify_spelling
+        self._spell_read_back = verify_spelling
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -268,34 +268,35 @@ class GetNameTask(AgentTask[GetNameResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
-        if self._verify_spelling:
-            return (
-                f"The name has been updated to {full_name}\n"
-                f"Spell out the name letter by letter for verification: {full_name}\n"
-                f"Prompt the user for confirmation, do not call `confirm_name` directly"
-            )
-
+        read_back = (
+            f"Spell out the name letter by letter for verification: {' '.join(full_name.replace(' ', ''))}"
+            if self._spell_read_back
+            else "Repeat the name back to the user."
+        )
+        self._spell_read_back = True
         return (
             f"The name has been updated to {full_name}\n"
-            f"Repeat the name back to the user and prompt for confirmation, "
-            f"do not call `confirm_name` directly"
+            f"{read_back}\n"
+            f"Prompt the user for confirmation, do not call `confirm_name` directly"
         )
 
     def _build_confirm_tool(
         self, *, first_name: str, middle_name: str, last_name: str
     ) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_name() -> None:
+        async def confirm_name() -> str | None:
             """Call after the user confirms the name is correct."""
             if (
                 first_name != self._first_name
                 or middle_name != self._middle_name
                 or last_name != self._last_name
             ):
-                self.session.generate_reply(
-                    instructions="The name has changed since confirmation was requested, ask the user to confirm the updated name."
+                # stale closure: update_name ran again after this confirm tool
+                # was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The name has changed since confirmation was requested, "
+                    "ask the user to confirm the updated name."
                 )
-                return
 
             if not self.done():
                 self.complete(
@@ -305,6 +306,7 @@ class GetNameTask(AgentTask[GetNameResult]):
                         last_name=self._last_name if self._collect_last_name else None,
                     )
                 )
+            return None
 
         return confirm_name
 

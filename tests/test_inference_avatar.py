@@ -1,9 +1,10 @@
 """Unit tests for livekit.agents.inference.AvatarSession.
 
 Covers model-string parsing, credential resolution, the gateway create call
-(payload/headers/idempotency), error mapping, that the response sample rate
-drives the DataStream audio sink, the terminate_token contract, double-start
-guarding, and the standalone (no job context) room paths.
+(payload/headers/idempotency), that the worker room token is left to the
+gateway to mint, error mapping, that the response sample rate drives the
+DataStream audio sink, the terminate_token contract, double-start guarding, and
+the standalone (no job context) room paths.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import contextlib
 from typing import Any
 
 import aiohttp
-import jwt
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -147,7 +147,6 @@ async def _call_create(av: AvatarSession) -> dict[str, Any]:
         room_name="my-room",
         room_sid="RM_123",
         livekit_url="wss://example.livekit.cloud",
-        worker_token="worker-token",
         agent_identity="agent-worker-1",
     )
 
@@ -180,9 +179,10 @@ async def test_create_session_success() -> None:
 
     body = captured["body"]
     assert body["provider"] == "lemonslice"
-    assert body["livekit_token"] == "worker-token"
     assert body["avatar_identity"] == "lemonslice-inference-avatar"
+    assert body["avatar_name"] == "lemonslice-inference-avatar"
     assert body["agent_identity"] == "agent-worker-1"
+    assert body["room_name"] == "my-room"
     assert body["room_sid"] == "RM_123"
     # Known LemonSliceOptions keys map onto the gateway's first-class fields.
     assert body["image_url"] == "https://example.com/face.png"
@@ -357,8 +357,6 @@ async def test_start_uses_response_sample_rate(monkeypatch: pytest.MonkeyPatch) 
             agent_session,  # type: ignore[arg-type]
             _FakeRoom(),  # type: ignore[arg-type]
             livekit_url="wss://example.livekit.cloud",
-            livekit_api_key="devkey",
-            livekit_api_secret="devsecret",
         )
 
     assert av.session_id == "AVS_1"
@@ -368,12 +366,13 @@ async def test_start_uses_response_sample_rate(monkeypatch: pytest.MonkeyPatch) 
     assert agent_session.output.sink.sample_rate == 24000
 
 
-async def test_start_mints_worker_token_with_expected_grants(
+async def test_start_sends_mint_inputs_and_no_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The minted avatar worker token must carry the room-join grant and the
-    lk.publish_on_behalf / lk.avatar_provider attributes the gateway and
-    server-side metering depend on."""
+    """The gateway mints the avatar worker's room token, so start() must send
+    the fields it mints from — and must not send a token of its own. A
+    client-signed token could not be trusted to carry lk.avatar_provider, which
+    server-side avatar-minutes metering keys on."""
     captured: dict[str, Any] = {}
 
     async def handler(request: web.Request) -> web.Response:
@@ -384,28 +383,36 @@ async def test_start_mints_worker_token_with_expected_grants(
     monkeypatch.setattr(avatar_mod, "DataStreamAudioOutput", _FakeSink)
 
     async with _gateway(handler) as (base_url, session):
-        av = _make_avatar(base_url=base_url, http_session=session)
+        av = _make_avatar(base_url=base_url, http_session=session, avatar_participant_name="Ada")
         agent_session = _FakeAgentSession()
         await av.start(
             agent_session,  # type: ignore[arg-type]
             _FakeRoom(),  # type: ignore[arg-type]
             livekit_url="wss://example.livekit.cloud",
-            livekit_api_key="devkey",
-            livekit_api_secret="devsecret",
         )
 
-    assert captured["body"]["room_sid"] == "RM_123"
-    assert captured["body"]["agent_identity"] == "agent-worker-1"
+    body = captured["body"]
+    assert "livekit_token" not in body, "the gateway mints the worker token, not the SDK"
+    # The mint inputs: roomJoin scope, worker identity/name, publish-on-behalf.
+    assert body["room_name"] == "my-room"
+    assert body["avatar_identity"] == "lemonslice-inference-avatar"
+    assert body["avatar_name"] == "Ada"
+    assert body["agent_identity"] == "agent-worker-1"
+    assert body["room_sid"] == "RM_123"
 
-    claims = jwt.decode(captured["body"]["livekit_token"], options={"verify_signature": False})
-    assert claims["kind"] == "agent"
-    assert claims["sub"] == "lemonslice-inference-avatar"
-    assert claims["video"]["roomJoin"] is True
-    assert claims["video"]["room"] == "my-room"
-    assert claims["attributes"] == {
-        "lk.publish_on_behalf": "agent-worker-1",
-        "lk.avatar_provider": "lemonslice",
-    }
+
+async def test_start_without_livekit_url_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LIVEKIT_URL is still required (the provider dials it); the room project's
+    key/secret are not, since the SDK no longer signs anything."""
+    monkeypatch.delenv("LIVEKIT_URL", raising=False)
+    monkeypatch.setattr(avatar_mod, "get_job_context", lambda *a, **k: _FakeJobCtx())
+
+    av = _make_avatar()
+    with pytest.raises(ValueError, match="livekit_url"):
+        await av.start(
+            _FakeAgentSession(),  # type: ignore[arg-type]
+            _FakeRoom(),  # type: ignore[arg-type]
+        )
 
 
 async def test_start_twice_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -427,8 +434,6 @@ async def test_start_twice_raises(monkeypatch: pytest.MonkeyPatch) -> None:
             agent_session,  # type: ignore[arg-type]
             _FakeRoom(),  # type: ignore[arg-type]
             livekit_url="wss://example.livekit.cloud",
-            livekit_api_key="devkey",
-            livekit_api_secret="devsecret",
         )
 
         with pytest.raises(RuntimeError, match="only be called once"):
@@ -436,8 +441,6 @@ async def test_start_twice_raises(monkeypatch: pytest.MonkeyPatch) -> None:
                 agent_session,  # type: ignore[arg-type]
                 _FakeRoom(),  # type: ignore[arg-type]
                 livekit_url="wss://example.livekit.cloud",
-                livekit_api_key="devkey",
-                livekit_api_secret="devsecret",
             )
 
     assert calls["n"] == 1, "second start() must not call the gateway again"
@@ -474,8 +477,6 @@ async def test_start_ids_set_before_audio_rebind(monkeypatch: pytest.MonkeyPatch
                 _FakeBrokenAgentSession(),  # type: ignore[arg-type]
                 _FakeRoom(),  # type: ignore[arg-type]
                 livekit_url="wss://example.livekit.cloud",
-                livekit_api_key="devkey",
-                livekit_api_secret="devsecret",
             )
 
     assert av.provider_session_id == "ls_1"
@@ -529,8 +530,6 @@ async def test_start_standalone_connected_room(monkeypatch: pytest.MonkeyPatch) 
             _FakeAgentSession(),  # type: ignore[arg-type]
             _FakeConnectedRoom(),  # type: ignore[arg-type]
             livekit_url="wss://example.livekit.cloud",
-            livekit_api_key="devkey",
-            livekit_api_secret="devsecret",
         )
 
         # isconnected() == True also makes the base class eagerly spawn a
@@ -559,8 +558,6 @@ async def test_start_standalone_disconnected_room_raises(monkeypatch: pytest.Mon
             _FakeAgentSession(),  # type: ignore[arg-type]
             _FakeRoom(),  # type: ignore[arg-type]
             livekit_url="wss://example.livekit.cloud",
-            livekit_api_key="devkey",
-            livekit_api_secret="devsecret",
         )
 
 

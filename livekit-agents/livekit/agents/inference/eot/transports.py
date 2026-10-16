@@ -40,7 +40,7 @@ from ...metrics import EOTInferenceMetrics
 from ...metrics.base import Metadata
 from ...types import APIConnectOptions
 from ...utils import aio, is_given
-from .._utils import create_access_token, get_inference_headers
+from .._utils import HEADER_SESSION_ID, create_access_token, get_inference_headers
 from .base import (
     DEFAULT_SAMPLE_RATE,
     TurnDetectorOptions,
@@ -93,10 +93,15 @@ class _CloudTransport:
         self._conn_options = cloud_opts.conn_options
         self._session_holder = http_session
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._session_id: str | None = None
         self._num_retries = 0
 
         self._send_ch: aio.Chan[ClientMessage] | None = None
         self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
+
+    @property
+    def session_id(self) -> str | None:
+        return self._session_id
 
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
@@ -152,12 +157,14 @@ class _CloudTransport:
         base_url = self._cloud_opts.base_url
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
+        headers = self._build_auth_headers()
+        session_id = headers.get(HEADER_SESSION_ID)
 
         try:
             ws = await asyncio.wait_for(
                 self._ensure_session().ws_connect(
                     f"{base_url}/eot",
-                    headers=self._build_auth_headers(),
+                    headers=headers,
                 ),
                 self._conn_options.timeout,
             )
@@ -173,6 +180,7 @@ class _CloudTransport:
             created_at.GetCurrentTime()
             session_create_msg.created_at.CopyFrom(created_at)
             await ws.send_bytes(session_create_msg.SerializeToString())
+            self._session_id = session_id
         except aiohttp.ClientResponseError as e:
             exc = create_api_error_from_http(e.message, status=e.status)
             exc.retryable = False
@@ -368,6 +376,7 @@ class _CloudTransport:
             if self._send_ch is send_ch:
                 self._send_ch = None
             self._ws = None
+            self._session_id = None
             if ws is not None:
                 await ws.close()
 
@@ -383,6 +392,10 @@ class _LocalTransport:
         self._eot = _EOT()
         self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
+
+    @property
+    def session_id(self) -> str | None:
+        return None
 
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)

@@ -1,16 +1,227 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import logging
+from array import array
+from dataclasses import replace
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
+from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
+from openai.types.realtime import (
+    ConversationItemCreateEvent,
+    ConversationItemDeletedEvent,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
+    RealtimeErrorEvent,
+    SessionUpdateEvent,
+)
+from openai.types.realtime.audio_transcription import AudioTranscription
+from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
-from livekit.agents import llm
+from livekit import rtc
+from livekit.agents import AgentSession, llm, utils
 from livekit.agents._exceptions import APIError
+from livekit.agents.llm._realtime.openai_types import RealtimeModels as CoreRealtimeModels
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
-from livekit.plugins.openai.realtime.realtime_model import RealtimeSession, _is_fatal_error
+from livekit.agents.metrics import STTMetrics
+from livekit.agents.utils import is_given
+from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.report import SessionReport
+from livekit.plugins.openai.models import RealtimeModels as PluginRealtimeModels
+from livekit.plugins.openai.realtime.realtime_model import (
+    RealtimeModel,
+    RealtimeSession,
+    _is_fatal_error,
+)
 
 pytestmark = pytest.mark.unit
+
+
+def test_direct_model_preserves_public_label_and_model_types() -> None:
+    from livekit.agents import inference
+    from livekit.agents.llm._realtime import openai as core
+
+    model = RealtimeModel(api_key="fake")
+    azure = RealtimeModel.with_azure(
+        azure_deployment="dep", api_key="fake", base_url="https://example.com/openai"
+    )
+
+    assert model.label == "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
+    assert type(azure) is RealtimeModel
+    assert azure.label == model.label
+    assert RealtimeSession is core.RealtimeSession
+    assert not issubclass(inference.RealtimeModel, RealtimeModel)
+    assert PluginRealtimeModels is CoreRealtimeModels
+
+
+def test_update_options_only_propagates_given_turn_detection() -> None:
+    # RealtimeModel.update_options must not force-sync turn_detection to sessions when the
+    # caller didn't set it, else a session that opted out of server-side turn detection gets
+    # server VAD re-enabled by an unrelated change (e.g. voice). An explicit value still
+    # propagates, so callers can re-enable it. (PR #6495 review)
+    class _StubSession:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def update_options(self, **kw: object) -> None:
+            self.calls.append(kw)
+
+    model = RealtimeModel(api_key="fake")
+    stub = _StubSession()
+    model._sessions.add(cast(RealtimeSession, stub))
+
+    model.update_options(voice="verse")
+    assert not is_given(stub.calls[-1]["turn_detection"])
+
+    model.update_options(turn_detection=model._opts.turn_detection)
+    assert is_given(stub.calls[-1]["turn_detection"])
+
+
+def test_with_azure_preserves_can_disable_turn_detection() -> None:
+    # with_azure fills in a default turn_detection, but the framework must still be allowed to
+    # auto-disable server-side turn detection when the caller didn't configure it. An explicit
+    # value is respected. (PR #6495 review)
+    default_td = RealtimeModel.with_azure(
+        azure_deployment="dep", api_key="fake", base_url="https://example.com/openai"
+    )
+    assert default_td.capabilities.turn_detection is True
+    assert default_td.capabilities.can_disable_turn_detection is True
+
+    explicit_off = RealtimeModel.with_azure(
+        azure_deployment="dep",
+        api_key="fake",
+        base_url="https://example.com/openai",
+        turn_detection=None,
+    )
+    assert explicit_off.capabilities.turn_detection is False
+    assert explicit_off.capabilities.can_disable_turn_detection is False
+
+
+def test_create_response_false_reports_client_side_turn_taking() -> None:
+    # server VAD with create_response=False commits and transcribes the audio server-side but
+    # leaves the reply to the client, so it must not count as server-side turn detection —
+    # otherwise allow_interruptions=False is rejected (issue #6635)
+    manual_reply = RealtimeModel(
+        api_key="fake",
+        turn_detection=ServerVad(type="server_vad", create_response=False),
+    )
+    assert manual_reply.capabilities.turn_detection is False
+
+    auto_reply = RealtimeModel(
+        api_key="fake",
+        turn_detection=ServerVad(type="server_vad"),
+    )
+    assert auto_reply.capabilities.turn_detection is True
+
+    assert RealtimeModel(api_key="fake").capabilities.turn_detection is True
+
+
+def test_create_response_false_warns_when_the_server_still_interrupts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # interrupt_response is a separate switch, left on the server keeps cancelling its response
+    # on user speech while the client believes it owns interruptions
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.openai"):
+        RealtimeModel(
+            api_key="fake",
+            turn_detection=ServerVad(type="server_vad", create_response=False),
+        )
+    assert "pass interrupt_response=False" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.openai"):
+        RealtimeModel(
+            api_key="fake",
+            turn_detection=ServerVad(
+                type="server_vad", create_response=False, interrupt_response=False
+            ),
+        )
+    assert caplog.text == ""
+
+
+def test_update_options_keeps_derived_capabilities_in_sync() -> None:
+    # a stale capability reports the server owning the turn after the caller handed turn
+    # taking to the client, and AgentActivity then rejects allow_interruptions=False
+    model = RealtimeModel(api_key="fake", turn_detection=ServerVad(type="server_vad"))
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.user_transcription is True
+
+    model.update_options(
+        turn_detection=ServerVad(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+        input_audio_transcription=None,
+    )
+    assert model.capabilities.turn_detection is False
+    assert model.capabilities.user_transcription is False
+
+    model.update_options(
+        turn_detection=ServerVad(type="server_vad"),
+        input_audio_transcription=AudioTranscription(model="whisper-1"),
+    )
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.user_transcription is True
+
+
+def test_update_options_leaves_derived_capabilities_alone_when_unset() -> None:
+    # an unrelated update must not resync a model that opted out of server-side turn taking
+    model = RealtimeModel(
+        api_key="fake",
+        turn_detection=ServerVad(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+    )
+    model.update_options(voice="marin")
+    assert model.capabilities.turn_detection is False
+
+
+def _capabilities_session(model: RealtimeModel) -> RealtimeSession:
+    # only the state update_options touches; a real session would open a websocket
+    return cast(
+        RealtimeSession,
+        SimpleNamespace(
+            _opts=replace(model._opts),
+            _capabilities=replace(model.capabilities),
+            send_event=lambda event: None,
+            _wrap_session_update=lambda event_id, session: session,
+        ),
+    )
+
+
+def test_session_update_options_keeps_capabilities_on_the_session() -> None:
+    # turn detection is per session: one session handing turn taking to the client must not
+    # change what the model, or any other session on it, reports
+    model = RealtimeModel(api_key="fake", turn_detection=ServerVad(type="server_vad"))
+    session = _capabilities_session(model)
+
+    RealtimeSession.update_options(
+        session,
+        turn_detection=ServerVad(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+        input_audio_transcription=None,
+    )
+
+    assert session._capabilities.turn_detection is False
+    assert session._capabilities.user_transcription is False
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.user_transcription is True
+
+
+def test_legacy_turn_detection_keeps_interrupt_response() -> None:
+    # the deprecated session.TurnDetection carries interrupt_response for server_vad too;
+    # dropping it silently re-enabled server-side interruption
+    model = RealtimeModel(
+        api_key="fake",
+        turn_detection=BetaTurnDetection(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+    )
+    assert model._opts.turn_detection == ServerVad(
+        type="server_vad", create_response=False, interrupt_response=False
+    )
 
 
 def test_update_chat_ctx_deletes_empty_remote_items() -> None:
@@ -48,11 +259,17 @@ def test_is_fatal_error_matches_known_codes() -> None:
     assert not _is_fatal_error(None)
 
 
-def _handle_error_session(capture: dict[str, object]) -> RealtimeSession:
+def _handle_error_session(
+    capture: dict[str, object], *, turn_detection: ServerVad | None = None
+) -> RealtimeSession:
     return cast(
         RealtimeSession,
         SimpleNamespace(
             _realtime_model=SimpleNamespace(_provider_label="openai"),
+            _opts=SimpleNamespace(turn_detection=turn_detection),
+            _chat_ctx_event_futures={},
+            _response_created_futures={},
+            _is_fatal_error=_is_fatal_error,
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
         ),
     )
@@ -64,7 +281,7 @@ def test_handle_error_raises_on_fatal() -> None:
     captured: dict[str, object] = {}
     session = _handle_error_session(captured)
     event = SimpleNamespace(
-        error=SimpleNamespace(message="quota exceeded", code="insufficient_quota")
+        error=SimpleNamespace(event_id=None, message="quota exceeded", code="insufficient_quota")
     )
     with pytest.raises(APIError) as exc_info:
         RealtimeSession._handle_error(session, event)
@@ -75,16 +292,45 @@ def test_handle_error_raises_on_fatal() -> None:
 def test_handle_error_emits_transient_as_recoverable() -> None:
     captured: dict[str, object] = {}
     session = _handle_error_session(captured)
-    event = SimpleNamespace(error=SimpleNamespace(message="server hiccup", code="server_error"))
+    event = SimpleNamespace(
+        error=SimpleNamespace(event_id=None, message="server hiccup", code="server_error")
+    )
     RealtimeSession._handle_error(session, event)
     assert captured["recoverable"] is True
 
 
 def test_handle_error_ignores_cancellation_failed() -> None:
     captured: dict[str, object] = {}
-    event = SimpleNamespace(error=SimpleNamespace(message="Cancellation failed: no response"))
+    event = SimpleNamespace(
+        error=SimpleNamespace(event_id=None, message="Cancellation failed: no response")
+    )
     RealtimeSession._handle_error(_handle_error_session(captured), event)
     assert captured == {}  # early return, nothing emitted
+
+
+def _empty_commit_event() -> SimpleNamespace:
+    return SimpleNamespace(
+        error=SimpleNamespace(
+            event_id=None,
+            message="Error committing input audio buffer: buffer too small.",
+            code="input_audio_buffer_commit_empty",
+        )
+    )
+
+
+def test_handle_error_ignores_empty_commit_with_server_vad() -> None:
+    # our commit raced the server VAD's own; the server owns the buffer, nothing to report
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured, turn_detection=ServerVad(type="server_vad"))
+    RealtimeSession._handle_error(session, _empty_commit_event())
+    assert captured == {}
+
+
+def test_handle_error_reports_empty_commit_without_server_vad() -> None:
+    # nothing else commits the buffer, so an empty commit is a real bug worth surfacing
+    captured: dict[str, object] = {}
+    RealtimeSession._handle_error(_handle_error_session(captured), _empty_commit_event())
+    assert captured["recoverable"] is True
 
 
 def test_response_done_failed_fatal_raises() -> None:
@@ -119,3 +365,563 @@ def test_response_done_failed_transient_stays_recoverable() -> None:
     )
     RealtimeSession._handle_response_done_but_not_complete(session, event)
     assert captured["recoverable"] is True
+
+
+def _chat_ctx_update_session() -> RealtimeSession:
+    """A session mid-update, with the delete and the create of one updated item in flight."""
+    session = _handle_error_session({})
+    session._item_delete_future = {"item_1": asyncio.Future()}
+    session._item_create_future = {"item_1": asyncio.Future()}
+    session._chat_ctx_event_futures = {
+        "chat_ctx_delete_abc": session._item_delete_future["item_1"],
+        "chat_ctx_create_abc": session._item_create_future["item_1"],
+    }
+    return session
+
+
+def _rejection(event_id: str, code: str = "invalid_request_error") -> RealtimeErrorEvent:
+    return RealtimeErrorEvent.construct(
+        type="error",
+        event_id=event_id,
+        error={
+            "message": "Item not found: item_1",
+            "type": "invalid_request_error",
+            "code": code,
+            "event_id": event_id,
+        },
+    )
+
+
+async def test_a_rejected_chat_ctx_event_releases_its_waiter() -> None:
+    # a rejected delete gets an error instead of conversation.item.deleted, so nothing else
+    # settles the future that update_chat_ctx awaits inside the speech
+    session = _chat_ctx_update_session()
+    waiter = session._item_delete_future["item_1"]
+
+    RealtimeSession._handle_error(session, _rejection("chat_ctx_delete_abc"))
+
+    assert waiter.done(), "update_chat_ctx would wait out its timeout, and the speech with it"
+    assert isinstance(waiter.exception(), llm.RealtimeError)
+
+
+async def test_a_rejected_waiter_is_not_settled_twice() -> None:
+    # the waiter stays parked under its item id, where a late reply would set a result on it
+    session = _chat_ctx_update_session()
+    session._remote_chat_ctx = RemoteChatContext()
+    session._input_transcript_accumulators = {}
+    session._input_speech_started_at = {}
+    waiter = session._item_delete_future["item_1"]
+    RealtimeSession._handle_error(session, _rejection("chat_ctx_delete_abc"))
+
+    RealtimeSession._handle_conversion_item_deleted(
+        session,
+        ConversationItemDeletedEvent.construct(
+            type="conversation.item.deleted", event_id="evt", item_id="item_1"
+        ),
+    )
+
+    assert isinstance(waiter.exception(), llm.RealtimeError)
+
+
+async def test_an_error_outliving_its_update_is_still_reported() -> None:
+    # an error that lands on a waiter the update already retired settles nothing, so it has to
+    # go down the ordinary path rather than pass for a rejected item
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._realtime_model = SimpleNamespace(_provider_label="openai", _label="openai")  # type: ignore[assignment]
+    session._opts = SimpleNamespace(turn_detection=None)  # type: ignore[assignment]
+    session._update_chat_ctx_lock = asyncio.Lock()
+    session._remote_chat_ctx = RemoteChatContext()
+    session._item_delete_future = {}
+    session._item_create_future = {}
+    session._chat_ctx_event_futures = {}
+    session._response_created_futures = {}
+    sent: list[ConversationItemCreateEvent] = []
+    session.send_event = sent.append  # type: ignore[method-assign,assignment]
+    errors: list[llm.RealtimeModelError] = []
+    session.emit = lambda name, ev: errors.append(ev)  # type: ignore[method-assign,assignment]
+
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hello", id="item_1")
+    update = asyncio.create_task(session.update_chat_ctx(chat_ctx))
+    await asyncio.sleep(0)  # let it send the create and start waiting on it
+    assert (waiter := session._item_create_future.get("item_1")) is not None
+    waiter.set_result(None)  # what conversation.item.added does
+    await update
+
+    session._handle_error(_rejection(sent[0].event_id))
+
+    assert [e.recoverable for e in errors] == [True], "swallowed by a retired waiter"
+
+
+async def test_a_duplicate_item_id_settles_its_waiter_as_a_no_op() -> None:
+    # the item is already on the conversation, which is all the create asked for; failing the
+    # waiter would report a rejection for an update that got what it wanted
+    session = _chat_ctx_update_session()
+    waiter = session._item_create_future["item_1"]
+
+    RealtimeSession._handle_error(
+        session, _rejection("chat_ctx_create_abc", code="item_create_duplicate_item_id")
+    )
+
+    assert waiter.done() and waiter.exception() is None
+
+
+async def test_a_rejection_leaves_its_sibling_event_alone() -> None:
+    # an updated item is deleted and created under one id, and the create can still land
+    session = _chat_ctx_update_session()
+    sibling = session._item_create_future["item_1"]
+
+    RealtimeSession._handle_error(session, _rejection("chat_ctx_delete_abc"))
+
+    assert not sibling.done()
+    assert session._item_create_future["item_1"] is sibling
+
+
+async def test_a_fatal_error_on_a_chat_ctx_event_still_ends_the_session() -> None:
+    # the error names the event that drew it, and an exhausted quota must stop the session
+    session = _chat_ctx_update_session()
+    waiter = session._item_create_future["item_1"]
+
+    with pytest.raises(APIError) as exc_info:
+        RealtimeSession._handle_error(
+            session, _rejection("chat_ctx_create_abc", code="insufficient_quota")
+        )
+
+    assert exc_info.value.retryable is False
+    assert isinstance(waiter.exception(), llm.RealtimeError)
+
+
+# --------------------------------------------------------------------------- #
+# a response.create rejected before any response.created (the conversation already
+# has an active response) must fail its generate_reply future immediately with the
+# provider code, instead of orphaning it until the 10s timeout — while still emitting
+# the error event.
+# --------------------------------------------------------------------------- #
+
+
+def _active_response_rejection(event_id: str) -> RealtimeErrorEvent:
+    return RealtimeErrorEvent.construct(
+        type="error",
+        event_id=event_id,
+        error={
+            "message": "Conversation already has an active response",
+            "type": "invalid_request_error",
+            "code": "conversation_already_has_active_response",
+            "event_id": event_id,
+        },
+    )
+
+
+def test_active_response_rejection_fails_generate_reply_future_fast() -> None:
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
+    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+    session._response_created_futures = {"response_create_1": fut}
+
+    RealtimeSession._handle_error(session, _active_response_rejection("response_create_1"))
+
+    # settled immediately (no 10s timeout), with the typed error and provider code
+    assert fut.done()
+    err = fut.exception()
+    assert isinstance(err, llm.RealtimeError)
+    assert err.code == "conversation_already_has_active_response"
+    # the future was consumed so nothing else touches it
+    assert "response_create_1" not in session._response_created_futures
+    # both surfaces: the error is still emitted as a recoverable "error" event
+    assert captured["recoverable"] is True
+
+
+def test_error_with_unknown_event_id_leaves_generate_reply_futures_untouched() -> None:
+    # an error naming an event_id we aren't tracking must not disturb a pending future
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
+    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+    session._response_created_futures = {"response_create_1": fut}
+
+    RealtimeSession._handle_error(session, _active_response_rejection("response_create_other"))
+
+    assert not fut.done()
+    assert session._response_created_futures == {"response_create_1": fut}
+    # still reported down the ordinary path
+    assert captured["recoverable"] is True
+
+
+def _transcription_metrics_session() -> tuple[RealtimeSession, list[STTMetrics]]:
+    model = RealtimeModel(
+        api_key="fake", input_audio_transcription=AudioTranscription(model="whisper-1")
+    )
+    session = RealtimeSession.__new__(RealtimeSession)
+    llm.RealtimeSession.__init__(session, model)
+    session._opts = replace(model._opts)
+    session._capabilities = replace(model.capabilities)
+    session._remote_chat_ctx = RemoteChatContext()
+    session._input_transcript_accumulators = {}
+    session._input_speech_started_at = {}
+    collected: list[STTMetrics] = []
+    session.on("metrics_collected", collected.append)
+    return session, collected
+
+
+def _completed_event_with_raw_usage(
+    usage: dict[str, object] | None,
+) -> ConversationItemInputAudioTranscriptionCompletedEvent:
+    event = ConversationItemInputAudioTranscriptionCompletedEvent.construct(
+        type="conversation.item.input_audio_transcription.completed",
+        event_id="evt",
+        item_id="item_1",
+        content_index=0,
+        transcript="hello",
+        usage=None,
+    )
+    event.usage = usage  # type: ignore[assignment]
+    return event
+
+
+def test_raw_duration_usage_emits_stt_metrics() -> None:
+    session, collected = _transcription_metrics_session()
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage({"type": "duration", "seconds": 2.5})
+    )
+
+    assert len(collected) == 1
+    assert collected[0].audio_duration == 2.5
+    assert collected[0].streamed is True
+    assert collected[0].metadata is not None
+    assert collected[0].metadata.model_name == "whisper-1"
+
+
+def test_raw_token_usage_emits_stt_metrics() -> None:
+    session, collected = _transcription_metrics_session()
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "input_token_details": {"audio_tokens": 8},
+            }
+        )
+    )
+
+    assert len(collected) == 1
+    assert collected[0].input_tokens == 10
+    assert collected[0].output_tokens == 2
+    assert collected[0].total_tokens == 12
+    assert collected[0].input_audio_tokens == 8
+    assert collected[0].streamed is True
+
+
+@pytest.mark.parametrize("usage", [None, {"type": "unknown"}, {"type": "tokens"}])
+def test_missing_or_invalid_transcription_usage_preserves_transcript(
+    usage: dict[str, object] | None,
+) -> None:
+    session, collected = _transcription_metrics_session()
+    transcripts: list[llm.InputTranscriptionCompleted] = []
+    session.on("input_audio_transcription_completed", transcripts.append)
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage(usage)
+    )
+    assert collected == []
+    assert len(transcripts) == 1
+    assert transcripts[0].transcript == "hello"
+    assert transcripts[0].is_final is True
+
+
+def test_transcription_metrics_use_session_model_after_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, collected = _transcription_metrics_session()
+    updates: list[SessionUpdateEvent] = []
+    monkeypatch.setattr(session, "send_event", updates.append)
+
+    session.update_options(input_audio_transcription=AudioTranscription(model="gpt-4o-transcribe"))
+    assert updates[0].session.audio.input.transcription.model == "gpt-4o-transcribe"
+    assert session._realtime_model._opts.input_audio_transcription.model == "whisper-1"
+
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage({"type": "duration", "seconds": 2.5})
+    )
+
+    assert collected[0].metadata is not None
+    assert collected[0].metadata.model_name == "gpt-4o-transcribe"
+
+
+def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
+    realtime_session, _ = _transcription_metrics_session()
+    agent_session = AgentSession()
+    activity = AgentActivity.__new__(AgentActivity)
+    activity._session = agent_session
+    realtime_session.on("metrics_collected", activity._on_metrics_collected)
+
+    realtime_session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "input_token_details": {"audio_tokens": 8, "text_tokens": 2},
+            }
+        )
+    )
+
+    report = SessionReport(
+        job_id="job",
+        room_id="room",
+        room="test",
+        options=agent_session.options,
+        events=[],
+        chat_history=llm.ChatContext(),
+        model_usage=agent_session.usage.model_usage,
+    )
+    assert report.to_dict()["usage"] == [
+        {
+            "provider": "api.openai.com",
+            "model": "whisper-1",
+            "input_tokens": 10,
+            "input_audio_tokens": 8,
+            "output_tokens": 2,
+        }
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# a reconnection replays the conversation the server held, tool calls included
+# --------------------------------------------------------------------------- #
+
+
+async def _start_function_call_server(
+    arguments: str, *, drop_on_output: bool = False, refuse_first: bool = False
+) -> tuple[Any, list[tuple[Any, list[dict]]]]:
+    """A realtime server whose response calls `weather`, recording each connection's creates.
+
+    With `drop_on_output`, the first connection closes on the function call output before it
+    confirms it. With `refuse_first`, the first handshake gets a 503.
+    """
+    from aiohttp import WSMsgType, web
+    from aiohttp.test_utils import TestServer
+
+    connections: list[tuple[web.WebSocketResponse, list[dict]]] = []
+    handshakes = 0
+
+    async def realtime(request: web.Request) -> web.StreamResponse:
+        nonlocal handshakes
+        handshakes += 1
+        if refuse_first and handshakes == 1:
+            return web.Response(status=503)
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        created: list[dict] = []
+        connections.append((ws, created))
+        await ws.send_json({"type": "session.created", "event_id": "ev_session", "session": {}})
+        previous_item_id = None
+        async for msg in ws:
+            if msg.type is not WSMsgType.TEXT:
+                continue
+            event = msg.json()
+            if event["type"] == "conversation.item.create":
+                item = event["item"]
+                created.append(item)
+                if (
+                    drop_on_output
+                    and len(connections) == 1
+                    and item["type"] == "function_call_output"
+                ):
+                    await ws.close()
+                    break
+                await ws.send_json(
+                    {
+                        "type": "conversation.item.added",
+                        "event_id": f"ev_{item['id']}",
+                        "previous_item_id": previous_item_id,
+                        "item": item,
+                    }
+                )
+                previous_item_id = item["id"]
+            elif event["type"] == "response.create":
+                # like the real API, the call is added with empty arguments and only
+                # completed by response.output_item.done
+                response = {
+                    "id": "resp_1",
+                    "object": "realtime.response",
+                    "status": "in_progress",
+                    "output": [],
+                    "metadata": event["response"].get("metadata"),
+                }
+                call = {
+                    "id": "item_call",
+                    "object": "realtime.item",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "call_id": "call_1",
+                    "name": "weather",
+                    "arguments": "",
+                }
+                done_call = {**call, "status": "completed", "arguments": arguments}
+                for server_event in (
+                    {"type": "response.created", "response": response},
+                    {
+                        "type": "response.output_item.added",
+                        "response_id": "resp_1",
+                        "output_index": 0,
+                        "item": call,
+                    },
+                    {
+                        "type": "conversation.item.added",
+                        "previous_item_id": previous_item_id,
+                        "item": call,
+                    },
+                    {
+                        "type": "response.output_item.done",
+                        "response_id": "resp_1",
+                        "output_index": 0,
+                        "item": done_call,
+                    },
+                    {
+                        "type": "response.done",
+                        "response": {**response, "status": "completed", "output": [done_call]},
+                    },
+                ):
+                    await ws.send_json({"event_id": f"ev_{server_event['type']}", **server_event})
+                previous_item_id = call["id"]
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/realtime", realtime)
+    server = TestServer(app)
+    await server.start_server()
+    return server, connections
+
+
+async def _call_weather(session: RealtimeSession, arguments: str) -> llm.ChatContext:
+    """Run one response that calls `weather`, returning the context with its output added."""
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="what's the weather in Tokyo?", id="item_user")
+    await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+    generation = await asyncio.wait_for(session.generate_reply(), 5)
+    calls = [call async for call in generation.function_stream]
+    assert [call.arguments for call in calls] == [arguments]
+
+    chat_ctx = session.chat_ctx.copy()
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(
+            id="item_output", call_id="call_1", name="weather", output="sunny", is_error=False
+        )
+    )
+    return chat_ctx
+
+
+_REPLAYED_CALL = [
+    ("message", None),
+    ("function_call", "call_1"),
+    ("function_call_output", "call_1"),
+]
+
+
+async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
+    # a tool still running across the reconnection sends its output for a call id the
+    # new conversation must know, or the server rejects it with invalid_tool_call_id
+    arguments = '{"city": "Tokyo"}'
+    server, connections = await _start_function_call_server(arguments)
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    try:
+        chat_ctx = await _call_weather(session, arguments)
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+        await connections[0][0].close()
+        for _ in range(100):
+            if len(connections) == 2 and len(connections[1][1]) == 3:
+                break
+            await asyncio.sleep(0.05)
+
+        replayed = connections[1][1]
+        assert [(item["type"], item.get("call_id")) for item in replayed] == _REPLAYED_CALL
+        assert replayed[1]["arguments"] == arguments
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+async def test_reconnect_creates_an_item_the_lost_connection_never_confirmed() -> None:
+    # the connection drops after the output is sent and before the server confirms it, so
+    # the replay of the confirmed items does not carry it
+    arguments = '{"city": "Tokyo"}'
+    server, connections = await _start_function_call_server(arguments, drop_on_output=True)
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    try:
+        chat_ctx = await _call_weather(session, arguments)
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 10)
+
+        assert len(connections) == 2
+        recreated = connections[1][1]
+        assert [(item["type"], item.get("call_id")) for item in recreated] == _REPLAYED_CALL
+        assert session.chat_ctx.get_by_id("item_output") is not None
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+async def test_a_refused_first_handshake_retries_as_a_fresh_connection() -> None:
+    # nothing reached the server, so the queued startup events are all it needs; replaying
+    # as a reconnection would discard the reply requested during startup
+    server, connections = await _start_function_call_server("{}", refuse_first=True)
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    reconnected: list[Any] = []
+    session.on("session_reconnected", reconnected.append)
+    try:
+        generation = await asyncio.wait_for(session.generate_reply(), 5)
+        assert [call.name async for call in generation.function_stream] == ["weather"]
+        assert len(connections) == 1
+        assert reconnected == []
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+def _audio_session() -> tuple[RealtimeSession, list[Any]]:
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._input_resampler = None
+    session._bstream = utils.audio.AudioByteStream(24000, 1, samples_per_channel=2400)
+    session._pushed_duration_s = 0
+    sent: list[Any] = []
+    session.send_event = sent.append  # type: ignore[method-assign,assignment]
+    return session, sent
+
+
+def _push(session: RealtimeSession, value: int, ms: int) -> None:
+    for _ in range(ms // 10):
+        session.push_audio(rtc.AudioFrame(array("h", [value] * 240).tobytes(), 24000, 1, 240))
+
+
+def _appended(events: list[Any]) -> list[int]:
+    data = b"".join(
+        base64.b64decode(e.audio) for e in events if e.type == "input_audio_buffer.append"
+    )
+    return array("h", data).tolist()
+
+
+def test_commit_sends_the_partial_frame_with_its_turn() -> None:
+    session, sent = _audio_session()
+    _push(session, 1, 250)
+    session.commit_audio()
+
+    commit = next(i for i, e in enumerate(sent) if e.type == "input_audio_buffer.commit")
+    assert len(_appended(sent[:commit])) == 6000
+
+
+def test_clear_drops_buffered_audio() -> None:
+    session, sent = _audio_session()
+    _push(session, 1, 250)
+    session.clear_audio()
+    cleared = len(sent)
+    _push(session, 2, 200)
+
+    assert set(_appended(sent[cleared:])) == {2}

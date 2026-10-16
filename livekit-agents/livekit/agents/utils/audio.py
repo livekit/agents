@@ -10,7 +10,6 @@ from numpy.typing import DTypeLike
 
 from livekit import rtc
 
-from ..log import logger
 from .aio.utils import cancel_and_wait
 
 # deprecated aliases
@@ -171,39 +170,52 @@ class AudioByteStream:
 
     write = push  # Alias for the push method.
 
+    @property
+    def buffered_duration(self) -> float:
+        """Seconds of audio waiting for the next frame."""
+        return len(self._buf) / self._bytes_per_sample / self._sample_rate
+
     def flush(self) -> list[rtc.AudioFrame]:
-        """
-        Flush the buffer and retrieve any remaining audio data as a frame.
+        """Emit buffered audio that forms complete samples for every channel.
+
+        Retain any trailing partial sample for the next :meth:`push`. A flush
+        can occur mid-stream, and incoming byte chunks can end inside a sample.
+        Discarding those bytes would misalign all subsequent samples.
+
+        This does not reset progressive frame sizing. Use :meth:`reset_progressive`
+        to restart with small frames, or :meth:`clear` to discard buffered audio
+        when abandoning the stream.
 
         Returns:
-            list[rtc.AudioFrame]: A list containing any remaining `AudioFrame` objects.
-
-        This method processes any remaining data in the buffer that does not
-        fill a complete frame. If the remaining data forms a partial frame
-        (i.e., its size is not a multiple of the expected sample size), a warning is
-        logged and an empty list is returned. Otherwise, it returns the final
-        `AudioFrame` containing the remaining data.
-
-        Use this method when you have no more data to push and want to ensure
-        that all buffered audio data has been processed.
+            A frame containing the complete samples, or an empty list if none
+            are available.
         """
         if len(self._buf) == 0:
             return []
 
-        if len(self._buf) % self._bytes_per_sample != 0:
-            logger.warning("AudioByteStream: incomplete frame during flush, dropping")
+        remainder = len(self._buf) % self._bytes_per_sample
+        complete_bytes = len(self._buf) - remainder
+        if complete_bytes == 0:
             return []
 
         frames = [
             rtc.AudioFrame(
-                data=self._buf.copy(),
+                data=self._buf[:complete_bytes],
                 sample_rate=self._sample_rate,
                 num_channels=self._num_channels,
-                samples_per_channel=len(self._buf) // self._bytes_per_sample,
+                samples_per_channel=complete_bytes // self._bytes_per_sample,
             )
         ]
-        self._buf.clear()
+        del self._buf[:complete_bytes]
         return frames
+
+    def reset_progressive(self) -> None:
+        """Reset progressive frame sizing while preserving buffered audio.
+
+        Use this after a mid-stream flush so the next burst starts with small
+        frames without losing the partial sample needed by the next push.
+        """
+        self._current_bytes_per_frame = self._initial_bytes_per_frame
 
     def clear(self) -> None:
         """Discard all buffered data and reset progressive frame sizing.
@@ -211,9 +223,11 @@ class AudioByteStream:
         After clearing, the next :meth:`push` will start from the initial
         (small) frame size again, ensuring low latency on the first frame
         after an interruption.
+
+        Use :meth:`reset_progressive` instead when the byte stream continues.
         """
         self._buf.clear()
-        self._current_bytes_per_frame = self._initial_bytes_per_frame
+        self.reset_progressive()
 
 
 async def audio_frames_from_file(
@@ -233,6 +247,7 @@ async def audio_frames_from_file(
     decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
 
     async def file_reader() -> None:
+        aborted = False
         try:
             async with aiofiles.open(file_path, mode="rb") as f:
                 while True:
@@ -241,8 +256,14 @@ async def audio_frames_from_file(
                         break
 
                     decoder.push(chunk)
+        except asyncio.CancelledError:
+            aborted = True
+            raise
         finally:
-            decoder.end_input()
+            # a cancelled read leaves a truncated file, not an end of input: signalling EOF
+            # would make the decoder report the abort as invalid audio. aclose() closes it.
+            if not aborted:
+                decoder.end_input()
 
     reader_task = asyncio.create_task(file_reader())
 
@@ -285,11 +306,8 @@ class AudioArrayBuffer:
             The number of samples written to the buffer.
 
         Raises:
-            ValueError: If the frame samples are greater than the buffer size.
+            ValueError: If the frame samples, after resampling, are greater than the buffer size.
         """
-        if frame.samples_per_channel > self._buffer_size:
-            raise ValueError("frame samples are greater than the buffer size")
-
         frames: list[rtc.AudioFrame] = []
         if self._resampler is None and frame.sample_rate != self._sample_rate:
             self._resampler = rtc.AudioResampler(
@@ -305,6 +323,21 @@ class AudioArrayBuffer:
             frames.extend(self._resampler.push(frame))
         else:
             frames.append(frame)
+
+        if not frames:
+            # the resampler holds short frames back until it can emit a full output frame
+            return 0
+
+        if (samples := sum(f.samples_per_channel for f in frames)) > self._buffer_size:
+            detail = (
+                f" after resampling {frame.sample_rate}Hz to {self._sample_rate}Hz"
+                if self._resampler
+                else ""
+            )
+            raise ValueError(
+                f"frame samples ({samples}{detail}) are greater than "
+                f"the buffer size ({self._buffer_size})"
+            )
 
         frame = merge_frames(frames)
 
@@ -339,6 +372,7 @@ class AudioArrayBuffer:
     def reset(self) -> None:
         self._start_idx = 0
         self._buffer.fill(0)
+        self._resampler = None
 
     def __len__(self) -> int:
         return self._start_idx

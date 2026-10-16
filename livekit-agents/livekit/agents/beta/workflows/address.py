@@ -59,6 +59,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_address = ""
+        self._spell_read_back = False
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -75,7 +76,12 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide their address.")
+        self.session.generate_reply(
+            instructions=(
+                "Ask the user for their address. If the user already stated one earlier in "
+                "this conversation, record it with update_address instead of asking again."
+            )
+        )
 
     def _build_update_address_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -130,9 +136,16 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        read_back = (
+            f"Repeat the address field by field, spelling the street name letter by "
+            f"letter: {[' '.join(street_address.replace(' ', '')), *address_fields[1:]]}"
+            if self._spell_read_back
+            else "Repeat the address back to the user."
+        )
+        self._spell_read_back = True
         return (
             f"The address has been updated to {address}\n"
-            f"Repeat the address field by field: {address_fields} if needed\n"
+            f"{read_back}\n"
             f"Prompt the user for confirmation, do not call `confirm_address` directly"
         )
 
@@ -140,16 +153,19 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         # confirm tool is only injected after update_address is called,
         # preventing the LLM from hallucinating a confirmation without user input
         @function_tool()
-        async def confirm_address() -> None:
+        async def confirm_address() -> str | None:
             """Call after the user confirms the address is correct."""
             if address != self._current_address:
-                self.session.generate_reply(
-                    instructions="The address has changed since confirmation was requested, ask the user to confirm the updated address."
+                # stale closure: update_address ran again after this confirm tool
+                # was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The address has changed since confirmation was requested, "
+                    "ask the user to confirm the updated address."
                 )
-                return
 
             if not self.done():
                 self.complete(GetAddressResult(address=address))
+            return None
 
         return confirm_address
 

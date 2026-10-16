@@ -18,10 +18,10 @@ def test_default_model_is_s2_1_pro():
 
 
 def test_model_variants_accepted():
-    """s1, s2-pro, and s2.1-pro are all accepted."""
+    """s1, s2-pro, s2.1-pro, and drama-3 are all accepted."""
     from livekit.plugins.fishaudio import TTS
 
-    for model in ("s1", "s2-pro", "s2.1-pro"):
+    for model in ("s1", "s2-pro", "s2.1-pro", "drama-3"):
         assert TTS(api_key="test-key", model=model).model == model
 
 
@@ -151,6 +151,13 @@ def test_normalize_loudness_with_speed_and_volume():
         TTS_opts(speed=1.2, volume=-3.0, normalize_loudness=True), text="hi"
     )["prosody"]
     assert prosody == {"speed": 1.2, "volume": -3.0, "normalize_loudness": True}
+
+
+def test_quality_guard_always_enabled():
+    """Every request carries the quality-guard feature flag; it is not configurable."""
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    assert _build_tts_request(TTS_opts(), text="hi")["features"] == ["quality-guard"]
 
 
 def test_generation_tuning_omitted_by_default():

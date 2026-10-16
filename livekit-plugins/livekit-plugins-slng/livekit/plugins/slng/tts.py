@@ -844,7 +844,10 @@ class ChunkedStream(tts.ChunkedStream):
                 try:
                     resp = json.loads(msg.data)
                 except json.JSONDecodeError:
-                    logger.debug("[TTS] ignoring non-JSON text frame: %s", msg.data)
+                    logger.debug(
+                        "[SLNG TTS] ignoring non-JSON text frame",
+                        extra={"lk.pii.data": msg.data},
+                    )
                     continue
 
                 if not isinstance(resp, dict):
@@ -902,7 +905,7 @@ class ChunkedStream(tts.ChunkedStream):
                         status_code=event.error_status or -1,
                     )
                 else:
-                    logger.debug("[TTS] ignoring unknown message: %s", resp)
+                    logger.debug("[TTS] ignoring unknown message", extra={"lk.pii.data": resp})
         except (TimeoutError, asyncio.TimeoutError):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -1190,7 +1193,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     try:
                         resp = json.loads(msg.data)
                     except json.JSONDecodeError:
-                        logger.debug("[TTS] ignoring non-JSON text frame: %s", msg.data)
+                        logger.debug(
+                            "[SLNG TTS] ignoring non-JSON text frame",
+                            extra={"lk.pii.data": msg.data},
+                        )
                         continue
 
                     if not isinstance(resp, dict):
@@ -1281,7 +1287,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
 
                     else:
-                        logger.debug("[TTS] ignoring unknown message: %s", resp)
+                        logger.debug("[TTS] ignoring unknown message", extra={"lk.pii.data": resp})
 
         try:
             ws: aiohttp.ClientWebSocketResponse | None = None

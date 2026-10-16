@@ -9,6 +9,12 @@ This project uses **uv** as the package manager. All commands run from the repos
 make install          # Install all dependencies with dev extras (uv sync --all-extras --dev)
 ```
 
+### Versioning
+
+- Versions change only in release PRs (`livekit-agents@X.Y.Z`). Other PRs never edit `version.py` files or the `livekit-agents` version floor in plugin `pyproject.toml` files.
+- Use a `patch` version bump by default.
+- Do not use a `minor` or `major` version bump unless a human explicitly confirms the bump level.
+
 ### Code Quality
 ```bash
 make format           # Format code with ruff
@@ -44,7 +50,7 @@ it.
 | `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
 
 ```bash
-uv run pytest --unit                    # the CI unit gate (no cloud accounts)
+uv run pytest --unit --audio_eot        # the CI unit gate (no cloud accounts)
 uv run pytest --plugin openai           # only the openai provider tests
 uv run pytest --list-categories         # list every module grouped by category, then exit
 ```
@@ -83,12 +89,12 @@ make doctor           # Check development environment health
 ```
 livekit-agents/livekit/agents/
 ├── voice/              # Core voice agent: AgentSession, Agent, room I/O, transcription
-├── llm/                # LLM integration: chat context, tool definitions, MCP support
+├── llm/                # LLM and realtime engines: chat context, tools, MCP, provider protocols
 ├── stt/                # Speech-to-text with fallback and stream adapters
 ├── tts/                # Text-to-speech with fallback and stream pacing
 ├── ipc/                # Inter-process communication for distributed job execution
 ├── cli/                # CLI commands (console, dev, start, connect)
-├── inference/          # Remote model inference (LLM, STT, TTS)
+├── inference/          # Hosted model inference (LLM, STT, TTS, realtime)
 ├── telemetry/          # OpenTelemetry traces and Prometheus metrics
 └── utils/              # Audio processing, codecs, HTTP, async utilities
 

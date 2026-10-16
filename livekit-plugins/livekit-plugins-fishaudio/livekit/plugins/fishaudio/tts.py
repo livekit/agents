@@ -106,7 +106,8 @@ class TTS(tts.TTS):
 
         Args:
             api_key (NotGivenOr[str]): Fish Audio API key. Reads ``FISH_API_KEY`` if unset.
-            model (TTSModels | str): TTS model to use. Defaults to ``"s2.1-pro"``.
+            model (TTSModels | str): TTS model to use: ``"s1"``, ``"s2-pro"``, ``"s2.1-pro"``,
+                or ``"drama-3"``. Defaults to ``"s2.1-pro"``.
             voice_id (NotGivenOr[str]): Voice model ID. Fish Audio's API refers to this
                 as ``reference_id``; it's the same value either way.
             output_format (OutputFormat): Audio output format. Defaults to ``"wav"``.
@@ -408,6 +409,9 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
         "prosody": prosody,
         "top_p": opts.top_p,
         "temperature": opts.temperature,
+        # Server-side reliability feature, deliberately not exposed as an option:
+        # every synthesis request runs with the quality guard enabled.
+        "features": ["quality-guard"],
     }
     # Generation-tuning fields have no plugin default: they are omitted unless
     # set so Fish's server-side defaults stay in effect.
@@ -586,7 +590,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                     break
                 else:
-                    logger.debug("unknown Fish Audio event: %s", data)
+                    logger.debug("unknown Fish Audio event", extra={"lk.pii.data": data})
 
         tasks = [
             asyncio.create_task(input_task()),

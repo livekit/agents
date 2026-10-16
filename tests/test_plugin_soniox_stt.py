@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
@@ -115,6 +115,67 @@ def test_token_accumulator_lang_segments_empty_initially():
     assert accumulator._lang_segments == []
 
 
+def test_token_accumulator_span_covers_all_timed_tokens():
+    """A token that carries timing late must not collapse the span onto itself.
+
+    Regression for #6885: when the leading tokens of an utterance arrive
+    without ``start_ms``/``end_ms`` and only a trailing token has them, the
+    emitted span used to collapse onto that trailing token (e.g. two words in
+    180ms).
+    """
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update({"text": " He's", "language": "en", "is_final": True})
+    accumulator.update({"text": " trying", "language": "en", "is_final": True})
+    accumulator.update(
+        {"text": ".", "language": "en", "is_final": True, "start_ms": 43663, "end_ms": 43843}
+    )
+
+    assert accumulator.text == " He's trying."
+    assert accumulator.start_time == 43663
+    assert accumulator.end_time == 43843
+
+
+def test_token_accumulator_end_time_never_regresses():
+    """A trailing token whose ``end_ms`` regresses must not pull the end back.
+
+    Regression for #6885: ``end_time`` was overwritten by every token that
+    carried ``end_ms``, so a non-monotonic trailing token shortened the span.
+    """
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update(
+        {"text": " He's", "language": "en", "is_final": True, "start_ms": 41000, "end_ms": 41400}
+    )
+    accumulator.update(
+        {"text": " trying", "language": "en", "is_final": True, "start_ms": 41400, "end_ms": 43843}
+    )
+    accumulator.update(
+        {"text": ".", "language": "en", "is_final": True, "start_ms": 43663, "end_ms": 43700}
+    )
+
+    assert accumulator.start_time == 41000
+    assert accumulator.end_time == 43843
+
+
+def test_token_accumulator_start_time_takes_earliest():
+    """The earliest ``start_ms`` wins even if a later token carries an earlier one."""
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update(
+        {"text": " He's", "language": "en", "is_final": True, "start_ms": 41000, "end_ms": 41400}
+    )
+    accumulator.update(
+        {"text": " trying", "language": "en", "is_final": True, "start_ms": 40000, "end_ms": 43843}
+    )
+
+    assert accumulator.start_time == 40000
+    assert accumulator.end_time == 43843
+
+
 # ---------------------------------------------------------------------------
 # _lang_segments_to_fields helper
 # ---------------------------------------------------------------------------
@@ -197,6 +258,22 @@ def _make_stream(translation: Any = None):
     return stream
 
 
+async def test_websocket_authenticates_with_header():
+    stream = _make_stream()
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.send_str = AsyncMock()
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.ws_connect = AsyncMock(return_value=ws)
+    stream._stt._http_session = session
+
+    await stream._connect_ws()
+
+    assert session.ws_connect.call_args.kwargs["headers"] == {"Authorization": "Bearer test-key"}
+    config = json.loads(ws.send_str.call_args.args[0])
+    assert "api_key" not in config
+    assert config["model"] == stream._stt._params.model
+
+
 @pytest.mark.parametrize("level", [None, 0, 2])
 async def test_endpoint_latency_adjustment_level_websocket_config(level: int | None):
     from livekit.plugins.soniox import STTOptions
@@ -214,7 +291,7 @@ async def test_endpoint_latency_adjustment_level_websocket_config(level: int | N
         def __init__(self, ws: FakeWebSocket) -> None:
             self.ws = ws
 
-        async def ws_connect(self, url: str) -> FakeWebSocket:
+        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
             return self.ws
 
     ws = FakeWebSocket()
@@ -568,3 +645,180 @@ async def test_final_transcript_no_translation_code_switched_populates_source_ru
     assert sd.target_texts is None
     assert sd.source_texts is not None
     assert "".join(sd.source_texts) == sd.text
+
+
+# --- RECOGNITION_USAGE reporting cadence -----------------------------------
+
+
+async def test_recognition_usage_reported_for_silent_frames():
+    """Frames that carry no tokens still report the audio Soniox processed.
+
+    The regression case: a silent speaker produces no endpoint token, and a
+    cancelled stream never reads the `finished` frame, so gating on those two
+    reported nothing at all.
+    """
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [{"tokens": [], "total_audio_proc_ms": 3000}],
+        expect_events=1,
+    )
+
+    assert [e.type for e in events] == [SpeechEventType.RECOGNITION_USAGE]
+    assert events[0].recognition_usage is not None
+    assert events[0].recognition_usage.audio_duration == pytest.approx(3.0)
+
+
+async def test_recognition_usage_reported_without_endpoint_token():
+    """Interim-only frames report usage too, ordered after the transcript events."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [{"tokens": [_nonfinal_token("hola", "es")], "total_audio_proc_ms": 2500}],
+        expect_events=3,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.RECOGNITION_USAGE,
+    ]
+    assert events[-1].recognition_usage is not None
+    assert events[-1].recognition_usage.audio_duration == pytest.approx(2.5)
+
+
+async def test_recognition_usage_reports_delta_and_skips_unchanged_totals():
+    """Usage is the delta against what was already reported, so the running
+    total stays monotonic and an unchanged total emits nothing."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {"tokens": [], "total_audio_proc_ms": 3000},
+            # Same total: already accounted for, so no event.
+            {"tokens": [], "total_audio_proc_ms": 3000},
+            {"tokens": [], "total_audio_proc_ms": 5000},
+        ],
+        expect_events=2,
+    )
+
+    assert [e.type for e in events] == [SpeechEventType.RECOGNITION_USAGE] * 2
+    durations = [e.recognition_usage.audio_duration for e in events if e.recognition_usage]
+    assert durations == pytest.approx([3.0, 2.0])
+    assert sum(durations) == pytest.approx(5.0)
+
+
+async def test_recognition_usage_still_reported_on_endpoint_frame():
+    """The endpoint path keeps reporting usage, after the transcript events."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {
+                "tokens": [_final_token("Hello world.", "en"), END_TOKEN_FINAL],
+                "total_audio_proc_ms": 1500,
+            }
+        ],
+        expect_events=3,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+        SpeechEventType.RECOGNITION_USAGE,
+    ]
+    assert events[-1].recognition_usage is not None
+    assert events[-1].recognition_usage.audio_duration == pytest.approx(1.5)
+
+
+# ---------------------------------------------------------------------------
+# Half-open socket detection (same fix as #7206 for Deepgram v1)
+# ---------------------------------------------------------------------------
+
+
+async def test_socket_is_opened_with_a_heartbeat():
+    """aiohttp defaults `heartbeat` to None, so without it the read side of a
+    half-open socket parks forever and the reconnect in `_run`, which only fires
+    when `_recv_messages_task` ends, never gets a turn."""
+    stream = _make_stream()
+
+    class RecordingWebSocket:
+        async def send_str(self, message: str) -> None:
+            pass
+
+    class RecordingSession:
+        kwargs: dict[str, Any] | None = None
+
+        async def ws_connect(self, url: str, **kwargs: Any) -> RecordingWebSocket:
+            self.kwargs = kwargs
+            return RecordingWebSocket()
+
+    session = RecordingSession()
+    stream._stt._http_session = session
+
+    await stream._connect_ws()
+
+    assert session.kwargs is not None
+    assert session.kwargs.get("heartbeat") == 30.0
+
+
+async def test_keepalive_write_drop_requests_reconnect():
+    """The keepalive used to catch every exception and return. When no audio is
+    flowing that write is the only thing touching the socket, so swallowing it
+    left the stream on a dead connection with nothing ever logged."""
+    stream = _make_stream()
+
+    class DeadWebSocket:
+        closed = False
+
+        async def send_str(self, message: str) -> None:
+            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    stream._ws = DeadWebSocket()
+
+    await asyncio.wait_for(stream._keepalive_task(), timeout=1.0)
+
+    assert stream._reconnect_event.is_set()
+
+
+async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
+    """A heartbeat timeout arrives as WSMsgType.ERROR, not as a close frame.
+    Logging it as an unexpected type and continuing only worked because aiohttp
+    happens to report CLOSED next, and it threw away the one value that says
+    why the socket went."""
+    stream = _make_stream()
+
+    class HeartbeatTimeoutWebSocket:
+        closed = False
+
+        def __init__(self) -> None:
+            self.receives = 0
+
+        def exception(self) -> BaseException:
+            return aiohttp.ServerTimeoutError("No PONG received after 15.0 seconds")
+
+        def __aiter__(self) -> HeartbeatTimeoutWebSocket:
+            return self
+
+        async def __anext__(self) -> _FakeWSMessage:
+            self.receives += 1
+            # yield, so a recv loop that steps over the error instead of ending
+            # fails the receive-count assertion rather than starving the loop
+            await asyncio.sleep(0)
+            if self.receives > 5:
+                raise StopAsyncIteration
+            return _FakeWSMessage("", msg_type=aiohttp.WSMsgType.ERROR)
+
+    ws = HeartbeatTimeoutWebSocket()
+    stream._ws = ws
+
+    with caplog.at_level("WARNING", logger="livekit.plugins.soniox"):
+        await asyncio.wait_for(stream._recv_messages_task(), timeout=1.0)
+
+    assert ws.receives == 1
+    assert stream._reconnect_event.is_set()
+    assert any("No PONG received" in r.getMessage() for r in caplog.records)

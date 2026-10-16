@@ -45,9 +45,11 @@ from spatius import (
 
 from .log import logger
 
-DEFAULT_REGION = "us-west"
+# "auto" resolves the ingress region via the Spatius bootstrap API, falling back
+# to us-west if resolution fails; set region/SPATIUS_REGION to pin a concrete region
+DEFAULT_REGION = "auto"
 DEFAULT_SAMPLE_RATE = 24000
-DEFAULT_AUDIO_FORMAT = AudioFormat.PCM_S16LE
+DEFAULT_AUDIO_FORMAT = AudioFormat.OGG_OPUS
 DEFAULT_OPUS_FRAME_DURATION_MS = 20
 DEFAULT_OPUS_APPLICATION = "audio"
 SUPPORTED_OPUS_SAMPLE_RATES = {8000, 12000, 16000, 24000, 48000}
@@ -76,6 +78,10 @@ class AvatarSession(BaseAvatarSession):
     to Spatius motion server, it joins the LiveKit room to publish synchronized
     avatar audio and motion data. The worker reports playback started and finished
     back to the agent over LiveKit RPC.
+
+    By default the ingress region is resolved automatically through the Spatius
+    bootstrap API (``region="auto"``). Pass ``region`` or set the ``SPATIUS_REGION``
+    environment variable to pin a concrete region such as ``us-west``.
     """
 
     def __init__(
@@ -95,6 +101,7 @@ class AvatarSession(BaseAvatarSession):
         bitrate: int = 0,
         opus_frame_duration_ms: int = DEFAULT_OPUS_FRAME_DURATION_MS,
         opus_application: str = DEFAULT_OPUS_APPLICATION,
+        extra_params: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
 
@@ -136,6 +143,7 @@ class AvatarSession(BaseAvatarSession):
         self._idle_timeout_seconds = idle_timeout_seconds
         self._sample_rate = int(sample_rate) if utils.is_given(sample_rate) else None
         self._bitrate = bitrate
+        self._extra_params = dict(extra_params or {})
         self._opus_encoder = (
             OggOpusEncoderConfig(
                 frame_duration_ms=opus_frame_duration_ms,
@@ -252,6 +260,7 @@ class AvatarSession(BaseAvatarSession):
                 bitrate=self._bitrate,
                 audio_format=self._audio_format,
                 ogg_opus_encoder=self._opus_encoder,
+                extra_params=self._extra_params,
                 on_error=self._on_spatius_error,
                 on_close=self._on_spatius_close,
             )

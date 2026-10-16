@@ -20,7 +20,7 @@ import inspect
 import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Flag, auto
 from typing import (
     TYPE_CHECKING,
@@ -119,6 +119,26 @@ class NamedToolChoice(TypedDict, total=False):
 ToolChoice = NamedToolChoice | Literal["auto", "required", "none"]
 
 
+@dataclass
+class ToolResult:
+    """A function tool's output and whether it requests a follow-up reply.
+
+    Args:
+        output: The value to return to the model, such as a string, dict, list,
+            or None. For a handoff, return ``(agent, ToolResult(...))``.
+        reply_required: Whether this result requests a reply. Defaults to True.
+            False keeps the output in chat history without requesting a reply.
+            Other tool results can still request a reply, and interruption or
+            ``cancel_tool_reply()`` can still prevent one.
+
+    Example:
+        return ToolResult("Successfully sent DTMF events: 1", reply_required=False)
+    """
+
+    output: Any
+    reply_required: bool = field(default=True, kw_only=True)
+
+
 class ToolError(Exception):
     def __init__(self, message: str) -> None:
         """
@@ -157,6 +177,28 @@ class ToolFlag(Flag):
 
 DuplicateMode = Literal["allow", "reject", "replace", "confirm"]
 
+DuplicateScope = Literal["name", "name_and_args"]
+"""What counts as a duplicate of an in-flight call, i.e. what ``on_duplicate`` acts on.
+
+``"name"``           any in-flight call of the same tool (default).
+``"name_and_args"``  same tool *and* same arguments, so concurrent calls of one
+                     tool with different arguments are not duplicates::
+
+                         @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+                         async def check_order(ctx: RunContext, order_id: str) -> str: ...
+
+                     Arguments are compared *after* validation, so a parameter the
+                     LLM omitted on one call and passed explicitly on the next still
+                     reads as the same call, and ``1`` matches ``1.0`` for a ``float``
+                     parameter. Raw function tools (including MCP tools) have no
+                     per-parameter schema, so their arguments are compared as sent.
+
+                     Comparison fails open — an unrepresentable argument or a
+                     validation error leaves the call treated as sent rather than
+                     blocking it — so don't rely on this as an exactly-once
+                     guarantee; put that in the tool body.
+"""
+
 
 @dataclass
 class FunctionToolInfo:
@@ -164,6 +206,7 @@ class FunctionToolInfo:
     description: str | None
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
+    duplicate_scope: DuplicateScope = "name"
 
 
 class RawFunctionDescription(TypedDict):
@@ -188,6 +231,7 @@ class RawFunctionToolInfo:
     raw_schema: dict[str, Any]
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
+    duplicate_scope: DuplicateScope = "name"
 
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
@@ -266,6 +310,7 @@ def function_tool(
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> RawFunctionTool[_P, _R]: ...
 
 
@@ -276,6 +321,7 @@ def function_tool(
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]: ...
 
 
@@ -287,6 +333,7 @@ def function_tool(
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> FunctionTool[_P, _R]: ...
 
 
@@ -298,6 +345,7 @@ def function_tool(
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
 
 
@@ -309,6 +357,7 @@ def function_tool(
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> (
     FunctionTool[_P, _R]
     | RawFunctionTool[_P, _R]
@@ -335,6 +384,7 @@ def function_tool(
             raw_schema=schema,
             flags=flags,
             on_duplicate=on_duplicate,
+            duplicate_scope=duplicate_scope,
         )
         return RawFunctionTool(func, info)
 
@@ -351,6 +401,7 @@ def function_tool(
             description=description or docstring.description,
             flags=flags,
             on_duplicate=on_duplicate,
+            duplicate_scope=duplicate_scope,
         )
         return FunctionTool(wrapped, info)
 

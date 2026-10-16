@@ -21,7 +21,7 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
-DEFAULT_STT = "deepgram/nova-3"
+DEFAULT_STT = "assemblyai/universal-3-6-pro"
 DEFAULT_LLM = "google/gemma-4-31b-it"
 DEFAULT_TTS = "inworld/inworld-tts-2"
 
@@ -76,7 +76,6 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=inference.LLM(model=DEFAULT_LLM),
         tts=inference.TTS(
             model=DEFAULT_TTS,
-            voice="Sarah",
             extra_kwargs={"delivery_mode": "CREATIVE"},
         ),
         # Flip user_state to "away" after 10s of mutual silence so we can

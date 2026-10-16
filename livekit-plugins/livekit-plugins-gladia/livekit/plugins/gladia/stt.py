@@ -665,6 +665,8 @@ class STT(stt.STT):
             self._opts.bit_depth = bit_depth
         if channels is not None:
             self._opts.channels = channels
+        if region is not None:
+            self._opts.region = region
         if encoding is not None:
             self._opts.encoding = encoding
         if custom_vocabulary is not None:
@@ -1102,7 +1104,8 @@ class SpeechStream(stt.SpeechStream):
                 translated_utterance = translation_data.get("translated_utterance", {})
                 if not translated_utterance:
                     logger.warning(
-                        f"No translated_utterance in translation message: {translation_data}"
+                        "No translated_utterance in translation message",
+                        extra={"lk.pii.data": translation_data},
                     )
                     return
 

@@ -104,6 +104,11 @@ class STT(stt.STT):
         base_url: str = "https://api.cartesia.ai",
         language: STTLanguages | str | None = None,
         encoding: STTEncoding = AUDIO_ENCODING,
+        turn_start_threshold: NotGivenOr[float] = NOT_GIVEN,
+        turn_eager_end_threshold: NotGivenOr[float] = NOT_GIVEN,
+        turn_end_threshold: NotGivenOr[float] = NOT_GIVEN,
+        turn_end_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Cartesia STT.
@@ -135,9 +140,27 @@ class STT(stt.STT):
             language: The language code for recognition.
                 This plugin only supports ``en`` for ``ink-2``.
             encoding: The audio encoding format. Must be ``pcm_s16le``.
+            turn_start_threshold: Likelihood above which the model starts a turn.
+                Range 0.5-0.9, Cartesia default 0.8. Must stay above
+                ``turn_eager_end_threshold``. Turn-detecting models (e.g. ``ink-2``) only.
+            turn_eager_end_threshold: Likelihood below which the model emits
+                ``turn.eager_end``, the early might-be-done signal. Range 0.3-0.6,
+                Cartesia default 0.4. Must stay between the end and start thresholds.
+                Turn-detecting models only.
+            turn_end_threshold: Likelihood below which the model ends the turn.
+                Range 0.05-0.5, Cartesia default 0.2. Must stay below
+                ``turn_eager_end_threshold``. Turn-detecting models only.
+            turn_end_timeout_ms: Maximum time in milliseconds to wait after the user
+                stops speaking before ending the turn even if the likelihood never
+                falls below ``turn_end_threshold``. Range 640-11200, Cartesia default
+                5600. Turn-detecting models only.
+            keyterm: Key terms to improve recall of specific words and phrases
+                (up to 100 terms totaling 1200 characters). Turn-detecting models only.
 
         Raises:
-            ValueError: If no API key is provided or found in environment variables.
+            ValueError: If no API key is provided or found in environment variables,
+                or if a turn-detection parameter is passed with a model that does not
+                support turn detection (e.g. ``ink-whisper``).
 
         Examples:
 
@@ -180,6 +203,21 @@ class STT(stt.STT):
         else:
             resolved_final_transcript_mode = "auto"
 
+        if resolved_final_transcript_mode == "legacy":
+            _turns_only_params = {
+                "turn_start_threshold": turn_start_threshold,
+                "turn_eager_end_threshold": turn_eager_end_threshold,
+                "turn_end_threshold": turn_end_threshold,
+                "turn_end_timeout_ms": turn_end_timeout_ms,
+                "keyterm": keyterm,
+            }
+            for _param_name, _param_value in _turns_only_params.items():
+                if utils.is_given(_param_value):
+                    raise ValueError(
+                        f"The {_param_name!r} parameter is only supported by turn-detecting"
+                        f" models (e.g. ink-2); model {resolved_model!r} does not support it."
+                    )
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -199,6 +237,11 @@ class STT(stt.STT):
         self._sample_rate = sample_rate
         self._session = http_session
         self._ws_base_url = _base_url_to_ws_base_url(base_url=base_url)
+        self._turn_start_threshold = turn_start_threshold
+        self._turn_eager_end_threshold = turn_eager_end_threshold
+        self._turn_end_threshold = turn_end_threshold
+        self._turn_end_timeout_ms = turn_end_timeout_ms
+        self._keyterm = keyterm
 
         self._streams = weakref.WeakSet[CartesiaRecognizeStream]()
 
@@ -258,6 +301,11 @@ class STT(stt.STT):
                     ws_base_url=self._ws_base_url,
                     session=session,
                     language=resolved_language or LanguageCode("en"),
+                    turn_start_threshold=self._turn_start_threshold,
+                    turn_eager_end_threshold=self._turn_eager_end_threshold,
+                    turn_end_threshold=self._turn_end_threshold,
+                    turn_end_timeout_ms=self._turn_end_timeout_ms,
+                    keyterm=self._keyterm,
                 )
             case "legacy":
                 stream = LegacyRecognizeStream(

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterable, AsyncIterator, Iterator
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
 
@@ -19,7 +20,7 @@ from livekit.agents.metrics.base import Metadata
 from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..telemetry import trace_types, tracer, utils as telemetry_utils
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     USERDATA_TIMED_TRANSCRIPT,
@@ -29,8 +30,9 @@ from ..types import (
 from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
+    from ..voice.agent_session import SpeechSteeringOptions
     from ..voice.io import TimedString
-    from ._provider_format import ExpressiveTag
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 
@@ -57,6 +59,14 @@ class TTSCapabilities:
     """Whether this TTS supports aligned transcripts with word timestamps"""
 
 
+@dataclass
+class MarkupInfo:
+    """What the expressive markup pipeline can do with a given voice."""
+
+    nonverbals: dict[str, list[str]] = field(default_factory=dict)
+    """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
+
+
 class TTSError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["tts_error"] = "tts_error"
@@ -77,8 +87,11 @@ class TTS(
     class Markup:
         """Declares TTS markup capabilities for the expressive pipeline.
 
-        Plugins override this inner class to declare what markup tags the TTS supports
-        and how to convert marked-up text back to plain text.
+        Plugins override this inner class to declare which markup dialect the TTS speaks:
+        what the LLM is taught to write, and how those markers are normalized and lowered
+        to the provider's native syntax before synthesis. Stripping markup back out is not
+        here — the transcript sinks do it provider-agnostically (see
+        ``_provider_format.split_all_markup``).
         """
 
         def __init__(self, tts: TTS) -> None:
@@ -88,78 +101,32 @@ class TTS(
             """Key into the shared ``_provider_format`` markup tables, or "" for none.
 
             Plugins override this to opt into markup support; the default ("") means
-            no markup instructions, stripping, normalization, or conversion are applied.
-            The other markup methods delegate through this key, so a plugin only needs
-            to override ``_provider_key``.
+            no markup instructions, normalization, or conversion are applied. The other
+            markup methods delegate through this key, so a plugin only needs to override
+            ``_provider_key``.
             """
             return ""
 
-        def llm_instructions(self) -> str | None:
+        @property
+        def info(self) -> MarkupInfo:
+            """The queryable markup matrix for this voice."""
+            from ._provider_format import supported_nonverbals
+
+            return MarkupInfo(nonverbals=supported_nonverbals(self._provider_key()))
+
+        def llm_instructions(
+            self, *, speech_steering: SpeechSteeringOptions | None = None
+        ) -> str | None:
             """Return instructions for the LLM describing available markup tags.
 
-            The framework injects this into the LLM system prompt when
-            ``expressive=True``.  Returns ``None`` if this TTS has no markup support.
+            The framework injects this into the LLM system prompt when expressive mode
+            is active. Returns ``None`` if this TTS has no markup support. When
+            *speech_steering* is given, sounds it disables are omitted from the
+            advertised vocabulary.
             """
             from ._provider_format import llm_instructions
 
-            return llm_instructions(self._provider_key())
-
-        def _split(self, text: str) -> tuple[str, list[ExpressiveTag]]:
-            """Strip markup and collect the stripped tags in one pass."""
-            from ._provider_format import split_markup
-
-            return split_markup(self._provider_key(), text)
-
-        def to_text(self, text: str) -> str:
-            """Strip TTS-specific markup from *text*, returning plain text.
-
-            Used for transcripts streamed to the user and for chat history storage.
-            The TTS itself receives the original marked-up text.
-            """
-            return self._split(text)[0]
-
-        async def to_text_stream(
-            self, text_stream: AsyncIterable[str], *, tags_out: list[ExpressiveTag] | None = None
-        ) -> AsyncGenerator[str, None]:
-            """Strip TTS markup from a stream of text chunks.
-
-            Buffers partial XML tags across chunks so that each buffer is stripped as a
-            whole. When ``tags_out`` is given, the stripped tags are appended to it (in
-            document order) as a byproduct of the same pass — no second scan.
-            """
-            buf = ""
-            async for chunk in text_stream:
-                buf += chunk
-                # hold the buffer only for a *tag-shaped* trailing "<" (a partial tag
-                # arriving across chunks); a bare "<" as in "3 < 5" is plain text and
-                # must not stall the transcript until the next ">" or flush
-                last_open = buf.rfind("<")
-                if last_open > buf.rfind(">"):
-                    nxt = buf[last_open + 1 : last_open + 2]
-                    if not nxt or nxt == "/" or nxt.isalpha():
-                        continue
-                stripped, tags = self._split(buf)
-                buf = ""
-                if tags_out is not None:
-                    tags_out.extend(tags)
-                if stripped:
-                    yield stripped
-
-            if buf:
-                stripped, tags = self._split(buf)
-                if tags_out is not None:
-                    tags_out.extend(tags)
-                if stripped:
-                    yield stripped
-
-        def extract_tags(self, text: str) -> list[ExpressiveTag]:
-            """Extract the markup tags that :meth:`to_text` would strip, in order.
-
-            Lets the framework surface stripped expressive tags (e.g. as transcription
-            attributes for the frontend) instead of discarding them. Returns ``[]`` when
-            the provider declares no markup.
-            """
-            return self._split(text)[1]
+            return llm_instructions(self._provider_key(), speech_steering)
 
         def normalize(self, text: str) -> str:
             """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
@@ -240,6 +207,11 @@ class TTS(
         return "unknown"
 
     @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this TTS instance."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
+    @property
     def capabilities(self) -> TTSCapabilities:
         return self._capabilities
 
@@ -296,10 +268,27 @@ class TTS(
         await self.aclose()
 
 
+@contextlib.contextmanager
+def _attempt_span(name: str | None, tts: TTS) -> Iterator[trace.Span]:
+    """One retry attempt's span, or the request span itself when ``name`` is None."""
+    if name is None:
+        yield trace.get_current_span()
+        return
+
+    with tracer.start_as_current_span(name) as span:
+        # a failed attempt names the model it asked without opening its parent
+        gen_ai_telemetry.set_request_attributes(
+            span, operation=None, provider=tts.provider, model=tts.model
+        )
+        yield span
+
+
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
     _tts_request_span_name: ClassVar[str] = "tts_request"
+    # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
+    _tts_attempt_span_name: ClassVar[str | None] = "tts_request_run"
 
     def __init__(
         self,
@@ -414,17 +403,17 @@ class ChunkedStream(ABC):
                 trace_types.ATTR_TTS_LABEL: self._tts.label,
             }
         )
+        # an adapter names the instance expected to serve; the one that did is its response
+        gen_ai_telemetry.set_request_attributes(
+            current_span, operation=None, provider=self._tts.provider, model=self._tts.model
+        )
 
         for i in range(self._conn_options.max_retry + 1):
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
-                with tracer.start_as_current_span("tts_request_run") as attempt_span:
+                with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                    try:
-                        await self._run(output_emitter)
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
+                    await self._run(output_emitter)
 
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
@@ -562,6 +551,8 @@ class _ChunkedStreamFromStream(ChunkedStream):
 
 class SynthesizeStream(ABC):
     _tts_request_span_name: ClassVar[str] = "tts_request"
+    # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
+    _tts_attempt_span_name: ClassVar[str | None] = "tts_request_run"
 
     class _FlushSentinel: ...
 
@@ -615,17 +606,17 @@ class SynthesizeStream(ABC):
                 trace_types.ATTR_TTS_LABEL: self._tts.label,
             }
         )
+        # an adapter names the instance expected to serve; the one that did is its response
+        gen_ai_telemetry.set_request_attributes(
+            current_span, operation=None, provider=self._tts.provider, model=self._tts.model
+        )
 
         for i in range(self._conn_options.max_retry + 1):
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
-                with tracer.start_as_current_span("tts_request_run") as attempt_span:
+                with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                    try:
-                        await self._run(output_emitter)
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
+                    await self._run(output_emitter)
 
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
@@ -937,6 +928,7 @@ class AudioEmitter:
 
         self._write_ch = aio.Chan[
             bytes
+            | rtc.AudioFrame
             | AudioEmitter._FlushSegment
             | AudioEmitter._StartSegment
             | AudioEmitter._EndSegment
@@ -1012,6 +1004,17 @@ class AudioEmitter:
 
         self._write_ch.send_nowait(data)
 
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        """Forward an already-framed chunk as-is, skipping the progressive re-chunking of
+        :meth:`push`. For adapters wrapping a TTS whose emitter already framed the audio."""
+        if not self._started:
+            raise RuntimeError("AudioEmitter isn't started")
+
+        if self._write_ch.closed:
+            return
+
+        self._write_ch.send_nowait(frame)
+
     def push_timed_transcript(self, delta_text: TimedString | list[TimedString]) -> None:
         if not self._started:
             raise RuntimeError("AudioEmitter isn't started")
@@ -1068,18 +1071,11 @@ class AudioEmitter:
         timed_transcripts: list[TimedString] = []
 
         flush_timer: asyncio.TimerHandle | None = None
-        sent_start: float | None = None
-        sent_duration: float = 0.0
+        playout_end = 0.0
         event_loop = asyncio.get_event_loop()
 
-        def _send_audio(ev: SynthesizedAudio, *, flush_if_delayed: bool = False) -> None:
-            nonlocal sent_start, sent_duration, flush_timer
-
-            self._dst_ch.send_nowait(ev)
-            if sent_start is None:
-                sent_start = event_loop.time()
-            sent_duration += ev.frame.duration
-
+        def _schedule_flush() -> None:
+            nonlocal flush_timer
             if flush_timer is not None:
                 flush_timer.cancel()
 
@@ -1087,13 +1083,19 @@ class AudioEmitter:
                 self.flush()
                 logger.debug("flush audio emitter due to slow audio generation")
 
-            if flush_if_delayed and sent_duration > 0.15:
-                # force flush the buffer if the audio comes slower than realtime.
-                # skip during the initial progressive ramp-up where sent_duration
-                # is too small for a meaningful slow-generation check.
-                delay = sent_duration - (event_loop.time() - sent_start) - 0.02
-                if delay > 0:
-                    flush_timer = event_loop.call_later(delay, _flush)
+            # Release buffered audio before the estimated downstream playback runs out.
+            delay = max(0.0, playout_end - event_loop.time() - 0.02)
+            flush_timer = event_loop.call_later(delay, _flush)
+
+        def _send_audio(ev: SynthesizedAudio, *, flush_if_delayed: bool = False) -> None:
+            nonlocal playout_end, flush_timer
+            self._dst_ch.send_nowait(ev)
+            playout_end = max(playout_end, event_loop.time()) + ev.frame.duration
+            if flush_if_delayed:
+                _schedule_flush()
+            elif flush_timer is not None:
+                flush_timer.cancel()
+                flush_timer = None
 
         # Number of samples held back in last_frame so we can tag is_final
         # on the very last audio of a segment.  10 ms is small enough to be
@@ -1201,7 +1203,6 @@ class AudioEmitter:
 
         def _flush_frame() -> None:
             nonlocal last_frame, segment_ctx, timed_transcripts
-            nonlocal flush_timer, sent_start, sent_duration
             assert segment_ctx is not None
 
             if last_frame is None:
@@ -1225,12 +1226,6 @@ class AudioEmitter:
                 debug_frames.append(last_frame)
 
             last_frame = None
-            # reset sent duration after flush
-            sent_start = None
-            sent_duration = 0.0
-            if flush_timer is not None:
-                flush_timer.cancel()
-                flush_timer = None
 
         def dump_segment() -> None:
             nonlocal segment_ctx
@@ -1301,7 +1296,10 @@ class AudioEmitter:
                         )
 
                 if self._is_raw_pcm:
-                    if isinstance(data, bytes):
+                    if isinstance(data, rtc.AudioFrame):
+                        _emit_frame(data)
+                        _schedule_flush()
+                    elif isinstance(data, bytes):
                         if audio_byte_stream is None:
                             audio_byte_stream = audio.AudioByteStream(
                                 sample_rate=self._sample_rate,
@@ -1314,22 +1312,31 @@ class AudioEmitter:
 
                         for f in audio_byte_stream.push(data):
                             _emit_frame(f)
-                    elif audio_byte_stream:
-                        if isinstance(data, AudioEmitter._FlushSegment):
+                        _schedule_flush()
+                    elif isinstance(data, AudioEmitter._FlushSegment):
+                        if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
-                            _flush_frame()
-                            audio_byte_stream.clear()  # reset progressive for next burst
+                            # More bytes can follow this flush. Keep any partial PCM sample.
+                            audio_byte_stream.reset_progressive()
+                        _flush_frame()
 
-                        elif isinstance(data, AudioEmitter._EndSegment):
+                    elif isinstance(data, AudioEmitter._EndSegment):
+                        if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
+                            if audio_byte_stream.buffered_duration > 0:
+                                logger.warning(
+                                    "incomplete PCM sample at end of segment, "
+                                    "discarding trailing bytes",
+                                    extra={"tts": self._label, "request_id": self._request_id},
+                                )
 
-                            _emit_frame(is_final=True)
-                            dump_segment()
-                            segment_ctx = audio_byte_stream = last_frame = None
-                        else:
-                            logger.warning("unknown data type: %s", type(data))
+                        _emit_frame(is_final=True)
+                        dump_segment()
+                        segment_ctx = audio_byte_stream = last_frame = None
+                    else:
+                        logger.warning("unknown data type: %s", type(data))
                 else:
                     if isinstance(data, bytes):
                         if not audio_decoder:

@@ -574,6 +574,104 @@ async def test_voice_activity_timeout_v2_model(mock_google_adc):
     assert stt_v1._config.version == 1
 
 
+async def test_custom_prompt_config_chirp_3(mock_google_adc):
+    """Test custom_prompt_config is applied when using the chirp_3 model."""
+    from livekit.plugins.google import STT
+
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt = STT(model="chirp_3", custom_prompt_config=custom_prompt_config)
+    assert stt._config.custom_prompt_config == custom_prompt_config
+
+
+async def test_custom_prompt_config_ignored_for_non_chirp_3_model(mock_google_adc):
+    """Test custom_prompt_config is ignored for models other than chirp_3."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.google import STT
+
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt = STT(model="long", custom_prompt_config=custom_prompt_config)
+    assert stt._config.custom_prompt_config is NOT_GIVEN
+
+
+async def test_custom_prompt_config_update_options(mock_google_adc):
+    """Test custom_prompt_config can be updated dynamically, and new values are
+    ignored for models other than chirp_3."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.google import STT
+
+    stt = STT(model="chirp_3")
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt.update_options(custom_prompt_config=custom_prompt_config)
+    assert stt._config.custom_prompt_config == custom_prompt_config
+
+    # switching the model away from chirp_3 must drop the now-invalid prompt
+    stt.update_options(model="long")
+    assert stt._config.custom_prompt_config is NOT_GIVEN
+
+    other_custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="be verbose")
+    stt.update_options(custom_prompt_config=other_custom_prompt_config)
+    assert stt._config.custom_prompt_config is NOT_GIVEN
+
+
+async def test_custom_prompt_config_cleared_on_model_switch_from_chirp_3(mock_google_adc):
+    """Test that switching from chirp_3 to another V2 model clears a previously
+    configured custom_prompt_config, so it is not forwarded to a rebuilt
+    non-streaming RecognitionConfig."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.google import STT
+
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt = STT(model="chirp_3", custom_prompt_config=custom_prompt_config)
+    assert stt._config.custom_prompt_config == custom_prompt_config
+
+    stt.update_options(model="telephony")
+    assert stt._config.custom_prompt_config is NOT_GIVEN
+
+    config = stt._build_recognition_config(sample_rate=16000, num_channels=1)
+    assert not config.features.custom_prompt_config.custom_prompt
+
+
+async def test_custom_prompt_config_cleared_on_stream_model_switch_from_chirp_3(mock_google_adc):
+    """Test that SpeechStream.update_options also clears a previously configured
+    custom_prompt_config when the model moves away from chirp_3, so an active
+    stream's rebuilt StreamingRecognitionConfig no longer carries the stale prompt."""
+    from livekit.agents.types import NOT_GIVEN
+
+    client = _FakeSpeechClient()
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    options = _default_stt_options()
+    options.model = "chirp_3"
+    options.custom_prompt_config = custom_prompt_config
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        pool=_FakeConnectionPool(client),
+        recognizer_cb=lambda _client: "",
+        config=options,
+    )
+
+    try:
+        assert stream._config.custom_prompt_config == custom_prompt_config
+
+        stream.update_options(model="telephony")
+        assert stream._config.custom_prompt_config is NOT_GIVEN
+
+        streaming_config = stream._build_streaming_config()
+        assert not streaming_config.config.features.custom_prompt_config.custom_prompt
+    finally:
+        await stream.aclose()
+
+
+async def test_custom_prompt_config_in_recognition_config(mock_google_adc):
+    """Test custom_prompt_config is wired into the built RecognitionConfig."""
+    from livekit.plugins.google import STT
+
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt = STT(model="chirp_3", custom_prompt_config=custom_prompt_config)
+    config = stt._build_recognition_config(sample_rate=16000, num_channels=1)
+    assert config.features.custom_prompt_config.custom_prompt == "answer briefly"
+
+
 async def test_voice_activity_timeout_update(mock_google_adc):
     """Test that timeout options can be updated dynamically."""
     from livekit.plugins.google import STT

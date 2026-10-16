@@ -285,6 +285,7 @@ class STT(stt.STT):
                 return prerecorded_transcription_to_speech_event(
                     config.language,
                     await res.json(),
+                    use_punctuated_word=config.punctuate or config.smart_format,
                 )
 
         except asyncio.TimeoutError as e:
@@ -594,10 +595,19 @@ class SpeechStream(stt.SpeechStream):
             # if we want to keep the connection alive even if no audio is sent,
             # Deepgram expects a keepalive message.
             # https://developers.deepgram.com/reference/listen-live#stream-keepalive
+            nonlocal closing_ws
             try:
                 while True:
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                     await asyncio.sleep(5)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # when no audio is flowing this write is the only thing touching the
+                # socket, so it is where a drop surfaces first. if the close is
+                # expected just return; otherwise re-raise as a retryable APIError so
+                # _main_task reconnects, symmetric with send_task and recv_task.
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("deepgram connection closed unexpectedly") from e
             except Exception as e:
                 logger.warning(f"Deepgram keepalive task exited: {e}")
                 return
@@ -628,10 +638,10 @@ class SpeechStream(stt.SpeechStream):
                         self._audio_duration_collector.push(frame.duration)
                         await ws.send_bytes(frame.data.tobytes())
 
-                        if has_ended:
-                            self._audio_duration_collector.flush()
-                            await ws.send_str(SpeechStream._FINALIZE_MSG)
-                            has_ended = False
+                    if has_ended:
+                        self._audio_duration_collector.flush()
+                        await ws.send_str(SpeechStream._FINALIZE_MSG)
+                        has_ended = False
 
                 # tell deepgram we are done sending audio/inputs
                 closing_ws = True
@@ -666,6 +676,15 @@ class SpeechStream(stt.SpeechStream):
                         status_code=ws.close_code or -1,
                         body=f"{msg.data=} {msg.extra=}",
                     )
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws or self._session.closed:
+                        return
+
+                    # the heartbeat closes the socket when a ping goes unanswered,
+                    # and that surfaces here rather than as a close frame.
+                    # ws.exception() is the only place the reason survives.
+                    raise APIConnectionError("deepgram connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -771,19 +790,35 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
                     headers={"Authorization": f"Token {self._api_key}"},
+                    # without this, a silently dropped socket (a half-open TCP
+                    # connection, no FIN/RST) is never noticed: recv_task parks on
+                    # ws.receive() forever and the reconnect loop below, which is
+                    # exception-driven, never runs. matches stt_v2.
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )
-            self._report_connection_acquired(time.perf_counter() - t0, False)
-            ws_headers = {
-                k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
-            }
-            logger.debug(
-                "Established new Deepgram STT WebSocket connection:",
-                extra={"headers": ws_headers},
-            )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to deepgram") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to deepgram") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to deepgram ({type(e).__name__})"
+            ) from None
+
+        self._report_connection_acquired(time.perf_counter() - t0, False)
+        ws_headers = {
+            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+        }
+        logger.debug(
+            "Established new Deepgram STT WebSocket connection:",
+            extra={"headers": ws_headers},
+        )
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -826,6 +861,7 @@ class SpeechStream(stt.SpeechStream):
                 data,
                 is_final=is_final_transcript,
                 start_time_offset=self.start_time_offset,
+                use_punctuated_word=self._opts.punctuate or self._opts.smart_format,
             )
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
@@ -869,11 +905,35 @@ class SpeechStream(stt.SpeechStream):
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
         else:
-            logger.warning("received unexpected message from deepgram %s", data)
+            logger.warning("received unexpected message from deepgram", extra={"lk.pii.data": data})
+
+
+def _word_text(word: dict, *, use_punctuated_word: bool) -> str:
+    """Return the word form matching the transcript the caller asked Deepgram for.
+
+    Deepgram returns `word` (lowercase, unpunctuated) and, when the request formats the
+    transcript, `punctuated_word` alongside it. `SpeechData.text` comes from
+    `alt["transcript"]`, so the word list follows the same formatting to stay consistent
+    with the text it belongs to.
+
+    Both `punctuate` and `smart_format` produce a formatted transcript, so callers pass
+    `punctuate or smart_format` rather than either alone. Falls back to `word` if the key
+    is missing, which is what Deepgram sends when neither option is set.
+    """
+    raw: str = word.get("word", "")
+    if not use_punctuated_word:
+        return raw
+    punctuated: str = word.get("punctuated_word") or raw
+    return punctuated
 
 
 def live_transcription_to_speech_data(
-    language: str, data: dict, *, is_final: bool, start_time_offset: float
+    language: str,
+    data: dict,
+    *,
+    is_final: bool,
+    start_time_offset: float,
+    use_punctuated_word: bool = True,
 ) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
@@ -889,15 +949,16 @@ def live_transcription_to_speech_data(
         sd = stt.SpeechData(
             language=LanguageCode(language),
             start_time=next((word.get("start", 0) for word in alt["words"]), 0) + start_time_offset,
-            end_time=next((word.get("end", 0) for word in alt["words"]), 0) + start_time_offset,
+            end_time=(alt["words"][-1].get("end", 0) if alt["words"] else 0) + start_time_offset,
             confidence=alt["confidence"],
             text=alt["transcript"],
             speaker_id=f"S{speaker}" if speaker is not None else None,
             words=[
                 TimedString(
-                    text=word.get("word", ""),
+                    text=_word_text(word, use_punctuated_word=use_punctuated_word),
                     start_time=word.get("start", 0) + start_time_offset,
                     end_time=word.get("end", 0) + start_time_offset,
+                    confidence=word.get("confidence", NOT_GIVEN),
                     start_time_offset=start_time_offset,
                 )
                 for word in alt["words"]
@@ -914,6 +975,8 @@ def live_transcription_to_speech_data(
 def prerecorded_transcription_to_speech_event(
     language: str | None,  # language should be None when 'detect_language' is enabled
     data: dict,
+    *,
+    use_punctuated_word: bool = True,
 ) -> stt.SpeechEvent:
     # We only support one channel for now
     request_id = data["metadata"]["request_id"]
@@ -936,9 +999,10 @@ def prerecorded_transcription_to_speech_event(
                 text=alt["transcript"],
                 words=[
                     TimedString(
-                        text=word.get("word", ""),
+                        text=_word_text(word, use_punctuated_word=use_punctuated_word),
                         start_time=word.get("start", 0),
                         end_time=word.get("end", 0),
+                        confidence=word.get("confidence", NOT_GIVEN),
                     )
                     for word in alt["words"]
                 ],

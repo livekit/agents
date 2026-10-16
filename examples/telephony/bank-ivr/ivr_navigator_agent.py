@@ -84,7 +84,7 @@ async def dtmf_session(ctx: JobContext) -> None:
     session: AgentSession = AgentSession(
         llm=inference.LLM("openai/gpt-4.1"),
         stt=inference.STT("deepgram/nova-3"),
-        tts=inference.TTS("rime/arcana"),
+        tts=inference.TTS("rime/coda", voice="astra"),
         # This flag does two things:
         # 1. Helps agent avoid getting stuck listening to repeating IVR loops by actively responding when a loop is detected.
         # 2. Automatically gives the agent the `send_dtmf_events` tool to allow it to dial DTMF digits.

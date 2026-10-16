@@ -59,7 +59,6 @@ class SimulationContext:
         self._scenario = dispatch.scenario
         self._job_ctx = job_ctx
         self._run: proto.SimulationRun | None = None
-        self._job: proto.SimulationRun.Job | None = None
         self._simulator_verdict: SimulationVerdict | None = None
         self._user_verdict: SimulationVerdict | None = None
 
@@ -77,12 +76,27 @@ class SimulationContext:
         return self._dispatch.mode
 
     @property
-    def simulation_run(self) -> proto.SimulationRun | None:
-        return self._run
+    def simulation_run_id(self) -> str:
+        """The run this session belongs to. Available as soon as the entrypoint runs,
+        unlike :attr:`simulation_run`, which the framework only fills in at the end."""
+        return self._dispatch.simulation_run_id
 
     @property
-    def simulation_job(self) -> proto.SimulationRun.Job | None:
-        return self._job
+    def simulation_job_id(self) -> str:
+        """The run job (one scenario) behind this session, likewise available up front."""
+        return self._dispatch.job_id
+
+    @property
+    def simulation_run(self) -> proto.SimulationRun | None:
+        """The run, or ``None`` before the simulation ends.
+
+        Carries only :attr:`~SimulationRun.id` today, so every other field reads as its
+        protobuf default (no jobs, a pending status, zero counts) rather than as the
+        run's real state: nothing on the finalize message carries more. Prefer
+        :attr:`simulation_run_id`, which is the same id and is available from the
+        entrypoint.
+        """
+        return self._run
 
     @property
     def simulator_verdict(self) -> SimulationVerdict:
@@ -110,12 +124,10 @@ class SimulationContext:
         *,
         simulator_verdict: SimulationVerdict,
         run: proto.SimulationRun | None,
-        job: proto.SimulationRun.Job | None,
     ) -> None:
         """Internal: populate the simulator verdict / run before on_simulation_end."""
         self._simulator_verdict = simulator_verdict
         self._run = run
-        self._job = job
 
     def userdata(self) -> ScenarioUserdata:
         """The scenario's ``userdata`` decoded from its JSON string (``{}`` if empty)."""

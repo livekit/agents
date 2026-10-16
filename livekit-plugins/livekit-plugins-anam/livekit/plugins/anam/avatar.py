@@ -113,17 +113,12 @@ class AvatarSession(BaseAvatarSession):
         async with AnamAPI(
             api_key=self._api_key, api_url=self._api_url, conn_options=self._conn_options
         ) as anam_api:
-            session_token = await anam_api.create_session_token(
+            logger.debug("Starting Anam engine session...")
+            session_details = await anam_api.start_session(
                 persona_config=self._persona_config,
                 livekit_url=livekit_url,
                 livekit_token=livekit_token,
                 session_options=self._session_options,
-            )
-            logger.debug("Anam session token created successfully.")
-
-            logger.debug("Starting Anam engine session...")
-            session_details = await anam_api.start_engine_session(
-                session_token=session_token,
             )
             self.session_id = session_details.get("sessionId")
 

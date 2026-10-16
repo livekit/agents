@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 
 import pytest
 
-from livekit.agents import APIConnectionError
+from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.stt import (
     STT,
     RecognizeStream,
     SpeechData,
     SpeechEvent,
     SpeechEventType,
+    StreamAdapter,
     STTCapabilities,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils.audio import AudioBuffer
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.utils.audio import AudioBuffer, silence_frame
+
+from .fake_stt import FakeSTT, FakeUserSpeech
+from .fake_vad import FakeVAD
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -57,6 +62,16 @@ class _DummySTT(STT):
 
     def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS) -> _DummyStream:
         return _DummyStream(stt=self)
+
+
+class _NonRetryableStream(RecognizeStream):
+    def __init__(self, *, stt: STT) -> None:
+        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+        self.run_count = 0
+
+    async def _run(self) -> None:
+        self.run_count += 1
+        raise APIStatusError("Unauthorized", status_code=401)
 
 
 async def test_start_time_seeded_on_init() -> None:
@@ -114,4 +129,156 @@ async def test_start_time_reseeded_on_retry() -> None:
     # And it should be a recent wall-clock value.
     assert time.time() - stream.start_time < 5.0
 
+    await stream.aclose()
+
+
+async def test_non_retryable_error_is_not_retried() -> None:
+    stt = _DummySTT()
+    stream = _NonRetryableStream(stt=stt)
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await stream._task
+
+    assert exc_info.value.status_code == 401
+    assert stream.run_count == 1
+
+    await stream.aclose()
+
+
+class _AlwaysFailingSTT(STT):
+    """A batch STT whose `_recognize_impl` always raises, counting its attempts."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=False))
+        self._error = error
+        self.attempts = 0
+
+    async def _recognize_impl(self, buffer: AudioBuffer, *, language, conn_options) -> SpeechEvent:
+        self.attempts += 1
+        raise self._error
+
+
+def _retry_friendly_options() -> APIConnectOptions:
+    # the default 2s retry_interval would make the retryable case take 6s of real time
+    return dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
+
+
+async def test_recognize_does_not_retry_a_non_retryable_error() -> None:
+    """`recognize()` must honour `APIError.retryable`, like TTS, the LLM and the streaming
+    path in this same module already do.
+
+    Before this, `max_retry` alone gated the retry loop, so a permanent failure such as a
+    401 was issued `max_retry + 1` times -- burning quota and delaying a failure that could
+    never succeed.
+    """
+    stt = _AlwaysFailingSTT(APIStatusError("Unauthorized", status_code=401))
+    with pytest.raises(APIStatusError) as exc_info:
+        await stt.recognize(
+            silence_frame(duration=0.1, sample_rate=16_000),
+            conn_options=_retry_friendly_options(),
+        )
+
+    assert exc_info.value.status_code == 401
+    assert stt.attempts == 1
+
+
+async def test_recognize_still_retries_a_retryable_error() -> None:
+    """The retryable path is unchanged: the full budget is still spent."""
+    stt = _AlwaysFailingSTT(APIConnectionError("socket closed"))
+    with pytest.raises(APIConnectionError):
+        await stt.recognize(
+            silence_frame(duration=0.1, sample_rate=16_000),
+            conn_options=_retry_friendly_options(),
+        )
+
+    assert stt.attempts == DEFAULT_API_CONNECT_OPTIONS.max_retry + 1
+
+
+async def test_recognize_returns_the_first_success_without_retrying() -> None:
+    """Guard against the fix swallowing successful calls."""
+    stt = FakeSTT(fake_transcript="hello")
+    event = await stt.recognize(
+        silence_frame(duration=0.1, sample_rate=16_000),
+        conn_options=_retry_friendly_options(),
+    )
+
+    assert event.alternatives[0].text == "hello"
+
+
+async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = silence_frame(duration=0.1, sample_rate=16_000)
+    monkeypatch.setattr("livekit.agents.stt.stream_adapter.utils.merge_frames", lambda _: frame)
+    speech = FakeUserSpeech(
+        start_time=0.0,
+        end_time=0.1,
+        transcript="hello",
+        stt_delay=0.0,
+    )
+    batch_stt = FakeSTT(fake_transcript="hello", fake_timeout=0.5)
+    batch_stt._capabilities.streaming = False
+    adapter = StreamAdapter(
+        stt=batch_stt,
+        vad=FakeVAD(
+            fake_user_speeches=[speech],
+            min_speech_duration=0.01,
+            min_silence_duration=0.3,
+        ),
+    )
+
+    try:
+        async with adapter.stream() as stream:
+            stream.push_frame(frame)
+            stream.end_input()
+            events = [event async for event in stream]
+    finally:
+        await adapter.aclose()
+
+    end_event = next(event for event in events if event.type == SpeechEventType.END_OF_SPEECH)
+    final_event = next(event for event in events if event.type == SpeechEventType.FINAL_TRANSCRIPT)
+
+    assert end_event.speech_end_time is not None
+    assert final_event.speech_end_time == end_event.speech_end_time
+    assert final_event.created_at - end_event.created_at == pytest.approx(0.5, abs=0.01)
+
+
+class _FlappingStream(RecognizeStream):
+    """Every connection succeeds, stays up for `uptime` seconds, then drops."""
+
+    def __init__(self, *, stt: STT, uptime: float, drops: int) -> None:
+        super().__init__(
+            stt=stt,
+            conn_options=dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0),
+        )
+        self.runs = 0
+        self._uptime = uptime
+        self._drops = drops
+
+    async def _run(self) -> None:
+        self.runs += 1
+        await asyncio.sleep(self._uptime)
+        if self.runs <= self._drops:
+            raise APIConnectionError("socket dropped")
+
+
+async def test_retry_budget_resets_after_an_attempt_that_outlived_the_connect_timeout() -> None:
+    # a caller who never speaks produces no FINAL_TRANSCRIPT, so this is the only reset that
+    # keeps an idle socket (Cartesia closes it every ~3 minutes) from exhausting the budget
+    drops = DEFAULT_API_CONNECT_OPTIONS.max_retry * 3
+    stream = _FlappingStream(stt=_DummySTT(), uptime=180.0, drops=drops)
+
+    await stream._task
+
+    assert stream.runs == drops + 1
+    await stream.aclose()
+
+
+async def test_retry_budget_still_gives_up_on_consecutive_short_lived_attempts() -> None:
+    stream = _FlappingStream(stt=_DummySTT(), uptime=1.0, drops=100)
+
+    with pytest.raises(APIConnectionError):
+        await stream._task
+
+    assert stream.runs == DEFAULT_API_CONNECT_OPTIONS.max_retry + 1
     await stream.aclose()

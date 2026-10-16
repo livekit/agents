@@ -43,6 +43,67 @@ class _StubAgentSession:
         return object()
 
 
+class _NamedRealtimeModel(FakeRealtimeModel):
+    """FakeRealtimeModel with a configurable model/provider so tests can tell instances apart."""
+
+    def __init__(self, *, model: str, provider: str) -> None:
+        super().__init__()
+        self._model_name = model
+        self._provider_name = provider
+
+    @property
+    def model(self) -> str:
+        return self._model_name
+
+    @property
+    def provider(self) -> str:
+        return self._provider_name
+
+
+async def test_reports_active_model_and_provider() -> None:
+    primary = _NamedRealtimeModel(model="primary-model", provider="primary")
+    backup = _NamedRealtimeModel(model="backup-model", provider="backup")
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+
+    # before any swap, the primary is reported
+    assert adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
+
+    session = adapter.session()
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+
+    # the backup now serves the session, so metrics must be labeled with it
+    assert adapter.metrics_metadata == {
+        "model_name": "backup-model",
+        "model_provider": "backup",
+    }
+    # the adapter keeps its own stable identity for spans, logs, and error events
+    assert adapter.model == "RealtimeModelFallbackAdapter"
+
+
+async def test_new_session_resets_active_model_to_primary() -> None:
+    primary = _NamedRealtimeModel(model="primary-model", provider="primary")
+    backup = _NamedRealtimeModel(model="backup-model", provider="backup")
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+
+    session = adapter.session()
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+    assert adapter.metrics_metadata["model_name"] == "backup-model"
+
+    # a fresh session (e.g. a new agent activity) always starts on the primary,
+    # so the label must follow it instead of sticking to the old failover target
+    adapter.session()
+
+    assert adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
+
+
 def test_requires_at_least_one_model() -> None:
     with pytest.raises(ValueError):
         RealtimeModelFallbackAdapter([])
@@ -199,6 +260,42 @@ async def test_restart_preserves_wrapper_subscribers() -> None:
     # events from the NEW child still reach the original wrapper subscriber, no rebinding
     session._active.emit("generation_created", "after-restart")
     assert received == ["after-restart"]
+
+
+async def test_restart_preserves_provider_event_subscribers() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+    received: list[object] = []
+    session.on("provider_event", lambda ev: received.append(ev))
+
+    primary.active_session.emit("provider_event", "before-restart")
+    await adapter.restart_session()
+    primary.active_session.emit("provider_event", "after-restart")
+
+    assert received == ["before-restart", "after-restart"]
+
+
+async def test_provider_event_subscribed_during_restart_skips_old_child() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+    old_child = primary.active_session
+    close_gate = asyncio.Event()
+    old_child.block_aclose = close_gate
+
+    restart_task = asyncio.create_task(adapter.restart_session())
+    await old_child.aclose_entered.wait()
+
+    received: list[object] = []
+    session.on("provider_event", lambda ev: received.append(ev))
+    old_child.emit("provider_event", "old-child")
+
+    close_gate.set()
+    await restart_task
+    primary.active_session.emit("provider_event", "new-child")
+
+    assert received == ["new-child"]
 
 
 async def test_restart_emits_no_error() -> None:

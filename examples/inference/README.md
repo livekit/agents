@@ -19,8 +19,8 @@ The agent registers one handler per control. All three (STT, LLM, TTS) call `upd
 ## Run locally
 
 ```bash
-pip install -r requirements.txt
-python agent.py dev
+uv sync --all-extras --dev   # from the repository root
+uv run agent.py dev
 ```
 
 The model list shown in the playground is sourced from `examples/playground.yaml`. To add or remove options, edit the `controls` block on the `inference` example there.

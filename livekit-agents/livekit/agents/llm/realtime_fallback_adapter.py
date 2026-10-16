@@ -6,14 +6,14 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
-from .chat_context import ChatContext
+from .chat_context import ChatContext, MetricsMetadata
 from .realtime import (
     EventTypes,
     GenerationCreatedEvent,
@@ -39,6 +39,7 @@ class RealtimeAvailabilityChangedEvent:
 _HARD_CAPABILITIES = (
     "audio_output",
     "turn_detection",
+    "supports_overlapping_speech",
 )
 
 # caps exposed as the conservative AND; the active model's exact value is read per-turn from the session
@@ -52,6 +53,7 @@ _SOFT_CAPABILITIES = (
     "mutable_tools",
     "per_response_tool_choice",
     "supports_say",
+    "can_disable_turn_detection",
 )
 
 # child events re-emitted on the wrapper
@@ -102,7 +104,8 @@ class RealtimeModelFallbackAdapter(
 
         Args:
             models: Ordered models; the first is primary, the rest fallbacks. All must agree on
-                the ``audio_output`` and ``turn_detection`` capabilities.
+                the ``audio_output``, ``turn_detection`` and ``supports_overlapping_speech``
+                capabilities.
             cooldown: Seconds a failed model stays unavailable before it can be preferred again.
             regenerate_on_swap: Re-issue the reply on the new session if one was in progress.
 
@@ -119,6 +122,9 @@ class RealtimeModelFallbackAdapter(
         self._regenerate_on_swap = regenerate_on_swap
         self._sessions: weakref.WeakSet[_FallbackRealtimeSession] = weakref.WeakSet()
 
+        # the model currently serving sessions; used to label metrics & traces
+        self._active_instance: RealtimeModel = models[0]
+
     @property
     def model(self) -> str:
         return "RealtimeModelFallbackAdapter"
@@ -127,8 +133,13 @@ class RealtimeModelFallbackAdapter(
     def provider(self) -> str:
         return "livekit"
 
-    def session(self) -> _FallbackRealtimeSession:
-        sess = _FallbackRealtimeSession(self)
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the model currently serving sessions (the primary until a swap)."""
+        return self._active_instance.metrics_metadata
+
+    def session(self, *, turn_detection_disabled: bool = False) -> _FallbackRealtimeSession:
+        sess = _FallbackRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)
         return sess
 
@@ -147,12 +158,16 @@ class RealtimeModelFallbackAdapter(
             await model.aclose()
 
 
-class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_changed"]]):
+class _FallbackRealtimeSession(RealtimeSession[str]):
     """Bound once by AgentActivity; swaps the inner child session internally."""
 
-    def __init__(self, adapter: RealtimeModelFallbackAdapter) -> None:
+    def __init__(
+        self, adapter: RealtimeModelFallbackAdapter, *, turn_detection_disabled: bool = False
+    ) -> None:
         super().__init__(adapter)
         self._adapter = adapter
+        # applied to every underlying session, including those brought up on a swap
+        self._turn_detection_disabled = turn_detection_disabled
 
         # session state replayed onto a new child on swap
         self._instructions: NotGivenOr[str] = NOT_GIVEN
@@ -170,6 +185,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._forwarders: dict[EventTypes, Callable[[object], None]] = {
             event: _make_forwarder(event) for event in _FORWARDED_EVENTS
         }
+        self._extra_forwarders: dict[str, Callable[..., None]] = {}
 
         # per-model availability, with a cooldown after a failure
         self._available = [True] * len(adapter._models)
@@ -184,18 +200,48 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._swapping = False
 
         self._active_index = 0
-        self._active = adapter._models[0].session()
+        self._active_bound = False
+        self._active = adapter._models[0].session(
+            turn_detection_disabled=self._turn_detection_disabled
+        )
+        # a fresh session always starts on the primary, even after an earlier failover
+        adapter._active_instance = adapter._models[0]
         self._bind(self._active)
 
     def _bind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.on(event, forwarder)
+        for extra_event, forwarder in self._extra_forwarders.items():
+            child.on(extra_event, forwarder)
         child.on("error", self._on_child_error)
+        self._active_bound = True
 
     def _unbind(self, child: RealtimeSession) -> None:
+        self._active_bound = False
         for event, forwarder in self._forwarders.items():
             child.off(event, forwarder)
+        for extra_event, forwarder in self._extra_forwarders.items():
+            child.off(extra_event, forwarder)
         child.off("error", self._on_child_error)
+
+    def on(
+        self,
+        event: EventTypes | str,
+        callback: Callable[..., Any] | None = None,
+    ) -> Callable[..., Any]:
+        if event not in _FORWARDED_EVENTS and event != "error":
+            forwarder = self._extra_forwarders.get(event)
+            if forwarder is None:
+
+                def _forward(*args: object) -> None:
+                    self.emit(event, *args)
+
+                forwarder = _forward
+                self._extra_forwarders[event] = forwarder
+                if self._active_bound:
+                    self._active.on(event, forwarder)
+
+        return super().on(event, callback)
 
     def _set_available(self, index: int, available: bool) -> None:
         if self._available[index] == available:
@@ -287,7 +333,9 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
             # return the error so the caller can try the next model
             async def _bring_up(index: int) -> Exception | None:
                 try:
-                    self._active = self._adapter._models[index].session()
+                    self._active = self._adapter._models[index].session(
+                        turn_detection_disabled=self._turn_detection_disabled
+                    )
                     self._active_index = index
                     self._bind(self._active)
                     await self._active._update_session(
@@ -295,6 +343,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
                     )
                     if is_given(self._tool_choice):
                         self._active.update_options(tool_choice=self._tool_choice)
+                    self._adapter._active_instance = self._adapter._models[index]
                     return None
                 except Exception as e:
                     logger.exception("failed to start realtime model on swap, trying next")

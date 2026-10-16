@@ -462,7 +462,9 @@ class AudioStreamDecoder:
                     self._emit_av_frame(f)
 
         except Exception:
-            logger.exception("error decoding audio")
+            # a close tears the input down mid-decode, which PyAV reports as invalid data
+            if not self._closed:
+                logger.exception("error decoding audio")
         finally:
             self._loop.call_soon_threadsafe(self._output_ch.close)
             if container:
@@ -489,14 +491,21 @@ class AudioStreamDecoder:
         if self._closed:
             return
 
-        self.end_input()
+        if self._is_wav:
+            # decoded inline, there is no worker thread to wind down
+            self.end_input()
+            self._closed = True
+            return
+
+        # set before tearing the input down, so the decode thread can tell this close
+        # from a real decode failure
         self._closed = True
 
-        if self._input_buf is not None:
-            self._input_buf.close()
-
-        if not self._started:
+        if self._input_buf is None:
+            self._output_ch.close()  # nothing was ever pushed, no frame will come
             return
+
+        self._input_buf.close()
 
         try:
             async for _ in self._output_ch:

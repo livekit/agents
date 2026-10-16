@@ -113,6 +113,73 @@ def test_drops_unclosed_reasoning_at_end_of_stream() -> None:
     )
 
 
+def test_flattens_list_shaped_delta_content() -> None:
+    # OpenAI-compatible providers (e.g. Mistral) can emit delta.content as a
+    # list of typed content parts instead of a string; this used to crash the
+    # session with AttributeError/TypeError (#6323)
+    state = ThinkingTokenFilter()
+    assert strip_thinking_tokens([{"type": "text", "text": "Hallo"}], state) == "Hallo"
+
+
+def test_flattens_multiple_and_string_parts() -> None:
+    state = ThinkingTokenFilter()
+    content = strip_thinking_tokens(
+        [{"type": "text", "text": "Hello "}, "from ", {"type": "text", "text": "LiveKit"}],
+        state,
+    )
+    assert content == "Hello from LiveKit"
+
+
+def test_strips_thinking_tokens_inside_list_parts() -> None:
+    state = ThinkingTokenFilter()
+    visible = []
+    for chunk in (
+        [{"type": "text", "text": "<think>private "}],
+        [{"type": "text", "text": "reasoning</think>answer"}],
+    ):
+        content = strip_thinking_tokens(chunk, state)
+        if content is not None:
+            visible.append(content)
+    content = strip_thinking_tokens(None, state, final=True)
+    if content is not None:
+        visible.append(content)
+    assert "".join(visible) == "answer"
+
+
+def test_list_parts_without_text_are_ignored() -> None:
+    state = ThinkingTokenFilter()
+    content = strip_thinking_tokens(
+        [{"type": "image_url", "image_url": {"url": "https://x"}}, {"type": "text", "text": "hi"}],
+        state,
+    )
+    assert content == "hi"
+
+
+def test_list_without_any_text_part_carries_no_content() -> None:
+    # nothing textual arrived, so report "no content" rather than an empty
+    # string the provider never sent
+    state = ThinkingTokenFilter()
+    assert strip_thinking_tokens([], state) is None
+    assert (
+        strip_thinking_tokens([{"type": "image_url", "image_url": {"url": "https://x"}}], state)
+        is None
+    )
+
+
+def test_an_empty_text_part_is_kept_as_empty_content() -> None:
+    # the provider did send text, it is just empty - same as a plain "" delta
+    state = ThinkingTokenFilter()
+    assert strip_thinking_tokens([{"type": "text", "text": ""}], state) == ""
+
+
+def test_object_parts_with_text_attribute_are_flattened() -> None:
+    class _Part:
+        text = "typed part"
+
+    state = ThinkingTokenFilter()
+    assert strip_thinking_tokens([_Part()], state) == "typed part"
+
+
 def test_strips_reasoning_from_text_alongside_tool_call() -> None:
     stream = LLMStream.__new__(LLMStream)
     stream._tool_call_id = None
