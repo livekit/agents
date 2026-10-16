@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import contextlib
 import dataclasses
 import time
 from collections.abc import AsyncIterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
@@ -28,6 +29,10 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
 )
 
+# audio kept on a segment's timeline before the position of the last VAD event, covering the
+# speech the VAD may report as started before it
+_VAD_TIMELINE_MARGIN = 1.0
+
 
 @dataclass
 class AvailabilityChangedEvent:
@@ -40,8 +45,31 @@ class _VADSegment:
     """The audio between two flushes, which a VAD stream of its own runs on."""
 
     vad_stream: VADStream
-    end_time: float | None = None
-    """When the segment ended (flush or end of input), so any speech in it began before."""
+    audio_duration: float = 0.0
+    """Duration of the audio pushed so far, the timeline the positions of VAD events are on."""
+    frame_ends: list[float] = field(default_factory=list)
+    frame_times: list[float] = field(default_factory=list)
+    """Position of the end of each pushed frame still needed, and when that frame was pushed."""
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        self.frame_times.append(time.perf_counter())
+        self.audio_duration += frame.duration
+        self.frame_ends.append(self.audio_duration)
+        self.vad_stream.push_frame(frame)
+
+    def pushed_at(self, position: float) -> float:
+        """When the audio at ``position`` (seconds from the start of the segment) was pushed."""
+        if not self.frame_times:
+            return time.perf_counter()
+        i = bisect.bisect_left(self.frame_ends, position)
+        return self.frame_times[min(i, len(self.frame_times) - 1)]
+
+    def trim(self, position: float) -> None:
+        """Forget the frames ending before ``position``, keeping the one it is in."""
+        i = min(bisect.bisect_left(self.frame_ends, position), len(self.frame_ends) - 1)
+        if i > 0:
+            del self.frame_ends[:i]
+            del self.frame_times[:i]
 
 
 @dataclass
@@ -85,8 +113,10 @@ class FallbackAdapter(
                 end, the stream is treated as failed and the next STT takes over. Each detected
                 speech is checked, so further speech never postpones the check of an earlier
                 one. A flush (or ``end_input()``) during a speech ends it there, once the VAD
-                processed the audio before it, as the STT is flushed too. Empty transcripts
-                (e.g. empty finals of an STT that heard nothing intelligible) and speech
+                processed the audio before it, as the STT is flushed too. A speech starts when
+                its audio was pushed, by its position on the audio timeline of the VAD, so a VAD
+                lagging behind the audio doesn't discount transcripts emitted meanwhile. Empty
+                transcripts (e.g. empty finals of an STT that heard nothing intelligible) and speech
                 boundaries don't count, as the latter can come from a VAD (e.g. the one of
                 ``stt.StreamAdapter``): a detected speech the STT only reports as empty counts
                 towards a stall, ``stall_min_speech_duration`` keeping short noises out of it.
@@ -459,7 +489,6 @@ class FallbackRecognizeStream(RecognizeStream):
     def _end_vad_segment(self) -> None:
         if (segment := self._vad_segment) is not None:
             self._vad_segment = None
-            segment.end_time = time.perf_counter()
             with contextlib.suppress(RuntimeError):
                 segment.vad_stream.end_input()
 
@@ -478,7 +507,7 @@ class FallbackRecognizeStream(RecognizeStream):
                 if (segment := self._vad_segment) is not None:
                     if isinstance(data, rtc.AudioFrame):
                         with contextlib.suppress(RuntimeError):
-                            segment.vad_stream.push_frame(data)
+                            segment.push_frame(data)
                     elif isinstance(data, self._FlushSentinel):
                         self._start_vad_segment()
 
@@ -667,21 +696,17 @@ class FallbackRecognizeStream(RecognizeStream):
     async def _monitor_vad_segment(self, segment: _VADSegment) -> None:
         """Schedule the stall checks of the speeches the VAD detects in a segment of audio."""
 
-        def _schedule_stall_check(speech_start_time: float, speech_duration: float) -> None:
-            # a VAD lagging behind the audio dates a speech late, while a speech of a segment
-            # was pushed before the segment ended (and the STT possibly finalized it there)
-            if segment.end_time is not None:
-                speech_start_time = min(speech_start_time, segment.end_time)
-            self._schedule_stall_check(speech_start_time, speech_duration)
-
         # start and duration so far of the speech the VAD is detecting
         speech_start_time: float | None = None
         speech_duration = 0.0
         async for ev in segment.vad_stream:
             if ev.type == VADEventType.START_OF_SPEECH:
-                # the VAD only reports speech after some of it was heard, while the STT may
-                # already have reacted, so date the speech back to when it began
-                speech_start_time = time.perf_counter() - ev.speech_duration
+                # the VAD only reports speech after some of it was heard, possibly long after
+                # that audio was pushed when it lags behind the audio, while the STT may already
+                # have reacted: date the speech back to when its audio was pushed, by its
+                # position on the audio timeline of the segment (a position before the audio
+                # kept, as from a VAD reporting none, dates it to the earliest audio kept)
+                speech_start_time = segment.pushed_at(ev.timestamp - ev.speech_duration)
                 speech_duration = ev.speech_duration
             elif ev.type == VADEventType.INFERENCE_DONE:
                 if speech_start_time is not None:
@@ -689,14 +714,20 @@ class FallbackRecognizeStream(RecognizeStream):
                     speech_duration = max(0.0, ev.speech_duration - ev.raw_accumulated_silence)
             elif ev.type == VADEventType.END_OF_SPEECH:
                 if speech_start_time is not None:
-                    _schedule_stall_check(speech_start_time, ev.speech_duration)
+                    self._schedule_stall_check(speech_start_time, ev.speech_duration)
                 speech_start_time = None
+            # a later speech can't start before the audio the VAD is accumulating as speech
+            segment.trim(
+                ev.timestamp
+                - max(ev.speech_duration, ev.raw_accumulated_speech)
+                - _VAD_TIMELINE_MARGIN
+            )
 
         # the VAD processed all the audio up to the flush (or end of input) ending the segment,
         # and dropped an ongoing speech there without an end of speech, while the STT is asked
         # to finalize it: check it as if it ended here
         if speech_start_time is not None:
-            _schedule_stall_check(speech_start_time, speech_duration)
+            self._schedule_stall_check(speech_start_time, speech_duration)
 
     def _try_recovery(self, stt: STT) -> None:
         stt_status = self._fallback_adapter._status[

@@ -690,8 +690,9 @@ async def test_stt_stream_stall_survives_end_input() -> None:
 
 class _UnendedSpeechVAD(VAD):
     """VAD detecting speech from the first frame on, until a flush hard-resets it without an
-    end of speech, as the shipped VADs do. With a ``lag``, it only starts processing the audio
-    queued to it that long after the first frame, as a VAD behind the audio."""
+    end of speech, as the shipped VADs do. Its events report their position on the audio
+    timeline of the stream, as the shipped VADs do. With a ``lag``, it only starts processing
+    the audio queued to it that long after the first frame, as a VAD behind the audio."""
 
     def __init__(self, *, lag: float = 0.0) -> None:
         super().__init__(capabilities=VADCapabilities(update_interval=0.1))
@@ -705,6 +706,7 @@ class _UnendedSpeechVADStream(VADStream):
     async def _main_task(self) -> None:
         assert isinstance(self._vad, _UnendedSpeechVAD)
         speech_duration: float | None = None
+        position = 0.0
         lagged = False
         async for data in self._input_ch:
             if not lagged and self._vad.lag > 0:
@@ -715,18 +717,20 @@ class _UnendedSpeechVADStream(VADStream):
                 speech_duration = None
                 continue
 
+            position += data.duration
             if speech_duration is None:
-                speech_duration = 0.0
-                self._send_event(VADEventType.START_OF_SPEECH, speech_duration)
-            speech_duration += data.duration
-            self._send_event(VADEventType.INFERENCE_DONE, speech_duration)
+                speech_duration = data.duration
+                self._send_event(VADEventType.START_OF_SPEECH, position, speech_duration)
+            else:
+                speech_duration += data.duration
+            self._send_event(VADEventType.INFERENCE_DONE, position, speech_duration)
 
-    def _send_event(self, type: VADEventType, speech_duration: float) -> None:
+    def _send_event(self, type: VADEventType, position: float, speech_duration: float) -> None:
         self._event_ch.send_nowait(
             VADEvent(
                 type=type,
-                samples_index=0,
-                timestamp=0.0,
+                samples_index=round(position * 16000),
+                timestamp=position,
                 speech_duration=speech_duration,
                 silence_duration=0.0,
                 speaking=True,
@@ -934,6 +938,91 @@ async def test_stt_stream_stall_keeps_stream_finalizing_queued_speech_on_flush()
         fake2.stream_ch.recv_nowait()
     with pytest.raises(ChanEmpty):
         fallback.availability_changed_ch(fake1).recv_nowait()
+
+    await fallback.aclose()
+
+
+class _EarlyInterimSTT(FakeSTT):
+    """STT transcribing the beginning of the speech, then nothing more."""
+
+    def stream(
+        self,
+        *,
+        language: str | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> RecognizeStream:
+        return _EarlyInterimStream(stt=self, conn_options=conn_options)
+
+
+class _EarlyInterimStream(RecognizeStream):
+    async def _run(self) -> None:
+        nb_frames = 0
+        async for data in self._input_ch:
+            if isinstance(data, rtc.AudioFrame):
+                nb_frames += 1
+                if nb_frames == 3:
+                    self._event_ch.send_nowait(
+                        SpeechEvent(
+                            type=SpeechEventType.INTERIM_TRANSCRIPT,
+                            alternatives=[SpeechData(language="en", text="hello")],
+                        )
+                    )
+        await asyncio.Event().wait()
+
+
+async def test_stt_stream_stall_keeps_stream_transcribing_lagged_speech() -> None:
+    """A transcript emitted before a lagging VAD reports the speech counts for that speech."""
+    fake1 = _EarlyInterimSTT()
+    fake2 = FakeSTT(fake_transcript="fallback")
+
+    # the VAD reports the speech starting at 0s (after its first frame) only at 1.5s
+    fallback = FallbackAdapterTester(
+        [fake1, fake2], vad=_UnendedSpeechVAD(lag=1.5), stall_timeout=1.0
+    )
+
+    events: list[SpeechEvent] = []
+    async with fallback.stream() as stream:
+        push_task = asyncio.create_task(_push_speech_then_flush(stream, end_input=False))
+        # the stream hangs after its input ended, so stop listening once the stall would show
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(_collect_events(stream, events), timeout=6.0)
+        await push_task
+
+    assert [ev.alternatives[0].text for ev in events] == ["hello"]
+    with pytest.raises(ChanEmpty):
+        fake2.stream_ch.recv_nowait()
+    with pytest.raises(ChanEmpty):
+        fallback.availability_changed_ch(fake1).recv_nowait()
+
+    await fallback.aclose()
+
+
+async def test_stt_stream_stall_checks_lagged_speech() -> None:
+    """A speech a lagging VAD reports late is still checked when the STT stays silent."""
+    fake1 = _HangingSTT()
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback = FallbackAdapterTester(
+        [fake1, fake2], vad=_UnendedSpeechVAD(lag=1.5), stall_timeout=1.0
+    )
+
+    events: list[tuple[float, SpeechEvent]] = []
+    async with fallback.stream() as stream:
+        start = time.perf_counter()
+        push_task = asyncio.create_task(_push_speech_then_flush(stream, end_input=False))
+
+        async def _collect() -> None:
+            async for ev in stream:
+                events.append((time.perf_counter() - start, ev))
+
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(_collect(), timeout=10.0)
+        await push_task
+
+    assert [ev.alternatives[0].text for _, ev in events] == ["hello world"]
+    # the VAD catches up before the flush at 2.0s, the stall is declared stall_timeout later
+    assert 2.0 + 1.0 <= events[0][0] < 2.0 + 1.0 + 0.2
+    assert not fallback.availability_changed_ch(fake1).recv_nowait().available
 
     await fallback.aclose()
 
