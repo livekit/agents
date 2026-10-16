@@ -183,8 +183,7 @@ class WireHost(Generic[S]):
 
     def _answer(self, outcome: TurnOutcome, artifact_id: str) -> pb.TaskArtifactUpdateEvent:
         """The answer artifact's last chunk: empty when the streamed tokens spelled the answer
-        already, else the whole answer, replacing what was streamed under the stream's artifact
-        id, or under the row's when nothing was streamed."""
+        already, the whole answer under the row's artifact id otherwise."""
         output = outcome.result.output
         text = output if isinstance(output, str) else json.dumps(output, separators=(",", ":"))
         if self._streamed and "".join(self._streamed) == text:
@@ -201,7 +200,7 @@ class WireHost(Generic[S]):
         return artifact_event(
             self._task_id,
             outcome.context_id,
-            artifact_id=self._artifact_id if self._streamed else artifact_id,
+            artifact_id=artifact_id,
             text=text,
             append=False,
             last_chunk=True,
