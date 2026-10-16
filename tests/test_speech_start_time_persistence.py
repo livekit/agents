@@ -69,6 +69,7 @@ class TestUserTurnStartPersistence:
         audio_recognition._audio_transcript = ""
         audio_recognition._audio_interim_transcript = ""
         audio_recognition._last_speaking_time = None
+        audio_recognition._stopped_speaking_at = None
         audio_recognition._transcription_timeout_handle = None
         audio_recognition._turn_speech_duration = 0.0
 
