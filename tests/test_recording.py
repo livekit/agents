@@ -864,9 +864,7 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
 
     stubs.set_logger_provider.assert_called_once()
     service_resource_calls = [
-        call.args[0]
-        for call in mock_resource.call_args_list
-        if "service.name" in call.args[0]
+        call.args[0] for call in mock_resource.call_args_list if "service.name" in call.args[0]
     ]
     assert service_resource_calls
     assert not any(k.startswith("lk.simulation.") for k in service_resource_calls[0])
