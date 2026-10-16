@@ -26,10 +26,11 @@ import base64
 import contextlib
 import json
 import os
+import re
 import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from urllib.parse import urlencode
 
 import aiohttp
@@ -64,6 +65,8 @@ TTSVoices = Literal[
     "michael",
     "paul",
     "vera",
+    "iris",
+    "reid",
     # Spanish, German, Italian, Portuguese, French
     "lola",
     "juergen",
@@ -77,19 +80,22 @@ TTSLanguages = Literal["english", "spanish", "german", "italian", "portuguese", 
 DEFAULT_BASE_URL = "wss://streaming-tts.assemblyai.com"
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
-# https://www.assemblyai.com/docs/tts/voices. Each voice speaks one language, and a
-# mismatch only fails ~0.5s after `Begin`, so the language is derived from the voice.
+# The voices the service offers today, each speaking one language: a voice sent with
+# another language fails ~0.5s after `Begin`, so the language is derived from the voice.
+# Voices outside this table are passed through as-is.
 VOICE_LANGUAGES: dict[str, str] = {
     "alba": "english",
     "anna": "english",
     "charles": "english",
     "eve": "english",
     "george": "english",
+    "iris": "english",
     "jane": "english",
     "jean": "english",
     "mary": "english",
     "michael": "english",
     "paul": "english",
+    "reid": "english",
     "vera": "english",
     "lola": "spanish",
     "juergen": "german",
@@ -98,16 +104,8 @@ VOICE_LANGUAGES: dict[str, str] = {
     "estelle": "french",
 }
 
-DEFAULT_VOICES: dict[str, str] = {
-    "english": "jane",
-    "spanish": "lola",
-    "german": "juergen",
-    "italian": "giovanni",
-    "portuguese": "rafael",
-    "french": "estelle",
-}
-
 # `language` takes the full English name of the language, not an ISO code.
+_LANGUAGES = frozenset(get_args(TTSLanguages))
 _ISO_LANGUAGES = {
     "en": "english",
     "es": "spanish",
@@ -123,14 +121,24 @@ _ISO_LANGUAGES = {
 _MAX_REQUEST_CHARS = 2000
 _MAX_IN_FLIGHT_REQUESTS = 3
 
+# The server closes the session (3006) on a run without a space or punctuation, such as a
+# hash, too long to speak in one piece: ~1900 characters today, 75 model tokens on the next
+# release, which random accented letters exceed by 60 characters. Longer runs are broken
+# up with a space.
+_MAX_UNBROKEN_CHARS = 40
+_UNBROKEN_RUN = re.compile(rf"\S{{{_MAX_UNBROKEN_CHARS}}}(?=\S)")
+_LAST_SPACE = re.compile(r"\s(?=\S*$)")
+
 # don't start a reply on a session about to be closed at its `expires_at` (3008)
 _EXPIRY_MARGIN = 60.0
 
 # how long the end of a segment waits for the WordBoundaries trailing its FlushDone
 _WORD_BOUNDARIES_GRACE = 0.5
 
-# a rejected credential, or a bad parameter, frame or voice: retrying can't help
-_NON_RETRYABLE_CODES = (1008, 3006)
+# For Error frames without `retryable`: a rejected credential, a bad parameter, frame or
+# voice, input sent / audio read at the wrong pace, a custom voice that is gone (3012) or
+# not paired with the model (3014). Retrying unchanged can't help...
+_NON_RETRYABLE_CODES = (1008, 3006, 3010, 3011, 3012, 3014)
 # ...except a 3006 from the inactivity timeout
 _INACTIVITY_PREFIX = "No message received"
 
@@ -141,8 +149,13 @@ _KEEPALIVE_FRAME = json.dumps({"type": "KeepAlive"})
 
 @dataclass
 class _TTSOptions:
-    voice: str
+    # None leaves the choice to the server: the default voice of the language
+    voice: str | None
+    # a custom voice, sent instead of `voice`
+    voice_id: str | None
     language: str | None
+    # None: the default model of the language
+    model_id: str | None
     sample_rate: int
     word_timestamps: bool
     api_key: str
@@ -154,7 +167,9 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
+        model_id: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -169,13 +184,20 @@ class TTS(tts.TTS):
         information on the API.
 
         Args:
-            voice: A preset voice, lowercase. Defaults to the default voice of
-                ``language``, which is ``"jane"`` for English. See
-                https://www.assemblyai.com/docs/tts/voices.
+            voice: A voice name, see https://www.assemblyai.com/docs/tts/voices.
+                Defaults to the server's default voice for ``language``, ``"jane"`` in
+                English.
+            voice_id: A custom (cloned) voice, instead of ``voice``: the ``id`` the Voices
+                API returned when it was created, or the account's slug for it. The voice
+                must be paired with the session's model, and it belongs to the data zone
+                whose host created it, so set ``base_url`` to that host.
             language: The language to synthesize. Accepts the API's full English name
                 (``"spanish"``) or a language code (``"es"``, ``"es-MX"``). Defaults to
-                the language of ``voice``; only needed for a voice that is not in
-                ``VOICE_LANGUAGES``.
+                the language of ``voice`` (see ``VOICE_LANGUAGES``), else English; with
+                ``voice_id``, to the language of the voice's reference clip.
+            model_id: The model to synthesize with: a dated name such as
+                ``"assemblyai-tts-mul-4b-2026-10-07"`` or an alias such as ``"latest"``.
+                Defaults to the default model of the language.
             sample_rate: Output sample rate in Hz, one of 8000, 16000, 22050, 24000,
                 44100 or 48000. Defaults to 24000, the service's native rate.
             word_timestamps: Request per-word timings and publish them as an aligned
@@ -214,14 +236,26 @@ class TTS(tts.TTS):
                 "or set it as the `ASSEMBLYAI_API_KEY` environment variable"
             )
 
-        resolved_voice, resolved_language = _resolve_voice(
-            voice if is_given(voice) else None,
-            language if is_given(language) else None,
-        )
+        if is_given(voice) and is_given(voice_id):
+            raise ValueError("pass either `voice` or `voice_id`, not both")
+
+        if is_given(voice_id):
+            resolved_voice = None
+            resolved_voice_id: str | None = _require(voice_id, "voice_id")
+            # a custom voice speaks its reference clip's language unless told otherwise
+            resolved_language = _normalize_language(language) if is_given(language) else None
+        else:
+            resolved_voice_id = None
+            resolved_voice, resolved_language = _resolve_voice(
+                voice if is_given(voice) else None,
+                language if is_given(language) else None,
+            )
 
         self._opts = _TTSOptions(
             voice=resolved_voice,
+            voice_id=resolved_voice_id,
             language=resolved_language,
+            model_id=_require(model_id, "model_id") if is_given(model_id) else None,
             sample_rate=sample_rate,
             word_timestamps=word_timestamps,
             api_key=assemblyai_api_key,
@@ -229,6 +263,8 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        # monotonic time before which no session is opened, see _note_retry_after()
+        self._connect_not_before = 0.0
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
@@ -246,61 +282,90 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return "streaming-tts"
+        return self._opts.model_id or "streaming-tts"
 
     @property
     def provider(self) -> str:
         return "AssemblyAI"
 
     @property
-    def voice(self) -> str:
+    def voice(self) -> str | None:
+        """The configured voice, or None for the server's default voice of the language."""
         return self._opts.voice
+
+    @property
+    def voice_id(self) -> str | None:
+        """The custom voice, when one is used instead of ``voice``."""
+        return self._opts.voice_id
 
     @property
     def language(self) -> str | None:
         return self._opts.language
 
+    @property
+    def model_id(self) -> str | None:
+        """The requested model, or None for the default model of the language."""
+        return self._opts.model_id
+
     def update_options(
         self,
         *,
         voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
+        model_id: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
-        """Change the voice or language used by streams created from now on.
+        """Change the voice, language or model used by streams created from now on.
 
         The session configuration is fixed at connect time, so pooled sockets are
         retired and the next stream opens a new session. A stream already speaking
         keeps its voice until it finishes.
 
         Args:
-            voice: A preset voice. When ``language`` is not also given, the language
-                follows the new voice.
-            language: The language to synthesize. When ``voice`` is not also given and
-                the current voice does not speak it, the voice switches to that
-                language's default.
+            voice: A voice name; replaces a ``voice_id``. When ``language`` is not also
+                given, the language follows the new voice if it is in
+                ``VOICE_LANGUAGES``, else stays as is.
+            voice_id: A custom voice; replaces ``voice``. When ``language`` is not also
+                given, the voice speaks its reference clip's language.
+            language: The language to synthesize. When neither voice is also given and
+                the current ``voice`` speaks another language, the server's default
+                voice of the new language is used.
+            model_id: A model name or alias, or None for the default model of the
+                language.
         """
-        if is_given(voice):
-            new_voice, new_language = _resolve_voice(
+        if is_given(voice) and is_given(voice_id):
+            raise ValueError("pass either `voice` or `voice_id`, not both")
+
+        new_voice, new_voice_id = self._opts.voice, self._opts.voice_id
+        new_language, new_model_id = self._opts.language, self._opts.model_id
+        if is_given(voice_id):
+            new_voice, new_voice_id = None, _require(voice_id, "voice_id")
+            new_language = _normalize_language(language) if is_given(language) else None
+        elif is_given(voice):
+            new_voice_id = None
+            new_voice, resolved_language = _resolve_voice(
                 voice, language if is_given(language) else None
             )
+            # a voice outside VOICE_LANGUAGES says nothing about the language
+            new_language = resolved_language or new_language
         elif is_given(language):
             new_language = _normalize_language(language)
-            if VOICE_LANGUAGES.get(self._opts.voice, new_language) == new_language:
-                new_voice = self._opts.voice
-            else:
-                new_voice, new_language = _resolve_voice(None, language)
-        else:
-            return
+            if new_voice and VOICE_LANGUAGES.get(new_voice, new_language) != new_language:
+                new_voice = None
+        if is_given(model_id):
+            new_model_id = _require(model_id, "model_id") if model_id is not None else None
 
-        if (new_voice, new_language) != (self._opts.voice, self._opts.language):
-            self._opts.voice = new_voice
-            self._opts.language = new_language
+        new = (new_voice, new_voice_id, new_language, new_model_id)
+        opts = self._opts
+        if new != (opts.voice, opts.voice_id, opts.language, opts.model_id):
+            opts.voice, opts.voice_id, opts.language, opts.model_id = new
             self._pool.invalidate()
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        # there is no REST endpoint; a one-shot synthesis runs over a pooled socket too.
+        # The HTTP API (POST /v1/speech) is not served in production yet, and a pooled
+        # socket is already open: a one-shot synthesis runs over it too.
         return self._synthesize_with_stream(text, conn_options=conn_options)
 
     def stream(
@@ -325,21 +390,44 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
+    def _note_retry_after(self, error: APIError) -> None:
+        """Hold off new sessions for as long as the server asked (`retry_after_seconds`)."""
+        body = error.body if isinstance(error, APIStatusError) else None
+        retry_after = body.get("retry_after_seconds") if isinstance(body, dict) else None
+        if isinstance(retry_after, (int, float)) and retry_after > 0:
+            self._connect_not_before = max(self._connect_not_before, time.monotonic() + retry_after)
+
     async def _connect(self, timeout: float) -> _Connection:
+        # Every refused reconnect still counts against the per-minute session allowance,
+        # so retrying sooner than asked can turn a transient error into a 3009.
+        if (wait := self._connect_not_before - time.monotonic()) > 0:
+            if wait > timeout:
+                # longer than a reply can wait: stop the retries (a FallbackAdapter moves on)
+                raise APIConnectionError(
+                    f"AssemblyAI TTS asked to wait {wait:.1f}s before opening a session",
+                    retryable=False,
+                )
+            await asyncio.sleep(wait)
+
         opts = self._opts
         params: dict[str, Any] = {
-            "voice": opts.voice,
             "sample_rate": opts.sample_rate,
             "encoding": "pcm_s16le",
             "word_boundaries": "true" if opts.word_timestamps else "false",
         }
+        if opts.voice:
+            params["voice"] = opts.voice
+        if opts.voice_id:
+            params["voice_id"] = opts.voice_id
         if opts.language:
             params["language"] = opts.language
+        if opts.model_id:
+            params["model_id"] = opts.model_id
         url = f"{opts.base_url}/v1/ws?{urlencode(params)}"
 
         try:
             ws = await asyncio.wait_for(
-                # the key goes in raw: "Bearer <key>" is rejected as an unknown key
+                # the key goes in raw: the service rejects "Bearer <key>" as an invalid key
                 self._ensure_session().ws_connect(url, headers={"Authorization": opts.api_key}),
                 timeout,
             )
@@ -369,7 +457,9 @@ class TTS(tts.TTS):
                     retryable=True,
                 )
             if begin.get("type") == "Error":
-                raise _error_from_frame(begin, session_id=None)
+                error = _error_from_frame(begin, session_id=None)
+                self._note_retry_after(error)
+                raise error
             if begin.get("type") != "Begin":
                 raise APIConnectionError(
                     f"expected Begin from AssemblyAI TTS, got {begin.get('type')!r}"
@@ -408,8 +498,15 @@ class TTS(tts.TTS):
             conn = await self._pool.get(timeout=timeout)
             if conn.usable:
                 return conn
-            # closed by the server while idle, or too close to its expires_at
             self._pool.remove(conn)
+            if conn.error is not None:
+                self._note_retry_after(conn.error)
+            if not self._pool.last_connection_reused:
+                # unusable from the start: another session would only spend a session start
+                raise conn.error or APIConnectionError(
+                    f"AssemblyAI TTS session {conn.session_id} was unusable as soon as it opened"
+                )
+            # closed by the server while idle, or too close to its expires_at
 
     def _release(self, conn: _Connection, *, discard: bool) -> None:
         if discard or not conn.usable:
@@ -438,7 +535,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         # (text waits in the input channel meanwhile).
         try:
             conn = await self._tts._acquire(timeout=self._conn_options.timeout)
-        except APIError:
+        except APIError as e:
+            self._tts._note_retry_after(e)
             raise
         except Exception as e:
             raise APIConnectionError("failed to acquire an AssemblyAI TTS connection") from e
@@ -477,11 +575,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             # by the reader until `Cancelled` confirms the server moved on.
             if run.has_outstanding:
                 with contextlib.suppress(APIError):
-                    conn.send(_CANCEL_FRAME)
-                    conn.note_cancel_sent()
+                    conn.cancel()
             discard = False
             raise
-        except APIError:
+        except APIError as e:
+            self._tts._note_retry_after(e)
             raise
         except Exception as e:
             raise APIConnectionError(
@@ -712,8 +810,8 @@ class _Listener:
 
     def __init__(self) -> None:
         self._ch = utils.aio.Chan[dict[str, Any] | APIError]()
-        # flush_id of the stream's first request; unknown while a Cancel from the previous
-        # holder is unanswered, since `Cancelled` is what settles the next id
+        # flush_id of the stream's first request; unknown after a Cancel from the previous
+        # holder until the first frame that follows its `Cancelled`
         self.base_flush_id: int | None = None
 
     def push(self, item: dict[str, Any] | APIError) -> None:
@@ -748,12 +846,16 @@ class _Connection:
         self.word_boundaries = self.configuration.get("word_boundaries") is True
         inactivity_timeout = self.configuration.get("inactivity_timeout")
 
-        # FlushDone + Cancelled frames received: the flush_id the next request will get
-        self._num_retired = 0
+        # The flush_id the next request will get. A Cancel makes it unknown: the server
+        # numbers the requests after it its own way (and has changed how), so it is read
+        # from the first Audio or FlushDone after the last `Cancelled` instead.
+        self._next_flush_id: int | None = 0
         self._cancels_pending = 0
         self._listener: _Listener | None = None
         self._error: APIError | None = None
         self._closed = False
+        # don't let a short session (a temporary token can cap it) be unusable from the start
+        self._expiry_margin = min(_EXPIRY_MARGIN, (self.expires_at - time.time()) / 2)
 
         self._send_ch = utils.aio.Chan[str]()
         self._recv_atask = asyncio.create_task(self._recv_loop(), name="AssemblyAITTS.recv")
@@ -775,19 +877,21 @@ class _Connection:
         return (
             not self._closed
             and self._error is None
-            and time.time() < self.expires_at - _EXPIRY_MARGIN
+            and time.time() < self.expires_at - self._expiry_margin
         )
 
+    @property
+    def error(self) -> APIError | None:
+        return self._error
+
     def attach(self) -> _Listener:
-        # While a previous holder's Cancel is unanswered the new holder has no base, so
-        # nothing reaches it until `Cancelled` settles the next flush_id. This relies on
-        # the Cancel being queued, and note_cancel_sent() called, before the socket is put
-        # back in the pool.
+        # After a previous holder's Cancel the new holder has no base, so nothing reaches
+        # it until the server's numbering is known again. This relies on cancel() being
+        # called before the socket is put back in the pool.
         listener = _Listener()
         if self._error is not None:
             listener.push(self._error)
-        elif self._cancels_pending == 0:
-            listener.base_flush_id = self._num_retired
+        listener.base_flush_id = self._next_flush_id
         self._listener = listener
         return listener
 
@@ -803,8 +907,11 @@ class _Connection:
             raise APIConnectionError(f"AssemblyAI TTS session {self.session_id} is closed")
         self._send_ch.send_nowait(frame)
 
-    def note_cancel_sent(self) -> None:
+    def cancel(self) -> None:
+        """Barge-in: drop every request the server has not finished yet."""
+        self.send(_CANCEL_FRAME)
         self._cancels_pending += 1
+        self._next_flush_id = None
 
     async def aclose(self) -> None:
         self._closed = True
@@ -886,39 +993,45 @@ class _Connection:
             logger.warning(
                 "AssemblyAI TTS error: %s",
                 error.message,
-                extra={"session_id": self.session_id, "error_code": data.get("error_code")},
+                extra={
+                    "session_id": self.session_id,
+                    "error_code": data.get("error_code"),
+                    "error_type": data.get("error_type"),
+                },
             )
             self._fail(error)
             return
 
         if kind == "Cancelled":
-            self._num_retired += 1
             if self._cancels_pending == 0:
-                # would re-base the current holder; every Cancel we send is counted
                 logger.warning(
                     "AssemblyAI TTS sent an unexpected Cancelled",
                     extra={"session_id": self.session_id},
                 )
-                return
-            self._cancels_pending -= 1
-            if self._cancels_pending == 0 and self._listener is not None:
-                self._listener.base_flush_id = self._num_retired
+            else:
+                self._cancels_pending -= 1
             return
-
-        if kind == "FlushDone":
-            self._num_retired += 1
 
         if kind not in ("Audio", "FlushDone", "WordBoundaries"):
             return  # Begin, Termination, and frame types added later
 
-        listener = self._listener
         flush_id = data.get("flush_id")
-        if (
-            listener is None
-            or listener.base_flush_id is None
-            or not isinstance(flush_id, int)
-            or flush_id < listener.base_flush_id
-        ):
+        if not isinstance(flush_id, int) or self._cancels_pending:
+            # until `Cancelled`, everything belongs to the requests being cancelled (the
+            # server sends nothing of theirs after it)
+            return
+        if self._next_flush_id is None:
+            if kind == "WordBoundaries":
+                return  # trails a request from before the Cancel
+            # the first request sent after the Cancel
+            self._next_flush_id = flush_id
+            if self._listener is not None:
+                self._listener.base_flush_id = flush_id
+        if kind == "FlushDone":
+            self._next_flush_id = max(self._next_flush_id, flush_id + 1)
+
+        listener = self._listener
+        if listener is None or listener.base_flush_id is None or flush_id < listener.base_flush_id:
             # no holder, or a WordBoundaries trailing the previous holder's last request
             return
         listener.push(data)
@@ -939,9 +1052,15 @@ def _error_from_frame(data: dict[str, Any], *, session_id: str | None) -> APISta
     code = data.get("error_code")
     code = code if isinstance(code, int) else -1
     text = str(data.get("error") or "")
-    retryable = code not in _NON_RETRYABLE_CODES or text.startswith(_INACTIVITY_PREFIX)
+    error_type = data.get("error_type")
+    retryable = data.get("retryable")
+    if not isinstance(retryable, bool):
+        # servers that send only the code and the text
+        inactivity = error_type == "inactivity_timeout" or text.startswith(_INACTIVITY_PREFIX)
+        retryable = code not in _NON_RETRYABLE_CODES or inactivity
+    kind = f" ({error_type})" if isinstance(error_type, str) else ""
     return APIStatusError(
-        f"AssemblyAI TTS error {code}: {text}",
+        f"AssemblyAI TTS error {code}{kind}: {text}",
         status_code=code,
         request_id=session_id,
         body=data,
@@ -951,7 +1070,7 @@ def _error_from_frame(data: dict[str, Any], *, session_id: str | None) -> APISta
 
 def _normalize_language(language: str) -> str:
     name = language.strip().lower()
-    if name in DEFAULT_VOICES:
+    if name in _LANGUAGES:
         return name
     try:
         return _ISO_LANGUAGES.get(LanguageCode(name).language, name)
@@ -960,37 +1079,38 @@ def _normalize_language(language: str) -> str:
         return name
 
 
-def _resolve_voice(voice: str | None, language: str | None) -> tuple[str, str | None]:
-    """Pair a voice with the language it speaks, filling in whichever is missing."""
+def _require(value: str, name: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError(f"`{name}` must not be empty")
+    return value
+
+
+def _resolve_voice(voice: str | None, language: str | None) -> tuple[str | None, str | None]:
+    """Normalize a voice and language, deriving the language from a known voice.
+
+    A pairing VOICE_LANGUAGES doesn't list is passed through for the server to judge, since
+    the service is moving to voices that speak several languages.
+    """
     normalized = _normalize_language(language) if language else None
-
     if voice is None:
-        lang = normalized or "english"
-        if lang not in DEFAULT_VOICES:
-            raise ValueError(f"no default voice for language {language!r}; pass `voice` explicitly")
-        return DEFAULT_VOICES[lang], lang
+        return None, normalized
 
-    voice_language = VOICE_LANGUAGES.get(voice)
-    if voice_language is None:
-        if voice.lower() in VOICE_LANGUAGES:
-            raise ValueError(f"voice names are case-sensitive, use {voice.lower()!r}")
-        # Not in the published catalog, which the server's list can be longer than.
-        # Without a language the server assumes English.
-        return voice, normalized
-
-    if normalized is not None and normalized != voice_language:
-        raise ValueError(f"voice {voice!r} speaks {voice_language}, but language is {normalized!r}")
-    return voice, voice_language
+    voice = voice.strip()
+    if voice.lower() in VOICE_LANGUAGES:
+        # the service is case-sensitive about names it lists lowercase
+        voice = voice.lower()
+    return voice, normalized or VOICE_LANGUAGES.get(voice)
 
 
 def _split_request_text(text: str) -> list[str]:
-    """Split text into requests of at most _MAX_REQUEST_CHARS, preferring whitespace."""
-    text = text.strip()
+    """Split text into requests of at most _MAX_REQUEST_CHARS, breaking at whitespace."""
+    text = _UNBROKEN_RUN.sub(lambda m: f"{m.group(0)} ", text.strip())
     pieces: list[str] = []
     while len(text) > _MAX_REQUEST_CHARS:
-        cut = text.rfind(" ", 0, _MAX_REQUEST_CHARS + 1)
-        if cut <= 0:
-            cut = _MAX_REQUEST_CHARS
+        # no run is longer than _MAX_UNBROKEN_CHARS, so the window holds a space
+        space = _LAST_SPACE.search(text, 0, _MAX_REQUEST_CHARS + 1)
+        cut = space.start() if space else _MAX_REQUEST_CHARS
         pieces.append(text[:cut].strip())
         text = text[cut:].strip()
     if text:

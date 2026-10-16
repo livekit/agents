@@ -6,14 +6,15 @@ import asyncio
 import base64
 import json
 import struct
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import aiohttp
 import pytest
 from aiohttp import web
 
-from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 
 pytestmark = pytest.mark.plugin("assemblyai")
@@ -21,6 +22,11 @@ pytestmark = pytest.mark.plugin("assemblyai")
 SAMPLE_RATE = 24000
 # 80 ms per Audio frame at 24 kHz pcm_s16le, as the service sends
 FRAME_BYTES = SAMPLE_RATE * 2 * 80 // 1000
+
+
+def _error(code: int, text: str, **fields: Any) -> dict[str, Any]:
+    """An Error frame; servers older than the documented API send only code and text."""
+    return {"type": "Error", "error_code": code, "error": text, **fields}
 
 
 def _pcm(num_bytes: int, seed: int) -> bytes:
@@ -42,6 +48,12 @@ class _FakeServer:
     Each Flush is answered with `frames_per_request` Audio frames, a FlushDone and
     (unless disabled) a WordBoundaries frame with one entry per whitespace token. The
     remaining knobs reproduce the orderings the protocol allows and the plugin must survive.
+
+    `flush_id_model` picks how request ids continue after a Cancel:
+    - "live": what the production service does today. The next request takes the id of
+      the cancelled request in flight plus one, reusing the ids of discarded requests.
+    - "documented": what the API reference specifies. Every Flush and every Cancel
+      advances the id, so the next request's id counts both frames sent before it.
     """
 
     def __init__(
@@ -51,14 +63,18 @@ class _FakeServer:
         frame_delay: float = 0.0,
         word_boundaries: bool = True,
         drop_word_boundaries: bool | set[int] = False,
-        connect_error: tuple[int, str] | None = None,
-        error_after_begin: tuple[int, str] | None = None,
+        connect_error: dict[str, Any] | None = None,
+        error_after_begin: dict[str, Any] | None = None,
         echo_sample_rate: int | None = None,
         tail_frames_after_cancel: int = 0,
         cancelled_delay: float = 0.0,
         late_word_boundaries: bool = False,
-        error_after_flush_dones: tuple[int, int, str] | None = None,
+        error_after_flush_dones: tuple[int, dict[str, Any]] | None = None,
         begin_delay: float = 0.0,
+        flush_id_model: Literal["live", "documented"] = "live",
+        session_seconds: float = 3600,
+        inactivity_timeout: float | None = None,
+        word_boundaries_after_cancelled: bool = False,
     ) -> None:
         self.frames_per_request = frames_per_request
         self.frame_delay = frame_delay
@@ -72,10 +88,19 @@ class _FakeServer:
         self.cancelled_delay = cancelled_delay
         # send WordBoundaries(N) after the first Audio of request N+1
         self.late_word_boundaries = late_word_boundaries
-        # (count, code, text): Error + close after that many FlushDone frames
+        # (count, Error frame): Error + close after that many FlushDone frames
         self.error_after_flush_dones = error_after_flush_dones
         self.begin_delay = begin_delay
+        self.flush_id_model = flush_id_model
+        self.session_seconds = session_seconds
+        # echoed in Begin as if the account set it; the fake doesn't enforce it
+        self.inactivity_timeout = inactivity_timeout
+        # hold the WordBoundaries of completed requests until the first Cancel, then send
+        # them right after its Cancelled
+        self.word_boundaries_after_cancelled = word_boundaries_after_cancelled
+        self._held_word_boundaries: list[dict[str, Any]] = []
         self.sessions: list[_Session] = []
+        self.flush_dones = 0
         # audio of every request, in order, for asserting what reached the client
         self.audio_by_request: list[bytes] = []
 
@@ -109,9 +134,10 @@ class _FakeServer:
         self.sessions.append(session)
 
         if self.connect_error is not None:
-            code, text = self.connect_error
-            await ws.send_json({"type": "Error", "error_code": code, "error": text})
-            await ws.close(code=code, message=b"See Error message for details")
+            await ws.send_json(self.connect_error)
+            await ws.close(
+                code=self.connect_error["error_code"], message=b"See Error message for details"
+            )
             return ws
 
         if self.begin_delay:
@@ -120,14 +146,14 @@ class _FakeServer:
             {
                 "type": "Begin",
                 "id": f"session-{len(self.sessions)}",
-                "expires_at": 4102444800,
+                "expires_at": int(time.time() + self.session_seconds),
                 "configuration": {
-                    "voice": session.params.get("voice"),
+                    "voice": session.params.get("voice", "jane"),
                     "language": session.params.get("language", "english"),
                     "sample_rate": self.echo_sample_rate
                     or int(session.params.get("sample_rate", SAMPLE_RATE)),
                     "encoding": session.params.get("encoding"),
-                    "inactivity_timeout": None,
+                    "inactivity_timeout": self.inactivity_timeout,
                     "word_boundaries": self.word_boundaries
                     and session.params.get("word_boundaries") == "true",
                     "voice_clone": False,
@@ -137,15 +163,17 @@ class _FakeServer:
         )
 
         if self.error_after_begin is not None:
-            code, text = self.error_after_begin
             await asyncio.sleep(0.05)
-            await ws.send_json({"type": "Error", "error_code": code, "error": text})
-            await ws.close(code=code, message=b"See Error message for details")
+            await ws.send_json(self.error_after_begin)
+            await ws.close(
+                code=self.error_after_begin["error_code"], message=b"See Error message for details"
+            )
             return ws
 
-        state = {"flush_id": 0, "timeline_ms": 0}
+        # flush_id: the request in flight ("live") or the next one to be flushed ("documented")
+        state = {"flush_id": 0, "timeline_ms": 0, "in_flight": 0}
         buffer: list[str] = []
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        queue: asyncio.Queue[tuple[int | None, str] | None] = asyncio.Queue()
         worker = asyncio.create_task(self._synthesize(ws, queue, state))
 
         try:
@@ -158,7 +186,11 @@ class _FakeServer:
                 if kind == "Generate":
                     buffer.append(data["text"])
                 elif kind == "Flush":
-                    await queue.put("".join(buffer))
+                    if self.flush_id_model == "documented":
+                        await queue.put((state["flush_id"], "".join(buffer)))
+                        state["flush_id"] += 1
+                    else:
+                        await queue.put((None, "".join(buffer)))
                     buffer.clear()
                 elif kind == "Cancel":
                     buffer.clear()
@@ -171,13 +203,18 @@ class _FakeServer:
                             {
                                 "type": "Audio",
                                 "audio": base64.b64encode(_pcm(FRAME_BYTES, seed=777)).decode(),
-                                "flush_id": state["flush_id"],
+                                "flush_id": state["in_flight"],
                             }
                         )
+                        state["timeline_ms"] += 80
                     state["flush_id"] += 1
                     if self.cancelled_delay:
                         await asyncio.sleep(self.cancelled_delay)
                     await ws.send_json({"type": "Cancelled", "audio_duration_seconds": 0.0})
+                    if self.word_boundaries_after_cancelled:
+                        self.word_boundaries_after_cancelled = False
+                        for held in self._held_word_boundaries:
+                            await ws.send_json(held)
                     worker = asyncio.create_task(self._synthesize(ws, queue, state))
                 elif kind == "Terminate":
                     break
@@ -187,7 +224,10 @@ class _FakeServer:
         return ws
 
     async def _synthesize(
-        self, ws: web.WebSocketResponse, queue: asyncio.Queue[str | None], state: dict[str, int]
+        self,
+        ws: web.WebSocketResponse,
+        queue: asyncio.Queue[tuple[int | None, str] | None],
+        state: dict[str, int],
     ) -> None:
         late: dict[str, Any] | None = None
         while True:
@@ -195,10 +235,12 @@ class _FakeServer:
                 # nothing follows to trail behind
                 await ws.send_json(late)
                 late = None
-            text = await queue.get()
-            if text is None:
+            item = await queue.get()
+            if item is None:
                 return
-            flush_id = state["flush_id"]
+            assigned, text = item
+            flush_id = state["flush_id"] if assigned is None else assigned
+            state["in_flight"] = flush_id
             audio_start_ms = state["timeline_ms"]
             frames = [_pcm(FRAME_BYTES, seed=flush_id) for _ in range(self.frames_per_request)]
             for i, frame in enumerate(frames):
@@ -211,20 +253,23 @@ class _FakeServer:
                         "flush_id": flush_id,
                     }
                 )
+                # the session timeline counts every byte sent, cancelled audio included
+                state["timeline_ms"] += 80
                 if i == 0 and late is not None:
                     await ws.send_json(late)
                     late = None
             self.audio_by_request.append(b"".join(frames))
             duration_ms = self.frames_per_request * 80
-            state["timeline_ms"] += duration_ms
-            state["flush_id"] += 1
+            if assigned is None:
+                state["flush_id"] += 1
+            self.flush_dones += 1
             await ws.send_json(
                 {"type": "FlushDone", "flush_id": flush_id, "audio_duration_ms": duration_ms}
             )
-            if self.error_after_flush_dones and self.error_after_flush_dones[0] == flush_id + 1:
-                _, code, error = self.error_after_flush_dones
-                await ws.send_json({"type": "Error", "error_code": code, "error": error})
-                await ws.close(code=code, message=b"See Error message for details")
+            if self.error_after_flush_dones and self.error_after_flush_dones[0] == self.flush_dones:
+                error = self.error_after_flush_dones[1]
+                await ws.send_json(error)
+                await ws.close(code=error["error_code"], message=b"See Error message for details")
                 return
             dropped = self.drop_word_boundaries
             if self.word_boundaries and not (
@@ -246,7 +291,9 @@ class _FakeServer:
                         for i, token in enumerate(tokens)
                     ],
                 }
-                if self.late_word_boundaries:
+                if self.word_boundaries_after_cancelled:
+                    self._held_word_boundaries.append(word_boundaries)
+                elif self.late_word_boundaries:
                     late = word_boundaries
                 else:
                     await ws.send_json(word_boundaries)
@@ -285,37 +332,80 @@ def _strip_padding(audio: bytes, expected_len: int) -> bytes:
 def test_voice_and_language_resolution() -> None:
     from livekit.plugins.assemblyai import TTS
 
+    # nothing given: the server's defaults (jane, English)
     tts = TTS(api_key="k")
-    assert (tts.voice, tts.language) == ("jane", "english")
+    assert (tts.voice, tts.language) == (None, None)
 
+    # a listed voice brings its language, since a voice sent with another one fails
     tts = TTS(api_key="k", voice="lola")
     assert (tts.voice, tts.language) == ("lola", "spanish")
+    tts = TTS(api_key="k", voice=" Jane ")
+    assert (tts.voice, tts.language) == ("jane", "english")
 
+    # a language alone leaves the voice to the server's default for it
     for language in ("spanish", "Spanish", "es", "es-MX"):
         tts = TTS(api_key="k", language=language)
-        assert (tts.voice, tts.language) == ("lola", "spanish")
+        assert (tts.voice, tts.language) == (None, "spanish")
 
-    # a voice outside the published catalog is passed through for the server to judge
+    # anything the table doesn't list is the server's call, as voices gain languages
+    tts = TTS(api_key="k", voice="jane", language="spanish")
+    assert (tts.voice, tts.language) == ("jane", "spanish")
     tts = TTS(api_key="k", voice="newvoice", language="german")
     assert (tts.voice, tts.language) == ("newvoice", "german")
     tts = TTS(api_key="k", voice="newvoice")
     assert (tts.voice, tts.language) == ("newvoice", None)
+    tts = TTS(api_key="k", language="klingon")
+    assert (tts.voice, tts.language) == (None, "klingon")
 
 
-@pytest.mark.parametrize(
-    ("kwargs", "match"),
-    [
-        ({"voice": "lola", "language": "english"}, "speaks spanish"),
-        ({"voice": "Jane"}, "case-sensitive"),
-        ({"language": "klingon"}, "no default voice"),
-        ({"sample_rate": 12345}, "sample_rate"),
-    ],
-)
-def test_invalid_configuration(kwargs: dict[str, Any], match: str) -> None:
+def test_custom_voice_and_model() -> None:
     from livekit.plugins.assemblyai import TTS
 
-    with pytest.raises(ValueError, match=match):
-        TTS(api_key="k", **kwargs)
+    voice_id = "01a142a4-66f3-7315-b15f-668b6edfb595"
+    # a custom voice speaks its clip's language: none is derived or defaulted
+    tts = TTS(api_key="k", voice_id=f" {voice_id} ")
+    assert (tts.voice, tts.voice_id, tts.language, tts.model_id) == (None, voice_id, None, None)
+    assert tts.model == "streaming-tts"
+
+    tts = TTS(api_key="k", voice_id="my-voice", language="es", model_id="latest")
+    assert (tts.voice_id, tts.language, tts.model_id) == ("my-voice", "spanish", "latest")
+    assert tts.model == "latest"
+
+    # model_id selects the model for a named voice too
+    tts = TTS(api_key="k", voice="vera", model_id="assemblyai-tts-mul-4b-2026-10-07")
+    assert (tts.voice, tts.language) == ("vera", "english")
+
+    with pytest.raises(ValueError, match="either"):
+        TTS(api_key="k", voice="jane", voice_id=voice_id)
+    with pytest.raises(ValueError, match="voice_id"):
+        TTS(api_key="k", voice_id="  ")
+    with pytest.raises(ValueError, match="model_id"):
+        TTS(api_key="k", model_id="")
+
+
+def test_update_options_switches_between_voice_and_voice_id() -> None:
+    from livekit.plugins.assemblyai import TTS
+
+    tts = TTS(api_key="k", voice="lola")
+    tts.update_options(voice_id="clone")
+    assert (tts.voice, tts.voice_id, tts.language) == (None, "clone", None)
+    tts.update_options(language="german")  # the clone is kept
+    assert (tts.voice, tts.voice_id, tts.language) == (None, "clone", "german")
+    tts.update_options(voice="paul")
+    assert (tts.voice, tts.voice_id, tts.language) == ("paul", None, "english")
+    tts.update_options(voice_id="clone", language="fr", model_id="latest")
+    assert (tts.voice_id, tts.language, tts.model_id) == ("clone", "french", "latest")
+    tts.update_options(model_id=None)
+    assert tts.model_id is None
+    with pytest.raises(ValueError, match="either"):
+        tts.update_options(voice="jane", voice_id="clone")
+
+
+def test_invalid_sample_rate() -> None:
+    from livekit.plugins.assemblyai import TTS
+
+    with pytest.raises(ValueError, match="sample_rate"):
+        TTS(api_key="k", sample_rate=12345)
 
 
 def test_api_key_required(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,10 +424,13 @@ def test_update_options_keeps_voice_and_language_paired() -> None:
     tts = TTS(api_key="k", voice="anna")
     tts.update_options(language="en")  # anna already speaks English
     assert (tts.voice, tts.language) == ("anna", "english")
-    tts.update_options(language="fr")
-    assert (tts.voice, tts.language) == ("estelle", "french")
+    tts.update_options(language="fr")  # anna doesn't: French's default voice
+    assert (tts.voice, tts.language) == (None, "french")
     tts.update_options(voice="paul")
     assert (tts.voice, tts.language) == ("paul", "english")
+    tts.update_options(language="german")
+    tts.update_options(voice="custom")  # says nothing about the language
+    assert (tts.voice, tts.language) == ("custom", "german")
 
 
 def test_split_request_text() -> None:
@@ -351,9 +444,23 @@ def test_split_request_text() -> None:
     assert all(len(p) <= _MAX_REQUEST_CHARS for p in pieces)
     assert " ".join(pieces) == words
 
-    # no whitespace to split on: cut at the limit, counted in code points
-    blob = "é" * (_MAX_REQUEST_CHARS + 5)
-    assert [len(p) for p in _split_request_text(blob)] == [_MAX_REQUEST_CHARS, 5]
+    # a run the server can't speak in one piece is broken up, in code points
+    from livekit.plugins.assemblyai.tts import _MAX_UNBROKEN_CHARS
+
+    blob = "é" * (2 * _MAX_UNBROKEN_CHARS + 5)
+    pieces = _split_request_text(blob)
+    assert all(len(p) <= _MAX_REQUEST_CHARS for p in pieces)
+    assert [len(run) for p in pieces for run in p.split()] == [
+        _MAX_UNBROKEN_CHARS,
+        _MAX_UNBROKEN_CHARS,
+        5,
+    ]
+    # any whitespace is a place to cut, not just a space
+    lines = "\n".join(["w" * (_MAX_UNBROKEN_CHARS - 1)] * 100)
+    pieces = _split_request_text(lines)
+    assert len(pieces) > 1
+    assert all(len(p) <= _MAX_REQUEST_CHARS for p in pieces)
+    assert [len(run) for p in pieces for run in p.split()] == [_MAX_UNBROKEN_CHARS - 1] * 100
 
 
 # --- streaming -------------------------------------------------------------------------
@@ -403,6 +510,7 @@ async def test_connection_is_reused_and_stale_frames_are_dropped() -> None:
         await tts.aclose()
 
     assert len(srv.sessions) == 1
+    assert srv.frames("Cancel") == []  # nothing was outstanding
     first, second = srv.audio_by_request
     assert _strip_padding(audio1, len(first)) == first
     assert _strip_padding(audio2, len(second)) == second
@@ -412,8 +520,14 @@ async def test_connection_is_reused_and_stale_frames_are_dropped() -> None:
     assert timed2[0].start_time == pytest.approx(0.0)
 
 
-async def test_interrupted_stream_cancels_and_frees_the_socket() -> None:
-    async with _FakeServer(frames_per_request=40, frame_delay=0.01) as srv:
+FLUSH_ID_MODELS = pytest.mark.parametrize("flush_id_model", ["live", "documented"])
+
+
+@FLUSH_ID_MODELS
+async def test_interrupted_stream_cancels_and_frees_the_socket(flush_id_model: str) -> None:
+    async with _FakeServer(
+        frames_per_request=40, frame_delay=0.01, flush_id_model=flush_id_model
+    ) as srv:
         tts = _make_tts(srv)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
         stream.push_text("This reply gets interrupted by the user.")
@@ -526,9 +640,24 @@ async def test_update_options_opens_a_new_session() -> None:
         await _speak(tts, ["Ciao."])
         await tts.aclose()
 
-    assert [(s.params["voice"], s.params["language"]) for s in srv.sessions] == [
-        ("jane", "english"),
+    assert [(s.params.get("voice"), s.params.get("language")) for s in srv.sessions] == [
+        (None, None),
         ("giovanni", "italian"),
+    ]
+
+
+async def test_custom_voice_and_model_are_sent_at_connect() -> None:
+    async with _FakeServer() as srv:
+        tts = _make_tts(srv, voice_id="clone", model_id="assemblyai-tts-mul-4b-2026-10-07")
+        await _speak(tts, ["Hello."])
+        tts.update_options(voice="jane", model_id=None)
+        await _speak(tts, ["Hello again."])
+        await tts.aclose()
+
+    keys = ("voice", "voice_id", "language", "model_id")
+    assert [tuple(s.params.get(k) for k in keys) for s in srv.sessions] == [
+        (None, "clone", None, "assemblyai-tts-mul-4b-2026-10-07"),
+        ("jane", None, "english", None),
     ]
 
 
@@ -537,8 +666,17 @@ async def test_socket_closed_while_idle_is_replaced() -> None:
         tts = _make_tts(srv)
         await _speak(tts, ["Hello."])
         # the server ends the idle session (inactivity timeout, expiry, network drop)
-        assert srv.sessions[0].ws is not None
-        await srv.sessions[0].ws.close(code=3008)
+        ws = srv.sessions[0].ws
+        assert ws is not None
+        await ws.send_json(
+            _error(
+                3008,
+                "Session reached its maximum duration; open a new connection to continue",
+                error_type="session_expired",
+                retryable=True,
+            )
+        )
+        await ws.close(code=3008)
         await asyncio.sleep(0.05)
         audio, _, _ = await _speak(tts, ["Still here."])
         await tts.aclose()
@@ -547,10 +685,15 @@ async def test_socket_closed_while_idle_is_replaced() -> None:
     assert audio
 
 
-async def test_next_holder_waits_for_cancelled_and_drops_the_tail() -> None:
+@FLUSH_ID_MODELS
+async def test_next_holder_waits_for_cancelled_and_drops_the_tail(flush_id_model: str) -> None:
     """A reply that starts while the previous one's Cancel is unanswered gets none of its tail."""
     async with _FakeServer(
-        frames_per_request=40, frame_delay=0.01, tail_frames_after_cancel=3, cancelled_delay=0.2
+        frames_per_request=40,
+        frame_delay=0.01,
+        tail_frames_after_cancel=3,
+        cancelled_delay=0.2,
+        flush_id_model=flush_id_model,
     ) as srv:
         tts = _make_tts(srv)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
@@ -572,13 +715,88 @@ async def test_next_holder_waits_for_cancelled_and_drops_the_tail() -> None:
     expected = srv.audio_by_request[-1]
     assert _strip_padding(audio, len(expected)) == expected
     assert "".join(timed) == "After the interruption. "
+    # re-anchored although the session timeline holds the cancelled audio and its tail
     assert timed[0].start_time == pytest.approx(0.0)
 
 
-async def test_cancel_after_some_requests_completed() -> None:
-    """FlushDone(0) arrives before the Cancel retires request 1; the next reply maps to id 2."""
+@FLUSH_ID_MODELS
+async def test_second_interrupt_before_the_first_cancelled(flush_id_model: str) -> None:
+    """A reply interrupted before it heard anything adds a Cancel; the next one waits for both."""
+    async with _FakeServer(
+        frames_per_request=40,
+        frame_delay=0.01,
+        cancelled_delay=0.3,
+        flush_id_model=flush_id_model,
+    ) as srv:
+        tts = _make_tts(srv)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
+        stream.push_text("The first reply gets interrupted.")
+        stream.end_input()
+        async for _ in stream:
+            break
+        await stream.aclose()
+
+        # still waiting for the first Cancelled: this reply hears nothing and is cut too
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
+        stream.push_text("The second reply never gets a word in.")
+        stream.end_input()
+        await asyncio.sleep(0.1)
+        await stream.aclose()
+
+        srv.frames_per_request = 2
+        srv.frame_delay = 0.0
+        srv.cancelled_delay = 0.0
+        audio, timed, _ = await _speak(tts, ["The third reply is heard."])
+        await tts.aclose()
+
+    assert len(srv.sessions) == 1
+    assert len(srv.frames("Cancel")) == 2
+    expected = srv.audio_by_request[-1]
+    assert _strip_padding(audio, len(expected)) == expected
+    assert "".join(timed) == "The third reply is heard. "
+
+
+@FLUSH_ID_MODELS
+async def test_word_boundaries_after_cancelled_are_dropped(flush_id_model: str) -> None:
+    """Timings of a completed request that trail the Cancel don't reach the next reply."""
+    async with _FakeServer(
+        frames_per_request=10,
+        frame_delay=0.03,
+        word_boundaries_after_cancelled=True,
+        flush_id_model=flush_id_model,
+    ) as srv:
+        tts = _make_tts(srv)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
+        stream.push_text("The first sentence finishes playing. The second one is cut off.")
+        stream.end_input()
+        received = 0
+        async for ev in stream:
+            received += len(ev.frame.data.tobytes())
+            if received > 12 * FRAME_BYTES:  # well into the second request
+                break
+        await stream.aclose()
+
+        srv.frames_per_request = 2
+        srv.frame_delay = 0.0
+        audio, timed, _ = await _speak(tts, ["A fresh reply."])
+        await tts.aclose()
+
+    assert len(srv.frames("Cancel")) == 1
+    expected = srv.audio_by_request[-1]
+    assert _strip_padding(audio, len(expected)) == expected
+    assert "".join(timed) == "A fresh reply. "
+    assert timed[0].start_time == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(("flush_id_model", "next_flush_id"), [("live", 3), ("documented", 4)])
+async def test_cancel_after_some_requests_completed(
+    flush_id_model: str, next_flush_id: int
+) -> None:
+    """FlushDone(0) arrives, then a Cancel cuts request 1; the next reply's id is learned."""
     # request 1 runs until ~0.6s at the fake; the Cancel lands at ~0.4s
-    async with _FakeServer(frames_per_request=10, frame_delay=0.03) as srv:
+    async with _FakeServer(
+        frames_per_request=10, frame_delay=0.03, flush_id_model=flush_id_model
+    ) as srv:
         tts = _make_tts(srv)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
         stream.push_text("The first sentence finishes playing. The second one is cut off.")
@@ -597,7 +815,8 @@ async def test_cancel_after_some_requests_completed() -> None:
         await tts.aclose()
 
     assert len(srv.frames("Cancel")) == 1
-    assert conn._num_retired == 3  # FlushDone(0), Cancelled, FlushDone(2)
+    # live: the fresh reply reuses id 2; documented: Flush 0, Flush 1, Cancel, so id 3
+    assert conn._next_flush_id == next_flush_id
     expected = srv.audio_by_request[-1]
     assert _strip_padding(audio, len(expected)) == expected
     assert "".join(timed) == "A fresh reply. "
@@ -671,7 +890,7 @@ async def test_interrupt_while_connecting_leaks_no_tasks() -> None:
 
 
 async def test_rejected_credential_is_not_retried() -> None:
-    async with _FakeServer(connect_error=(1008, "Unauthorized: Invalid API key")) as srv:
+    async with _FakeServer(connect_error=_error(1008, "Unauthorized: Invalid API key")) as srv:
         tts = _make_tts(srv)
         with pytest.raises(APIStatusError) as exc_info:
             await _speak(tts, ["Hello."], max_retry=2)
@@ -684,8 +903,10 @@ async def test_rejected_credential_is_not_retried() -> None:
 
 
 async def test_unsupported_voice_error_after_begin() -> None:
-    error = "Unsupported preset voice 'nobody'. Available on this connection: ['jane']."
-    async with _FakeServer(error_after_begin=(3006, error)) as srv:
+    error = _error(
+        3006, "Unsupported preset voice 'nobody'. Available on this connection: ['jane']."
+    )
+    async with _FakeServer(error_after_begin=error) as srv:
         tts = _make_tts(srv, voice="nobody")
         with pytest.raises(APIStatusError) as exc_info:
             await _speak(tts, ["Hello."], max_retry=2)
@@ -697,7 +918,8 @@ async def test_unsupported_voice_error_after_begin() -> None:
 
 
 async def test_transient_error_is_retried_on_a_new_session() -> None:
-    async with _FakeServer(connect_error=(3009, "Too many concurrent sessions")) as srv:
+    error = _error(3005, "The TTS service is temporarily unavailable; please reconnect and retry")
+    async with _FakeServer(connect_error=error) as srv:
         tts = _make_tts(srv)
         with pytest.raises(APIStatusError) as exc_info:
             await _speak(tts, ["Hello."], max_retry=1)
@@ -707,15 +929,117 @@ async def test_transient_error_is_retried_on_a_new_session() -> None:
     assert len(srv.sessions) == 2
 
 
-def test_inactivity_close_is_retryable() -> None:
+@pytest.mark.parametrize(
+    ("frame", "retryable"),
+    [
+        # servers that send only the code and the text
+        (_error(3006, "No message received for 30 seconds."), True),
+        (_error(3006, "Generate text is 2500 characters, over the 2000-character limit."), False),
+        (_error(3010, "Input text rate exceeded"), False),
+        (_error(3009, "Too many sessions opened for this account"), True),
+        (_error(3012, "The requested voice was not found."), False),
+        (_error(3014, "Voice v has no ready pairing with model m"), False),
+        # the documented frame: `retryable` decides, whatever the code or text
+        (_error(3006, "reworded", error_type="inactivity_timeout", retryable=True), True),
+        (_error(3005, "The server is out of room", error_type="at_capacity", retryable=True), True),
+        (
+            _error(3011, "Audio consumption too slow", error_type="audio_backlog", retryable=False),
+            False,
+        ),
+        (_error(4321, "A code added later", error_type="something_new", retryable=False), False),
+    ],
+)
+def test_error_retryability(frame: dict[str, Any], retryable: bool) -> None:
     from livekit.plugins.assemblyai.tts import _error_from_frame
 
-    err = _error_from_frame(
-        {"type": "Error", "error_code": 3006, "error": "No message received for 30 seconds."},
-        session_id="s",
-    )
-    assert err.retryable is True
+    err = _error_from_frame(frame, session_id="s")
+    assert err.retryable is retryable
     assert err.request_id == "s"
+    if "error_type" in frame:
+        assert frame["error_type"] in err.message
+
+
+async def test_retry_after_is_honoured_before_the_next_session() -> None:
+    error = _error(
+        3009,
+        "Too many sessions opened for this account in the last minute (allowance 5 per minute); retry in 1 s.",
+        error_type="rate_limited",
+        retryable=True,
+        retry_after_seconds=0.5,
+    )
+    async with _FakeServer(connect_error=error) as srv:
+        tts = _make_tts(srv)
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        with pytest.raises(APIStatusError):
+            await _speak(tts, ["Hello."], max_retry=1)
+        elapsed = loop.time() - t0
+        await tts.aclose()
+
+    assert len(srv.sessions) == 2
+    assert elapsed >= 0.5
+
+
+async def test_retry_after_longer_than_the_timeout_ends_the_retries() -> None:
+    error = _error(
+        3009,
+        "Too many sessions opened for this account in the last minute (allowance 5 per minute); retry in 30 s.",
+        error_type="rate_limited",
+        retryable=True,
+        retry_after_seconds=30,
+    )
+    async with _FakeServer(connect_error=error) as srv:
+        tts = _make_tts(srv)
+        with pytest.raises(APIConnectionError) as exc_info:
+            await _speak(tts, ["Hello."], max_retry=2)
+        await tts.aclose()
+
+    assert exc_info.value.retryable is False
+    assert len(srv.sessions) == 1  # no session start spent on a retry that can't succeed
+
+
+async def test_session_unusable_on_arrival_is_not_replaced_in_a_loop() -> None:
+    async with _FakeServer(session_seconds=-1) as srv:  # already past its expires_at
+        tts = _make_tts(srv)
+        with pytest.raises(APIConnectionError, match="unusable as soon as it opened"):
+            await _speak(tts, ["Hello."], max_retry=1)
+        await tts.aclose()
+
+    assert len(srv.sessions) == 2  # one per attempt
+
+
+async def test_short_session_is_still_used() -> None:
+    """A session shorter than twice the expiry margin (a capped token) is not discarded."""
+    async with _FakeServer(session_seconds=60) as srv:
+        tts = _make_tts(srv)
+        audio, _, _ = await _speak(tts, ["Hello."])
+        await tts.aclose()
+
+    assert len(srv.sessions) == 1
+    assert audio
+
+
+async def test_keepalive_follows_the_echoed_inactivity_timeout() -> None:
+    async with _FakeServer(inactivity_timeout=0.2) as srv:
+        tts = _make_tts(srv)
+        await _speak(tts, ["Hello."])
+        await asyncio.sleep(0.35)  # idle in the pool
+        await tts.aclose()
+
+    assert len(srv.frames("KeepAlive")) >= 2
+
+
+async def test_unbroken_run_is_sent_in_speakable_pieces() -> None:
+    from livekit.plugins.assemblyai.tts import _MAX_UNBROKEN_CHARS
+
+    digest = "f" * 1900  # the service closes the session on a run this long
+    async with _FakeServer(frames_per_request=1) as srv:
+        tts = _make_tts(srv)
+        await _speak(tts, [f"The digest is {digest}."])
+        await tts.aclose()
+
+    runs = [run for f in srv.frames("Generate") for run in f["text"].split()]
+    assert max(len(r) for r in runs) <= _MAX_UNBROKEN_CHARS
 
 
 async def test_sample_rate_mismatch_is_rejected() -> None:
@@ -729,8 +1053,8 @@ async def test_sample_rate_mismatch_is_rejected() -> None:
 
 
 async def test_error_mid_stream_is_raised_after_partial_audio() -> None:
-    error = (1, 3005, "The TTS service is temporarily unavailable; please reconnect and retry")
-    async with _FakeServer(error_after_flush_dones=error) as srv:
+    error = _error(3005, "The TTS service is temporarily unavailable; please reconnect and retry")
+    async with _FakeServer(error_after_flush_dones=(1, error)) as srv:
         tts = _make_tts(srv)
         with pytest.raises(APIStatusError) as exc_info:
             await _speak(

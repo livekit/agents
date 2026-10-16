@@ -27,21 +27,34 @@ session = AgentSession(
 )
 ```
 
-`voice` is one of the [preset voices](https://www.assemblyai.com/docs/tts/voices). Every voice
-speaks exactly one language, and the plugin derives `language` from the voice, so you only pass
-one of them:
+`voice` is one of the [voices](https://www.assemblyai.com/docs/tts/voices). Each voice speaks one
+language today, and the plugin derives `language` from the voice, so you only pass one of them:
 
-| Language   | Voices                                                                              |
-| ---------- | ----------------------------------------------------------------------------------- |
-| English    | `alba`, `anna`, `charles`, `eve`, `george`, `jane` (default), `jean`, `mary`, `michael`, `paul`, `vera` |
-| Spanish    | `lola`                                                                              |
-| German     | `juergen`                                                                           |
-| Italian    | `giovanni`                                                                          |
-| Portuguese | `rafael`                                                                            |
-| French     | `estelle`                                                                           |
+| Language   | Voices                                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------------------------- |
+| English    | `alba`, `anna`, `charles`, `eve`, `george`, `iris`, `jane` (default), `jean`, `mary`, `michael`, `paul`, `reid`, `vera` |
+| Spanish    | `lola`                                                                                                  |
+| German     | `juergen`                                                                                               |
+| Italian    | `giovanni`                                                                                              |
+| Portuguese | `rafael`                                                                                                |
+| French     | `estelle`                                                                                               |
 
-`assemblyai.TTS(language="es")` picks that language's default voice. Voice names are lowercase and
-case-sensitive.
+`assemblyai.TTS(language="es")` (or `"spanish"`) uses the server's default voice for that language.
+A voice or a voice/language pairing the table doesn't list is passed through for the server to
+judge, and the server's error lists the voices available.
+
+A custom (cloned) voice is passed as `voice_id` instead of `voice`. Use the `id` that AssemblyAI
+returned when the voice was created, or your slug for it. The voice speaks the language of its
+reference clip, so `language` can be left out. It must be paired with the session's model, and it
+can only be used on a host in the data zone it was created in:
+
+```python
+assemblyai.TTS(
+    voice_id="01a142a4-66f3-7315-b15f-668b6edfb595",
+    model_id="assemblyai-tts-mul-4b-2026-10-07",  # optional: a dated model name or an alias
+    base_url="wss://streaming-tts.us.assemblyai.com",
+)
+```
 
 Other options:
 
@@ -50,16 +63,21 @@ Other options:
 - `base_url`: `wss://streaming-tts.us.assemblyai.com` or `wss://streaming-tts.eu.assemblyai.com`
   keeps text and audio in one data zone; the default global endpoint routes to the nearest region.
 
-The service has no speed, pitch or SSML controls, and markup is read aloud as text. Numbers,
-currency, dates and common abbreviations are expanded to their spoken form automatically.
+The service has no speed, pitch or SSML controls. Numbers, currency, dates and common
+abbreviations are expanded to their spoken form automatically; keep LLM markup out of the speech
+with `AgentSession(tts_text_transforms=["filter_markdown", "filter_emoji"])`.
 
 ### How the plugin uses the API
 
 - Each sentence of the LLM output is sent as its own request (`Generate` + `Flush`), so audio
-  starts after the first sentence instead of the whole reply.
+  starts after the first sentence instead of the whole reply. `synthesize()` runs over the same
+  pooled sessions.
 - Sessions are pooled and reused across turns: opening a session costs a handshake and counts
   against the per-minute session limit. Call `tts.prewarm()` to open one before the first reply.
 - On interruption the plugin sends `Cancel` and keeps the session, dropping any audio that was
   already in flight for the interrupted reply.
-- Credential (`1008`) and request (`3006`, including an unsupported voice) errors are not
-  retried; transient errors are retried on a new session.
+- Errors are retried on a new session when the server marks them retryable (credential and
+  request errors, such as an unsupported voice or a custom voice that is missing or not paired
+  with the model, are not). A new session waits out any
+  `retry_after_seconds` the server asked for; a wait longer than the connect timeout ends the
+  retries instead, so a `FallbackAdapter` can move on.
