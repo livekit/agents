@@ -28,6 +28,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
@@ -44,13 +45,12 @@ from .log import logger
 
 STTEncoding = Literal["pcm_s16le"]
 
-# Define bytes per frame for different encoding types
-bytes_per_frame = {
-    "pcm_s16le": 2,
-}
-
-
 SUPPORTED_SAMPLE_RATE = 24000
+# Client-side ping interval. Without it a silently dropped socket (half-open TCP, no
+# FIN or RST) is never noticed: the receive loop polls forever and audio keeps going
+# into a dead socket. aiohttp closes the socket itself when a pong does not come back,
+# which the receive loop sees as an ERROR frame.
+WS_HEARTBEAT_S = 30.0
 
 
 def _api_error(msg_data: dict[str, Any]) -> APIError:
@@ -70,7 +70,7 @@ class STTOptions:
     encoding: str = "pcm_s16le"
     temperature: float | None = None
     language: LanguageCode = LanguageCode("en")
-    vad_threshold: float = 0.6
+    vad_threshold: float = 0.9
     vad_bucket: int | None = 2
     # When set, we flush the stt state on the first time the VAD triggers
     # in order to recover the text currently being processed as soon as possible.
@@ -97,7 +97,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,  # only final transcripts
+                interim_results=True,
                 aligned_transcript=False,  # only chunk start times are available
                 offline_recognize=False,
             ),
@@ -219,7 +219,6 @@ class SpeechStream(stt.SpeechStream):
         self._model_endpoint = model_endpoint
         self._model_name = model_name
         self._session = http_session
-        self._speech_duration: float = 0
 
         self._reconnect_event = asyncio.Event()
         self._ready_msg: dict[str, Any] | None = None
@@ -265,22 +264,29 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(data.data.tobytes())
 
-                for frame in frames:
-                    if len(frame.data) % 2 != 0:
-                        logger.warning("Frame data size not aligned to int16 (multiple of 2)")
+                    for frame in frames:
+                        if len(frame.data) % 2 != 0:
+                            logger.warning("Frame data size not aligned to int16 (multiple of 2)")
 
-                    audio_data = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                    audio_msg = {
-                        "type": "audio",
-                        "audio": audio_data,
-                    }
-                    await ws.send_str(json.dumps(audio_msg))
+                        audio_data = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                        audio_msg = {
+                            "type": "audio",
+                            "audio": audio_data,
+                        }
+                        await ws.send_str(json.dumps(audio_msg))
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # a mid-write socket drop surfaces here as a raw connection error; raise
+                # it as a retryable API error so the base class reconnects
+                if closing_ws:
+                    return
+                raise APIConnectionError("Gradium connection closed unexpectedly") from e
 
             # Input ended: tell the server, then let recv_task drain the model's last
             # words until the server replies with its own end_of_stream.
@@ -345,8 +351,16 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws:
+                        _finalize()
+                        return
+                    # the heartbeat closes the socket when a ping goes unanswered, and
+                    # that surfaces here rather than as a close frame
+                    raise APIConnectionError("Gradium connection lost") from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.error("Unexpected Gradium message type: %s", msg.type)
+                    logger.warning("Unexpected Gradium message type: %s", msg.type)
                     continue
 
                 try:
@@ -376,12 +390,13 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     if type_ == "text":
+                        text, start_s = data["text"], data["start_s"]
                         if speaking is False:
                             speaking = True
-                            utterance_start = data["start_s"] + self.start_time_offset
+                            utterance_start = start_s + self.start_time_offset
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                             self._event_ch.send_nowait(start_event)
-                        buffered_text.append(data["text"])
+                        buffered_text.append(text)
                         # The agent treats an interim as the whole partial utterance (it
                         # replaces the previous one), not as a delta.
                         event = stt.SpeechEvent(
@@ -474,7 +489,9 @@ class SpeechStream(stt.SpeechStream):
         # handshake here and map its failures to API errors the base class can retry.
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(self._model_endpoint, headers=headers),
+                self._session.ws_connect(
+                    self._model_endpoint, headers=headers, heartbeat=WS_HEARTBEAT_S
+                ),
                 self._conn_options.timeout,
             )
         except asyncio.TimeoutError:
@@ -483,6 +500,9 @@ class SpeechStream(stt.SpeechStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except Exception as e:
+            # DNS, refused connection, TLS: transient, and not an APIError by itself
+            raise APIConnectionError() from e
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {

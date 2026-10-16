@@ -11,7 +11,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APIStatusError
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+)
 from livekit.agents.stt import SpeechEventType
 
 # hermetic: every test talks to a fake websocket, so this is a unit module
@@ -105,7 +111,13 @@ class FakeWebSocket:
         frame = self._frames.pop(0)
         if frame == "close":
             return _Msg(self._ws_type.CLOSE, self.close_code, "")
+        if isinstance(frame, tuple) and frame[0] == "error":
+            self._exception = frame[1]
+            return _Msg(self._ws_type.ERROR, frame[1])
         return _Msg(self._ws_type.TEXT, json.dumps(frame))
+
+    def exception(self) -> BaseException | None:
+        return getattr(self, "_exception", None)
 
     async def close(self) -> bool:
         return True
@@ -208,7 +220,7 @@ async def test_speech_stream_sends_language_in_json_config():
             sent_messages.append(message)
 
     class FakeSession:
-        async def ws_connect(self, url, headers):
+        async def ws_connect(self, url, headers, **kwargs):
             return FakeWebSocket()
 
     stt = STT(api_key="test-key")
@@ -377,9 +389,6 @@ async def test_vad_bucket_zero_is_honored():
     assert events[-1].alternatives[0].text == "hello"
 
 
-from livekit.agents import APIConnectOptions, APIError, APITimeoutError
-
-
 class HangingSession:
     """A server that never completes the websocket handshake."""
 
@@ -399,3 +408,87 @@ async def test_stream_times_out_on_hung_connect():
             await _collect_until(stream, lambda ev: False)
     finally:
         await stream.aclose()
+
+
+async def test_connect_failures_are_retryable_api_errors():
+    """DNS, refused connection, TLS: aiohttp raises ClientConnectionError subclasses that
+    the base class would treat as fatal unless mapped."""
+    from livekit.plugins.gradium import STT
+
+    class RefusingSession:
+        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+            import aiohttp
+
+            raise aiohttp.ClientOSError(111, "Connection refused")
+
+    stt = STT(api_key="test-key", http_session=RefusingSession())  # type: ignore[arg-type]
+    stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1))
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIConnectionError) as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_socket_is_opened_with_a_heartbeat():
+    from livekit.plugins.gradium.stt import WS_HEARTBEAT_S
+
+    stt, session, _ = _make_stt([READY, _text("hello", 0.1)])
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+    assert session.connects[0][1]["heartbeat"] == WS_HEARTBEAT_S
+
+
+async def test_transport_error_frame_reconnects():
+    """aiohttp reports a lost socket (a missed pong) as an ERROR frame."""
+    err = RuntimeError("No PONG received")
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), ("error", err)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIConnectionError) as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.__cause__ is err
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_audio_write_on_a_dead_socket_reconnects():
+    stt, _, _ = _make_stt([READY], fail_send_on="audio")
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIConnectionError) as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_a_text_frame_without_start_s_does_not_corrupt_the_turn():
+    bad = {"type": "text", "text": "dropped"}  # no start_s
+    frames = [READY, bad, _text("hello", 0.1)] + [_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert [ev.type for ev in events].count(SpeechEventType.START_OF_SPEECH) == 1
+    assert events[0].type == SpeechEventType.START_OF_SPEECH
+    assert events[-1].alternatives[0].text == "hello"
