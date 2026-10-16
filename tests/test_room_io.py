@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -1599,3 +1600,169 @@ async def test_modern_stream_still_published_when_legacy_is_skipped() -> None:
 
     assert "".join(writer.chunks) == "hello"
     assert room.local_participant.publish_transcription.await_count == 0
+
+
+# -- audio track warnings -----------------------------------------------------
+
+
+def _make_publishing_output(room: _FakeRoom, subscribed: asyncio.Event) -> _ParticipantAudioOutput:
+    room.local_participant.publish_track = AsyncMock(
+        return_value=SimpleNamespace(sid="TR_agent", wait_for_subscription=subscribed.wait)
+    )
+    with patch("livekit.rtc.AudioSource", _FakeAudioSource):
+        return _ParticipantAudioOutput(
+            room,
+            sample_rate=24000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(),
+        )
+
+
+def _records(caplog: pytest.LogCaptureFixture, message: str) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.getMessage() == message]
+
+
+@pytest.mark.asyncio
+async def test_audio_output_warns_once_without_subscriber(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+    room = _FakeRoom()
+    room.remote_participants = {"user": object()}
+    subscribed = asyncio.Event()
+    output = _make_publishing_output(room, subscribed)
+
+    with patch("livekit.rtc.LocalAudioTrack.create_audio_track", MagicMock()):
+        publish_task = asyncio.create_task(output._publish_track())
+        await asyncio.sleep(25)
+
+    records = _records(caplog, "agent audio track has no subscriber after 10s")
+    assert len(records) == 1
+    assert records[0].track_sid == "TR_agent"
+    assert records[0].remote_participant_count == 1
+
+    subscribed.set()
+    await publish_task
+    assert output.subscribed.done()
+    assert output._no_subscriber_timer is None
+    await output.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_output_no_warning_when_subscribed(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+    subscribed = asyncio.Event()
+    subscribed.set()
+    output = _make_publishing_output(_FakeRoom(), subscribed)
+
+    with patch("livekit.rtc.LocalAudioTrack.create_audio_track", MagicMock()):
+        await output._publish_track()
+    await asyncio.sleep(15)
+
+    assert _records(caplog, "agent audio track has no subscriber after 10s") == []
+    await output.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_output_cancelled_publish_clears_timer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+    output = _make_publishing_output(_FakeRoom(), asyncio.Event())
+
+    with patch("livekit.rtc.LocalAudioTrack.create_audio_track", MagicMock()):
+        publish_task = asyncio.create_task(output._publish_track())
+        await asyncio.sleep(1)
+        await utils.aio.cancel_and_wait(publish_task)
+    await asyncio.sleep(15)
+
+    assert output._no_subscriber_timer is None
+    assert _records(caplog, "agent audio track has no subscriber after 10s") == []
+    await output.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_output_publish_failure_starts_no_timer() -> None:
+    room = _FakeRoom()
+    with patch("livekit.rtc.AudioSource", _FakeAudioSource):
+        output = _ParticipantAudioOutput(
+            room,
+            sample_rate=24000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(),
+        )
+    room.local_participant.publish_track = AsyncMock(side_effect=RuntimeError("engine closed"))
+
+    with (
+        patch("livekit.rtc.LocalAudioTrack.create_audio_track", MagicMock()),
+        pytest.raises(RuntimeError),
+    ):
+        await output._publish_track()
+
+    assert output._no_subscriber_timer is None
+    await output.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_logs_once_without_track(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="livekit.agents")
+    room = _FakeRoom()
+    camera = SimpleNamespace(source=rtc.TrackSource.SOURCE_CAMERA, track=None)
+    room.remote_participants = {
+        "test-user": SimpleNamespace(identity="test-user", track_publications={"TR_cam": camera})
+    }
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+
+    audio_input.set_participant("test-user")
+    await asyncio.sleep(25)
+
+    records = _records(caplog, "linked participant has no audio track after 10s")
+    assert len(records) == 1
+    assert getattr(records[0], "lk.pii.participant_identity") == "test-user"
+    assert records[0].published_sources == ["SOURCE_CAMERA"]
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_no_log_when_track_arrives(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="livekit.agents")
+    room = _FakeRoom()
+    track, publication, participant = _make_track_available_args()
+    room.remote_participants = {"test-user": participant}
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input._create_stream = MagicMock(return_value=_MockAudioStream())  # type: ignore[method-assign]
+
+    audio_input.set_participant("test-user")
+    await asyncio.sleep(1)
+    assert audio_input._no_track_timer is None
+    await asyncio.sleep(15)
+
+    assert _records(caplog, "linked participant has no audio track after 10s") == []
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_timer_reset_on_participant_change_and_close(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="livekit.agents")
+    room = _FakeRoom()
+    room.remote_participants = {
+        "a": SimpleNamespace(identity="a", track_publications={}),
+        "b": SimpleNamespace(identity="b", track_publications={}),
+    }
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+
+    audio_input.set_participant("a")
+    await asyncio.sleep(5)
+    audio_input.set_participant("b")
+    await asyncio.sleep(7)
+    # the timer restarted for "b", so neither participant has hit 10s yet
+    assert _records(caplog, "linked participant has no audio track after 10s") == []
+
+    await audio_input.aclose()
+    assert audio_input._no_track_timer is None
+    await asyncio.sleep(15)
+    assert _records(caplog, "linked participant has no audio track after 10s") == []
