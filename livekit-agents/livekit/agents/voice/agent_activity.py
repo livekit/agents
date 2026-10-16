@@ -520,6 +520,10 @@ class AgentActivity(RecognitionHooks):
     def _validate_turn_detection(
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
+        # text simulations commit user turns as text, there is no audio to detect turns in
+        if self._text_only and turn_detection not in ("manual", "realtime_llm"):
+            return None
+
         if turn_detection is not None and not isinstance(turn_detection, str):
             if isinstance(turn_detection, _StreamingTurnDetector):
                 if self.vad is None:
@@ -5191,6 +5195,10 @@ class AgentActivity(RecognitionHooks):
         return self._session._using_default_vad
 
     def _resolve_interruption_detection(self) -> inference.AdaptiveInterruptionDetector | None:
+        # text simulations carry no audio to detect interruptions in
+        if self._text_only:
+            return None
+
         realtime_llm = self.llm if isinstance(self.llm, llm.RealtimeModel) else None
         if realtime_llm is not None:
             # realtime commits turns manually; barge-in withholds the commit, so no STT is needed
