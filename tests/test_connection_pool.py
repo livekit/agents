@@ -19,6 +19,19 @@ class DummyConnection:
         return f"DummyConnection({self.id})"
 
 
+class OrderedPopSet(set):
+    def __init__(self, values, pop_order):
+        super().__init__(values)
+        self._pop_order = iter(pop_order)
+
+    def pop(self):
+        for conn in self._pop_order:
+            if conn in self:
+                self.remove(conn)
+                return conn
+        return super().pop()
+
+
 def dummy_connect_factory():
     counter = 0
 
@@ -65,6 +78,68 @@ async def test_get_creates_new_connection_when_none_available():
     # so calling get() again should create a new connection.
     conn2 = await pool.get(timeout=10.0)
     assert conn1 is not conn2, "Expected a new connection when no available connection exists."
+
+
+@pytest.mark.asyncio
+async def test_get_reuses_only_a_connection_with_a_matching_key():
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
+
+    v2 = await pool.get(timeout=10.0, key="bulbul:v2")
+    pool.put(v2)
+    v3 = await pool.get(timeout=10.0, key="bulbul:v3")
+    pool.put(v3)
+
+    assert await pool.get(timeout=10.0, key="bulbul:v2") is v2
+    assert await pool.get(timeout=10.0, key="bulbul:v3") is not v2
+
+
+@pytest.mark.asyncio
+async def test_matching_key_lookup_restores_skipped_connections():
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
+
+    v2 = await pool.get(timeout=10.0, key="bulbul:v2")
+    pool.put(v2)
+    v3 = await pool.get(timeout=10.0, key="bulbul:v3")
+    pool.put(v3)
+    pool._available = OrderedPopSet([v2, v3], [v3, v2])
+
+    assert await pool.get(timeout=10.0, key="bulbul:v2") is v2
+    assert pool._available == {v3}
+    assert await pool.get(timeout=10.0, key="bulbul:v3") is v3
+
+
+@pytest.mark.asyncio
+async def test_inflight_connection_uses_the_requested_snapshot_callback():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    attempts: list[str] = []
+
+    async def connect_current(timeout: float):
+        attempts.append("current")
+        return DummyConnection(len(attempts))
+
+    async def connect_snapshot(timeout: float):
+        attempts.append("bulbul:v2")
+        started.set()
+        await release.wait()
+        return DummyConnection(len(attempts))
+
+    pool = ConnectionPool(connect_cb=connect_current)
+    acquiring = asyncio.create_task(
+        pool.get(
+            timeout=10.0,
+            key="bulbul:v2",
+            connect_cb=connect_snapshot,
+        )
+    )
+    await started.wait()
+    pool.invalidate()
+    release.set()
+    await acquiring
+
+    assert attempts == ["bulbul:v2", "bulbul:v2"]
 
 
 @pytest.mark.asyncio
@@ -249,6 +324,42 @@ async def test_aclose_closes_retired_connections_never_returned():
     await pool.aclose()
 
     assert leaked in closed, "aclose() must close retired connections that were never returned."
+
+
+@pytest.mark.asyncio
+async def test_aclose_waits_for_an_inflight_get_without_reconnecting_after_shutdown():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    closed: list[DummyConnection] = []
+    counter = 0
+
+    async def slow_connect(timeout: float):
+        nonlocal counter
+        counter += 1
+        started.set()
+        await release.wait()
+        return DummyConnection(counter)
+
+    async def close_cb(conn: DummyConnection) -> None:
+        closed.append(conn)
+
+    pool = ConnectionPool(connect_cb=slow_connect, close_cb=close_cb)
+    acquiring = asyncio.create_task(pool.get(timeout=10.0))
+    await started.wait()
+
+    closing = asyncio.create_task(pool.aclose())
+    await asyncio.sleep(0)
+    assert not closing.done(), "Shutdown should wait for the in-flight handshake."
+
+    release.set()
+    conn = await acquiring
+    await closing
+
+    assert conn in closed
+    assert not pool._connections
+    assert not pool._available
+    with pytest.raises(RuntimeError, match="closed"):
+        await pool.get(timeout=10.0)
 
 
 @pytest.mark.asyncio
