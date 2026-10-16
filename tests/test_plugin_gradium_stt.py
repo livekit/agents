@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError
+from livekit.agents import APIConnectOptions, APIError, APIStatusError
 from livekit.agents.stt import SpeechEventType
 
 # hermetic: every test talks to a fake websocket, so this is a unit module
@@ -73,6 +73,7 @@ class FakeWebSocket:
         *,
         after_eos: list[Any] | None = None,
         close_code: int = 1000,
+        fail_send_on: str | None = None,
     ) -> None:
         import aiohttp
 
@@ -80,11 +81,17 @@ class FakeWebSocket:
         self._frames = list(frames)
         self._after_eos = [EOS, "close"] if after_eos is None else list(after_eos)
         self.close_code = close_code
+        self._fail_send_on = fail_send_on
         self.sent: list[dict[str, Any]] = []
         self._client_eos = asyncio.Event()
 
     async def send_str(self, data: str) -> None:
+        import aiohttp
+
         msg = json.loads(data)
+        if msg.get("type") == self._fail_send_on:
+            self._client_eos.set()
+            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
         self.sent.append(msg)
         if msg.get("type") == "end_of_stream":
             self._client_eos.set()
@@ -114,10 +121,16 @@ class FakeSession:
         return self.ws
 
 
-def _make_stt(frames: list[Any], *, after_eos: list[Any] | None = None, **kwargs: Any):
+def _make_stt(
+    frames: list[Any],
+    *,
+    after_eos: list[Any] | None = None,
+    fail_send_on: str | None = None,
+    **kwargs: Any,
+):
     from livekit.plugins.gradium import STT
 
-    ws = FakeWebSocket(frames, after_eos=after_eos)
+    ws = FakeWebSocket(frames, after_eos=after_eos, fail_send_on=fail_send_on)
     session = FakeSession(ws)
     stt = STT(api_key="test-key", http_session=session, **kwargs)  # type: ignore[arg-type]
     return stt, session, ws
@@ -273,3 +286,52 @@ async def test_error_frame_raises_api_error():
             await _collect_until(stream, lambda ev: False)
     finally:
         await stream.aclose()
+
+
+async def test_pending_text_is_finalized_when_the_server_closes_instead_of_replying():
+    """A close in place of the server's end_of_stream must not lose the buffered words."""
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), _text("world", 0.4)], after_eos=["close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
+
+
+async def test_server_ending_the_session_mid_input_finalizes_then_reconnects():
+    """The server's end_of_stream while audio still flows: keep the words, and raise so
+    the base class reconnects rather than the next audio write failing raw."""
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), EOS, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIStatusError, match="while input was still open") as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_final_end_of_stream_send_on_a_closed_socket_is_not_an_error():
+    stt, _, _ = _make_stt(
+        [READY, _text("hello", 0.1)], after_eos=["close"], fail_send_on="end_of_stream"
+    )
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)  # no exception
+    finally:
+        await stream.aclose()
+    finals = [
+        ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert finals == ["hello"]

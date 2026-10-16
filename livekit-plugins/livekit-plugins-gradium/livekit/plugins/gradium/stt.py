@@ -284,7 +284,11 @@ class SpeechStream(stt.SpeechStream):
             # Input ended: tell the server, then let recv_task drain the model's last
             # words until the server replies with its own end_of_stream.
             closing_ws = True
-            await ws.send_str(json.dumps({"type": "end_of_stream"}))
+            try:
+                await ws.send_str(json.dumps({"type": "end_of_stream"}))
+            except (aiohttp.ClientError, ConnectionError):
+                # the server closed first; recv_task reports what it got
+                return
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
@@ -317,7 +321,10 @@ class SpeechStream(stt.SpeechStream):
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
                 except asyncio.TimeoutError:
                     if closing_ws:
-                        break
+                        # the server did not answer the end_of_stream in time: keep
+                        # what the model already produced
+                        _finalize()
+                        return
                     continue
 
                 if msg.type in (
@@ -326,6 +333,8 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if closing_ws:
+                        # a close instead of the server's end_of_stream: same thing
+                        _finalize()
                         return
                     raise APIStatusError(
                         "Gradium connection closed unexpectedly",
@@ -350,7 +359,17 @@ class SpeechStream(stt.SpeechStream):
                     # The model has consumed all the audio: whatever is still buffered
                     # is the end of the last utterance.
                     _finalize()
-                    return
+                    if closing_ws:
+                        return
+                    # The server ended the session while audio is still coming (a
+                    # duration limit, for instance) and will close the socket; raise
+                    # so the base class reconnects instead of the next audio write
+                    # failing with a raw connection error.
+                    raise APIStatusError(
+                        "Gradium ended the session while input was still open",
+                        status_code=ws.close_code or -1,
+                        body=data,
+                    )
 
                 try:
                     if type_ == "text":
