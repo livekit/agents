@@ -1,4 +1,4 @@
-# Microsoft AI speech plugin for LiveKit Agents
+# Microsoft AI plugin for LiveKit Agents
 
 ## Service availability
 
@@ -30,6 +30,12 @@ deployable there, so transcription fails with `DeploymentNotFound`.
 
 Supported MAI-Transcribe models are `MAI-Transcribe-2` and `MAI-Transcribe-1.5`;
 `MAI-Transcribe-1` was deprecated on August 20, 2026.
+
+**Decisions** use
+[Microsoft-Decision-1](https://ai.azure.com/catalog/models/Microsoft-Decision-1)
+deployed in Microsoft Foundry, through the resource's System One endpoint
+(`POST <resource endpoint>/providers/microsoft/v1/systemone`). See
+[Decision model contract](#decision-model-contract).
 
 None of this establishes access in every resource or region, recognition
 accuracy across inputs/languages, every backend tail boundary, long-session
@@ -76,7 +82,11 @@ Obtain these values and the exact contract from your deployment owner.
 | `MICROSOFT_AI_TTS_MODEL` | `TTS(model=...)` (optional with a full voice ID) |
 | `MICROSOFT_AI_TTS_VOICE` | `TTS(voice=...)` |
 | `MICROSOFT_AI_TTS_SAMPLE_RATE` | `TTS(sample_rate=...)` |
-| `MICROSOFT_AI_ENV_FILE` | `STT(env_file=...)`, `TTS(env_file=...)` |
+| `MICROSOFT_AI_DECISION_URL` | `DecisionModel(url=...)` |
+| `MICROSOFT_AI_DECISION_API_KEY` | `DecisionModel(api_key=...)` |
+| `MICROSOFT_AI_DECISION_AUTH_HEADER` | `DecisionModel(auth_header=...)`: `api-key` or `Authorization` |
+| `MICROSOFT_AI_DECISION_MODEL` | `DecisionModel(model=...)` (Foundry deployment name) |
+| `MICROSOFT_AI_ENV_FILE` | `STT(env_file=...)`, `TTS(env_file=...)`, `DecisionModel(env_file=...)` |
 
 URLs are complete endpoints, including any required path and query string. For
 example, `wss://stt.example.invalid/v1/realtime?intent=transcription` is a **dummy**,
@@ -284,6 +294,39 @@ Client-side safeguards, not advertised provider limits, are configurable:
 `max_text_length=4096`, `max_audio_bytes=10485760`, and
 `request_timeout=30` seconds. HTTP errors and safety refusals remain errors.
 Only transient failures retry, with no audio emitted from incomplete attempts.
+
+## Decision model contract
+
+`microsoft_ai.DecisionModel` answers a batch of probability, choice, and score
+decisions about the same input in one request:
+
+```python
+from livekit.agents import llm
+from livekit.plugins import microsoft_ai
+
+model = microsoft_ai.DecisionModel()
+response = await model.evaluate(
+    input=chat_ctx,
+    decisions={
+        "handoff": llm.Probability("The caller requests a human."),
+        "intent": llm.Choice("Intent?", options={"booking": "Reservation", "other": "Other"}),
+    },
+)
+```
+
+Configure the full System One URL of your Foundry resource in
+`MICROSOFT_AI_DECISION_URL`, for example
+`https://<resource>.services.ai.azure.com/providers/microsoft/v1/systemone`, and
+the deployment name in `MICROSOFT_AI_DECISION_MODEL`. The resource key is sent
+as the raw `api-key` header by default; set `auth_header="Authorization"` to send
+an Entra ID token as `Authorization: Bearer ...`.
+
+The request body is `{"model", "state", "questions"}`: a conversation is sent as
+its transcript in `state`, and each decision as a named `noul`, `choice` or
+`score` question. An answer the model declines or that fails validation is
+reported in `DecisionResponse.errors` without dropping the rest of the batch.
+Non-2xx responses raise `APIStatusError`; 408, 429 and 5xx are retried according
+to `conn_options`.
 
 ## Examples and validation
 
