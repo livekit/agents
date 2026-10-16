@@ -128,14 +128,15 @@ class AvatarSession(BaseAvatarSession):
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._ensure_http_session().post(
-                    f"{self._api_url}/v1/session",
+                    f"{self._api_url}/v1/sessions",
                     headers={
                         "x-api-key": self._api_key,
                     },
                     json={
+                        "transport": "livekit",
                         "avatar_id": self._avatar_id,
-                        "livekit_url": livekit_url,
-                        "livekit_token": livekit_token,
+                        "url": livekit_url,
+                        "token": livekit_token,
                     },
                     timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
                 ) as response:
