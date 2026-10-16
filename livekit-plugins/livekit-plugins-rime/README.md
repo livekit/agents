@@ -26,18 +26,20 @@ import os
 from livekit.plugins import rime
 
 tts = rime.TTS(
-    websocket_url="wss://api.rime.ai/coda/ws",
+    websocket_url="wss://coda.api.rime.ai/ws",
+    model="coda",
     speaker="lyra",
     api_key=os.environ["RIME_API_KEY"],
 )
 ```
 
 Pass the active model WebSocket endpoint explicitly. The presence of `websocket_url` selects
-WebSocket v1 streaming. For a route such as `/coda/ws`, the plugin reads the model from the path
-segment before `/ws`. Do not also pass `model` for this type of route.
+WebSocket v1 streaming. Public model endpoints use port 443 and the `/ws` path.
+Pass `model="coda"` for `wss://coda.api.rime.ai/ws`, which serves Coda v2.
+Pass `model="mistv3"` for `wss://mist.api.rime.ai/ws`.
+The model name is not inferred from the hostname.
 
-Some dedicated Rime endpoints end with `/ws` and do not contain a model path segment. Pass
-`model` for these endpoints:
+Dedicated deployment endpoints also require `model` when the path is `/ws`:
 
 ```python
 tts = rime.TTS(
@@ -65,8 +67,9 @@ custom tokenizer must emit complete sentence units that are safe for Rime text n
 The plugin sends the resolved sample rate in every HTTP, WS3, and WebSocket v1 request so it
 matches the audio emitter's rate. Pass `sample_rate` to override the model default.
 
-The public WebSocket v1 endpoint currently supports Coda. The future Mist route will use
-`/mist/ws`, not `/mistv3/ws`.
+The old `api.rime.ai/<model>` routes are scheduled for retirement. For compatibility,
+the plugin still reads the model from a path such as `/coda/ws`; omit `model` for
+those routes. Use the model hosts above for new configurations.
 
 Select the Rime output format with `audio_format`. It defaults to `audio/pcm`. The adapter supports
 all canonical formats from the Rime interface:
@@ -87,7 +90,8 @@ set `sample_rate` explicitly:
 
 ```python
 tts = rime.TTS(
-    websocket_url="wss://api.rime.ai/coda/ws",
+    websocket_url="wss://coda.api.rime.ai/ws",
+    model="coda",
     audio_format="audio/pcmu",
     sample_rate=8000,
     api_key=os.environ["RIME_API_KEY"],

@@ -285,6 +285,83 @@ async def test_push_frame_is_not_rechunked():
     assert sum(ev.frame.duration for ev in events) == pytest.approx(0.22)
 
 
+async def _run_timed_emitter(
+    chunks: list[tuple[float, int]], *, push_frames: bool = False
+) -> list[tuple[float, tts.SynthesizedAudio]]:
+    dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
+    emitter = tts.AudioEmitter(label="timed-pcm", dst_ch=dst_ch)
+    emitter.initialize(
+        request_id="timed-pcm", sample_rate=SR, num_channels=NC, mime_type="audio/pcm"
+    )
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    events: list[tuple[float, tts.SynthesizedAudio]] = []
+
+    async def collect():
+        async for event in dst_ch:
+            events.append((loop.time() - start, event))
+
+    collector = asyncio.create_task(collect())
+    expected = bytearray()
+    try:
+        for at, size in chunks:
+            await asyncio.sleep(max(0.0, start + at - loop.time()))
+            pcm = bytes((len(expected) + i) % 251 + 1 for i in range(size))
+            expected.extend(pcm)
+            if push_frames:
+                emitter.push_frame(rtc.AudioFrame(pcm, SR, NC, size // (2 * NC)))
+            else:
+                emitter.push(pcm)
+        await asyncio.sleep(0.001)
+        emitter.end_input()
+        await emitter.join()
+    finally:
+        await emitter.aclose()
+        dst_ch.close()
+        await collector
+
+    assert b"".join(event.frame.data.tobytes() for _, event in events) == expected
+    assert sum(event.is_final for _, event in events) == 1
+    assert events[-1][1].is_final
+    return events
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("push_frames", [False, True], ids=["bytes", "frames"])
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param([(0.0, 11744), (0.163057, 9600), (0.3, 9600)], id="startup-163ms"),
+        pytest.param([(0.0, 11744), (0.199544, 9600), (0.3, 9600)], id="startup-200ms"),
+        pytest.param([(0.0, 1920), (0.03, 480), (0.045, 9600)], id="small-after-flush"),
+        pytest.param([(0.0, 480), (0.005, 480), (0.015, 9600)], id="10ms-startup"),
+        pytest.param([(0.0, 240), (0.004, 480), (0.01, 9600)], id="5ms-startup"),
+    ],
+)
+async def test_automatic_flush_prevents_playback_gaps(chunks, push_frames):
+    events = await _run_timed_emitter(chunks, push_frames=push_frames)
+
+    # Every schedule supplies enough PCM for continuous playback from the first push.
+    playback_end = 0.0
+    for at, event in events:
+        assert at <= playback_end + 1e-6, f"playback gap of {at - playback_end:.6f}s"
+        playback_end += event.frame.duration
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+@pytest.mark.virtual_time
+async def test_automatic_flush_keeps_batching_fast_input():
+    chunks = [(i * 0.005, 960) for i in range(50)]  # 20 ms of audio every 5 ms
+    events = await _run_timed_emitter(chunks)
+
+    # Repeated startup flushes must not reduce sustained input to tiny frames.
+    assert len(events) < len(chunks) // 2
+    assert max(event.frame.duration for _, event in events) >= 0.16
+
+
 @pytest.mark.asyncio
 @pytest.mark.no_concurrent
 @pytest.mark.virtual_time

@@ -18,6 +18,7 @@ from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, llm, utils
+from livekit.agents.llm._provider_format.utils import _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -84,7 +85,8 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
 
 
 # generate_reply() appends a "." user turn so Gemini sees a completed turn. These models
-# answer that placeholder with an empty turn instead, so they must not get it.
+# answer that placeholder with an empty turn instead, so they must not get it, and take
+# reply instructions as a user turn instead.
 MODELS_WITHOUT_REPLY_PLACEHOLDER: tuple[str, ...] = ("3.1", "3.8")
 
 
@@ -209,8 +211,6 @@ class _ResponseGeneration:
 
     _created_timestamp: float = field(default_factory=time.time)
     """The timestamp when the generation is created"""
-    _first_token_timestamp: float | None = None
-    """The timestamp when the first audio token is received"""
     _completed_timestamp: float | None = None
     """The timestamp when the generation is completed"""
     _done: bool = False
@@ -873,9 +873,16 @@ class RealtimeSession(llm.RealtimeSession):
             self._in_user_activity = False
 
         turns = []
+        placeholder = _needs_reply_placeholder(self._opts.model)
         if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        if _needs_reply_placeholder(self._opts.model):
+            if placeholder:
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            else:
+                # a trailing model turn is continued: these models speak their reasoning
+                # or stay silent. Unwrapped, they later quote it back as the user's words.
+                text = _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE.format(content=instructions)
+                turns.append(types.Content(parts=[types.Part(text=text)], role="user"))
+        if placeholder:
             turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
         self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
@@ -1417,8 +1424,6 @@ class RealtimeSession(llm.RealtimeSession):
                                 "Gemini sent audio after generation completed; dropping it"
                             )
                         continue
-                    if not current_gen._first_token_timestamp:
-                        current_gen._first_token_timestamp = time.time()
                     frame_data = part.inline_data.data
                     try:
                         if not isinstance(frame_data, bytes):
@@ -1608,11 +1613,6 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.warning("no active generation to report metrics for")
             return
 
-        ttft = (
-            current_gen._first_token_timestamp - current_gen._created_timestamp
-            if current_gen._first_token_timestamp
-            else -1
-        )
         duration = (
             current_gen._completed_timestamp or time.time()
         ) - current_gen._created_timestamp
@@ -1641,7 +1641,9 @@ class RealtimeSession(llm.RealtimeSession):
             request_id=current_gen.response_id,
             timestamp=current_gen._created_timestamp,
             duration=duration,
-            ttft=ttft,
+            # Gemini has no response-start event; generation creation can be triggered
+            # by an input transcript or by the first output packet.
+            ttft=-1,
             cancelled=False,
             input_tokens=usage_metadata.prompt_token_count or 0,
             output_tokens=usage_metadata.response_token_count or 0,

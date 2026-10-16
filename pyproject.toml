@@ -84,6 +84,7 @@ livekit-plugins-tavus = { workspace = true }
 livekit-plugins-telnyx = { workspace = true }
 livekit-plugins-trugen = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
+livekit-plugins-typesafe = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-vakyam = { workspace = true }
@@ -113,6 +114,7 @@ dev = [
     "scipy>=1.13.1",
     "tiktoken>=0.9.0",
     "pytest-xdist>=3.8.0",
+    "jsonschema>=4.25.0",
     "playwright>=1.58.0",
 ]
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
