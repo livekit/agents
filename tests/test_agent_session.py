@@ -32,6 +32,7 @@ from livekit.agents import (
     vad,
 )
 from livekit.agents.llm import (
+    FunctionCall,
     FunctionTool,
     FunctionToolCall,
     InputTranscriptionCompleted,
@@ -1534,6 +1535,86 @@ async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
         await session._closing_task
     finally:
         await _close_test_session(session)
+
+
+async def test_unrecoverable_errors_log_count(caplog: pytest.LogCaptureFixture) -> None:
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
+    )
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    try:
+        session._on_error(_unrecoverable_stt_error())
+        session._on_error(_unrecoverable_stt_error())
+        assert session._closing_task is not None
+        await session._closing_task
+    finally:
+        await _close_test_session(session)
+
+    warning = next(r for r in caplog.records if r.getMessage() == "unrecoverable model error")
+    assert warning.levelno == logging.WARNING
+    assert warning.error_type == "stt_error"
+    assert warning.source == "fake_stt"
+    assert warning.count == 1
+    assert warning.max_unrecoverable_errors == 1
+
+    closing = next(
+        r
+        for r in caplog.records
+        if r.getMessage() == "AgentSession is closing due to unrecoverable error"
+    )
+    assert closing.levelno == logging.ERROR
+    assert closing.count == 2
+
+
+async def test_session_close_logs_reason_at_info(caplog: pytest.LogCaptureFixture) -> None:
+    from livekit.agents.voice.events import CloseReason
+
+    caplog.set_level(logging.INFO, logger="livekit.agents")
+    async with AgentSession(vad=None, turn_handling={"turn_detection": None}) as session:
+        await session.start(MyAgent())
+        await session._aclose_impl(reason=CloseReason.ERROR, error=_unrecoverable_stt_error())
+
+    closed = next(r for r in caplog.records if r.getMessage() == "session closed")
+    assert closed.levelno == logging.INFO
+    assert closed.reason == "error"
+    assert closed.drain is False
+    assert closed.error_type == "stt_error"
+    assert closed.error_source == "fake_stt"
+
+
+def _unrecoverable_stt_error() -> STTError:
+    return STTError(
+        timestamp=time.time(),
+        label="fake_stt",
+        error=RuntimeError("stt unavailable"),
+        recoverable=False,
+    )
+
+
+def test_interrupted_handoff_logs_cancellation(caplog: pytest.LogCaptureFixture) -> None:
+    from livekit.agents.voice.generation import _interrupted_tool_output, make_tool_output
+
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+    fnc_call = FunctionCall(call_id="call_1", name="transfer", arguments="{}")
+    target = MyAgent()
+    out = make_tool_output(fnc_call=fnc_call, output=target, exception=None)
+
+    fnc_call_out = _interrupted_tool_output(out, speech_id="speech_1")
+
+    assert fnc_call_out.is_error
+    record = next(
+        r
+        for r in caplog.records
+        if r.getMessage() == "agent handoff cancelled: speech was interrupted"
+    )
+    assert record.function == "transfer"
+    assert record.call_id == "call_1"
+    assert record.speech_id == "speech_1"
+    assert record.target_agent == target.id
 
 
 async def test_reset_away_timer_restarts_the_full_timeout() -> None:
