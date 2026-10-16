@@ -243,6 +243,9 @@ class EventLoopMonitor:
         self._span_limiter = _RateLimiter(MAX_SPANS_PER_MINUTE)
         self._log_limiter = _RateLimiter(MAX_LOGS_PER_MINUTE)
         self._report_context: contextvars.Context | None = None
+        # OTel parent captured inside ``set_report_context`` (the ``job_entrypoint`` span).
+        # The Python context used to *run* reports is not itself an OTel parent.
+        self._report_span_context: otel_context.Context | None = None
 
         # tests and integrations may observe reports without going through OTel
         self._on_report: Callable[[BlockedReport], None] | None = None
@@ -260,6 +263,15 @@ class EventLoopMonitor:
         the heartbeat itself inherits the context of whoever started the monitor, which predates
         the job."""
         self._report_context = ctx
+        self._report_span_context = None
+        if ctx is not None:
+
+            def _capture_entrypoint_span() -> None:
+                span = trace.get_current_span()
+                if span.get_span_context().is_valid:
+                    self._report_span_context = trace.set_span_in_context(span)
+
+            ctx.run(_capture_entrypoint_span)
 
     def start(self) -> None:
         """Arm the heartbeat. Safe to call from any thread, before or after the loop runs."""
@@ -441,14 +453,14 @@ class EventLoopMonitor:
 
         if get_job_context(required=False) is None:
             return  # no job, no trace to belong to: a root span here would be a stray trace
-        # under the span the blocked task was in, else the session root, else the report
-        # context (job_entrypoint); the heartbeat's own context predates all of them
-        if report.parent_span_context is not None:
-            parent: otel_context.Context | None = trace.set_span_in_context(
-                trace.NonRecordingSpan(report.parent_span_context)
-            )
+        # blocked-task span, else session root, else job_entrypoint captured at set_report_context
+        parent: otel_context.Context | None
+        if report.parent_span_context is not None and report.parent_span_context.is_valid:
+            parent = trace.set_span_in_context(trace.NonRecordingSpan(report.parent_span_context))
         else:
             parent = session_context.session_root_context()
+            if parent is None:
+                parent = self._report_span_context
         span = tracer.start_span(
             SPAN_NAME, context=parent, start_time=start_ns, attributes=attributes
         )
