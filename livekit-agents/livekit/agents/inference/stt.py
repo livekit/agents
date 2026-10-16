@@ -319,6 +319,15 @@ _WORD_ALIGNED_MODELS = frozenset(
     }
 )
 
+_UTTERANCE_DURATION_MODELS = frozenset(
+    {
+        "soniox/stt-rt",
+        "soniox/stt-rt-v4",
+        "soniox/stt-rt-v5",
+        "speechmatics/linden-1",
+    }
+)
+
 
 def _aligned_transcript_for_model(
     model: NotGivenOr[STTModels | str],
@@ -1442,7 +1451,28 @@ class SpeechStream(stt.SpeechStream):
 
             if self._speaking:
                 self._speaking = False
-                end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                words = data.get("words") or []
+                end_alternatives = []
+                if words and words[-1].get("end", 0) > 0:
+                    end_alternatives = [
+                        replace(speech_data, end_time=self.start_time_offset + words[-1]["end"])
+                    ]
+                elif (
+                    data.get("duration", 0) > 0
+                    and self._opts.model in _UTTERANCE_DURATION_MODELS
+                    and (
+                        not is_given(self._opts.fallback)
+                        or all(
+                            item["model"] in _UTTERANCE_DURATION_MODELS
+                            for item in self._opts.fallback
+                        )
+                    )
+                ):
+                    end_alternatives = [speech_data]
+                end_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=end_alternatives,
+                )
                 self._event_ch.send_nowait(end_event)
                 self._on_end_of_speech()
         else:

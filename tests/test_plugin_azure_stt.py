@@ -9,6 +9,26 @@ from livekit.plugins.azure import stt as azure_stt
 pytestmark = pytest.mark.plugin("azure")
 
 
+@pytest.mark.parametrize("offset", [4_000_000, 0, -1])
+def test_azure_endpoint_uses_event_offset_before_final(offset: int) -> None:
+    events = []
+    stream = object.__new__(azure_stt.SpeechStream)
+    stream._speaking = True
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
+    stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
+    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+
+    stream._on_speech_end(SimpleNamespace(offset=offset))
+    stream._on_speech_end(SimpleNamespace(offset=offset))
+
+    assert len(events) == 1
+    assert events[0].type == stt.SpeechEventType.END_OF_SPEECH
+    if offset > 0:
+        assert events[0].alternatives[0].end_time == pytest.approx(7.4)
+    else:
+        assert events[0].alternatives == []
+
+
 def test_azure_recognized_emits_final_transcript(monkeypatch):
     events = []
     monkeypatch.setattr(

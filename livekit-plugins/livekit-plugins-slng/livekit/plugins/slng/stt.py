@@ -1111,8 +1111,10 @@ class SpeechStream(stt.SpeechStream):
                                 language=language,
                                 text=text,
                                 confidence=confidence,
-                                start_time=start_time,
-                                end_time=end_time,
+                                start_time=start_time + self.start_time_offset
+                                if end_time > 0
+                                else 0.0,
+                                end_time=end_time + self.start_time_offset if end_time > 0 else 0.0,
                             )
                         ],
                     )
@@ -1124,7 +1126,10 @@ class SpeechStream(stt.SpeechStream):
                     if is_final:
                         speech_started = False
                         self._event_ch.send_nowait(
-                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.END_OF_SPEECH,
+                                alternatives=event.alternatives if end_time > 0 else [],
+                            )
                         )
                         emit_recognition_usage()
                         recover_primary_if_ready()

@@ -58,6 +58,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.stt import SpeechData
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -453,6 +454,7 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._session = http_session
         self._speaking = False
+        self._final_alternatives: list[SpeechData] = []
         self._session_id = ""
         self._reconnect_event = asyncio.Event()
         self._audio_duration_collector = _PeriodicCollector(
@@ -744,12 +746,25 @@ class SpeechStream(stt.SpeechStream):
     def _start_speech(self) -> None:
         if not self._speaking:
             self._speaking = True
+            self._final_alternatives = []
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
-    def _end_speech(self) -> None:
+    def _end_speech(self, *, end_time: float = 0.0) -> None:
         if self._speaking:
             self._speaking = False
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            alternatives = self._final_alternatives
+            if end_time > 0:
+                alternatives = [
+                    stt.SpeechData(
+                        language=LanguageCode(self._opts.language),
+                        text="",
+                        end_time=end_time + self.start_time_offset,
+                    )
+                ]
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=alternatives)
+            )
+            self._final_alternatives = []
 
     def _process_stream_event(self, data: dict[str, Any]) -> None:
         session_id = data.get("session_id", "")
@@ -762,7 +777,7 @@ class SpeechStream(stt.SpeechStream):
             self._start_speech()
             return
         if msg_type == "speech_ended":
-            self._end_speech()
+            self._end_speech(end_time=data.get("timestamp", 0.0))
             return
 
         # The gateway duplicates the server's `transcript` into `transcription`.
@@ -782,6 +797,9 @@ class SpeechStream(stt.SpeechStream):
                 start_time_offset=self.start_time_offset,
                 diarize=self._opts.diarize,
             )
+            if is_final:
+                words = data.get("words") or []
+                self._final_alternatives = alts if words and words[-1].get("end", 0) > 0 else []
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=(
