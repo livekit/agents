@@ -822,3 +822,53 @@ async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
     assert ws.receives == 1
     assert stream._reconnect_event.is_set()
     assert any("No PONG received" in r.getMessage() for r in caplog.records)
+
+
+async def test_flush_asks_soniox_to_finalize_once():
+    from livekit import rtc
+    from livekit.plugins.soniox.stt import FINALIZE_MESSAGE
+
+    stream = _make_stream()
+    stream._ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    frame = rtc.AudioFrame(
+        b"\x00\x00" * 160, sample_rate=16000, num_channels=1, samples_per_channel=160
+    )
+
+    stream.push_frame(frame)
+    stream.flush()
+    stream.end_input()  # flushes again, with no new audio: no second finalize
+    await stream._prepare_audio_task()
+
+    queued = [stream.audio_queue.get_nowait() for _ in range(stream.audio_queue.qsize())]
+    assert queued == [frame.data.tobytes(), FINALIZE_MESSAGE]
+
+
+@pytest.mark.parametrize(
+    ("steps", "expected"),
+    [
+        pytest.param(["flush"], 0, id="flush with no audio"),
+        pytest.param(["frame", "flush", "flush"], 1, id="two flushes after one frame"),
+        pytest.param(["frame", "flush", "frame", "flush"], 2, id="two separate utterances"),
+        pytest.param(["frame", "flush"], 1, id="flush followed by end_input"),
+    ],
+)
+async def test_finalize_is_sent_once_per_stretch_of_audio(steps: list[str], expected: int):
+    from livekit import rtc
+    from livekit.plugins.soniox.stt import FINALIZE_MESSAGE
+
+    stream = _make_stream()
+    stream._ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    frame = rtc.AudioFrame(
+        b"\x00\x00" * 160, sample_rate=16000, num_channels=1, samples_per_channel=160
+    )
+
+    for step in steps:
+        if step == "frame":
+            stream.push_frame(frame)
+        else:
+            stream.flush()
+    stream.end_input()  # also flushes
+    await stream._prepare_audio_task()
+
+    queued = [stream.audio_queue.get_nowait() for _ in range(stream.audio_queue.qsize())]
+    assert queued.count(FINALIZE_MESSAGE) == expected
