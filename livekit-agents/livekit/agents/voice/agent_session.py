@@ -221,9 +221,16 @@ class SpeechSteeringOptions(TypedDict, total=False):
     context.
     """
 
-    disfluencies: bool
+    disfluencies: bool | str
     """Filler words such as "um" / "uh". On by default
-    (``DEFAULT_SPEECH_STEERING_OPTIONS``); set ``False`` to opt out."""
+    (``DEFAULT_SPEECH_STEERING_OPTIONS``); set ``False`` to opt out.
+
+    A string replaces the built-in English filler guideline verbatim, e.g. to
+    name language-appropriate fillers (``"Use natural Japanese fillers such as
+    えっと and あの, zero to two per turn."``); braces in it are kept literally.
+    As with ``False``, Fish Audio's English filler examples and guidance are
+    dropped; the shared marker preamble and base examples are unchanged. An
+    empty string adds no filler guideline at all."""
     nonverbal_sounds: bool | NonverbalOptions
     """Which non-verbal sounds the TTS may make. ``True`` (and omitting the
     key) keeps the provider's full vocabulary, ``False`` disables every sound,
