@@ -41,11 +41,9 @@ from ._utils import (
 
 CartesiaModels = Literal[
     "cartesia",
+    "cartesia/sonic-3.6",
     "cartesia/sonic-3.5",
     "cartesia/sonic-3",
-    "cartesia/sonic-2",
-    "cartesia/sonic-turbo",
-    "cartesia/sonic",
     "cartesia/sonic-3-latest",
     "cartesia/sonic-latest",
 ]
@@ -103,11 +101,11 @@ class FallbackModel(TypedDict):
     Extra fields are passed through to the provider.
 
     Example:
-        >>> FallbackModel(model="cartesia/sonic", voice="")
+        >>> FallbackModel(model="cartesia/sonic-3.6", voice="")
     """
 
     model: str
-    """Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda")."""
+    """Model name (e.g. "cartesia/sonic-3.6", "inworld/inworld-tts-1", "rime/coda")."""
 
     voice: str
     """Voice to use for the model."""
