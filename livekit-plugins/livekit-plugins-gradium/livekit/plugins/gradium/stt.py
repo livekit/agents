@@ -28,8 +28,11 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
+    APITimeoutError,
     LanguageCode,
     stt,
     utils,
@@ -42,13 +45,22 @@ from .log import logger
 
 STTEncoding = Literal["pcm_s16le"]
 
-# Define bytes per frame for different encoding types
-bytes_per_frame = {
-    "pcm_s16le": 2,
-}
-
-
 SUPPORTED_SAMPLE_RATE = 24000
+# Client-side ping interval. Without it a silently dropped socket (half-open TCP, no
+# FIN or RST) is never noticed: the receive loop polls forever and audio keeps going
+# into a dead socket. aiohttp closes the socket itself when a pong does not come back,
+# which the receive loop sees as an ERROR frame.
+WS_HEARTBEAT_S = 30.0
+
+
+def _api_error(msg_data: dict[str, Any]) -> APIError:
+    """Build the error for a `{"type": "error"}` frame.
+
+    The server sends it right before closing the socket, so the message is the only
+    place the actual failure reason (unsupported language, no credits, ...) shows up.
+    """
+    message = msg_data.get("message") or "unknown error"
+    return APIError(f"Gradium returned error: {message}", body=msg_data)
 
 
 @dataclass
@@ -58,7 +70,7 @@ class STTOptions:
     encoding: str = "pcm_s16le"
     temperature: float | None = None
     language: LanguageCode = LanguageCode("en")
-    vad_threshold: float = 0.6
+    vad_threshold: float = 0.9
     vad_bucket: int | None = 2
     # When set, we flush the stt state on the first time the VAD triggers
     # in order to recover the text currently being processed as soon as possible.
@@ -85,7 +97,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,  # only final transcripts
+                interim_results=True,
                 aligned_transcript=False,  # only chunk start times are available
                 offline_recognize=False,
             ),
@@ -189,9 +201,6 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
-    # Used to close websocket
-    _CLOSE_MSG: str = json.dumps({"terminate_session": True})
-
     def __init__(
         self,
         *,
@@ -210,15 +219,14 @@ class SpeechStream(stt.SpeechStream):
         self._model_endpoint = model_endpoint
         self._model_name = model_name
         self._session = http_session
-        self._speech_duration: float = 0
 
-        self._reconnect_event = asyncio.Event()
         self._ready_msg: dict[str, Any] | None = None
 
     @property
-    def delay_in_tokens(self) -> int:
+    def delay_in_frames(self) -> int:
+        """Steps the model lags behind the audio, from the server's ready message."""
         if self._ready_msg is not None:
-            return int(self._ready_msg.get("delay_in_tokens", 6))
+            return int(self._ready_msg.get("delay_in_frames", 6))
         return 6
 
     @property
@@ -232,20 +240,18 @@ class SpeechStream(stt.SpeechStream):
         *,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
+        # Nothing here changes the live session, so the stream keeps its socket:
+        # reconnecting would drop the utterance in progress.
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
-        self._reconnect_event.set()
-
     async def _run(self) -> None:
-        """
-        Run a single websocket connection to Gradium and make sure to reconnect
-        when something went wrong.
-        """
+        """Run one websocket session to Gradium; the base class retries on failure."""
 
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal closing_ws
             samples_per_buffer = 1920
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -254,34 +260,76 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(data.data.tobytes())
 
-                for frame in frames:
-                    if len(frame.data) % 2 != 0:
-                        logger.warning("Frame data size not aligned to int16 (multiple of 2)")
+                    for frame in frames:
+                        if len(frame.data) % 2 != 0:
+                            logger.warning("Frame data size not aligned to int16 (multiple of 2)")
 
-                    audio_data = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                    audio_msg = {
-                        "type": "audio",
-                        "audio": audio_data,
-                    }
-                    await ws.send_str(json.dumps(audio_msg))
+                        audio_data = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                        audio_msg = {
+                            "type": "audio",
+                            "audio": audio_data,
+                        }
+                        await ws.send_str(json.dumps(audio_msg))
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # a mid-write socket drop surfaces here as a raw connection error; raise
+                # it as a retryable API error so the base class reconnects
+                if closing_ws:
+                    return
+                raise APIConnectionError("Gradium connection closed unexpectedly") from e
+
+            # Input ended: tell the server, then let recv_task drain the model's last
+            # words until the server replies with its own end_of_stream.
+            closing_ws = True
+            try:
+                await ws.send_str(json.dumps({"type": "end_of_stream"}))
+            except (aiohttp.ClientError, ConnectionError):
+                # the server closed first; recv_task reports what it got
+                return
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             buffered_text: list[str] = []
             speaking = False
+            utterance_start = 0.0
             remaining_vad_steps: int | None = None
+
+            def _finalize() -> None:
+                nonlocal speaking, remaining_vad_steps, buffered_text
+                if not speaking:
+                    return
+                speaking = False
+                remaining_vad_steps = None
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        alternatives=[
+                            stt.SpeechData(
+                                text=" ".join(buffered_text),
+                                language=self._opts.language,
+                                start_time=utterance_start,
+                            )
+                        ],
+                    )
+                )
+                buffered_text = []
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
                 except asyncio.TimeoutError:
                     if closing_ws:
-                        break
+                        # the server did not answer the end_of_stream in time: keep
+                        # what the model already produced
+                        _finalize()
+                        return
                     continue
 
                 if msg.type in (
@@ -290,6 +338,8 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if closing_ws:
+                        # a close instead of the server's end_of_stream: same thing
+                        _finalize()
                         return
                     raise APIStatusError(
                         "Gradium connection closed unexpectedly",
@@ -297,28 +347,61 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws:
+                        _finalize()
+                        return
+                    # the heartbeat closes the socket when a ping goes unanswered, and
+                    # that surfaces here rather than as a close frame
+                    raise APIConnectionError("Gradium connection lost") from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.error("Unexpected Gradium message type: %s", msg.type)
+                    logger.warning("Unexpected Gradium message type: %s", msg.type)
                     continue
 
                 try:
                     data = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    logger.exception("Failed to decode message from Gradium")
+                    continue
 
-                    type_ = data.get("type", "")
+                type_ = data.get("type", "")
+                if type_ == "error":
+                    raise _api_error(data)
+                if type_ == "end_of_stream":
+                    # The model has consumed all the audio: whatever is still buffered
+                    # is the end of the last utterance.
+                    _finalize()
+                    if closing_ws:
+                        return
+                    # The server ended the session while audio is still coming (a
+                    # duration limit, for instance) and will close the socket; raise
+                    # so the base class reconnects instead of the next audio write
+                    # failing with a raw connection error.
+                    raise APIStatusError(
+                        "Gradium ended the session while input was still open",
+                        status_code=ws.close_code or -1,
+                        body=data,
+                    )
 
+                try:
                     if type_ == "text":
+                        text, start_s = data["text"], data["start_s"]
                         if speaking is False:
                             speaking = True
+                            utterance_start = start_s + self.start_time_offset
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                             self._event_ch.send_nowait(start_event)
-                        buffered_text.append(data["text"])
+                        buffered_text.append(text)
+                        # The agent treats an interim as the whole partial utterance (it
+                        # replaces the previous one), not as a delta.
                         event = stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                             alternatives=[
                                 stt.SpeechData(
-                                    text=data["text"],
+                                    text=" ".join(buffered_text),
                                     language=self._opts.language,
-                                    start_time=data["start_s"] + self.start_time_offset,
+                                    start_time=utterance_start,
                                 )
                             ],
                         )
@@ -327,42 +410,27 @@ class SpeechStream(stt.SpeechStream):
                     elif type_ == "step":
                         if not speaking:
                             continue
-                        if vad_bucket := self._opts.vad_bucket:
+                        if (vad_bucket := self._opts.vad_bucket) is not None:
                             positive_vad = (
                                 data["vad"][vad_bucket]["inactivity_prob"]
                                 > self._opts.vad_threshold
                             )
                             if positive_vad:
                                 if remaining_vad_steps is None:
-                                    remaining_vad_steps = self.delay_in_tokens
+                                    remaining_vad_steps = self.delay_in_frames
                                     if self._opts.vad_flush:
-                                        samples_per_channel = self.frame_size * self.delay_in_tokens
+                                        samples_per_channel = self.frame_size * self.delay_in_frames
                                         zeros = AudioFrame.create(
                                             sample_rate=self._opts.sample_rate,
                                             num_channels=1,
                                             samples_per_channel=samples_per_channel,
                                         )
-                                        await self._input_ch.send(zeros)
+                                        if not self._input_ch.closed:
+                                            await self._input_ch.send(zeros)
                                 else:
                                     remaining_vad_steps -= 1
                                     if remaining_vad_steps <= 0:
-                                        speaking = False
-                                        remaining_vad_steps = None
-                                        event = stt.SpeechEvent(
-                                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                            alternatives=[
-                                                stt.SpeechData(
-                                                    text=" ".join(buffered_text),
-                                                    language=self._opts.language,
-                                                )
-                                            ],
-                                        )
-                                        self._event_ch.send_nowait(event)
-
-                                        buffered_text = []
-                                        self._event_ch.send_nowait(
-                                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                                        )
+                                        _finalize()
                             else:
                                 remaining_vad_steps = None
 
@@ -377,43 +445,40 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("Failed to process message from Gradium")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
+        ws = await self._connect_ws()
+        try:
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
             try:
-                ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
-                try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(*tasks)
+        finally:
+            await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"x-api-key": self._api_key, "x-api-source": "livekit"}
 
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers)
+        # The shared aiohttp session has no connect timeout of its own, so bound the
+        # handshake here and map its failures to API errors the base class can retry.
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    self._model_endpoint, headers=headers, heartbeat=WS_HEARTBEAT_S
+                ),
+                self._conn_options.timeout,
+            )
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            # DNS, refused connection, TLS: transient, and not an APIError by itself
+            raise APIConnectionError() from e
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {
