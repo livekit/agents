@@ -23,6 +23,12 @@ Once called, no further interaction is possible with the user.
 Don't generate any other text or response when the tool is called.
 """
 
+# Bound both the wait for the tool-reply speech_created event and the wait for that
+# speech to finish. Guarding only the first await left a hang path: speech_created
+# fires, but await speech_handle never returns, finally never runs, and shutdown is
+# skipped (room/SIP stay up when delete_room=True). See #5096.
+TOOL_REPLY_TIMEOUT = 5.0
+
 
 class EndCallTool(Toolset):
     def __init__(
@@ -99,6 +105,7 @@ class EndCallTool(Toolset):
     async def _delayed_session_shutdown(self, ctx: RunContext) -> None:
         """Shutdown the session after the tool reply is played out"""
         speech_created_fut = asyncio.Future[SpeechHandle]()
+        speech_handle: SpeechHandle | None = None
 
         @ctx.session.once("speech_created")
         def _on_speech_created(ev: SpeechCreatedEvent) -> None:
@@ -106,13 +113,19 @@ class EndCallTool(Toolset):
                 speech_created_fut.set_result(ev.speech_handle)
 
         try:
-            speech_handle = await asyncio.wait_for(speech_created_fut, timeout=5.0)
-            await speech_handle
+            speech_handle = await asyncio.wait_for(speech_created_fut, timeout=TOOL_REPLY_TIMEOUT)
+            await asyncio.wait_for(speech_handle, timeout=TOOL_REPLY_TIMEOUT)
         except asyncio.TimeoutError:
             logger.warning("tool reply timed out, shutting down session")
+            # Default shutdown drains and can wait on the same unfinished reply.
+            # Force-interrupt and skip drain so room/SIP cleanup still runs (#5096).
+            if speech_handle is not None and not speech_handle.done():
+                speech_handle.interrupt(force=True)
+            ctx.session.shutdown(drain=False)
+        else:
+            ctx.session.shutdown()
         finally:
             ctx.session.off("speech_created", _on_speech_created)
-            ctx.session.shutdown()
 
     def _on_session_close(self, ev: CloseEvent) -> None:
         """Close the job process when AgentSession is closed"""
