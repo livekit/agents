@@ -33,3 +33,17 @@ from livekit.plugins import smallestai
 
 tts = smallestai.TTS(voice_id="emily")
 ```
+
+### LLM (Electron)
+
+Electron is an OpenAI-compatible chat-completions model: same wire format, streaming,
+tool calling, and JSON mode as the OpenAI Chat Completions API.
+
+```python
+from livekit.plugins import smallestai
+
+llm = smallestai.LLM(model="electron")
+
+# or the newer model
+llm = smallestai.LLM(model="electron-2.0")
+```
