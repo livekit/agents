@@ -22,6 +22,7 @@ from livekit.agents.inference.eot.base import (
     _BaseStreamingTurnDetectorStream,
 )
 from livekit.agents.inference.eot.languages import ThresholdOptions
+from livekit.agents.llm import ChatContext
 from livekit.agents.types import NOT_GIVEN
 
 pytestmark = pytest.mark.audio_eot
@@ -42,7 +43,7 @@ class _FakeTransport:
         assert self._stream is not None
         await self._stream._drain_audio_channel()
 
-    def run_inference(self, request_id: str) -> None:
+    def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None:
         self.events.append(("run_inference", request_id))
 
     def push_frame(self, frame: Any) -> None:

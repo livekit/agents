@@ -17,6 +17,7 @@ from livekit import rtc
 
 from ..._exceptions import APITimeoutError
 from ...language import LanguageCode
+from ...llm import ChatContext
 from ...log import logger
 from ...types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -50,7 +51,7 @@ class _StreamingTurnDetectionTransport(Protocol):
 
     async def run(self) -> None: ...
 
-    def run_inference(self, request_id: str) -> None: ...
+    def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None: ...
     def push_frame(self, frame: rtc.AudioFrame) -> None: ...
     def flush(self) -> None: ...
 
@@ -170,7 +171,7 @@ class _BaseStreamingTurnDetectorStream:
 
     # region: inference requests
 
-    def predict(self) -> asyncio.Future[TurnDetectionEvent]:
+    def predict(self, chat_ctx: ChatContext | None = None) -> asyncio.Future[TurnDetectionEvent]:
         """Start a new inference request and return its future."""
         if self._audio_ch.closed:
             fut: asyncio.Future[TurnDetectionEvent] = asyncio.get_running_loop().create_future()
@@ -184,7 +185,7 @@ class _BaseStreamingTurnDetectorStream:
             fallback_prefix="turn_request_",
         )
         self._request_fut = asyncio.get_running_loop().create_future()
-        self._transport.run_inference(self._request_id)
+        self._transport.run_inference(self._request_id, chat_ctx=chat_ctx)
         return self._request_fut
 
     def cancel_inference(self, *, timed_out: bool = False) -> None:
