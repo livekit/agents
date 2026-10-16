@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import Any, get_type_hints
 
+import mcp.types
 import pytest
+from mcp.shared.exceptions import MCPError
 
+from livekit.agents.llm import mcp as mcp_module
 from livekit.agents.llm.async_toolset import AsyncToolset
 from livekit.agents.llm.mcp import (
     MCPServer,
@@ -11,7 +16,7 @@ from livekit.agents.llm.mcp import (
     MCPToolset,
     _resolve_tool_options,
 )
-from livekit.agents.llm.tool_context import ToolFlag, is_raw_function_tool
+from livekit.agents.llm.tool_context import ToolError, ToolFlag, is_raw_function_tool
 from livekit.agents.llm.utils import is_context_type
 from livekit.agents.voice.tool_executor import has_cancellable_tool
 
@@ -322,3 +327,140 @@ async def test_a_cancelled_call_propagates() -> None:
         await call
 
     assert sent == []
+
+
+class _DyingSession:
+    """Stands in for ``ClientSession``: connects fine, then the transport is gone.
+
+    ``call_tool`` on tool ``"slow"`` waits for ``release`` before failing, so a test can keep a
+    call in flight while another one discovers the death.
+    """
+
+    release: Any = None
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> _DyingSession:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        pass
+
+    async def initialize(self) -> None:
+        pass
+
+    async def call_tool(self, name: str, arguments: Any, **kwargs: Any) -> Any:
+        if name == "slow":
+            await type(self).release.wait()
+        raise MCPError(mcp.types.CONNECTION_CLOSED, "Connection closed")
+
+    async def list_tools(self) -> Any:
+        raise MCPError(mcp.types.CONNECTION_CLOSED, "Connection closed")
+
+
+class _ConnectableServer(MCPServer):
+    def __init__(self) -> None:
+        super().__init__(client_session_timeout_seconds=5)
+
+    @contextlib.asynccontextmanager
+    async def client_streams(self):  # type: ignore[no-untyped-def,override]
+        yield (None, None)
+
+
+def _tool_named(server: MCPServer, name: str):  # type: ignore[no-untyped-def]
+    return server._make_function_tool(
+        name=name,
+        description="x",
+        input_schema={"type": "object", "properties": {}},
+        meta=None,
+        options=_resolve_tool_options(MCPToolOptions()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dead_connection_fails_the_call_clearly_and_is_no_longer_initialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the server process dies, nothing woke the parked connection task, so ``initialized``
+    stayed True and every later call raised the SDK's bare ``MCPError``."""
+    monkeypatch.setattr(mcp_module, "ClientSession", _DyingSession)
+    server = _ConnectableServer()
+    await server.initialize()
+    assert server.initialized
+    client_task = server._client_task
+    assert client_task is not None
+
+    with pytest.raises(ToolError, match="internal service is unavailable"):
+        await _tool_named(server, "echo")({})
+
+    assert not server.initialized
+    await asyncio.wait_for(client_task, timeout=5)  # the connection task unwound
+
+    # later calls keep failing the same clear way
+    with pytest.raises(ToolError, match="internal service is unavailable"):
+        await _tool_named(server, "echo")({})
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_error_that_is_not_a_closed_connection_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _MethodNotFoundSession(_DyingSession):
+        async def call_tool(self, name: str, arguments: Any, **kwargs: Any) -> Any:
+            raise MCPError(mcp.types.METHOD_NOT_FOUND, "Method not found")
+
+    monkeypatch.setattr(mcp_module, "ClientSession", _MethodNotFoundSession)
+    server = _ConnectableServer()
+    await server.initialize()
+
+    with pytest.raises(MCPError, match="Method not found"):
+        await _tool_named(server, "echo")({})
+
+    assert server.initialized
+    await server.aclose()
+
+
+@pytest.mark.asyncio
+async def test_listing_tools_on_a_dead_connection_is_no_longer_initialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mcp_module, "ClientSession", _DyingSession)
+    server = _ConnectableServer()
+    await server.initialize()
+
+    with pytest.raises(RuntimeError, match="internal service is unavailable"):
+        await server.list_tools()
+
+    assert not server.initialized
+
+
+@pytest.mark.asyncio
+async def test_a_call_failing_after_the_connection_was_torn_down_does_not_break_the_next_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two calls are in flight when the server dies. The first to notice tears the connection
+    down; the second fails later. It must not leave ``_closing_ev`` set, or the next
+    ``initialize()`` would close the connection it just opened."""
+    _DyingSession.release = asyncio.Event()
+    monkeypatch.setattr(mcp_module, "ClientSession", _DyingSession)
+    server = _ConnectableServer()
+    await server.initialize()
+
+    in_flight = asyncio.create_task(_tool_named(server, "slow")({}))
+    await asyncio.sleep(0)
+
+    with pytest.raises(ToolError):
+        await _tool_named(server, "echo")({})
+    first_task = server._client_task
+    assert first_task is not None
+    await asyncio.wait_for(first_task, timeout=5)
+
+    _DyingSession.release.set()
+    with pytest.raises(ToolError):
+        await in_flight
+
+    await server.initialize()
+    await asyncio.sleep(0.1)
+    assert server.initialized
+    await server.aclose()
