@@ -396,9 +396,6 @@ class _DuplexRealtimeSession(RealtimeSession):
         # the gate is the one boundary: a burst is open exactly while the model is audibly
         # producing output, its own pauses inside an utterance included
         if self._gate.update(f.frame):
-            if self._burst is None and self._stamped:
-                # before the burst's generation, so these words keep their place ahead of it
-                self._release_unvoiced(self._audio_ms)
             burst = self._burst = self._burst or self._open_burst()
             if not burst.audio_ch.closed:
                 burst.audio_ch.send_nowait(f.frame)
@@ -469,34 +466,24 @@ class _DuplexRealtimeSession(RealtimeSession):
                 self._chat_ctx.insert(message)
         self._waiting_since_ms = self._audio_ms
 
-    def _release_unvoiced(self, onset_ms: int) -> None:
-        # stamped audio and spans share the model's clock, so words due before the sound that
-        # opens a burst are for sound the provider never sent (the model was cut): they go out
-        # as text on their own rather than become that burst's first words and anchor. Their
-        # start decides, since a cut span is the plan for words never said and can run past
-        # the moment the model speaks again
-        unvoiced = 0
-        for fragment in self._fragments:
-            if fragment.start_ms is None or fragment.start_ms + _ATTACH_LEAD_MS >= onset_ms:
-                break
-            unvoiced += 1
-        if unvoiced:
-            burst = self._open_burst(kind="text")
-            for _ in range(unvoiced):
-                burst.attach(self._fragments.popleft())
-            if (message := burst.close()) is not None:
-                self._chat_ctx.insert(message)
-
     def _attach_fragments(self, burst: _Burst) -> None:
         # the first fragment anchors the span clock to the audio clock; a later one is due when
         # the audio reaches its span, and one this burst never reaches waits for the next
-        if burst.anchor_ms is None and self._stamped:
-            # words for sound never sent can also arrive after the burst opened
-            self._release_unvoiced(burst.audio_start_ms)
         while self._fragments:
             fragment = self._fragments[0]
             if fragment.start_ms is not None:
                 if burst.anchor_ms is None:
+                    if self._stamped and fragment.start_ms + _ATTACH_LEAD_MS < burst.audio_start_ms:
+                        # stamped audio puts both clocks on the model's, so words due before this
+                        # burst's first sound are for audio never sent (the model was cut): nobody
+                        # heard them, so they are dropped, never this burst's anchor. The start
+                        # decides, since a cut span can run past the moment the model speaks again
+                        self._fragments.popleft()
+                        logger.debug(
+                            "dropping duplex transcript for audio never sent",
+                            extra={"lk.pii.transcript": fragment.text},
+                        )
+                        continue
                     burst.anchor_ms = fragment.start_ms - burst.audio_start_ms
                     self._last_burst = burst
                 if fragment.start_ms - burst.anchor_ms > burst.heard_ms + _ATTACH_LEAD_MS:
