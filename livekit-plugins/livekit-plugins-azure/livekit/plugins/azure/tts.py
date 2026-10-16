@@ -19,6 +19,8 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+import aiohttp
+
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit.agents import (
     APIConnectionError,
@@ -36,8 +38,6 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-
-from .log import logger
 
 SUPPORTED_OUTPUT_FORMATS = {
     8000: speechsdk.SpeechSynthesisOutputFormat.Raw8Khz16BitMonoPcm,
@@ -152,7 +152,7 @@ class TTS(tts.TTS):
         speech_host: str | None = None,
         deployment_id: str | None = None,
         speech_auth_token: str | None = None,
-        http_session: Any | None = None,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
         Create a new instance of Azure TTS, backed by the Azure Speech SDK.
@@ -176,7 +176,8 @@ class TTS(tts.TTS):
             speech_host: Speech container host, e.g. ``ws://localhost:5000``.
             deployment_id: Custom voice deployment ID.
             speech_auth_token: Microsoft Entra authorization token.
-            http_session: Unused, the Speech SDK manages its own connections.
+            http_session: Accepted for backward compatibility; the Speech SDK manages its
+                own connections, so it is not used.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -187,9 +188,6 @@ class TTS(tts.TTS):
             raise ValueError(
                 f"Unsupported sample rate {sample_rate}. Supported: {list(SUPPORTED_OUTPUT_FORMATS)}"  # noqa: E501
             )
-
-        if http_session is not None:
-            logger.warning("http_session is ignored, Azure TTS uses the Speech SDK's connections")
 
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
