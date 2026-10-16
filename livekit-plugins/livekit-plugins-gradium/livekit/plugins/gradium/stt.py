@@ -220,7 +220,6 @@ class SpeechStream(stt.SpeechStream):
         self._model_name = model_name
         self._session = http_session
 
-        self._reconnect_event = asyncio.Event()
         self._ready_msg: dict[str, Any] | None = None
 
     @property
@@ -241,16 +240,13 @@ class SpeechStream(stt.SpeechStream):
         *,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
+        # Nothing here changes the live session, so the stream keeps its socket:
+        # reconnecting would drop the utterance in progress.
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
-        self._reconnect_event.set()
-
     async def _run(self) -> None:
-        """
-        Run a single websocket connection to Gradium and make sure to reconnect
-        when something went wrong.
-        """
+        """Run one websocket session to Gradium; the base class retries on failure."""
 
         closing_ws = False
 
@@ -449,38 +445,18 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("Failed to process message from Gradium")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
+        ws = await self._connect_ws()
+        try:
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
             try:
-                ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
-                try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(*tasks)
+        finally:
+            await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"x-api-key": self._api_key, "x-api-source": "livekit"}
