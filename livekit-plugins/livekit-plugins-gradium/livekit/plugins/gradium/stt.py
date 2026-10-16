@@ -38,6 +38,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.rtc import AudioFrame
 
+from .api import ws_headers
 from .log import logger
 
 STTEncoding = Literal["pcm_s16le"]
@@ -411,9 +412,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        headers = {"x-api-key": self._api_key, "x-api-source": "livekit"}
-
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers)
+        ws = await self._session.ws_connect(self._model_endpoint, headers=ws_headers(self._api_key))
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {
