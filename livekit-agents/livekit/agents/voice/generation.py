@@ -1380,17 +1380,25 @@ def update_expressive_instructions(chat_ctx: ChatContext, *, text: str) -> None:
     replaces the previous guide instead of accumulating one copy per turn, and a
     turn that runs with expressive off can remove it again
     (:func:`remove_expressive_instructions`).
+
+    The guide is placed right after the instructions message (and its dynamic
+    section, if any) rather than at the tail of the conversation, so it stays part
+    of the stable prompt prefix and doesn't invalidate the provider's prompt cache
+    each turn.
     """
-    idx = chat_ctx.index_by_id(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)
-    if idx is not None:
-        chat_ctx.items[idx] = llm.ChatMessage(
-            id=EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
-            role="system",
-            content=[text],
-            created_at=chat_ctx.items[idx].created_at,
-        )
-    else:
-        chat_ctx.add_message(role="system", content=text, id=EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)
+    msg = llm.ChatMessage(id=EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, role="system", content=[text])
+    if (old := chat_ctx.get_by_id(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)) is not None:
+        msg.created_at = old.created_at
+    remove_expressive_instructions(chat_ctx)
+
+    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    if idx is None:
+        chat_ctx.items.insert(0, msg)
+        return
+    idx += 1
+    if idx < len(chat_ctx.items) and chat_ctx.items[idx].id == DYNAMIC_INSTRUCTIONS_MESSAGE_ID:
+        idx += 1
+    chat_ctx.items.insert(idx, msg)
 
 
 def remove_expressive_instructions(chat_ctx: ChatContext) -> None:
