@@ -196,7 +196,7 @@ class TTS(tts.TTS):
                 the language of ``voice`` (see ``VOICE_LANGUAGES``), else English; with
                 ``voice_id``, to the language of the voice's reference clip.
             model_id: The model to synthesize with: a dated name such as
-                ``"assemblyai-tts-mul-4b-2026-10-07"`` or an alias such as ``"latest"``.
+                ``"assemblyai-tts-mul-4brl-2026-10-12"`` or an alias such as ``"latest"``.
                 Defaults to the default model of the language.
             sample_rate: Output sample rate in Hz, one of 8000, 16000, 22050, 24000,
                 44100 or 48000. Defaults to 24000, the service's native rate.

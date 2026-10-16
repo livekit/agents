@@ -50,8 +50,8 @@ can only be used on a host in the data zone it was created in:
 
 ```python
 assemblyai.TTS(
-    voice_id="01a142a4-66f3-7315-b15f-668b6edfb595",
-    model_id="assemblyai-tts-mul-4b-2026-10-07",  # optional: a dated model name or an alias
+    voice_id="01a0da61-138c-77c7-ab98-421431ed74e8",
+    model_id="assemblyai-tts-mul-4brl-2026-10-12",  # optional: a dated model name or an alias
     base_url="wss://streaming-tts.us.assemblyai.com",
 )
 ```
