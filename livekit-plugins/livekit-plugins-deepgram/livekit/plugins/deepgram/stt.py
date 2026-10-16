@@ -367,6 +367,7 @@ class STT(stt.STT):
             self._opts.endpointing_ms = endpointing_ms
         if is_given(enable_diarization):
             self._opts.enable_diarization = enable_diarization
+            self._capabilities.diarization = enable_diarization
         if is_given(filler_words):
             self._opts.filler_words = filler_words
         if is_given(keywords):

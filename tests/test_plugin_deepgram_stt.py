@@ -428,6 +428,24 @@ async def test_stt_update_options_reaches_open_streams_diarization_and_tags():
         await instance.aclose()
 
 
+async def test_update_options_keeps_diarization_capability_in_sync():
+    from livekit.agents.stt import MultiSpeakerAdapter
+    from livekit.plugins.deepgram import STT
+
+    instance = STT(api_key="test-key")
+    try:
+        assert not instance.capabilities.diarization
+
+        instance.update_options(enable_diarization=True)
+        assert instance.capabilities.diarization
+        MultiSpeakerAdapter(stt=instance)
+
+        instance.update_options(enable_diarization=False)
+        assert not instance.capabilities.diarization
+    finally:
+        await instance.aclose()
+
+
 class _DeadSocket:
     """A socket that has silently gone away: writes fail, the read side never notices.
 
