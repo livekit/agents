@@ -259,3 +259,135 @@ async def test_messages_mode_no_custom_output():
     chunks = await collect_chunks(stream)
 
     assert chunks == []
+
+
+# --- Tests: checkpointed graphs ---
+
+
+@pytest.mark.asyncio
+async def test_checkpointed_graph_does_not_duplicate_prior_replies():
+    """A graph with a checkpointer already holds earlier turns, so only the new turn is sent."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    fake_llm = GenericFakeChatModel(
+        messages=iter(AIMessage(content=f"reply {n}", id=f"graph-reply-{n}") for n in (1, 2))
+    )
+
+    def chat_node(state: MessagesState):
+        return {"messages": [fake_llm.invoke(state["messages"])]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("chat", chat_node)
+    builder.add_edge(START, "chat")
+    builder.add_edge("chat", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "t1"}}
+    adapter = LLMAdapter(graph, config=config)
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="system", content="Be brief.")
+    chat_ctx.add_message(role="user", content="first")
+    await collect_chunks(adapter.chat(chat_ctx=chat_ctx))
+
+    # AgentSession records its own copy of the reply, with a different id
+    chat_ctx.add_message(role="assistant", content="reply 1")
+    chat_ctx.add_message(role="user", content="second")
+    await collect_chunks(adapter.chat(chat_ctx=chat_ctx))
+
+    state = await graph.aget_state(config)
+    assert [m.content for m in state.values["messages"]] == [
+        "Be brief.",
+        "first",
+        "reply 1",
+        "second",
+        "reply 2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_checkpointed_graph_receives_replies_it_did_not_produce():
+    """session.say() and interrupted replies: send the former, not a prefix of a stored reply."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    seen: list[list[str]] = []
+
+    def chat_node(state: MessagesState):
+        seen.append([m.content for m in state["messages"]])
+        return {"messages": [AIMessage(content="a long reply", id=f"graph-reply-{len(seen)}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("chat", chat_node)
+    builder.add_edge(START, "chat")
+    builder.add_edge("chat", END)
+    adapter = LLMAdapter(
+        builder.compile(checkpointer=InMemorySaver()),
+        config={"configurable": {"thread_id": "t1"}},
+    )
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="assistant", content="Welcome!")
+    chat_ctx.add_message(role="user", content="first")
+    await collect_chunks(adapter.chat(chat_ctx=chat_ctx))
+
+    chat_ctx.add_message(role="assistant", content="a long")  # interrupted playback
+    chat_ctx.add_message(role="user", content="second")
+    await collect_chunks(adapter.chat(chat_ctx=chat_ctx))
+
+    assert seen == [
+        ["Welcome!", "first"],
+        ["Welcome!", "first", "a long reply", "second"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_checkpointed_graph_receives_say_that_prefixes_a_stored_reply():
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    seen: list[list[str]] = []
+
+    def chat_node(state: MessagesState):
+        seen.append([m.content for m in state["messages"]])
+        return {"messages": [AIMessage(content="Hello there", id=f"graph-reply-{len(seen)}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("chat", chat_node)
+    builder.add_edge(START, "chat")
+    builder.add_edge("chat", END)
+    adapter = LLMAdapter(
+        builder.compile(checkpointer=InMemorySaver()),
+        config={"configurable": {"thread_id": "t1"}},
+    )
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="first")
+    await collect_chunks(adapter.chat(chat_ctx=chat_ctx))
+
+    chat_ctx.add_message(role="assistant", content="Hello there")  # copy of the graph reply
+    chat_ctx.add_message(role="assistant", content="Hello")  # session.say()
+    chat_ctx.add_message(role="user", content="second")
+    await collect_chunks(adapter.chat(chat_ctx=chat_ctx))
+
+    assert seen[1] == ["first", "Hello there", "Hello", "second"]
+
+
+@pytest.mark.asyncio
+async def test_graph_without_checkpointer_still_receives_prior_replies():
+    seen: list[list[str]] = []
+
+    def chat_node(state: MessagesState):
+        seen.append([m.content for m in state["messages"]])
+        return {"messages": [AIMessage(content="ok")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("chat", chat_node)
+    builder.add_edge(START, "chat")
+    builder.add_edge("chat", END)
+    adapter = LLMAdapter(builder.compile())
+
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="first")
+    chat_ctx.add_message(role="assistant", content="reply 1")
+    chat_ctx.add_message(role="user", content="second")
+    await collect_chunks(adapter.chat(chat_ctx=chat_ctx))
+
+    assert seen == [["first", "reply 1", "second"]]
