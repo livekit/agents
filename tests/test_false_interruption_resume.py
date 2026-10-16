@@ -22,6 +22,8 @@ from livekit.agents.voice.audio_recognition import (
     _EndOfTurnInfo,
     _EndOfTurnMetrics,
 )
+from livekit.agents.voice.endpointing import DynamicEndpointing
+from livekit.agents.voice.speech_handle import SpeechHandle
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
     _StreamingTurnDetector,
@@ -29,6 +31,7 @@ from livekit.agents.voice.turn import (
 )
 
 from .fake_io import FakeAudioOutput
+from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 from .fake_vad import FakeVAD
 
@@ -352,7 +355,9 @@ async def test_interruption_event_does_not_end_agent_again_after_pausing(
     assert activity._paused_speech is not None
     await session.aclose()
 
-    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(ended_at=ANY)
+    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(
+        ended_at=ANY, paused=True
+    )
 
 
 async def test_handing_over_a_paused_speech_does_not_end_the_agent_turn(
@@ -371,6 +376,219 @@ async def test_handing_over_a_paused_speech_does_not_end_the_agent_turn(
 
     handle.interrupt.assert_not_called()
     activity._audio_recognition._on_end_of_agent_speech.assert_not_called()
+
+
+@pytest.mark.parametrize("adaptive", [False, True])
+@pytest.mark.parametrize("resolve_before_eos", [False, True])
+@pytest.mark.parametrize(
+    "outcome", ["interrupted", "externally_interrupted", "resumed", "closed", "finished"]
+)
+async def test_dynamic_endpointing_waits_for_pause_resolution(
+    adaptive: bool, resolve_before_eos: bool, outcome: str
+) -> None:
+    session = AgentSession(
+        llm=FakeLLM(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        aec_warmup_duration=0,
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            endpointing={"mode": "dynamic", "min_delay": 0.3, "max_delay": 1.4, "alpha": 0.5},
+            interruption={"mode": "vad"},
+        ),
+    )
+    session.output.audio = FakeAudioOutput(can_pause=True)
+    activity = AgentActivity(Agent(instructions="test"), session)
+    handle = SpeechHandle.create()
+    activity._current_speech = handle
+    # Inject the detector's result through the real activity hook without provider I/O.
+    activity._interruption_detection_enabled = adaptive
+    endpointing = DynamicEndpointing(min_delay=0.3, max_delay=1.4, alpha=0.5)
+    recognition = AudioRecognition(
+        session,
+        hooks=activity,
+        endpointing=endpointing,
+        stt=None,
+        vad=session.vad,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    activity._audio_recognition = recognition
+
+    async def resolve() -> None:
+        if outcome == "interrupted":
+            await activity._cancel_speech_pause()
+            await activity._cancel_speech_pause()
+            assert handle.interrupted
+        elif outcome == "externally_interrupted":
+            handle.interrupt(force=True)
+            await activity._cancel_speech_pause()
+        elif outcome == "resumed":
+            if resolve_before_eos:
+                activity._disallow_interruptions(handle)
+            else:
+                activity._start_false_interruption_timer(0)
+                await asyncio.sleep(0.01)
+            assert recognition._agent_speaking
+        elif outcome == "finished":
+            handle._mark_done()
+            activity._start_false_interruption_timer(0)
+            await asyncio.sleep(0.01)
+        else:
+            await activity._cancel_speech_pause(interrupt=False)
+        assert activity._paused_speech is None
+
+    try:
+        now = time.time()
+        endpointing.on_start_of_speech(now - 2.0)
+        endpointing.on_end_of_speech(now - 1.0)
+        session._update_agent_state("speaking")
+        recognition._on_start_of_agent_speech(now - 0.7)
+        activity.on_start_of_speech(None, speech_start_time=now - 0.43)
+        recognition._speaking = True  # VAD sets this after dispatching its onset hook.
+
+        if adaptive:
+            activity.on_overlap_speech(
+                OverlappingSpeechEvent(
+                    is_interruption=True, overlap_started_at=now - 0.43, detected_at=now
+                )
+            )
+        else:
+            activity._interrupt_by_audio_activity()
+
+        # Repeated audio activity must not replace or consume the original candidate.
+        activity._interrupt_by_audio_activity()
+        assert activity._paused_speech is not None
+        assert not recognition._agent_speaking
+        assert not endpointing.overlapping
+        assert endpointing.min_delay == pytest.approx(0.3)
+
+        if resolve_before_eos:
+            await resolve()
+        activity.on_end_of_speech(None)
+        recognition._speaking = False
+        if not resolve_before_eos:
+            assert endpointing.min_delay == pytest.approx(0.3)
+            await resolve()
+
+        expected = 0.435 if outcome == "interrupted" else 0.3
+        assert endpointing.min_delay == pytest.approx(expected)
+        recognition._on_pause_resolved(interrupted=True)
+        assert endpointing.min_delay == pytest.approx(expected)
+    finally:
+        activity._cancel_false_interruption_timer()
+        await recognition._aclose()
+        await session.aclose()
+
+
+@pytest.mark.parametrize("completion", ["before_eos", "after_eos", "after_timeout"])
+@pytest.mark.parametrize(
+    ("outcome", "force"),
+    [
+        ("session_interrupt", False),
+        ("session_interrupt", True),
+        ("handle_interrupt", False),
+        ("handle_interrupt", True),
+        ("completed", False),
+    ],
+)
+async def test_scheduler_resolves_dynamic_endpointing_pause(
+    monkeypatch: pytest.MonkeyPatch, completion: str, outcome: str, force: bool
+) -> None:
+    session = AgentSession(
+        llm=FakeLLM(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        aec_warmup_duration=0,
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            endpointing={"mode": "dynamic", "min_delay": 0.3, "max_delay": 1.4, "alpha": 0.5},
+            interruption={"mode": "vad", "false_interruption_timeout": 0.01},
+        ),
+    )
+    session.output.audio = FakeAudioOutput(can_pause=True)
+    activity = AgentActivity(Agent(instructions="test"), session)
+    session._activity = activity
+    endpointing = DynamicEndpointing(min_delay=0.3, max_delay=1.4, alpha=0.5)
+    recognition = AudioRecognition(
+        session,
+        hooks=activity,
+        endpointing=endpointing,
+        stt=None,
+        vad=session.vad,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    activity._audio_recognition = recognition
+    activity._scheduling_paused = False
+    activity._scheduling_atask = asyncio.create_task(activity._scheduling_task())
+    handle = SpeechHandle.create()
+    activity._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+    await handle._wait_for_authorization()
+
+    try:
+        now = time.time()
+        endpointing.on_start_of_speech(now - 2)
+        endpointing.on_end_of_speech(now - 1)
+        session._update_agent_state("speaking")
+        recognition._on_start_of_agent_speech(now - 0.7)
+        activity.on_start_of_speech(None, speech_start_time=now - 0.43)
+        recognition._speaking = True
+        activity._interrupt_by_audio_activity()
+        assert activity._paused_speech is not None
+
+        def end_user_speech(ended_at: float) -> None:
+            with monkeypatch.context() as patch:
+                patch.setattr(time, "time", lambda: ended_at)
+                activity.on_end_of_speech(None)
+            recognition._speaking = False
+
+        if completion != "before_eos":
+            end_user_speech(now + 0.2)
+
+        if force:
+            handle.allow_interruptions = False
+        interruption = None
+        if outcome == "session_interrupt":
+            interruption = session.interrupt(force=force)
+        elif outcome == "handle_interrupt":
+            handle.interrupt(force=force)
+
+        if completion == "after_timeout":
+            await asyncio.sleep(0.02)
+            assert activity._paused_speech is None
+            assert endpointing.min_delay == pytest.approx(0.3)
+
+        # Acknowledge generation completion through the real scheduler.
+        activity._scheduling_paused = True
+        handle._mark_done()
+        activity._on_pipeline_reply_done(MagicMock())
+        await activity._scheduling_atask
+        if interruption is not None:
+            await interruption
+
+        assert activity._paused_speech is None
+        assert activity._false_interruption_timer is None
+        if completion == "before_eos":
+            end_user_speech(now + 0.2)
+
+        assert endpointing.min_delay == pytest.approx(0.3)
+
+        activity.on_start_of_speech(None, speech_start_time=now + 0.7)
+        recognition._speaking = True
+        end_user_speech(now + 1)
+        assert endpointing.min_delay == pytest.approx(0.3)
+        previous_delay = endpointing.min_delay
+        activity.on_start_of_speech(None, speech_start_time=now + 1.5)
+        recognition._speaking = True
+        end_user_speech(now + 2)
+
+        assert endpointing.min_delay == pytest.approx((previous_delay + 0.5) / 2)
+    finally:
+        activity._cancel_false_interruption_timer()
+        activity._scheduling_atask.cancel()
+        await asyncio.gather(activity._scheduling_atask, return_exceptions=True)
+        session._activity = None
+        await recognition._aclose()
+        await session.aclose()
 
 
 async def test_resume_is_immediate_when_no_turn_decision_is_open(

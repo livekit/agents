@@ -340,11 +340,13 @@ async def test_tool_call() -> None:
         recognition: AudioRecognition,
         *,
         ended_at: float,
+        paused: bool = False,
     ) -> None:
         agent_speech_end_states.append(session.agent_state)
         on_end_of_agent_speech(
             recognition,
             ended_at=ended_at,
+            paused=paused,
         )
 
     with patch.object(
