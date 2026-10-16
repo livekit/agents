@@ -14,7 +14,8 @@ from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError
 from livekit.agents.stt import SpeechEventType
 
-pytestmark = pytest.mark.plugin("gradium")
+# hermetic: every test talks to a fake websocket, so this is a unit module
+pytestmark = pytest.mark.unit
 
 # no retries: the tests assert on the behaviour of the single attempt
 CONN_OPTS = APIConnectOptions(max_retry=0, timeout=5)
