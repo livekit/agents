@@ -294,7 +294,7 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
     clock = ReconnectClock(monkeypatch)
     options = {} if vad_flush else {"vad_flush": False}
     provider = STT(api_key="test-key", http_session=clock, **options)
-    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=1))
     stream.start_time_offset = 7.0
 
     # vad_flush pads the model delay (80 ms frames) of silence after each turn
@@ -340,7 +340,10 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
                     provider_start=index * (1.0 + padding if vad_flush else 1.0),
                     expected_end=7.4 + index,
                 )
-            stream.update_options(buffer_size_seconds=0.1)
+            # a dropped socket makes the base class reconnect
+            clock.sockets[-1].incoming.put_nowait(
+                aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1011, "server restart")
+            )
             await wait_until(lambda: len(clock.sockets) == 2)
             await check_turn(3, captured_at=1010.0, provider_start=0.0, expected_end=17.4)
     finally:
@@ -688,17 +691,23 @@ async def test_vad_start_of_speech_with_vad_bucket_zero():
 
 
 @pytest.mark.no_concurrent
-async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
-    from livekit.agents import APIConnectOptions
+async def test_reconnect_reanchors_audio_clock(monkeypatch):
+    """A retry after the server drops the socket re-anchors the audio clock."""
     from livekit.plugins.gradium.stt import STT
 
     from .stt_reconnect import ReconnectClock
 
     clock = ReconnectClock(monkeypatch)
     provider = STT(api_key="test-key", http_session=clock)
-    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=1))
+
+    def drop_socket() -> None:
+        clock.sockets[-1].incoming.put_nowait(
+            aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1011, "server restart")
+        )
+
     try:
-        await clock.check(stream, lambda: stream.update_options(buffer_size_seconds=0.1))
+        await clock.check(stream, drop_socket)
     finally:
         await stream.aclose()
         await provider.aclose()
@@ -937,3 +946,25 @@ async def test_a_text_frame_without_start_s_does_not_corrupt_the_turn():
     assert [ev.type for ev in events].count(SpeechEventType.START_OF_SPEECH) == 1
     assert events[0].type == SpeechEventType.START_OF_SPEECH
     assert events[-1].alternatives[0].text == "hello"
+
+
+async def test_update_options_keeps_the_socket_and_the_utterance():
+    """`buffer_size_seconds` does not affect the live session, so changing it must not
+    reconnect: a reconnect dropped the words buffered so far."""
+    stt, session, _ = _make_stt([READY, _text("hello", 0.1)], after_eos=[_text("world", 0.4), EOS])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        await _collect_until(stream, lambda ev: ev.type == SpeechEventType.INTERIM_TRANSCRIPT)
+        stt.update_options(buffer_size_seconds=0.1)
+        stream.push_frame(_audio_frame())
+        stream.end_input()
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    assert len(session.connects) == 1
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
+    assert stream._opts.buffer_size_seconds == 0.1
