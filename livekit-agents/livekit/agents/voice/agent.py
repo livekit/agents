@@ -964,6 +964,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         # imported at call time: agent_activity imports Agent at module scope, so the reverse can't
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+        from .run_result import _RunSuspension
 
         speech_handle = _SpeechHandleContextVar.get(None)
         old_activity = _AgentActivityContextVar.get()
@@ -1012,8 +1013,15 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
             # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
             self.__inactive_ev.clear()
-            suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
             pending_on_enter_task: asyncio.Task[None] | None = None
+
+            # registered before on_enter can run: the task may complete from it, and a run
+            # started meanwhile must see the awaiter resume
+            suspension = _RunSuspension(handles=[current_task], until=self.__fut)
+            session._run_suspensions.append(suspension)
+            self.__fut.add_done_callback(lambda _: session._run_suspensions.remove(suspension))
+            if (run_state := session._global_run_state) and not run_state.done():
+                run_state._watch_handle(current_task)
             try:
                 # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
                 # AgentTasks that require user input, but session.run() can't return until
@@ -1034,28 +1042,33 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
                 run_state = session._global_run_state
 
-                if self._activity and (on_enter_task := self._activity._on_enter_task):
-                    if run_state and not run_state.done():
-                        # watch the on_enter task as a guard so RunResult won't complete
-                        # before on_enter has registered its own speech handles
-                        run_state._watch_handle(on_enter_task)
-                        pending_on_enter_task = on_enter_task
-                    else:
-                        # no active run to guard — just wait for on_enter directly
-                        await asyncio.shield(on_enter_task)
+                on_enter_task = self._activity._on_enter_task if self._activity else None
+                if on_enter_task and run_state and not run_state.done():
+                    # watch the on_enter task as a guard so RunResult won't complete
+                    # before on_enter has registered its own speech handles
+                    run_state._watch_handle(on_enter_task)
+                    pending_on_enter_task = on_enter_task
 
-                # now unwatch the parent speech handle and blocked tasks that belong to the
+                # now suspend the parent speech handle and blocked tasks that belong to the
                 # old activity — they can't complete while this AgentTask is running, and
-                # keeping them watched would block RunResult from completing. A foreground
-                # hold waiting on this task is in the same position, so its guard suspends too.
+                # holding the run open on them would block RunResult from completing. A
+                # foreground hold waiting on this task is in the same position, so its guard
+                # suspends too.
                 if run_state and not run_state.done():
-                    if speech_handle and run_state._unwatch_handle(speech_handle):
-                        suspended_handles.append(speech_handle)
-                    for blocked in [*blocked_tasks, *session._foreground_guards]:
-                        if run_state._unwatch_handle(blocked):
-                            suspended_handles.append(blocked)
-                    if suspended_handles:
-                        run_state._mark_done_if_needed(None)
+                    suspension.handles += [
+                        handle
+                        for handle in [speech_handle, *blocked_tasks, *session._foreground_guards]
+                        if handle is not None
+                        and handle is not current_task
+                        and handle in run_state._handles
+                    ]
+                suspension.active = True
+                if run_state and not run_state.done():
+                    run_state._mark_done_if_needed(None)
+
+                if on_enter_task and not pending_on_enter_task:
+                    # no active run to guard — just wait for on_enter directly
+                    await asyncio.shield(on_enter_task)
             # asyncio.CancelledError derives from BaseException, not Exception
             except BaseException:
                 self.__inactive_ev.set()
@@ -1065,15 +1078,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 return await asyncio.shield(self.__fut)
 
             finally:
-                # run_state could have changed after self.__fut
-                run_state = session._global_run_state
-
-                # re-watch the suspended handles so the resumed parent activity
-                # is tracked by the current RunResult again
-                if run_state and not run_state.done():
-                    for handle in [*suspended_handles, current_task]:
-                        run_state._watch_handle(handle)
-
                 if pending_on_enter_task:
                     try:
                         await asyncio.shield(pending_on_enter_task)

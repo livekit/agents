@@ -95,6 +95,24 @@ class AgentHandoffEvent:
 RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
 
 
+@dataclass
+class _RunSuspension:
+    """Handles of an AgentTask's awaiter, which cannot finish while the task runs.
+
+    While ``until`` (the task's result) is pending they don't hold a run open; once it
+    resolves they do again. Being a predicate rather than an unwatch/re-watch pair, a run
+    never sees the gap between the task completing and its awaiter resuming.
+    """
+
+    handles: list[SpeechHandle | asyncio.Future[Any]]
+    until: asyncio.Future[Any]
+    # false until the task's on_enter is guarded, so the awaiter keeps the run open meanwhile
+    active: bool = False
+
+    def suspends(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
+        return self.active and not self.until.done() and handle in self.handles
+
+
 class RunResult(Generic[Run_T]):
     def __init__(
         self,
@@ -123,6 +141,12 @@ class RunResult(Generic[Run_T]):
         self._final_output: Run_T | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
+
+        # an awaiter suspended before this run started resumes into it
+        if session is not None:
+            for suspension in session._run_suspensions:
+                for handle in suspension.handles:
+                    self._watch_handle(handle)
 
     @property
     def events(self) -> list[RunEvent]:
@@ -226,22 +250,15 @@ class RunResult(Generic[Run_T]):
 
         handle.add_done_callback(self._mark_done_if_needed)
 
-    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
-        if handle not in self._handles:
-            return False
-
-        self._handles.discard(handle)
-        handle.remove_done_callback(self._mark_done_if_needed)
-
-        if isinstance(handle, SpeechHandle):
-            handle._remove_item_added_callback(self._item_added)
-        return True
-
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Future[Any] | None) -> None:
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
 
-        if all(handle.done() for handle in self._handles):
+        suspensions = self._session._run_suspensions if self._session is not None else []
+        if all(
+            handle.done() or any(s.suspends(handle) for s in suspensions)
+            for handle in self._handles
+        ):
             self._mark_done()
 
     def _mark_done(self) -> None:
