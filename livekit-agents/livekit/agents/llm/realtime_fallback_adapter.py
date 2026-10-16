@@ -5,7 +5,7 @@ import contextlib
 import time
 import weakref
 from collections.abc import AsyncIterable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
@@ -13,7 +13,7 @@ from livekit import rtc
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
-from .chat_context import ChatContext, MetricsMetadata
+from .chat_context import ChatContext, ChatMessage, MetricsMetadata
 from .realtime import (
     EventTypes,
     GenerationCreatedEvent,
@@ -178,6 +178,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         def _make_forwarder(event: EventTypes) -> Callable[[object], None]:
             # callbacks receive only the payload, so bind the event name per forwarder
             def _forward(ev: object) -> None:
+                if isinstance(ev, GenerationCreatedEvent):
+                    ev = self._track_generation(ev, self._active)
                 self.emit(event, ev)
 
             return _forward
@@ -193,6 +195,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         self._swap_task: asyncio.Task[None] | None = None
         self._swap_lock = asyncio.Lock()
+        self._initializing = False
+        self._initialization_error: Exception | None = None
         # bound by AgentActivity; used to read agent state and drive interrupt/generate_reply on swap
         self._agent_session: AgentSession | None = None
 
@@ -257,7 +261,9 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             ),
         )
 
-    def _next_available_index(self, *, exclude_current: bool = False) -> int | None:
+    def _next_available_index(
+        self, *, exclude_current: bool = False, exclude: set[int] | None = None
+    ) -> int | None:
         # re-enable models whose cooldown expired, then pick the first available (primary preferred)
         now = time.time()
         for i, deadline in enumerate(self._cooldown_deadline):
@@ -266,6 +272,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         for i in range(len(self._adapter._models)):
             if exclude_current and i == self._active_index:
+                continue
+            if exclude is not None and i in exclude:
                 continue
             if self._available[i]:
                 return i
@@ -279,6 +287,11 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         )
 
     def _on_child_error(self, error: RealtimeModelError) -> None:
+        if self._initializing and not error.recoverable:
+            # The initialization loop owns startup fallback, including replacement
+            # startup. Do not start another swap or close AgentSession early.
+            self._initialization_error = error.error
+            return
         if error.recoverable:
             # surface it and let the plugin's own reconnect handle it
             self.emit("error", error)
@@ -329,30 +342,6 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             else:
                 chat_ctx = self._active.chat_ctx
 
-            # bring up a fresh child on ``index``; on failure clean it up, cool it down, and
-            # return the error so the caller can try the next model
-            async def _bring_up(index: int) -> Exception | None:
-                try:
-                    self._active = self._adapter._models[index].session(
-                        turn_detection_disabled=self._turn_detection_disabled
-                    )
-                    self._active_index = index
-                    self._bind(self._active)
-                    await self._active._update_session(
-                        instructions=self._instructions, chat_ctx=chat_ctx, tools=self._tools
-                    )
-                    if is_given(self._tool_choice):
-                        self._active.update_options(tool_choice=self._tool_choice)
-                    self._adapter._active_instance = self._adapter._models[index]
-                    return None
-                except Exception as e:
-                    logger.exception("failed to start realtime model on swap, trying next")
-                    self._unbind(self._active)
-                    with contextlib.suppress(Exception):
-                        await self._active.aclose()
-                    self._set_available(index, False)
-                    return e
-
             self._swapping = True
             try:
                 # close the old child; best-effort since the provider may already be dead
@@ -360,28 +349,18 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 with contextlib.suppress(Exception):
                     await self._active.aclose()
 
-                # cascade to further models if one fails to start
-                error = await _bring_up(target_index)
-                while error is not None:
-                    nxt = self._next_available_index()
-                    if nxt is None:
-                        break
-                    error = await _bring_up(nxt)
+                error = await self._start_with_fallback(
+                    index=target_index,
+                    reuse_active=False,
+                    instructions=self._instructions,
+                    chat_ctx=chat_ctx,
+                    tools=self._tools,
+                    report_attempt_errors=False,
+                )
             finally:
                 self._swapping = False
 
             if error is not None:
-                # every model failed to start; escalate so AgentSession can close instead of
-                # continuing on a broken session
-                self.emit(
-                    "error",
-                    RealtimeModelError(
-                        timestamp=time.time(),
-                        label=self._adapter.label,
-                        error=error,
-                        recoverable=False,
-                    ),
-                )
                 return
 
             # a swap is a reconnect from the caller's perspective
@@ -407,6 +386,199 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     @property
     def tools(self) -> ToolContext:
         return self._active.tools
+
+    async def initialize(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> None:
+        if is_given(instructions):
+            self._instructions = instructions
+        if is_given(tools):
+            self._tools = tools
+        if self._swap_task is not None and not self._swap_task.done():
+            await self._swap_task
+        self._swap_task = asyncio.create_task(
+            self._initialize(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
+        )
+        await self._swap_task
+
+    async def _initialize(
+        self,
+        *,
+        instructions: NotGivenOr[str],
+        chat_ctx: NotGivenOr[ChatContext],
+        tools: NotGivenOr[list[Tool]],
+    ) -> None:
+        async with self._swap_lock:
+            self._swapping = True
+            try:
+                error = await self._start_with_fallback(
+                    index=self._active_index,
+                    reuse_active=True,
+                    instructions=instructions,
+                    chat_ctx=chat_ctx,
+                    tools=tools,
+                    report_attempt_errors=True,
+                )
+                if error is not None:
+                    raise error
+            finally:
+                self._swapping = False
+
+    async def _start_with_fallback(
+        self,
+        *,
+        index: int,
+        reuse_active: bool,
+        instructions: NotGivenOr[str],
+        chat_ctx: NotGivenOr[ChatContext],
+        tools: NotGivenOr[list[Tool]],
+        report_attempt_errors: bool,
+    ) -> Exception | None:
+        """Start each candidate at most once while the caller holds _swap_lock.
+
+        Initial setup can configure the existing child with omitted settings.
+        Replacements receive saved settings and history. Startup reports each
+        failure; swaps retain their existing single error on exhaustion.
+        """
+        history = chat_ctx if is_given(chat_ctx) else self._active.chat_ctx
+        if reuse_active:
+            # Snapshot before initial configuration can modify the current child.
+            history = history.copy()
+        attempted: set[int] = set()
+        self._initializing = True
+        try:
+            while True:
+                self._initialization_error = None
+                replacing = not reuse_active or bool(attempted)
+                attempted.add(index)
+                try:
+                    if replacing:
+                        self._active_index = index
+                        self._active = self._adapter._models[index].session(
+                            turn_detection_disabled=self._turn_detection_disabled
+                        )
+                        self._bind(self._active)
+                        instructions, chat_ctx, tools = self._instructions, history, self._tools
+                    await self._active.initialize(
+                        instructions=instructions, chat_ctx=chat_ctx, tools=tools
+                    )
+                    if replacing and is_given(self._tool_choice):
+                        self._active.update_options(tool_choice=self._tool_choice)
+                    if self._initialization_error is not None:
+                        raise self._initialization_error
+                    self._adapter._active_instance = self._adapter._models[index]
+                    return None
+                except Exception as error:
+                    self._unbind(self._active)
+                    with contextlib.suppress(Exception):
+                        await self._active.aclose()
+                    self._set_available(index, False)
+                    # Cooldown may expire during startup, or be zero. Do not
+                    # retry a failed candidate during this operation.
+                    target = self._next_available_index(exclude=attempted)
+                    if report_attempt_errors or target is None:
+                        self.emit(
+                            "error",
+                            RealtimeModelError(
+                                timestamp=time.time(),
+                                label=self._adapter.label,
+                                error=error,
+                                recoverable=target is not None,
+                            ),
+                        )
+                    else:
+                        logger.exception("failed to start realtime model on swap, trying next")
+                    if target is None:
+                        return error
+                    index = target
+        except asyncio.CancelledError:
+            self._unbind(self._active)
+            with contextlib.suppress(Exception):
+                await self._active.aclose()
+            raise
+        finally:
+            self._initializing = False
+            self._initialization_error = None
+
+    async def set_input_text(
+        self, text: str, *, message_id: NotGivenOr[str] = NOT_GIVEN
+    ) -> ChatMessage:
+        # Unlike microphone frames, a typed turn must not be discarded during a swap.
+        async with self._swap_lock:
+            return await self._active.set_input_text(text, message_id=message_id)
+
+    def _track_generation(
+        self, event: GenerationCreatedEvent, child: RealtimeSession
+    ) -> GenerationCreatedEvent:
+        # The generation carries its owner across swaps, including nested fallback
+        # adapters. Provider response and message IDs stay unchanged.
+        return replace(event, playback_session=event.playback_session or child)
+
+    def _track_reply(
+        self, future: asyncio.Future[GenerationCreatedEvent], child: RealtimeSession
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        tracked: asyncio.Future[GenerationCreatedEvent] = future.get_loop().create_future()
+
+        def _complete(source: asyncio.Future[GenerationCreatedEvent]) -> None:
+            if source.cancelled():
+                tracked.cancel()
+            elif (error := source.exception()) is not None:
+                if not tracked.done():
+                    tracked.set_exception(error)
+            elif not tracked.done():
+                tracked.set_result(self._track_generation(source.result(), child))
+            elif tracked.cancelled():
+                # Acceptance can race cancellation before this callback runs. The
+                # caller never received the generation, so it cannot report skipped
+                # playback. Target its owning child and response explicitly.
+                try:
+                    accepted = source.result()
+                    owner = accepted.playback_session or child
+                    owner.interrupt()
+                    owner.playback_finished(
+                        response_id=accepted.response_id,
+                        message_id=None,
+                        audio_end_ms=0,
+                        interrupted=True,
+                        interrupted_by_user=False,
+                    )
+                except Exception:
+                    logger.exception("failed to report cancelled realtime reply playback")
+
+        def _cancel(source: asyncio.Future[GenerationCreatedEvent]) -> None:
+            if source.cancelled():
+                future.cancel()
+
+        future.add_done_callback(_complete)
+        tracked.add_done_callback(_cancel)
+        return tracked
+
+    def playback_finished(
+        self,
+        *,
+        response_id: str | None,
+        message_id: str | None,
+        audio_end_ms: int,
+        interrupted: bool,
+        interrupted_by_user: bool,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
+        modalities: list[Literal["text", "audio"]] | None = None,
+    ) -> None:
+        # Direct callers address the active session. AgentActivity instead uses
+        # GenerationCreatedEvent.playback_session to retain ownership across swaps.
+        self._active.playback_finished(
+            response_id=response_id,
+            message_id=message_id,
+            audio_end_ms=audio_end_ms,
+            interrupted=interrupted,
+            interrupted_by_user=interrupted_by_user,
+            audio_transcript=audio_transcript,
+            modalities=modalities,
+        )
 
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions
@@ -444,8 +616,10 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]:
-        return self._active.generate_reply(
-            instructions=instructions, tool_choice=tool_choice, tools=tools
+        child = self._active
+        return self._track_reply(
+            child.generate_reply(instructions=instructions, tool_choice=tool_choice, tools=tools),
+            child,
         )
 
     def commit_audio(self) -> None:
@@ -461,7 +635,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._active.start_user_activity()
 
     def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
-        return self._active.say(text)
+        child = self._active
+        return self._track_reply(child.say(text), child)
 
     def truncate(
         self,
