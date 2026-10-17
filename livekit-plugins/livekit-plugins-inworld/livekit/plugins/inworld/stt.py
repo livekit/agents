@@ -275,6 +275,11 @@ class SpeechStream(stt.SpeechStream):
             self._ensure_session().ws_connect(
                 ws_url,
                 headers={"Authorization": self._stt._authorization},
+                # without heartbeat, a silently dropped socket (a half-open TCP
+                # connection, no FIN/RST) is never noticed: the receive loop parks
+                # on ws.receive() forever and the reconnect loop, which is
+                # exception-driven, never runs.
+                heartbeat=30.0,
             ),
             timeout=self._conn_options.timeout,
         )
@@ -394,8 +399,12 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     return
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"Inworld STT WebSocket error: {self._ws.exception()}")
-                    return
+                    # the heartbeat closes the socket when a ping goes unanswered,
+                    # and that surfaces here rather than as a close frame.
+                    # ws.exception() is the only place the reason survives.
+                    raise APIConnectionError(
+                        "Inworld STT connection lost"
+                    ) from self._ws.exception()
         except aiohttp.ClientError as e:
             logger.error(f"WebSocket error while receiving: {e}")
             raise
