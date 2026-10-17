@@ -29,6 +29,7 @@ import aiohttp
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     stt,
@@ -50,6 +51,16 @@ bytes_per_frame = {
 
 
 SUPPORTED_SAMPLE_RATE = 24000
+
+
+def _api_error(msg_data: dict[str, Any]) -> APIError:
+    """Build the error for a `{"type": "error"}` frame.
+
+    The server sends it right before closing the socket, so the message is the only
+    place the actual failure reason (unsupported language, no credits, ...) shows up.
+    """
+    message = msg_data.get("message") or "unknown error"
+    return APIError(f"Gradium returned error: {message}", body=msg_data)
 
 
 @dataclass
@@ -190,9 +201,6 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
-    # Used to close websocket
-    _CLOSE_MSG: str = json.dumps({"terminate_session": True})
-
     def __init__(
         self,
         *,
@@ -217,9 +225,10 @@ class SpeechStream(stt.SpeechStream):
         self._ready_msg: dict[str, Any] | None = None
 
     @property
-    def delay_in_tokens(self) -> int:
+    def delay_in_frames(self) -> int:
+        """Steps the model lags behind the audio, from the server's ready message."""
         if self._ready_msg is not None:
-            return int(self._ready_msg.get("delay_in_tokens", 6))
+            return int(self._ready_msg.get("delay_in_frames", 6))
         return 6
 
     @property
@@ -247,6 +256,7 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal closing_ws
             samples_per_buffer = 1920
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -272,17 +282,50 @@ class SpeechStream(stt.SpeechStream):
                     }
                     await ws.send_str(json.dumps(audio_msg))
 
+            # Input ended: tell the server, then let recv_task drain the model's last
+            # words until the server replies with its own end_of_stream.
+            closing_ws = True
+            try:
+                await ws.send_str(json.dumps({"type": "end_of_stream"}))
+            except (aiohttp.ClientError, ConnectionError):
+                # the server closed first; recv_task reports what it got
+                return
+
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             buffered_text: list[str] = []
             speaking = False
             remaining_vad_steps: int | None = None
+
+            def _finalize() -> None:
+                nonlocal speaking, remaining_vad_steps, buffered_text
+                if not speaking:
+                    return
+                speaking = False
+                remaining_vad_steps = None
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        alternatives=[
+                            stt.SpeechData(
+                                text=" ".join(buffered_text),
+                                language=self._opts.language,
+                            )
+                        ],
+                    )
+                )
+                buffered_text = []
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
                 except asyncio.TimeoutError:
                     if closing_ws:
-                        break
+                        # the server did not answer the end_of_stream in time: keep
+                        # what the model already produced
+                        _finalize()
+                        return
                     continue
 
                 if msg.type in (
@@ -291,6 +334,8 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if closing_ws:
+                        # a close instead of the server's end_of_stream: same thing
+                        _finalize()
                         return
                     raise APIStatusError(
                         "Gradium connection closed unexpectedly",
@@ -304,9 +349,30 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     data = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    logger.exception("Failed to decode message from Gradium")
+                    continue
 
-                    type_ = data.get("type", "")
+                type_ = data.get("type", "")
+                if type_ == "error":
+                    raise _api_error(data)
+                if type_ == "end_of_stream":
+                    # The model has consumed all the audio: whatever is still buffered
+                    # is the end of the last utterance.
+                    _finalize()
+                    if closing_ws:
+                        return
+                    # The server ended the session while audio is still coming (a
+                    # duration limit, for instance) and will close the socket; raise
+                    # so the base class reconnects instead of the next audio write
+                    # failing with a raw connection error.
+                    raise APIStatusError(
+                        "Gradium ended the session while input was still open",
+                        status_code=ws.close_code or -1,
+                        body=data,
+                    )
 
+                try:
                     if type_ == "text":
                         if speaking is False:
                             speaking = True
@@ -335,35 +401,20 @@ class SpeechStream(stt.SpeechStream):
                             )
                             if positive_vad:
                                 if remaining_vad_steps is None:
-                                    remaining_vad_steps = self.delay_in_tokens
+                                    remaining_vad_steps = self.delay_in_frames
                                     if self._opts.vad_flush:
-                                        samples_per_channel = self.frame_size * self.delay_in_tokens
+                                        samples_per_channel = self.frame_size * self.delay_in_frames
                                         zeros = AudioFrame.create(
                                             sample_rate=self._opts.sample_rate,
                                             num_channels=1,
                                             samples_per_channel=samples_per_channel,
                                         )
-                                        await self._input_ch.send(zeros)
+                                        if not self._input_ch.closed:
+                                            await self._input_ch.send(zeros)
                                 else:
                                     remaining_vad_steps -= 1
                                     if remaining_vad_steps <= 0:
-                                        speaking = False
-                                        remaining_vad_steps = None
-                                        event = stt.SpeechEvent(
-                                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                            alternatives=[
-                                                stt.SpeechData(
-                                                    text=" ".join(buffered_text),
-                                                    language=self._opts.language,
-                                                )
-                                            ],
-                                        )
-                                        self._event_ch.send_nowait(event)
-
-                                        buffered_text = []
-                                        self._event_ch.send_nowait(
-                                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                                        )
+                                        _finalize()
                             else:
                                 remaining_vad_steps = None
 
