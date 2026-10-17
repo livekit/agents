@@ -234,7 +234,18 @@ class ThreadJobExecutor:
             # future is resolved below becomes a second reader of the duplex
             init_read_task = self._init_read_task
             if init_read_task is not None and not init_read_task.done():
-                await utils.aio.cancel_and_wait(init_read_task)
+                # the read must first finish the frame it has started: cancelling
+                # between the frame header and its payload would desynchronize the
+                # channel and the monitor task would read the pending payload as a
+                # new frame header, failing to decode it and losing the messages
+                # that follow (e.g. the shutdown ack). when the runner is
+                # unresponsive instead, the read is parked on the next frame header
+                # with nothing consumed and the cancel below loses nothing. the
+                # bound only covers a runner that stops writing a frame halfway;
+                # once its end of the channel closes, the read ends on its own
+                await asyncio.wait([init_read_task], timeout=1.0)
+                if not init_read_task.done():
+                    await utils.aio.cancel_and_wait(init_read_task)
 
             if not self._initialize_fut.done():
                 # never initialized (a cancelled initialize() also leaves this future

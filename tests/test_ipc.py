@@ -743,6 +743,81 @@ async def test_thread_aclose_during_pending_initialize():
         release_init.set()  # never leave the runner blocked in its warm-up
 
 
+async def test_thread_aclose_during_inflight_response_frame():
+    """Regression test: aclose() used to cancel initialize()'s response read even
+    when it had already consumed the frame header of the InitializeResponse.
+    The monitor task then read the pending payload as a new frame header: the
+    stream was desynchronized, decoding failed with a struct.error that escaped
+    aclose() itself, and the ShutdownRequestAck/ShuttingDown messages were lost.
+    The close must let the in-flight frame finish before handing the channel
+    over to the monitor task."""
+    proc, _ = _create_thread_proc(close_timeout=5.0)
+    await proc.start()
+
+    # instrument the parent duplex (per instance, safe to run concurrently): hold
+    # the first payload read so the close commits its strategy while the
+    # response frame is in flight, and record every frame the duplex delivers
+    # as an aligned header+payload pair
+    reader = proc._pch._reader
+    orig_readexactly = reader.readexactly
+    header_consumed = asyncio.Event()
+    payload_released = asyncio.Event()
+    read_state = {"expect_header": True, "header": b"", "gated": False}
+    frames: list[bytes] = []
+
+    async def _readexactly_spy(n: int) -> bytes:
+        if read_state["expect_header"]:
+            data = await orig_readexactly(n)
+            read_state["header"] = data
+            read_state["expect_header"] = False
+            header_consumed.set()
+            return data
+
+        if not read_state["gated"]:
+            read_state["gated"] = True
+            # the frame header is consumed but not its payload yet
+            await payload_released.wait()
+        data = await orig_readexactly(n)
+        frames.append(read_state["header"] + data)
+        read_state["expect_header"] = True
+        return data
+
+    reader.readexactly = _readexactly_spy
+
+    init_task = asyncio.create_task(proc.initialize())
+    await _poll_until(header_consumed.is_set)
+    init_read_task = proc._init_read_task
+    assert not init_read_task.done(), "the response read should be parked mid-frame"
+
+    close_task = asyncio.create_task(proc.aclose())
+    # the close either cancels the mid-frame read right away (the old behavior,
+    # which desynchronizes the stream) or waits for it to finish the frame;
+    # once it has committed either way, let the response payload through
+    for _ in range(20):
+        if init_read_task.done():
+            break
+        await asyncio.sleep(0.01)
+    payload_released.set()
+
+    try:
+        await init_task
+    except asyncio.CancelledError:
+        pass  # the close aborted the in-flight initialize()
+
+    await asyncio.wait_for(close_task, timeout=10.0)
+
+    await _poll_until(lambda: not proc._thread.is_alive())
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+
+    def _frame(msg: object) -> bytes:
+        payload = ipc.channel._write_message(msg)
+        return len(payload).to_bytes(4, "big") + payload
+
+    assert _frame(ipc.proto.ShutdownRequestAck()) in frames, "the monitor lost the shutdown ack"
+    assert _frame(ipc.proto.ShuttingDown()) in frames, "the monitor lost the ShuttingDown message"
+
+
 async def test_thread_aclose_without_initialize():
     """Regression test: start() then aclose() with no initialize(). The
     ShutdownRequest is the runner's very first message; it used to die on its
