@@ -6,6 +6,7 @@ import io
 import logging
 import multiprocessing as mp
 import socket
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -614,13 +615,14 @@ def _create_thread_proc(
     *,
     close_timeout: float,
     job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
+    initialize_process_fnc: Callable[[JobProcess], None] = _initialize_proc,
 ) -> tuple[ipc.job_thread_executor.ThreadJobExecutor, _StartArgs]:
     # the runner is a thread of the test process, so the mp primitives of _StartArgs are plain
     # in-process synchronization here
     start_args = _new_start_args(mp.get_context("spawn"))
     loop = asyncio.get_running_loop()
     proc = ipc.job_thread_executor.ThreadJobExecutor(
-        initialize_process_fnc=_initialize_proc,
+        initialize_process_fnc=initialize_process_fnc,
         job_entrypoint_fnc=job_entrypoint_fnc,
         session_end_fnc=None,
         simulation_end_fnc=None,
@@ -666,6 +668,38 @@ async def test_thread_shutdown_no_job_join_before_ack_is_read():
     assert time.monotonic() - started_at < 1.0, "aclose() waited for an ack that was sent"
     assert proc.status == ipc.job_executor.JobStatus.SUCCESS
     assert start_args.shutdown_counter.value == 0
+
+
+async def test_thread_aclose_after_initialize_cancelled():
+    """Regression test: a cancelled initialize() never resolves the initialize future,
+    so the main task never started the monitor task (the sole channel reader) and
+    aclose() waited forever for a ShuttingDown message that nobody read, hanging the
+    worker shutdown."""
+    init_started = threading.Event()
+    release_init = threading.Event()
+
+    def _initialize_proc_gated(proc: JobProcess) -> None:
+        # hold the runner's warm-up until initialize() has been cancelled, so the
+        # cancel can't race with a warm-up that already finished
+        init_started.set()
+        release_init.wait(timeout=10.0)
+
+    proc, _ = _create_thread_proc(close_timeout=0.5, initialize_process_fnc=_initialize_proc_gated)
+    await proc.start()
+
+    init_task = asyncio.create_task(proc.initialize())
+    try:
+        await _poll_until(init_started.is_set)
+
+        init_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await init_task
+
+        release_init.set()  # the runner acks the queued shutdown once its warm-up ends
+        await asyncio.wait_for(proc.aclose(), timeout=5.0)
+        assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    finally:
+        release_init.set()  # never leave the runner blocked in its warm-up
 
 
 async def test_thread_job_graceful_shutdown():

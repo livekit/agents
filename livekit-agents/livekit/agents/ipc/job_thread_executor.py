@@ -213,6 +213,15 @@ class ThreadJobExecutor:
         if not self.started:
             return
 
+        if not self._initialize_fut.done():
+            # never initialized (a cancelled initialize() also leaves this future
+            # unresolved, its CancelledError isn't caught): unblock the main task
+            # waiting on this future so it starts the monitor task, the sole reader
+            # of the channel, and the runner can ack the queued shutdown request
+            self._initialize_fut.set_exception(
+                RuntimeError("runner closed before initialization completed")
+            )
+
         self._closing = True
         with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
             await channel.asend_message(self._pch, proto.ShutdownRequest())
