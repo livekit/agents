@@ -565,6 +565,55 @@ async def test_idle_time_before_first_frame_does_not_allow_a_burst(
     assert clock.sleeps == pytest.approx([0.08, 0.08])
 
 
+async def test_first_frame_pushed_after_sender_started_anchors_pacing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Clock:
+        now = 10.0
+        sleeps: list[float] = []
+
+        def time(self) -> float:
+            return self.now
+
+        async def sleep(self, delay: float) -> None:
+            self.sleeps.append(delay)
+            self.now += delay
+
+    class _PacingWebSocket:
+        def __init__(self) -> None:
+            self.packets: list[bytes] = []
+
+        async def send_bytes(self, packet: bytes) -> None:
+            self.packets.append(packet)
+
+        async def send_str(self, payload: str) -> None:
+            pass
+
+    clock = _Clock()
+    stream = object.__new__(meta.SpeechStream)
+    stream._audio_consumed = False
+    stream._end_stream_sent = False
+    stream._first_frame_at = None
+
+    async def input_items() -> AsyncIterator[rtc.AudioFrame]:
+        # the sender is already running when the first frame is pushed at t=10.00,
+        # and it only gets to the frames at t=10.24
+        stream._first_frame_at = 10.0
+        clock.now = 10.24
+        yield _frame(b"x" * (3840 * 4))
+
+    stream._input_ch = cast(Any, input_items())
+    monkeypatch.setattr(meta_stt.asyncio, "get_running_loop", lambda: clock)
+    monkeypatch.setattr(meta_stt.asyncio, "sleep", clock.sleep)
+
+    websocket = _PacingWebSocket()
+    await stream._send_audio(cast(aiohttp.ClientWebSocketResponse, websocket))
+
+    # packets 0-3 are due at 10.00, 10.08, 10.16, 10.24: nothing to wait for
+    assert len(websocket.packets) == 4
+    assert clock.sleeps == []
+
+
 async def test_first_frame_time_is_recorded_once() -> None:
     provider = meta.STT(
         api_key="key", http_session=cast(aiohttp.ClientSession, _FakeSession([_websocket()]))

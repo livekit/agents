@@ -558,7 +558,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _send_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         pending = bytearray()
         loop = asyncio.get_running_loop()
-        pacing_origin = self._first_frame_at
+        pacing_origin: float | None = None
         sent_duration = 0.0
 
         async def send_packet(packet: bytes) -> None:
@@ -566,7 +566,10 @@ class SpeechStream(stt.RecognizeStream):
             if not packet:
                 return
             if pacing_origin is None:
-                pacing_origin = loop.time()
+                # the first frame may be pushed after this task started
+                pacing_origin = self._first_frame_at
+                if pacing_origin is None:
+                    pacing_origin = loop.time()
             deadline = pacing_origin + sent_duration
             delay = deadline - loop.time()
             if delay > 0:
