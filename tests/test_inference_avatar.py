@@ -281,9 +281,17 @@ class _FakeSink:
 class _FakeOutput:
     def __init__(self) -> None:
         self.sink: Any = None
+        self.audio: Any = None
 
-    def replace_audio_tail(self, sink: Any) -> None:
+    @property
+    def audio_tail(self) -> Any:
+        return self.sink
+
+    def replace_audio_tail(self, sink: Any) -> Any:
+        previous = self.sink
         self.sink = sink
+        self.audio = sink
+        return previous
 
 
 class _FakeAgentSession:
@@ -291,6 +299,9 @@ class _FakeAgentSession:
         self.output = _FakeOutput()
 
     def on(self, *_a: Any, **_k: Any) -> None:
+        pass
+
+    def off(self, *_a: Any, **_k: Any) -> None:
         pass
 
     def emit(self, *_a: Any, **_k: Any) -> None:
@@ -364,6 +375,48 @@ async def test_start_uses_response_sample_rate(monkeypatch: pytest.MonkeyPatch) 
     assert av._terminate_token == "tt_1"
     assert isinstance(agent_session.output.sink, _FakeSink)
     assert agent_session.output.sink.sample_rate == 24000
+
+
+async def test_aclose_restores_the_audio_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Closing the inference avatar must undo the route start() installed (#7276).
+
+    start() goes through _attach_audio_output, so the base aclose() can put the
+    previous route back; a failed avatar then degrades to regular audio instead
+    of leaving the agent pointed at a dead datastream sink.
+    """
+
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "session_id": "AVS_1",
+                "provider_session_id": "ls_1",
+                "terminate_token": "tt_1",
+                "sample_rate": 24000,
+            }
+        )
+
+    monkeypatch.setattr(avatar_mod, "get_job_context", lambda *a, **k: _FakeJobCtx())
+    monkeypatch.setattr(avatar_mod, "DataStreamAudioOutput", _FakeSink)
+
+    async with _gateway(handler) as (base_url, session):
+        av = _make_avatar(
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"image_url": "https://example.com/face.png"},
+        )
+        agent_session = _FakeAgentSession()
+        await av.start(
+            agent_session,  # type: ignore[arg-type]
+            _FakeRoom(),  # type: ignore[arg-type]
+            livekit_url="wss://example.livekit.cloud",
+        )
+        assert isinstance(agent_session.output.sink, _FakeSink)
+
+        # the terminate call 404s against the fake gateway; aclose is documented
+        # as best-effort there and must still run the base cleanup
+        await av.aclose()
+
+    assert agent_session.output.audio is None
 
 
 async def test_start_sends_mint_inputs_and_no_token(

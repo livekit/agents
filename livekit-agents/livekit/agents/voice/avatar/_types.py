@@ -17,6 +17,7 @@ from ..events import ConversationItemAddedEvent, MetricsCollectedEvent
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
+    from ..io import AudioOutput
 
 
 class AudioSegmentEnd:
@@ -72,6 +73,10 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         self._wait_avatar_join_task: asyncio.Task[None] | None = None
         self._room: rtc.Room | None = None
         self._agent_session: AgentSession | None = None
+        # audio route installed via _attach_audio_output, and what it replaced,
+        # so aclose can put the previous route back
+        self._installed_audio_output: AudioOutput | None = None
+        self._previous_audio_output: AudioOutput | None = None
 
     @property
     @abstractmethod
@@ -103,6 +108,40 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         else:
             self._room.on("connection_state_changed", self._on_connection_state_changed)
 
+    def _attach_audio_output(self, sink: AudioOutput) -> None:
+        """Route the agent session's audio to the avatar, remembering the previous route.
+
+        Plugins call this from ``start()`` instead of
+        ``agent_session.output.replace_audio_tail(...)`` so that :meth:`aclose`
+        can restore the previous route: a failed avatar start then degrades back
+        to regular audio instead of leaving the agent silent.
+        """
+        assert self._agent_session is not None, "_attach_audio_output requires start() first"
+        self._previous_audio_output = self._agent_session.output.replace_audio_tail(sink)
+        self._installed_audio_output = sink
+
+    def _restore_audio_output(self) -> None:
+        """Undo :meth:`_attach_audio_output`, unless something replaced our sink since."""
+        installed, previous = self._installed_audio_output, self._previous_audio_output
+        self._installed_audio_output = None
+        self._previous_audio_output = None
+        if installed is None or self._agent_session is None:
+            return
+
+        output = self._agent_session.output
+        if output.audio_tail is not installed:
+            # someone re-routed the audio after us; their route wins
+            return
+
+        if previous is not None:
+            output.replace_audio_tail(previous)
+        elif output.audio is installed:
+            # the avatar's sink was the whole chain (installed before the session
+            # started); clear it so a later session.start() sets up room audio
+            output.audio = None
+        # else: a wrapper chain was built on top of the avatar's sink and there is
+        # no earlier route to go back to; leave it in place
+
     async def wait_for_join(self, *, timeout: float | None = 30.0) -> None:
         """Wait until the avatar participant has joined the room and
         published its video track.
@@ -119,6 +158,10 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         await asyncio.wait_for(asyncio.shield(self._wait_avatar_join_task), timeout=timeout)
 
     async def aclose(self) -> None:
+        # first, and before any await: a cancellation mid-close (job-shutdown
+        # deadline) must not leave agent audio routed to the closing avatar
+        self._restore_audio_output()
+
         if self._room is not None and self._room.isconnected():
             job_ctx = get_job_context(required=False)
             if job_ctx is not None:
