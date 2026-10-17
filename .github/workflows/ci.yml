@@ -77,3 +77,6 @@ jobs:
 
       - name: Check Types
         run: uv run python scripts/check_types.py
+
+      - name: Giggy offline TTS tests
+        run: uv run pytest -q livekit-plugins/livekit-plugins-giggy/tests/
