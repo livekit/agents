@@ -90,6 +90,7 @@ class InferenceProcExecutor(SupervisedProc):
             self._fail_pending_requests()
 
     def _fail_pending_requests(self) -> None:
+        """Reject outstanding inference requests after the IPC reader stops."""
         self._requests_closed = True
 
         pending_requests, self._active_requests = self._active_requests, {}
@@ -109,14 +110,34 @@ class InferenceProcExecutor(SupervisedProc):
         fut = asyncio.Future[proto.InferenceResponse]()
         self._active_requests[request_id] = fut
 
+        def _drop_cancelled_request(fut: asyncio.Future[proto.InferenceResponse]) -> None:
+            # the caller stopped waiting (its task was cancelled while awaiting the
+            # response): forget the request so the reader loop and the
+            # pending-requests cleanup never try to complete it afterwards
+            if fut.cancelled():
+                self._active_requests.pop(request_id, None)
+
+        fut.add_done_callback(_drop_cancelled_request)
+
         try:
             await channel.asend_message(
                 self._pch,
                 proto.InferenceRequest(request_id=request_id, method=method, data=data),
             )
-        except Exception:
+        except BaseException:
+            # BaseException, not Exception: a cancellation while the send is blocked
+            # (e.g. a large request stuck in the writer's drain()) used to bypass
+            # this cleanup and leave the future registered with no waiter, so
+            # _fail_pending_requests() later completed it with an exception nobody
+            # retrieved.
             if not fut.done():
                 fut.cancel()
+            elif not fut.cancelled():
+                # the pending-requests cleanup rejected it while this send was
+                # blocked (the process died): retrieve the exception so asyncio
+                # doesn't report it as never retrieved, the send error is raised
+                # to the caller instead
+                fut.exception()
             self._active_requests.pop(request_id, None)
             raise
 

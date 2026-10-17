@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ctypes
+import gc
 import io
 import logging
 import multiprocessing as mp
@@ -840,3 +841,138 @@ async def test_inference_proc_death_fails_pending_requests():
     finally:
         with contextlib.suppress(Exception):
             await executor.aclose()
+
+
+def _stalled_inference_proc_main(cch: socket.socket) -> None:
+    # complete the init handshake, then never read from the IPC socket again:
+    # simulates an inference process that hung with its socket undrained, so a
+    # large request from the parent blocks inside the writer's drain()
+    dplx = duplex_unix._Duplex.open(cch)
+    first_req = ipc.channel.recv_message(dplx, ipc.proto.IPC_MESSAGES)
+    assert isinstance(first_req, ipc.proto.InitializeRequest), (
+        "first message must be proto.InitializeRequest"
+    )
+    ipc.channel.send_message(dplx, ipc.proto.InitializeResponse())
+    time.sleep(3600)
+
+
+class _StalledInferenceExecutor(ipc.inference_proc_executor.InferenceProcExecutor):
+    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
+        return self._mp_ctx.Process(  # type: ignore
+            target=_stalled_inference_proc_main,
+            args=(cch,),
+            name="agents_inference_process",
+        )
+
+
+def _create_stalled_inf_executor() -> ipc.inference_proc_executor.InferenceProcExecutor:
+    return _StalledInferenceExecutor(
+        runners={_EchoInferenceRunner.INFERENCE_METHOD: _EchoInferenceRunner},
+        initialize_timeout=20.0,
+        close_timeout=20.0,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        # the stalled child never answers pings: keep the health checks from
+        # killing it while the test is running
+        ping_interval=9999.0,
+        ping_timeout=9999.0,
+        high_ping_threshold=1.0,
+        mp_ctx=mp.get_context("spawn"),
+        loop=asyncio.get_running_loop(),
+        http_proxy=None,
+    )
+
+
+class _AsyncioErrorCapture(logging.Handler):
+    """Collect asyncio error records, e.g. unretrieved future exceptions."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+async def test_cancelled_inference_send_leaves_no_pending_request():
+    """Regression test: cancelling do_inference() while its request is blocked in
+    the IPC writer's drain() must deregister the request. The orphaned future
+    would otherwise have no waiter and _fail_pending_requests() would later
+    complete it with an exception nobody retrieves (asyncio "Future exception was
+    never retrieved" warning when the process exits)."""
+    executor = _create_stalled_inf_executor()
+    capture = _AsyncioErrorCapture()
+    logging.getLogger("asyncio").addHandler(capture)
+    task_a = task_b = None
+    try:
+        await executor.start()
+        await executor.initialize()
+
+        payload = b"x" * (4 * 1024 * 1024)
+        # the first large request fills the OS send pipeline against the child
+        # that stopped reading...
+        task_a = asyncio.create_task(executor.do_inference("test_echo", payload))
+        await _poll_until(lambda: len(executor._active_requests) == 1)
+        # ...so this send blocks inside the writer's drain()
+        task_b = asyncio.create_task(executor.do_inference("test_echo", payload))
+        await _poll_until(lambda: len(executor._active_requests) == 2)
+
+        task_b.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task_b
+
+        # the cancelled send must not leave its future registered without a waiter
+        assert len(executor._active_requests) == 1
+
+        # the process dies: the remaining request is rejected (its send had
+        # completed) or fails on the closed channel (its send was still blocked
+        # in the writer), and no unhandled future failure may surface
+        await executor.kill()
+        with contextlib.suppress(RuntimeError, duplex_unix.DuplexClosed):
+            await asyncio.wait_for(task_a, timeout=5.0)
+
+        # the cancelled task holds the do_inference frame (and with it the request
+        # future) alive through its CancelledError traceback: release the
+        # references before collecting, a pending unretrieved exception could
+        # otherwise be missed
+        task_a = task_b = None
+        gc.collect()
+        assert not [m for m in capture.messages if "was never retrieved" in m]
+    finally:
+        logging.getLogger("asyncio").removeHandler(capture)
+        for t in (task_a, task_b):
+            if t is not None and not t.done():
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await t
+        with contextlib.suppress(Exception):
+            await executor.kill()
+
+
+async def test_cancelled_inference_wait_leaves_no_pending_request():
+    """Regression test: cancelling do_inference() while it waits for the response
+    must also deregister the request, the dead entry would otherwise stay in
+    _active_requests until the process exits."""
+    executor = _create_stalled_inf_executor()
+    task = None
+    try:
+        await executor.start()
+        await executor.initialize()
+
+        # small payload: the send itself completes against the stalled child, the
+        # task then waits for a response that never arrives
+        task = asyncio.create_task(executor.do_inference("test_echo", b"hello"))
+        await _poll_until(lambda: len(executor._active_requests) == 1)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert len(executor._active_requests) == 0
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        with contextlib.suppress(Exception):
+            await executor.kill()
