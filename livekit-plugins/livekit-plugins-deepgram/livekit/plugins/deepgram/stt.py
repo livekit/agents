@@ -170,7 +170,7 @@ class STT(stt.STT):
                 interim_results=interim_results,
                 diarization=enable_diarization,
                 aligned_transcript="word",
-                keyterms=True,
+                keyterms=_supports_keyterm(model),
             )
         )
 
@@ -347,11 +347,29 @@ class STT(stt.STT):
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        if is_given(keyterms):
+            logger.warning(
+                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
+            )
+            keyterm = keyterms
+
+        new_model = self._opts.model
+        if is_given(model):
+            new_model = _validate_model(
+                model, language if is_given(language) else (self._opts.language or NOT_GIVEN)
+            )
+        user_keyterm = self._user_keyterm
+        if is_given(keyterm):
+            user_keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
+        new_keywords = keywords if is_given(keywords) else self._opts.keywords
+        _validate_keyterm(new_model, language, user_keyterm or NOT_GIVEN, new_keywords or NOT_GIVEN)
+
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(model):
-            self._opts.model = _validate_model(
-                model, language if is_given(language) else (self._opts.language or NOT_GIVEN)
+            self._opts.model = new_model
+            self._capabilities = dataclasses.replace(
+                self._capabilities, keyterms=_supports_keyterm(new_model)
             )
         if is_given(interim_results):
             self._opts.interim_results = interim_results
@@ -371,14 +389,9 @@ class STT(stt.STT):
             self._opts.filler_words = filler_words
         if is_given(keywords):
             self._opts.keywords = keywords
-        if is_given(keyterms):
-            logger.warning(
-                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
-            )
-            keyterm = keyterms
-        if is_given(keyterm):
-            self._user_keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
-            keyterm = list(dict.fromkeys([*self._user_keyterm, *self._session_keyterms]))
+        if is_given(keyterm) or is_given(model):
+            self._user_keyterm = user_keyterm
+            keyterm = self._merged_keyterm()
             self._opts.keyterm = keyterm
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
@@ -428,11 +441,20 @@ class STT(stt.STT):
                 search=search,
             )
 
+    def _merged_keyterm(self) -> list[str]:
+        if not _supports_keyterm(self._opts.model):
+            return []
+        return list(dict.fromkeys([*self._user_keyterm, *self._session_keyterms]))
+
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if keyterms == self._session_keyterms:
             return
+        # kept even when the model can't use them, so a later switch to Nova-3 applies them
         self._session_keyterms = list(keyterms)
-        merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
+        if not self._capabilities.keyterms:
+            super()._update_session_keyterms(keyterms)
+            return
+        merged = self._merged_keyterm()
         self._opts.keyterm = merged
         for stream in self._streams:
             if stream._speaking:
@@ -1041,6 +1063,10 @@ def _validate_tags(tags: list[str]) -> list[str]:
     return tags
 
 
+def _supports_keyterm(model: DeepgramModels | str) -> bool:
+    return model.startswith("nova-3")
+
+
 def _validate_keyterm(
     model: DeepgramModels | str,
     language: NotGivenOr[DeepgramLanguages | str],
@@ -1057,7 +1083,7 @@ def _validate_keyterm(
             "Base speech to text models. For Nova-3, use Keyterm Prompting."
         )
 
-    if is_given(keyterm) and (not model.startswith("nova-3")):
+    if is_given(keyterm) and not _supports_keyterm(model):
         raise ValueError(
             "Keyterm Prompting is only available for transcription using the Nova-3 Model. "
             "To boost recognition of keywords using another model, use the Keywords feature."
