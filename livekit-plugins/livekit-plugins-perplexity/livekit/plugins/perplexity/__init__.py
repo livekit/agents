@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Perplexity plugin for LiveKit Agents
+"""Perplexity plugin for LiveKit Agents.
 
-Wraps Perplexity's OpenAI-compatible chat completions endpoint at
-``https://api.perplexity.ai`` so it can be used as a drop-in LLM for LiveKit
-voice agents.
+Use ``perplexity.responses.LLM`` for Perplexity's Agent API. The legacy
+``perplexity.LLM`` class uses Sonar Chat Completions and is deprecated.
 """
 
 from livekit.agents import Plugin
