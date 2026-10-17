@@ -6,7 +6,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -340,6 +340,8 @@ class AgentActivity(RecognitionHooks):
         self._lock = asyncio.Lock()
         # one awaited inline AgentTask may pause this activity at a time
         self._inline_task_lock = asyncio.Lock()
+        # one chat context push to the realtime server at a time, see _extend_rt_chat_ctx
+        self._rt_chat_ctx_push_lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
@@ -803,6 +805,27 @@ class AgentActivity(RecognitionHooks):
             update_instructions(
                 chat_ctx, instructions=self._agent.instructions, add_if_missing=True
             )
+
+    async def _extend_rt_chat_ctx(self, items: Sequence[llm.ChatItem]) -> None:
+        """Append items to the realtime server's conversation.
+
+        `update_chat_ctx` sends the difference between the context it is handed and the
+        provider's mirror of the server conversation, and that mirror only catches up
+        when the server acks the items. A snapshot taken while another push is waiting
+        for its ack is therefore missing that push's items, and they come back out of
+        the diff as deletes -- a queued text turn can delete the `function_call_output`
+        a tool push just added, leaving the call open and every later response blind to
+        the tool result. Taking the snapshot and sending the diff under one lock keeps
+        two pushes from removing each other's items.
+
+        Raises `llm.RealtimeError` the way `update_chat_ctx` does.
+        """
+        assert self._rt_session is not None
+
+        async with self._rt_chat_ctx_push_lock:
+            chat_ctx = self._rt_session.chat_ctx.copy()
+            chat_ctx.items.extend(items)
+            await self._rt_session.update_chat_ctx(chat_ctx)
 
     def update_options(
         self,
@@ -4158,10 +4181,9 @@ class AgentActivity(RecognitionHooks):
             return
 
         if user_input is not None:
-            chat_ctx = self._rt_session.chat_ctx.copy()
-            msg = chat_ctx.add_message(role="user", content=user_input)
+            msg = llm.ChatMessage(role="user", content=[user_input])
             try:
-                await self._rt_session.update_chat_ctx(chat_ctx)
+                await self._extend_rt_chat_ctx([msg])
             except llm.RealtimeError as e:
                 # the push is best-effort (the items were sent; only the ack timed out),
                 # so still generate the reply rather than dropping the whole turn
@@ -4738,10 +4760,8 @@ class AgentActivity(RecognitionHooks):
                 self._session._tool_items_added(interrupted_fnc_outputs)
 
                 # unlike the pipeline, a realtime model holds the call open server-side
-                chat_ctx = self._rt_session.chat_ctx.copy()
-                chat_ctx.items.extend(interrupted_fnc_outputs)
                 try:
-                    await self._rt_session.update_chat_ctx(chat_ctx)
+                    await self._extend_rt_chat_ctx(interrupted_fnc_outputs)
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to sync the tool results of an interrupted generation",
@@ -4851,10 +4871,8 @@ class AgentActivity(RecognitionHooks):
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
                     run_state._watch_handle(task)
 
-                chat_ctx = self._rt_session.chat_ctx.copy()
-                chat_ctx.items.extend(new_fnc_outputs)
                 try:
-                    await self._rt_session.update_chat_ctx(chat_ctx)
+                    await self._extend_rt_chat_ctx(new_fnc_outputs)
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to update chat context before generating the function calls results",  # noqa: E501
