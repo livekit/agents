@@ -50,11 +50,15 @@ class FakeAvaz:
     truncate_audio: bool = False
     audio_override: str | None = None
     hang_after_flush: bool = False
+    close_after_line: int | None = None
+    redirect_to: str | None = None
     connections: list[list[dict[str, Any]]] = field(default_factory=list)
     headers: list[dict[str, str]] = field(default_factory=list)
 
     async def handler(self, request: web.Request) -> web.StreamResponse:
         self.headers.append(dict(request.headers))
+        if self.redirect_to is not None:
+            raise web.HTTPTemporaryRedirect(self.redirect_to)
         if self.reject_status is not None:
             return web.json_response({"error": "unauthorized"}, status=self.reject_status)
 
@@ -98,6 +102,12 @@ class FakeAvaz:
                     )
                     await ws.send_json({"audio": audio, "chunk_index": line_idx})
                 line_idx += 1
+                if line_idx - 1 == self.close_after_line:
+                    await ws.send_json({"status": "closed", "chunks_generated": line_idx})
+                    break
+            else:
+                continue
+            break
 
         await ws.close()
         return ws
@@ -119,13 +129,18 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AVAZ_BASE_URL", raising=False)
 
 
-@pytest.fixture
-async def server() -> AsyncIterator[tuple[FakeAvaz, str]]:
-    fake = FakeAvaz()
+async def _start_server(fake: FakeAvaz) -> TestServer:
     app = web.Application()
     app.router.add_get("/api/tts/stream-input", fake.handler)
     test_server = TestServer(app)
     await test_server.start_server()
+    return test_server
+
+
+@pytest.fixture
+async def server() -> AsyncIterator[tuple[FakeAvaz, str]]:
+    fake = FakeAvaz()
+    test_server = await _start_server(fake)
     try:
         yield fake, str(test_server.make_url("/api"))
     finally:
@@ -221,6 +236,8 @@ def test_options() -> None:
 
     tts.update_options(speaker_id=3)
     assert tts._opts.speaker_id == 3
+    tts.update_options(speaker_id=None)
+    assert tts._opts.speaker_id is None
 
 
 @pytest.mark.parametrize("speaker_id", [-1, True, "5"])
@@ -257,7 +274,7 @@ async def test_stream_sends_one_sentence_per_line(
         "Merhaba, size nasıl yardımcı olabilirim?\n",
         "Toplam borcunuz 1.500 TL görünüyor.\n",
     ]
-    assert fake.headers[0]["X-API-Key"] == API_KEY
+    assert fake.headers[0]["Authorization"] == f"Bearer {API_KEY}"
     assert fake.headers[0]["User-Agent"].startswith("livekit-plugins-avaz/")
 
     assert {frame.sample_rate for frame in frames} == {48000}
@@ -410,3 +427,42 @@ async def test_no_response_after_flush_times_out(
     )
     with pytest.raises(APITimeoutError):
         await asyncio.wait_for(stream, 5)
+
+
+async def test_stream_closed_before_flush_fails(
+    server: tuple[FakeAvaz, str], make_tts: Any
+) -> None:
+    fake, _ = server
+    fake.close_after_line = 0
+    tts = make_tts()
+    # depending on when the early `closed` is read, this is a connection error or a
+    # missing-audio error, but never a silent success
+    with pytest.raises(APIError):
+        async with tts.stream(conn_options=CONN_OPTIONS) as stream:
+            stream.push_text("İlk cümle okunuyor ve sunucu ardından kapanıyor. Bu ikinci ")
+            await asyncio.sleep(0.3)  # Avaz answers the first sentence, then closes
+            stream.push_text("cümle sessizce kaybolmamalı.")
+            stream.end_input()
+            async for _ in stream:
+                pass
+
+
+async def test_api_key_is_not_sent_to_a_redirected_origin(make_tts: Any) -> None:
+    target = FakeAvaz()
+    target_server = await _start_server(target)
+    try:
+        source = FakeAvaz(redirect_to=str(target_server.make_url("/api/tts/stream-input")))
+        source_server = await _start_server(source)
+        try:
+            tts = avaz.TTS(base_url=str(source_server.make_url("/api")), api_key=API_KEY)
+            async with aiohttp.ClientSession() as session:
+                tts._session = session
+                assert await _synthesize_stream(tts, ["Yönlendirilen bağlantı da okunur."])
+                await tts.aclose()
+        finally:
+            await source_server.close()
+    finally:
+        await target_server.close()
+
+    assert source.headers[0]["Authorization"] == f"Bearer {API_KEY}"
+    assert "Authorization" not in target.headers[0]

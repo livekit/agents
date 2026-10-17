@@ -56,7 +56,6 @@ from .version import __version__
 
 NUM_CHANNELS = 1
 SAMPLE_WIDTH = 2
-API_KEY_HEADER = "X-API-Key"
 USER_AGENT = f"livekit-plugins-avaz/{__version__}"
 STREAM_PATH = "/tts/stream-input"
 # Avaz cuts its text buffer at `chunk_notation`. Sending one sentence per line keeps
@@ -167,14 +166,16 @@ class TTS(tts.TTS):
         """The provider name, ``"Avaz"``."""
         return "Avaz"
 
-    def update_options(self, *, speaker_id: NotGivenOr[int] = NOT_GIVEN) -> None:
+    def update_options(self, *, speaker_id: NotGivenOr[int | None] = NOT_GIVEN) -> None:
         """Update the voice used by streams created after this call.
 
         Args:
-            speaker_id: The voice to use, as listed by the Avaz ``/tts/voices`` endpoint.
+            speaker_id: The voice to use, as listed by the Avaz ``/tts/voices`` endpoint, or
+                ``None`` for the model's default voice.
         """
         if is_given(speaker_id):
-            _validate_speaker_id(speaker_id)
+            if speaker_id is not None:
+                _validate_speaker_id(speaker_id)
             self._opts.speaker_id = speaker_id
 
     def synthesize(
@@ -273,12 +274,12 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         ws = await self._connect()
         sent = received = 0
-        input_done = False
+        input_done = flush_sent = False
         # set while Avaz owes audio, so a slow LLM between sentences can't time out
         audio_owed = asyncio.Event()
 
         async def _send_task() -> None:
-            nonlocal sent, input_done
+            nonlocal sent, input_done, flush_sent
             try:
                 async for ev in sentence_stream:
                     # a newline inside a sentence would split it on the Avaz side
@@ -295,9 +296,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await ws.send_str(json.dumps({"text": text + CHUNK_NOTATION}))
 
                 if sent:
+                    flush_sent = True
                     await ws.send_str(json.dumps({"flush": True, "force_flush": True}))
-            except (aiohttp.ClientError, OSError):
-                pass  # the receive task reports why the connection ended
             finally:
                 input_done = True
                 audio_owed.set()
@@ -323,6 +323,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if received >= sent and not input_done:
                         audio_owed.clear()
                 elif data.get("status") == "closed":
+                    if not flush_sent:
+                        raise APIConnectionError("Avaz ended the stream before all text was sent")
                     break
 
             # Avaz sends nothing for a sentence it fails to synthesize
@@ -349,7 +351,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         """Open a WebSocket and send the voice settings, both within the connect timeout."""
         headers = {"User-Agent": USER_AGENT}
         if self._opts.api_key:
-            headers[API_KEY_HEADER] = self._opts.api_key
+            # aiohttp drops Authorization, unlike custom headers, on cross-origin redirects
+            headers["Authorization"] = f"Bearer {self._opts.api_key}"
 
         started_at = time.perf_counter()
         try:
