@@ -768,6 +768,29 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    # A heartbeat timeout, and any other transport-level failure,
+                    # arrives as ERROR rather than as a close frame. aiohttp feeds
+                    # exactly one of these and then reports CLOSED, so falling
+                    # through to the branch below still ended the stream -- but via
+                    # the close, raised as a generic "closed unexpectedly" carrying
+                    # only code 1006, with the reason on `ws.exception()` dropped.
+                    # Raising here keeps that reason as the cause, and stays
+                    # retryable so `_main_task` still reconnects. The reason is
+                    # read from `msg.data`: aiohttp puts it there for every ERROR,
+                    # but a protocol error (`WebSocketError`) only sets the close
+                    # code and never reaches `ws.exception()`.
+                    exc = msg.data if isinstance(msg.data, BaseException) else ws.exception()
+                    logger.warning(
+                        "AssemblyAI WebSocket error frame session=%s code=%s error=%r",
+                        self._session_id,
+                        ws.close_code,
+                        exc,
+                    )
+                    raise APIConnectionError(
+                        f"AssemblyAI connection error (code={ws.close_code})"
+                    ) from exc
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error(
                         "unexpected AssemblyAI message type=%s session=%s",
@@ -900,7 +923,22 @@ class SpeechStream(stt.SpeechStream):
             self._opts.speech_model,
             self._base_url,
         )
-        ws = await self._session.ws_connect(url, headers=headers)
+        ws = await self._session.ws_connect(
+            url,
+            headers=headers,
+            # aiohttp defaults `heartbeat` to None, so nothing probes the
+            # connection. On a half-open socket (no FIN, no RST) `recv_task` has
+            # no liveness bound: its read-timeout branch only leaves the loop on
+            # a graceful close, so the read side waits on a socket that will
+            # never speak again until `send_task`'s write finally fails, which
+            # waits on the kernel's TCP timeout -- and never, while no audio is
+            # being pushed. A ping is the only probe silence does not suppress:
+            # with the options this plugin sends (no `session_heartbeat`, no
+            # `acknowledge_silence`) the server is quiet while nobody speaks, so a
+            # plugin-side give-up on read inactivity would recycle healthy
+            # connections.
+            heartbeat=30.0,
+        )
         logger.debug(
             "AssemblyAI WebSocket connected status=%s",
             ws._response.status if ws._response is not None else None,
