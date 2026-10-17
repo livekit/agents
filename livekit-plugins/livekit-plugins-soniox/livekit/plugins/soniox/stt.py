@@ -519,6 +519,18 @@ class SpeechStream(stt.SpeechStream):
                 is_speaking = False
             else:
                 final_original.reset()
+                if is_speaking:
+                    # All tokens of the segment were retracted (non-final
+                    # tokens are not retained across messages): the endpoint
+                    # must still close the utterance, otherwise the session
+                    # stays stuck in speaking and the next utterance never
+                    # gets its own START_OF_SPEECH.
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=SpeechEventType.END_OF_SPEECH,
+                        )
+                    )
+                    is_speaking = False
 
         if not self._ws:
             return
