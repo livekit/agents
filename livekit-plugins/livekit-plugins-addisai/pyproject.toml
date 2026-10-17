@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-addisai"
 dynamic = ["version"]
-description = "AddisAI STT and TTS plugin for LiveKit Agents"
+description = "AddisAI STT, TTS, and realtime voice plugin for LiveKit Agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
@@ -20,6 +20,7 @@ keywords = [
     "afaan-oromo",
     "stt",
     "tts",
+    "realtime",
 ]
 classifiers = [
     "Intended Audience :: Developers",

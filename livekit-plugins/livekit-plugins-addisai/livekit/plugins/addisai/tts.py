@@ -17,10 +17,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import ipaddress
 import os
 import uuid
 from dataclasses import dataclass, replace
-from urllib.parse import unquote_to_bytes
+from urllib.parse import unquote_to_bytes, urlsplit
 
 import aiohttp
 
@@ -271,8 +272,10 @@ class ChunkedStream(tts.ChunkedStream):
             output_emitter.push(audio)
             return
 
+        _validate_audio_url(audio_url)
         async with self._addisai_tts._ensure_session().get(
             audio_url,
+            allow_redirects=False,
             timeout=aiohttp.ClientTimeout(
                 total=self._opts.download_timeout,
                 sock_connect=self._conn_options.timeout,
@@ -291,6 +294,23 @@ class ChunkedStream(tts.ChunkedStream):
             )
             async for chunk in response.content.iter_chunked(64 * 1024):
                 output_emitter.push(chunk)
+
+
+def _validate_audio_url(url: str) -> None:
+    parsed = urlsplit(url)
+    if not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+        raise APIConnectionError("AddisAI returned an invalid audio URL")
+    local = parsed.hostname in ("localhost", "::1")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_private or address.is_loopback or address.is_link_local):
+        local = address.is_loopback
+        if not local:
+            raise APIConnectionError("AddisAI returned a private-network audio URL")
+    if parsed.scheme != "https" and not (local and parsed.scheme == "http"):
+        raise APIConnectionError("AddisAI audio URLs must use HTTPS")
 
 
 def _audio_url(data: dict[str, object]) -> str:

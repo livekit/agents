@@ -132,7 +132,7 @@ def test_stt_rejects_unsupported_languages(language: str) -> None:
     with pytest.raises(ValueError, match="language must be one of"):
         addisai.STT(language=language, api_key="test-key")
 
- 
+
 async def test_tigrinya_batch_transcription() -> None:
     async def recognize(request: web.Request) -> web.Response:
         reader = await request.multipart()
@@ -158,3 +158,45 @@ async def test_tigrinya_batch_transcription() -> None:
 def test_rejects_invalid_request_timeout() -> None:
     with pytest.raises(ValueError, match="request_timeout must be positive"):
         addisai.STT(api_key="test-key", request_timeout=0)
+
+
+async def test_scribe_recognize_uses_current_api() -> None:
+    async def recognize(request: web.Request) -> web.Response:
+        assert request.query["backend"] == "turbo"
+        assert request.query["stream"] == "false"
+        assert request.query["speakers"] == "true"
+        reader = await request.multipart()
+        part = await reader.next()
+        assert part is not None and part.name == "audio"
+        assert (await part.read()).startswith(b"RIFF")
+        return web.json_response(
+            {"data": {"text": "ሰላም", "usage": {"settled": True, "credits_used": 1}}}
+        )
+
+    app = web.Application()
+    app.router.add_post("/api/v1/scribe/transcribe", recognize)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        client = addisai.ScribeSTT(
+            backend="turbo",
+            speakers=True,
+            api_key="test-key",
+            base_url=str(server.make_url("/")).rstrip("/"),
+            http_session=session,
+        )
+        event = await client.recognize(
+            _audio_frame(), conn_options=APIConnectOptions(max_retry=0, timeout=2)
+        )
+
+    assert client.capabilities.streaming is True
+    assert client.capabilities.interim_results is True
+    assert event.alternatives[0].text == "ሰላም"
+
+
+def test_latest_realtime_adapters_expose_livekit_capabilities() -> None:
+    tts_client = addisai.StreamingTTS(api_key="test-key")
+    assert tts_client.capabilities.streaming is True
+    assert tts_client.sample_rate == 44_100
+
+    model = addisai.RealtimeModel(api_key="test-key")
+    assert model.model == "አሌፍ-1.2-realtime-audio"
+    assert model.capabilities.user_transcription is False

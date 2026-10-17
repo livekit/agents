@@ -18,11 +18,25 @@ from livekit.agents import Plugin
 
 from .log import logger
 from .models import Language, TTSOutputFormat
+from .realtime import RealtimeModel
+from .scribe import ScribeBackend, ScribeChunk, ScribeSTT
+from .streaming_tts import StreamingTTS
 from .stt import STT
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "TTS", "Language", "TTSOutputFormat", "__version__"]
+__all__ = [
+    "STT",
+    "ScribeSTT",
+    "ScribeBackend",
+    "ScribeChunk",
+    "TTS",
+    "StreamingTTS",
+    "RealtimeModel",
+    "Language",
+    "TTSOutputFormat",
+    "__version__",
+]
 
 
 class AddisAIPlugin(Plugin):
