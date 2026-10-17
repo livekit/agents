@@ -617,6 +617,11 @@ class LLMStream(llm.LLMStream):
             delta.content, thinking_filter, final=choice.finish_reason is not None
         )
 
+        # Calls completed by this delta. A provider can send several parallel calls
+        # in one chunk (e.g. Ollama), so they are collected rather than returned at
+        # the first one.
+        flushed: llm.ChatChunk | None = None
+
         if delta.tool_calls:
             for tool in delta.tool_calls:
                 if not tool.function:
@@ -652,8 +657,11 @@ class LLMStream(llm.LLMStream):
                 elif tool.function.arguments:
                     self._fnc_raw_arguments += tool.function.arguments  # type: ignore
 
-                if call_chunk is not None:
-                    return call_chunk
+                if call_chunk is not None and call_chunk.delta is not None:
+                    if flushed is None or flushed.delta is None:
+                        flushed = call_chunk
+                    else:
+                        flushed.delta.tool_calls.extend(call_chunk.delta.tool_calls)
 
         if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
             finish_extra = getattr(delta, "extra_content", None)
@@ -664,18 +672,22 @@ class LLMStream(llm.LLMStream):
                     content=delta.content,
                     extra=finish_extra,
                     tool_calls=[
+                        *(flushed.delta.tool_calls if flushed and flushed.delta else []),
                         llm.FunctionToolCall(
                             arguments=self._fnc_raw_arguments or "",
                             name=self._fnc_name or "",
                             call_id=self._tool_call_id or "",
                             extra=self._tool_extra,
-                        )
+                        ),
                     ],
                 ),
             )
             self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
             self._tool_extra = None
             return call_chunk
+
+        if flushed is not None:
+            return flushed
 
         # Extract extra from delta (e.g., Google thought signatures on text parts)
         delta_extra = getattr(delta, "extra_content", None)
