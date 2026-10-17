@@ -212,5 +212,31 @@ async def test_retry_uses_fresh_stream_request_id(
 
 @pytest.mark.parametrize("language", ["en", "ha", "sw", ""])
 def test_tts_rejects_unsupported_languages(language: str) -> None:
-    with pytest.raises(ValueError, match="language must be either"):
+    with pytest.raises(ValueError, match="language must be one of"):
         addisai.TTS(language=language, api_key="test-key")
+
+ 
+async def test_tigrinya_voice_generation() -> None:
+    audio = _wav_audio()
+
+    async def generate(request: web.Request) -> web.Response:
+        body = await request.json()
+        assert body["language"] == "ti"
+        assert body["voice_id"] == "ti-berhane"
+        return web.json_response({"data": {
+            "id": "ti-clip", "mime_type": "audio/wav",
+            "audio_url": f"data:audio/wav;base64,{base64.b64encode(audio).decode()}",
+        }})
+
+    app = web.Application()
+    app.router.add_post("/api/v1/voice/generations", generate)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        client = addisai.TTS(
+            language="ti", voice="ti-berhane", api_key="test-key",
+            base_url=str(server.make_url("/")).rstrip("/"), http_session=session,
+        )
+        async with client.synthesize(
+            "ሰላም", conn_options=APIConnectOptions(max_retry=0, timeout=2),
+        ) as stream:
+            events = [event async for event in stream]
+    assert events

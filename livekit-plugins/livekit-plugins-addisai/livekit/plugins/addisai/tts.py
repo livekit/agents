@@ -86,8 +86,8 @@ class TTS(tts.TTS):
         """Create an AddisAI text-to-speech client.
 
         Args:
-            language: Synthesis language: ``"am"`` for Amharic or ``"om"`` for
-                Afaan Oromo.
+            language: Synthesis language: ``"am"`` (Amharic), ``"om"``
+                (Afaan Oromo), or ``"ti"`` (Tigrinya).
             voice: Voice ID from the dynamic AddisAI voice catalog.
             output_format: ``"mp3_44100"``, ``"wav_44100"``, or ``"pcm_16000"``.
                 The default is WAV-wrapped 16 kHz PCM for speech pipelines.

@@ -129,5 +129,32 @@ async def test_recognize_preserves_http_error() -> None:
 
 @pytest.mark.parametrize("language", ["en", "ha", "sw", ""])
 def test_stt_rejects_unsupported_languages(language: str) -> None:
-    with pytest.raises(ValueError, match="language must be either"):
+    with pytest.raises(ValueError, match="language must be one of"):
         addisai.STT(language=language, api_key="test-key")
+
+ 
+async def test_tigrinya_batch_transcription() -> None:
+    async def recognize(request: web.Request) -> web.Response:
+        reader = await request.multipart()
+        while part := await reader.next():
+            if part.name == "request_data":
+                assert json.loads(await part.text()) == {"language_code": "ti"}
+        return web.json_response({"data": {"transcription": "ሰላም"}})
+
+    app = web.Application()
+    app.router.add_post("/api/v2/stt", recognize)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        client = addisai.STT(
+            language="ti", api_key="test-key",
+            base_url=str(server.make_url("/")).rstrip("/"), http_session=session,
+        )
+        event = await client.recognize(
+            _audio_frame(), conn_options=APIConnectOptions(max_retry=0, timeout=2),
+        )
+    assert event.alternatives[0].language == "ti"
+    assert event.alternatives[0].text == "ሰላም"
+
+
+def test_rejects_invalid_request_timeout() -> None:
+    with pytest.raises(ValueError, match="request_timeout must be positive"):
+        addisai.STT(api_key="test-key", request_timeout=0)
