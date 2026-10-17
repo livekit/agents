@@ -71,7 +71,8 @@ def _prefix_hashes(
     A thinking block's signature is bound to the system prompt, the tool set and every
     earlier message, but not to earlier thinking blocks. When that prefix changes, for
     example after update_instructions() or update_tools(), the API rejects the block on
-    accounts that enforce the binding, so it must not be sent again.
+    accounts that enforce the binding, so it must not be sent again. The API binds the
+    tools as a set, so they are hashed sorted by name: a new order keeps a block valid.
     """
     tools = sorted(tools or [], key=lambda t: str(t.get("name")))
     digest = hashlib.sha256(json.dumps([system or [], tools], sort_keys=True, default=str).encode())
