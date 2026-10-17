@@ -95,10 +95,14 @@ def proc_main(args: ProcStartArgs) -> None:
 
     client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
     try:
-        client.initialize()
+        initialized = client.initialize()
     except Exception:
         log_handler.close()
         return  # initialization failed, exit (initialize will send an error to the worker)
+
+    if not initialized:
+        log_handler.close()
+        return  # shutdown requested before initialization, exit
 
     client.run()
 
@@ -618,7 +622,10 @@ def thread_main(
         )
 
         client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
-        client.initialize()
+        if not client.initialize():
+            # the worker closed the runner before it was initialized: nothing
+            # ran, exit cleanly without starting the job loop
+            return
         client.run()
     finally:
         args.join_fnc()

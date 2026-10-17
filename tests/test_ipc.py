@@ -702,6 +702,83 @@ async def test_thread_aclose_after_initialize_cancelled():
         release_init.set()  # never leave the runner blocked in its warm-up
 
 
+async def test_thread_aclose_during_pending_initialize():
+    """Regression test: aclose() racing a still-running (not cancelled) initialize().
+    The close used to resolve the initialize future while initialize()'s response read
+    was still pending, starting the monitor task as a second reader of the duplex
+    (a concurrent-read error that also failed aclose()), and initialize() then
+    crashed double-setting the already-failed future. aclose() must first stop the
+    in-flight read, and both calls must end cleanly."""
+    init_started = threading.Event()
+    release_init = threading.Event()
+
+    def _initialize_proc_gated(proc: JobProcess) -> None:
+        # hold the runner's warm-up so initialize()'s response read stays pending
+        init_started.set()
+        release_init.wait(timeout=10.0)
+
+    proc, _ = _create_thread_proc(close_timeout=2.0, initialize_process_fnc=_initialize_proc_gated)
+    await proc.start()
+
+    init_task = asyncio.create_task(proc.initialize())
+    await _poll_until(init_started.is_set)
+    assert not proc._initialize_fut.done(), "initialize() should still be reading"
+
+    close_task = asyncio.create_task(proc.aclose())
+    try:
+        # the deterministic window: aclose() resolves the initialize future while
+        # the runner is still warming up (the response read still pending), and
+        # only then is the warm-up allowed to finish
+        await _poll_until(proc._initialize_fut.done, timeout=5.0)
+        release_init.set()
+
+        await asyncio.wait_for(close_task, timeout=5.0)
+        assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+
+        # initialize() must fail cleanly (the close aborts its read), not crash
+        # double-setting the resolved future
+        with pytest.raises(asyncio.CancelledError):
+            await init_task
+    finally:
+        release_init.set()  # never leave the runner blocked in its warm-up
+
+
+async def test_thread_aclose_without_initialize():
+    """Regression test: start() then aclose() with no initialize(). The
+    ShutdownRequest is the runner's very first message; it used to die on its
+    "first message must be InitializeRequest" assert (an uncaught exception in
+    the runner thread) while the executor reported SUCCESS. The runner must exit
+    cleanly and the executor status must stay accurate."""
+    from livekit.agents.ipc import job_proc_lazy_main
+
+    thread_crashed = threading.Event()
+    original_thread_main = job_proc_lazy_main.thread_main
+
+    def _spy_thread_main(args) -> None:
+        try:
+            original_thread_main(args)
+        except BaseException:
+            thread_crashed.set()
+            raise
+
+    job_proc_lazy_main.thread_main = _spy_thread_main
+    try:
+        proc, start_args = _create_thread_proc(close_timeout=2.0)
+        await proc.start()
+
+        await asyncio.wait_for(proc.aclose(), timeout=5.0)
+    finally:
+        job_proc_lazy_main.thread_main = original_thread_main
+
+    # the executor can observe the join before the thread has fully unwound:
+    # wait for the thread itself before judging whether it crashed
+    await _poll_until(lambda: not proc._thread.is_alive())
+    assert not thread_crashed.is_set(), "runner crashed on the initial ShutdownRequest"
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.initialize_counter.value == 0
+    assert start_args.shutdown_counter.value == 0, "shutdown_cb isn't called when there is no job"
+
+
 async def test_thread_job_graceful_shutdown():
     proc, start_args = _create_thread_proc(close_timeout=10.0)
     start_args.shutdown_simulate_work_time = 0.3

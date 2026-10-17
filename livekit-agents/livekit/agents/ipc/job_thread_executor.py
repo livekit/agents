@@ -69,6 +69,7 @@ class ThreadJobExecutor:
 
         self._main_atask: asyncio.Task[None] | None = None
         self._initialize_fut = asyncio.Future[None]()
+        self._init_read_task: asyncio.Task[channel.Message] | None = None
         self._closing = False
         self._lock = asyncio.Lock()
         self._shutdown_ack_fut = asyncio.Future[None]()
@@ -180,10 +181,18 @@ class ThreadJobExecutor:
         try:
             logger.info("initializing job runner", extra=self.logging_extra())
             start_time = time.perf_counter()
-            init_res = await asyncio.wait_for(
-                channel.arecv_message(self._pch, proto.IPC_MESSAGES),
-                timeout=self._opts.initialize_timeout,
-            )
+            # the response read is tracked so a concurrent aclose() can stop it
+            # before the monitor task (started once the initialize future is
+            # resolved) becomes a second reader of the duplex
+            read_task = asyncio.create_task(channel.arecv_message(self._pch, proto.IPC_MESSAGES))
+            self._init_read_task = read_task
+            try:
+                init_res = await asyncio.wait_for(read_task, timeout=self._opts.initialize_timeout)
+            finally:
+                # the read must never outlive initialize()
+                if not read_task.done():
+                    await utils.aio.cancel_and_wait(read_task)
+                self._init_read_task = None
             assert isinstance(init_res, proto.InitializeResponse), (
                 "first message must be InitializeResponse"
             )
@@ -195,15 +204,21 @@ class ThreadJobExecutor:
                 },
             )
         except asyncio.TimeoutError:
-            self._initialize_fut.set_exception(
-                asyncio.TimeoutError("runner initialization timed out")
-            )
+            if not self._initialize_fut.done():
+                self._initialize_fut.set_exception(
+                    asyncio.TimeoutError("runner initialization timed out")
+                )
             raise
         except Exception as e:  # should be channel.ChannelClosed most of the time
-            self._initialize_fut.set_exception(e)
+            if not self._initialize_fut.done():
+                self._initialize_fut.set_exception(e)
             raise
         else:
-            self._initialize_fut.set_result(None)
+            if not self._initialize_fut.done():
+                # a concurrent aclose() may have failed the future while this read
+                # was completing; the main task treats both as "initialization
+                # did not complete"
+                self._initialize_fut.set_result(None)
 
     async def aclose(self) -> None:
         """
@@ -214,13 +229,21 @@ class ThreadJobExecutor:
             return
 
         if not self._initialize_fut.done():
-            # never initialized (a cancelled initialize() also leaves this future
-            # unresolved, its CancelledError isn't caught): unblock the main task
-            # waiting on this future so it starts the monitor task, the sole reader
-            # of the channel, and the runner can ack the queued shutdown request
-            self._initialize_fut.set_exception(
-                RuntimeError("runner closed before initialization completed")
-            )
+            # a still-running initialize() may be reading the channel; stop its
+            # read first, otherwise the monitor task started once the initialize
+            # future is resolved below becomes a second reader of the duplex
+            init_read_task = self._init_read_task
+            if init_read_task is not None and not init_read_task.done():
+                await utils.aio.cancel_and_wait(init_read_task)
+
+            if not self._initialize_fut.done():
+                # never initialized (a cancelled initialize() also leaves this future
+                # unresolved, its CancelledError isn't caught): unblock the main task
+                # waiting on this future so it starts the monitor task, the sole reader
+                # of the channel, and the runner can ack the queued shutdown request
+                self._initialize_fut.set_exception(
+                    RuntimeError("runner closed before initialization completed")
+                )
 
         self._closing = True
         with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
