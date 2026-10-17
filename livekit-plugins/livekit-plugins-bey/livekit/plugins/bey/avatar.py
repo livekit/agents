@@ -122,7 +122,7 @@ class AvatarSession(BaseAvatarSession):
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
 
-        for i in range(self._conn_options.max_retry):
+        for attempt in range(self._conn_options.max_retry + 1):
             try:
                 async with self._ensure_http_session().post(
                     f"{self._api_url}/v1/session",
@@ -143,13 +143,26 @@ class AvatarSession(BaseAvatarSession):
                         )
                     return
 
-            except Exception as e:
-                if isinstance(e, APIConnectionError):
-                    logger.warning("failed to call bey presence api", extra={"error": str(e)})
-                else:
-                    logger.exception("failed to call bey presence api")
-
-                if i < self._conn_options.max_retry - 1:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+            except APIStatusError as e:
+                # A 4xx such as a bad API key will fail the same way every time.
+                if not e.retryable:
+                    raise
+                logger.warning(
+                    "failed to call bey presence api",
+                    extra={"attempt": attempt + 1, "status_code": e.status_code},
+                )
+                if attempt >= self._conn_options.max_retry:
+                    raise
+                await asyncio.sleep(self._conn_options.retry_interval)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(
+                    "failed to call bey presence api",
+                    extra={"attempt": attempt + 1, "error": str(e)},
+                )
+                if attempt >= self._conn_options.max_retry:
+                    raise APIConnectionError(
+                        "Failed to start Bey Avatar Session after all retries"
+                    ) from e
+                await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to start Bey Avatar Session after all retries")
