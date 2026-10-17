@@ -46,6 +46,9 @@ class InferenceProcExecutor(SupervisedProc):
 
         self._runners = runners
         self._active_requests: dict[str, asyncio.Future[proto.InferenceResponse]] = {}
+        # set once the IPC read loop has ended: the process is gone (or being torn
+        # down) and no inference response can ever arrive anymore
+        self._requests_closed = False
 
     @property
     def process_kind(self) -> SupervisedProcKind:
@@ -66,22 +69,41 @@ class InferenceProcExecutor(SupervisedProc):
 
     @log_exceptions(logger=logger)
     async def _main_task(self, ipc_ch: aio.ChanReceiver[channel.Message]) -> None:
-        async for msg in ipc_ch:
-            if isinstance(msg, proto.InferenceResponse):
-                fut = self._active_requests.pop(msg.request_id, None)
-                if fut is None:
-                    logger.warning(
-                        "received unexpected inference response",
-                        extra={"request_id": msg.request_id},
-                    )
-                    continue
+        try:
+            async for msg in ipc_ch:
+                if isinstance(msg, proto.InferenceResponse):
+                    fut = self._active_requests.pop(msg.request_id, None)
+                    if fut is None:
+                        logger.warning(
+                            "received unexpected inference response",
+                            extra={"request_id": msg.request_id},
+                        )
+                        continue
 
-                with contextlib.suppress(asyncio.InvalidStateError):
-                    fut.set_result(msg)
+                    with contextlib.suppress(asyncio.InvalidStateError):
+                        fut.set_result(msg)
+        finally:
+            # the read task is the sole reader of the IPC channel; once it ends, the
+            # inference process is gone (channel closed) or the executor is being torn
+            # down. Reject the pending requests so do_inference() callers don't wait
+            # forever for a response that can never arrive.
+            self._fail_pending_requests()
+
+    def _fail_pending_requests(self) -> None:
+        self._requests_closed = True
+
+        pending_requests, self._active_requests = self._active_requests, {}
+        for fut in pending_requests.values():
+            with contextlib.suppress(asyncio.InvalidStateError):
+                fut.set_exception(RuntimeError("the inference process exited before responding"))
 
     async def do_inference(self, method: str, data: bytes) -> bytes | None:
         if not self.started:
             raise RuntimeError("process not started")
+
+        if self._requests_closed:
+            # the process is gone (or shutting down), a response would never arrive
+            raise RuntimeError("the inference process exited before responding")
 
         request_id = shortuuid("inference_req_")
         fut = asyncio.Future[proto.InferenceResponse]()

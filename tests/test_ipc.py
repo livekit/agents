@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import io
 import logging
@@ -17,6 +18,7 @@ import psutil
 import pytest
 
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
+from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
 from livekit.agents.utils.aio import duplex_unix
 from livekit.protocol import agent
@@ -771,3 +773,70 @@ def test_inference_executor_is_alive_after_proc_closed() -> None:
     executor._proc = proc
 
     assert executor.is_alive() is False
+
+
+class _EchoInferenceRunner(_InferenceRunner):
+    INFERENCE_METHOD = "test_echo"
+
+    def initialize(self) -> None: ...
+
+    def run(self, data: bytes) -> bytes | None:
+        return data
+
+
+class _BlockingInferenceRunner(_InferenceRunner):
+    INFERENCE_METHOD = "test_block"
+
+    def initialize(self) -> None: ...
+
+    def run(self, data: bytes) -> bytes | None:
+        # keep the request in-flight long enough for the process to be killed mid-request
+        time.sleep(10)
+        return data
+
+
+def _create_inf_executor() -> ipc.inference_proc_executor.InferenceProcExecutor:
+    return ipc.inference_proc_executor.InferenceProcExecutor(
+        runners={
+            _EchoInferenceRunner.INFERENCE_METHOD: _EchoInferenceRunner,
+            _BlockingInferenceRunner.INFERENCE_METHOD: _BlockingInferenceRunner,
+        },
+        initialize_timeout=20.0,
+        close_timeout=20.0,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        ping_interval=2.5,
+        ping_timeout=10.0,
+        high_ping_threshold=1.0,
+        mp_ctx=mp.get_context("spawn"),
+        loop=asyncio.get_running_loop(),
+        http_proxy=None,
+    )
+
+
+async def test_inference_proc_death_fails_pending_requests():
+    """Regression test: when the inference process dies (crash, OOM kill, manual
+    kill) with a request in flight, the pending do_inference() call must reject
+    with an error instead of waiting forever for a response that can never
+    arrive."""
+    executor = _create_inf_executor()
+    try:
+        await executor.start()
+        await executor.initialize()
+
+        # round-trip one request first, so a failure below can't be blamed on startup
+        res = await asyncio.wait_for(executor.do_inference("test_echo", b"hello"), timeout=20.0)
+        assert res == b"hello"
+
+        inf_task = asyncio.create_task(executor.do_inference("test_block", b""))
+        # do_inference registers the request and completes the send without ever
+        # yielding to the event loop, so once the request is visible it was sent
+        await _poll_until(lambda: len(executor._active_requests) == 1)
+
+        await executor.kill()
+
+        with pytest.raises(RuntimeError, match="exited before responding"):
+            await asyncio.wait_for(inf_task, timeout=5.0)
+    finally:
+        with contextlib.suppress(Exception):
+            await executor.aclose()
