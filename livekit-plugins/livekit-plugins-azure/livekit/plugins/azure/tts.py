@@ -198,6 +198,11 @@ class TTS(tts.TTS):
             auth_token=speech_auth_token,
         )
 
+    class Markup(tts.TTS.Markup):
+        # the input text goes into the SSML document as-is, so inline SSML is honored
+        def _provider_key(self) -> str:
+            return "ssml"
+
     @property
     def model(self) -> str:
         if self._opts.speech_endpoint:

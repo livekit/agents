@@ -13,14 +13,17 @@ import pytest
 
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.tts._provider_format import (
+    _SSML_TAGS,
     TranscriptMarkupStripper,
     convert_markup,
     expression_attribute,
     llm_instructions,
+    native_markup,
     normalize_markup,
     split_all_markup,
     strip_all_markup,
     strip_expr_markup,
+    union_native_markup,
 )
 
 pytestmark = pytest.mark.unit
@@ -622,3 +625,160 @@ def test_only_the_stranded_separator_goes() -> None:
     assert strip_expr_markup(turn) == "Intro:\n    indented text"
     # and a marker mid-line still leaves exactly one separator
     assert strip_all_markup('a <expr type="sound" label="laugh"/> b') == "a b"
+
+
+# ---------------------------------------------------------------------------
+# convert_markup: dialects say() text lowers onto (no LLM instructions)
+# ---------------------------------------------------------------------------
+
+SAY_TURN = (
+    'Hi <expr type="break" label="1s"/> there. '
+    '<expr type="expression" label="whispers"/> Secret <expr type="sound" label="laughs"/> ok. '
+    'Code <expr type="spell">A7X</expr>. <expr type="prosody" label="emphasis">Now</expr>.'
+)
+
+
+def test_convert_expr_ssml() -> None:
+    # <emphasis> is dropped: Polly rejects it on every engine but standard
+    assert convert_markup("ssml", SAY_TURN) == (
+        'Hi <break time="1000ms"/> there. Secret ok. '
+        'Code <say-as interpret-as="characters">A7X</say-as>. Now.'
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "label", "expected"),
+    [
+        ("ssml", "500ms", '<break time="500ms"/>'),
+        ("ssml", "1.5s", '<break time="1500ms"/>'),
+        ("ssml", "30s", '<break time="10000ms"/>'),  # Polly's limit
+        ("ssml", "a while", "<break/>"),  # not a duration: the default pause
+    ],
+)
+def test_convert_expr_ssml_break_limits(provider: str, label: str, expected: str) -> None:
+    assert convert_markup(provider, f'<expr type="break" label="{label}"/>') == expected
+
+
+def test_convert_expr_google_markup_keeps_only_pauses() -> None:
+    assert (
+        convert_markup("google_markup", SAY_TURN) == "Hi [pause] there. Secret ok. Code A7X. Now."
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "pause"),
+    [("200ms", "[pause short]"), ("1s", "[pause]"), ("2s", "[pause long]")],
+)
+def test_convert_expr_google_pause_levels(label: str, pause: str) -> None:
+    assert convert_markup("google_markup", f'<expr type="break" label="{label}"/>') == pause
+
+
+@pytest.mark.parametrize("provider", ["", "deepgram", "elevenlabs", "eleven_v3"])
+def test_convert_expr_without_a_dialect_drops_markers(provider: str) -> None:
+    # nothing would lower them, so they must not reach the TTS and be read aloud. The
+    # ElevenLabs dialects name only native markup: the plugin streams natively, so
+    # nothing converts for it
+    assert convert_markup(provider, SAY_TURN) == "Hi there. Secret ok. Code A7X. Now."
+
+
+def test_normalize_closes_markers_for_say_only_dialects() -> None:
+    assert normalize_markup("ssml", '<expr type="break" label="1s">') == (
+        '<expr type="break" label="1s"/>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# native markup: what a TTS reads, stripped from say() transcripts and history
+# ---------------------------------------------------------------------------
+
+
+# the free-form bracket cues a bracket dialect reads, and Google's pause-only ones
+_CUES = native_markup("eleven_v3")[1]
+_PAUSES = native_markup("google_markup")[1]
+
+
+def _strip_streamed(stripper: TranscriptMarkupStripper, chunks: list[str]) -> str:
+    return "".join(stripper.push(c) for c in chunks) + stripper.flush()
+
+
+def test_native_markup_per_dialect() -> None:
+    assert native_markup("ssml") == (_SSML_TAGS, None)
+    assert native_markup("elevenlabs") == (["break", "phoneme"], None)
+    assert _CUES is not None and native_markup("inworld")[1] is _CUES
+    assert _PAUSES is not None and _PAUSES is not _CUES
+    assert "emotion" in native_markup("cartesia")[0]
+    assert native_markup("") == ([], None)
+
+
+def test_stripper_removes_only_google_pauses() -> None:
+    # Google markup's only brackets are its pauses; any other bracket is prose
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_PAUSES)
+    out = _strip_streamed(stripper, ["Wait [pause] here. [pau", "se long]Option [A] is ready."])
+    assert out == "Wait here. Option [A] is ready."
+
+
+def test_google_pauses_keep_markdown_links_and_dont_hold_prose() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_PAUSES)
+    assert _strip_streamed(stripper, ["See [pause](https://x.io) now."]) == (
+        "See [pause](https://x.io) now."
+    )
+    # "[A]" is prose for Google, so a chunk ending on it isn't held for a link check
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_PAUSES)
+    assert stripper.push("Option [A]") == "Option [A]"
+    # a free-form dialect still holds it: it may be a cue or a link's label
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
+    assert stripper.push("Option [A]") == ""
+
+
+def test_union_native_markup_keeps_the_broadest_brackets() -> None:
+    assert union_native_markup([native_markup("ssml"), native_markup("google_markup")]) == (
+        sorted(_SSML_TAGS),
+        _PAUSES,
+    )
+    assert (
+        union_native_markup([native_markup("google_markup"), native_markup("eleven_v3")])[1]
+        is _CUES
+    )
+    assert union_native_markup([native_markup(""), native_markup("ssml")])[1] is None
+
+
+def test_stripper_removes_native_ssml_and_keeps_expr() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=_SSML_TAGS, strip_expr=False)
+    out = _strip_streamed(
+        stripper,
+        [
+            'Say <phoneme ph="x">tom',
+            'ato</phoneme> <expr type="break" label="1s"/> <say-as interpret-as="date">',
+            '1/2</say-as> <amazon:effect name="whispered">ok</amazon:effect> <break time="1s"/>end',
+        ],
+    )
+    assert out == 'Say tomato <expr type="break" label="1s"/> 1/2 ok end'
+
+
+def test_stripper_removes_bracket_cues_split_across_chunks() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
+    out = _strip_streamed(stripper, ["[whispers] Hello and [la", "ughs] done."])
+    assert out == "Hello and done."
+
+
+def test_stripper_leaves_markdown_links_for_a_bracket_dialect() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
+    assert _strip_streamed(stripper, ["See [the guide](https://x.io)."]) == (
+        "See [the guide](https://x.io)."
+    )
+
+
+def test_stripper_holds_a_bracket_until_a_streamed_link_can_complete() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
+    assert _strip_streamed(stripper, ["See [guide]", "(https://x.io)."]) == (
+        "See [guide](https://x.io)."
+    )
+    # a cue ending the stream is still a cue
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
+    assert _strip_streamed(stripper, ["Done [laughs]"]) == "Done"
+
+
+def test_stripper_releases_a_lone_bracket() -> None:
+    stripper = TranscriptMarkupStripper(xml_tags=[], brackets=_CUES)
+    out = stripper.push("[" + "a" * 300)
+    assert out.startswith("[a")  # past the hold cap, a lone "[" is plain text

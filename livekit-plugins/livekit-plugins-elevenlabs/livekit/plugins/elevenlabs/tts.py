@@ -221,6 +221,15 @@ class TTS(tts.TTS):
         self._opts_revision = 0
         self._warn_if_dialogue_model_ignores_options()
 
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            assert isinstance(self._tts, TTS)
+            if is_dialogue_model(self._tts._opts.model):
+                return "eleven_v3"  # v3/v4 read [whispers]-style cues, not SSML
+            # SSML parsing reads only <break> and <phoneme>, not the shared ssml dialect
+            return "elevenlabs" if self._tts._opts.enable_ssml_parsing else ""
+
     @property
     def model(self) -> str:
         return self._opts.model
