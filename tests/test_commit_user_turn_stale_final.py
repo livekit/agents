@@ -73,6 +73,9 @@ def _make_recognition() -> AudioRecognition:
     ar._audio_preflight_transcript = ""  # type: ignore[attr-defined]
     ar._final_transcript_confidence = []  # type: ignore[attr-defined]
     ar._sample_rate = None  # type: ignore[attr-defined]
+    ar._stt_consumer_atask = None  # type: ignore[attr-defined]
+    ar._stt_pipeline = None  # type: ignore[attr-defined]
+    ar._transcript_buffer = MagicMock()  # type: ignore[attr-defined]
     ar._hooks = MagicMock()  # type: ignore[attr-defined]
     ar._hooks.retrieve_chat_ctx.return_value = MagicMock()
     return ar
@@ -83,6 +86,9 @@ def _emit_final(ar: AudioRecognition, text: str, age_s: float) -> None:
     ar._final_transcript_received.set()
     ar._audio_transcript = text
     ar._last_final_transcript_time = time.time() - age_s
+    # the tests stub out the pipeline; default to "no audio trail" (None) so
+    # they exercise the reuse path exactly as before the last_audio_at guard
+    ar._stt_pipeline = None
 
 
 @pytest.mark.asyncio
@@ -143,6 +149,71 @@ async def test_no_final_at_all_still_waits_timeout():
 
     assert transcript == ""
     assert elapsed >= 0.25, "no final must still go through the flush-wait"
+
+
+@pytest.mark.asyncio
+async def test_audio_since_final_takes_flush_wait():
+    """Devin review bug 1: audio reached the STT after the final (no interim,
+    e.g. interim_results=False) — the turn is NOT complete, keep the flush-wait."""
+    ar = _make_recognition()
+    _emit_final(ar, "book", age_s=0.4)  # final in hand, recent
+    pipeline = MagicMock()
+    pipeline.last_audio_at = time.time()  # audio pushed after that final
+    ar._stt_pipeline = pipeline
+
+    t0 = time.monotonic()
+    fut = ar._commit_user_turn(audio_detached=False, transcript_timeout=0.3)
+    transcript = await asyncio.wait_for(fut, timeout=2.0)
+    elapsed = time.monotonic() - t0
+
+    assert transcript == "book"  # the old final is still what we hold
+    assert elapsed >= 0.25, "pending audio without final must go through the flush-wait"
+
+
+@pytest.mark.asyncio
+async def test_stale_final_event_from_prior_turn_waits_for_new_final():
+    """Devin review bug 2: the final event survived a previous commit — a new
+    manual turn with no final of its own must NOT reuse the stale event."""
+    ar = _make_recognition()
+    # prior turn: final arrived and was committed (cleanup resets timestamps
+    # but the event stays set) — the new turn starts empty
+    ar._final_transcript_received.set()
+    ar._last_final_transcript_time = None  # reset by commit cleanup
+    ar._stt_pipeline = None
+
+    t0 = time.monotonic()
+    fut = ar._commit_user_turn(audio_detached=False, transcript_timeout=0.3)
+    transcript = await asyncio.wait_for(fut, timeout=2.0)
+    elapsed = time.monotonic() - t0
+
+    assert transcript == ""
+    assert elapsed >= 0.25, "stale final event must not shortcut the new turn"
+
+
+@pytest.mark.asyncio
+async def test_clear_user_turn_releases_stale_final_event():
+    """After _clear_user_turn the stale final event must be released, so the
+    next commit waits for its own final (the event no longer leaks)."""
+    ar = _make_recognition()
+    ar._final_transcript_received.set()
+    ar._last_final_transcript_time = time.time()
+    ar._final_transcript_confidence = [0.9]
+    # attributes _clear_user_turn touches beyond the commit stub
+    ar._audio_preflight_transcript = ""
+    ar._speech_start_time = None
+    ar._last_speaking_time = None
+    ar._vad_speech_started = False
+    ar._user_turn_committed = False
+    ar._last_emitted_prediction = None
+    ar._turn_detector_stream = None
+    ar._active_vad_speech_started_at = None
+    ar._last_final_transcript_time = None
+
+    ar._clear_user_turn()
+
+    assert not ar._final_transcript_received.is_set(), (
+        "cleared turn must release the final event (it belonged to that turn)"
+    )
 
 
 @pytest.mark.asyncio

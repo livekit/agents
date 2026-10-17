@@ -59,6 +59,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._hooks.on_end_of_turn.return_value = False  # don't commit
     ar._stt = None
     ar._stt_pipeline = None
+    ar._final_transcript_received = asyncio.Event()  # commit-path cleanup clears it
     ar._turn_backchannel_over_agent = False
     ar._transcription_timeout_handle = None
     ar._audio_transcript = ""
@@ -359,6 +360,7 @@ class TestEotPredictionDedup:
         ar._turn_detector_stream.flush = MagicMock()
         ar._update_stt = MagicMock()  # type: ignore[method-assign]
         ar._user_turn_start = 123.0
+        ar._final_transcript_received = asyncio.Event()  # cleared by _clear_user_turn
 
         ar._clear_user_turn()
 
