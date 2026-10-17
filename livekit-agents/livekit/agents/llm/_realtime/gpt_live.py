@@ -63,6 +63,7 @@ _CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed"})
 _FATAL_ERROR_CODES = frozenset(
     {
         "insufficient_quota",
+        "credit_balance_exhausted",
         "invalid_api_key",
         "account_deactivated",
         "billing_hard_limit_reached",

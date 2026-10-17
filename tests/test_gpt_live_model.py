@@ -530,6 +530,31 @@ async def test_provider_content_is_only_logged_under_pii_fields(
         await model.aclose()
 
 
+async def test_an_exhausted_credit_balance_is_not_recoverable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        # the code is checked before the type, so the code itself must be fatal (#7805)
+        with pytest.raises(APIError) as fatal:
+            session._handle_event(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "insufficient_quota",
+                        "code": "credit_balance_exhausted",
+                        "message": "You have no credits remaining.",
+                    },
+                }
+            )
+        assert not fatal.value.retryable
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 @pytest.mark.parametrize("operation", ["connect", "send", "receive"])
 @pytest.mark.parametrize("max_retry", [0, 1])
 async def test_transport_errors_do_not_expose_provider_payloads(
