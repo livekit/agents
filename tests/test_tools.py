@@ -24,6 +24,7 @@ from livekit.agents.llm.utils import (
     function_arguments_to_pydantic_model,
     prepare_function_arguments,
 )
+from livekit.agents.voice import RunContext
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -548,6 +549,38 @@ class TestToolExecution:
         assert kwargs == {}
         output = await agent.mock_tool_in_agent(*args, **kwargs)
         assert output == {"arg1": "test", "opt_arg2": "test2"}
+
+    async def test_positional_only_tool_argument(self):
+        @function_tool
+        async def lookup_order(order_id: str, /) -> str:
+            """Look up an order by ID."""
+            return order_id
+
+        schema = build_legacy_openai_schema(lookup_order)["function"]["parameters"]
+        assert schema["properties"]["order_id"]["type"] == "string"
+        assert schema["required"] == ["order_id"]
+
+        args, kwargs = prepare_function_arguments(
+            fnc=lookup_order, json_arguments='{"order_id": "order-123"}'
+        )
+        assert await lookup_order(*args, **kwargs) == "order-123"
+
+    async def test_positional_only_tool_argument_without_call_context(self):
+        # A RunContext parameter is left out of the tool's argument model, so when
+        # there is no call context to inject it is simply absent from the parsed
+        # arguments. It still has a default, so the call stays valid positionally.
+        @function_tool
+        async def lookup_order(ctx: RunContext = None, order_id: str = "default", /) -> str:
+            """Look up an order by ID."""
+            return f"{ctx is None}:{order_id}"
+
+        schema = build_legacy_openai_schema(lookup_order)["function"]["parameters"]
+        assert set(schema["properties"]) == {"order_id"}
+
+        args, kwargs = prepare_function_arguments(
+            fnc=lookup_order, json_arguments='{"order_id": "order-123"}'
+        )
+        assert await lookup_order(*args, **kwargs) == "True:order-123"
 
     async def test_raw_function_tool_execution(self):
         agent = DummyAgent()
