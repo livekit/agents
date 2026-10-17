@@ -134,7 +134,7 @@ Use Python 3.11 or later for this feature. Existing TTS use still supports 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra installs `rimelabs-sdk>=0.1.0a14` from PyPI. For source
+The realtime extra installs `rimelabs-sdk>=0.1.0a16` from PyPI. For source
 development, install this plugin with its realtime extra from the repository root:
 
 ```sh
