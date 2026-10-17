@@ -1046,7 +1046,24 @@ class AudioRecognition:
             return fut
 
         async def _commit_user_turn() -> None:
-            if self._last_final_transcript_time is None or (
+            if self._final_transcript_received.is_set() and not self._audio_interim_transcript:
+                # A final transcript for this turn is already in hand and the STT has
+                # emitted nothing since it (an interim would have repopulated
+                # _audio_interim_transcript). A streaming STT will not re-finalize
+                # audio it already closed, so waiting the full transcript_timeout here
+                # can only add latency, not correctness (see livekit/agents#7517).
+                # Skip the flush-wait and commit the final we have.
+                logger.debug(
+                    "commit_user_turn: reusing last final transcript",
+                    extra={
+                        "final_age": (
+                            time.time() - self._last_final_transcript_time
+                            if self._last_final_transcript_time is not None
+                            else None
+                        )
+                    },
+                )
+            elif self._last_final_transcript_time is None or (
                 time.time() - self._last_final_transcript_time > 0.5
             ):
                 # if the last final transcript is received more than 0.5s ago
