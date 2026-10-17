@@ -390,11 +390,15 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
 
     loop.set_exception_handler(_loop_exception_handler)
 
+    worker_failed = False
+
     async def _worker_run(worker: AgentServer) -> None:
+        nonlocal worker_failed
         try:
             await server.run(devmode=devmode, unregistered=False)
         except Exception:
             logger.exception("worker failed")
+            worker_failed = True
 
     watch_client = None
     if args.cli_addr:
@@ -445,6 +449,14 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
                 loop.run_until_complete(watch_client.aclose())
         except _ExitCli:
             pass  # stray from first signal — ignore
+        except Exception:
+            # run() can fail before the server finished initializing (missing
+            # config, unreachable server, no rtc_session registered), leaving
+            # drain()/aclose() to hit uninitialized internals. Don't let that
+            # secondary error mask the original "worker failed" one.
+            if not worker_failed:
+                raise
+            logger.warning("error during shutdown after worker failure", exc_info=True)
     finally:
         # Re-enable force exit for the final cleanup phase
         for sig in HANDLED_SIGNALS:
@@ -466,6 +478,12 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
             except Exception:
                 pass
             loop.close()
+
+    if worker_failed:
+        # the failure was already logged by _worker_run; exit non-zero so
+        # orchestrators (systemd, docker, k8s probes, CI) can detect it
+        # instead of treating the dead worker as a clean stop
+        raise SystemExit(1)
 
 
 def run_app(server: AgentServer | WorkerOptions) -> None:
