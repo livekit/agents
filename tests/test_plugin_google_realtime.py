@@ -273,6 +273,7 @@ async def test_ttft_is_unavailable_without_a_response_start_event(
         session._handle_usage_metadata(
             types.UsageMetadata(prompt_token_count=10, response_token_count=5, total_token_count=15)
         )
+        session._mark_current_generation_done()
 
         assert len(collected) == 1
         assert collected[0].ttft == -1
