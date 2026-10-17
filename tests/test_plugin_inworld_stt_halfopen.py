@@ -1,4 +1,5 @@
 """Tests for Inworld STT half-open socket detection (#7900)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -110,7 +111,11 @@ class _FakeSession:
 
 def _stream(session: _FakeSession) -> inworld_stt.SpeechStream:
     """Create a SpeechStream with a fake session."""
-    stt = inworld_stt.STT(api_key="sk_test", base_url="http://localhost:8000/", http_session=session)  # type: ignore[arg-type]
+    stt = inworld_stt.STT(
+        api_key="sk_test",
+        base_url="http://localhost:8000/",
+        http_session=session,  # type: ignore[arg-type]
+    )
     return stt.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
 

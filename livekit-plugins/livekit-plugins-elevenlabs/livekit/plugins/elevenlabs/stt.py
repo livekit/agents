@@ -635,9 +635,7 @@ class SpeechStream(stt.SpeechStream):
                     # the heartbeat closes the socket when a ping goes unanswered,
                     # and that surfaces here rather than as a close frame.
                     # ws.exception() is the only place the reason survives.
-                    raise APIConnectionError(
-                        "ElevenLabs STT connection lost"
-                    ) from ws.exception()
+                    raise APIConnectionError("ElevenLabs STT connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected ElevenLabs STT message type %s", msg.type)

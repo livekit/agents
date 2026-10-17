@@ -1,4 +1,5 @@
 """Tests for ElevenLabs STT half-open socket detection (#7900)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -97,7 +98,9 @@ class _FakeSession:
 def _stream(session: _FakeSession) -> elevenlabs_stt.SpeechStream:
     """Create a SpeechStream with a fake session."""
     stt = elevenlabs_stt.STT(
-        api_key="sk_test", base_url="http://localhost:8000/v1", http_session=session  # type: ignore[arg-type]
+        api_key="sk_test",
+        base_url="http://localhost:8000/v1",
+        http_session=session,  # type: ignore[arg-type]
     )
     return stt.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
 

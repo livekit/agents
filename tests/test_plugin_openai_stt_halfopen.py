@@ -1,4 +1,5 @@
 """Tests for OpenAI STT half-open socket detection (#7900)."""
+
 from __future__ import annotations
 
 import asyncio
