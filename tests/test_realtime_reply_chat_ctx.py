@@ -6,6 +6,10 @@ failure (e.g. the plugin's "update_chat_ctx timed out.", where the items were
 already sent and only the ack timed out) the reply is still generated instead of
 dropping the whole turn. Unexpected errors mark the SpeechHandle done with the
 error (observable via SpeechHandle.exception()) without crashing the turn task.
+
+The push also has to survive overlapping with another one: both diff their own
+snapshot of the server conversation, so a snapshot taken before the other push
+is acked turns the other push's items into deletes.
 """
 
 from __future__ import annotations
@@ -56,7 +60,10 @@ class _FakeActivity(SimpleNamespace):
             ),
             _realtime_generation_task=_realtime_generation_task,
             generation_calls=generation_calls,
+            _rt_chat_ctx_push_lock=asyncio.Lock(),
         )
+        # the real push helper, so the lock it takes is part of what is under test
+        self._extend_rt_chat_ctx = AgentActivity._extend_rt_chat_ctx.__get__(self)
 
 
 def _run_reply_task(activity: _FakeActivity, speech_handle: SpeechHandle) -> asyncio.Task[None]:
@@ -135,3 +142,61 @@ async def test_update_chat_ctx_unexpected_error_fails_speech_handle() -> None:
     assert activity.generation_calls == []
     assert handle.done()
     assert isinstance(handle.exception(), RuntimeError)
+
+
+class _MirroredRealtimeSession(FakeRealtimeSession):
+    """A session whose `chat_ctx` is a mirror the server only updates on ack.
+
+    The OpenAI plugin works this way: `update_chat_ctx` diffs the context it is handed
+    against its mirror of the server conversation, sending creates for what is new and
+    deletes for what is missing, and the mirror only catches up when the server acks.
+    Items a caller's snapshot predates therefore come back out of the diff as deletes.
+    """
+
+    def __init__(self, model: FakeRealtimeModel) -> None:
+        super().__init__(model)
+        self.ack = asyncio.Event()
+        self.deleted: list[str] = []
+        # the plugin's own _update_chat_ctx_lock: it diffs, sends and waits for the ack
+        # while holding it, so a push that overlaps one diffs the mirror the earlier
+        # push left behind -- never the one it saw when it built its context
+        self._update_lock = asyncio.Lock()
+
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        async with self._update_lock:
+            requested = {item.id for item in chat_ctx.items}
+            self.deleted.extend(
+                item.id for item in self._chat_ctx.items if item.id not in requested
+            )
+            await self.ack.wait()
+            self._chat_ctx = chat_ctx
+
+
+async def test_overlapping_pushes_keep_each_other_s_items() -> None:
+    """Regression for https://github.com/livekit/agents/issues/7880.
+
+    A function tool returns while another speech is queued, so its output push waits
+    for its ack. A text user turn queued in the meantime used to snapshot the server
+    conversation before that ack landed, and then send a delete for the
+    `function_call_output` it could not see -- leaving the function call open with no
+    output, so the tool reply and every later response were generated without the
+    result and the model reports the operation as still running.
+    """
+    rt_session = _MirroredRealtimeSession(FakeRealtimeModel())
+    activity = _FakeActivity(rt_session)
+
+    fnc_output = llm.FunctionCallOutput(
+        call_id="call_weather", name="get_weather", output="sunny", is_error=False
+    )
+    user_msg = llm.ChatMessage(role="user", content=["is it still raining?"])
+
+    tool_push = asyncio.create_task(activity._extend_rt_chat_ctx([fnc_output]))
+    await asyncio.sleep(0)  # the tool output is sent and waiting for its ack
+    text_push = asyncio.create_task(activity._extend_rt_chat_ctx([user_msg]))
+    await asyncio.sleep(0)  # the text turn must not snapshot behind the pending ack
+
+    rt_session.ack.set()
+    await asyncio.gather(tool_push, text_push)
+
+    assert rt_session.deleted == []
+    assert [item.id for item in rt_session.chat_ctx.items] == [fnc_output.id, user_msg.id]
