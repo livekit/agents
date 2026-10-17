@@ -667,10 +667,15 @@ class LLMStream(llm.LLMStream):
                             usage = response.usage_metadata
                             if initial_prompt_tokens is None:
                                 initial_prompt_tokens = usage.prompt_token_count
+                            # thinking tokens are billed as output but reported apart from
+                            # the answer's; CompletionUsage counts them in completion_tokens
+                            thoughts_tokens = usage.thoughts_token_count or 0
                             hop_usage = llm.CompletionUsage(
-                                completion_tokens=usage.candidates_token_count or 0,
+                                completion_tokens=(usage.candidates_token_count or 0)
+                                + thoughts_tokens,
                                 prompt_tokens=usage.prompt_token_count or 0,
                                 prompt_cached_tokens=usage.cached_content_token_count or 0,
+                                reasoning_tokens=thoughts_tokens,
                                 total_tokens=usage.total_token_count or 0,
                             )
                             self._event_ch.send_nowait(
@@ -685,6 +690,8 @@ class LLMStream(llm.LLMStream):
                                         + hop_usage.prompt_tokens,
                                         prompt_cached_tokens=settled_usage.prompt_cached_tokens
                                         + hop_usage.prompt_cached_tokens,
+                                        reasoning_tokens=settled_usage.reasoning_tokens
+                                        + hop_usage.reasoning_tokens,
                                         total_tokens=settled_usage.total_tokens
                                         + hop_usage.total_tokens,
                                     ),
@@ -739,6 +746,8 @@ class LLMStream(llm.LLMStream):
                         prompt_tokens=settled_usage.prompt_tokens + hop_usage.prompt_tokens,
                         prompt_cached_tokens=settled_usage.prompt_cached_tokens
                         + hop_usage.prompt_cached_tokens,
+                        reasoning_tokens=settled_usage.reasoning_tokens
+                        + hop_usage.reasoning_tokens,
                         total_tokens=settled_usage.total_tokens + hop_usage.total_tokens,
                     )
 
