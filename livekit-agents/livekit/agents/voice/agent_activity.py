@@ -4160,6 +4160,14 @@ class AgentActivity(RecognitionHooks):
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
             msg = chat_ctx.add_message(role="user", content=user_input)
+            # The agent's own context has to carry the message before the push, not
+            # after it: the push waits for the server to acknowledge the item, and a
+            # context copied from this agent while that is in flight would not have
+            # the message in it. The next update built from that copy asks the server
+            # to delete an item it has just acknowledged, and the reply is then
+            # generated without the user's turn. Both tool-output pushes already
+            # record their items locally first for the same reason.
+            self._agent._chat_ctx._upsert_item(msg)
             try:
                 await self._rt_session.update_chat_ctx(chat_ctx)
             except llm.RealtimeError as e:
@@ -4171,9 +4179,12 @@ class AgentActivity(RecognitionHooks):
                 )
             except Exception as e:
                 logger.exception("failed to update the chat context before generating the reply")
+                # the turn is over and nothing was sent, so the message must not be
+                # left behind in the history of a turn that never happened
+                with contextlib.suppress(ValueError):
+                    self._agent._chat_ctx.remove(msg)
                 speech_handle._mark_done(error=e)
                 return
-            self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
         # inside on_enter, hide flagged tools even when no tools= was passed (fall back to self.tools)

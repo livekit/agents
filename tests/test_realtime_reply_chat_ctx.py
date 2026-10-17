@@ -135,3 +135,77 @@ async def test_update_chat_ctx_unexpected_error_fails_speech_handle() -> None:
     assert activity.generation_calls == []
     assert handle.done()
     assert isinstance(handle.exception(), RuntimeError)
+
+
+# --- when the user message becomes visible in the agent's own context --------
+
+
+async def test_the_user_message_is_recorded_before_the_push() -> None:
+    """Regression for https://github.com/livekit/agents/issues/7906.
+
+    The push waits for the server to acknowledge the item. A context copied from
+    this agent while that is in flight used to have no user message in it, so the
+    next update built from that copy asked the server to delete an item it had
+    just acknowledged, and the reply was generated without the user's turn.
+    """
+    rt_session = FakeRealtimeModel().session()
+    activity = _FakeActivity(rt_session)
+    during: list[list[str]] = []
+
+    async def update(chat_ctx: llm.ChatContext) -> None:
+        # exactly what a concurrent `agent.chat_ctx.copy()` would contain
+        during.append([item.id for item in activity._agent._chat_ctx.items])
+
+    rt_session.update_chat_ctx = update  # type: ignore[method-assign]
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+
+    task = _run_reply_task(activity, handle)
+    await _resolve_reply_future(rt_session, task)
+    await task
+
+    assert len(during) == 1
+    assert len(during[0]) == 1, "the user message was not in the agent context during the push"
+
+
+async def test_the_item_added_event_still_fires_after_the_push() -> None:
+    """Recording the message early must not move the event that announces it."""
+    rt_session = FakeRealtimeModel().session()
+    activity = _FakeActivity(rt_session)
+    order: list[str] = []
+
+    async def update(chat_ctx: llm.ChatContext) -> None:
+        order.append("push")
+
+    rt_session.update_chat_ctx = update  # type: ignore[method-assign]
+    activity._session = SimpleNamespace(
+        _conversation_item_added=lambda msg: order.append("item_added"),
+        _update_agent_state=lambda state: None,
+    )
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+
+    task = _run_reply_task(activity, handle)
+    await _resolve_reply_future(rt_session, task)
+    await task
+
+    assert order == ["push", "item_added"]
+
+
+async def test_an_unexpected_error_leaves_no_message_behind() -> None:
+    """The turn is over and nothing was sent, so the history must not keep it.
+
+    A RealtimeError is different: the items did reach the server and only the
+    ack timed out, so that message stays (asserted above).
+    """
+    rt_session = FakeRealtimeModel().session()
+    rt_session.update_error = RuntimeError("boom")
+    activity = _FakeActivity(rt_session)
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+
+    await _run_reply_task(activity, handle)
+
+    assert handle.done()
+    assert isinstance(handle.exception(), RuntimeError)
+    assert [item.id for item in activity._agent._chat_ctx.items] == []
