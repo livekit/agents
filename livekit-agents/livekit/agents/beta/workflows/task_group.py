@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine
@@ -18,6 +19,8 @@ from ...llm.tool_context import ToolError, ToolFlag, function_tool
 from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.agent import AgentTask
 
+logger = logging.getLogger("task-group")
+
 
 @dataclass
 class _FactoryInfo:
@@ -29,6 +32,9 @@ class _FactoryInfo:
 @dataclass
 class TaskGroupResult:
     task_results: dict[str, Any]
+    # Set when summarize_chat_ctx was requested but could not be applied. The results
+    # above are still complete; only the context condensation was skipped.
+    summarize_error: Exception | None = None
 
 
 @dataclass
@@ -158,7 +164,16 @@ class TaskGroup(AgentTask[TaskGroupResult]):
 
                 await self.update_chat_ctx(summarized_chat_ctx)
             except Exception as e:
-                self.complete(e)
+                # Summarizing is post-processing over context the tasks already produced.
+                # A provider failure here -- or a realtime model, which is not an LLM and
+                # cannot summarize at all -- must not discard the results the tasks
+                # returned. Report it and hand those results over untouched.
+                logger.warning(
+                    "task group could not summarize the chat context; "
+                    "returning the task results without it",
+                    exc_info=True,
+                )
+                self.complete(TaskGroupResult(task_results=task_results, summarize_error=e))
                 return
 
         self.complete(TaskGroupResult(task_results=task_results))
