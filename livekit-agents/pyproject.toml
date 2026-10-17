@@ -142,6 +142,7 @@ gradium = ["livekit-plugins-gradium>=1.8.8"]
 xai = ["livekit-plugins-xai>=1.8.8"]
 phonic = ["livekit-plugins-phonic>=1.8.8"]
 did = ["livekit-plugins-did>=1.8.8"]
+zoom-ai = ["livekit-plugins-zoom-ai>=1.8.8"]
 
 
 [project.urls]
