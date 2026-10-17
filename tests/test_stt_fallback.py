@@ -7,17 +7,21 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, utils
+from livekit.agents.metrics import STTMetrics
 from livekit.agents.stt import (
     STT,
     AvailabilityChangedEvent,
     FallbackAdapter,
     RecognizeStream,
     SpeechEvent,
+    SpeechEventType,
     STTCapabilities,
+    STTError,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import AudioBuffer
+from livekit.agents.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
 
 from .fake_stt import FakeSTT
 from .fake_vad import FakeVAD
@@ -99,6 +103,141 @@ async def test_aclose_closes_automatically_created_stream_adapters() -> None:
 
     assert _metrics_listener_count(stt) == baseline
     assert stt.close_count == 0
+    assert _metrics_listener_count(fallback) == 0
+
+
+class _FlushVAD(VAD):
+    """Treat explicitly flushed audio as one utterance, without wall-clock timing."""
+
+    def __init__(self) -> None:
+        super().__init__(capabilities=VADCapabilities(update_interval=0.1))
+
+    def stream(self) -> VADStream:
+        return _FlushVADStream(self)
+
+
+class _FlushVADStream(VADStream):
+    async def _main_task(self) -> None:
+        frames: list[rtc.AudioFrame] = []
+        async for item in self._input_ch:
+            if isinstance(item, rtc.AudioFrame):
+                frames.append(item)
+            elif frames:
+                self._event_ch.send_nowait(
+                    VADEvent(
+                        type=VADEventType.END_OF_SPEECH,
+                        samples_index=0,
+                        timestamp=0,
+                        speech_duration=sum(frame.duration for frame in frames),
+                        silence_duration=0,
+                        frames=frames,
+                    )
+                )
+                frames = []
+
+
+class _RecordingBatchSTT(_NonStreamingSTT):
+    def __init__(self, *, fail: bool = False) -> None:
+        super().__init__()
+        self._fake_exception = APIConnectionError("primary unavailable") if fail else None
+        self._fake_transcript = "transcribed utterance"
+        self.buffers: list[bytes] = []
+
+    async def _recognize_impl(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: str | None,
+        conn_options: APIConnectOptions,
+    ) -> SpeechEvent:
+        self.buffers.append(utils.merge_frames(buffer).data.tobytes())
+        return await super()._recognize_impl(buffer, language=language, conn_options=conn_options)
+
+
+@pytest.mark.parametrize("fail_primary", [False, True])
+@pytest.mark.parametrize("end_input", [False, True])
+async def test_batch_fallback_preserves_the_failed_utterance(
+    fail_primary: bool, end_input: bool
+) -> None:
+    primary = _RecordingBatchSTT(fail=fail_primary)
+    backup = _RecordingBatchSTT()
+    fallback = FallbackAdapter([primary, backup], vad=_FlushVAD(), max_retry_per_stt=0)
+    metrics: list[STTMetrics] = []
+    fallback.on("metrics_collected", metrics.append)
+    frames = [
+        rtc.AudioFrame(
+            data=bytes([value, 0]) * 160, sample_rate=16000, num_channels=1, samples_per_channel=160
+        )
+        for value in (1, 2)
+    ]
+    expected_audio = b"".join(frame.data.tobytes() for frame in frames)
+    try:
+        async with fallback.stream() as stream:
+            for frame in frames:
+                stream.push_frame(frame)
+            stream.flush()
+            if end_input:
+                stream.end_input()
+
+            async def final_transcript() -> SpeechEvent:
+                async for event in stream:
+                    if event.type == SpeechEventType.FINAL_TRANSCRIPT:
+                        return event
+                pytest.fail("no final transcript")
+
+            event = await asyncio.wait_for(final_transcript(), timeout=1)
+            assert event.alternatives[0].text == "transcribed utterance"
+            assert primary.buffers and all(buf == expected_audio for buf in primary.buffers)
+            assert backup.buffers == ([expected_audio] if fail_primary else [])
+            assert [m.audio_duration for m in metrics] == [0.02]
+
+            if not end_input:
+                # The same stream must handle another utterance without replaying the first.
+                stream.push_frame(frames[1])
+                stream.flush()
+                next_event = await asyncio.wait_for(final_transcript(), timeout=1)
+                assert next_event.alternatives[0].text == "transcribed utterance"
+                active = backup if fail_primary else primary
+                assert active.buffers == [expected_audio, frames[1].data.tobytes()]
+                assert [m.audio_duration for m in metrics] == [0.02, 0.01]
+                stream.end_input()
+
+            assert not [
+                event async for event in stream if event.type == SpeechEventType.FINAL_TRANSCRIPT
+            ]
+    finally:
+        await fallback.aclose()
+
+
+async def test_batch_fallback_reports_when_all_providers_fail() -> None:
+    fallback = FallbackAdapter(
+        [_RecordingBatchSTT(fail=True), _RecordingBatchSTT(fail=True)],
+        vad=_FlushVAD(),
+        max_retry_per_stt=0,
+    )
+    errors: list[STTError] = []
+    fallback.on("error", errors.append)
+    try:
+        async with fallback.stream() as stream:
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=b"\x01\x00" * 160,
+                    sample_rate=16000,
+                    num_channels=1,
+                    samples_per_channel=160,
+                )
+            )
+            stream.end_input()
+
+            async def collect() -> list[SpeechEvent]:
+                return [event async for event in stream]
+
+            with pytest.raises(APIConnectionError, match="all STTs failed"):
+                await asyncio.wait_for(collect(), timeout=1)
+        assert len(errors) == 1
+        assert not errors[0].recoverable
+    finally:
+        await fallback.aclose()
 
 
 async def test_reports_active_instance_model_and_provider() -> None:

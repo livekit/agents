@@ -17,6 +17,7 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from ..utils import aio
 from ..utils.audio import AudioBuffer
 from ..vad import VAD
+from .stream_adapter import StreamAdapter
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 if TYPE_CHECKING:
@@ -71,12 +72,12 @@ class FallbackAdapter(
                     "Provide a VAD to enable stt.StreamAdapter automatically "
                     "or wrap them with stt.StreamAdapter before using this adapter."
                 )
-            from ..stt import StreamAdapter
-
             adapted_stt: list[STT] = []
             for stt_instance in stt:
                 if not stt_instance.capabilities.streaming:
                     stt_instance = StreamAdapter(stt=stt_instance, vad=vad)
+                    # recognize() forwards the wrapped provider's metrics already.
+                    stt_instance._recognize_metrics_needed = False
                     owned_stream_adapters.append(stt_instance)
                 adapted_stt.append(stt_instance)
             stt = adapted_stt
@@ -119,6 +120,14 @@ class FallbackAdapter(
         for stt_instance in self._stt_instances:
             stt_instance.on("metrics_collected", self._on_metrics_collected)
         self._recognize_metrics_needed = False  # don't emit metrics via fallback adapter
+
+        # Batch providers need the same complete utterance on every attempt. Wrapping
+        # each provider's stream separately loses that audio when the first one fails.
+        self._batch_stream_adapter = (
+            StreamAdapter(stt=self, vad=vad)
+            if len(non_streaming_stt) == len(stt) and vad is not None
+            else None
+        )
 
     def _next_instance(self) -> STT:
         """The instance the next request goes to first: the first one marked available, or
@@ -309,6 +318,8 @@ class FallbackAdapter(
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
+        if self._batch_stream_adapter is not None:
+            return self._batch_stream_adapter.stream(language=language, conn_options=conn_options)
         return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
 
     def prewarm(self) -> None:
@@ -333,6 +344,9 @@ class FallbackAdapter(
 
         for stream_adapter in self._owned_stream_adapters:
             await stream_adapter.aclose()
+
+        if self._batch_stream_adapter is not None:
+            await self._batch_stream_adapter.aclose()
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
