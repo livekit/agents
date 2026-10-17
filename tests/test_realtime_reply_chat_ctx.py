@@ -157,12 +157,19 @@ class _MirroredRealtimeSession(FakeRealtimeSession):
         super().__init__(model)
         self.ack = asyncio.Event()
         self.deleted: list[str] = []
+        # the plugin's own _update_chat_ctx_lock: it diffs, sends and waits for the ack
+        # while holding it, so a push that overlaps one diffs the mirror the earlier
+        # push left behind -- never the one it saw when it built its context
+        self._update_lock = asyncio.Lock()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        requested = {item.id for item in chat_ctx.items}
-        await self.ack.wait()
-        self.deleted.extend(item.id for item in self._chat_ctx.items if item.id not in requested)
-        self._chat_ctx = chat_ctx
+        async with self._update_lock:
+            requested = {item.id for item in chat_ctx.items}
+            self.deleted.extend(
+                item.id for item in self._chat_ctx.items if item.id not in requested
+            )
+            await self.ack.wait()
+            self._chat_ctx = chat_ctx
 
 
 async def test_overlapping_pushes_keep_each_other_s_items() -> None:
