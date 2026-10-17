@@ -27,8 +27,8 @@ API_BASE_URL = "https://api.addisassistant.com"
 
 
 def validate_language(language: str) -> Language:
-    if language not in ("am", "om"):
-        raise ValueError("language must be either 'am' (Amharic) or 'om' (Afaan Oromo)")
+    if language not in ("am", "om", "ti"):
+        raise ValueError("language must be one of 'am' (Amharic), 'om' (Afaan Oromo), or 'ti' (Tigrinya)")
     return cast(Language, language)
 
 

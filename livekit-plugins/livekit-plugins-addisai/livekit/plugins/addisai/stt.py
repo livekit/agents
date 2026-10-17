@@ -51,6 +51,7 @@ from .version import __version__
 class _STTOptions:
     language: Language
     base_url: str
+    request_timeout: float
 
 
 class STT(stt.STT):
@@ -62,15 +63,17 @@ class STT(stt.STT):
         language: Language | str = "am",
         api_key: str | None = None,
         base_url: str = API_BASE_URL,
+        request_timeout: float = 120.0,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Create an AddisAI speech-to-text client.
 
         Args:
-            language: Transcription language: ``"am"`` for Amharic or ``"om"``
-                for Afaan Oromo.
+            language: Transcription language: ``"am"`` (Amharic), ``"om"``
+                (Afaan Oromo), or ``"ti"`` (Tigrinya).
             api_key: AddisAI API key. Falls back to ``ADDIS_API_KEY``.
             base_url: AddisAI API base URL.
+            request_timeout: Maximum transcription time in seconds.
             http_session: Optional shared :class:`aiohttp.ClientSession`.
 
         Raises:
@@ -88,10 +91,14 @@ class STT(stt.STT):
         if not resolved_api_key:
             raise ValueError("AddisAI API key is required, either as api_key or ADDIS_API_KEY")
 
+        if request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
+
         self._api_key = resolved_api_key
         self._opts = _STTOptions(
             language=validate_language(language),
             base_url=base_url.rstrip("/"),
+            request_timeout=request_timeout,
         )
         self._session = http_session
 
@@ -152,7 +159,7 @@ class STT(stt.STT):
                     "X-Addis-Client": f"livekit-plugins-addisai/{__version__}",
                 },
                 timeout=aiohttp.ClientTimeout(
-                    total=30,
+                    total=options.request_timeout,
                     sock_connect=conn_options.timeout,
                 ),
             ) as response:

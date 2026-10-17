@@ -14,5 +14,5 @@
 
 from typing import Literal
 
-Language = Literal["am", "om"]
+Language = Literal["am", "om", "ti"]
 TTSOutputFormat = Literal["mp3_44100", "wav_44100", "pcm_16000"]
