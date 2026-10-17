@@ -88,6 +88,13 @@ class StreamAdapter(TTS):
     def provider(self) -> str:
         return self._wrapped_tts.provider
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "tts": self._wrapped_tts,
+            "text_pacing": self._stream_pacer is not None,
+        }
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:

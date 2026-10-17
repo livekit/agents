@@ -196,6 +196,17 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "nabrah"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            "recognition_model": self._recognition_model,
+            "language": self._language,
+            "end_of_utterance_silence_ms": self._end_of_utterance_silence_ms,
+            "disable_number_normalization": self._disable_number_normalization,
+            "priority_words_strength": self._priority_words_strength,
+            "max_transcript_inactivity_seconds": self._max_transcript_inactivity_seconds,
+            "end_of_turn_confirm_delay_seconds": self._end_of_turn_confirm_delay_seconds,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

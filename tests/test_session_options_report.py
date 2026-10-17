@@ -12,9 +12,8 @@ from typing import Any
 import pytest
 
 from livekit.agents import AgentSession, inference
+from livekit.agents._reporting import _describe_option_object, _serialize_option_value
 from livekit.agents.telemetry.traces import (
-    _describe_option_object,
-    _serialize_option_value,
     _serialize_session_options,
 )
 from livekit.agents.types import NOT_GIVEN

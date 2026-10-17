@@ -15,7 +15,7 @@ import aiohttp
 import pytest
 from google.rpc import error_details_pb2, status_pb2
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, JobContext
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
@@ -112,6 +112,7 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.timestamp = 1010.0
     report.options = MagicMock()
     report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
+    report.models = {}
     return report
 
 
@@ -670,6 +671,44 @@ async def test_upload_audio_only_no_file() -> None:
         await _call_upload(report, http_session=mock_http)
 
     mock_http.post.assert_not_called()
+
+
+async def test_session_report_models_ignore_agent_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _create_simple_session()
+    agent = Agent(
+        instructions="Test agent", vad=FakeVAD(), stt=FakeSTT(), llm=FakeLLM(), tts=FakeTTS()
+    )
+    for name in ("vad", "stt", "llm", "tts"):
+        monkeypatch.setattr(
+            getattr(session, name), "describe_options", lambda: {"configuration": "session"}
+        )
+        monkeypatch.setattr(
+            getattr(agent, name), "describe_options", lambda: {"configuration": "agent"}
+        )
+
+    await session.start(agent, record=False)
+    try:
+        session.options.recording_options = {
+            "audio": False,
+            "traces": True,
+            "logs": False,
+            "transcript": False,
+        }
+        report = JobContext.make_session_report(_make_mock_job_ctx(), session)
+        assert set(report.models) == {"vad", "stt", "llm", "tts"}
+        assert all(component["configuration"] == "session" for component in report.models.values())
+        assert report.to_dict()["models"] == report.models
+
+        with _patch_upload_deps() as mock_logger:
+            await _call_upload(report)
+        session_report_call = next(
+            c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "session report"
+        )
+        assert session_report_call.kwargs["attributes"]["session.models"] == report.models
+    finally:
+        await _cleanup(session)
 
 
 async def test_upload_evaluations_emitted_without_logs() -> None:

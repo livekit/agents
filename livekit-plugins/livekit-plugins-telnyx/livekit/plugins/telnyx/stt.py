@@ -10,7 +10,7 @@ import json
 import struct
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 
@@ -23,6 +23,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -34,11 +35,11 @@ TranscriptionEngine = Literal["telnyx", "google", "deepgram", "azure"]
 
 @dataclass
 class _STTOptions:
-    api_key: str
+    api_key: Sensitive[str]
     language: LanguageCode
     transcription_engine: TranscriptionEngine
     interim_results: bool
-    base_url: str
+    base_url: Sensitive[str]
     sample_rate: int
 
 
@@ -79,6 +80,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "telnyx"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     async def _recognize_impl(
         self,

@@ -9,6 +9,7 @@ from openai.types.responses import ResponseTextConfigParam
 from openai.types.shared_params import Reasoning
 
 from livekit.agents import llm
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.inference._utils import (
     HEADER_INFERENCE_PROVIDER,
     create_access_token,
@@ -52,7 +53,7 @@ class OpenAIResponsesOptions(TypedDict, total=False):
 
     model: str
     """An OpenAI LLM LiveKit Inference serves; ``gpt-5.6-luna`` when unset."""
-    instructions: str
+    instructions: Sensitive[str]
     """Instructions for the backend model, distinct from the voice model's."""
     tool_choice: llm.ToolChoice | None
     parallel_tool_calls: bool
@@ -74,9 +75,9 @@ class OpenAIDuplexOptions(TypedDict, total=False):
 
 @dataclass
 class _InferenceOptions:
-    provider: str | None
-    api_key: str
-    api_secret: str
+    inference_provider: str | None
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
 
 
 class DuplexModel(_GPTLiveModel):
@@ -165,7 +166,7 @@ class DuplexModel(_GPTLiveModel):
             conn_options=conn_options,
         )
         self._inference_opts = _InferenceOptions(
-            provider=provider,
+            inference_provider=provider,
             api_key=resolved_api_key,
             api_secret=resolved_api_secret,
         )
@@ -179,6 +180,12 @@ class DuplexModel(_GPTLiveModel):
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._inference_opts),
+        }
 
     def session(self) -> DuplexSession:
         return DuplexSession(self)
@@ -196,8 +203,8 @@ class DuplexSession(_GPTLiveSession):
         headers = get_inference_headers()
         # signed per connection, so a reconnect never presents an expired token
         headers["Authorization"] = f"Bearer {create_access_token(opts.api_key, opts.api_secret)}"
-        if opts.provider:
-            headers[HEADER_INFERENCE_PROVIDER] = opts.provider
+        if opts.inference_provider:
+            headers[HEADER_INFERENCE_PROVIDER] = opts.inference_provider
         return url, headers
 
     async def _update_tools(self, tools: list[llm.Tool]) -> None:

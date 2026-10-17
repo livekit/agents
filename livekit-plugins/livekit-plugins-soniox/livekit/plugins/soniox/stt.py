@@ -34,6 +34,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -113,7 +114,7 @@ class STTOptions:
 
     language_hints: list[str] | None = None
     language_hints_strict: bool = False
-    context: ContextObject | str | None = None
+    context: Sensitive[ContextObject | str | None] = None
 
     num_channels: int = 1
     sample_rate: int = 16000
@@ -138,7 +139,7 @@ class STTOptions:
     Leave as None to use the server-side default.
     Introduced in the Soniox v5 model; earlier models reject it."""
 
-    client_reference_id: str | None = None
+    client_reference_id: Sensitive[str | None] = None
     translation: TranslationConfig | None = None
 
     def __post_init__(self) -> None:
@@ -205,6 +206,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Soniox"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._params)
 
     async def _recognize_impl(
         self,

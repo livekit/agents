@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, Awaitable
+from collections.abc import AsyncIterable, Awaitable, Mapping
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -120,6 +120,10 @@ class RealtimeModel:
     @property
     def provider(self) -> str:
         return "unknown"
+
+    def describe_options(self) -> Mapping[str, Any]:
+        """Return settings to include in session reports, without credentials or user content."""
+        return {}
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:
