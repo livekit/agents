@@ -518,6 +518,18 @@ class SpeechStream(stt.SpeechStream):
                 # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
                 is_speaking = False
             else:
+                # An endpoint can arrive with nothing final behind it: Soniox
+                # may send non-final tokens and then retract them, so `final`
+                # never accumulates. START_OF_SPEECH has already gone out in
+                # that case, because it is keyed on `non_final.text` too, so
+                # the segment still has to be closed here. Leaving it open
+                # keeps the user `speaking` through the silence that follows,
+                # until some later utterance happens to finalise -- which
+                # stalls `user_away_timeout` and swallows the next
+                # START_OF_SPEECH.
+                if is_speaking:
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                    is_speaking = False
                 final_original.reset()
 
         if not self._ws:

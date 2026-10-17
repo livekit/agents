@@ -822,3 +822,59 @@ async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
     assert ws.receives == 1
     assert stream._reconnect_event.is_set()
     assert any("No PONG received" in r.getMessage() for r in caplog.records)
+
+
+# --- Endpoint with nothing final behind it ----------------------------------
+
+
+async def test_endpoint_after_retracted_non_finals_still_ends_speech():
+    """START_OF_SPEECH fires on non-final tokens, so the endpoint must close it.
+
+    Soniox can send non-final tokens and then retract them, leaving `final`
+    empty. `send_endpoint_transcript` used to return without emitting anything
+    in that case, so `is_speaking` stayed True and the session kept the user
+    `speaking` through the silence that followed -- until some later utterance
+    happened to finalise.
+    """
+    stream = _make_stream()
+
+    events = await _drive_recv(
+        stream,
+        [
+            # A non-final token: enough to open the segment.
+            {"tokens": [_nonfinal_token("seven", "en")]},
+            # Retracted -- no non-finals, and nothing ever finalised.
+            {"tokens": []},
+            # The endpoint that follows must still close the segment.
+            {"tokens": [END_TOKEN_FINAL]},
+        ],
+        expect_events=3,
+    )
+
+    types = [e.type for e in events]
+    assert types[0] == SpeechEventType.START_OF_SPEECH
+    assert SpeechEventType.END_OF_SPEECH in types, (
+        f"endpoint produced no END_OF_SPEECH; the user stays 'speaking'. Got {types}"
+    )
+
+
+async def test_endpoint_without_any_speech_stays_quiet():
+    """No START_OF_SPEECH was sent, so there is no segment to close.
+
+    Guards the obvious over-correction: emitting END_OF_SPEECH for every
+    endpoint would send one for silence the plugin never reported as speech.
+    """
+    stream = _make_stream()
+
+    stream._ws = _FakeWebSocket([{"tokens": [END_TOKEN_FINAL]}])
+    task = asyncio.create_task(stream._recv_messages_task())
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(stream._event_ch.recv(), timeout=0.3)
+    finally:
+        stream._ws = None
+        task.cancel()
+        try:
+            await task
+        except BaseException:
+            pass
