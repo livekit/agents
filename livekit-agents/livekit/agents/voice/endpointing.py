@@ -203,6 +203,7 @@ class DynamicEndpointing(BaseEndpointing):
                 (0 < interruption_delay <= self.min_delay)
                 and (0 < turn_delay <= self.max_delay)
                 and (pause := self.between_utterance_delay) > 0
+                and pause <= self.max_delay
             ):
                 prev_val = self.min_delay
                 self._utterance_pause.apply(1.0, pause)
@@ -221,9 +222,12 @@ class DynamicEndpointing(BaseEndpointing):
                 )
 
         else:
-            # Only learn an intra-user pause when no agent turn occurred between utterances.
+            # Only learn an intra-user pause when no agent turn occurred between utterances
+            # and the pause does not exceed max_delay (longer pauses are separate turns,
+            # not mid-turn hesitations, and learning them would artificially inflate min_delay).
             if (
                 (pause := self.between_utterance_delay) > 0
+                and pause <= self.max_delay
                 and self._agent_speech_ended_at is None
                 and self._agent_speech_started_at is None
             ):
