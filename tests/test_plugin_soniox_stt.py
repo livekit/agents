@@ -723,16 +723,90 @@ async def test_recognition_usage_still_reported_on_endpoint_frame():
                 "total_audio_proc_ms": 1500,
             }
         ],
-        expect_events=3,
+        expect_events=4,
     )
 
     assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
         SpeechEventType.FINAL_TRANSCRIPT,
         SpeechEventType.END_OF_SPEECH,
         SpeechEventType.RECOGNITION_USAGE,
     ]
     assert events[-1].recognition_usage is not None
     assert events[-1].recognition_usage.audio_duration == pytest.approx(1.5)
+
+
+# --- Speaking state across endpoints ----------------------------------------
+
+
+async def test_endpoint_after_retracted_tokens_ends_speech():
+    """An endpoint after every non-final token was retracted still closes the
+    segment, so the next utterance opens its own START_OF_SPEECH."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {"tokens": [_nonfinal_token(" 42", "pl")]},
+            # " 42" is retracted: the endpoint arrives with no final text.
+            {"tokens": [END_TOKEN_FINAL]},
+            {"tokens": [_nonfinal_token(" Halo.", "pl")]},
+        ],
+        expect_events=5,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+    ]
+
+
+async def test_endpoint_without_speech_emits_nothing():
+    """An endpoint with no open segment does not emit a stray END_OF_SPEECH."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {"tokens": [END_TOKEN_FINAL]},
+            {"tokens": [_final_token("Hello.", "en"), END_TOKEN_FINAL]},
+        ],
+        expect_events=3,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+    ]
+
+
+async def test_final_and_endpoint_in_one_message_opens_speech():
+    """Final tokens that arrive with their endpoint still get a START_OF_SPEECH,
+    also right after a segment closed on retracted tokens."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {"tokens": [_nonfinal_token(" 42", "pl")]},
+            {"tokens": [END_TOKEN_FINAL]},
+            {"tokens": [_final_token(" Halo.", "pl"), END_TOKEN_FINAL]},
+        ],
+        expect_events=6,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+    ]
 
 
 # ---------------------------------------------------------------------------

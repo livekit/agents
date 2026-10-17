@@ -477,6 +477,12 @@ class SpeechStream(stt.SpeechStream):
         def send_endpoint_transcript() -> None:
             nonlocal is_speaking
             if final.text:
+                if not is_speaking:
+                    # final tokens and the endpoint arrived in one message, before the
+                    # post-loop check could open the segment: open it here.
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                    )
                 # Translation mode determines the role of each accumulator:
                 # when on, `final_original` carries the source side and
                 # `final` carries the target side -- even across flush windows
@@ -519,6 +525,15 @@ class SpeechStream(stt.SpeechStream):
                 is_speaking = False
             else:
                 final_original.reset()
+                if is_speaking:
+                    # every non-final token was retracted: still close the segment
+                    # that START_OF_SPEECH opened, or the user stays "speaking".
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=SpeechEventType.END_OF_SPEECH,
+                        )
+                    )
+                    is_speaking = False
 
         if not self._ws:
             return
