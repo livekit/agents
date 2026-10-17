@@ -76,9 +76,9 @@ def split_words(
             and char in _CJK_CLAUSE_PUNCTUATION
             and pos > 0
             and _CJK_TEXT.match(text[pos - 1])
-            # a separator inside a full-width number like １，０００ or １０：３０, which a
+            # a "，" or "：" inside a full-width number like １，０００ or １０：３０, which a
             # TTS would stop reading as one number once the words are joined with a space
-            and not text[pos - 1].isdigit()
+            and not (char in "，：" and text[pos - 1].isdigit())
         ):
             # commit the word with its punctuation, otherwise a CJK reply is a single
             # word and a word stream (e.g. a TTS input) holds it until the end

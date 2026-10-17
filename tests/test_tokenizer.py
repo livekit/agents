@@ -276,10 +276,10 @@ def test_word_tokenizer_ignores_non_ascii_punctuation(text: str, expected: list[
             "LiveKit是一个平台， 用于 voice agents",
             ["LiveKit是一个平台，", "用于", "voice", "agents"],
         ),
-        # a full-width number keeps its separator, so a TTS reads it as one number
+        # a full-width number keeps its separators, and a sentence ending in one still ends
         (
-            "お会計は１，０００円です。会議は１０：３０から。",
-            ["お会計は１，０００円です。", "会議は１０：３０から。"],
+            "お会計は１，０００。会議は１０：３０から。",
+            ["お会計は１，０００。", "会議は１０：３０から。"],
         ),
     ],
 )
