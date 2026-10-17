@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -38,12 +39,18 @@ from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL
 
 # Claude 4.6+ no longer supports prefilling (trailing assistant messages).
-_NO_PREFILL_PATTERNS = ("claude-sonnet-4-6", "claude-opus-4-6")
+_CLAUDE_FAMILY_RE = re.compile(r"^claude-(?:sonnet|opus|haiku|fable)-(\d+)(?:-(\d+))?")
 
 
 def _model_disables_prefill(model: str) -> bool:
     """Return True if the model does not support assistant message prefilling."""
-    return any(model.startswith(p) for p in _NO_PREFILL_PATTERNS)
+    m = _CLAUDE_FAMILY_RE.match(model)
+    if not m:
+        return False
+    major = int(m.group(1))
+    raw_minor = m.group(2)
+    minor = int(raw_minor) if raw_minor is not None and len(raw_minor) < 8 else 0
+    return (major, minor) >= (4, 6)
 
 
 @dataclass
