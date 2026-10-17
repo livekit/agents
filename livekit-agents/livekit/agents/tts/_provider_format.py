@@ -1303,6 +1303,10 @@ _SAY_ONLY_MARKUP: dict[str, list[str]] = {
 _BRACKET_CUE_RE = re.compile(LEADING_WS + r"\[(?P<inner>[^\]\n]*)\](?!\()")
 # Google markup's only brackets: its three pauses
 _GOOGLE_PAUSE_RE = re.compile(LEADING_WS + r"\[(?P<inner>pause(?: short| long)?)\](?!\()")
+# a free-form bracket cue that isn't one of Google's pauses
+_CUE_NOT_PAUSE_RE = re.compile(
+    LEADING_WS + r"\[(?!pause(?: short| long)?\])(?P<inner>[^\]\n]*)\](?!\()"
+)
 
 # the bracket spans each dialect reads as markup, so in say() text they are not prose.
 # Google's are pauses only: stripping every bracket would cut "Option [A]" from history.
@@ -1361,6 +1365,19 @@ def union_native_markup(
     # the free-form pattern covers every narrower one
     brackets = _BRACKET_CUE_RE if _BRACKET_CUE_RE in patterns else next(iter(patterns), None)
     return xml_tags, brackets
+
+
+def foreign_brackets(
+    union: re.Pattern[str] | None, own: re.Pattern[str] | None
+) -> re.Pattern[str] | None:
+    """The bracket cues a TTS reading *own* must lose when others it shares a
+    ``FallbackAdapter`` with read *union*: the cues it doesn't read itself."""
+    if own is None:
+        return union
+    if own is union:
+        return None
+    # the union is free-form and this TTS reads only Google's pauses
+    return _CUE_NOT_PAUSE_RE
 
 
 def _drop_trailing_separator(clean: str, stripped_any: bool) -> str:
