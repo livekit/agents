@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference, tokenize, tts
-from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.llm.chat_context import ChatContext, Instructions
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
 from livekit.agents.voice.agent_activity import AgentActivity
@@ -14,6 +14,7 @@ from livekit.agents.voice.generation import (
     _strip_assistant_markup,
     remove_expressive_instructions,
     update_expressive_instructions,
+    update_instructions,
 )
 
 from .fake_session import FakeActions, create_session, run_session
@@ -74,6 +75,24 @@ def test_update_and_remove_expressive_instructions() -> None:
 
     remove_expressive_instructions(ctx)
     assert all(item.id != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID for item in ctx.items)
+
+
+def test_expressive_instructions_follow_instructions() -> None:
+    ctx = ChatContext.empty()
+    update_instructions(
+        ctx, instructions=Instructions("be helpful", dynamic="now: 1"), add_if_missing=True
+    )
+    ctx.add_message(role="user", content="hi")
+    ctx.add_message(role="assistant", content="hello")
+
+    update_expressive_instructions(ctx, text="markup guide v1")
+    ctx.add_message(role="user", content="again")
+    update_expressive_instructions(ctx, text="markup guide v2")
+
+    ids = [item.id for item in ctx.items]
+    assert ids.index(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID) == 2
+    assert ctx.items[2].text_content == "markup guide v2"
+    assert ids.count(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID) == 1
 
 
 def test_expressive_param_defaults_off() -> None:
