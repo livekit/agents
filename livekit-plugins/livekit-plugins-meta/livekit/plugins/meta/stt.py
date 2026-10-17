@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -411,7 +412,15 @@ class SpeechStream(stt.RecognizeStream):
         self._end_stream_sent = False
         self._last_audio_processed_ms = 0.0
         self._pending_usage_seconds = 0.0
-        self._started_at: float | None = None
+        self._first_frame_at: float | None = None
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        # Audio keeps queueing in the input channel while the websocket connects. Pace from the
+        # first frame so that backlog is sent right away, without letting idle time before the
+        # first frame turn into a faster-than-realtime burst.
+        if self._first_frame_at is None:
+            self._first_frame_at = asyncio.get_running_loop().time()
+        super().push_frame(frame)
 
     async def _run(self) -> None:
         self._end_stream_sent = False
@@ -419,9 +428,6 @@ class SpeechStream(stt.RecognizeStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
         tasks: list[asyncio.Task[None]] = []
         try:
-            if self._started_at is None:
-                # audio keeps queueing in the input channel while we connect, so pace from here
-                self._started_at = asyncio.get_running_loop().time()
             ws = await self._connect_ws()
             sender = asyncio.create_task(self._send_audio(ws), name="meta-stt-send")
             receiver = asyncio.create_task(self._receive_events(ws), name="meta-stt-receive")
@@ -552,7 +558,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _send_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         pending = bytearray()
         loop = asyncio.get_running_loop()
-        pacing_origin = self._started_at
+        pacing_origin = self._first_frame_at
         sent_duration = 0.0
 
         async def send_packet(packet: bytes) -> None:

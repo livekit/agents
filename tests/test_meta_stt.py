@@ -456,7 +456,7 @@ async def test_absolute_pacing_accounts_for_send_time(monkeypatch: pytest.Monkey
     stream._input_ch = cast(Any, input_items())
     stream._audio_consumed = False
     stream._end_stream_sent = False
-    stream._started_at = None
+    stream._first_frame_at = None
     stream._session_id = "session-1"
     stream._event_ch = cast(Any, event_sink)
     monkeypatch.setattr(meta_stt.asyncio, "get_running_loop", lambda: clock)
@@ -509,8 +509,8 @@ async def test_audio_queued_while_connecting_is_not_paced_late(
     stream._input_ch = cast(Any, input_items())
     stream._audio_consumed = False
     stream._end_stream_sent = False
-    # the stream started 240 ms ago, i.e. the connection took 240 ms
-    stream._started_at = 0.0
+    # the first frame was pushed 240 ms ago, i.e. the connection took 240 ms
+    stream._first_frame_at = 0.0
     clock.now = 0.24
     monkeypatch.setattr(meta_stt.asyncio, "get_running_loop", lambda: clock)
     monkeypatch.setattr(meta_stt.asyncio, "sleep", clock.sleep)
@@ -519,6 +519,71 @@ async def test_audio_queued_while_connecting_is_not_paced_late(
 
     assert len(websocket.packets) == 6
     assert clock.sleeps == []
+
+
+async def test_idle_time_before_first_frame_does_not_allow_a_burst(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Clock:
+        now = 10.0
+        sleeps: list[float] = []
+
+        def time(self) -> float:
+            return self.now
+
+        async def sleep(self, delay: float) -> None:
+            self.sleeps.append(delay)
+            self.now += delay
+
+    class _PacingWebSocket:
+        def __init__(self) -> None:
+            self.packets: list[bytes] = []
+
+        async def send_bytes(self, packet: bytes) -> None:
+            self.packets.append(packet)
+
+        async def send_str(self, payload: str) -> None:
+            pass
+
+    async def input_items() -> AsyncIterator[rtc.AudioFrame]:
+        yield _frame(b"x" * (3840 * 3))
+
+    clock = _Clock()
+    websocket = _PacingWebSocket()
+    stream = object.__new__(meta.SpeechStream)
+    stream._input_ch = cast(Any, input_items())
+    stream._audio_consumed = False
+    stream._end_stream_sent = False
+    # connected long ago, the first audio only arrives now
+    stream._first_frame_at = 10.0
+    monkeypatch.setattr(meta_stt.asyncio, "get_running_loop", lambda: clock)
+    monkeypatch.setattr(meta_stt.asyncio, "sleep", clock.sleep)
+
+    await stream._send_audio(cast(aiohttp.ClientWebSocketResponse, websocket))
+
+    assert len(websocket.packets) == 3
+    assert clock.sleeps == pytest.approx([0.08, 0.08])
+
+
+async def test_first_frame_time_is_recorded_once() -> None:
+    provider = meta.STT(
+        api_key="key", http_session=cast(aiohttp.ClientSession, _FakeSession([_websocket()]))
+    )
+    stream = provider.stream(conn_options=_TEST_OPTIONS)
+    assert stream._first_frame_at is None
+
+    stream.push_frame(_frame(b"x" * 3840))
+    first = stream._first_frame_at
+    assert first is not None
+    await asyncio.sleep(0.01)
+    stream.push_frame(_frame(b"x" * 3840))
+    assert stream._first_frame_at == first
+
+    stream.end_input()
+    async for _ in stream:
+        pass
+    await stream.aclose()
+    await provider.aclose()
 
 
 async def test_audio_progress_does_not_duplicate_sent_byte_usage() -> None:
