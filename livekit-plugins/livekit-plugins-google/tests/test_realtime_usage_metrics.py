@@ -2,24 +2,28 @@
 Regression tests for Gemini Live usage metrics emission.
 
 The Gemini Live API sends usageMetadata messages periodically, each carrying the
-*cumulative* token counts for the session, and a final one around turn
-completion. The realtime session used to emit a `metrics_collected` event for
+token counts for the current generation request (accumulating within the turn),
+and a final one around turn completion. The realtime session used to emit a `metrics_collected` event for
 every one of these messages, so a single generation was reported (and summed by
 the usage collectors) multiple times.
 
 These tests pin the intended behavior: usage is reported exactly once per
-generation, with the final cumulative value seen for that generation.
+generation, with the final value seen for that generation (accumulated within
+the turn).
 """
 
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from google.genai import types
 
 from livekit.agents import llm
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins.google.realtime.realtime_api import RealtimeSession
+
+pytestmark = pytest.mark.unit
 
 
 def _model_turn_message(text: str) -> types.LiveServerMessage:
