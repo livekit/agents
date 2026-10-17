@@ -17,6 +17,7 @@ from .proto import (
     InitializeResponse,
     PingRequest,
     PongResponse,
+    ShutdownRequest,
 )
 
 
@@ -33,10 +34,20 @@ class _ProcClient:
         self._main_task_fnc = main_task_fnc
         self._initialized = False
 
-    def initialize(self) -> None:
+    def initialize(self) -> bool:
+        """Read the InitializeRequest handshake. Returns False when the first
+        message is a ShutdownRequest instead: the worker closed the runner before
+        it was initialized (e.g. a thread executor closed without initialize()),
+        no job ever ran, so the caller must exit without starting the job loop."""
         try:
             cch = aio.duplex_unix._Duplex.open(self._mp_cch)
             first_req = recv_message(cch, IPC_MESSAGES)
+
+            if isinstance(first_req, ShutdownRequest):
+                logger.info("shutting down before initialization")
+                with contextlib.suppress(aio.duplex_unix.DuplexClosed):
+                    cch.close()
+                return False
 
             assert isinstance(first_req, InitializeRequest), (
                 "first message must be proto.InitializeRequest"
@@ -52,6 +63,7 @@ class _ProcClient:
 
             self._initialized = True
             cch.detach()
+            return True
         except aio.duplex_unix.DuplexClosed as e:
             raise RuntimeError("failed to initialize proc_client") from e
 
