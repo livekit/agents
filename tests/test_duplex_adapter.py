@@ -79,6 +79,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         self.config_batches: list[tuple[object, object, object]] = []
         self.appended: list[llm.ChatItem] = []
         self.replies_requested: list[object] = []
+        self.pushed: list[rtc.AudioFrame] = []
         self.fail_instructions = False
 
     @property
@@ -105,7 +106,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         pass
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        pass
+        self.pushed.append(frame)
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -998,6 +999,213 @@ async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:
         await session.start(agent)
         with pytest.raises(RuntimeError, match="not running a DuplexModel"):
             _ = agent.duplex_session
+
+
+async def test_a_disabled_input_keeps_feeding_the_model_silence() -> None:
+    """The model speaks on the clock of the audio it is sent, and a disabled input sends none."""
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+
+    model = _FakeDuplexModel()
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        session.input.audio = FakeAudioInput()
+        await session.start(Agent(instructions=""))
+        assert model.session_obj is not None
+        pushed = model.session_obj.pushed
+
+        session.input.set_audio_enabled(False)
+        await asyncio.sleep(0.35)
+        assert len(pushed) >= 3
+        assert all(not np.frombuffer(f.data, dtype=np.int16).any() for f in pushed)
+
+        session.input.set_audio_enabled(True)
+        await asyncio.sleep(0)
+        fed = len(pushed)
+        await asyncio.sleep(0.25)
+        assert len(pushed) == fed
+
+
+async def test_an_input_disabled_before_the_agent_starts_is_fed_silence_too() -> None:
+    """The activity picks up an input that was disabled before it started."""
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+
+    model = _FakeDuplexModel()
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        session.input.audio = FakeAudioInput()
+        session.input.set_audio_enabled(False)
+        await session.start(Agent(instructions=""))
+        await asyncio.sleep(0.25)
+        assert model.session_obj is not None
+        assert len(model.session_obj.pushed) >= 2
+
+
+async def test_silence_follows_the_audio_input_being_set_and_removed() -> None:
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+
+    model = _FakeDuplexModel()
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        session.input.set_audio_enabled(False)
+        await session.start(Agent(instructions=""))
+        assert model.session_obj is not None
+        pushed = model.session_obj.pushed
+        await asyncio.sleep(0.15)
+        assert pushed == []
+
+        session.input.audio = FakeAudioInput()
+        await asyncio.sleep(0.25)
+        assert len(pushed) >= 2
+
+        session.input.audio = None
+        await asyncio.sleep(0)
+        fed = len(pushed)
+        await asyncio.sleep(0.25)
+        assert len(pushed) == fed
+
+
+async def test_a_closing_activity_does_not_start_feeding_silence_again() -> None:
+    """Disabling the input while the old realtime session is still closing leaves it alone."""
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+
+    old_model, new_model = _FakeDuplexModel(), _FakeDuplexModel()
+    async with AgentSession(llm=old_model, aec_warmup_duration=None) as session:
+        audio_input = FakeAudioInput()
+        session.input.audio = audio_input
+        await session.start(Agent(instructions=""))
+        old = old_model.session_obj
+        assert old is not None
+
+        closing, release = asyncio.Event(), asyncio.Event()
+        close = old.aclose
+
+        async def _slow_close() -> None:
+            closing.set()
+            await release.wait()
+            await close()
+
+        old.aclose = _slow_close  # type: ignore[method-assign]
+        handoff = asyncio.create_task(
+            session._update_activity(Agent(instructions="", llm=new_model))
+        )
+        await asyncio.wait_for(closing.wait(), 1)
+        session.input.set_audio_enabled(False)
+        audio_input.push(_frame(0.2))
+        await asyncio.sleep(0.25)
+        release.set()
+        await handoff
+        assert new_model.session_obj is not None
+        pushed = new_model.session_obj.pushed
+        for _ in range(20):
+            audio_input.push(_frame(0.3))
+        await asyncio.sleep(0.25)
+        assert old.pushed == []
+        assert len(pushed) >= 2
+        assert all(not np.frombuffer(f.data, dtype=np.int16).any() for f in pushed)
+
+        pushed.clear()
+        session.input.set_audio_enabled(True)
+        await _settle()
+        after = _frame(0.4)
+        audio_input.push(after)
+        await asyncio.sleep(0.25)
+        assert pushed == [after]
+        assert old.pushed == []
+
+
+@pytest.mark.parametrize("duplex_model", [True, False])
+async def test_disabled_input_discards_live_and_queued_frames(duplex_model: bool) -> None:
+    """Detach hooks need not stop yielding; the session must drain muted frames itself."""
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+    from .fake_realtime import FakeRealtimeModel
+
+    model = _FakeDuplexModel() if duplex_model else FakeRealtimeModel()
+    audio_input = FakeAudioInput()
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        session.input.audio = audio_input
+        await session.start(Agent(instructions=""))
+        if isinstance(model, _FakeDuplexModel):
+            assert model.session_obj is not None
+            pushed = model.session_obj.pushed
+        else:
+            pushed = model.active_session.pushed_audio
+
+        before = _frame(0.1)
+        audio_input.push(before)
+        await _settle()
+        assert pushed == [before]
+        pushed.clear()
+
+        # A frame already queued when mute is requested must not slip through either.
+        audio_input.push(_frame(0.2))
+        session.input.set_audio_enabled(False)
+        started = asyncio.get_running_loop().time()
+        for _ in range(3):
+            # Much faster than the silence clock: real input must not add clock ticks,
+            # even if a downstream echo/discard path would replace it with silence.
+            for _ in range(20):
+                audio_input.push(_frame(0.3))
+            await asyncio.sleep(0.1)
+        await _settle()
+
+        assert all(not np.frombuffer(f.data, dtype=np.int16).any() for f in pushed)
+        if duplex_model:
+            assert len(pushed) >= 2
+            elapsed = asyncio.get_running_loop().time() - started
+            assert sum(f.duration for f in pushed) <= elapsed + 0.2
+        else:
+            assert pushed == []
+
+        pushed.clear()
+        session.input.set_audio_enabled(True)
+        await _settle()
+        after = _frame(0.4)
+        audio_input.push(after)
+        await _settle()
+        assert pushed == [after]  # no replay of the frames consumed during mute
+        await asyncio.sleep(0.25)
+        assert pushed == [after]  # the independent silence clock has stopped
+
+
+async def test_replacing_a_disabled_input_does_not_add_an_audio_clock() -> None:
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+
+    model = _FakeDuplexModel()
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        session.input.audio = FakeAudioInput()
+        session.input.set_audio_enabled(False)
+        await session.start(Agent(instructions=""))
+        assert model.session_obj is not None
+        pushed = model.session_obj.pushed
+        await _settle()
+        pushed.clear()
+        started = asyncio.get_running_loop().time()
+
+        replacement = FakeAudioInput()
+        session.input.audio = replacement
+        for _ in range(20):
+            replacement.push(_frame(0.3))
+        await asyncio.sleep(0.25)
+        assert len(pushed) >= 2
+        assert all(not np.frombuffer(f.data, dtype=np.int16).any() for f in pushed)
+        elapsed = asyncio.get_running_loop().time() - started
+        assert sum(f.duration for f in pushed) <= elapsed + 0.2
+
+        session.input.audio = None
+        await _settle()
+        pushed.clear()
+        replacement.push(_frame(0.4))
+        await asyncio.sleep(0.25)
+        assert pushed == []
 
 
 async def test_a_failed_audio_stream_reports_an_unrecoverable_error(duplex) -> None:
