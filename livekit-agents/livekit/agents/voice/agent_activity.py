@@ -1970,13 +1970,28 @@ class AgentActivity(RecognitionHooks):
         return future
 
     def clear_user_turn(self) -> None:
-        if self._audio_recognition:
-            self._audio_recognition._clear_user_turn()
+        recognition = self._audio_recognition
+        manual_commit_pending = (
+            self._turn_detection == "manual"
+            and recognition is not None
+            and recognition._end_of_turn_task is not None
+            and not recognition._end_of_turn_task.done()
+        )
+        if (
+            self._rt_session is not None
+            and manual_commit_pending
+            and (last_speaking_time := self._last_user_speaking_time) is not None
+            and last_speaking_time > self._realtime_user_input_answered_at
+        ):
+            self._session._unanswered_user_metrics = {"stopped_speaking_at": last_speaking_time}
+        if recognition is not None:
+            recognition._clear_user_turn()
 
         if self._rt_session is not None:
             self._rt_session.clear_audio()
-            self._realtime_user_input_answered_at = time.time()
-            self._session._unanswered_user_metrics = None
+            if not manual_commit_pending:
+                self._realtime_user_input_answered_at = time.time()
+                self._session._unanswered_user_metrics = None
 
     def commit_user_turn(
         self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False

@@ -176,7 +176,7 @@ async def test_skewed_provider_timestamp(mode: str) -> None:
     if mode == "stt":
         # accepted: the provider owns the boundary here and a skewed timestamp is
         # indistinguishable from a good one, so the delay under-reports
-        assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
+        assert now <= ar._last_speaking_time <= time.time()
     else:
         assert ar._last_speaking_time == vad_anchor
 
