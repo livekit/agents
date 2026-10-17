@@ -103,6 +103,8 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     )
     ar._user_turn_span = None
     ar._user_turn_start = None
+    ar._utterances = []
+    ar._transcribed_speech_start = None
     ar._eou_wait_span = None
     ar._eou_wait_started_at_ns = None
     ar._eou_wait_rearms = 0
