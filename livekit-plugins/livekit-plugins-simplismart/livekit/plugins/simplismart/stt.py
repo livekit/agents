@@ -23,7 +23,6 @@ import contextlib
 import json
 import os
 import traceback
-import weakref
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -184,7 +183,10 @@ class STT(stt.STT):
         )
         self._base_url = base_url
         self._session = http_session
-        self._streams = weakref.WeakSet[SpeechStream]()
+        # Strong ownership: a stream that finishes and gets garbage collected would
+        # otherwise take its still-open per-stream aiohttp.ClientSession with it.
+        # Streams discard themselves in SpeechStream.aclose() once closed.
+        self._streams: set[SpeechStream] = set()
 
     @property
     def provider(self) -> str:
@@ -304,6 +306,22 @@ class STT(stt.STT):
         self._streams.add(stream)
         return stream
 
+    async def aclose(self) -> None:
+        """Close every stream this instance created.
+
+        ``stream()`` gives each ``SpeechStream`` its own ``aiohttp.ClientSession``,
+        and only ``SpeechStream.aclose()`` closes it. Streams are owned strongly
+        (see ``self._streams``) so a finished, garbage-collected stream cannot take
+        its open session with it; closed streams discard themselves, so the set
+        never grows without bound.
+        """
+        closed = list(self._streams)
+        for stream in closed:
+            await stream.aclose()
+        # Remove only what this call closed: a stream created concurrently (or one
+        # whose aclose was cancelled mid-cleanup) stays tracked for a later close.
+        self._streams.difference_update(closed)
+
 
 class SpeechStream(stt.SpeechStream):
     """Simplismart streaming speech-to-text implementation."""
@@ -367,6 +385,17 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.set()
                     return
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if self._session.closed:
+                        return
+                    # The heartbeat closes the socket when a ping goes unanswered, and
+                    # that arrives here rather than as a close frame. Treating it as an
+                    # unexpected message type stepped over it and discarded the reason,
+                    # which only survives on ws.exception().
+                    logger.warning("simplismart connection lost: %r", ws.exception())
+                    self._reconnect_event.set()
+                    return
+
                 if msg.type != aiohttp.WSMsgType.BINARY:
                     logger.warning("unexpected simplismart message type %s", msg.type)
                     continue
@@ -418,17 +447,36 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     self.ws_url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
+                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                    # is never noticed: recv_task parks on ws.receive() forever, and the
+                    # reconnect in _run is only ever triggered by that task ending.
+                    # Matches the Deepgram and Muse STT plugins.
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to simplismart") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to simplismart") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to simplismart ({type(e).__name__})"
+            ) from None
         return ws
 
     async def aclose(self) -> None:
         await super().aclose()
         if self._session and not self._session.closed:
             await self._session.close()
+        # Release the STT's strong ownership only after session cleanup succeeds.
+        stt = self._stt
+        if self._session.closed and isinstance(stt, STT):
+            stt._streams.discard(self)
 
     async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Send initial configuration message with language for Simplismart models."""

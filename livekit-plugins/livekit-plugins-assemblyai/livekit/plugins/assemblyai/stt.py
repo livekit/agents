@@ -22,7 +22,7 @@ import os
 import time
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -59,7 +59,8 @@ class STTOptions:
         "u3-rt-pro-beta-1",
         "u3-pro",
         "universal-3-5-pro",
-    ] = "universal-3-5-pro"
+        "universal-3-6-pro",
+    ] = "universal-3-6-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     language_codes: NotGivenOr[list[str]] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -85,7 +86,7 @@ class STTOptions:
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
-_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro")
+_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro")
 
 # Server-side cap on the number of steering codes, mirrored client-side so bad
 # input fails at construction/update time instead of as a websocket error.
@@ -147,7 +148,8 @@ class STT(stt.STT):
             "u3-rt-pro-beta-1",
             "u3-pro",
             "universal-3-5-pro",
-        ] = "universal-3-5-pro",
+            "universal-3-6-pro",
+        ] = "universal-3-6-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
         language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
@@ -300,8 +302,8 @@ class STT(stt.STT):
             ),
         )
         if model == "u3-pro":
-            logger.warning("'u3-pro' is deprecated, use 'universal-3-5-pro' instead.")
-            model = "universal-3-5-pro"
+            logger.warning("'u3-pro' is deprecated, use 'universal-3-6-pro' instead.")
+            model = "universal-3-6-pro"
 
         # These parameters are only supported by the Universal-3 Pro family of models.
         if model not in _U3_PRO_MODELS:
@@ -961,10 +963,36 @@ class SpeechStream(stt.SpeechStream):
         utterance = data.get("utterance", "")
         transcript = data.get("transcript", "")
         language = LanguageCode(data.get("language_code", "en"))
+        language_confidence = data.get("language_confidence")
 
         # Extract speaker label for diarization (returns "A", "B", ... or "UNKNOWN")
         speaker_label = data.get("speaker_label")
         speaker_id = speaker_label if speaker_label and speaker_label != "UNKNOWN" else None
+
+        # Surface the server's per-turn scores on SpeechData.metadata, reachable
+        # from the SpeechEvent stream (e.g. in an `stt_node` override) without
+        # subclassing the stream. Note that UserInputTranscribedEvent does not
+        # carry metadata, so session-level listeners won't see these. Each key is
+        # attached only when the message carries it, so models that don't emit a
+        # field are unaffected.
+        #
+        # end_of_turn_confidence: on Universal-3.5 Pro (and later) this rises from 0
+        # toward 1 across the partials emitted while a turn is held open between
+        # min_turn_silence and max_turn_silence, letting callers threshold it to
+        # trigger preemptive/eager LLM generation before the final arrives; it is 1.0
+        # on the final.
+        #
+        # language_confidence: sent when the `language_detection` connection param is
+        # on (this plugin's default for the multilingual and U3 Pro models) and scores
+        # the `language_code` on the same message. The confidence score for the detected
+        # language, between 0 (low confidence) and 1 (high confidence). Only populated when
+        # language detection is enabled and an utterance is complete or turn is final.
+        turn_metadata: dict[str, Any] = {}
+        if end_of_turn_confidence is not None:
+            turn_metadata["end_of_turn_confidence"] = end_of_turn_confidence
+        if language_confidence is not None:
+            turn_metadata["language_confidence"] = language_confidence
+        speech_metadata = turn_metadata or None
 
         # transcript (final) and words (interim) are cumulative
         # utterance (preflight) is chunk based
@@ -1002,6 +1030,7 @@ class SpeechStream(stt.SpeechStream):
                         words=timed_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
+                        metadata=speech_metadata,
                     )
                 ],
             )
@@ -1038,6 +1067,7 @@ class SpeechStream(stt.SpeechStream):
                         words=utterance_words,
                         confidence=utterance_confidence,
                         speaker_id=speaker_id,
+                        metadata=speech_metadata,
                     )
                 ],
             )
@@ -1063,6 +1093,7 @@ class SpeechStream(stt.SpeechStream):
                         words=timed_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
+                        metadata=speech_metadata,
                     )
                 ],
             )

@@ -38,6 +38,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
         require_explicit_ask: bool = False,
+        verify_spelling: bool = False,
         # deprecated
         extra_instructions: str = "",
     ) -> None:
@@ -53,13 +54,20 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 _modality_specific=Instructions(audio=AUDIO_SPECIFIC, text=TEXT_SPECIFIC),
                 _confirmation=Instructions(
                     # confirmation is enabled by default for audio, disabled by default for text
-                    audio=CONFIRMATION_INSTRUCTION if require_confirmation is not False else "",
-                    text=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
+                    audio=CONFIRMATION_INSTRUCTION
+                    if verify_spelling or require_confirmation is not False
+                    else "",
+                    text=CONFIRMATION_INSTRUCTION
+                    if verify_spelling or require_confirmation is True
+                    else "",
                 ),
+                _spelling=SPELLING_INSTRUCTION if verify_spelling else "",
             )
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_email = ""
+        self._verify_spelling = verify_spelling
+        self._spell_read_back = verify_spelling
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -76,7 +84,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide an email address.")
+        self.session.generate_reply(
+            instructions=(
+                "Ask the user for their email address. If the user already stated one earlier "
+                "in this conversation, record it with update_email_address instead of asking again."
+            )
+        )
 
     def _build_update_email_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -113,9 +126,15 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        read_back = (
+            f"Repeat the email character by character: {separated_email}"
+            if self._spell_read_back
+            else "Repeat the email back to the user."
+        )
+        self._spell_read_back = True
         return (
             f"The email has been updated to {email}\n"
-            f"Repeat the email character by character: {separated_email} if needed\n"
+            f"{read_back}\n"
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 
@@ -148,6 +167,8 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             self.complete(ToolError(f"couldn't get the email address: {reason}"))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
+        if self._verify_spelling:
+            return True
         if is_given(self._require_confirmation):
             return self._require_confirmation
         return ctx.speech_handle.input_details.modality == "audio"
@@ -162,16 +183,12 @@ EMAIL_REGEX = (
 PERSONA = "You are only a single step in a broader system, responsible solely for capturing an email address."
 
 AUDIO_SPECIFIC = """\
-Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:
-- 'john dot doe at gmail dot com'
-- 'susan underscore smith at yahoo dot co dot uk'
-- 'dave dash b at protonmail dot com'
-- 'jane at example' (partial—prompt for the domain)
-- 'theo t h e o at livekit dot io' (name followed by spelling)
+Handle input as noisy voice transcription. Users say emails aloud.
 Normalize common spoken patterns silently:
 - Convert words like 'dot', 'underscore', 'dash', 'plus' into symbols: `.`, `_`, `-`, `+`.
 - Convert 'at' to `@`.
 - Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.
+- If only the part before the '@' is given, prompt for the domain.
 - Filter out filler words or hesitations.
 - Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).
 Don't mention corrections. Treat inputs as possibly imperfect but fix them silently."""
@@ -184,12 +201,17 @@ If the address looks almost correct but has minor typos (e.g. missing '@' or dom
 CONFIRMATION_INSTRUCTION = """\
 Call `confirm_email_address` after the user confirmed the email address is correct."""
 
+SPELLING_INSTRUCTION = """\
+After receiving the email address, always verify the spelling by asking the user to confirm or spell it out character by character.
+When confirming, spell out the email address character by character to the user.
+"""
+
 INSTRUCTIONS_TEMPLATE = """\
 {persona}
 
 {_modality_specific}
 
-Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
+{_spelling}Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
 Don't invent new email addresses, stick strictly to what the user said.
 {_confirmation}
 If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.

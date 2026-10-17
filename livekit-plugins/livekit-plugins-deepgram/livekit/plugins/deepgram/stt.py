@@ -595,10 +595,19 @@ class SpeechStream(stt.SpeechStream):
             # if we want to keep the connection alive even if no audio is sent,
             # Deepgram expects a keepalive message.
             # https://developers.deepgram.com/reference/listen-live#stream-keepalive
+            nonlocal closing_ws
             try:
                 while True:
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                     await asyncio.sleep(5)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # when no audio is flowing this write is the only thing touching the
+                # socket, so it is where a drop surfaces first. if the close is
+                # expected just return; otherwise re-raise as a retryable APIError so
+                # _main_task reconnects, symmetric with send_task and recv_task.
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("deepgram connection closed unexpectedly") from e
             except Exception as e:
                 logger.warning(f"Deepgram keepalive task exited: {e}")
                 return
@@ -667,6 +676,15 @@ class SpeechStream(stt.SpeechStream):
                         status_code=ws.close_code or -1,
                         body=f"{msg.data=} {msg.extra=}",
                     )
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws or self._session.closed:
+                        return
+
+                    # the heartbeat closes the socket when a ping goes unanswered,
+                    # and that surfaces here rather than as a close frame.
+                    # ws.exception() is the only place the reason survives.
+                    raise APIConnectionError("deepgram connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -772,19 +790,35 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
                     headers={"Authorization": f"Token {self._api_key}"},
+                    # without this, a silently dropped socket (a half-open TCP
+                    # connection, no FIN/RST) is never noticed: recv_task parks on
+                    # ws.receive() forever and the reconnect loop below, which is
+                    # exception-driven, never runs. matches stt_v2.
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )
-            self._report_connection_acquired(time.perf_counter() - t0, False)
-            ws_headers = {
-                k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
-            }
-            logger.debug(
-                "Established new Deepgram STT WebSocket connection:",
-                extra={"headers": ws_headers},
-            )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to deepgram") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to deepgram") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to deepgram ({type(e).__name__})"
+            ) from None
+
+        self._report_connection_acquired(time.perf_counter() - t0, False)
+        ws_headers = {
+            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+        }
+        logger.debug(
+            "Established new Deepgram STT WebSocket connection:",
+            extra={"headers": ws_headers},
+        )
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -924,6 +958,7 @@ def live_transcription_to_speech_data(
                     text=_word_text(word, use_punctuated_word=use_punctuated_word),
                     start_time=word.get("start", 0) + start_time_offset,
                     end_time=word.get("end", 0) + start_time_offset,
+                    confidence=word.get("confidence", NOT_GIVEN),
                     start_time_offset=start_time_offset,
                 )
                 for word in alt["words"]
@@ -967,6 +1002,7 @@ def prerecorded_transcription_to_speech_event(
                         text=_word_text(word, use_punctuated_word=use_punctuated_word),
                         start_time=word.get("start", 0),
                         end_time=word.get("end", 0),
+                        confidence=word.get("confidence", NOT_GIVEN),
                     )
                     for word in alt["words"]
                 ],

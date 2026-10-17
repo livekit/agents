@@ -101,6 +101,11 @@ class StartJobRequest:
         channel.write_string(b, self.running_job.token)
         channel.write_string(b, self.running_job.worker_id)
         channel.write_bool(b, self.running_job.fake_job)
+        # unix timestamps: a 32-bit float only resolves ~128 s at this magnitude
+        channel.write_double(b, self.running_job.received_at)
+        channel.write_double(b, self.running_job.accepted_at)
+        channel.write_double(b, self.running_job.assigned_at)
+        channel.write_double(b, self.running_job.launched_at)
 
     def read(self, b: io.BytesIO) -> None:
         job = agent.Job()
@@ -116,6 +121,10 @@ class StartJobRequest:
             token=channel.read_string(b),
             worker_id=channel.read_string(b),
             fake_job=channel.read_bool(b),
+            received_at=channel.read_double(b),
+            accepted_at=channel.read_double(b),
+            assigned_at=channel.read_double(b),
+            launched_at=channel.read_double(b),
         )
 
 

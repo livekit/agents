@@ -38,11 +38,28 @@ from livekit.protocol import agent, models
 
 from .log import logger
 from .observability import Tagger
-from .telemetry import _upload_session_report, otel_metrics
-from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
+from .telemetry import (
+    _upload_session_report,
+    otel_metrics,
+    rpc as rpc_tracing,
+    session_context,
+    trace_types,
+    utils as telemetry_utils,
+)
+from .telemetry.traces import (
+    _BufferingHandler,
+    _cloud_log_handler,
+    _discard_cloud_tracer,
+    _JobTelemetry,
+    _prepare_cloud_tracer,
+    _setup_cloud_tracer,
+    _shutdown_telemetry,
+)
 from .types import (
     ATTRIBUTE_REDACTION_ENABLED,
     ATTRIBUTE_SIMULATION_ENABLED,
+    ATTRIBUTE_SIMULATION_JOB_ID,
+    ATTRIBUTE_SIMULATION_RUN_ID,
     ATTRIBUTE_SIMULATOR,
     ATTRIBUTE_SIMULATOR_DISPATCH,
     NotGivenOr,
@@ -138,6 +155,15 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
+    # dispatch timeline, unix seconds; 0.0 when unknown (simulation, console, resumed jobs)
+    received_at: float = 0.0
+    """The worker received the availability request."""
+    accepted_at: float = 0.0
+    """The request handler accepted the job."""
+    assigned_at: float = 0.0
+    """The server's assignment (room token) arrived."""
+    launched_at: float = 0.0
+    """A process was acquired from the pool and handed the job."""
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -237,6 +263,11 @@ class JobContext:
         self._recording_initialized = False
         self._redaction_enabled = info.job.enable_redaction
         self._early_log_handler: _BufferingHandler | None = None
+        # this job's cloud-telemetry registration, set by init_recording():
+        # span/log/metric attribution and upload gating resolve from it (the
+        # OTel providers are shared across possibly-concurrent jobs). None while
+        # the job has no registration to release.
+        self._telemetry_state: _JobTelemetry | None = None
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
@@ -253,6 +284,24 @@ class JobContext:
 
         self._early_log_handler = _BufferingHandler()
         logging.getLogger().addHandler(self._early_log_handler)
+
+    def _prepare_telemetry(self) -> None:
+        """Have the cloud trace pipeline up before the job's first span; whether anything is
+        uploaded is decided in ``init_recording``, and the job's spans are held until then."""
+        if self._info.fake_job:
+            return
+        obs_url = _observability_url(self._info.url)
+        if not obs_url:
+            return
+        try:
+            _prepare_cloud_tracer(
+                room_id=self.job.room.sid,
+                job_id=self.job.id,
+                agent_name=self.job.agent_name,
+                observability_url=obs_url,
+            )
+        except Exception:
+            logger.exception("failed to prepare the cloud trace pipeline")
 
     def _stop_log_buffering(self) -> None:
         """Remove the buffering handler without replaying."""
@@ -274,14 +323,13 @@ class JobContext:
         if not replay:
             return
 
-        # find the OTLP LoggingHandler that _setup_cloud_tracer just added
-        from opentelemetry.sdk._logs import LoggingHandler
-
-        for h in logging.getLogger().handlers:
-            if isinstance(h, LoggingHandler):
-                for record in handler.buffer:
-                    h.emit(record)
-                break
+        # replay through the framework's own OTLP handler that _setup_cloud_tracer
+        # just attached — the integrator may have their own OTel LoggingHandler on
+        # the root logger, and the buffered records must not be routed into it
+        otlp_handler = _cloud_log_handler()
+        if otlp_handler is not None and otlp_handler in logging.getLogger().handlers:
+            for record in handler.buffer:
+                otlp_handler.emit(record)
 
     async def _on_session_end(self) -> None:
         from .cli import AgentsConsole
@@ -327,12 +375,15 @@ class JobContext:
                     report=report,
                     tagger=self._tagger,
                     http_session=http_context.http_session(),
-                    metadata=self._otel_metadata(report.options.recording_options),
+                    metadata=self._otel_metadata(
+                        report.options.recording_options,
+                        redaction_enabled=self._redaction_enabled,
+                    ),
                 )
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
 
-    def _on_cleanup(self) -> None:
+    async def _on_cleanup(self) -> None:
         # if session.start() was never reached and server wanted recording,
         # set up OTLP now and flush buffered crash logs
         if self._early_log_handler is not None and not self._recording_initialized:
@@ -346,8 +397,16 @@ class JobContext:
                 logger.exception("failed to initialize crash log upload")
                 self._stop_log_buffering()
 
-        self._tempdir.cleanup()
-        _shutdown_telemetry()
+        def _cleanup_blocking() -> None:
+            self._tempdir.cleanup()
+            # per job: flushes this job's telemetry, leaves a concurrent job's untouched
+            if self._telemetry_state is not None:
+                _shutdown_telemetry(self.job.id)
+            # a job that never registered still had spans held for it by the gate
+            _discard_cloud_tracer(self.job.id)
+
+        # exporter flushes and the tempdir cleanup block; keep them off the event loop
+        await asyncio.to_thread(_cleanup_blocking)
 
         for handler in self._handlers_with_filter:
             handler.removeFilter(self._log_filter)
@@ -577,6 +636,10 @@ class JobContext:
             async def wrapper(_: str) -> None:
                 await callback()  # type: ignore
 
+            # the job_shutdown trace labels callbacks by name and tells framework ones by module
+            wrapper.__name__ = getattr(callback, "__name__", wrapper.__name__)
+            wrapper.__qualname__ = getattr(callback, "__qualname__", wrapper.__qualname__)
+            wrapper.__module__ = getattr(callback, "__module__", wrapper.__module__)
             self._shutdown_callbacks.append(wrapper)
 
     async def wait_for_participant(
@@ -596,7 +659,15 @@ class JobContext:
         if not self._room.isconnected():
             await self.connect()
 
-        return await wait_for_participant(self._room, identity=identity, kind=kind)
+        # nests under session_start when the session is starting, else the ambient context
+        with session_context.session_span(
+            "wait_for_participant",
+            attributes={trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
+            job_ctx=self,
+        ) as span:
+            participant = await wait_for_participant(self._room, identity=identity, kind=kind)
+            span.set_attributes(telemetry_utils.participant_attributes(participant))
+            return participant
 
     @deprecate_params({"e2ee": "Use `encryption` instead."})
     async def connect(
@@ -629,7 +700,27 @@ class JobContext:
                 single_peer_connection=single_peer_connection,
             )
 
-            await self._room.connect(self._info.url, self._info.token, options=room_options)
+            with session_context.session_span(
+                "room_connect",
+                attributes={
+                    trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
+                    trace_types.ATTR_ROOM_SID: self._info.job.room.sid,
+                    trace_types.ATTR_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
+                    trace_types.ATTR_ROOM_E2EE: encryption is not None,
+                },
+                job_ctx=self,
+            ) as connect_span:
+                await self._room.connect(self._info.url, self._info.token, options=room_options)
+                connect_span.set_attributes(
+                    {
+                        trace_types.ATTR_PARTICIPANT_ID: self._room.local_participant.sid,
+                        trace_types.ATTR_PARTICIPANT_IDENTITY: self._room.local_participant.identity,  # noqa: E501
+                        trace_types.ATTR_ROOM_REMOTE_PARTICIPANT_COUNT: len(
+                            self._room.remote_participants
+                        ),
+                    }
+                )
+            rpc_tracing.install(self._room.local_participant)
             self._on_connect()
 
             # Always registered: the callback ignores participants without the
@@ -821,14 +912,14 @@ class JobContext:
             return
 
         logger.debug("configuring session recording")
-        _setup_cloud_tracer(
+        self._telemetry_state = _setup_cloud_tracer(
             room_id=self.job.room.sid,
             job_id=self.job.id,
             agent_name=self.job.agent_name,
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],
-            metadata=self._otel_metadata(options),
+            metadata=self._otel_metadata(options, redaction_enabled=redaction_enabled),
         )
         # init_recording is typically called during session.start(), at which point a bunch of
         # the logs would have already been emitted. we want to capture all of the logs as it
@@ -875,11 +966,23 @@ class JobContext:
     def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
 
-    def _otel_metadata(self, options: RecordingOptions | None = None) -> dict[str, Any] | None:
+    def _otel_metadata(
+        self, options: RecordingOptions | None = None, *, redaction_enabled: bool = False
+    ) -> dict[str, Any] | None:
         metadata: dict[str, Any] = {}
-        if self.simulation_context() is not None:
+        if (sim := self.simulation_context()) is not None:
             metadata[ATTRIBUTE_SIMULATION_ENABLED] = True
-        if options and options.get("redaction", False):
+            # The run/job ids ride every span and log so a run can be aggregated as a
+            # whole. Omitted when blank rather than sent empty: an absent attribute
+            # reads as "not a simulation" downstream, an empty one as a run named "".
+            if sim.simulation_run_id:
+                metadata[ATTRIBUTE_SIMULATION_RUN_ID] = sim.simulation_run_id
+            if sim.simulation_job_id:
+                metadata[ATTRIBUTE_SIMULATION_JOB_ID] = sim.simulation_job_id
+        # stamped on every span and log so redaction can be resolved per-record, off the
+        # record itself, rather than from the ambient job context. Takes the resolved
+        # flag so project-wide redaction counts, not just the per-session option.
+        if redaction_enabled or (options and options.get("redaction", False)):
             metadata[ATTRIBUTE_REDACTION_ENABLED] = True
         return metadata or None
 

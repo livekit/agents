@@ -7,11 +7,14 @@ from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+from opentelemetry import trace
+
 from livekit import rtc
 
 from .. import utils
 from .._exceptions import APIConnectionError
 from ..log import logger
+from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
 from .stream_adapter import StreamAdapter
@@ -121,13 +124,27 @@ class FallbackAdapter(
 
             t.on("metrics_collected", self._on_metrics_collected)
 
+    def _next_instance(self) -> TTS:
+        """The instance the next request goes to first: the first one marked available, or
+        the primary once all are down (they are then all retried, primary first). A failed
+        instance's recovery task flips it back to available, so a recovered primary is
+        reported again before it has served."""
+        for instance, status in zip(self._tts_instances, self._status, strict=True):
+            if status.available:
+                return instance
+        return self._tts_instances[0]
+
     @property
     def model(self) -> str:
-        return "FallbackAdapter"
+        """The model of the instance that serves next (see :meth:`_next_instance`). Spans and
+        metrics read this, so a failover shows the model expected to answer rather than the
+        adapter; the instance that actually served is stamped per request by the stream."""
+        return self._next_instance().model
 
     @property
     def provider(self) -> str:
-        return "livekit"
+        """The provider of the instance that serves next (see :attr:`model`)."""
+        return self._next_instance().provider
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:
@@ -169,17 +186,48 @@ class FallbackAdapter(
             t.off("metrics_collected", self._on_metrics_collected)
 
 
+def _record_fallback_served(
+    tts: TTS, index: int, request_span: trace.Span | None, caller_span: trace.Span
+) -> None:
+    """The instance that served: its label and position on the adapter's request span, and
+    the response side there and on the caller's (tts_node). From ``tts``, not the adapter:
+    concurrent requests may be served by different instances."""
+    response_attrs: dict[str, Any] = {trace_types.ATTR_GEN_AI_RESPONSE_MODEL: tts.model}
+    if (normalized := trace_types.gen_ai_provider_name(tts.provider)) is not None:
+        response_attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
+    if request_span is not None:
+        request_span.set_attributes(
+            {
+                trace_types.ATTR_FALLBACK_LABEL: tts.label,
+                trace_types.ATTR_FALLBACK_INDEX: index,
+                **response_attrs,
+            }
+        )
+    caller_span.set_attributes(response_attrs)
+
+
+def _mark_recovery(stream: ChunkedStream | SynthesizeStream) -> None:
+    # the probe nests beside the request's real attempts; tell them apart
+    if stream._tts_request_span is not None:
+        stream._tts_request_span.set_attribute(trace_types.ATTR_FALLBACK_RECOVERY, True)
+
+
 class FallbackChunkedStream(ChunkedStream):
     _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    # each instance's request span nests directly under the adapter's
+    _tts_attempt_span_name: ClassVar[str | None] = None
 
     def __init__(
         self, *, tts: FallbackAdapter, input_text: str, conn_options: APIConnectOptions
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._fallback_adapter = tts
+        # the span this request was made under (tts_node); see _record_fallback_served
+        self._caller_span = trace.get_current_span()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
-        pass  # do nothing
+        async for _ in event_aiter:
+            pass
 
     async def _try_synthesize(
         self, *, tts: TTS, recovering: bool = False
@@ -195,11 +243,15 @@ class FallbackChunkedStream(ChunkedStream):
                 ),
             ) as stream:
                 should_set_active = not recovering
-                async for audio in stream:
-                    if should_set_active:
-                        should_set_active = False
-                        self._fallback_adapter._active_instance = tts
-                    yield audio
+                try:
+                    async for audio in stream:
+                        if should_set_active:
+                            should_set_active = False
+                            self._fallback_adapter._active_instance = tts
+                        yield audio
+                finally:
+                    if recovering:
+                        _mark_recovery(stream)
 
         except Exception as e:
             if recovering:
@@ -273,14 +325,15 @@ class FallbackChunkedStream(ChunkedStream):
 
                         if resampler is not None:
                             for rf in resampler.push(synthesized_audio.frame):
-                                output_emitter.push(rf.data.tobytes())
+                                output_emitter.push_frame(rf)
                         else:
-                            output_emitter.push(synthesized_audio.frame.data.tobytes())
+                            output_emitter.push_frame(synthesized_audio.frame)
 
                     if resampler is not None:
                         for rf in resampler.flush():
-                            output_emitter.push(rf.data.tobytes())
+                            output_emitter.push_frame(rf)
 
+                    _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                     return
                 except Exception:  # exceptions already logged inside _try_synthesize
                     if tts_status.available:
@@ -294,6 +347,8 @@ class FallbackChunkedStream(ChunkedStream):
                         logger.warning(
                             f"{tts.label} already synthesized of audio, ignoring fallback"
                         )
+                        # the caller heard this instance's audio: it served, partially
+                        _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                         return
 
             self._try_recovery(tts)
@@ -305,14 +360,18 @@ class FallbackChunkedStream(ChunkedStream):
 
 class FallbackSynthesizeStream(SynthesizeStream):
     _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    # each instance's request span nests directly under the adapter's
+    _tts_attempt_span_name: ClassVar[str | None] = None
 
     def __init__(self, *, tts: FallbackAdapter, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._fallback_adapter = tts
+        self._caller_span = trace.get_current_span()
         self._pushed_tokens: list[str] = []
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
-        pass  # do nothing
+        async for _ in event_aiter:
+            pass
 
     async def _try_synthesize(
         self,
@@ -323,16 +382,17 @@ class FallbackSynthesizeStream(SynthesizeStream):
         recovering: bool = False,
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         # If TTS doesn't support streaming, wrap it with StreamAdapter
+        temporary_adapter: StreamAdapter | None = None
         if tts.capabilities.streaming:
             stream = tts.stream(conn_options=conn_options)
         else:
             from .. import tokenize
 
-            wrapped_tts = StreamAdapter(
+            temporary_adapter = StreamAdapter(
                 tts=tts,
                 sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
             )
-            stream = wrapped_tts.stream(conn_options=conn_options)
+            stream = temporary_adapter.stream(conn_options=conn_options)
 
         @utils.log_exceptions(logger=logger)
         async def _forward_input_task() -> None:
@@ -357,12 +417,16 @@ class FallbackSynthesizeStream(SynthesizeStream):
         try:
             async with stream:
                 should_set_active = not recovering
-                async for audio in stream:
-                    _capture_started_time()
-                    if should_set_active:
-                        should_set_active = False
-                        self._fallback_adapter._active_instance = tts
-                    yield audio
+                try:
+                    async for audio in stream:
+                        _capture_started_time()
+                        if should_set_active:
+                            should_set_active = False
+                            self._fallback_adapter._active_instance = tts
+                        yield audio
+                finally:
+                    if recovering:
+                        _mark_recovery(stream)
         except Exception as e:
             if recovering:
                 logger.warning(
@@ -380,7 +444,11 @@ class FallbackSynthesizeStream(SynthesizeStream):
             raise
         finally:
             _capture_started_time()
-            await utils.aio.cancel_and_wait(input_task)
+            try:
+                await utils.aio.cancel_and_wait(input_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         start_time = time.time()
@@ -459,14 +527,15 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
                             if resampler is not None:
                                 for resampled_frame in resampler.push(synthesized_audio.frame):
-                                    output_emitter.push(resampled_frame.data.tobytes())
+                                    output_emitter.push_frame(resampled_frame)
 
                                 if synthesized_audio.is_final:
                                     for resampled_frame in resampler.flush():
-                                        output_emitter.push(resampled_frame.data.tobytes())
+                                        output_emitter.push_frame(resampled_frame)
                             else:
-                                output_emitter.push(synthesized_audio.frame.data.tobytes())
+                                output_emitter.push_frame(synthesized_audio.frame)
 
+                        _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                         return
                     except Exception:
                         if tts_status.available:
@@ -479,6 +548,10 @@ class FallbackSynthesizeStream(SynthesizeStream):
                         if output_emitter.pushed_duration() > 0.0:
                             logger.warning(
                                 f"{tts.label} already synthesized of audio, ignoring the current segment for the tts fallback"  # noqa: E501
+                            )
+                            # the caller heard this instance's audio: it served, partially
+                            _record_fallback_served(
+                                tts, i, self._tts_request_span, self._caller_span
                             )
                             return
 

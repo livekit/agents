@@ -24,7 +24,7 @@ LiveKit's Agents SDKs give you full control over your agent backend, with produc
 
 Agent logic: Define tasks, model repeatable patterns, and customize agent behavior with reusable building blocks, from structured data capture to multi-agent handoffs.
 
-Any AI pipeline: Mix and match any STT-LLM-TTS pipeline combination, or use a realtime speech-to-speech model and video avatars to bring your agents to life. LiveKit Inference provides access to models from OpenAI, Google, Deepgram, Cartesia, ElevenLabs, and more without needing separate API keys.
+Any AI pipeline: Mix and match any STT-LLM-TTS pipeline combination, or use a realtime speech-to-speech model and video avatars to bring your agents to life. LiveKit Inference provides access to models from OpenAI, Google, Deepgram, Cartesia, and more without needing separate API keys.
 
 Custom tools: Give your agent the ability to take action with full support for LLM tool use. Make frontend calls with RPC, call external APIs, connect MCP servers, or look up data for RAG.
 

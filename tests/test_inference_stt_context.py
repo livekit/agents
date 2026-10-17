@@ -40,7 +40,11 @@ def _assistant_item_event(text: str) -> ConversationItemAddedEvent:
 
 def test_chat_context_capability_on_for_u3_pro_family():
     """The chat_context capability follows the model's native support (U3 Pro family)."""
-    for model in ("assemblyai/u3-rt-pro", "assemblyai/universal-3-5-pro"):
+    for model in (
+        "assemblyai/u3-rt-pro",
+        "assemblyai/universal-3-5-pro",
+        "assemblyai/universal-3-6-pro",
+    ):
         stt = _make_stt(model=model)
         assert stt.capabilities.chat_context is True
 

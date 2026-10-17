@@ -55,6 +55,18 @@ delivered with the agent dispatch and read by
 ATTRIBUTE_SIMULATION_ENABLED = "lk.simulation.enabled"
 """Telemetry metadata key marking the session as a simulation."""
 
+ATTRIBUTE_SIMULATION_RUN_ID = "lk.simulation.run_id"
+"""Telemetry metadata key naming the simulation run this session belongs to.
+
+Sits alongside :data:`ATTRIBUTE_SIMULATION_ENABLED`: the boolean says a session is
+synthetic, this says which run it came from, so a run's sessions can be aggregated
+without resolving each one's room first.
+"""
+
+ATTRIBUTE_SIMULATION_JOB_ID = "lk.simulation.job_id"
+"""Telemetry metadata key naming the simulation run job (one scenario) behind the
+session."""
+
 ATTRIBUTE_REDACTION_ENABLED = "lk.redaction.enabled"
 """Telemetry metadata key requesting PII redaction for the session."""
 
@@ -67,6 +79,12 @@ def recording_enabled(options: Mapping[str, object]) -> bool:
 
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
+
+CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS = 3
+"""Minimum ``ParticipantInfo.client_protocol`` of a client that rebuilds transcription
+events from ``lk.transcription`` text streams and ignores the deprecated ``rtc.Transcription``
+data packet. While any considered participant is below this, the legacy packet is still
+published. The value is defined by the client SDKs (``client-sdk-js`` ``src/version.ts``)."""
 
 USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 """

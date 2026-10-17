@@ -5,12 +5,14 @@ import json
 import time
 
 from google.protobuf.json_format import MessageToDict
+from opentelemetry import context as otel_context
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
+from ...telemetry import trace_types, tracer
 from ...tts._provider_format import (
     ExpressiveTag,
     TranscriptMarkupStripper,
@@ -23,6 +25,7 @@ from ...types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+    CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS,
     TOPIC_TRANSCRIPTION,
     TimedString,
 )
@@ -56,8 +59,10 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
         self._audio_bstream = utils.audio.AudioByteStream(
-            sample_rate, num_channels, samples_per_channel=sample_rate // 20, progressive=True
+            sample_rate, num_channels, samples_per_channel=sample_rate // 20
         )
+        # flushes the byte stream's tail before the source runs dry
+        self._bstream_flush_timer: asyncio.TimerHandle | None = None
 
         self._flush_task: asyncio.Task[None] | None = None
         self._interrupted_event = asyncio.Event()
@@ -67,6 +72,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._source_pushed_duration: float = 0.0
         self._source_discarded_duration: float = 0.0
         self._interruption_generation = 0
+
+        # the playhead sits at `_source_pushed_duration - queued_duration`; `_dry_at` is when
+        # the source runs out if nothing more is pushed, which dates a run that has ended
+        self._run_offset: float = 0.0
+        self._dry_at: float | None = None
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
@@ -90,11 +100,17 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def subscribed(self) -> asyncio.Future[None]:
         return self._subscribed_fut
 
-    async def start(self) -> None:
+    async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
         self._forwarding_task = asyncio.create_task(self._forward_audio())
-        await self._publish_track()
+        # detached: publishing spawns the track's tasks, which must not inherit this span
+        with tracer.detached_span("publish_audio_output", context=trace_context) as span:
+            await self._publish_track()
+            if self._publication is not None:
+                span.set_attribute(trace_types.ATTR_TRACK_SID, self._publication.sid)
 
     async def aclose(self) -> None:
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
         if self._flush_task:
             await utils.aio.cancel_and_wait(self._flush_task)
         if self._forwarding_task:
@@ -114,13 +130,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
         for f in self._audio_bstream.push(frame.data):
             self._audio_buf.send_nowait(f)
             self._pushed_duration += f.duration
+        self._arm_bstream_flush()
 
     def flush(self) -> None:
         super().flush()
-
-        for f in self._audio_bstream.flush():
-            self._audio_buf.send_nowait(f)
-            self._pushed_duration += f.duration
+        self._flush_bstream(force=True)
 
         if not self._pushed_duration:
             return
@@ -133,20 +147,82 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
         self._audio_bstream.clear()
 
         if not self._pushed_duration:
             return
+
+        # a detaching sink never reaches the playout wait, so the playhead is reported here
+        self._report_run(
+            offset=self._source_pushed_duration - self._audio_source.queued_duration,
+            ended_at=time.time(),
+        )
         self._interrupted_event.set()
 
     def pause(self) -> None:
         super().pause()
         self._playback_enabled.clear()
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
         # self._audio_source.clear_queue()
 
     def resume(self) -> None:
         super().resume()
         self._playback_enabled.set()
+        self._arm_bstream_flush()
+
+    def _arm_bstream_flush(self, *, margin: float = 0.02) -> None:
+        # audio short of a frame waits for more, and the timer flushes it `margin` seconds before
+        # the output runs dry; a paused output needs no frames, so no timer runs while paused
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
+        if not self._playback_enabled.is_set():
+            return
+        queued = (
+            self._audio_source.queued_duration
+            + self._pushed_duration
+            - self._source_pushed_duration
+        )
+        self._bstream_flush_timer = asyncio.get_running_loop().call_later(
+            max(queued - margin, 0.0), self._flush_bstream
+        )
+
+    def _flush_bstream(self, *, force: bool = False) -> None:
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
+        # nothing plays before the first frame, so one under 20 ms waits for more instead
+        if not force and not self._pushed_duration and self._audio_bstream.buffered_duration < 0.02:
+            return
+        for f in self._audio_bstream.flush():
+            self._audio_buf.send_nowait(f)
+            self._pushed_duration += f.duration
+
+    def _report_run(
+        self, *, offset: float, ended_at: float, resumes_at: float | None = None
+    ) -> None:
+        """Report the open run, and begin the next past any audio that never played.
+
+        The run covers ``[_run_offset, offset)`` and stopped at ``ended_at``. The next one
+        starts at ``offset``, or at ``resumes_at`` when the audio between the two was
+        discarded rather than played.
+        """
+        if self._dry_at is not None:
+            # a run cannot outlast the audio the source held, however late the caller noticed
+            ended_at = min(ended_at, self._dry_at)
+
+        duration = offset - self._run_offset
+        if duration > 0:
+            self.on_playback_progressed(
+                started_at=ended_at - duration, offset=self._run_offset, duration=duration
+            )
+        self._run_offset = offset if resumes_at is None else resumes_at
+        self._dry_at = None
 
     async def _wait_for_playout(self) -> None:
         wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())
@@ -181,10 +257,18 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 self._audio_buf.recv_nowait()
 
             pushed_duration = max(pushed_duration - queued_duration, 0)
+            # the playhead stops where the cleared queue begins
+            self._report_run(
+                offset=self._source_pushed_duration - queued_duration, ended_at=time.time()
+            )
             self._audio_source.clear_queue()
             wait_for_playout.cancel()
         else:
             wait_for_interruption.cancel()
+            # the source drained, so everything pushed has played
+            self._report_run(offset=self._source_pushed_duration, ended_at=time.time())
+
+        self._run_offset = 0.0
 
         self._pushed_duration = 0
         self._source_pushed_duration = 0
@@ -199,14 +283,19 @@ class _ParticipantAudioOutput(io.AudioOutput):
             self._forwarding_idle.clear()
             try:
                 if not self._playback_enabled.is_set():
-                    self._source_discarded_duration += self._audio_source.queued_duration
+                    queued = self._audio_source.queued_duration
+                    self._source_discarded_duration += queued
+                    # the dropped queue never plays, so the next run resumes past it
+                    self._report_run(
+                        offset=self._source_pushed_duration - queued,
+                        ended_at=time.time(),
+                        resumes_at=self._source_pushed_duration,
+                    )
                     self._audio_source.clear_queue()
                     await self._playback_enabled.wait()
                     # drop a paused frame when its original segment was interrupted.
                     if interruption_generation != self._interruption_generation:
                         continue
-                    # TODO(long): preserve or report cleared frames so RecorderIO can reconstruct
-                    # discarded mid-stream audio instead of only correcting playback duration.
                     # TODO(long): ignore frames from previous syllable
 
                 if self._interrupted_event.is_set() or self._pushed_duration == 0:
@@ -219,10 +308,48 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 if not self._first_frame_event.is_set():
                     self._first_frame_event.set()
                     self.on_playback_started(created_at=time.time())
+                if self._dry_at is not None and time.time() >= self._dry_at:
+                    # the source ran out before this frame arrived
+                    self._report_run(offset=self._source_pushed_duration, ended_at=self._dry_at)
+
                 self._source_pushed_duration += frame.duration
                 await self._audio_source.capture_frame(frame)
+                self._dry_at = time.time() + self._audio_source.queued_duration
             finally:
                 self._forwarding_idle.set()
+
+
+def _legacy_transcription_needed(room: rtc.Room) -> bool:
+    """True while some remote participant may still rely on the deprecated
+    ``rtc.Transcription`` data packet.
+
+    ``publish_transcription`` has no destination parameter, so this is all-or-nothing for the
+    room: the packet is dropped only once every considered participant advertises
+    ``client_protocol >= CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS``, meaning it rebuilds
+    transcription events from the ``lk.transcription`` stream channel instead.
+
+    The client protocol is read from the private ``_info``, because livekit-rtc exposes no
+    public property for it. There is no fallback: the field is ``required`` in the FFI
+    protobuf, and ``livekit`` is pinned to an exact version, so it is always present. A
+    rename must fail loudly here rather than report 0 for every participant, which would
+    silently keep legacy publishing on for good.
+
+    Only STANDARD participants -- user-created client SDK instances -- are considered. SIP,
+    INGRESS, AGENT (including avatar workers), CONNECTOR and BRIDGE participants never render
+    legacy transcripts, so their client protocol tells us nothing about whether the legacy
+    packet is still necessary. Counting them would also keep legacy publishing alive in every
+    telephony room for good: the Go SDK does not send a client protocol at all, so SIP and
+    INGRESS participants report 0 permanently. EGRESS participants join hidden and never
+    reach ``remote_participants``.
+    """
+    local_identity = room.local_participant.identity
+    return any(
+        p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+        and p._info.client_protocol < CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS
+        # not an avatar worker of ours that joined as STANDARD rather than AGENT
+        and p.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF) != local_identity
+        for p in room.remote_participants.values()
+    )
 
 
 class _ParticipantLegacyTranscriptionOutput:
@@ -234,6 +361,9 @@ class _ParticipantLegacyTranscriptionOutput:
         participant: rtc.Participant | str | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
+        # the last status written to the log, so only transitions are logged. This never
+        # takes part in the decision itself.
+        self._legacy_status_logged: bool | None = None
         self._track_id: str | None = None
         self._participant_identity: str | None = None
 
@@ -327,8 +457,28 @@ class _ParticipantLegacyTranscriptionOutput:
         if self._flush_task:
             await self._flush_task
 
+    def _should_publish(self) -> bool:
+        needed = _legacy_transcription_needed(self._room)
+        if needed != self._legacy_status_logged:
+            self._legacy_status_logged = needed
+            logger.debug(
+                "legacy transcription publishing %s",
+                "enabled" if needed else "disabled",
+                extra={"participant": self._participant_identity},
+            )
+
+        return needed
+
     async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
         if self._participant_identity is None or self._track_id is None:
+            return
+
+        # Gate here, not in capture_text: every legacy publish carries the whole accumulated
+        # segment under a stable id, so _pushed_text/_current_id must stay warm. A legacy
+        # client that joins mid-segment then gets the complete segment on the very next
+        # publish, and a client that only ever sees the final=True packet still gets a
+        # complete, correctly-closed segment.
+        if not self._should_publish():
             return
 
         transcription = rtc.Transcription(

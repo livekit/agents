@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 import openai
@@ -594,6 +594,14 @@ class STT(stt.STT):
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
+
+    async def aclose(self) -> None:
+        """Close the websocket connection pool this STT owns.
+
+        Without this the pool's ``close_cb`` never runs for pooled sockets, so
+        they stay open after the STT is closed.
+        """
+        await self._pool.aclose()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

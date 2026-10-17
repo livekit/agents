@@ -141,14 +141,16 @@ scenarios:
       - time of birth: 6:45 in the morning
       - date of birth: March 3rd, 1992
       DO, IN ORDER:
-      1. When asked for the date of birth, give ONLY the time first: "I was born
+      1. Open by naming the detail you are offering (your opening line). The
+         agent asks which detail you want to give; "date of birth" is the answer.
+      2. When asked for the date of birth, give ONLY the time first: "I was born
          at 6:45 in the morning." Do not mention the date yet.
-      2. If the agent asks you to confirm before you've given a date, say "yes,
+      3. If the agent asks you to confirm before you've given a date, say "yes,
          that's right" - do NOT volunteer the date until the agent explicitly
          asks for the date itself.
-      3. When the agent asks for the date, give March 3rd, 1992.
-      4. Confirm the full date (and time) when read back.
-      5. Don't hang up until the agent reads back March 3rd, 1992 as captured.
+      4. When the agent asks for the date, give March 3rd, 1992.
+      5. Confirm the full date (and time) when read back.
+      6. Don't hang up until the agent reads back March 3rd, 1992 as captured.
     agent_expectations: >
       Records the 6:45 AM time of birth but recognizes the date is still
       missing: if the user tries to confirm before any date exists, the agent
@@ -164,16 +166,18 @@ scenarios:
   - label: Date of birth corrected while confirming
     instructions: |
       PERSONA: Ana Sofia Torres, mixes up day and month at first.
-      OPENING LINE: "Sure, my date of birth - it's July 9th, 1988."
+      OPENING LINE: "I'd like to give you my date of birth."
       FACTS:
       - first date given: July 9th, 1988
       - corrected date: September 7th, 1988
       DO, IN ORDER:
-      1. Give July 9th, 1988 when asked.
-      2. When the agent asks you to confirm, say: "hold on, I always flip those -
+      1. Open by naming the detail you are offering (your opening line). The
+         agent asks which detail you want to give; "date of birth" is the answer.
+      2. Give July 9th, 1988 when asked.
+      3. When the agent asks you to confirm, say: "hold on, I always flip those -
          it's September 7th, 1988. Yes, that's right."
-      3. If the agent asks you to confirm the corrected date, confirm it.
-      4. Don't hang up until the agent reads back September 7th, 1988 as captured.
+      4. If the agent asks you to confirm the corrected date, confirm it.
+      5. Don't hang up until the agent reads back September 7th, 1988 as captured.
     agent_expectations: >
       After the correction at the confirmation step, the agent confirms and
       completes with September 7th, 1988 — never July 9th. It responds verbally
@@ -196,16 +200,16 @@ scenarios:
       DO, IN ORDER:
       1. When the agent asks for your card number, give the 10-digit partial
          number as if it were complete.
-      2. When the agent says it's invalid or asks you to repeat, give the full
-         4242 4242 4242 4242.
+      2. When the agent says it's invalid, incomplete, or asks you to continue or
+         repeat, give all sixteen digits: 4242 4242 4242 4242.
       3. Repeat the full number when asked to confirm it.
       4. Provide the expiration, security code, and name as asked, repeating
          each back when asked to confirm.
       5. Don't hang up until the agent confirms the card details are complete.
     agent_expectations: >
-      Tells the user the number is invalid (wrong length) and asks them to
-      repeat it — it must not accept the 10-digit number, must not go silent
-      after the invalid attempt, and must not read the card number back aloud.
+      Does not record the 10-digit number, and keeps talking: it asks for the
+      full number or for the remaining digits. It must not go silent after the
+      short attempt and must not read the card number back aloud.
       After the full 16-digit number is given and repeated, the flow proceeds
       through expiration, security code, and cardholder name to completion.
     tags:

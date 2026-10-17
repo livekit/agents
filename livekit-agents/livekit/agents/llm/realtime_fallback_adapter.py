@@ -39,6 +39,7 @@ class RealtimeAvailabilityChangedEvent:
 _HARD_CAPABILITIES = (
     "audio_output",
     "turn_detection",
+    "supports_overlapping_speech",
 )
 
 # caps exposed as the conservative AND; the active model's exact value is read per-turn from the session
@@ -103,7 +104,8 @@ class RealtimeModelFallbackAdapter(
 
         Args:
             models: Ordered models; the first is primary, the rest fallbacks. All must agree on
-                the ``audio_output`` and ``turn_detection`` capabilities.
+                the ``audio_output``, ``turn_detection`` and ``supports_overlapping_speech``
+                capabilities.
             cooldown: Seconds a failed model stays unavailable before it can be preferred again.
             regenerate_on_swap: Re-issue the reply on the new session if one was in progress.
 

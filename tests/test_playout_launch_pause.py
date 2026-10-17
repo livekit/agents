@@ -167,12 +167,16 @@ async def test_audio_forwarding_reconciles_playout_pause_before_first_frame() ->
     async def _frames():
         yield frame
 
-    out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
+    out = _AudioOutput(
+        first_frame_fut=asyncio.Future(),
+        captured_segments_before=0,
+    )
     await _audio_forwarding_task(
         audio_output,
         _frames(),
         out,
         reconcile_playout_pause=lambda: order.append("reconcile"),
+        tts_data=None,
     )
 
     assert order == ["reconcile", "frame", "flush"]

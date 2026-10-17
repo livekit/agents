@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock
+from collections import deque
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
@@ -30,7 +32,7 @@ from .fake_io import FakeAudioOutput
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 from .fake_vad import FakeVAD
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 # scaled-down shipped defaults, keeping max_delay - vad_min_silence > timeout
 VAD_MIN_SILENCE = 0.05
@@ -42,6 +44,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     """AudioRecognition wired to drive one real eou bounce against ``hooks``."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._session = MagicMock()
+    ar._session._root_span_context = None
     ar._hooks = hooks
     ar._stt = None  # realtime model, no STT
     ar._audio_transcript = ""
@@ -71,6 +74,8 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._turn_detector_flushed = False
     ar._turn_detector_late_prediction_warned = False
     ar._agent_speaking = False
+    ar._transcript_buffer = deque()
+    ar._transcript_gate_active = False
     ar._interruption_enabled = False
     ar._interruption_ch = None
     ar._vad_base_turn_detection = True
@@ -88,10 +93,18 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     )
     ar._user_turn_span = None
     ar._user_turn_start = None
+    ar._eou_wait_span = None
+    ar._eou_wait_started_at_ns = None
+    ar._eou_wait_rearms = 0
+    ar._eou_wait_floor_ns = None
+    ar._eou_wait_not_committed = 0
+    ar._user_turn_resumes = 0
+    ar._eou_detection_span = None
     ar._user_silence_ev = asyncio.Event()
     ar._speaking = False
     ar._final_transcript_confidence = []
     ar._stt_request_ids = []
+    ar._stt_events = []
     ar._last_speaking_time = last_speaking_time
     ar._last_final_transcript_time = None
     ar._speech_start_time = None
@@ -329,15 +342,17 @@ async def test_interruption_event_does_not_end_agent_again_after_pausing(
     handle._generations = []
     activity._paused_speech = None
     activity._audio_recognition = MagicMock()
-    event = MagicMock(overlap_started_at=1.0, detected_at=2.0)
+    event = OverlappingSpeechEvent(
+        is_interruption=True,
+        overlap_started_at=1.0,
+        detected_at=2.0,
+    )
 
-    activity.on_interruption(event)
+    activity.on_overlap_speech(event)
     assert activity._paused_speech is not None
     await session.aclose()
 
-    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(
-        ignore_user_transcript_until=1.0
-    )
+    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(ended_at=ANY)
 
 
 async def test_handing_over_a_paused_speech_does_not_end_the_agent_turn(

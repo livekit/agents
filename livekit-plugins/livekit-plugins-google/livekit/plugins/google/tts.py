@@ -468,7 +468,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         except GoogleAPICallError as e:
             raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
         finally:
-            await input_gen.aclose()
+            # the transport may still be parked inside input_gen; closing it then raises
+            # RuntimeError and would mask the real error
+            try:
+                await input_gen.aclose()
+            except Exception:
+                pass
 
 
 def _gender_from_str(gender: str) -> SsmlVoiceGender:

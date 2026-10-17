@@ -36,7 +36,7 @@ class BaseEndpointing:
     def on_start_of_speech(self, started_at: float, overlapping: bool = False) -> None:
         self._overlapping = overlapping
 
-    def on_end_of_speech(self, ended_at: float, should_ignore: bool = False) -> None:
+    def on_end_of_speech(self, ended_at: float, interruption: NotGivenOr[bool] = NOT_GIVEN) -> None:
         self._overlapping = False
 
     def on_start_of_agent_speech(self, started_at: float) -> None:
@@ -81,6 +81,7 @@ class DynamicEndpointing(BaseEndpointing):
         self._utterance_ended_at: float | None = None
         self._agent_speech_started_at: float | None = None
         self._agent_speech_ended_at: float | None = None
+        self._agent_speaking = False
         self._speaking = False
 
     @property
@@ -128,19 +129,33 @@ class DynamicEndpointing(BaseEndpointing):
         )
 
     def on_start_of_agent_speech(self, started_at: float) -> None:
+        # Agent speech started before the current user utterance ended, so the stored
+        # end still belongs to the previous utterance. Move it just before agent speech
+        # to exclude this overlap from dynamic endpointing statistics.
+        if (
+            not self._agent_speaking
+            and self._speaking
+            and self._utterance_started_at is not None
+            and self._utterance_ended_at is not None
+            and self._utterance_ended_at < self._utterance_started_at
+        ):
+            self._utterance_ended_at = started_at - 1e-3
+            logger.trace(
+                "utterance ended at adjusted: %s",
+                self._utterance_ended_at,
+            )
+
         self._agent_speech_started_at = started_at
         self._agent_speech_ended_at = None
-        self._overlapping = False
+        self._agent_speaking = True
+        self._overlapping = self._speaking
 
     def on_end_of_agent_speech(self, ended_at: float) -> None:
         # Keep the agent speech timestamps until the next user utterance ends so
         # the pause across an agent turn is not learned as an intra-user pause.
-        # NOTE: we also guard against duplicate calls from pipeline reply and pipeline reply done
-        if self._agent_speech_started_at is not None and (
-            self._agent_speech_ended_at is None
-            or self._agent_speech_ended_at < self._agent_speech_started_at
-        ):
+        if self._agent_speaking:
             self._agent_speech_ended_at = ended_at
+        self._agent_speaking = False
         self._overlapping = False
 
     def on_start_of_speech(self, started_at: float, overlapping: bool = False) -> None:
@@ -148,29 +163,14 @@ class DynamicEndpointing(BaseEndpointing):
             # duplicate calls from _interrupt_by_audio_activity and on_start_of_speech
             return
 
-        # VAD interrupt by audio activity is triggered before end of speech is detected
-        # adjust the utterance ended time to be just before the agent speech started
-        if (
-            self._utterance_started_at is not None
-            and self._utterance_ended_at is not None
-            and self._agent_speech_started_at is not None
-            and self._utterance_ended_at < self._utterance_started_at
-            and overlapping
-        ):
-            self._utterance_ended_at = self._agent_speech_started_at - 1e-3
-            logger.trace(
-                "utterance ended at adjusted: %s",
-                self._utterance_ended_at,
-            )
-
         self._utterance_started_at = started_at
         self._overlapping = overlapping
         self._speaking = True
 
-    def on_end_of_speech(self, ended_at: float, should_ignore: bool = False) -> None:
-        if should_ignore and self._overlapping:
+    def on_end_of_speech(self, ended_at: float, interruption: NotGivenOr[bool] = NOT_GIVEN) -> None:
+        if is_given(interruption) and not interruption and self._overlapping:
             # If user speech started within _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD of agent speech,
-            # don't ignore — TTS leading silence can cause the agent speech timestamp
+            # don't skip — TTS leading silence can cause the agent speech timestamp
             # to precede actual audible audio, making this look like a backchannel
             # when it's really the user speaking before hearing the agent.
             if (
@@ -180,13 +180,14 @@ class DynamicEndpointing(BaseEndpointing):
                 < _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD
             ):
                 logger.trace(
-                    "ignoring should_ignore=True: user speech started within %.3fs of agent speech "
+                    "overriding non-interruption verdict: user speech started within %.3fs of "
+                    "agent speech "
                     "(within grace period of %.3fs)",
                     abs(self._utterance_started_at - self._agent_speech_started_at),
                     _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD,
                 )
             else:
-                # skip update because it might be a backchannel
+                # skip update for a confirmed non-interruption, such as a backchannel
                 self._overlapping = False
                 self._speaking = False
                 self._utterance_started_at = None
@@ -241,8 +242,10 @@ class DynamicEndpointing(BaseEndpointing):
                 )
 
         self._utterance_ended_at = ended_at
-        self._agent_speech_started_at = None
-        self._agent_speech_ended_at = None
+        # Preserve an active agent interval until its end is recorded.
+        if not self._agent_speaking:
+            self._agent_speech_started_at = None
+            self._agent_speech_ended_at = None
         self._speaking = False
         self._overlapping = False
 

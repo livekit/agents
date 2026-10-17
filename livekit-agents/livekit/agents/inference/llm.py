@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeAlias, cast
 
-import httpx
+import httpx2 as httpx
 import openai
 from openai.types.chat import (
     ChatCompletionChunk,
@@ -25,14 +26,23 @@ from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGiven,
+    NotGivenOr,
+)
 from ..utils import is_given
+from ._realtime_models import is_duplex_model, is_realtime_model
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
+    InferenceClass,
     create_access_token,
     extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
+    resolve_credentials,
 )
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
@@ -69,6 +79,10 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "grok-4.20-multi-agent": _XAI_REASONING_UNSUPPORTED_PARAMS,
 }
 
+# temperature/top_p are accepted by gpt-5.1+ only at reasoning_effort
+# "none"; see the note in drop_unsupported_params.
+_SAMPLING_PARAMS: set[str] = {"temperature", "top_p"}
+
 # models that don't support reasoning_effort when function tools are present
 _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
 
@@ -86,15 +100,38 @@ def drop_unsupported_params(
     matching against known model prefixes.
     """
     model_name = model.split("/")[-1] if "/" in model else model
-    for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
-        if model_name.startswith(prefix):
-            params = {k: v for k, v in params.items() if k not in unsupported}
-            break
     if tools and any(
         model_name.startswith(p) for p in _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES
     ):
         params = {k: v for k, v in params.items() if k != "reasoning_effort"}
+    for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
+        if model_name.startswith(prefix):
+            if (
+                unsupported is _REASONING_UNSUPPORTED_PARAMS
+                and min_reasoning_effort(model_name) == "none"
+                and _reasoning_effort_is_none(params)
+            ):
+                # OpenAI accepts temperature/top_p on gpt-5.1+ models only at
+                # effort "none" (the model's lowest supported effort). Verified
+                # against the API on gpt-5.6-luna (2026-10): "none" +
+                # temperature -> 200, "low" + temperature -> 400, on both the
+                # chat completions and responses APIs. The reasoning guide no
+                # longer documents this restriction. Applies only to models in
+                # _MIN_REASONING_EFFORT — new gpt-5.1+ models must be added
+                # there or temperature stays stripped.
+                unsupported = unsupported - _SAMPLING_PARAMS
+            params = {k: v for k, v in params.items() if k not in unsupported}
+            break
     return params
+
+
+def _reasoning_effort_is_none(params: dict[str, Any]) -> bool:
+    # chat completions sends effort as params["reasoning_effort"]; the
+    # responses plugin sends it as params["reasoning"], an openai Reasoning
+    # object with an .effort attribute
+    if params.get("reasoning_effort") == "none":
+        return True
+    return getattr(params.get("reasoning"), "effort", None) == "none"
 
 
 # lowest supported reasoning effort per model; "none" requires gpt-5.1+
@@ -103,10 +140,36 @@ _MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
     "gpt-5.2": "none",
     "gpt-5.4": "none",
     "gpt-5.4-mini": "none",
+    "gpt-5.4-nano": "none",
+    "gpt-5.5": "none",
+    "gpt-5.6-luna": "none",
+    "gpt-5.6-sol": "none",
+    "gpt-5.6-terra": "none",
     "gpt-5": "minimal",
     "gpt-5-mini": "minimal",
     "gpt-5-nano": "minimal",
 }
+
+
+_GPT_VERSION = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
+_BREAKPOINT_FORMATS = ("openai", "openai.responses")
+
+
+def supports_prompt_cache_breakpoints(model: str) -> bool:
+    """Whether an OpenAI model accepts ``prompt_cache_breakpoint`` content parts.
+
+    OpenAI supports breakpoints on GPT-5.6 and later, so any ``gpt-<major>.<minor>``
+    at or above 5.6 qualifies, future families such as gpt-6 included. Every other
+    name is out: gpt-oss, the o-series, the chat-latest aliases, and models from
+    other providers (``google/...``). Older models answer HTTP 400 to the field.
+    """
+    provider, _, name = model.lower().rpartition("/")
+    if provider not in ("", "openai"):
+        return False
+    version = _GPT_VERSION.match(name)
+    if version is None:
+        return False
+    return (int(version.group(1)), int(version.group(2) or 0)) >= (5, 6)
 
 
 def min_reasoning_effort(model: str) -> ReasoningEffort | None:
@@ -136,11 +199,15 @@ OpenAIModels = Literal[
     "openai/gpt-5.4-mini",
     "openai/gpt-5.4-nano",
     "openai/gpt-5.5",
+    "openai/gpt-5.6-luna",
+    "openai/gpt-5.6-sol",
+    "openai/gpt-5.6-terra",
     "openai/chat-latest",
     "openai/gpt-oss-120b",
 ]
 
 GoogleModels = Literal[
+    "google/gemini-4-argon",
     "google/gemini-3.1-pro",
     "google/gemini-3-flash",
     "google/gemini-3.1-flash-lite",
@@ -168,13 +235,14 @@ XAIModels = Literal[
     "xai/grok-4.20-0309-non-reasoning",
     "xai/grok-4.20-0309-reasoning",
     "xai/grok-4.20-multi-agent-0309",
+    "xai/grok-4.3",
+    "xai/grok-4.5",
 ]
 
 LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
 
-InferenceClass = Literal["priority", "standard", "low"]
-"""Scheduling class for a request. ``low`` yields to voice traffic, so it is only
-appropriate for work no caller is waiting on."""
+
+PromptCacheOptions: TypeAlias = completion_create_params.PromptCacheOptions
 
 
 class ChatCompletionOptions(TypedDict, total=False):
@@ -190,6 +258,7 @@ class ChatCompletionOptions(TypedDict, total=False):
     prediction: ChatCompletionPredictionContentParam | None
     presence_penalty: float | None
     prompt_cache_key: str
+    prompt_cache_options: PromptCacheOptions
     prompt_cache_retention: Literal["in_memory", "24h"] | None
     reasoning_effort: ReasoningEffort | None
     safety_identifier: str
@@ -219,6 +288,7 @@ class _LLMOptions:
     api_secret: str
     inference_class: InferenceClass | None
     extra_kwargs: ChatCompletionOptions | dict[str, Any]
+    prompt_cache_breakpoints: bool | Literal["auto"]
 
 
 class LLM(llm.LLM):
@@ -232,30 +302,20 @@ class LLM(llm.LLM):
         api_secret: str | None = None,
         inference_class: InferenceClass | None = None,
         extra_kwargs: ChatCompletionOptions | dict[str, Any] | None = None,
+        prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
     ) -> None:
+        """
+        Args:
+            prompt_cache_breakpoints: Send each :class:`llm.CacheBreakpoint` in the chat
+                context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` sends them
+                when :func:`supports_prompt_cache_breakpoints` accepts the current model;
+                ``True`` or ``False`` overrides that.
+        """
         super().__init__()
 
         lk_base_url = base_url if base_url else get_default_inference_url()
 
-        lk_api_key = (
-            api_key
-            if api_key
-            else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
-        )
-        if not lk_api_key:
-            raise ValueError(
-                "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
-            )
-
-        lk_api_secret = (
-            api_secret
-            if api_secret
-            else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
-        )
-        if not lk_api_secret:
-            raise ValueError(
-                "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
-            )
+        lk_api_key, lk_api_secret = resolve_credentials(api_key, api_secret)
 
         self._opts = _LLMOptions(
             model=model,
@@ -265,6 +325,7 @@ class LLM(llm.LLM):
             api_secret=lk_api_secret,
             inference_class=inference_class,
             extra_kwargs=extra_kwargs or {},
+            prompt_cache_breakpoints=prompt_cache_breakpoints,
         )
         self._client = openai.AsyncClient(
             api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
@@ -296,6 +357,7 @@ class LLM(llm.LLM):
         *,
         model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
+        prompt_cache_breakpoints: NotGivenOr[bool | Literal["auto"]] = NOT_GIVEN,
     ) -> None:
         """Update LLM configuration options.
 
@@ -308,6 +370,9 @@ class LLM(llm.LLM):
             self._opts.model = model
         if is_given(extra_kwargs):
             self._opts.extra_kwargs = dict(extra_kwargs)
+        # isinstance rather than is_given: mypy cannot narrow the bool | Literal union through it
+        if not isinstance(prompt_cache_breakpoints, NotGiven):
+            self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
 
     @property
     def model(self) -> str:
@@ -379,7 +444,15 @@ class LLM(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
+            prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
         )
+
+    def _resolve_prompt_cache_breakpoints(self) -> bool:
+        # resolved per chat() so update_options(model=...) re-evaluates "auto"
+        setting = self._opts.prompt_cache_breakpoints
+        if isinstance(setting, bool):
+            return setting
+        return supports_prompt_cache_breakpoints(self._opts.model)
 
 
 class LLMStream(llm.LLMStream):
@@ -397,12 +470,17 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         provider_fmt: str = "openai",  # used internally for chat_ctx format
+        prompt_cache_breakpoints: bool = False,
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
         self._inference_class = inference_class
         self._provider_fmt = provider_fmt
+        # the other formatters take no such argument and drop CacheBreakpoint themselves
+        self._prompt_cache_breakpoints = prompt_cache_breakpoints and (
+            provider_fmt in _BREAKPOINT_FORMATS
+        )
         self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._llm = llm_v
@@ -421,7 +499,10 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
+            fmt_kwargs: dict[str, Any] = {}
+            if self._prompt_cache_breakpoints:
+                fmt_kwargs["prompt_cache_breakpoints"] = True
+            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt, **fmt_kwargs)
             tool_schemas = cast(
                 list[ChatCompletionToolParam],
                 self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema),
@@ -472,12 +553,21 @@ class LLMStream(llm.LLMStream):
                     if chunk.usage is not None:
                         tokens_details = chunk.usage.prompt_tokens_details
                         cached_tokens = tokens_details.cached_tokens if tokens_details else 0
+                        cache_creation_tokens = (
+                            tokens_details.cache_write_tokens if tokens_details else 0
+                        )
+                        completion_details = chunk.usage.completion_tokens_details
+                        reasoning_tokens = (
+                            completion_details.reasoning_tokens if completion_details else 0
+                        )
                         usage_chunk = llm.ChatChunk(
                             id=chunk.id,
                             usage=llm.CompletionUsage(
                                 completion_tokens=chunk.usage.completion_tokens or 0,
                                 prompt_tokens=chunk.usage.prompt_tokens or 0,
                                 prompt_cached_tokens=cached_tokens or 0,
+                                cache_creation_tokens=cache_creation_tokens or 0,
+                                reasoning_tokens=reasoning_tokens or 0,
                                 total_tokens=chunk.usage.total_tokens or 0,
                                 service_tier=getattr(chunk, "service_tier", None),
                             ),
@@ -601,3 +691,26 @@ class LLMStream(llm.LLMStream):
                 extra=delta_extra,
             ),
         )
+
+
+def llm_from_model_string(model: str) -> llm.LLM | llm.RealtimeModel | llm.DuplexModel:
+    """Create the inference model a ``llm=`` string names.
+
+    Duplex model strings resolve to :class:`livekit.agents.inference.DuplexModel`,
+    realtime (speech-to-speech) model strings to
+    :class:`livekit.agents.inference.RealtimeModel`, every other string to
+    :class:`livekit.agents.inference.LLM`.
+    """
+    if is_duplex_model(model):
+        # imported lazily: the realtime package imports this module
+        from .realtime import DuplexModel
+
+        return DuplexModel.from_model_string(model)
+
+    if is_realtime_model(model):
+        # imported lazily: the realtime package imports this module
+        from .realtime import RealtimeModel
+
+        return RealtimeModel.from_model_string(model)
+
+    return LLM.from_model_string(model)

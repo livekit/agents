@@ -43,10 +43,10 @@ from livekit.agents.llm import (
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
-from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import FunctionToolsExecutedEvent
+from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
@@ -339,12 +339,12 @@ async def test_tool_call() -> None:
     def _record_agent_speech_end(
         recognition: AudioRecognition,
         *,
-        ignore_user_transcript_until: float,
+        ended_at: float,
     ) -> None:
         agent_speech_end_states.append(session.agent_state)
         on_end_of_agent_speech(
             recognition,
-            ignore_user_transcript_until=ignore_user_transcript_until,
+            ended_at=ended_at,
         )
 
     with patch.object(
@@ -470,7 +470,8 @@ async def test_tool_without_a_reply_returns_the_agent_to_listening() -> None:
     assert transitions[-2:] == [("speaking", "thinking"), ("thinking", "listening")]
 
 
-async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
+@pytest.mark.parametrize("reset_away_timer", [False, True])
+async def test_async_tool_defers_user_away_until_its_reply_lands(reset_away_timer: bool) -> None:
     """A background tool speaks for itself, so "away" must wait for that reply (#6883)."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Look up my order")
@@ -498,7 +499,11 @@ async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
             """Look an order up in the background."""
             nonlocal tool_returned_at
             await context.update("looking it up")
-            await asyncio.sleep(20.0)
+            await asyncio.sleep(10.0)
+            if reset_away_timer:
+                assert context.session.agent_state == "listening"
+                context.session.reset_away_timer()
+            await asyncio.sleep(10.0)
             tool_returned_at = time.time()
             return "order 42 shipped"
 
@@ -516,6 +521,7 @@ async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
 
     # the agent is genuinely listening while the tool runs, so nothing but the tool holds
     # the window off; landing restarts it in full rather than firing on what was left
+    assert tool_returned_at > 0
     assert len(away_times) == 1
     assert away_times[0] >= tool_returned_at + 3.0
 
@@ -626,6 +632,30 @@ async def test_interruption(
     if not resume_false_interruption:
         # fake audio output doesn't support pause/resume
         check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
+
+
+async def test_interrupted_say_uses_speech_start_timestamp() -> None:
+    class SayOnEnterAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("I saw your application for a Honda")
+
+    actions = FakeActions()
+    actions.add_tts(10.0, input="I saw your application for a Honda")
+    actions.add_user_speech(1.0, 1.2, "Who is this?")
+    actions.add_llm("This is John.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = SayOnEnterAgent()
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    messages = [item for item in agent.chat_ctx.items if item.type == "message"]
+    assert [message.role for message in messages] == ["system", "assistant", "user", "assistant"]
+    assert messages[1].interrupted is True
+    assert messages[1].created_at == messages[1].metrics["started_speaking_at"]
+    assert messages[2].text_content == "Who is this?"
+    assert messages[3].text_content == "This is John."
 
 
 async def test_interruption_options() -> None:
@@ -1184,6 +1214,25 @@ def test_explicit_aec_warmup_duration_overrides_outbound_sip_default(
     assert session._aec_warmup_remaining == (duration or 0.0)
 
 
+@pytest.mark.parametrize(
+    ("explicit", "expected_duration"),
+    [(NOT_GIVEN, None), (1.5, 1.5)],
+)
+def test_simulation_has_no_aec_warmup_by_default(
+    explicit: NotGivenOr[float | None], expected_duration: float | None
+) -> None:
+    session = AgentSession(vad=None, aec_warmup_duration=explicit)
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    participant.attributes = {}
+
+    with patch("livekit.agents.job.current_simulation", return_value=object()):
+        session._on_room_io_participant_linked(participant)
+
+    assert session.options.aec_warmup_duration == expected_duration
+    assert session._aec_warmup_remaining == (expected_duration or 0.0)
+
+
 def test_outbound_sip_cancels_aec_warmup_that_already_started() -> None:
     session = AgentSession(vad=None)
     timer = MagicMock(spec=asyncio.TimerHandle)
@@ -1295,26 +1344,32 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
 
     try:
         recognition._on_start_of_agent_speech(started_at=time.time())
-        # backchannels during the cooldown are dropped (they are a no-op anyway,
-        # but this guards against the gate firing on `on_interruption`)
-        await recognition._on_overlap_speech_event(_backchannel_event())
+        # backchannels during the cooldown are dropped
+        event = _backchannel_event()
+        hooks.on_overlap_speech(event)
+        recognition._on_overlap_speech_event(event)
         assert hooks.interruptions == []
 
         # a real interruption during the cooldown must still fire
-        await recognition._on_overlap_speech_event(_interruption_event())
+        event = _interruption_event()
+        hooks.on_overlap_speech(event)
+        recognition._on_overlap_speech_event(event)
         assert len(hooks.interruptions) == 1
 
         # after cooldown, both event types behave normally
         await asyncio.sleep(0.06)
-        await recognition._on_overlap_speech_event(_backchannel_event())
-        await recognition._on_overlap_speech_event(_interruption_event())
+        backchannel_event = _backchannel_event()
+        hooks.on_overlap_speech(backchannel_event)
+        recognition._on_overlap_speech_event(backchannel_event)
+        interruption_event = _interruption_event()
+        hooks.on_overlap_speech(interruption_event)
+        recognition._on_overlap_speech_event(interruption_event)
         assert len(hooks.interruptions) == 2
     finally:
         await _close_test_session(session)
@@ -1327,7 +1382,6 @@ async def _make_stt_eos_recognition() -> AudioRecognition:
         endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="stt",
     )
@@ -1384,37 +1438,39 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
-        turn_detection="vad",
+        turn_detection="manual",
     )
     recognition._interruption_enabled = True
     recognition._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
-    input_started_at = time.time() - 10.0
-    # the input anchor lives on the STT pipeline (see _STTPipeline.input_started_at)
-    recognition._stt_pipeline = SimpleNamespace(input_started_at=input_started_at)  # type: ignore[assignment]
 
     try:
-        # the agent speaks for a couple of seconds so the held transcript still lands
-        # after the agent-speech start (the lower bound of the ignore window)
-        recognition._on_start_of_agent_speech(started_at=time.time() - 2.0)
-        speech_ended_at = time.time()
-        recognition._on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
-
-        assert not recognition._should_hold_stt_event(
+        recognition._on_start_of_agent_speech(started_at=8.0)
+        recognition._on_start_of_speech(started_at=8.1)
+        await recognition._on_stt_event(
+            _final_transcript_event(
+                text="before the boundary", start_time=0.0, end_time=0.0, created_at=9.0
+            )
+        )
+        await recognition._on_stt_event(
             _final_transcript_event(
                 text="near the boundary",
-                start_time=speech_ended_at - input_started_at - 0.25,
-                end_time=speech_ended_at - input_started_at,
+                start_time=10_000.0,
+                end_time=20_000.0,
+                created_at=9.75,
             )
         )
-        assert recognition._should_hold_stt_event(
+        recognition._on_end_of_agent_speech(ended_at=10.0)
+        await recognition._on_stt_event(
             _final_transcript_event(
-                text="before the boundary",
-                start_time=speech_ended_at - input_started_at - 0.75,
-                end_time=speech_ended_at - input_started_at - 0.5,
+                text="after agent", start_time=0.0, end_time=0.0, created_at=10.1
             )
         )
+
+        assert recognition._hooks.final_transcripts == [  # type: ignore[attr-defined]
+            "near the boundary",
+            "after agent",
+        ]
     finally:
         recognition._interruption_ch.close()
         await _close_test_session(session)
@@ -1478,6 +1534,107 @@ async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
         await session._closing_task
     finally:
         await _close_test_session(session)
+
+
+async def test_reset_away_timer_restarts_the_full_timeout() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        user_states: list[str] = []
+        session.on("user_state_changed", lambda ev: user_states.append(ev.new_state))
+        await session.start(MyAgent())
+
+        for _ in range(2):
+            await asyncio.sleep(2.0)
+            session.reset_away_timer()
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        assert user_states == []
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "away"
+        assert user_states == ["away"]
+
+
+@pytest.mark.parametrize("agent_state", ["listening", "speaking", "thinking"])
+async def test_reset_away_timer_returns_away_user_to_listening(agent_state: AgentState) -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        transitions: list[tuple[str, str]] = []
+        session.on(
+            "user_state_changed", lambda ev: transitions.append((ev.old_state, ev.new_state))
+        )
+        await session.start(MyAgent())
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+
+        session._update_agent_state(agent_state)
+        session.reset_away_timer()
+        assert session.user_state == "listening"
+        assert transitions == [("listening", "away"), ("away", "listening")]
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        await asyncio.sleep(2.0)
+        assert session.user_state == ("away" if agent_state == "listening" else "listening")
+
+
+@pytest.mark.parametrize(
+    ("user_state", "agent_state"),
+    [("speaking", "listening"), ("listening", "speaking"), ("listening", "thinking")],
+)
+async def test_reset_away_timer_preserves_active_turns(
+    user_state: UserState, agent_state: AgentState
+) -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        await session.start(MyAgent())
+        session._update_user_state(user_state)
+        session._update_agent_state(agent_state)
+
+        session.reset_away_timer()
+        await asyncio.sleep(4.0)
+        assert session.user_state == user_state
+        assert session.agent_state == agent_state
+
+        session._update_user_state("listening")
+        session._update_agent_state("listening")
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+
+
+async def test_reset_away_timer_is_noop_when_disabled() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=None
+    ) as session:
+        await session.start(MyAgent())
+        session.reset_away_timer()
+        await asyncio.sleep(30.0)
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
+
+
+async def test_reset_away_timer_is_noop_outside_session_lifetime() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        session.reset_away_timer()
+        assert session._user_away_timer is None
+
+        await session.start(MyAgent())
+        timer = session._user_away_timer
+        session.shutdown()
+        session.reset_away_timer()
+        assert session._user_away_timer is timer
+
+        await session.aclose()
+        session.reset_away_timer()
+        await asyncio.sleep(4.0)
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
 
 
 async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
@@ -1579,6 +1736,7 @@ async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
         ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
         assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
         assert ev.alternatives[0].text == "recovered"
+        assert ev.created_at > 0
         assert attempts == 2
     finally:
         await pipeline.aclose()
@@ -1749,7 +1907,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
                 speaking=True,
             )
         )
-        current_speech.interrupt.assert_called_once_with()
+        current_speech.interrupt.assert_called_once_with(source="audio_activity")
         assert any(
             record.levelno == logging.INFO
             and "falling back to VAD-based interruption" in record.message
@@ -1760,7 +1918,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
         await _close_test_session(session)
 
 
-async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
+async def test_flush_held_transcripts_emits_buffered_events() -> None:
     actions = FakeActions()
     session = create_session(actions)
     hooks = _TestRecognitionHooks()
@@ -1770,7 +1928,6 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1779,7 +1936,7 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
     )
 
     try:
-        await recognition._flush_held_transcripts(cooldown=0.0, force=True)
+        recognition._flush_held_transcripts()
 
         assert hooks.final_transcripts == ["held transcript"]
         assert not recognition._transcript_buffer
@@ -1787,7 +1944,7 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         await _close_test_session(session)
 
 
-async def test_held_final_transcript_cancels_transcription_timeout() -> None:
+async def test_held_final_transcript_cancels_timeout_on_arrival() -> None:
     session = create_session(FakeActions())
     hooks = _TestRecognitionHooks()
     recognition = AudioRecognition(
@@ -1796,12 +1953,10 @@ async def test_held_final_transcript_cancels_transcription_timeout() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
-        turn_detection="vad",
+        turn_detection="manual",
     )
-    recognition._interruption_enabled = True
-    recognition._agent_speaking = True
+    recognition._transcript_gate_active = True
     timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
     recognition._transcription_timeout_handle = timeout_handle
     event = _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
@@ -1813,8 +1968,58 @@ async def test_held_final_transcript_cancels_transcription_timeout() -> None:
         assert recognition._turn_transcript_received
         assert list(recognition._transcript_buffer) == [event]
         assert hooks.final_transcripts == []
+
+        recognition._flush_held_transcripts()
+
+        assert timeout_handle.cancelled()
+        assert recognition._turn_transcript_received
+        assert hooks.final_transcripts == ["held transcript"]
+        assert recognition._current_transcript == "held transcript"
     finally:
         timeout_handle.cancel()
+        await _close_test_session(session)
+
+
+async def test_true_verdict_releases_late_transcripts() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="manual",
+    )
+    recognition._transcript_gate_active = True
+    recognition._agent_speaking = True
+    recognition._agent_speech_started_at = time.time() - 1.0
+    overlap_started_at = time.time() - 0.5
+    recognition._transcript_buffer.append(
+        _final_transcript_event(
+            text="already held",
+            start_time=0.0,
+            end_time=0.0,
+            created_at=overlap_started_at,
+        )
+    )
+
+    try:
+        event = inference.OverlappingSpeechEvent(
+            is_interruption=True,
+            overlap_started_at=overlap_started_at,
+        )
+        hooks.on_overlap_speech(event)
+        recognition._on_overlap_speech_event(event)
+        await recognition._on_stt_event(
+            _final_transcript_event(text="arrived later", start_time=0.0, end_time=0.0)
+        )
+
+        assert hooks.final_transcripts == ["already held", "arrived later"]
+        assert len(hooks.interruptions) == 1
+        assert not recognition._transcript_buffer
+    finally:
         await _close_test_session(session)
 
 
@@ -1827,7 +2032,6 @@ async def test_preflight_transcript_does_not_cancel_transcription_timeout() -> N
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1856,7 +2060,6 @@ async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> Non
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -1893,7 +2096,6 @@ async def test_late_vad_eos_after_committed_turn_does_not_arm_transcription_time
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="stt",
     )
@@ -1926,7 +2128,6 @@ async def test_clear_user_turn_resets_transcription_timeout() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -2002,6 +2203,43 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
         max_abs_diff=0.2,
     )
     assert agent_state_events[3].new_state == "listening"
+
+
+@pytest.mark.parametrize(
+    "preflight, final, expected",
+    [
+        ("hello how are you", "Hello, how are you?", True),
+        ("مرحبا كيف حالك", "مرحبا، كيف حالك؟", True),
+        ("نعم أريد الحجز", "نعم، أريد الحجز؛", True),
+        ("آپ کیسے ہیں", "آپ کیسے ہیں۔", True),
+        ("आप कैसे हैं", "आप कैसे हैं।", True),
+        ("你好 我很好", "你好，我很好。", True),
+        # different words must still invalidate the preemptive generation
+        ("مرحبا كيف حالك", "مرحبا كيف حالكم؟", False),
+    ],
+)
+def test_preemptive_transcripts_equivalent(preflight: str, final: str, expected: bool) -> None:
+    assert _transcripts_equivalent(preflight, final) is expected
+
+
+@pytest.mark.parametrize(
+    "preemptive_generation, expected",
+    [
+        # bool form: the legacy on/off flag
+        (True, {"enabled": True, "preemptive_tts": False}),
+        (False, {"enabled": False, "preemptive_tts": False}),
+        # dict form: an options mapping, documented on the same kwarg (#7343)
+        ({"enabled": False}, {"enabled": False, "preemptive_tts": False}),
+        ({"enabled": True, "preemptive_tts": True}, {"enabled": True, "preemptive_tts": True}),
+    ],
+)
+async def test_deprecated_preemptive_generation_kwarg(
+    preemptive_generation: bool | dict, expected: dict
+) -> None:
+    session = AgentSession(preemptive_generation=preemptive_generation)
+    opts = session.options.preemptive_generation
+    assert {k: opts[k] for k in expected} == expected
+    assert isinstance(opts["enabled"], bool)
 
 
 @pytest.mark.parametrize(
@@ -2260,9 +2498,11 @@ class _TestRecognitionHooks:
     def __init__(self) -> None:
         self.interruptions: list[inference.OverlappingSpeechEvent] = []
         self.final_transcripts: list[str] = []
+        self.interruption_by_audio_activity_enabled = False
 
-    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
-        self.interruptions.append(ev)
+    def on_overlap_speech(self, ev: inference.OverlappingSpeechEvent) -> None:
+        if ev.is_interruption:
+            self.interruptions.append(ev)
 
     def on_backchannel_confirmed(self) -> None:
         pass
@@ -2310,8 +2550,10 @@ def _backchannel_event() -> inference.OverlappingSpeechEvent:
     )
 
 
-def _final_transcript_event(*, text: str, start_time: float, end_time: float) -> SpeechEvent:
-    return SpeechEvent(
+def _final_transcript_event(
+    *, text: str, start_time: float, end_time: float, created_at: float | None = None
+) -> SpeechEvent:
+    ev = SpeechEvent(
         type=SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
             SpeechData(
@@ -2322,6 +2564,9 @@ def _final_transcript_event(*, text: str, start_time: float, end_time: float) ->
             )
         ],
     )
+    if created_at is not None:
+        ev.created_at = created_at
+    return ev
 
 
 async def _close_test_session(session: object) -> None:

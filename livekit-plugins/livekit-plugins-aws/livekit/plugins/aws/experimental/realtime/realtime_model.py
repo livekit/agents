@@ -15,11 +15,23 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import boto3
-from aws_sdk_bedrock_runtime.client import (
-    BedrockRuntimeClient,
-    InvokeModelWithBidirectionalStreamOperationInput,
-)
-from aws_sdk_bedrock_runtime.config import Config, HTTPAuthSchemeResolver, SigV4AuthScheme
+
+try:
+    from aws_sdk_bedrock_runtime.client import (
+        AsyncBedrockRuntimeClient as _BedrockRuntimeClient,
+        InvokeModelWithBidirectionalStreamOperationInput,
+    )
+    from aws_sdk_bedrock_runtime.config import AsyncBedrockRuntimeConfig as _BedrockRuntimeConfig
+
+    _BEDROCK_CONFIG_USES_RESOLVE = True
+except ImportError:  # aws-sdk-bedrock-runtime < 0.10
+    from aws_sdk_bedrock_runtime.client import (
+        BedrockRuntimeClient as _BedrockRuntimeClient,
+        InvokeModelWithBidirectionalStreamOperationInput,
+    )
+    from aws_sdk_bedrock_runtime.config import Config as _BedrockRuntimeConfig
+
+    _BEDROCK_CONFIG_USES_RESOLVE = False
 from aws_sdk_bedrock_runtime.models import (
     BidirectionalInputPayloadPart,
     InvokeModelWithBidirectionalStreamInputChunk,
@@ -33,6 +45,7 @@ from aws_sdk_bedrock_runtime.models import (
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
+from smithy_http.aio.crt import AWSCRTHTTPClient
 
 from livekit import rtc
 from livekit.agents import (
@@ -459,6 +472,50 @@ class RealtimeModel(llm.RealtimeModel):
             generate_reply_timeout=generate_reply_timeout,
         )
 
+    @classmethod
+    def with_nova_sonic_2_5(
+        cls,
+        *,
+        voice: NotGivenOr[SONIC2_VOICES | str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        region: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: TURN_DETECTION = "MEDIUM",
+        generate_reply_timeout: float = 10.0,
+    ) -> RealtimeModel:
+        """Create a RealtimeModel configured for Nova Sonic 2.5 (audio + text input).
+
+        Args:
+            voice (SONIC2_VOICES | str | NotGiven): Voice id for TTS output. Import SONIC2_VOICES from livekit.plugins.aws.experimental.realtime for supported values. Defaults to "tiffany".
+            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
+            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
+            max_tokens (int | NotGiven): Upper bound for tokens emitted. Defaults to DEFAULT_MAX_TOKENS.
+            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation.
+            region (str | NotGiven): AWS region. Defaults to "us-east-1".
+            turn_detection (TURN_DETECTION): Turn-taking sensitivity. Defaults to "MEDIUM".
+            generate_reply_timeout (float): Timeout for generate_reply() calls. Defaults to 10.0.
+
+        Returns:
+            RealtimeModel: Configured for Nova Sonic 2.5 with mixed modalities (audio + text input).
+
+        Example:
+            model = RealtimeModel.with_nova_sonic_2_5(voice="tiffany", max_tokens=10_000)
+        """
+        return cls(
+            model="amazon.nova-2-5-sonic",
+            modalities="mixed",
+            voice=voice,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            tool_choice=tool_choice,
+            region=region,
+            turn_detection=turn_detection,
+            generate_reply_timeout=generate_reply_timeout,
+        )
+
     @property
     def model(self) -> str:
         return self._model
@@ -540,6 +597,10 @@ class RealtimeSession(  # noqa: F811
         # Session recycling: proactively restart before credential expiry or 8-min limit
         self._session_start_time: float | None = None
         self._session_recycle_task: asyncio.Task[None] | None = None
+        # Held only so the loop's weak reference cannot collect them mid-flight.
+        # Their lifecycle - cancellation, coalescing, shutdown - is #7052's subject.
+        self._user_text_tasks: set[asyncio.Task[None]] = set()
+        self._deferred_tool_recycle_tasks: set[asyncio.Task[None]] = set()
         self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
         self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
@@ -589,17 +650,36 @@ class RealtimeSession(  # noqa: F811
         )
 
     @utils.log_exceptions(logger=logger)
-    def _initialize_client(self) -> None:
-        """Instantiate the Bedrock runtime client"""
-        config = Config(
-            endpoint_uri=f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com",
-            region=self._realtime_model._opts.region,
-            aws_credentials_identity_resolver=_get_credentials_resolver(),
-            auth_scheme_resolver=HTTPAuthSchemeResolver(),
-            auth_schemes={"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")},
-            user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
-        )
-        self._bedrock_client = BedrockRuntimeClient(config=config)
+    async def _initialize_client(self) -> None:
+        """Instantiate the Bedrock runtime client.
+
+        aws-sdk-bedrock-runtime 0.10 renamed ``Config`` / ``BedrockRuntimeClient``
+        to the async types and requires ``await AsyncBedrockRuntimeConfig.resolve``.
+        0.11 then dropped the old names entirely. Keep both construction paths so
+        the locked 0.7 extra and a fresh pip install of 0.11 both import.
+        See https://github.com/livekit/agents/issues/6994.
+
+        Sonic streams bidirectionally, so the transport has to be the CRT client.
+        0.11 defaults to aiohttp, which does not support duplex.
+        """
+        kwargs: dict[str, Any] = {
+            "endpoint_uri": (
+                f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com"
+            ),
+            "region": self._realtime_model._opts.region,
+            "aws_credentials_identity_resolver": _get_credentials_resolver(),
+            "user_agent_extra": "x-client-framework:livekit-plugins-aws[realtime]",
+            "transport": AWSCRTHTTPClient(),
+        }
+        if _BEDROCK_CONFIG_USES_RESOLVE:
+            config = await _BedrockRuntimeConfig.resolve(**kwargs)
+        else:
+            from aws_sdk_bedrock_runtime.config import HTTPAuthSchemeResolver, SigV4AuthScheme
+
+            kwargs["auth_scheme_resolver"] = HTTPAuthSchemeResolver()
+            kwargs["auth_schemes"] = {"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")}
+            config = _BedrockRuntimeConfig(**kwargs)
+        self._bedrock_client = _BedrockRuntimeClient(config=config)
 
     def _calculate_session_duration(self) -> float:
         """Calculate session duration based on credential expiry and AWS 8-min limit."""
@@ -889,7 +969,7 @@ class RealtimeSession(  # noqa: F811
         try:
             if not self._bedrock_client:
                 logger.info("Creating Bedrock client")
-                self._initialize_client()
+                await self._initialize_client()
             assert self._bedrock_client is not None, "bedrock_client is None"
 
             logger.info("Initializing Bedrock stream")
@@ -1665,7 +1745,10 @@ class RealtimeSession(  # noqa: F811
 
         finally:
             logger.info("main output response stream processing task exiting")
-            self._is_sess_active.clear()
+            # A retry can replace this task before the old task reaches its
+            # cleanup block. Keep the session active for the replacement task.
+            if asyncio.current_task() is self._response_task:
+                self._is_sess_active.clear()
 
     async def _restart_session(self, ex: Exception) -> None:
         # Get restart attempts from current generation, or 0 if no generation
@@ -1833,7 +1916,11 @@ class RealtimeSession(  # noqa: F811
                                 if self._pending_generation_fut is fut:
                                     self._pending_generation_fut = None
 
-                        asyncio.create_task(_send_user_text())
+                        task = asyncio.create_task(
+                            _send_user_text(), name="RealtimeSession._send_user_text"
+                        )
+                        self._user_text_tasks.add(task)
+                        task.add_done_callback(self._user_text_tasks.discard)
 
                     self._sent_message_ids.add(item.id)
                     self._chat_ctx.items.append(item)
@@ -1899,7 +1986,11 @@ class RealtimeSession(  # noqa: F811
                 f"[SESSION] Tools changed (added={new_tools - old_tools}, "
                 f"removed={old_tools - new_tools}), scheduling deferred session recycle"
             )
-            asyncio.create_task(self._deferred_tool_recycle())
+            task = asyncio.create_task(
+                self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
+            )
+            self._deferred_tool_recycle_tasks.add(task)
+            task.add_done_callback(self._deferred_tool_recycle_tasks.discard)
         else:
             logger.debug("Tool list updated locally")
 

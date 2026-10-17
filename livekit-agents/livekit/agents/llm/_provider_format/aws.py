@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import itertools
-import json
 from dataclasses import dataclass
 from typing import Any
 
 from livekit.agents import llm
 
-from .utils import convert_mid_conversation_instructions, group_tool_calls
+from .utils import (
+    convert_mid_conversation_instructions,
+    group_tool_calls,
+    parse_tool_call_arguments,
+)
 
 _AWS_IMAGE_FORMATS = {
     "image/jpeg": "jpeg",
@@ -55,7 +58,7 @@ def to_chat_ctx(
             for content in msg.content:
                 if isinstance(content, llm.ImageContent):
                     current_content.append(_build_image(content))
-                elif isinstance(content, llm.AudioContent):
+                elif isinstance(content, (llm.AudioContent, llm.CacheBreakpoint)):
                     pass
                 elif content:
                     # str or Instructions
@@ -66,7 +69,7 @@ def to_chat_ctx(
                     "toolUse": {
                         "toolUseId": msg.call_id,
                         "name": msg.name,
-                        "input": json.loads(msg.arguments or "{}"),
+                        "input": parse_tool_call_arguments(msg),
                     }
                 }
             )

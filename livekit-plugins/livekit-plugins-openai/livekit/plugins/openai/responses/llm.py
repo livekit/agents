@@ -8,12 +8,16 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 from yarl import URL
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
-from livekit.agents.inference.llm import drop_unsupported_params
+from livekit.agents.inference.llm import (
+    PromptCacheOptions,
+    drop_unsupported_params,
+    supports_prompt_cache_breakpoints,
+)
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext, ChatItem
 from livekit.agents.llm.tool_context import (
@@ -32,6 +36,7 @@ from openai.types.responses import (
     ResponseCreatedEvent,
     ResponseErrorEvent,
     ResponseFailedEvent,
+    ResponseIncompleteEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
@@ -46,10 +51,11 @@ from ..log import logger
 from ..models import _supports_reasoning_effort
 from ..tools import OpenAITool
 
-ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
+ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "ultrafast"]
 Verbosity = Literal["low", "medium", "high"]
 
-OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
+_OPENAI_HOST = "api.openai.com"
+OPENAI_RESPONSES_WS_URL = f"wss://{_OPENAI_HOST}/v1/responses"
 
 # ws ping interval; keeps idle pooled sockets warm and lets aiohttp detect dead peers
 _WS_HEARTBEAT = 30.0
@@ -66,7 +72,7 @@ class _ResponsesWebsocket:
         url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
         if url.scheme in ("http", "https"):
             url = url.with_scheme("ws" if url.scheme == "http" else "wss")
-        if url.host != "api.openai.com":
+        if url.host != _OPENAI_HOST:
             # OpenAI's native endpoint takes the model in the response.create
             # payload; gateways need it on the upgrade URL to route the
             # connection before the first frame.
@@ -79,6 +85,7 @@ class _ResponsesWebsocket:
             connect_cb=self._create_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,
+            connect_timeout=self._timeout,
         )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -156,7 +163,12 @@ class _ResponsesWebsocket:
 
                 event = json.loads(raw_msg.data)
                 yield event
-                if event["type"] in ["response.completed", "response.failed", "error"]:
+                if event["type"] in [
+                    "response.completed",
+                    "response.failed",
+                    "response.incomplete",
+                    "error",
+                ]:
                     completed = True
                     return
         finally:
@@ -200,6 +212,8 @@ class _LLMOptions:
     verbosity: NotGivenOr[Verbosity]
     max_output_tokens: NotGivenOr[int]
     use_websocket: bool
+    prompt_cache_options: NotGivenOr[PromptCacheOptions]
+    prompt_cache_breakpoints: bool | Literal["auto"]
 
 
 class LLM(llm.LLM):
@@ -226,17 +240,37 @@ class LLM(llm.LLM):
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
+        prompt_cache_options: NotGivenOr[PromptCacheOptions] = NOT_GIVEN,
+        prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
     ) -> None:
         """
         Create a new instance of OpenAI Responses LLM.
 
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
+
+        ``prompt_cache_breakpoints`` sends each :class:`livekit.agents.llm.CacheBreakpoint` in the
+        chat context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` sends them only against
+        api.openai.com and only for GPT-5.6 and later. ``True`` sends them anyway, for a custom host
+        that accepts the field; ``False`` never sends them. Models before GPT-5.6 reject the field
+        with HTTP 400, so ``True`` cannot add support to them.
+
+        ``prompt_cache_options`` is forwarded as given on every request; it is not gated like the
+        breakpoints, and models before GPT-5.6 reject it the same way.
         """
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
+            if model in [
+                "gpt-5.1",
+                "gpt-5.2",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+                "gpt-5.5",
+                "gpt-5.6-luna",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+            ]:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
@@ -258,6 +292,8 @@ class LLM(llm.LLM):
             verbosity=verbosity,
             max_output_tokens=max_output_tokens,
             use_websocket=use_websocket,
+            prompt_cache_options=prompt_cache_options,
+            prompt_cache_breakpoints=prompt_cache_breakpoints,
         )
         self._client = client
         self._owns_client = client is None
@@ -301,7 +337,14 @@ class LLM(llm.LLM):
                 ),
             )
 
+    async def _prewarm_impl(self) -> None:
+        if self._ws is not None:
+            self._ws._pool.prewarm()
+        elif self._client is not None:
+            await self._client.models.list()
+
     async def aclose(self) -> None:
+        await super().aclose()
         if self._ws:
             await self._ws.aclose()
         if self._owns_client and self._client:
@@ -361,6 +404,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.max_output_tokens):
             extra["max_output_tokens"] = self._opts.max_output_tokens
 
+        if is_given(self._opts.prompt_cache_options):
+            extra["prompt_cache_options"] = self._opts.prompt_cache_options
+
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         )
@@ -405,7 +451,27 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
             full_chat_ctx=chat_ctx,
+            prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
         )
+
+    def _resolve_prompt_cache_breakpoints(self) -> bool:
+        setting = self._opts.prompt_cache_breakpoints
+        if isinstance(setting, bool):
+            return setting
+        # subclasses (xAI) and custom base URLs reach hosts not verified to accept the field
+        return self._host() == _OPENAI_HOST and supports_prompt_cache_breakpoints(
+            str(self._opts.model)
+        )
+
+    def _host(self) -> str:
+        # the hostname, not the netloc: an explicit port or a trailing dot is still OpenAI
+        if self._opts.use_websocket and self._ws is not None:
+            host = URL(self._ws._base_url).host
+        elif self._client is not None:
+            host = self._client._base_url.host
+        else:
+            host = None
+        return (host or "").rstrip(".").lower()
 
     def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
         if not self._pending_tool_calls:
@@ -430,8 +496,10 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         full_chat_ctx: llm.ChatContext,
+        prompt_cache_breakpoints: bool,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._prompt_cache_breakpoints = prompt_cache_breakpoints
         self._model = model
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
@@ -458,7 +526,9 @@ class LLMStream(llm.LLMStream):
 
     async def _run_impl(self) -> None:
         self._response_completed = False
-        chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
+        chat_ctx, _ = self._chat_ctx.to_provider_format(
+            format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
+        )
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
@@ -567,6 +637,8 @@ class LLMStream(llm.LLMStream):
             return ResponseCompletedEvent.model_validate(event)
         elif event_type == "response.failed":
             return ResponseFailedEvent.model_validate(event)
+        elif event_type == "response.incomplete":
+            return ResponseIncompleteEvent.model_validate(event)
         return None
 
     def _process_event(self, event: ResponseStreamEvent | None) -> llm.ChatChunk | None:
@@ -586,6 +658,8 @@ class LLMStream(llm.LLMStream):
             chunk = self._handle_response_completed(event)
         if isinstance(event, ResponseFailedEvent):
             self._handle_response_failed(event)
+        if isinstance(event, ResponseIncompleteEvent):
+            self._handle_response_incomplete(event)
         if chunk is not None:
             self._event_ch.send_nowait(chunk)
         return chunk
@@ -602,6 +676,15 @@ class LLMStream(llm.LLMStream):
         err = event.response.error
         raise APIStatusError(
             err.message if err else "response.failed",
+            status_code=-1,
+            retryable=False,
+        )
+
+    def _handle_response_incomplete(self, event: ResponseIncompleteEvent) -> None:
+        details = event.response.incomplete_details
+        reason = details.reason if details else None
+        raise APIStatusError(
+            f"response incomplete: {reason or 'reason unavailable'}",
             status_code=-1,
             retryable=False,
         )
@@ -638,6 +721,9 @@ class LLMStream(llm.LLMStream):
                     completion_tokens=usage.output_tokens,
                     prompt_tokens=usage.input_tokens,
                     prompt_cached_tokens=usage.input_tokens_details.cached_tokens
+                    if usage.input_tokens_details
+                    else 0,
+                    cache_creation_tokens=usage.input_tokens_details.cache_write_tokens
                     if usage.input_tokens_details
                     else 0,
                     total_tokens=usage.total_tokens,

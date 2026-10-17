@@ -36,6 +36,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "prompt_cached_tokens": metrics.prompt_cached_tokens,
                 "cache_creation_tokens": metrics.cache_creation_tokens,
                 "completion_tokens": metrics.completion_tokens,
+                "reasoning_tokens": metrics.reasoning_tokens,
                 "tokens_per_second": round(metrics.tokens_per_second, 2),
             },
         )
@@ -91,6 +92,10 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             extra=metadata
             | {
                 "audio_duration": round(metrics.audio_duration, 2),
+                "input_tokens": metrics.input_tokens,
+                "output_tokens": metrics.output_tokens,
+                "total_tokens": metrics.total_tokens,
+                "input_audio_tokens": metrics.input_audio_tokens,
             },
         )
     elif isinstance(metrics, InterruptionMetrics):

@@ -260,10 +260,10 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         The commit may be positive (predicted end of turn) or a negative
         prediction whose max endpointing delay elapsed — either one counts.
 
-        For every verdict except a confident human, both an end-of-turn and the
-        post-speech silence timer must fire before it is released (whichever
-        lands last unblocks the wait). Humans only require the silence timer so
-        we can respond quickly.
+        When VAD provides a speech end, every verdict except a confident human
+        requires both end-of-turn and the post-speech silence timer. If VAD does
+        not provide a valid speech end, end-of-turn also satisfies the silence
+        gate. Humans only require the silence gate so we can respond quickly.
 
         When the turn detector never calls this, the synthetic EOT timer
         provides the backstop. This gate matters most under
@@ -282,6 +282,9 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         if self._eot_timer is not None:
             self._eot_timer.cancel()
             self._eot_timer = None
+        if self._speech_active or self._speech_ended_at is None:
+            self._speech_active = False
+            self._silence_reached = True
         self._eot_reached = True
         self._try_emit_result()
 
@@ -299,7 +302,8 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
     def _can_emit(self, verdict: AMDPredictionEvent) -> bool:
         """Release gate for a verdict (which verdict it is, is decided elsewhere).
 
-        - post-speech silence is required for every verdict
+        - post-speech silence, or the EOT fallback when VAD misses speech end,
+          is required for every verdict
         - end-of-turn is additionally required for everything except a human
           (machine and uncertain wait for the greeting to finish; humans
           release on silence alone so we can respond quickly)
@@ -370,7 +374,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
                     speech_duration=speech_duration or self.speech_duration,
                     category=category,
                     reason=reason,
-                    transcript="",
+                    transcript=self._transcript,
                     delay=(time.time() - self._speech_ended_at) if self._speech_ended_at else 0.0,
                 )
             )
