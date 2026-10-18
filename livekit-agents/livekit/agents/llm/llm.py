@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Iterator
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any, ClassVar, Generic, Literal, TypeVar
@@ -18,7 +19,7 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -233,6 +234,8 @@ class _LLMEventChannel(aio.Chan[ChatChunk]):
 
 class LLMStream(ABC):
     _llm_request_span_name: ClassVar[str] = "llm_request"
+    # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
+    _llm_attempt_span_name: ClassVar[str | None] = "llm_request_run"
     _genai_operation_name: ClassVar[str | None] = trace_types.GenAIOperationName.CHAT
 
     def __init__(
@@ -292,19 +295,41 @@ class LLMStream(ABC):
             output_type=trace_types.GenAIOutputType.TEXT,
         )
         if self._record_content:
+            if self._genai_operation_name is None and input_delta.active():
+                # a delegating span (fallback) would only repeat the input its provider
+                # span records, and take that span's place as the next delta's base
+                gen_ai_telemetry.set_content_attributes(
+                    span, tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools)
+                )
+                return
+            delta = input_delta.compute(input_delta.LLM_REQUEST, self._chat_ctx, span)
             gen_ai_telemetry.set_content_attributes(
                 span,
-                system_instructions=gen_ai_telemetry.to_system_instructions(self._chat_ctx),
-                input_messages=gen_ai_telemetry.to_input_messages(self._chat_ctx),
+                system_instructions=delta.system_instructions(),
+                input_messages=delta.input_messages(),
                 tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
             )
+            input_delta.set_attributes(span, delta)
+
+    @contextlib.contextmanager
+    def _attempt_span(self) -> Iterator[trace.Span]:
+        if self._llm_attempt_span_name is None:
+            yield trace.get_current_span()
+            return
+
+        with tracer.start_as_current_span(self._llm_attempt_span_name) as span:
+            # a failed attempt names the model it asked without opening its parent
+            gen_ai_telemetry.set_request_attributes(
+                span, operation=None, provider=self._llm.provider, model=self._llm.model
+            )
+            yield span
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
 
         for i in range(self._conn_options.max_retry + 1):
             try:
-                with tracer.start_as_current_span("llm_request_run") as attempt_span:
+                with self._attempt_span() as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
                     # Reset per-attempt context ids; the monitor task populates
                     # this as ChatChunks arrive.
@@ -433,7 +458,8 @@ class LLMStream(ABC):
             )
 
             # the GenAI response side; the request side was recorded at span creation
-            gen_ai_telemetry.set_usage_attributes(self._llm_request_span, metrics)
+            if self._genai_operation_name is not None:
+                gen_ai_telemetry.set_usage_attributes(self._llm_request_span, metrics)
             finish_reason = gen_ai_telemetry.finish_reason_for(
                 function_calls=tool_calls, interrupted=metrics.cancelled
             )

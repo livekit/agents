@@ -14,6 +14,7 @@ import pytest
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 
 from livekit.agents import Agent, AgentSession, APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FallbackAdapter, LLMStream, Tool
@@ -23,6 +24,7 @@ from livekit.agents.telemetry import (
     tracer,
     utils as telemetry_utils,
 )
+from livekit.agents.tts import FallbackAdapter as TTSFallbackAdapter, StreamAdapter
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.voice import generation
 from livekit.agents.voice.agent_activity import AgentActivity
@@ -283,27 +285,47 @@ async def test_llm_fallback_records_failed_and_serving_provider(
                 await stream.aclose()
             response = "".join(c.delta.content or "" for c in chunks if c.delta)
     finally:
+        await asyncio.gather(*(s.recovering_task for s in adapter._status if s.recovering_task))
         await adapter.aclose()
         await primary.aclose()
         await secondary.aclose()
 
     assert response == "hello"
 
-    # the adapter's request span nests the attempt span that ran the fallback loop
+    # each instance's request nests directly under the adapter's, with no attempt span between
     [request] = _spans(span_exporter, "llm_fallback_adapter")
-    runs = [
+    children = [
         s
-        for s in _spans(span_exporter, "llm_request_run")
+        for s in _spans(span_exporter, "llm_request")
         if s.parent is not None and s.parent.span_id == request.context.span_id
     ]
-    assert runs, "no llm_request_run under the fallback request"
-    run = runs[-1]
-    assert (run.attributes or {})[trace_types.ATTR_FALLBACK_LABEL] == secondary.label
-    assert (run.attributes or {})[trace_types.ATTR_FALLBACK_INDEX] == 1
-    # the run and the request span name the one that served: request = expected (the
-    # primary), response = who answered
-    assert (run.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == secondary.model
+    instance_requests = sorted(
+        (s for s in children if not (s.attributes or {}).get(trace_types.ATTR_FALLBACK_RECOVERY)),
+        key=lambda s: s.start_time or 0,
+    )
+    models = [
+        (s.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] for s in instance_requests
+    ]
+    assert models == [primary.model, secondary.model]
+    # the background check that the primary is back is marked, not mistaken for an attempt
+    [probe] = [s for s in children if s not in instance_requests]
+    assert (probe.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
+    # the failed attempt names the model it asked on its own span
+    [failed_run] = [
+        s
+        for s in _spans(span_exporter, "llm_request_run")
+        if s.parent is not None and s.parent.span_id == instance_requests[0].context.span_id
+    ]
+    assert failed_run.status.status_code is StatusCode.ERROR
+    assert (failed_run.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
+    assert (failed_run.attributes or {})[
+        trace_types.ATTR_GEN_AI_PROVIDER_NAME
+    ] == trace_types.gen_ai_provider_name(primary.provider)
+    # the adapter's span names the one that served: request = expected (the primary),
+    # response = who answered
     request_attrs = request.attributes or {}
+    assert request_attrs[trace_types.ATTR_FALLBACK_LABEL] == secondary.label
+    assert request_attrs[trace_types.ATTR_FALLBACK_INDEX] == 1
     assert trace_types.ATTR_GEN_AI_OPERATION_NAME not in request_attrs
     assert request_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
     assert request_attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == secondary.model
@@ -320,6 +342,93 @@ async def test_llm_fallback_records_failed_and_serving_provider(
         assert caller_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
     # and the adapter itself now reports who serves next
     assert adapter.model == secondary.model and adapter.provider == secondary.provider
+
+
+class _BrokenTTS(FakeTTS):
+    @property
+    def model(self) -> str:
+        return "broken-tts"
+
+    @property
+    def provider(self) -> str:
+        return "broken"
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["chunked", "stream"])
+async def test_tts_fallback_nests_instance_requests_directly(
+    span_exporter: InMemorySpanExporter, streaming: bool
+) -> None:
+    primary = _BrokenTTS(fake_exception=APIConnectionError("primary down"))
+    secondary = FakeTTS(fake_audio_duration=0.1)
+    adapter = TTSFallbackAdapter([primary, secondary], max_retry_per_tts=0)
+    try:
+        if streaming:
+            stream = adapter.stream(conn_options=APIConnectOptions(max_retry=0))
+            stream.push_text("hello world.")
+            stream.end_input()
+        else:
+            stream = adapter.synthesize("hello world.")
+        async with stream:
+            _ = [audio async for audio in stream]
+    finally:
+        for status in adapter._status:
+            for task in (status.recovering_synthesize_task, status.recovering_stream_task):
+                if task is not None:
+                    await asyncio.gather(task, return_exceptions=True)
+        await adapter.aclose()
+        await primary.aclose()
+        await secondary.aclose()
+
+    [request] = _spans(span_exporter, "tts_fallback_adapter")
+    children = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.parent is not None and s.parent.span_id == request.context.span_id
+    ]
+    assert {s.name for s in children} == {"tts_request"}
+    probes = [s for s in children if (s.attributes or {}).get(trace_types.ATTR_FALLBACK_RECOVERY)]
+    attempts = sorted((s for s in children if s not in probes), key=lambda s: s.start_time or 0)
+    # the failed primary, then the secondary that served, each naming its model
+    models = [(s.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] for s in attempts]
+    assert models == [primary.model, secondary.model]
+    [probe] = probes
+    assert (probe.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
+    # the failed attempt names the model it asked on its own span
+    [failed_run] = [
+        s
+        for s in _spans(span_exporter, "tts_request_run")
+        if s.parent is not None and s.parent.span_id == attempts[0].context.span_id
+    ]
+    assert failed_run.status.status_code is StatusCode.ERROR
+    failed_attrs = failed_run.attributes or {}
+    assert failed_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
+    assert failed_attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] == "broken"
+    # the adapter's span: request = expected (the primary), response = who answered
+    request_attrs = request.attributes or {}
+    assert request_attrs[trace_types.ATTR_FALLBACK_LABEL] == secondary.label
+    assert request_attrs[trace_types.ATTR_FALLBACK_INDEX] == 1
+    assert request_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
+    assert request_attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == secondary.model
+
+
+async def test_tts_stream_adapter_nests_sentence_requests_directly(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    async with StreamAdapter(tts=FakeTTS(fake_audio_duration=0.1)) as adapter:
+        stream = adapter.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream.push_text("hello world.")
+        stream.end_input()
+        async with stream:
+            _ = [audio async for audio in stream]
+
+    [request] = _spans(span_exporter, "tts_stream_adapter")
+    children = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.parent is not None and s.parent.span_id == request.context.span_id
+    ]
+    assert children
+    assert {s.name for s in children} == {"tts_request"}
 
 
 @pytest.mark.parametrize("streaming", [False, True])

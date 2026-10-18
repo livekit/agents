@@ -380,6 +380,19 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             else:
                 self._update_processor(None)
 
+        publication = participant.track_publications.get(track.sid)
+        if (
+            noise_cancellation is not None
+            and publication is not None
+            and AudioTrackFeature.TF_ENHANCED_NOISE_CANCELLATION in publication.audio_features
+        ):
+            logger.warning(
+                "the participant's audio track already has enhanced noise cancellation enabled, "
+                "applying noise cancellation again on the agent side degrades audio quality. "
+                "disable it on either the client or the agent",
+                extra={"participant": participant.identity, "track_id": track.sid},
+            )
+
         return rtc.AudioStream.from_track(
             track=track,
             sample_rate=self._sample_rate,
