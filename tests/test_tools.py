@@ -2234,6 +2234,35 @@ class TestToolCallEvents:
         assert items[1] == ToolCallEnded(id="c1", call_id="c1", message=message, status="done")
 
     @pytest.mark.asyncio
+    async def test_handoff_with_tool_result_terminal_message_is_sanitized(self):
+        """The documented ``return (agent, ToolResult(...))`` handoff must not
+        stringify the tuple (and its Agent) into the public terminal event."""
+        from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
+        from livekit.agents.voice.generation import make_tool_output
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        next_agent = Agent(instructions="next")
+
+        @function_tool
+        async def transfer() -> Any:
+            """t"""
+            return (next_agent, ToolResult("Transferred", reply_required=False))
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context(call_id="c6", name="transfer")
+        result = await executor.execute(tool=transfer, run_ctx=run_ctx, raw_arguments={})
+        await _drain_executor(executor)
+
+        items = _emitted_items(run_ctx.session)
+        assert isinstance(items[0], ToolCallStarted)
+        assert items[1] == ToolCallEnded(
+            id="c6", call_id="c6", message="Transferred", status="done"
+        )
+        # the terminal text must match what dispatch records for the model
+        out = make_tool_output(fnc_call=run_ctx.function_call, output=result, exception=None)
+        assert items[1].message == out.fnc_call_out.output
+
+    @pytest.mark.asyncio
     async def test_error_before_update_uses_plain_call_id(self):
         from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
         from livekit.agents.voice.tool_executor import _ToolExecutor
