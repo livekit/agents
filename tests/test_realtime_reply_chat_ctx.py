@@ -209,3 +209,31 @@ async def test_an_unexpected_error_leaves_no_message_behind() -> None:
     assert handle.done()
     assert isinstance(handle.exception(), RuntimeError)
     assert [item.id for item in activity._agent._chat_ctx.items] == []
+
+
+async def test_a_cancelled_turn_leaves_no_message_behind() -> None:
+    """An interruption can force-cancel this task while the push is still awaiting.
+
+    `CancelledError` is not an `Exception`, so it skips the rollback the error path
+    uses. Recording the message ahead of the push would otherwise leave it in the
+    history of a turn that never ran -- the behaviour before the message moved.
+    """
+    rt_session = FakeRealtimeModel().session()
+    activity = _FakeActivity(rt_session)
+    pushing = asyncio.Event()
+
+    async def update(chat_ctx: llm.ChatContext) -> None:
+        pushing.set()
+        await asyncio.Event().wait()  # never returns; the task is cancelled instead
+
+    rt_session.update_chat_ctx = update  # type: ignore[method-assign]
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+
+    task = _run_reply_task(activity, handle)
+    await pushing.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [item.id for item in activity._agent._chat_ctx.items] == []

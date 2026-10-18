@@ -4177,6 +4177,15 @@ class AgentActivity(RecognitionHooks):
                     "failed to update the chat context before generating the reply",
                     extra={"error": str(e)},
                 )
+            except asyncio.CancelledError:
+                # an interruption can force-cancel this task while the push is still
+                # awaiting. CancelledError is not an Exception, so it would otherwise
+                # skip the rollback below and leave the message in the history of a
+                # turn that never ran -- which is what happened before the message
+                # was recorded ahead of the push.
+                with contextlib.suppress(ValueError):
+                    self._agent._chat_ctx.remove(msg)
+                raise
             except Exception as e:
                 logger.exception("failed to update the chat context before generating the reply")
                 # the turn is over and nothing was sent, so the message must not be
