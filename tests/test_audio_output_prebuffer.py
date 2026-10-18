@@ -191,8 +191,9 @@ async def test_a_sink_that_cannot_pause_is_reported_as_such() -> None:
 async def test_interruption_during_flush_does_not_hang() -> None:
     """
     Regression test for: when clear_buffer() is called while a flush task is
-    in-flight, the task must complete and flush the downstream sink for any
-    frames already forwarded, so wait_for_playout() does not hang.
+    in-flight, the in-flight task is cancelled and the already-forwarded
+    segment is completed by the sink's own clear_buffer(), so
+    wait_for_playout() does not hang.
     """
     sink = _TrackingSink()
     buf = _buffered(sink, 0.3)
@@ -207,12 +208,32 @@ async def test_interruption_during_flush_does_not_hang() -> None:
     # immediate interruption before the task completes
     buf.clear_buffer()
 
-    # must not hang - the in-flight task completes and flushes the sink
+    # must not hang - the interrupted segment completes via the sink's clear
     await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
 
-    # the sink receives flush (from the interrupted segment) which completes
-    # it; wait_for_playout completes without hanging.
-    assert sink.flushed is True
+    # the sink was cleared, not flushed: a flush here would report the stop as a
+    # normal completion and consume the segment before the interrupted event
+    assert sink.flushed is False
+    assert sink.cleared is True
+
+
+async def test_interruption_is_reported_as_interrupted() -> None:
+    """
+    A stopped reply must be reported to the caller as interrupted, never as a
+    normal completion, even when the sink finishes synchronously on flush.
+    """
+    sink = _TrackingSink()
+    buf = _buffered(sink, 0.3)
+
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))  # 0.4s > 0.3s buffer, forwards downstream
+
+    buf.flush()
+    buf.clear_buffer()
+
+    ev = await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+    assert ev.interrupted is True, "a cleared segment must report interrupted=True"
+    assert sink.flush_events == 0, "clearing must not close the sink segment as complete"
 
 
 async def test_adjacent_replies_do_not_merge_segments() -> None:
@@ -239,7 +260,11 @@ async def test_adjacent_replies_do_not_merge_segments() -> None:
 
 
 class _TrackingSink(AudioOutput):
-    """Sink that counts segments and tracks flush state."""
+    """Sink that counts segments and tracks flush/clear state.
+
+    Mirrors the room sink: ``flush()`` completes the segment normally and
+    ``clear_buffer()`` completes it as interrupted.
+    """
 
     def __init__(self) -> None:
         super().__init__(
@@ -248,6 +273,8 @@ class _TrackingSink(AudioOutput):
         )
         self.segments = 0
         self.flushed = False
+        self.cleared = False
+        self.flush_events = 0
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
@@ -256,9 +283,11 @@ class _TrackingSink(AudioOutput):
         super().flush()
         self.segments += 1
         self.flushed = True
+        self.flush_events += 1
         self.on_playback_finished(playback_position=0.0, interrupted=False)
 
     def clear_buffer(self) -> None:
         super().clear_buffer()
-        # emit interrupted playback event so wait_for_playout() completes
+        self.cleared = True
+        self.segments += 1
         self.on_playback_finished(playback_position=0.0, interrupted=True)

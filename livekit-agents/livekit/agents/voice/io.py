@@ -624,22 +624,19 @@ class BufferedAudioOutput(AudioOutput):
         return await super().wait_for_playout()
 
     def clear_buffer(self) -> None:
-        # cancel any pending flush task to drop remaining held frames, but
-        # create a sync flush for any already-forwarded audio before clearing
-        # so the sink's interruption event has a waiter to complete.
+        # an interruption drops the held tail, so cancel any pending release task
         task, self._flush_task = self._flush_task, None
         if task is not None and not task.done():
             task.cancel()
         self._held.clear()
         self._held_duration = 0.0
-        # complete interrupted segment in wrapper synchronously
+        # complete the interrupted segment locally, then start a fresh one. the sink
+        # reports the segment itself through clear_buffer() as interrupted — flushing
+        # it here first would report the stop as a normal completion and consume the
+        # segment before the interrupted event could arrive.
         super().flush()
         self._start_segment()
-        # flush any forwarded audio downstream so the sink has a waiter,
-        # then clear the sink for the interruption
-        if self.next_in_chain is not None:
-            self.next_in_chain.flush()
-            self.next_in_chain.clear_buffer()
+        self.next_in_chain.clear_buffer()
 
     def pause(self) -> None:
         self._paused_at = time.monotonic()
