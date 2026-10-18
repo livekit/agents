@@ -2771,8 +2771,8 @@ class AgentActivity(RecognitionHooks):
         # When the audio recognition detects the end of a user turn:
         #  - check if realtime model server-side turn detection is enabled
         #  - check if there is no current generation happening
-        #  - cancel the current generation if it allows interruptions (otherwise skip this current
-        #  turn)
+        #  - cancel the current generation if it allows interruptions (otherwise skip the reply
+        #  but keep the user message)
         #  - generate a reply to the user input
 
         # interrupt all background speeches and wait for them to finish to update the chat context
@@ -2814,6 +2814,10 @@ class AgentActivity(RecognitionHooks):
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
+                # the reply is skipped, not the user message: keep it like the skip_reply branch does
+                if info.new_transcript != "":
+                    self._agent._chat_ctx.items.append(user_message)
+                    self._session._conversation_item_added(user_message)
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
