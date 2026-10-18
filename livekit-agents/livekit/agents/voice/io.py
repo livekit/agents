@@ -143,6 +143,20 @@ class PlaybackProgressedEvent:
 class AudioOutputCapabilities:
     pause: bool
 
+    # Whether ``flush()`` marks the end of the segment for a receiver *outside* this
+    # SDK, rather than only arming local completion bookkeeping.
+    #
+    # Sinks that push the audio to a remote consumer answer ``True``: the avatar
+    # data-stream sink closes the stream it is writing to, and DebugQueueIO pushes
+    # an AudioSegmentEnd to whatever reads the queue. For those, an extra ``flush()``
+    # is an end-of-speech the remote side will act on, so a wrapper must not issue one
+    # on the user's behalf.
+    #
+    # Sinks that own playback answer ``False``: flushing them is local bookkeeping
+    # (the room sink uses it to arm the task that reports the segment), so a wrapper
+    # may flush before clearing when it needs that bookkeeping settled.
+    flush_ends_segment: bool = False
+
 
 class AudioOutput(
     ABC, rtc.EventEmitter[Literal["playback_finished", "playback_started", "playback_progressed"]]
@@ -205,6 +219,10 @@ class AudioOutput(
     @property
     def label(self) -> str:
         return self.__label
+
+    @property
+    def capabilities(self) -> AudioOutputCapabilities:
+        return self._capabilities
 
     @property
     def next_in_chain(self) -> AudioOutput | None:
@@ -341,7 +359,11 @@ class _AudioSinkProxy(AudioOutput):
     def __init__(self, next_in_chain: AudioOutput) -> None:
         super().__init__(
             label="AudioSinkProxy",
-            capabilities=AudioOutputCapabilities(pause=True),
+            # the proxy stands in for the leaf, so it reports the leaf's contract
+            capabilities=AudioOutputCapabilities(
+                pause=True,
+                flush_ends_segment=next_in_chain.capabilities.flush_ends_segment,
+            ),
             next_in_chain=None,
         )
         # whether the wrapper above us has attached the proxy; set_next_in_chain
@@ -519,7 +541,10 @@ class BufferedAudioOutput(AudioOutput):
     ) -> None:
         super().__init__(
             label="BufferedAudioOutput",
-            capabilities=AudioOutputCapabilities(pause=next_in_chain.can_pause),
+            capabilities=AudioOutputCapabilities(
+                pause=next_in_chain.can_pause,
+                flush_ends_segment=next_in_chain.capabilities.flush_ends_segment,
+            ),
             next_in_chain=next_in_chain,
             sample_rate=sample_rate,
         )
@@ -632,17 +657,18 @@ class BufferedAudioOutput(AudioOutput):
         self._held_duration = 0.0
         super().flush()
         self._start_segment()
-        # A sink arms its completion reporting on flush() (the room sink creates its
-        # playout-wait task there) and settles it from clear_buffer(), so the clear
-        # must follow a flush. Cancelling the release task above means that flush never
-        # happened, so arm it here or the segment would never be reported and
-        # wait_for_playout() would hang.
+        # Cancelling the release task above means the sink's own flush never happened.
+        # Sinks that own playback settle a segment through flush (the room sink arms
+        # the playout wait there), so flush before clearing or the segment is never
+        # reported and wait_for_playout() hangs. The flush only arms that reporting;
+        # the clear that follows settles it as interrupted.
         #
-        # Flushing first does not report the stop as a completion: the sink's flush only
-        # arms the reporting, and the clear that immediately follows settles it as
-        # interrupted. The flush is synchronous but the reporting is not, so the
-        # interrupted event is the one that lands.
-        self.next_in_chain.flush()
+        # Sinks that push audio to an external receiver answer flush_ends_segment, and
+        # for those an extra flush is an end-of-speech the remote side acts on — the
+        # avatar would report the stop as a normal completion before this clear lands.
+        # Those sinks settle from clear_buffer() alone, so they are cleared directly.
+        if not self.next_in_chain.capabilities.flush_ends_segment:
+            self.next_in_chain.flush()
         self.next_in_chain.clear_buffer()
 
     def pause(self) -> None:
