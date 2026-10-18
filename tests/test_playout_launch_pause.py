@@ -250,3 +250,36 @@ async def test_a_pause_taken_while_speaking_still_holds(
     assert audio_output._paused_at == paused_at
     assert agent_activity._paused_speech is not None
     assert agent_activity._paused_speech.handle is speech_handle
+
+
+async def test_caller_noise_does_not_hold_the_reply_at_authorization(
+    early_reply_activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    """The playout release is downstream of authorization, which gathers *all* of
+    its futures -- so a pending `_user_silence_event` would hold the reply before
+    forwarding ever runs, and the option would do nothing in the case it exists for.
+    """
+    agent_activity, _ = early_reply_activity
+    speech_handle = SpeechHandle.create()
+    agent_activity._user_silence_event.clear()  # the caller is making a noise
+
+    assert agent_activity._waits_for_user_silence(speech_handle) is False
+
+
+async def test_the_default_still_waits_for_the_caller_to_stop(
+    activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    agent_activity, _ = activity
+    speech_handle = SpeechHandle.create()
+
+    assert agent_activity._waits_for_user_silence(speech_handle) is True
+
+
+async def test_uninterruptible_speech_never_waits(
+    activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    """Speech that cannot be interrupted never waited for silence, option or not."""
+    agent_activity, _ = activity
+    speech_handle = SpeechHandle.create(allow_interruptions=False)
+
+    assert agent_activity._waits_for_user_silence(speech_handle) is False
