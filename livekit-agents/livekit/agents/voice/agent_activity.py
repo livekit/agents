@@ -4932,6 +4932,17 @@ class AgentActivity(RecognitionHooks):
                 timeout=timeout,
             )
 
+    def _holds_reply_while_thinking(self) -> bool:
+        """Should a pause taken while the agent was thinking keep the reply waiting?
+
+        Only pauses recorded with the agent *thinking* are released early: an
+        interruption during playback is a different thing and keeps its behaviour.
+        """
+        if self._session.options.interruption["hold_reply_while_user_speaking"]:
+            return True
+
+        return self._paused_speech is None or self._paused_speech.agent_state != "thinking"
+
     def _pause_enabled(self) -> bool:
         if self._rt_overlapping_speech_enabled:
             # the framework never interrupts on the caller here, so no interruption can be false
@@ -4959,6 +4970,24 @@ class AgentActivity(RecognitionHooks):
             and self._paused_speech.handle is speech_handle
             and pause_is_allowed
         )
+        if pause_is_valid and not self._holds_reply_while_thinking():
+            # The pause was taken while this reply was still being generated and the
+            # caller is only making noise -- a breath, line noise, a short "mm".
+            # Holding the audio means waiting for end of speech, plus
+            # false_interruption_timeout when the sound was long enough to count as an
+            # interruption, so a 0.6s noise near the start of a reply costs seconds of
+            # dead air. Release it here instead, which is what 1.6.x did.
+            #
+            # This returns rather than falling through: the block below would see the
+            # agent still not "speaking" and the caller still not silent, and pause
+            # again. The agent state is left alone, since playout starting moves it to
+            # "speaking" on its own.
+            self._paused_speech = None
+            self._cancel_false_interruption_timer()
+            if audio_output is not None and audio_output.can_pause:
+                audio_output.resume()
+            return
+
         if pause_is_valid:
             # a paused playout stay paused regardless of forwarding status
             return
