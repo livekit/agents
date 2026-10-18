@@ -2511,8 +2511,12 @@ class RealtimeSession(  # noqa: F811
                 except asyncio.CancelledError:
                     # A recycle interrupted above may already have cancelled this task, and
                     # awaiting it raises here even though nobody cancelled aclose(). Re-raise
-                    # only if the cancellation really is ours, so the teardown below still runs.
+                    # only if the cancellation really is ours, so the teardown below runs.
                     if not self._response_task.cancelled():
+                        # Our caller is going away and the shield kept this task alive, so
+                        # nothing would ever await it again: cancel it rather than leave the
+                        # reader running past the session it belongs to.
+                        self._response_task.cancel()
                         raise
             tasks.append(self._response_task)
 
