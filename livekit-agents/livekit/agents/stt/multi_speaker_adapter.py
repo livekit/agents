@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -172,6 +173,10 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
 
         stream = self._wrapped_stt.stream(language=self._language, conn_options=self._conn_options)
         stream._on_provider_progress = self._mark_provider_progress
+        # a fresh leg is created on every attempt: seed its offset so provider timestamps
+        # continue on the input timeline instead of restarting at zero
+        stream.start_time_offset = self.start_time_offset + (time.time() - self._start_time)
+
         tasks = [
             asyncio.create_task(
                 _forward_input(stream), name="DiarizationAdapterWrapper.forward_input"
