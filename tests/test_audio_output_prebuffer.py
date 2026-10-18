@@ -288,12 +288,16 @@ class _TrackingSink(AudioOutput):
     Mirrors the room sink's shape: ``flush()`` only *arms* completion reporting by
     creating a playout-wait task, and that task reports ``interrupted=True`` if
     ``clear_buffer()`` arrives first. Reporting is asynchronous in both paths.
+
+    This sink has ``flush_ends_segment=False``: its ``flush()`` only arms a local
+    completion task, and an extra ``flush()`` before ``clear_buffer()`` is required
+    to arm the task so the interruption is consumed.
     """
 
     def __init__(self) -> None:
         super().__init__(
             label="TrackingSink",
-            capabilities=AudioOutputCapabilities(pause=True),
+            capabilities=AudioOutputCapabilities(pause=True, flush_ends_segment=False),
         )
         self.segments = 0
         self.flushed = False
@@ -328,3 +332,58 @@ class _TrackingSink(AudioOutput):
         # completion task is what turns it into a reported segment. clearing
         # without a flush therefore leaves the segment unreported, which is what
         # the wrapper's flush-before-clear ordering prevents.
+
+
+async def test_interruption_does_not_close_an_avatar_stream() -> None:
+    """
+    Regression test for: an interruption must not flush a sink whose flush() ends
+    the segment for the remote receiver. The avatar data-stream sink closes its
+    stream on flush, so a flush issued by clear_buffer() would make the avatar
+    report a normal completion and the stopped reply would look uninterrupted.
+    """
+    sink = _StreamClosingSink()
+    buf = _buffered(sink, 0.3)
+
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))  # 0.4s > 0.3s buffer, forwards downstream
+
+    buf.flush()
+    # the interruption lands before the scheduled release reaches the sink
+    buf.clear_buffer()
+
+    ev = await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+    assert ev.interrupted is True, "the stopped reply must report interrupted=True"
+    # exactly one end of speech, and it must come from the clear, not a flush
+    assert sink.streams_closed == 0, "clearing must not close the avatar's stream"
+    assert sink.clear_calls == 1
+
+
+class _StreamClosingSink(AudioOutput):
+    """Sink whose ``flush()`` has an externally visible end-of-segment effect.
+
+    Mirrors the avatar data-stream sink: ``flush()`` closes the remote stream, so
+    flushing before clearing would end the segment as a normal completion before
+    the clear could interrupt it. Such a sink must not receive an extra flush.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="StreamClosingSink",
+            capabilities=AudioOutputCapabilities(pause=False, flush_ends_segment=True),
+        )
+        self.streams_closed = 0
+        self.clear_calls = 0
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+
+    def flush(self) -> None:
+        super().flush()
+        # closing the remote stream is what the avatar sees as end of speech
+        self.streams_closed += 1
+        self.on_playback_finished(playback_position=0.0, interrupted=False)
+
+    def clear_buffer(self) -> None:
+        super().clear_buffer()
+        self.clear_calls += 1
+        self.on_playback_finished(playback_position=0.0, interrupted=True)
