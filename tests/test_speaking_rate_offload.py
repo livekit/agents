@@ -8,9 +8,12 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
-from livekit import rtc
 
-from livekit.agents.voice.transcription._speaking_rate import SpeakingRateDetector, SpeakingRateStream
+from livekit import rtc
+from livekit.agents.voice.transcription._speaking_rate import (
+    SpeakingRateDetector,
+    SpeakingRateStream,
+)
 
 pytestmark = pytest.mark.unit
 
