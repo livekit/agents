@@ -876,7 +876,15 @@ class SpeechStream(stt.SpeechStream):
                 backoff_time = 1.0
 
                 # Connect to the WebSocket
-                async with self._session.ws_connect(session_url) as ws:
+                async with self._session.ws_connect(
+                    # Without a heartbeat aiohttp never notices a socket that died
+                    # without a FIN/RST: the receive side parks forever and nothing
+                    # reports a failure, so the stream neither reconnects nor lets a
+                    # FallbackAdapter move on. An unanswered ping closes the socket,
+                    # which arrives in the receive loop as an ERROR frame.
+                    session_url,
+                    heartbeat=30.0,
+                ) as ws:
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 

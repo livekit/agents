@@ -981,6 +981,14 @@ class SpeechStream(stt.SpeechStream):
                         return False
                     raise APIStatusError("SLNG connection closed unexpectedly")
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    # A heartbeat timeout arrives as an ERROR frame rather than a close
+                    # frame, and the not-TEXT branch below would step over it, ending the
+                    # receive loop without a failure for the base class to report.
+                    raise APIConnectionError(
+                        message="SLNG STT websocket failed"
+                    ) from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
@@ -1430,6 +1438,12 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     model_endpoint,
                     headers=headers,
+                    # Without a heartbeat aiohttp never notices a socket that died
+                    # without a FIN/RST: the receive side parks forever and nothing
+                    # reports a failure, so the stream neither reconnects nor lets a
+                    # FallbackAdapter move on. An unanswered ping closes the socket,
+                    # which arrives in the receive loop as an ERROR frame.
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )
