@@ -711,6 +711,29 @@ async def test_thread_job_loop_is_closed_after_the_runner_exits():
     assert _job_loops[0].is_closed()
 
 
+@pytest.mark.no_concurrent  # monkeypatches the process-global telemetry functions
+async def test_thread_executor_updates_active_job_metric(monkeypatch: pytest.MonkeyPatch):
+    """Thread-executed jobs must update the active-job gauge like process jobs do,
+    otherwise lk_agents_active_job_count has no writer under JobExecutorType.THREAD."""
+    from livekit.agents.telemetry import metrics as telemetry_metrics
+
+    calls: list[str] = []
+    monkeypatch.setattr(telemetry_metrics, "job_started", lambda: calls.append("started"))
+    monkeypatch.setattr(telemetry_metrics, "job_ended", lambda: calls.append("ended"))
+
+    proc, start_args = _create_thread_proc(close_timeout=10.0)
+    await proc.start()
+    await proc.initialize()
+    try:
+        await proc.launch_job(_generate_fake_job())
+        await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+        assert calls == ["started"], "job_started must be called while a job is running"
+    finally:
+        await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert calls == ["started", "ended"], "job_ended must be called when the job ends"
+
+
 def test_log_queue_drains_before_stop():
     """All log records must be received by the listener even when stop() is
     called right after the sender closes its end.  This reproduces a race where
