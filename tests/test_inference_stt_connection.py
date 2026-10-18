@@ -582,3 +582,89 @@ async def test_non_retryable_error_still_logs_at_error(caplog: pytest.LogCapture
     error_messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert "received error from LiveKit Inference STT" in error_messages
     assert any("Error in recv_task" in msg for msg in error_messages)
+
+
+async def _always_reject_before_input_end(
+    request: web.Request,
+) -> web.WebSocketResponse:
+    """A gateway that rejects the session before input ends, on every connection."""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    async for msg in ws:
+        if json.loads(msg.data)["type"] == "session.create":
+            await ws.send_json(
+                {"type": "error", "code": 2006, "message": "Streaming ASR unavailable"}
+            )
+    return ws
+
+
+@pytest.mark.parametrize("max_retry", [0, 2])
+async def test_retryable_error_logs_at_error_when_it_ends_the_stream(
+    max_retry: int,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The per-attempt logs stay at DEBUG, but a failure that ends the stream must be
+    reported: the retry loop only logs WARNING when it will make another attempt."""
+    connection_count = 0
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connection_count
+        connection_count += 1
+        return await _always_reject_before_input_end(request)
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(base_url, session)
+        stream = stt.stream(
+            conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.001, timeout=1.0)
+        )
+        with caplog.at_level(logging.DEBUG):
+            try:
+                # input has ended, so a gateway reject is terminal and is not retried
+                stream.end_input()
+                with pytest.raises(APIError):
+                    await asyncio.wait_for(_final_transcripts(stream), timeout=2.0)
+            finally:
+                await stream.aclose()
+
+    assert connection_count == 1
+    error_messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_messages, "a stream that ended on a retryable failure must log an error"
+
+
+@pytest.mark.parametrize(
+    ("max_retry", "expected_connections"),
+    [
+        pytest.param(0, 1, id="no-retries"),
+        pytest.param(2, 3, id="retries-exhausted"),
+    ],
+)
+async def test_retryable_error_logs_at_error_once_retry_budget_is_spent(
+    max_retry: int,
+    expected_connections: int,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A gateway that keeps rejecting before input end is retried; the last attempt
+    ends the stream and must be logged at ERROR rather than only at DEBUG."""
+    connection_count = 0
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connection_count
+        connection_count += 1
+        return await _always_reject_before_input_end(request)
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(base_url, session)
+        stream = stt.stream(
+            conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.001, timeout=5.0)
+        )
+        with caplog.at_level(logging.DEBUG):
+            try:
+                # no end_input(), so the reject stays retryable and the budget is spent
+                with pytest.raises(APIError):
+                    await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+            finally:
+                await stream.aclose()
+
+    assert connection_count == expected_connections
+    error_messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_messages, "the attempt that exhausts the budget must log an error"
