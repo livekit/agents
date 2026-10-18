@@ -13,6 +13,7 @@ from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import aio
 from .chat_context import ChatContext, MetricsMetadata
 from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import Tool, ToolChoice
@@ -82,6 +83,7 @@ class FallbackAdapter(
         self._retry_on_chunk_sent = retry_on_chunk_sent
         self._sticky = sticky
         self._attempt_id = 0
+        self._closed = False
 
         self._status = [
             _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
@@ -162,6 +164,16 @@ class FallbackAdapter(
             self._llm_instances[0].prewarm(loop=loop)
 
     async def aclose(self) -> None:
+        # set before the sweep: _try_recovery is synchronous, so a probe is
+        # either already in a slot (and cancelled below) or refused by this
+        # flag. A stream still in flight runs its finally after this returns,
+        # and must not start a probe that nothing is left to cancel
+        self._closed = True
+
+        for llm_status in self._status:
+            if llm_status.recovering_task is not None:
+                await aio.cancel_and_wait(llm_status.recovering_task)
+
         for llm_instance in self._llm_instances:
             llm_instance.off("metrics_collected", self._on_metrics_collected)
 
@@ -296,6 +308,10 @@ class FallbackLLMStream(LLMStream):
             raise
 
     def _try_recovery(self, llm: LLM) -> None:
+        if self._fallback_adapter._closed:
+            # nothing would cancel a probe started from here
+            return
+
         llm_status = self._fallback_adapter._status[
             self._fallback_adapter._llm_instances.index(llm)
         ]
