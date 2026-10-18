@@ -17,9 +17,11 @@ class _FakeWebSocket:
 class _FakeSession:
     def __init__(self) -> None:
         self.url = ""
+        self.kwargs: dict[str, object] = {}
 
-    async def ws_connect(self, url: str, **_kwargs: object) -> _FakeWebSocket:
+    async def ws_connect(self, url: str, **kwargs: object) -> _FakeWebSocket:
         self.url = url
+        self.kwargs = kwargs
         return _FakeWebSocket()
 
 
@@ -111,3 +113,16 @@ async def test_native_responses_websocket_connect_url_omits_model() -> None:
     assert parsed_url.netloc == "api.openai.com"
     assert parsed_url.path == "/v1/responses"
     assert parse_qs(parsed_url.query) == {}
+
+
+async def test_realtime_stt_socket_is_opened_with_a_heartbeat() -> None:
+    """aiohttp defaults `heartbeat` to None, so a socket that dies without a
+    FIN/RST leaves the receive side parked forever: the stream never raises, and
+    neither the reconnect nor a FallbackAdapter switch is ever triggered."""
+    instance = stt.STT(api_key="test-key", base_url="https://gateway.example.com/v1")
+    session = _FakeSession()
+    instance._session = session
+
+    await instance._connect_ws(5)
+
+    assert session.kwargs.get("heartbeat") == 30.0

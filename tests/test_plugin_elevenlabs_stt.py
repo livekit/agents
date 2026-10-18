@@ -763,3 +763,27 @@ async def test_recognize_does_not_retry_a_client_error(
     assert exc_info.value.message == message
     assert exc_info.value.body == parsed
     assert requests == 1
+
+
+async def test_connect_ws_opens_the_socket_with_a_heartbeat() -> None:
+    """aiohttp defaults `heartbeat` to None, so a socket that dies without a
+    FIN/RST leaves the receive side parked forever: the stream never raises, and
+    neither the reconnect nor a FallbackAdapter switch is ever triggered."""
+    stream = _new_stream()
+
+    class _ConnOptions:
+        timeout = 5.0
+
+    stream._conn_options = _ConnOptions()
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        async def ws_connect(self, url: str, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return object()
+
+    stream._session = _FakeSession()
+
+    await stream._connect_ws()
+
+    assert captured.get("heartbeat") == 30.0

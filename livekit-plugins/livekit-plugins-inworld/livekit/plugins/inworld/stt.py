@@ -275,6 +275,12 @@ class SpeechStream(stt.SpeechStream):
             self._ensure_session().ws_connect(
                 ws_url,
                 headers={"Authorization": self._stt._authorization},
+                # Without a heartbeat aiohttp never notices a half-open socket (one
+                # that died without a FIN/RST): the receive side parks forever, the
+                # stream never raises, and so neither the reconnect nor a
+                # FallbackAdapter switch is ever triggered. An unanswered ping makes
+                # aiohttp close the socket, which surfaces in the receive loop.
+                heartbeat=30.0,
             ),
             timeout=self._conn_options.timeout,
         )

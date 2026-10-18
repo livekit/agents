@@ -590,7 +590,15 @@ class STT(stt.STT):
         session = self._ensure_session()
         # the config is sent once the stream acquires the connection, since the pool also
         # hands back sockets it opened earlier
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        return await asyncio.wait_for(
+            # Without a heartbeat aiohttp never notices a half-open socket (one
+            # that died without a FIN/RST): the receive side parks forever, the
+            # stream never raises, and so neither the reconnect nor a
+            # FallbackAdapter switch is ever triggered. An unanswered ping makes
+            # aiohttp close the socket, which surfaces in the receive loop.
+            session.ws_connect(url, headers=headers, heartbeat=30.0),
+            timeout,
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
