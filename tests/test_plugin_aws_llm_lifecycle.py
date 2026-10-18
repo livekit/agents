@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import struct
+import zlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -10,12 +13,89 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiobotocore.session import AioSession
+from aiohttp import web
 
 from livekit.agents import Agent, AgentSession, APIConnectOptions
 from livekit.agents.llm import ChatContext
 from livekit.plugins.aws import LLM
 
 pytestmark = pytest.mark.unit
+
+
+def _text_event() -> bytes:
+    headers = b""
+    for name, value in (
+        (":message-type", "event"),
+        (":event-type", "contentBlockDelta"),
+        (":content-type", "application/json"),
+    ):
+        key, data = name.encode(), value.encode()
+        headers += bytes([len(key)]) + key + b"\x07" + struct.pack("!H", len(data)) + data
+    payload = json.dumps({"delta": {"text": "hello"}, "contentBlockIndex": 0}).encode()
+    prelude = struct.pack("!II", 16 + len(headers) + len(payload), len(headers))
+    message = prelude + struct.pack("!I", zlib.crc32(prelude)) + headers + payload
+    return message + struct.pack("!I", zlib.crc32(message))
+
+
+@pytest.mark.parametrize("idle", [3, 13, 115, 121])
+@pytest.mark.parametrize("server_closes", [False, True])
+async def test_real_client_idle_connection_lifecycle(
+    monkeypatch: pytest.MonkeyPatch, idle: int, server_closes: bool
+) -> None:
+    transports = []
+
+    async def respond(request: web.Request) -> web.Response:
+        transports.append(request.transport)
+        await request.read()
+        response = web.Response(
+            body=_text_event(),
+            content_type="application/vnd.amazon.eventstream",
+            headers={"x-amzn-requestid": "test-request"},
+        )
+        if server_closes:
+            response.force_close()
+        return response
+
+    app = web.Application()
+    app.router.add_post("/{path:.*}", respond)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    server = await asyncio.get_running_loop().create_server(runner.server, "127.0.0.1", 0)
+    endpoint = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+    session = AioSession()
+    create_client = session.create_client
+
+    def local_client(*args: Any, **kwargs: Any) -> Any:
+        return create_client(
+            *args,
+            **kwargs,
+            endpoint_url=endpoint,
+            region_name="us-east-1",
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+
+    monkeypatch.setattr(session, "create_client", local_client)
+    model = LLM(session=session, model="test-model")
+    try:
+        assert await _turn(model) == "hello"
+        http_session = model._client._endpoint.http_session
+        for client_session in http_session._sessions.values():
+            connector = client_session.connector
+            # Advance only the pool's idle age, without slowing or changing the event loop.
+            for key, connections in connector._conns.items():
+                connector._conns[key] = type(connections)(
+                    (connection, timestamp - idle) for connection, timestamp in connections
+                )
+            connector._cleanup()
+        assert await _turn(model) == "hello"
+        assert len(transports) == 2
+        assert (transports[0] is transports[1]) == (idle < 120 and not server_closes)
+    finally:
+        await model.aclose()
+        server.close()
+        await server.wait_closed()
+        await runner.cleanup()
 
 
 class _Response:
@@ -57,6 +137,7 @@ class _Bedrock:
     async def create_client(self, *args: Any, **kwargs: Any) -> AsyncIterator[_Bedrock]:
         assert args == ("bedrock-runtime",)
         assert kwargs["config"].user_agent_extra == "x-client-framework:livekit-plugins-aws"
+        assert kwargs["config"].connector_args["keepalive_timeout"] == 120
         self.attempts += 1
         self.entered.set()
         if self.block_initialization:

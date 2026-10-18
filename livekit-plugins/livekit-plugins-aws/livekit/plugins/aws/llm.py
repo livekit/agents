@@ -21,8 +21,8 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from aiobotocore.config import AioConfig  # type: ignore
 from aiobotocore.session import AioSession  # type: ignore
-from botocore.config import Config  # type: ignore
 from botocore.exceptions import ClientError  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
@@ -207,7 +207,10 @@ class LLM(llm.LLM):
             if self._closed:
                 raise RuntimeError("AWS Bedrock LLM is closed")
             if self._client is None:
-                config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
+                config = AioConfig(
+                    user_agent_extra="x-client-framework:livekit-plugins-aws",
+                    connector_args={"keepalive_timeout": 120},
+                )
                 context = self._session.create_client("bedrock-runtime", config=config)
                 client = await context.__aenter__()
                 # Publish only after successful entry so failed/cancelled initialization can retry.
