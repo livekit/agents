@@ -630,12 +630,19 @@ class BufferedAudioOutput(AudioOutput):
             task.cancel()
         self._held.clear()
         self._held_duration = 0.0
-        # complete the interrupted segment locally, then start a fresh one. the sink
-        # reports the segment itself through clear_buffer() as interrupted — flushing
-        # it here first would report the stop as a normal completion and consume the
-        # segment before the interrupted event could arrive.
         super().flush()
         self._start_segment()
+        # A sink arms its completion reporting on flush() (the room sink creates its
+        # playout-wait task there) and settles it from clear_buffer(), so the clear
+        # must follow a flush. Cancelling the release task above means that flush never
+        # happened, so arm it here or the segment would never be reported and
+        # wait_for_playout() would hang.
+        #
+        # Flushing first does not report the stop as a completion: the sink's flush only
+        # arms the reporting, and the clear that immediately follows settles it as
+        # interrupted. The flush is synchronous but the reporting is not, so the
+        # interrupted event is the one that lands.
+        self.next_in_chain.flush()
         self.next_in_chain.clear_buffer()
 
     def pause(self) -> None:

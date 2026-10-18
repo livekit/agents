@@ -191,9 +191,9 @@ async def test_a_sink_that_cannot_pause_is_reported_as_such() -> None:
 async def test_interruption_during_flush_does_not_hang() -> None:
     """
     Regression test for: when clear_buffer() is called while a flush task is
-    in-flight, the in-flight task is cancelled and the already-forwarded
-    segment is completed by the sink's own clear_buffer(), so
-    wait_for_playout() does not hang.
+    in-flight, cancelling that task must not leave the already-forwarded
+    segment unreported. The wrapper re-arms the sink's completion before
+    clearing it, so wait_for_playout() does not hang.
     """
     sink = _TrackingSink()
     buf = _buffered(sink, 0.3)
@@ -208,19 +208,20 @@ async def test_interruption_during_flush_does_not_hang() -> None:
     # immediate interruption before the task completes
     buf.clear_buffer()
 
-    # must not hang - the interrupted segment completes via the sink's clear
-    await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+    # must not hang: the sink reports the interrupted segment
+    ev = await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
 
-    # the sink was cleared, not flushed: a flush here would report the stop as a
-    # normal completion and consume the segment before the interrupted event
-    assert sink.flushed is False
+    assert ev.interrupted is True
     assert sink.cleared is True
+    # the segment is reported exactly once, so the next reply starts clean
+    assert sink.segments == 1, f"expected one completed segment, got {sink.segments}"
 
 
 async def test_interruption_is_reported_as_interrupted() -> None:
     """
     A stopped reply must be reported to the caller as interrupted, never as a
-    normal completion, even when the sink finishes synchronously on flush.
+    normal completion: the sink's flush only arms reporting, and the clear that
+    immediately follows is what settles it.
     """
     sink = _TrackingSink()
     buf = _buffered(sink, 0.3)
@@ -233,7 +234,29 @@ async def test_interruption_is_reported_as_interrupted() -> None:
 
     ev = await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
     assert ev.interrupted is True, "a cleared segment must report interrupted=True"
-    assert sink.flush_events == 0, "clearing must not close the sink segment as complete"
+
+
+async def test_flush_after_interruption_still_completes_normally() -> None:
+    """
+    The flush-before-clear ordering must not leak: a reply that plays to its
+    end afterwards still reports a normal completion.
+    """
+    sink = _TrackingSink()
+    buf = _buffered(sink, 0.3)
+
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))
+
+    buf.flush()
+    await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))
+    buf.flush()
+
+    ev = await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+    assert ev.interrupted is False, "an uninterrupted reply must report a completion"
+    assert sink.segments == 2
 
 
 async def test_adjacent_replies_do_not_merge_segments() -> None:
@@ -262,8 +285,9 @@ async def test_adjacent_replies_do_not_merge_segments() -> None:
 class _TrackingSink(AudioOutput):
     """Sink that counts segments and tracks flush/clear state.
 
-    Mirrors the room sink: ``flush()`` completes the segment normally and
-    ``clear_buffer()`` completes it as interrupted.
+    Mirrors the room sink's shape: ``flush()`` only *arms* completion reporting by
+    creating a playout-wait task, and that task reports ``interrupted=True`` if
+    ``clear_buffer()`` arrives first. Reporting is asynchronous in both paths.
     """
 
     def __init__(self) -> None:
@@ -275,19 +299,32 @@ class _TrackingSink(AudioOutput):
         self.flushed = False
         self.cleared = False
         self.flush_events = 0
+        self._interrupted = False
+        self._flush_task: asyncio.Task[None] | None = None
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
 
+    async def _report(self) -> None:
+        # one loop turn, so a clear_buffer() arriving right after flush() wins
+        await asyncio.sleep(0)
+        interrupted = self._interrupted
+        self.segments += 1
+        self.on_playback_finished(playback_position=0.0, interrupted=interrupted)
+
     def flush(self) -> None:
         super().flush()
-        self.segments += 1
         self.flushed = True
         self.flush_events += 1
-        self.on_playback_finished(playback_position=0.0, interrupted=False)
+        self._interrupted = False
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = asyncio.create_task(self._report())
 
     def clear_buffer(self) -> None:
         super().clear_buffer()
         self.cleared = True
-        self.segments += 1
-        self.on_playback_finished(playback_position=0.0, interrupted=True)
+        self._interrupted = True
+        # like the room sink, this only signals the interruption; a flush-armed
+        # completion task is what turns it into a reported segment. clearing
+        # without a flush therefore leaves the segment unreported, which is what
+        # the wrapper's flush-before-clear ordering prevents.
