@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import io
 import logging
@@ -616,6 +617,7 @@ def _create_thread_proc(
     close_timeout: float,
     job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
     initialize_process_fnc: Callable[[JobProcess], None] = _initialize_proc,
+    initialize_timeout: float = 20.0,
 ) -> tuple[ipc.job_thread_executor.ThreadJobExecutor, _StartArgs]:
     # the runner is a thread of the test process, so the mp primitives of _StartArgs are plain
     # in-process synchronization here
@@ -627,7 +629,7 @@ def _create_thread_proc(
         session_end_fnc=None,
         simulation_end_fnc=None,
         inference_executor=None,
-        initialize_timeout=20.0,
+        initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         session_end_timeout=300.0,
         ping_interval=2.5,
@@ -736,8 +738,11 @@ async def test_thread_aclose_during_pending_initialize():
         assert proc.status == ipc.job_executor.JobStatus.SUCCESS
 
         # initialize() must fail cleanly (the close aborts its read), not crash
-        # double-setting the resolved future
-        with pytest.raises(asyncio.CancelledError):
+        # double-setting the resolved future. The close no longer cancels the
+        # in-flight read -- it closes the duplex under it, so the read ends
+        # with DuplexClosed (frame-aligned) instead of a mid-frame
+        # cancellation.
+        with pytest.raises((asyncio.CancelledError, duplex_unix.DuplexClosed)):
             await init_task
     finally:
         release_init.set()  # never leave the runner blocked in its warm-up
@@ -816,6 +821,103 @@ async def test_thread_aclose_during_inflight_response_frame():
 
     assert _frame(ipc.proto.ShutdownRequestAck()) in frames, "the monitor lost the shutdown ack"
     assert _frame(ipc.proto.ShuttingDown()) in frames, "the monitor lost the ShuttingDown message"
+
+
+async def _start_midframe_initialize(close_timeout: float, initialize_timeout: float = 20.0):
+    """Start an initialize() whose response frame is held mid-flight: the frame
+    header is consumed, the payload read is gated on an event (the reader-side
+    view of a runner that has written the header but not the payload yet)."""
+    proc, _ = _create_thread_proc(
+        close_timeout=close_timeout, initialize_timeout=initialize_timeout
+    )
+    await proc.start()
+
+    reader = proc._pch._reader
+    orig_readexactly = reader.readexactly
+    header_consumed = asyncio.Event()
+    payload_released = asyncio.Event()
+    read_state = {"expect_header": True, "gated": False}
+
+    async def _readexactly_spy(n: int) -> bytes:
+        if read_state["expect_header"]:
+            data = await orig_readexactly(n)
+            read_state["expect_header"] = False
+            header_consumed.set()
+            return data
+        if not read_state["gated"]:
+            read_state["gated"] = True
+            await payload_released.wait()
+        return await orig_readexactly(n)
+
+    reader.readexactly = _readexactly_spy
+
+    init_task = asyncio.create_task(proc.initialize())
+    await _poll_until(header_consumed.is_set)
+    return proc, init_task, payload_released
+
+
+async def test_thread_aclose_slow_inflight_response_frame():
+    """Regression test: the response payload arrives after aclose()'s one-second
+    grace for the in-flight frame. The close used to fall back to cancelling
+    the read between the frame header and its payload, desynchronizing the
+    channel: the monitor task then misparsed the late payload as a frame
+    header and the decoding error escaped aclose() itself. Past the grace the
+    duplex is closed instead -- the read ends frame-aligned and the close
+    completes cleanly without a graceful shutdown handshake."""
+    proc, init_task, payload_released = await _start_midframe_initialize(close_timeout=5.0)
+
+    close_task = asyncio.create_task(proc.aclose())
+    await asyncio.sleep(1.5)  # past the one-second grace, while the payload is still gated
+
+    payload_released.set()  # the runner finishes the frame, too late for the grace
+
+    await asyncio.wait_for(close_task, timeout=10.0)
+    with contextlib.suppress(asyncio.CancelledError, duplex_unix.DuplexClosed):
+        await init_task
+
+    await _poll_until(lambda: not proc._thread.is_alive())
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+
+
+async def test_thread_initialize_cancelled_midframe():
+    """Regression test: initialize() cancelled externally while its response
+    read is mid-frame. initialize()'s cleanup used to cancel the read between
+    the frame header and its payload; the monitor task that aclose() starts
+    afterwards then read the pending payload as a new frame header and the
+    decoding error escaped aclose(). The cleanup closes the duplex instead --
+    the read ends frame-aligned and both calls complete cleanly."""
+    proc, init_task, payload_released = await _start_midframe_initialize(close_timeout=5.0)
+
+    init_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await init_task
+
+    payload_released.set()  # the runner finishes the frame it started
+
+    await asyncio.wait_for(proc.aclose(), timeout=10.0)
+    await _poll_until(lambda: not proc._thread.is_alive())
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+
+
+async def test_thread_initialize_timeout_midframe():
+    """Regression test: initialize() timing out while its response read is
+    mid-frame. The timeout used to cancel the read between the frame header and
+    its payload (the bare wait_for cancels the read it wraps), leaving the
+    pending payload for the monitor task to misparse; the decoding error then
+    escaped aclose(). The read is shielded from the timeout and the cleanup
+    closes the duplex, so both initialize() and aclose() end cleanly."""
+    proc, init_task, payload_released = await _start_midframe_initialize(
+        close_timeout=5.0, initialize_timeout=0.5
+    )
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(init_task, timeout=5.0)
+
+    payload_released.set()  # the runner finishes the frame it started
+
+    await asyncio.wait_for(proc.aclose(), timeout=10.0)
+    await _poll_until(lambda: not proc._thread.is_alive())
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
 
 
 async def test_thread_aclose_without_initialize():
