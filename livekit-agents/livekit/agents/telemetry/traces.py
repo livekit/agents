@@ -536,6 +536,17 @@ class _GatedSpanExporter(SpanExporter):
         self._inner.shutdown()
 
 
+# logger scopes of the records _upload_session_report emits. They belong to the
+# session recording, not to Python log export, so a job's `logs` option does not
+# gate them: a record=False session with evals still uploads them.
+_SESSION_REPORT_SCOPES = frozenset({"chat_history", "evaluations"})
+
+
+def _is_session_report_record(record: ReadableLogRecord) -> bool:
+    scope = getattr(record, "instrumentation_scope", None)
+    return getattr(scope, "name", None) in _SESSION_REPORT_SCOPES
+
+
 class _GatedLogExporter(LogRecordExporter):
     """Log counterpart of :class:`_GatedSpanExporter`."""
 
@@ -544,12 +555,13 @@ class _GatedLogExporter(LogRecordExporter):
         self._export_jobs = export_jobs
 
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
-        exportable = [
-            r
-            for r in batch
-            if (state := _job_export_state(self._export_jobs, r.log_record.attributes)) is not None
-            and state.logs_enabled
-        ]
+        exportable: list[ReadableLogRecord] = []
+        for r in batch:
+            state = _job_export_state(self._export_jobs, r.log_record.attributes)
+            if state is None:
+                continue
+            if state.logs_enabled or _is_session_report_record(r):
+                exportable.append(r)
         if not exportable:
             return LogRecordExportResult.SUCCESS
         return self._inner.export(exportable)
@@ -923,11 +935,18 @@ class _CloudTelemetry:
         observability_url: str,
         enable_traces: bool = True,
         enable_logs: bool = True,
+        enable_session_report: bool = False,
+        enable_metrics: bool = True,
         metadata: dict[str, AttributeValue] | None = None,
     ) -> _JobTelemetry:
         """Set up (or reuse) the pipelines for a job. Returns the job's
         telemetry state, for the caller to keep on the JobContext — per-record
-        stamping and upload gating resolve it from there."""
+        stamping and upload gating resolve it from there.
+
+        ``enable_session_report`` creates the log pipeline for the records
+        ``_upload_session_report`` emits (evaluations, tags, outcome, chat
+        history) without turning on Python log export; it is what lets a job
+        that records nothing else still upload its evals."""
         base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
         if agent_name:
             # identifies the agent for LiveKit Cloud agent insights (explicit dispatch
@@ -969,10 +988,12 @@ class _CloudTelemetry:
             # evaluations, and chat history, not just Python log export.
             self._ensure_logger_provider()
 
-            if enable_logs:
+            if enable_logs or enable_session_report:
                 self._ensure_log_pipeline(url)
                 if self._log_metadata_processor is not None:
                     self._log_metadata_processor.set_metadata(session_metadata)
+
+            if enable_logs:
                 if self._log_handler is not None:
                     root = logging.getLogger()
                     if self._log_handler not in root.handlers:
@@ -982,11 +1003,12 @@ class _CloudTelemetry:
             # set-once), so its resource carries only process-stable identity;
             # per-job room_id/job_id ride on each measurement instead
             # (otel_metrics._job_attrs)
-            process_metadata = {
-                k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
-            }
-            meter_resource = _resource({SERVICE_NAME: "livekit-agents", **process_metadata})
-            self._ensure_meter_provider(meter_resource, url)
+            if enable_metrics:
+                process_metadata = {
+                    k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
+                }
+                meter_resource = _resource({SERVICE_NAME: "livekit-agents", **process_metadata})
+                self._ensure_meter_provider(meter_resource, url)
 
             if not self._atexit_registered:
                 self._atexit_registered = True
@@ -1231,6 +1253,8 @@ def _setup_cloud_tracer(
     observability_url: str,
     enable_traces: bool = True,
     enable_logs: bool = True,
+    enable_session_report: bool = False,
+    enable_metrics: bool = True,
     metadata: dict[str, AttributeValue] | None = None,
 ) -> _JobTelemetry:
     _upload_gate.reset()
@@ -1241,6 +1265,8 @@ def _setup_cloud_tracer(
         observability_url=observability_url,
         enable_traces=enable_traces,
         enable_logs=enable_logs,
+        enable_session_report=enable_session_report,
+        enable_metrics=enable_metrics,
         metadata=metadata,
     )
 
