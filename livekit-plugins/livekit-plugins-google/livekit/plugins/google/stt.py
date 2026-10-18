@@ -22,7 +22,7 @@ import weakref
 from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import cast, get_args
+from typing import Any, cast, get_args
 
 from grpc.aio import StreamStreamCall
 
@@ -48,6 +48,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -91,14 +92,14 @@ class STTOptions:
     min_confidence_threshold: float
     profanity_filter: bool
     denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN
-    adaptation: NotGivenOr[cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation] = (
-        NOT_GIVEN
-    )
-    keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
+    adaptation: Sensitive[
+        NotGivenOr[cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation]
+    ] = NOT_GIVEN
+    keywords: Sensitive[NotGivenOr[list[tuple[str, float]]]] = NOT_GIVEN
     speech_start_timeout: NotGivenOr[float] = NOT_GIVEN
     speech_end_timeout: NotGivenOr[float] = NOT_GIVEN
     endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN
-    custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN
+    custom_prompt_config: Sensitive[NotGivenOr[cloud_speech_v2.CustomPromptConfig]] = NOT_GIVEN
 
     @property
     def version(self) -> int:
@@ -316,6 +317,14 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Google Cloud Platform"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **report_options(self._config, exclude=["denoiser_config"]),
+            "denoiser_config": cloud_speech_v2.DenoiserConfig.to_dict(self._config.denoiser_config)
+            if is_given(self._config.denoiser_config)
+            else None,
+        }
 
     async def _create_client(self, timeout: float) -> SpeechAsyncClientV2 | SpeechAsyncClientV1:
         # Add support for passing a specific location that matches recognizer

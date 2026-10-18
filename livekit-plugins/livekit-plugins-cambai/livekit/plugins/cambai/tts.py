@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import replace
+from typing import Any
 
 import aiohttp
 
@@ -29,6 +30,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -130,6 +132,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Camb.ai"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     def update_options(
         self,

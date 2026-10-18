@@ -33,6 +33,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -143,6 +144,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Inworld"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def update_options(
         self,

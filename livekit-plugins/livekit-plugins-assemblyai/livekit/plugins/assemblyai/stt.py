@@ -36,6 +36,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -69,9 +70,9 @@ class STTOptions:
     format_turns: NotGivenOr[bool] = NOT_GIVEN
     continuous_partials: NotGivenOr[bool] = NOT_GIVEN
     interruption_delay: NotGivenOr[int] = NOT_GIVEN
-    keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
-    prompt: NotGivenOr[str] = NOT_GIVEN
-    agent_context: NotGivenOr[str] = NOT_GIVEN
+    keyterms_prompt: Sensitive[NotGivenOr[list[str]]] = NOT_GIVEN
+    prompt: Sensitive[NotGivenOr[str]] = NOT_GIVEN
+    agent_context: Sensitive[NotGivenOr[str]] = NOT_GIVEN
     previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
@@ -399,6 +400,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "AssemblyAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     @property
     def session(self) -> aiohttp.ClientSession:

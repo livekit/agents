@@ -261,6 +261,27 @@ class LLM(OpenAILLM):
     def provider(self) -> str:
         return "Sarvam"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "extra_body": {
+                key: value
+                for key, value in self._opts.extra_body.items()
+                if key
+                in {
+                    "max_tokens",
+                    "wiki_grounding",
+                    "n",
+                    "seed",
+                    "frequency_penalty",
+                    "presence_penalty",
+                    "reasoning_effort",
+                }
+            }
+            if is_given(self._opts.extra_body)
+            else None,
+        }
+
     def update_options(
         self,
         *,

@@ -20,6 +20,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from .._reporting import Sensitive, report_options
 from ..language import LanguageCode
 from ..log import logger
 from ..tts._provider_format import drop_bracket_cues
@@ -182,7 +183,8 @@ class InworldOptions(TypedDict, total=False):
 class XaiOptions(TypedDict, total=False):
     bit_rate: Literal[32000, 64000, 96000, 128000, 192000]
     speed: float  # speaking-rate multiplier, default 1.0
-    optimize_streaming_latency: Literal[0, 1, 2]  # latency optimization level, default 0
+    # latency optimization level, default 0
+    optimize_streaming_latency: Literal[0, 1, 2]
 
 
 class FishAudioOptions(TypedDict, total=False):
@@ -215,9 +217,9 @@ class _TTSOptions:
     language: NotGivenOr[LanguageCode]
     encoding: TTSEncoding
     sample_rate: int
-    base_url: str
-    api_key: str
-    api_secret: str
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
     extra_kwargs: dict[str, Any]
     fallback: NotGivenOr[list[FallbackModel]]
     conn_options: NotGivenOr[APIConnectOptions]
@@ -227,6 +229,16 @@ class _TTSOptions:
 class _TTSConnection:
     ws: aiohttp.ClientWebSocketResponse
     session_id: str | None
+
+
+_EXTRA_OPTION_TYPES = (
+    CartesiaOptions,
+    DeepgramOptions,
+    RimeOptions,
+    InworldOptions,
+    XaiOptions,
+    FishAudioOptions,
+)
 
 
 class TTS(tts.TTS):
@@ -508,6 +520,26 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **report_options(self._opts, exclude=["extra_kwargs", "fallback", "conn_options"]),
+            "sample_rate": self.sample_rate,
+            "num_channels": self.num_channels,
+            "extra_kwargs": report_options(self._opts.extra_kwargs, *_EXTRA_OPTION_TYPES),
+            "fallback": [
+                {
+                    "model": item["model"],
+                    "voice": item["voice"],
+                    "extra_kwargs": report_options(
+                        item.get("extra_kwargs", {}), *_EXTRA_OPTION_TYPES
+                    ),
+                }
+                for item in self._opts.fallback
+            ]
+            if is_given(self._opts.fallback)
+            else NOT_GIVEN,
+        }
 
     async def _connect_ws(self, timeout: float) -> _TTSConnection:
         session = self._ensure_session()

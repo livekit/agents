@@ -26,6 +26,7 @@ import contextlib
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Any
 
 from palabra_ai import (
     AuthError,
@@ -48,6 +49,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -181,6 +183,12 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         """Provider display name used in metrics."""
         return "Palabra"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     def _new_tts(self) -> TtsSession:
         return self._client.tts(

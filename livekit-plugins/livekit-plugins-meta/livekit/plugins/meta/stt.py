@@ -330,6 +330,9 @@ class STT(stt.STT[Any]):
     def provider(self) -> str:
         return "Meta"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), "language_bias": self._language_bias}
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
             self._http_session = utils.http_context.http_session()

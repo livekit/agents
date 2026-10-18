@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Mapping
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
 
@@ -86,6 +86,10 @@ class DuplexModel(ABC):
     @property
     def provider(self) -> str:
         return "unknown"
+
+    def describe_options(self) -> Mapping[str, Any]:
+        """Return settings to include in session reports, without credentials or user content."""
+        return {}
 
     @property
     def capabilities(self) -> DuplexCapabilities:

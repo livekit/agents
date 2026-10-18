@@ -6,6 +6,7 @@ import threading
 from collections import Counter
 from collections.abc import Generator
 from dataclasses import dataclass
+from typing import Any
 
 import riva.client
 from riva.client.proto.riva_asr_pb2 import SpeakerDiarizationConfig
@@ -17,6 +18,7 @@ from livekit.agents import (
     LanguageCode,
     stt,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
@@ -34,7 +36,7 @@ class STTOptions:
     language_code: LanguageCode
     sample_rate: int
     use_ssl: bool
-    server: str
+    server: Sensitive[str]
     enable_diarization: bool
     max_speaker_count: int
 
@@ -97,6 +99,13 @@ class STT(stt.STT):
             enable_diarization=enable_diarization,
             max_speaker_count=max_speaker_count,
         )
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def _recognize_impl(
         self,

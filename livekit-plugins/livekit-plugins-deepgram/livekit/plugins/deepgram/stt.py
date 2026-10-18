@@ -38,6 +38,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -64,19 +65,19 @@ class STTOptions:
     filler_words: bool
     sample_rate: int
     num_channels: int
-    keywords: list[tuple[str, float]]
-    keyterm: str | Sequence[str]
+    keywords: Sensitive[list[tuple[str, float]]]
+    keyterm: Sensitive[str | Sequence[str]]
     profanity_filter: bool
     redact: str | list[str]
-    endpoint_url: str
+    endpoint_url: Sensitive[str]
     vad_events: bool = True
     numerals: bool = False
     mip_opt_out: bool = False
-    tags: NotGivenOr[list[str]] = NOT_GIVEN
+    tags: Sensitive[NotGivenOr[list[str]]] = NOT_GIVEN
     utterance_end_ms: int | None = None
     dictation: bool = False
-    replace: dict[str, str] | None = None
-    search: list[str] | None = None
+    replace: Sensitive[dict[str, str] | None] = None
+    search: Sensitive[list[str] | None] = None
 
 
 class STT(stt.STT):
@@ -232,6 +233,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Deepgram"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

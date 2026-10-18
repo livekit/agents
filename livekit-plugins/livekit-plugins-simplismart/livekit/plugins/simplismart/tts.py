@@ -4,7 +4,7 @@ import asyncio
 import os
 import traceback
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import Any, cast
 
 import aiohttp
 
@@ -17,6 +17,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 
 from .log import logger
 from .models import TTSModels
@@ -142,6 +143,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "SimpliSmart"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
