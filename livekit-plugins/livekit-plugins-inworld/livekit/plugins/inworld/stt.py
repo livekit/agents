@@ -400,8 +400,14 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     return
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"Inworld STT WebSocket error: {self._ws.exception()}")
-                    return
+                    # A heartbeat timeout arrives here as an ERROR frame rather than as
+                    # a close frame. Returning normally ended the stream silently:
+                    # `_run` breaks out instead of reconnecting, and the base class only
+                    # reports a failure when `_run` raises -- so FallbackAdapter had
+                    # nothing to react to.
+                    raise APIConnectionError(
+                        message="Inworld STT websocket failed"
+                    ) from self._ws.exception()
         except aiohttp.ClientError as e:
             logger.error(f"WebSocket error while receiving: {e}")
             raise

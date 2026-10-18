@@ -628,6 +628,19 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                # A heartbeat timeout arrives here as an ERROR frame rather than as a
+                # close frame. Letting it fall through to the unexpected-message-type
+                # branch stepped over it: the loop ended normally, `_run` broke out
+                # instead of reconnecting, and the stream died without the base class
+                # ever seeing a failure -- so FallbackAdapter had nothing to react to.
+                # The reason only survives on `ws.exception()`.
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws or self._session.closed:
+                        return
+                    raise APIConnectionError(
+                        message="ElevenLabs STT websocket failed"
+                    ) from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected ElevenLabs STT message type %s", msg.type)
                     continue
