@@ -1025,6 +1025,16 @@ class SpeechStream(stt.SpeechStream):
                 aiohttp.WSMsgType.CLOSING,
             ):
                 break
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                # A heartbeat timeout arrives here as an ERROR frame rather than as a
+                # close frame, and the warning below would step over it: this task
+                # would end normally, `_run` would break instead of reconnecting, and
+                # the base stream only reports a failure when `_run` raises -- so a
+                # FallbackAdapter would have nothing to react to. The reason only
+                # survives on `ws.exception()`.
+                raise APIConnectionError(
+                    message="Gladia STT websocket failed"
+                ) from self._ws.exception()
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
 
