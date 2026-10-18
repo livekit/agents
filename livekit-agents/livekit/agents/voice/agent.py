@@ -1089,7 +1089,15 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                         f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
                         "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
                     )
-                    await old_activity.aclose()
+                    if session._closing:
+                        # the close path walks back to `old_activity` once this task
+                        # is inactive and drains/closes it there
+                        pass
+                    else:
+                        # this coroutine can be running inside a non-cancellable tool
+                        # task owned by `old_activity`: awaiting its close here would
+                        # drain the tool executor, which waits for this very task
+                        session._close_detached_activity(old_activity)
                 else:
                     merged_chat_ctx = old_agent.chat_ctx.copy().merge(
                         self.chat_ctx,
