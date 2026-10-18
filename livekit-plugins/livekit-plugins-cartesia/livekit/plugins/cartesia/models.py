@@ -11,7 +11,7 @@ TTSEncoding = Literal["pcm_s16le"]
     Only `pcm_s16le`is allowed. Prefer using `AUDIO_ENCODING` from constants.py.
 """
 
-TTSModels = Literal["sonic", "sonic-2", "sonic-lite", "sonic-preview", "sonic-turbo", "sonic-3"]
+TTSModels = Literal["sonic-3", "sonic-3.5", "sonic-3.6", "sonic-lite", "sonic-preview"]
 """See [the docs](https://docs.cartesia.ai/build-with-cartesia/tts-models/latest) for all options."""
 
 TTSLanguages = Literal["en", "es", "fr", "de", "pt", "zh", "ja"]
@@ -85,7 +85,8 @@ TTSVoiceEmotion = Literal[
 
 
 def _is_sonic_3(model: str) -> bool:
-    return model.startswith("sonic-3")
+    # sonic-latest and sonic-preview point to sonic-3 or newer, so they take generation_config too
+    return model.startswith("sonic-3") or model in ("sonic-latest", "sonic-preview")
 
 
 ###############################################################################
