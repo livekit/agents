@@ -137,7 +137,7 @@ class AvatarSession(BaseAvatarSession):
         # frames until the video track shows up, so nothing is lost
         # in the gap. replace_audio_tail keeps the TranscriptSynchronizer
         # / RecorderAudioOutput chain intact across hot swaps.
-        agent_session.output.replace_audio_tail(
+        self._attach_audio_output(
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,
