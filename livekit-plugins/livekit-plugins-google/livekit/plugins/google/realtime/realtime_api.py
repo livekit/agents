@@ -602,6 +602,12 @@ class RealtimeSession(llm.RealtimeSession):
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
 
+            if not on_error:
+                # a resumed session keeps its old instructions and tools, so a config change
+                # must start a fresh one
+                self._session_resumption_handle = None
+                self._resumption_chat_ctx = None
+
     def update_options(
         self,
         *,

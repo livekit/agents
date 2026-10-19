@@ -999,8 +999,9 @@ async def test_handle_does_not_claim_a_queued_but_unsent_update(
         # the diff is queued but its send is blocked, so the new handle must not cover it
         assert [m.text_content for m in session._resumption_chat_ctx.messages()] == ["hello"]
 
-        # restart before the send completes: the channel drain drops the queued diff
-        await session.update_tools([_restart_tool])
+        # an error restart before the send completes resumes from the handle and drops the
+        # queued diff with the old channel
+        session._mark_restart_needed(on_error=True)
         while len(opened) < 2:
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.05)
