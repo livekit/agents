@@ -785,12 +785,18 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
 
+            # Startup begins here: any failure below must still run the full
+            # shutdown path in aclose() (the CLI calls it after run() raises).
+            # _close_future therefore has to exist before the first resource is
+            # started; creating it at the end of startup used to leak the
+            # inference executor when e.g. the HTTP port was already in use.
+            self._closed = False
+            self._close_future = asyncio.Future(loop=self._loop)
+
             if self._inference_executor is not None:
                 logger.info("starting inference executor")
                 await self._inference_executor.start()
                 await self._inference_executor.initialize()
-
-            self._closed = False
 
             def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
                 t = self._loop.create_task(self._update_job_status(proc))
@@ -824,7 +830,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._api = api.LiveKitAPI(
                     self._ws_url, self._api_key, self._api_secret, session=self._http_session
                 )
-            self._close_future = asyncio.Future(loop=self._loop)
 
             @utils.log_exceptions(logger=logger)
             async def _load_task() -> None:
@@ -1053,11 +1058,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._closed = True
 
-            # Worker never fully started (e.g. interrupted during init, or
-            # running unregistered without a LiveKit connection)
-            if self._close_future is None:
-                return
-
+            # _closed is only set to False once run() begins starting resources,
+            # and _close_future is created at the same time, so every resource
+            # below is individually null-checked rather than assuming a
+            # completed startup. This keeps a failure mid-startup cleanable.
             logger.info("shutting down worker", extra={"id": self.id})
 
             if self._conn_task is not None:
@@ -1090,7 +1094,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
 
-            if not self._close_future.done():
+            if self._close_future is not None and not self._close_future.done():
                 self._close_future.set_result(None)
 
     async def _queue_msg(self, msg: agent.WorkerMessage) -> None:
