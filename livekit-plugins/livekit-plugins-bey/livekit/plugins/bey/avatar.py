@@ -28,7 +28,9 @@ _DEFAULT_API_URL = "https://api.bey.dev"
 
 _AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
 _AVATAR_AGENT_NAME = "bey-avatar-agent"
-_AVATAR_TOKEN_TTL = datetime.timedelta(hours=24)
+_MAX_SESSION_DURATION = datetime.timedelta(hours=24)
+# covers the startup request and its retries, which run after the token is minted
+_AVATAR_TOKEN_TTL = _MAX_SESSION_DURATION + datetime.timedelta(hours=1)
 
 
 class BeyException(Exception):
