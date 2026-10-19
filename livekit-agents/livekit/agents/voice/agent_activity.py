@@ -2124,20 +2124,24 @@ class AgentActivity(RecognitionHooks):
             # eou is part of the user turn and may spawn a new speech handle,
             # so an in-flight eou keeps both the user and the agent active.
             nonlocal user_active
-            if (
-                self._audio_recognition
-                and (eou_task := self._audio_recognition._end_of_turn_task)
+            while (
+                self._audio_recognition is not None
+                and (eou_task := self._audio_recognition._end_of_turn_task) is not None
                 and not eou_task.done()
             ):
                 user_active = True
                 try:
                     await asyncio.shield(eou_task)
                 except asyncio.CancelledError:
-                    # a dropped decision (clear_user_turn, or a newer trigger that
-                    # superseded it) is idle, not a failed wait. cancellation of
-                    # *this* waiter still propagates: the shielded task keeps running.
+                    # cancellation of *this* waiter still propagates: the shielded
+                    # task keeps running.
                     if not eou_task.cancelled():
                         raise
+                    # The decision was dropped or superseded. Loop to pick up a
+                    # replacement; a dropped decision (clear_user_turn) leaves no
+                    # pending task, so the next pass exits and the turn reads idle.
+                    # This matters for agent-only waiters: returning here would
+                    # report idle while the replacement decision is still open.
 
             if (user_turn_task := self._user_turn_completed_atask) and not user_turn_task.done():
                 user_active = True

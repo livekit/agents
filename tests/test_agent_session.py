@@ -2363,6 +2363,70 @@ async def test_clear_user_turn_does_not_cancel_wait_for_idle() -> None:
         await _close_clear_test_session(session, synchronizer)
 
 
+@pytest.mark.real_time
+async def test_agent_only_idle_wait_follows_superseded_end_of_turn() -> None:
+    """An agent-only idle wait must follow a superseded decision to its replacement.
+
+    A newer final transcript makes ``_run_eou_detection`` cancel decision A and
+    install decision B. ``_user_turn_exceeded_task`` waits with
+    ``wait_for_idle(wait_for_user=False)``; observing A's cancellation must not
+    report idle while B is still pending, or the turn-limit callback fires early.
+    """
+    agent = _ClearProbeAgent()
+    session, llm, _speeches = _create_clear_test_session()
+    synchronizer = (
+        session.output.audio._synchronizer
+        if isinstance(session.output.audio, _SyncedAudioOutput)
+        else None
+    )
+
+    try:
+        await session.start(agent)
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+        first = await _arm_pending_end_of_turn(recognition)
+
+        idle_waiter = asyncio.create_task(
+            session._activity.wait_for_idle(wait_for_agent=True, wait_for_user=False)
+        )
+        await asyncio.sleep(0.05)  # let the waiter block on decision A
+        assert not idle_waiter.done()
+
+        # a newer final transcript supersedes A with B
+        await recognition._on_stt_event(
+            SpeechEvent(
+                type=SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[
+                    SpeechData(
+                        text="hello world again",
+                        language=LanguageCode(""),
+                        start_time=0.0,
+                        end_time=2.0,
+                    )
+                ],
+            )
+        )
+        replacement = recognition._end_of_turn_task
+        assert replacement is not None and replacement is not first
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(first, timeout=1.0)
+        assert first.cancelled()
+
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert not idle_waiter.done(), (
+            "agent-only idle wait reported idle while the replacement decision was pending"
+        )
+
+        await asyncio.wait_for(replacement, timeout=1.0)
+        await asyncio.wait_for(idle_waiter, timeout=1.0)
+        # the replacement decision committed the combined transcript
+        assert "hello world hello world again" in llm.user_inputs
+    finally:
+        await _close_clear_test_session(session, synchronizer)
+
+
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
