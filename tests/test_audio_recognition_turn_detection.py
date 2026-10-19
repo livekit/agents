@@ -123,6 +123,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._speech_start_time = None
     ar._vad_speech_started = False
     ar._end_of_turn_task = None
+    ar._end_of_turn_trigger = None
     ar._user_turn_committed = False
     ar._vad = None
     ar._last_language = None
