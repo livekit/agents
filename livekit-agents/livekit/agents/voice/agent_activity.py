@@ -3390,6 +3390,22 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
 
+            if (
+                self._rt_session is not None
+                and isinstance(self.llm, llm.RealtimeModel)
+                and self.llm.capabilities.mutable_chat_context
+            ):
+                # send the spoken text now so the model's history keeps the order it was said in
+                rt_chat_ctx = self._rt_session.chat_ctx.copy()
+                rt_chat_ctx.items.append(msg)
+                try:
+                    await self._rt_session.update_chat_ctx(rt_chat_ctx)
+                except llm.RealtimeError as e:
+                    logger.warning(
+                        "failed to add the spoken message to the realtime chat context",
+                        extra={"error": str(e)},
+                    )
+
         if self._session.agent_state == "speaking":
             self._session._update_agent_state(
                 "thinking" if self._background_speeches else "listening"
