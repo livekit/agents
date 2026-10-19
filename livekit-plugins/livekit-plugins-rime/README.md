@@ -20,9 +20,6 @@ The Rime v1 WebSocket protocol accepts streaming text and returns audio before t
 is complete. The plugin aggregates input fragments into complete sentences before it sends them
 to Rime. All sentences in one LiveKit output turn use one continuous synthesis context.
 
-WebSocket v1 requires both `websocket_url` and `model` at construction. The URL selects
-the deployment. The model sets the plugin's defaults and available options.
-
 ```python
 import os
 
@@ -36,17 +33,18 @@ tts = rime.TTS(
 )
 ```
 
-Use `model="coda"` with `wss://coda.api.rime.ai/ws`, or `model="mistv3"` with
-`wss://mist.api.rime.ai/ws`. Both public endpoints use port 443.
+Pass the active model WebSocket endpoint explicitly. The presence of `websocket_url` selects
+WebSocket v1 streaming. Public model endpoints use port 443 and the `/ws` path.
+Pass `model="coda"` for `wss://coda.api.rime.ai/ws`, which serves Coda v2.
+Pass `model="mistv3"` for `wss://mist.api.rime.ai/ws`.
+`model` is required when constructing any WebSocket v1 client. The plugin does not infer
+the model from the URL hostname or path.
 
-If your configuration relied on a model in the URL path, add `model` to the constructor.
-The plugin does not read the model from the URL hostname or path.
-
-Custom deployments can use any URL path. Replace this example URL with your deployment URL:
+Dedicated deployment endpoints also require `model`:
 
 ```python
 tts = rime.TTS(
-    websocket_url="wss://voice.customer.example/custom/stream",
+    websocket_url="wss://voice.customer.example/ws",
     model="coda",
     allow_custom_endpoint=True,
     api_key=os.environ["RIME_API_KEY"],
@@ -57,19 +55,22 @@ The plugin sends the Rime API key to the endpoint. It trusts `rime.ai` and its s
 default. To use an endpoint on a different domain, confirm that you trust it and set
 `allow_custom_endpoint=True`. This opt-in also applies to `base_url`.
 
-`websocket_protocol` accepts `binary` or `json`. It defaults to `binary`, which uses the
+The `websocket_protocol` option accepts `binary` or `json`. It defaults to `binary`, which uses the
 `rime.v1.binary` subprotocol and protobuf binary frames. Set `websocket_protocol="json"` to use the
 `rime.v1.json` subprotocol and canonical proto3 JSON text frames.
 
-For Coda, the default speaker is `lyra`. Mist uses `cove`. Pass `speaker` to use another voice.
-
-By default, the plugin uses `livekit.agents.tokenize.blingfire.SentenceTokenizer` and configures
-it to emit one complete sentence at a time. Pass `tokenizer` to select another LiveKit sentence
-tokenizer. A custom tokenizer must emit complete sentence units that are safe for Rime text
-normalization.
+The speaker defaults to `lyra` for Coda and `cove` for Mist across all transports.
+For HTTP and WS3, an omitted model defaults to Coda. An explicit speaker is preserved.
+The plugin uses
+`livekit.agents.tokenize.blingfire.SentenceTokenizer` by default and configures it to emit one
+complete sentence at a time. Pass `tokenizer` to select another LiveKit sentence tokenizer. A
+custom tokenizer must emit complete sentence units that are safe for Rime text normalization.
 
 The plugin sends the resolved sample rate in every HTTP, WS3, and WebSocket v1 request so it
 matches the audio emitter's rate. Pass `sample_rate` to override the model default.
+
+If your configuration relied on a model in the URL path, add `model` to the constructor.
+Custom URL paths pass through without model detection.
 
 Select the Rime output format with `audio_format`. It defaults to `audio/pcm`. The adapter supports
 all canonical formats from the Rime interface:
