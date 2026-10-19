@@ -45,9 +45,9 @@ from ._websocket_v1 import (
     DEFAULT_AUDIO_FORMAT,
     RimeAudioFormat,
     WebSocketProtocol,
-    model_from_websocket_url,
     validate_audio_format,
     validate_endpoint_host,
+    validate_websocket_url,
 )
 from ._websocket_v1_adapter import V1SynthesisOptions, WebSocketV1Adapter
 from .langs import TTSLangs
@@ -160,20 +160,12 @@ def _resolve_websocket_model(
     allow_custom_endpoint: bool,
     current_model: TTSModels | str | None = None,
 ) -> TTSModels | str:
-    endpoint_model = model_from_websocket_url(
-        websocket_url, allow_custom_endpoint=allow_custom_endpoint
-    )
-    if endpoint_model is None:
-        if not is_given(model):
-            if current_model is not None:
-                return current_model
-            raise ValueError("model is required when websocket_url ends with /ws")
-        return model
-    if is_given(model):
-        raise ValueError("model is derived from websocket_url; omit model")
-    if endpoint_model == "mist":
-        return MODEL_MIST_V3
-    return endpoint_model
+    validate_websocket_url(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
+    if not is_given(model):
+        if current_model is not None:
+            return current_model
+        raise ValueError("model is required when using websocket_url")
+    return model
 
 
 class TTS(tts.TTS):
@@ -182,8 +174,8 @@ class TTS(tts.TTS):
         self,
         *,
         websocket_url: str,
+        model: TTSModels | str,
         websocket_protocol: WebSocketProtocol = "binary",
-        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
         audio_format: RimeAudioFormat = DEFAULT_AUDIO_FORMAT,
