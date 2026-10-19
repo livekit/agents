@@ -39,6 +39,8 @@ class FakeFinesse:
     closed_by_client: asyncio.Event = field(default_factory=asyncio.Event)
     on_task: Callable[[web.WebSocketResponse, str], Any] | None = None
     reject_status: int | None = None
+    answer_finalize: bool = True
+    frame_bytes: list[int] = field(default_factory=list)
 
 
 async def _answer(ws: web.WebSocketResponse, context_id: str, chunks: int = 2) -> None:
@@ -63,6 +65,7 @@ async def server() -> AsyncIterator[FakeFinesse]:
         async for msg in ws:
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
+            fake.frame_bytes.append(len(msg.data.encode()))
             data = json.loads(msg.data)
             fake.received.append(data)
             ctx = data.get("context_id", "")
@@ -71,7 +74,7 @@ async def server() -> AsyncIterator[FakeFinesse]:
                     await fake.on_task(ws, ctx)
                 else:
                     await _answer(ws, ctx)
-            if data.get("finalize"):
+            if data.get("finalize") and fake.answer_finalize:
                 await ws.send_json({"type": "task_done", "context_id": ctx})
         fake.closed_by_client.set()
         return ws
@@ -205,13 +208,24 @@ def test_update_options() -> None:
     assert tts._opts.length_scale == 1.2
 
 
-def test_update_options_rejects_invalid_values_atomically() -> None:
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"voice": "other", "num_step": 99}, "num_step"),
+        ({"voice": "other", "length_scale": 0}, "length_scale"),
+        ({"voice": "other", "guidance_scale": -1}, "guidance_scale"),
+    ],
+)
+def test_update_options_rejects_invalid_values_atomically(
+    kwargs: dict[str, Any], match: str
+) -> None:
     from livekit.plugins.finesse import TTS
 
     tts = TTS(api_key=API_KEY, voice=VOICE)
-    with pytest.raises(ValueError, match="num_step"):
-        tts.update_options(voice="other", num_step=99)
+    with pytest.raises(ValueError, match=match):
+        tts.update_options(**kwargs)
     assert tts._opts.voice == VOICE
+    assert tts._opts.length_scale is None
 
 
 # ---- streaming ------------------------------------------------------------------------------
@@ -304,6 +318,49 @@ async def test_stream_drops_audio_for_other_contexts(
     await tts.aclose()
 
 
+async def test_pause_in_the_text_longer_than_the_timeout_still_speaks(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    tts = _tts(server, session)
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.3))
+    stream.push_text("Let me check that for you.")
+
+    async def llm() -> None:
+        await asyncio.sleep(1.0)  # e.g. a tool call, well past the 0.3 s timeout
+        stream.push_text(" Your order shipped today.")
+        stream.end_input()
+
+    feeder = asyncio.create_task(llm())
+    audio = await _collect(stream)
+    await feeder
+
+    # No timeout error, and the audio is all there (the emitter pads the last frame).
+    assert audio.startswith(CHUNK * 2)
+    assert set(audio[len(CHUNK) * 2 :]) <= {0}
+    assert [m["text"] for m in server.received] == [
+        "Let me check that for you.",
+        " Your order shipped today.",
+        "",
+    ]
+    await tts.aclose()
+
+
+async def test_timeout_applies_once_the_input_is_finalized(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    from livekit.agents import APITimeoutError
+
+    server.answer_finalize = False  # the server never finishes the context
+    tts = _tts(server, session)
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.3))
+    stream.push_text("Hello.")
+    stream.end_input()
+
+    with pytest.raises(APITimeoutError):
+        await _collect(stream)
+    await tts.aclose()
+
+
 async def test_connection_is_reused_across_streams(
     server: FakeFinesse, session: aiohttp.ClientSession
 ) -> None:
@@ -383,6 +440,22 @@ async def test_long_text_is_split_below_the_frame_limit(
     await tts.aclose()
 
 
+@pytest.mark.parametrize("char", ["😀", "\x01", "नमस्ते"])
+async def test_frames_stay_under_1_mib_for_any_text(
+    server: FakeFinesse, session: aiohttp.ClientSession, char: str
+) -> None:
+    from livekit.plugins.finesse.tts import _MAX_TEXT_CHARS
+
+    tts = _tts(server, session)
+    text = (char * (_MAX_TEXT_CHARS * 2))[: _MAX_TEXT_CHARS * 2]
+
+    await _collect(tts.synthesize(text, conn_options=NO_RETRY))
+
+    assert "".join(m["text"] for m in server.received) == text
+    assert max(server.frame_bytes) < 1024 * 1024
+    await tts.aclose()
+
+
 # ---- errors ---------------------------------------------------------------------------------
 
 
@@ -420,7 +493,46 @@ async def test_server_errors(
     await tts.aclose()
 
 
-@pytest.mark.parametrize(("close_code", "retryable"), [(1013, True), (1008, False)])
+async def test_server_cancelled_context_is_an_error(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    async def on_task(ws: web.WebSocketResponse, ctx: str) -> None:
+        await _answer(ws, ctx, chunks=1)
+        await ws.send_json({"type": "task_cancelled", "context_id": ctx})
+
+    server.on_task = on_task
+    tts = _tts(server, session)
+
+    err = await _synthesize_error(tts)
+
+    assert isinstance(err, APIStatusError)
+    assert "cancelled" in str(err)
+    await tts.aclose()
+
+
+async def test_error_codes_that_are_not_identifiers_are_not_reported(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    async def on_task(ws: web.WebSocketResponse, ctx: str) -> None:
+        await ws.send_json(
+            {"type": "task_failed", "context_id": ctx, "code": "Hello, this is speech"}
+        )
+
+    server.on_task = on_task
+    tts = _tts(server, session)
+
+    err = await _synthesize_error(tts)
+
+    assert isinstance(err, APIStatusError)
+    assert err.body == {"code": "unknown_error"}
+    assert "speech" not in str(err)
+    await tts.aclose()
+
+
+@pytest.mark.parametrize(
+    ("close_code", "retryable"),
+    [(1000, True), (1001, True), (1012, True), (1013, True), (1008, False), (1009, False)],
+)
 async def test_unexpected_close(
     server: FakeFinesse, session: aiohttp.ClientSession, close_code: int, retryable: bool
 ) -> None:
