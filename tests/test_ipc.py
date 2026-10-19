@@ -167,6 +167,11 @@ def _failing_initialize_proc(proc: JobProcess) -> None:
     raise RuntimeError("simulated init failure")
 
 
+def _failing_initialize_proc_empty_message(proc: JobProcess) -> None:
+    # str(AssertionError()) is "", which the parent used to read as a successful initialization.
+    raise AssertionError()
+
+
 async def _job_entrypoint(job_ctx: JobContext) -> None:
     start_args: _StartArgs = job_ctx.proc.user_arguments
 
@@ -712,29 +717,48 @@ async def test_thread_job_loop_is_closed_after_the_runner_exits():
     assert _job_loops[0].is_closed()
 
 
-async def test_thread_initialize_propagates_runner_error():
+@pytest.mark.parametrize(
+    ("initialize_process_fnc", "expected_error"),
+    [
+        (_failing_initialize_proc, "simulated init failure"),
+        (_failing_initialize_proc_empty_message, "AssertionError()"),
+    ],
+    ids=["message", "empty-message"],
+)
+async def test_thread_initialize_propagates_runner_error(
+    initialize_process_fnc: Callable[[JobProcess], object], expected_error: str
+):
     """initialize_process_fnc runs in the runner thread; when it raises, the runner reports
     InitializeResponse(error=...) and exits. initialize() must surface that error (as
-    SupervisedProc.initialize does) instead of reporting the dead runner as initialized."""
-    proc, _ = _create_thread_proc(
-        close_timeout=10.0, initialize_process_fnc=_failing_initialize_proc
-    )
+    SupervisedProc.initialize does) instead of reporting the dead runner as initialized,
+    including when str(exception) is empty."""
+    proc, _ = _create_thread_proc(close_timeout=10.0, initialize_process_fnc=initialize_process_fnc)
     await proc.start()
 
-    with pytest.raises(RuntimeError, match="runner initialization failed: simulated init failure"):
+    expected = f"runner initialization failed: {expected_error}"
+    with pytest.raises(RuntimeError) as exc_info:
         await asyncio.wait_for(proc.initialize(), timeout=10.0)
 
+    assert str(exc_info.value) == expected
     assert proc._initialize_fut.done()
     init_exc = proc._initialize_fut.exception()
     assert isinstance(init_exc, RuntimeError)
-    assert "simulated init failure" in str(init_exc)
+    assert str(init_exc) == expected
 
     await asyncio.wait_for(proc.aclose(), timeout=30.0)
 
 
-async def test_proc_pool_thread_does_not_warm_a_failed_runner():
+@pytest.mark.parametrize(
+    "initialize_process_fnc",
+    [_failing_initialize_proc, _failing_initialize_proc_empty_message],
+    ids=["message", "empty-message"],
+)
+async def test_proc_pool_thread_does_not_warm_a_failed_runner(
+    initialize_process_fnc: Callable[[JobProcess], object],
+):
     """A THREAD runner whose initialize_process_fnc raised is dead: ProcPool must not queue
-    it as warmed and hand it a job, because the entrypoint would never execute."""
+    it as warmed and hand it a job, because the entrypoint would never execute, even when
+    str(exception) is empty."""
     entrypoint_job_ids: list[str] = []
 
     async def _recording_entrypoint(job_ctx: JobContext) -> None:
@@ -743,7 +767,7 @@ async def test_proc_pool_thread_does_not_warm_a_failed_runner():
 
     pool = ipc.proc_pool.ProcPool(
         job_executor_type=job.JobExecutorType.THREAD,
-        initialize_process_fnc=_failing_initialize_proc,
+        initialize_process_fnc=initialize_process_fnc,
         job_entrypoint_fnc=_recording_entrypoint,
         session_end_fnc=None,
         simulation_end_fnc=None,
