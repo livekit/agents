@@ -232,6 +232,8 @@ class SpeakingRateStream:
         # Parameters
         frame_length = int(sample_rate * 0.025)  # 25ms
         hop_length = frame_length // 2  # 50% overlap
+        if len(audio) < frame_length:
+            return 0.0
 
         Zxx = self._stft(audio, frame_length, hop_length)
 
