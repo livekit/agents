@@ -170,6 +170,14 @@ def test_rejects_out_of_range_options(kwargs: dict[str, Any], match: str) -> Non
         ("ne-NP", "npi"),
         ("no", "nb"),
         ("or-IN", "ory"),
+        ("ar-SA", "arb"),
+        ("ar-EG", "arz"),
+        ("ar-AE", "afb"),
+        ("ar-KW", "afb"),
+        ("arz", "arz"),
+        ("ars", "ars"),
+        ("yue", "yue"),
+        ("mni", "mni"),
     ],
 )
 def test_task_start_language(language: str, expected: str) -> None:
