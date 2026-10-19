@@ -3395,9 +3395,10 @@ class AgentActivity(RecognitionHooks):
                 and isinstance(self.llm, llm.RealtimeModel)
                 and self.llm.capabilities.mutable_chat_context
             ):
-                # send the spoken text now so the model's history keeps the order it was said in
+                # send the spoken text now, placed by when it started, so the model's history
+                # keeps the order it was said in even if the user spoke during playback
                 rt_chat_ctx = self._rt_session.chat_ctx.copy()
-                rt_chat_ctx.items.append(msg)
+                rt_chat_ctx.insert(msg)
                 try:
                     await self._rt_session.update_chat_ctx(rt_chat_ctx)
                 except llm.RealtimeError as e:

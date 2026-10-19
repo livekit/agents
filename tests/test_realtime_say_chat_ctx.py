@@ -6,9 +6,11 @@ can insert it after items that were said later (#7916).
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, llm
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
@@ -38,3 +40,28 @@ async def test_say_adds_spoken_message_to_realtime_chat_ctx(mutable_chat_context
         assert [msg.id for msg in remote_msgs] == [local_msgs[0].id]
     else:
         assert remote_msgs == []
+
+
+async def test_say_places_spoken_message_before_later_remote_items() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(supports_say=False))
+    agent = Agent(instructions="test")
+
+    async with AgentSession(llm=model) as session:
+        await session.start(agent)
+        # a user turn the server added while the message was still playing
+        remote_ctx = model.active_session.chat_ctx.copy()
+        user_msg = remote_ctx.add_message(role="user", content="yes", created_at=time.time() + 60)
+        await model.active_session.update_chat_ctx(remote_ctx)
+
+        await session.say("Are you ready?")
+
+        remote_ids = [
+            item.id for item in model.active_session.chat_ctx.items if item.type == "message"
+        ]
+        spoken = next(
+            item
+            for item in agent.chat_ctx.items
+            if isinstance(item, llm.ChatMessage) and item.text_content == "Are you ready?"
+        )
+
+    assert remote_ids == [spoken.id, user_msg.id]
