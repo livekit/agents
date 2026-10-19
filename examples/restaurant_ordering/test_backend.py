@@ -436,6 +436,18 @@ def test_natural_names_for_items_sizes_and_sauces(pos: Pos) -> None:
         pos.add("wings", 1, "dozen", sauce="ranch sauce")
 
 
+def test_the_model_sees_opaque_menu_ids(pos: Pos) -> None:
+    refs = [m.ref for m in pos.menu]
+    assert len(set(refs)) == len(refs)
+    assert not set(refs) & {m.id for m in pos.menu}
+    assert all(pos.item(m.ref) is m for m in pos.menu)
+    wings = pos.item("wings")
+    assert (
+        wings.describe()
+        == f"{wings.ref}: Bone-in Wings (half dozen $8.99, dozen $16.99). Sauce required."
+    )
+
+
 def test_grade_passes_the_expected_order(pos: Pos) -> None:
     pos.add("pepperoni", 1, "large")
     pos.add("wings", 1, "dozen", sauce="hot")

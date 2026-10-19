@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import random
 import re
 import unicodedata
@@ -142,8 +144,10 @@ class MenuItem:
 
     @property
     def ref(self) -> str:
-        # the id the model sees on the menu and passes back to the tools
-        return self.id
+        # the id the model sees on the menu and passes back to the tools: opaque, so the only way
+        # to an item is the name beside its id, never a word the caller said or a category
+        digest = hashlib.sha256(self.id.encode()).digest()
+        return base64.b32encode(digest)[:4].decode().lower()
 
     @property
     def needs_size(self) -> bool:
