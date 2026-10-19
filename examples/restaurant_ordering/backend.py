@@ -141,6 +141,11 @@ class MenuItem:
     ingredients: tuple[str, ...] = ()  # what a pizza comes with, so it can be left off
 
     @property
+    def ref(self) -> str:
+        # the id the model sees on the menu and passes back to the tools
+        return self.id
+
+    @property
     def needs_size(self) -> bool:
         return len(self.sizes) > 1
 
@@ -173,7 +178,7 @@ class MenuItem:
         else:
             prices = f"${self.sizes[0].price}"
         extra = " Sauce required." if self.needs_sauce else ""
-        return f"{self.id}: {self.name} ({prices}).{extra}"
+        return f"{self.ref}: {self.name} ({prices}).{extra}"
 
 
 # ---- the menu ----
@@ -563,7 +568,7 @@ class Pos:
     def item(self, item_id: str) -> MenuItem:
         k = _key(item_id)
         for m in self.menu:
-            if k in (_key(m.id), _key(m.name)):
+            if k in (_key(m.ref), _key(m.id), _key(m.name)):
                 return m
         loose = _loose(item_id, ITEM_FILLER)
         for m in self.menu:
