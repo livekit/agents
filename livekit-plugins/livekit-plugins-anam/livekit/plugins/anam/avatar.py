@@ -14,9 +14,10 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
+from ._audio_output import AnamAudioOutput
 from .api import DEFAULT_API_URL, AnamAPI
 from .errors import AnamException
 from .log import logger
@@ -110,6 +111,17 @@ class AvatarSession(BaseAvatarSession):
             .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
             .to_jwt()
         )
+        # Rebind the audio tail before the session HTTP call. This protects against
+        # a race where audio is pushed before the audio tail is replaced.
+        agent_session.output.replace_audio_tail(
+            AnamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=SAMPLE_RATE,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
+        )
+
         async with AnamAPI(
             api_key=self._api_key, api_url=self._api_url, conn_options=self._conn_options
         ) as anam_api:
@@ -121,12 +133,3 @@ class AvatarSession(BaseAvatarSession):
                 session_options=self._session_options,
             )
             self.session_id = session_details.get("sessionId")
-
-        agent_session.output.replace_audio_tail(
-            DataStreamAudioOutput(
-                room=room,
-                destination_identity=self._avatar_participant_identity,
-                sample_rate=SAMPLE_RATE,
-                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            ),
-        )
