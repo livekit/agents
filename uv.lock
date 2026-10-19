@@ -5844,7 +5844,7 @@ wheels = [
 
 [[package]]
 name = "rimelabs-sdk"
-version = "0.1.0a16"
+version = "0.1.0a17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
@@ -5853,9 +5853,9 @@ dependencies = [
     { name = "rime-api" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a1/0c/08be57cc3a99b729642574a31e3f1ea569c9120233a42dff0bec20e54e0e/rimelabs_sdk-0.1.0a16.tar.gz", hash = "sha256:1c749227efe4b19a8dec90d3c4345118ccf354d3fe67945500afb51577e9d3ac", size = 190889, upload-time = "2026-10-16T21:18:00.497Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/b5/3ff0f8fc7cf0c87e494d13ab0bc2130acb2224ade74134686192b14e0881/rimelabs_sdk-0.1.0a17.tar.gz", hash = "sha256:9183d6db59e5abfe443ee902730addac7620f9a82acb23666d4cc7f1480cb623", size = 192530, upload-time = "2026-10-19T20:43:12.714Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a5/bc/2babcdab11e5ec9a4f33efdb4b78776898bdf55e0ffdc4da2c7b2f850093/rimelabs_sdk-0.1.0a16-py3-none-any.whl", hash = "sha256:6fc1abcca2b890ca83794aac1d293402fb8afaffdc870656eacc3d9d2ec31517", size = 61181, upload-time = "2026-10-16T21:17:59.351Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/69/8207233308a087035b0c5cf32427125e20a2b698ff22bd7f423fe98c86c1/rimelabs_sdk-0.1.0a17-py3-none-any.whl", hash = "sha256:eb044a7cd4276196168ff2747cda61ad8b64e000d3f597d9f68843a792ffb33d", size = 61345, upload-time = "2026-10-19T20:43:11.664Z" },
 ]
 
 [[package]]
