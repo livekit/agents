@@ -24,6 +24,8 @@ from .log import logger
 
 EGE_STOCK_AVATAR_ID = "b9be11b8-89fb-4227-8f86-4a881393cbdb"
 _DEFAULT_API_URL = "https://api.bey.dev"
+# The avatar worker renders and publishes 16 kHz audio
+SAMPLE_RATE = 16000
 
 _AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
 _AVATAR_AGENT_NAME = "bey-avatar-agent"
@@ -116,6 +118,7 @@ class AvatarSession(BaseAvatarSession):
                 room=room,
                 destination_identity=self._avatar_participant_identity,
                 wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                sample_rate=SAMPLE_RATE,
             ),
         )
 
@@ -125,14 +128,15 @@ class AvatarSession(BaseAvatarSession):
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._ensure_http_session().post(
-                    f"{self._api_url}/v1/session",
+                    f"{self._api_url}/v1/sessions",
                     headers={
                         "x-api-key": self._api_key,
                     },
                     json={
+                        "transport": "livekit",
                         "avatar_id": self._avatar_id,
-                        "livekit_url": livekit_url,
-                        "livekit_token": livekit_token,
+                        "url": livekit_url,
+                        "token": livekit_token,
                     },
                     timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
                 ) as response:
