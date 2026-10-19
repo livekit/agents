@@ -2814,8 +2814,11 @@ class AgentActivity(RecognitionHooks):
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
-                # the reply is skipped, not the user message: keep it like the skip_reply branch does
-                if info.new_transcript != "":
+                # only the reply is skipped: if the user audio was kept, keep the message too
+                if (
+                    info.new_transcript != ""
+                    and not self._session.options.interruption["discard_audio_if_uninterruptible"]
+                ):
                     self._agent._chat_ctx.items.append(user_message)
                     self._session._conversation_item_added(user_message)
                 return

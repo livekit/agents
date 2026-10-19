@@ -1,9 +1,12 @@
 """A user turn that completes while the agent speaks uninterruptibly is kept, not dropped.
 
 The reply is skipped on purpose: the speech cannot be interrupted, so nothing is generated
-until it finishes. But what the user said must still land in the chat context (and be
-announced as a conversation item), exactly like the ``skip_reply`` path does. Otherwise the
-transcript loses the turn and the next reply is generated as if the user had never spoken.
+until it finishes. But when the session keeps the user's audio during uninterruptible speech
+(``discard_audio_if_uninterruptible=False``), what the user said must still land in the chat
+context (and be announced as a conversation item), exactly like the ``skip_reply`` path does.
+Otherwise the transcript loses the turn and the next reply is generated as if the user had
+never spoken. With the default (``True``) STT hears silence during the speech, so input in that
+window is ignored by design and the chat context stays as it was.
 """
 
 from __future__ import annotations
@@ -63,3 +66,28 @@ async def test_user_turn_during_uninterruptible_speech_is_kept_in_chat_ctx() -> 
     # the speech itself was untouched and no reply was generated for the skipped turn
     assert [m.text_content for m in assistant_messages] == [_AGENT_LINE]
     assert assistant_messages[0].interrupted is False
+
+
+async def test_user_turn_during_uninterruptible_speech_is_ignored_when_audio_is_discarded() -> None:
+    actions = FakeActions()
+    actions.add_tts(10.0, input=_AGENT_LINE)
+    actions.add_user_speech(1.0, 1.5, _USER_LINE)
+
+    # default: the user audio is discarded during the speech, so the turn is ignored as before
+    session: AgentSession = create_session(actions)
+    agent = _UninterruptibleGreetingAgent()
+
+    added_user_items: list[str | None] = []
+
+    def _on_item_added(ev: ConversationItemAddedEvent) -> None:
+        if ev.item.type == "message" and ev.item.role == "user":
+            added_user_items.append(ev.item.text_content)
+
+    session.on("conversation_item_added", _on_item_added)
+
+    await run_session(session, agent, drain_delay=1.0)
+
+    messages = [item for item in agent.chat_ctx.items if item.type == "message"]
+    assert [m.text_content for m in messages if m.role == "user"] == []
+    assert added_user_items == []
+    assert [m.text_content for m in messages if m.role == "assistant"] == [_AGENT_LINE]
