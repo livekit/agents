@@ -61,3 +61,44 @@ def _tts(**kwargs):
 )
 def test_model_derivation(kwargs, expected):
     assert _tts(**kwargs).model == expected
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"rate": 1},
+        {"rate": 2},
+        {"rate": 0.75},
+        {"rate": "fast"},
+        {"volume": 0},
+        {"volume": 50},
+        {"volume": 100.0},
+        {"volume": "loud"},
+    ],
+)
+def test_prosody_accepts_valid_values(kwargs):
+    from livekit.plugins.azure.tts import ProsodyConfig
+
+    ProsodyConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        # integers are range-checked like floats
+        ({"rate": 3}, "between 0.5 and 2"),
+        ({"rate": 0}, "between 0.5 and 2"),
+        ({"volume": 150}, "between 0 and 100"),
+        ({"volume": -1}, "between 0 and 100"),
+        # bool is an int subclass, not a prosody value
+        ({"rate": True}, "must be one of"),
+        ({"volume": False}, "must be one of"),
+        # an empty string used to skip validation and render as rate=""
+        ({"rate": ""}, "must be one of"),
+    ],
+)
+def test_prosody_rejects_invalid_values(kwargs, match):
+    from livekit.plugins.azure.tts import ProsodyConfig
+
+    with pytest.raises(ValueError, match=match):
+        ProsodyConfig(**kwargs)
