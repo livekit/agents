@@ -123,6 +123,11 @@ class RunResult(Generic[Run_T]):
         self._final_output: Run_T | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
+        # a run can watch several speech handles (e.g. session.say() from a tool);
+        # keep the last one that actually carries a result so a later handle
+        # without output does not replace it
+        self.__last_speech_handle_with_output: SpeechHandle | None = None
+        self.__last_speech_handle_with_error: SpeechHandle | None = None
 
     @property
     def events(self) -> list[RunEvent]:
@@ -235,27 +240,46 @@ class RunResult(Generic[Run_T]):
 
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
+            # an unwatched handle no longer belongs to the run, don't let its
+            # result (or lack of one) decide how the run completes
+            if self.__last_speech_handle is handle:
+                self.__last_speech_handle = None
+            if self.__last_speech_handle_with_output is handle:
+                self.__last_speech_handle_with_output = None
+            if self.__last_speech_handle_with_error is handle:
+                self.__last_speech_handle_with_error = None
         return True
 
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Future[Any] | None) -> None:
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
+            if handle._maybe_run_final_output is not None:
+                self.__last_speech_handle_with_output = handle
+            if handle._error is not None:
+                self.__last_speech_handle_with_error = handle
 
         if all(handle.done() for handle in self._handles):
             self._mark_done()
 
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
-            if self.__last_speech_handle is None:
+            # prefer the output-bearing handle over an error-only one, and fall
+            # back to the last handle for the no-output retry path
+            speech_handle = (
+                self.__last_speech_handle_with_output
+                or self.__last_speech_handle_with_error
+                or self.__last_speech_handle
+            )
+            if speech_handle is None:
                 self._done_fut.set_result(None)
                 return
 
             # propagate speech handle errors (e.g. LLM or realtime failures)
-            if self.__last_speech_handle._error is not None:
-                self._done_fut.set_exception(self.__last_speech_handle._error)
+            if speech_handle._error is not None:
+                self._done_fut.set_exception(speech_handle._error)
                 return
 
-            final_output = self.__last_speech_handle._maybe_run_final_output
+            final_output = speech_handle._maybe_run_final_output
             if not isinstance(final_output, BaseException):
                 if self._output_type and not isinstance(final_output, self._output_type):
                     # only the no-output case is retryable: a completed task is
