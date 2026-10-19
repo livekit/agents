@@ -49,6 +49,8 @@ _MAX_SAMPLE_RATE = 48000
 
 # Finesse uses base ISO 639 codes, except where it names a macrolanguage member.
 _LANGUAGE_OVERRIDES = {"ar": "arb", "ne": "npi", "no": "nb", "or": "ory"}
+# Arabic regions with their own Finesse dialect: Egyptian, and Gulf (Khaleeji).
+_ARABIC_REGIONS = {"EG": "arz", "AE": "afb", "KW": "afb", "QA": "afb", "BH": "afb", "OM": "afb"}
 
 # Text frames over 1 MiB close the socket. Frames are sent as UTF-8 (ensure_ascii=False), so a
 # character costs at most 6 bytes (a JSON-escaped control character) and this stays far below it.
@@ -84,6 +86,8 @@ _NON_RETRYABLE_CLOSE_CODES = frozenset({1008, 1009})
 
 def _finesse_language(language: LanguageCode) -> str:
     base = language.language
+    if base == "ar" and language.region in _ARABIC_REGIONS:
+        return _ARABIC_REGIONS[language.region]
     return _LANGUAGE_OVERRIDES.get(base, base)
 
 
