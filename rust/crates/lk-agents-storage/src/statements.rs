@@ -1161,8 +1161,9 @@ impl Lease {
     }
 }
 
-/// The error mapping of plan 13.5: a lost transaction, a drop mid-request, a severed database and
-/// a closed connection are `StorageUnavailable`, retryable; `not_found` at `Hello` is
+/// The error mapping of plan 13.5: a lost transaction, a drop mid-request, a severed database, a
+/// write of unknown outcome (`outcome_unknown`), a request still refused after its resends
+/// (`retry`) and a closed connection are `StorageUnavailable`, retryable; `not_found` at `Hello` is
 /// `ThreadNotFound`; a refused token is `Unauthorized`; the rest keep agent-db's code.
 impl From<WsdbError> for StorageError {
     fn from(e: WsdbError) -> Self {
@@ -1173,7 +1174,9 @@ impl From<WsdbError> for StorageError {
             | WsdbError::Timeout
             | WsdbError::Io(_) => StorageError::Unavailable(e.to_string()),
             WsdbError::Server { code, message } => match code.as_str() {
-                "unavailable" | "resource_exhausted" => StorageError::Unavailable(message),
+                "unavailable" | "resource_exhausted" | "retry" | "outcome_unknown" => {
+                    StorageError::Unavailable(message)
+                }
                 "not_found" => StorageError::ThreadNotFound(message),
                 "unauthenticated" | "permission_denied" => StorageError::Unauthorized(message),
                 _ => StorageError::Server { code, message },
@@ -1405,5 +1408,10 @@ mod tests {
         assert!(matches!(StorageError::from(nf), StorageError::ThreadNotFound(_)));
         let other = WsdbError::Server { code: "exec".into(), message: "constraint".into() };
         assert!(matches!(StorageError::from(other), StorageError::Server { .. }));
+        for code in ["retry", "outcome_unknown"] {
+            let e =
+                StorageError::from(WsdbError::Server { code: code.into(), message: "m".into() });
+            assert!(e.retryable(), "{code}");
+        }
     }
 }
