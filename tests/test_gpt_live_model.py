@@ -537,7 +537,6 @@ async def test_an_exhausted_credit_balance_is_not_recoverable(
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
     try:
-        # the code is checked before the type, so the code itself must be fatal (#7805)
         with pytest.raises(APIError) as fatal:
             session._handle_event(
                 {
@@ -550,6 +549,32 @@ async def test_an_exhausted_credit_balance_is_not_recoverable(
                 }
             )
         assert not fatal.value.retryable
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize(
+    ("code", "type_", "fatal"),
+    [
+        ("some_new_code", "insufficient_quota", True),
+        ("insufficient_quota", "some_new_type", True),
+        (None, "insufficient_quota", True),
+        ("", "insufficient_quota", True),
+        ("server_error", "server_error", False),
+        ("", "", False),
+        (None, None, False),
+    ],
+)
+async def test_fatal_errors_match_either_code_or_type(
+    monkeypatch: pytest.MonkeyPatch, code: str | None, type_: str | None, fatal: bool
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        error = gpt_live_model.types.ErrorBody(type=type_, code=code)
+        assert session._is_fatal_error(error) is fatal
     finally:
         await session.aclose()
         await model.aclose()
