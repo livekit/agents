@@ -116,7 +116,7 @@ class AvatarSession(BaseAvatarSession):
             properties={"livekit_ws_url": livekit_url, "livekit_room_token": livekit_token},
         )
 
-        agent_session.output.replace_audio_tail(
+        self._replace_audio_tail(
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,
