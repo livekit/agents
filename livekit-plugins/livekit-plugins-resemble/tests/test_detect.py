@@ -219,7 +219,9 @@ class DetectionMonitorPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(monitor.results[-1].score, 0.95)
         self.assertFalse(monitor._force_pending)
         self.assertEqual(len(verdicts), 1)  # settled once when the budget ran out
-        self.assertEqual(monitor.verdict.analyzed_seconds, 4.0)  # forced check not counted
+        # the forced window counts as analyzed speech but not against the ambient budget
+        self.assertEqual(monitor.verdict.analyzed_seconds, 6.0)
+        self.assertEqual(monitor._budget_seconds, 4.0)
         self.assertTrue(stream.closed)
 
     async def test_concurrent_results_use_chronological_window_order(self) -> None:

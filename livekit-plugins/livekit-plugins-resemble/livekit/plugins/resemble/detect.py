@@ -494,6 +494,7 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
         self._analysis_tasks: set[asyncio.Task[Any]] = set()
         self._results: list[DetectionResult] = []
         self._analyzed_seconds = 0.0
+        self._budget_seconds = 0.0
         self._window_index = 0
         self._samples_taken = 0
         self._verdict_emitted = False
@@ -709,9 +710,10 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
                     logger.debug("skipping silent window", extra={"window_start": window_start})
                     continue
 
+                self._analyzed_seconds += self._opts.window_seconds
                 if not forced:
                     # on-demand checks never draw down the ambient analysis budget
-                    self._analyzed_seconds += self._opts.window_seconds
+                    self._budget_seconds += self._opts.window_seconds
                 index = self._window_index
                 self._window_index += 1
                 self._spawn(
@@ -749,7 +751,7 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
     def _budget_exhausted(self) -> bool:
         return (
             self._opts.mode == "first_n"
-            and self._analyzed_seconds >= self._opts.analysis_budget_seconds
+            and self._budget_seconds >= self._opts.analysis_budget_seconds
         )
 
     def _is_silence(self, pcm16: bytes) -> bool:
