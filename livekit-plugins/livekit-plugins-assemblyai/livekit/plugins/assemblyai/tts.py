@@ -195,9 +195,8 @@ class TTS(tts.TTS):
                 (``"spanish"``) or a language code (``"es"``, ``"es-MX"``). Defaults to
                 the language of ``voice`` (see ``VOICE_LANGUAGES``), else English; with
                 ``voice_id``, to the language of the voice's reference clip.
-            model_id: The model to synthesize with: a dated name such as
-                ``"assemblyai-tts-mul-4brl-2026-10-12"`` or an alias such as ``"latest"``.
-                Defaults to the default model of the language.
+            model_id: The model to synthesize with, by name or alias. Defaults to the
+                default model of the language. A ``voice_id`` voice must be paired with it.
             sample_rate: Output sample rate in Hz, one of 8000, 16000, 22050, 24000,
                 44100 or 48000. Defaults to 24000, the service's native rate.
             word_timestamps: Request per-word timings and publish them as an aligned

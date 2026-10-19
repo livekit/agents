@@ -45,13 +45,13 @@ judge, and the server's error lists the voices available.
 
 A custom (cloned) voice is passed as `voice_id` instead of `voice`. Use the `id` that AssemblyAI
 returned when the voice was created, or your slug for it. The voice speaks the language of its
-reference clip, so `language` can be left out. It must be paired with the session's model, and it
-can only be used on a host in the data zone it was created in:
+reference clip, so `language` can be left out. It must be paired with the session's model (the
+language's default, or the one you name with `model_id`), and it can only be used on a host in
+the data zone it was created in:
 
 ```python
 assemblyai.TTS(
     voice_id="01a0da61-138c-77c7-ab98-421431ed74e8",
-    model_id="assemblyai-tts-mul-4brl-2026-10-12",  # optional: a dated model name or an alias
     base_url="wss://streaming-tts.us.assemblyai.com",
 )
 ```

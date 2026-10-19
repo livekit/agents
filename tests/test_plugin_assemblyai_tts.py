@@ -372,7 +372,7 @@ def test_custom_voice_and_model() -> None:
     assert tts.model == "latest"
 
     # model_id selects the model for a named voice too
-    tts = TTS(api_key="k", voice="vera", model_id="assemblyai-tts-mul-4b-2026-10-07")
+    tts = TTS(api_key="k", voice="vera", model_id="some-model")
     assert (tts.voice, tts.language) == ("vera", "english")
 
     with pytest.raises(ValueError, match="either"):
@@ -648,7 +648,7 @@ async def test_update_options_opens_a_new_session() -> None:
 
 async def test_custom_voice_and_model_are_sent_at_connect() -> None:
     async with _FakeServer() as srv:
-        tts = _make_tts(srv, voice_id="clone", model_id="assemblyai-tts-mul-4b-2026-10-07")
+        tts = _make_tts(srv, voice_id="clone", model_id="some-model")
         await _speak(tts, ["Hello."])
         tts.update_options(voice="jane", model_id=None)
         await _speak(tts, ["Hello again."])
@@ -656,7 +656,7 @@ async def test_custom_voice_and_model_are_sent_at_connect() -> None:
 
     keys = ("voice", "voice_id", "language", "model_id")
     assert [tuple(s.params.get(k) for k in keys) for s in srv.sessions] == [
-        (None, "clone", None, "assemblyai-tts-mul-4b-2026-10-07"),
+        (None, "clone", None, "some-model"),
         ("jane", None, "english", None),
     ]
 
