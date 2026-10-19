@@ -655,21 +655,18 @@ impl ThreadDb {
             > 0)
     }
 
-    /// `true` while this holder still has the lease.
+    /// `true` while this holder still has the lease. A one-statement `Batch`, as the receive:
+    /// agent-store refuses a write sent as a `Query`.
     pub async fn renew(
         &self,
         lane: &str,
         holder: &str,
         lease_token: &str,
     ) -> Result<bool, StorageError> {
-        let set = self
-            .conn
-            .query_all(
-                RENEW,
-                vec![self.lease_ttl_secs.into(), lane.into(), holder.into(), lease_token.into()],
-            )
-            .await?;
-        Ok(!set.rows.is_empty())
+        let params =
+            vec![self.lease_ttl_secs.into(), lane.into(), holder.into(), lease_token.into()];
+        let out = self.conn.batch(vec![statement(RENEW, params)]).await?;
+        Ok(!out.results[0].rows().is_empty())
     }
 
     /// The renewal timer: [`RENEW`] at the configured interval until [`Lease::stop`], or until a
@@ -1362,6 +1359,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r, Receive::Received(Received { id: 4, acquired: None }));
+    }
+
+    /// agent-store refuses a write sent as a `Query`, so the renewal must go as a `Batch`.
+    fn refuses_writes_in_query(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        use crate::wsdb::tests::{hello_ok, reply};
+        use pb::client_message::Message as C;
+        use pb::server_message::Message as S;
+        match &m.message {
+            Some(C::Hello(_)) => vec![hello_ok()],
+            Some(C::Query(_)) => vec![reply(S::Error(pb::Error {
+                code: "query".into(),
+                message: "query runs read-only statements; send writes with exec".into(),
+            }))],
+            Some(C::Batch(b)) if b.statements.len() == 1 && b.statements[0].sql == RENEW => {
+                let rows = crate::wire::encode_batch(&[vec![SqlValue::Int(4)]], 1);
+                vec![
+                    reply(S::Columns(pb::Columns { names: vec!["version".into()], statement: 0 })),
+                    reply(S::ColumnBatch(rows)),
+                    reply(S::Done(pb::Done { tip: 9, total_rows: 1 })),
+                ]
+            }
+            _ => vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn renew_is_a_batch_not_a_query() {
+        let (url, _) = crate::wsdb::tests::serve(refuses_writes_in_query, false).await;
+        let conn = crate::wsdb::tests::dial(&url, "DB_1").await.unwrap();
+        let db =
+            ThreadDb::over(conn, Some(SCHEMA_VERSION), DEFAULT_LEASE_TTL, DEFAULT_RENEW_INTERVAL);
+        assert!(db.renew("front-desk", "h", "t").await.unwrap());
     }
 
     #[test]
