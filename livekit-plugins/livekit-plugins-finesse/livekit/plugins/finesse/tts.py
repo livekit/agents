@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import weakref
 from dataclasses import dataclass, replace
 from typing import Any
@@ -49,8 +50,12 @@ _MAX_SAMPLE_RATE = 48000
 # Finesse uses base ISO 639 codes, except where it names a macrolanguage member.
 _LANGUAGE_OVERRIDES = {"ar": "arb", "ne": "npi", "no": "nb", "or": "ory"}
 
-# Text frames over 1 MiB close the socket; this many characters stays far below it in UTF-8.
+# Text frames over 1 MiB close the socket. Frames are sent as UTF-8 (ensure_ascii=False), so a
+# character costs at most 6 bytes (a JSON-escaped control character) and this stays far below it.
 _MAX_TEXT_CHARS = 100_000
+
+# Finesse error codes are snake_case identifiers; anything else is not put in an error message.
+_ERROR_CODE_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 
 # Error codes that fail the same way on retry.
 _NON_RETRYABLE_CODES = frozenset(
@@ -72,8 +77,9 @@ _NON_RETRYABLE_CODES = frozenset(
     }
 )
 
-# Close codes worth retrying on a new connection: no close frame, engine failure, engine busy.
-_RETRYABLE_CLOSE_CODES = frozenset({1006, 1011, 1013})
+# Close codes that fail the same way on a new connection: out of credits, frame too large.
+# Any other close (normal, going away, service restart, engine failure) is retried.
+_NON_RETRYABLE_CLOSE_CODES = frozenset({1008, 1009})
 
 
 def _finesse_language(language: LanguageCode) -> str:
@@ -345,7 +351,7 @@ async def _send_text(
                 "text": chunk,
                 "finalize": last,
             }
-        await ws.send_str(json.dumps(msg))
+        await ws.send_str(json.dumps(msg, ensure_ascii=False))
 
 
 async def _cancel_context(ws: aiohttp.ClientWebSocketResponse, context_id: str) -> None:
@@ -363,13 +369,41 @@ async def _cancel_context(ws: aiohttp.ClientWebSocketResponse, context_id: str) 
 
 
 def _event_error(data: dict[str, Any], request_id: str) -> APIStatusError:
-    code = str(data.get("code") or "unknown_error")
+    code = data.get("code")
+    if not isinstance(code, str) or not _ERROR_CODE_RE.match(code):
+        code = "unknown_error"
     return APIStatusError(
         f"Finesse {data.get('type')}: {code}",
         request_id=request_id,
         body={"code": code},
         retryable=code not in _NON_RETRYABLE_CODES,
     )
+
+
+async def _receive(
+    ws: aiohttp.ClientWebSocketResponse, timeout: float, input_done: asyncio.Event | None
+) -> aiohttp.WSMessage:
+    """Wait for the next frame.
+
+    The timeout only runs once the input has ended: while the LLM is still writing (or
+    calling a tool), the server can rightly have nothing to send.
+    """
+    if input_done is None or input_done.is_set():
+        return await ws.receive(timeout=timeout)
+
+    recv = asyncio.ensure_future(ws.receive())
+    done = asyncio.ensure_future(input_done.wait())
+    try:
+        await asyncio.wait({recv, done}, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        recv.cancel()
+        raise
+    finally:
+        done.cancel()
+    if recv.done():
+        return recv.result()
+    # The input ended while waiting: from now on the server has to answer within the timeout.
+    return await asyncio.wait_for(recv, timeout)
 
 
 async def _receive_context(
@@ -379,6 +413,7 @@ async def _receive_context(
     sample_rate: int,
     output_emitter: tts.AudioEmitter,
     timeout: float,
+    input_done: asyncio.Event | None = None,
 ) -> None:
     """Push the context's audio until it finishes.
 
@@ -388,7 +423,7 @@ async def _receive_context(
     # Each binary frame belongs to the context named by the audio_chunk just before it.
     audio_context: str | None = None
     while True:
-        msg = await ws.receive(timeout=timeout)
+        msg = await _receive(ws, timeout, input_done)
         if msg.type in (
             aiohttp.WSMsgType.CLOSED,
             aiohttp.WSMsgType.CLOSE,
@@ -399,7 +434,7 @@ async def _receive_context(
                 "Finesse connection closed unexpectedly",
                 status_code=close_code or -1,
                 request_id=context_id,
-                retryable=close_code is None or close_code in _RETRYABLE_CLOSE_CODES,
+                retryable=close_code not in _NON_RETRYABLE_CLOSE_CODES,
             )
 
         if msg.type == aiohttp.WSMsgType.BINARY:
@@ -434,8 +469,12 @@ async def _receive_context(
                     "Finesse returned a different sample rate",
                     extra={"requested": sample_rate, "returned": data["sample_rate"]},
                 )
-        elif kind in ("task_done", "task_cancelled"):
+        elif kind == "task_done":
             return
+        elif kind == "task_cancelled":
+            # The plugin only cancels a context it has stopped reading, so this came from the
+            # server: the speech is incomplete.
+            raise APIStatusError("Finesse cancelled the context", request_id=context_id)
         elif kind == "task_failed":
             raise _event_error(data, context_id)
         elif kind != "sentence_done":
@@ -507,6 +546,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         # Set once the context is open, or once the input ended without any text.
         opened_event = asyncio.Event()
+        # Set once the context is finalized: only then must the server answer within the timeout.
+        input_done = asyncio.Event()
         opened = False
         finished = False
 
@@ -533,6 +574,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             if opened:
                 await _send_text(ws, self._opts, context_id, "", opened=True, finalize=True)
+            input_done.set()
             opened_event.set()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -546,6 +588,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sample_rate=self._opts.sample_rate,
                 output_emitter=output_emitter,
                 timeout=self._conn_options.timeout,
+                input_done=input_done,
             )
             finished = True
 
