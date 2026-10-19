@@ -2650,6 +2650,14 @@ class AgentActivity(RecognitionHooks):
             created_at=time.time(),
         )
 
+    def on_interim_after_preflight(self, transcript: str) -> None:
+        # once the transcript moved past the preflight, the end of turn cannot adopt the
+        # preemptive reply, so stop it now instead of at the next preflight or final transcript
+        if (preemptive := self._preemptive_generation) is not None and not _transcripts_equivalent(
+            preemptive.info.new_transcript, transcript
+        ):
+            self._cancel_preemptive_generation()
+
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None:
         if (host := self._session._session_host) is not None:
             host._on_eot_prediction(ev)
