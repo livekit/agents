@@ -3458,7 +3458,7 @@ requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "httpx2", specifier = ">=2.12,<3" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
-    { name = "openai", specifier = ">=3.19,<4" },
+    { name = "openai", specifier = ">=3.28,<4" },
 ]
 provides-extras = ["vertex"]
 
