@@ -85,6 +85,25 @@ The service sends partial segments by default, emitted as interim transcripts. S
 stt = speechmatics.STT(include_partials=False)
 ```
 
+## Sentence segments
+
+By default the service closes a segment at the end of each turn, so a turn arrives as one final
+transcript. Set `emit_sentences=True` to close a segment at every end of sentence as well, so each
+sentence is emitted as its own final transcript:
+
+```python
+stt = speechmatics.STT(emit_sentences=True)
+```
+
+## Sample rate
+
+Audio is sent at 16 kHz by default. The service also accepts 8 kHz; any other rate raises a
+`ValueError`. LiveKit resamples incoming audio to the rate you choose:
+
+```python
+stt = speechmatics.STT(sample_rate=8000)
+```
+
 ## Diarization
 
 Speechmatics attributes each transcript segment to a speaker. Diarization is enabled by default
