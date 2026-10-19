@@ -2130,7 +2130,14 @@ class AgentActivity(RecognitionHooks):
                 and not eou_task.done()
             ):
                 user_active = True
-                await asyncio.shield(eou_task)
+                try:
+                    await asyncio.shield(eou_task)
+                except asyncio.CancelledError:
+                    # a dropped decision (clear_user_turn, or a newer trigger that
+                    # superseded it) is idle, not a failed wait. cancellation of
+                    # *this* waiter still propagates: the shielded task keeps running.
+                    if not eou_task.cancelled():
+                        raise
 
             if (user_turn_task := self._user_turn_completed_atask) and not user_turn_task.done():
                 user_active = True
