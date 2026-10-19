@@ -80,8 +80,14 @@ def _make_mock_job_ctx(enable_recording: bool = True) -> MagicMock:
 
 
 @contextlib.contextmanager
-def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iterator[None]:
-    """Patch get_job_context and optionally RecorderIO."""
+def _patch_job_ctx(
+    mock_ctx: MagicMock, *, patch_recorder: bool = False
+) -> Iterator[MagicMock | None]:
+    """Patch get_job_context and optionally RecorderIO.
+
+    Yields the mocked RecorderIO class when patch_recorder=True (so a test can assert on its
+    constructor args via mock_cls.call_args), otherwise None.
+    """
     with patch(f"{_AGENT_SESSION_MOD}.get_job_context", return_value=mock_ctx):
         if patch_recorder:
             with patch(f"{_AGENT_SESSION_MOD}.RecorderIO") as mock_cls:
@@ -91,9 +97,9 @@ def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iter
                 recorder.start = AsyncMock()
                 recorder.aclose = AsyncMock()
                 mock_cls.return_value = recorder
-                yield
+                yield mock_cls
         else:
-            yield
+            yield None
 
 
 def _make_mock_report(recording_options: RecordingOptions | None = None) -> MagicMock:
@@ -1662,3 +1668,33 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
     assert session._recorder_io is None
     await _cleanup(session)
+
+
+async def test_recorder_io_receives_bit_rate_options_from_record_dict() -> None:
+    """record={"bit_rate": ..., "constant_bit_rate": ...} must reach RecorderIO: this is the
+    only path session.start(record=...) has to it, since RecorderIO itself isn't exported."""
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+
+    with _patch_job_ctx(mock_ctx, patch_recorder=True) as mock_cls:
+        assert mock_cls is not None
+        await session.start(
+            SimpleAgent(), record={"audio": True, "bit_rate": 32000, "constant_bit_rate": True}
+        )
+        assert mock_cls.call_args.kwargs["bit_rate"] == 32000
+        assert mock_cls.call_args.kwargs["constant_bit_rate"] is True
+        await _cleanup(session)
+
+
+async def test_recorder_io_bit_rate_options_default_to_recorder_ios_own_defaults() -> None:
+    """record=True (no bit_rate/constant_bit_rate given) must not force a specific bit rate or
+    constant-bit-rate on RecorderIO - its own defaults (None, False) decide."""
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+
+    with _patch_job_ctx(mock_ctx, patch_recorder=True) as mock_cls:
+        assert mock_cls is not None
+        await session.start(SimpleAgent(), record=True)
+        assert mock_cls.call_args.kwargs["bit_rate"] is None
+        assert mock_cls.call_args.kwargs["constant_bit_rate"] is False
+        await _cleanup(session)

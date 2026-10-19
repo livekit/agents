@@ -152,6 +152,13 @@ class RecordingOptions(TypedDict, total=False):
     ``gen_ai.system_instructions`` is left out while unchanged. Such spans carry
     ``lk.input.*`` attributes pointing at the span that holds the rest.
     """
+    bit_rate: int | None
+    """Target bit rate of the session-audio Opus encoder, in bits per second. ``None``
+    (the default) keeps the encoder's own default. Only affects ``audio`` recording."""
+    constant_bit_rate: bool
+    """Encode session audio at a constant bit rate instead of a variable one. Defaults to
+    ``False``. Players that estimate an Ogg Opus duration from the file size (e.g. macOS
+    Finder and QuickLook) only get it right on a constant bit rate."""
 
 
 _RECORDING_ALL_ON: RecordingOptions = {
@@ -1085,7 +1092,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
                     if self._opts.recording_options["audio"] or (c.enabled and c.record):
-                        self._recorder_io = RecorderIO(agent_session=self)
+                        self._recorder_io = RecorderIO(
+                            agent_session=self,
+                            bit_rate=self._opts.recording_options.get("bit_rate"),
+                            constant_bit_rate=self._opts.recording_options.get(
+                                "constant_bit_rate", False
+                            ),
+                        )
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)
 
