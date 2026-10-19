@@ -65,6 +65,11 @@ class LLM(OpenAILLM):
 
         ``model`` selects between ``"electron"`` (default) and ``"electron-2.0"``; both
         are served from the same ``base_url`` and accept the same request shape.
+
+        .. note::
+            ``"electron-2.0"`` is not yet live on the Smallest AI gateway and currently
+            returns a 502 ``upstream model unavailable`` error. The model id is accepted
+            here in anticipation of its rollout; use ``"electron"`` until it's available.
         """
         api_key = api_key if is_given(api_key) else os.environ.get("SMALLEST_API_KEY", "")
         if not api_key:

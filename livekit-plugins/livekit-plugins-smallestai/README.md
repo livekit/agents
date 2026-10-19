@@ -44,6 +44,6 @@ from livekit.plugins import smallestai
 
 llm = smallestai.LLM(model="electron")
 
-# or the newer model
+# or the newer model (not yet live on the gateway; currently returns a 502)
 llm = smallestai.LLM(model="electron-2.0")
 ```
