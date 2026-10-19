@@ -2001,8 +2001,8 @@ class RealtimeSession(
         if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
             # the server can anchor to an item it just deleted; the item belongs at the tail
             logger.warning(
-                f"{self._realtime_model._provider_label} anchored an item to one it is no longer "
-                "tracking, appending it instead",
+                f"{self._realtime_model._provider_label} placed a chat history item after an "
+                "unknown item; appended it instead",
                 extra={"item_id": event.item.id, "previous_item_id": event.previous_item_id},
             )
             event.previous_item_id = self._remote_chat_ctx.tail_id
