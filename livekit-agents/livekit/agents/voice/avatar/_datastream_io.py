@@ -375,6 +375,9 @@ class DataStreamAudioReceiver(AudioReceiver):
 
         self._rpc_send_ch = utils.aio.Chan[PlaybackFinishedEvent | _PlaybackStartedEvent]()
         self._rpc_max_retries = rpc_max_retries
+        # senders on the default DataStreamAudioOutput(wait_playback_start=False) never
+        # register lk.playback_started; stop sending it once the sender says so
+        self._playback_started_unsupported = False
 
         self._main_atask: asyncio.Task | None = None
         self._exception: Exception | None = None
@@ -441,7 +444,8 @@ class DataStreamAudioReceiver(AudioReceiver):
         )
 
     def notify_playback_started(self) -> None:
-        self._rpc_send_ch.send_nowait(_PlaybackStartedEvent())
+        if not self._playback_started_unsupported:
+            self._rpc_send_ch.send_nowait(_PlaybackStartedEvent())
 
     async def _main_task(self) -> None:
         tasks = [
@@ -465,6 +469,9 @@ class DataStreamAudioReceiver(AudioReceiver):
             if isinstance(event, PlaybackFinishedEvent):
                 method = RPC_PLAYBACK_FINISHED
                 payload = json.dumps(asdict(event))
+            elif self._playback_started_unsupported:
+                # queued before the sender reported the method as unsupported
+                continue
             else:
                 method = RPC_PLAYBACK_STARTED
                 payload = ""
@@ -480,20 +487,27 @@ class DataStreamAudioReceiver(AudioReceiver):
                     )
                     break
                 except rtc.RpcError as e:
-                    if e.code == rtc.RpcError.ErrorCode.UNSUPPORTED_METHOD:
-                        # remote participant didn't register this method; skip retry
-                        if method == RPC_PLAYBACK_STARTED:
-                            logger.error(
-                                "remote participant didn't register lk.playback_started RPC"
-                            )
-                            break
+                    if (
+                        method == RPC_PLAYBACK_STARTED
+                        and e.code == rtc.RpcError.ErrorCode.UNSUPPORTED_METHOD
+                    ):
+                        # the sender only registers it with wait_playback_start=True
+                        self._playback_started_unsupported = True
+                        logger.info(
+                            "remote participant didn't register lk.playback_started RPC, "
+                            "not sending it again"
+                        )
+                        break
 
                     if retry_count == self._rpc_max_retries - 1:
+                        # raising would close the receiver and stop all later audio,
+                        # so drop this notification instead. The message comes from the
+                        # sender's RPC handler, so only the code is logged.
                         logger.error(
-                            f"failed to call {method} after {retry_count + 1} retries",
-                            exc_info=e,
+                            f"failed to call {method} after {retry_count + 1} retries, dropping it",
+                            extra={"code": e.code},
                         )
-                        raise
+                        break
                     retry_count += 1
                     logger.warning(f"failed to call {method}, retrying...")
                     await asyncio.sleep(0.1)
