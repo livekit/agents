@@ -320,7 +320,7 @@ class GabbyAgent(Agent):
         """Check that an item can be ordered today.
 
         Args:
-            item_id: The menu id, e.g. "buffalo_cauliflower".
+            item_id: The menu id: the code before the item's name on the menu.
         """
         with _pos_rules(ctx) as pos:
             item = pos.check_availability(item_id)
@@ -387,7 +387,7 @@ class GabbyAgent(Agent):
         caller naming it again is repeating themselves, not ordering more.
 
         Args:
-            item_id: The menu id, e.g. "pepperoni".
+            item_id: The menu id: the code before the item's name on the menu.
             quantity: How many orders of it: "a dozen wings" is quantity 1, size dozen.
             size: Required for pizza (small, medium, large), wings (half dozen, dozen), and
                 drinks (small, medium, large). Leave out for one-size items. Only a
