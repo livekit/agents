@@ -259,3 +259,114 @@ async def test_token_counts_survive_a_response_that_generates_nothing() -> None:
     assert metrics[0].ttft == -1
     assert metrics[0].completion_tokens == 7
     assert metrics[0].total_tokens == 18
+
+
+# A provider may pack several complete tool calls into a single delta, with the
+# turn's finish_reason alongside them.
+_BATCHED_TOOL_CALLS = _sse(
+    {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "google/gemma-4-31b-it",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_a",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city":"Paris"}',
+                            },
+                        },
+                        {
+                            "index": 1,
+                            "id": "call_b",
+                            "type": "function",
+                            "function": {"name": "get_time", "arguments": '{"city":"Rome"}'},
+                        },
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+)
+
+# Parallel calls whose argument fragments alternate, routed by tool_calls[].index.
+_INTERLEAVED_TOOL_CALLS = [
+    _chunk(
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "index": 0,
+                    "id": "call_a",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": ""},
+                }
+            ],
+        }
+    ),
+    _chunk(
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "index": 1,
+                    "id": "call_b",
+                    "type": "function",
+                    "function": {"name": "get_time", "arguments": ""},
+                }
+            ],
+        }
+    ),
+    _chunk(
+        {"role": "assistant", "tool_calls": [{"index": 0, "function": {"arguments": '{"city":'}}]}
+    ),
+    _chunk(
+        {"role": "assistant", "tool_calls": [{"index": 0, "function": {"arguments": '"Paris"}'}}]}
+    ),
+    _chunk(
+        {"role": "assistant", "tool_calls": [{"index": 1, "function": {"arguments": '{"city":'}}]}
+    ),
+    _chunk(
+        {"role": "assistant", "tool_calls": [{"index": 1, "function": {"arguments": '"Rome"}'}}]}
+    ),
+    _TOOL_DONE,
+]
+
+
+async def _collect_tool_calls(chunks: list[bytes]) -> list[tuple[str, str, str]]:
+    llm_model, _, _ = _llm_for(lambda _: _CompletedStream(chunks))
+    try:
+        response = await _drain(llm_model, max_retry=0).collect()
+    finally:
+        await llm_model.aclose()
+
+    return [(tc.name, tc.call_id, tc.arguments) for tc in response.tool_calls]
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_calls_in_one_delta_are_all_emitted() -> None:
+    tool_calls = await _collect_tool_calls([_BATCHED_TOOL_CALLS])
+
+    assert tool_calls == [
+        ("get_weather", "call_a", '{"city":"Paris"}'),
+        ("get_time", "call_b", '{"city":"Rome"}'),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_interleaved_tool_call_fragments_keep_their_own_arguments() -> None:
+    tool_calls = await _collect_tool_calls(_INTERLEAVED_TOOL_CALLS)
+
+    assert tool_calls == [
+        ("get_weather", "call_a", '{"city":"Paris"}'),
+        ("get_time", "call_b", '{"city":"Rome"}'),
+    ]

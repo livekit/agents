@@ -291,6 +291,25 @@ class _LLMOptions:
     prompt_cache_breakpoints: bool | Literal["auto"]
 
 
+@dataclass
+class _InProgressToolCall:
+    """Arguments of one tool call, accumulated while the provider streams its deltas."""
+
+    call_id: str | None = None
+    name: str | None = None
+    arguments: str = ""
+    extra: dict[str, Any] | None = None
+
+
+def _to_function_tool_call(state: _InProgressToolCall) -> llm.FunctionToolCall:
+    return llm.FunctionToolCall(
+        arguments=state.arguments or "",
+        name=state.name or "",
+        call_id=state.call_id or "",
+        extra=state.extra,
+    )
+
+
 class LLM(llm.LLM):
     def __init__(
         self,
@@ -488,13 +507,11 @@ class LLMStream(llm.LLMStream):
         self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
-        # current function call that we're waiting for full completion (args are streamed)
+        # tool calls still being streamed, keyed by the index the provider assigns them
         # (defined inside the _run method to make sure the state is reset for each run/attempt)
         self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
-        self._tool_call_id: str | None = None
-        self._fnc_name: str | None = None
-        self._fnc_raw_arguments: str | None = None
-        self._tool_extra: dict[str, Any] | None = None
+        self._pending_tool_calls: dict[int, _InProgressToolCall] = {}
+        # last index seen, used only when a provider omits tool_calls[].index on a continuation
         self._tool_index: int | None = None
         retryable = True
 
@@ -617,65 +634,67 @@ class LLMStream(llm.LLMStream):
             delta.content, thinking_filter, final=choice.finish_reason is not None
         )
 
+        # Providers address parallel tool calls by ``index``: a delta can start a
+        # new call, continue one or more earlier calls, or carry several complete
+        # calls at once. Accumulate each index separately so interleaved argument
+        # fragments never leak into another call.
+        pending: dict[int, _InProgressToolCall] | None = getattr(self, "_pending_tool_calls", None)
+        if pending is None:
+            pending = self._pending_tool_calls = {}
+
+        completed: list[llm.FunctionToolCall] = []
         if delta.tool_calls:
             for tool in delta.tool_calls:
                 if not tool.function:
                     continue
 
-                call_chunk = None
-                if self._tool_call_id and tool.id and tool.index != self._tool_index:
-                    call_chunk = llm.ChatChunk(
-                        id=id,
-                        delta=llm.ChoiceDelta(
-                            role="assistant",
-                            content=delta.content,
-                            tool_calls=[
-                                llm.FunctionToolCall(
-                                    arguments=self._fnc_raw_arguments or "",
-                                    name=self._fnc_name or "",
-                                    call_id=self._tool_call_id or "",
-                                    extra=self._tool_extra,
-                                )
-                            ],
-                        ),
-                    )
-                    self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
-                    self._tool_extra = None
+                # Some OpenAI-compatible servers omit the index on continuation
+                # deltas; in that case the fragment belongs to the last call seen.
+                index = tool.index if tool.index is not None else self._tool_index
+                if index is None:
+                    index = 0
+
+                state = pending.get(index)
+                if state is not None and tool.id and state.call_id and tool.id != state.call_id:
+                    # a different call reuses this index: the previous one is complete
+                    completed.append(_to_function_tool_call(state))
+                    state = None
+
+                if state is None:
+                    state = pending[index] = _InProgressToolCall()
+
+                if tool.id:
+                    state.call_id = tool.id
 
                 if tool.function.name:
-                    self._tool_index = tool.index
-                    self._tool_call_id = tool.id
-                    self._fnc_name = tool.function.name
-                    self._fnc_raw_arguments = tool.function.arguments or ""
+                    state.name = tool.function.name
+                    state.arguments = tool.function.arguments or ""
                     # Extract extra from tool call (e.g., Google thought signatures)
-                    self._tool_extra = getattr(tool, "extra_content", None)
+                    state.extra = getattr(tool, "extra_content", None)
                 elif tool.function.arguments:
-                    self._fnc_raw_arguments += tool.function.arguments  # type: ignore
+                    state.arguments += tool.function.arguments
 
-                if call_chunk is not None:
-                    return call_chunk
+                self._tool_index = index
 
-        if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
-            finish_extra = getattr(delta, "extra_content", None)
-            call_chunk = llm.ChatChunk(
+        finished = choice.finish_reason in ("tool_calls", "stop")
+        if finished:
+            # the turn is over: every call still buffered is complete
+            for index in sorted(pending):
+                completed.append(_to_function_tool_call(pending[index]))
+            pending.clear()
+            self._tool_index = None
+
+        if completed:
+            return llm.ChatChunk(
                 id=id,
                 delta=llm.ChoiceDelta(
                     role="assistant",
                     content=delta.content,
-                    extra=finish_extra,
-                    tool_calls=[
-                        llm.FunctionToolCall(
-                            arguments=self._fnc_raw_arguments or "",
-                            name=self._fnc_name or "",
-                            call_id=self._tool_call_id or "",
-                            extra=self._tool_extra,
-                        )
-                    ],
+                    # finish extra lives on the delta (e.g. Google thought signatures)
+                    extra=getattr(delta, "extra_content", None) if finished else None,
+                    tool_calls=completed,
                 ),
             )
-            self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
-            self._tool_extra = None
-            return call_chunk
 
         # Extract extra from delta (e.g., Google thought signatures on text parts)
         delta_extra = getattr(delta, "extra_content", None)
