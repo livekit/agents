@@ -58,6 +58,8 @@ class _ChatCtxToolResponse(types.LiveClientToolResponse):
     """Tool responses built from chat ctx items; the ids let the send task mark them sent."""
 
     item_ids: set[str] = Field(default_factory=set, exclude=True)
+    # the answered calls that were open when this was queued
+    call_ids: set[str] = Field(default_factory=set, exclude=True)
 
 
 # stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
@@ -557,6 +559,10 @@ class RealtimeSession(llm.RealtimeSession):
         # not carry an id, since the server never issued it. kept for the session's lifetime: a
         # resumption can replay a response long after it was first queued
         self._synthetic_call_ids: set[str] = set()
+        # server-issued calls whose response has not been sent yet
+        self._open_call_ids: set[str] = set()
+        # a config change happened, so the next connect must not resume the old session
+        self._fresh_session_needed = False
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -602,11 +608,9 @@ class RealtimeSession(llm.RealtimeSession):
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
 
-            if not on_error:
-                # a resumed session keeps its old instructions and tools, so a config change
-                # must start a fresh one
-                self._session_resumption_handle = None
-                self._resumption_chat_ctx = None
+        if not on_error:
+            # a resumed session keeps its old instructions and tools
+            self._fresh_session_needed = True
 
     def update_options(
         self,
@@ -778,7 +782,14 @@ class RealtimeSession(llm.RealtimeSession):
                 self._unsent_item_ids |= item_ids
                 self._send_client_event(
                     _ChatCtxToolResponse(
-                        function_responses=tool_results.function_responses, item_ids=item_ids
+                        function_responses=tool_results.function_responses,
+                        item_ids=item_ids,
+                        call_ids={
+                            item.call_id
+                            for item in append_ctx.items
+                            if item.type == "function_call_output"
+                            and item.call_id in self._open_call_ids
+                        },
                     )
                 )
 
@@ -989,6 +1000,11 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
+            if self._fresh_session_needed:
+                # cleared only now, after the old receive task can no longer store a handle
+                self._fresh_session_needed = False
+                self._session_resumption_handle = None
+                self._resumption_chat_ctx = None
             session = None
             try:
                 config = self._build_connect_config()
@@ -1040,6 +1056,33 @@ class RealtimeSession(llm.RealtimeSession):
                                     turns=turns,  # type: ignore
                                     turn_complete=False,
                                 )
+                            # the replay skips tool results, so answer the calls still open;
+                            # a fresh session accepts a response to a call it never issued
+                            answered = {
+                                item.call_id
+                                for item in self._chat_ctx.items
+                                if item.type == "function_call_output"
+                                and item.call_id in self._open_call_ids
+                            }
+                            if tool_results := get_tool_results_for_realtime(
+                                llm.ChatContext(
+                                    [
+                                        item
+                                        for item in self._chat_ctx.items
+                                        if item.type == "function_call_output"
+                                        and item.call_id in answered
+                                    ]
+                                ),
+                                vertexai=self._opts.vertexai,
+                                tool_response_scheduling=self._opts.tool_response_scheduling,
+                                supports_silent_scheduling=not self._opts.vertexai
+                                and self._opts.tool_behavior == types.Behavior.NON_BLOCKING,
+                                synthetic_call_ids=self._synthetic_call_ids,
+                            ):
+                                await session.send_tool_response(
+                                    function_responses=tool_results.function_responses or []
+                                )
+                                self._open_call_ids -= answered
                             self._unsent_item_ids.clear()
 
                     # queue up existing chat context
@@ -1146,7 +1189,15 @@ class RealtimeSession(llm.RealtimeSession):
                         turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
-                    await session.send_tool_response(function_responses=msg.function_responses)
+                    # skip a response the replay of a fresh connect already sent
+                    if not (
+                        isinstance(msg, _ChatCtxToolResponse)
+                        and msg.call_ids
+                        and not msg.call_ids & self._open_call_ids
+                    ):
+                        await session.send_tool_response(function_responses=msg.function_responses)
+                    if isinstance(msg, _ChatCtxToolResponse):
+                        self._open_call_ids -= msg.call_ids
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
                         await session.send_realtime_input(audio=msg.audio)
@@ -1592,6 +1643,7 @@ class RealtimeSession(llm.RealtimeSession):
             if not call_id:
                 call_id = utils.shortuuid("fnc-call-")
                 self._synthetic_call_ids.add(call_id)
+            self._open_call_ids.add(call_id)
 
             gen.function_ch.send_nowait(
                 llm.FunctionCall(
@@ -1609,6 +1661,7 @@ class RealtimeSession(llm.RealtimeSession):
             "server cancelled tool calls",
             extra={"function_call_ids": tool_call_cancellation.ids},
         )
+        self._open_call_ids -= set(tool_call_cancellation.ids or ())
 
     def _handle_usage_metadata(self, usage_metadata: types.UsageMetadata) -> None:
         current_gen = self._current_generation

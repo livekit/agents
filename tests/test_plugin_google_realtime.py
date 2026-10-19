@@ -1010,6 +1010,129 @@ async def test_handle_does_not_claim_a_queued_but_unsent_update(
         await session.aclose()
 
 
+@asynccontextmanager
+async def _two_sockets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[RealtimeSession, list[_FakeLiveSession], list[str | None]]]:
+    """A session over two fake sockets, recording the resumption handle of each connect."""
+    from google.genai.live import AsyncLive
+
+    sockets = [_FakeLiveSession(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+    handles: list[str | None] = []
+
+    @asynccontextmanager
+    async def _connect(
+        self: AsyncLive, *, config: types.LiveConnectConfig, **kwargs: object
+    ) -> AsyncIterator[_FakeLiveSession]:
+        handles.append(config.session_resumption.handle if config.session_resumption else None)
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel().session()
+    session._session_resumption_handle = "resume-1"
+    try:
+        while not opened:
+            await asyncio.sleep(0.01)
+        yield session, opened, handles
+    finally:
+        await session.aclose()
+
+
+async def _wait_for_socket(opened: list[_FakeLiveSession], count: int) -> None:
+    while len(opened) < count:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+
+
+def _tool_ctx(output: str = "booked") -> llm.ChatContext:
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="book it")
+    chat_ctx.items.append(llm.FunctionCall(call_id="call_1", name="book", arguments="{}"))
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(call_id="call_1", name="book", output=output, is_error=False)
+    )
+    return chat_ctx
+
+
+def _tool_responses(sent: list[tuple[str, object]]) -> list[str | None]:
+    return [
+        r.id  # type: ignore[attr-defined]
+        for kind, responses in sent
+        if kind == "tool_response"
+        for r in responses  # type: ignore[attr-defined]
+    ]
+
+
+async def test_config_restart_starts_a_fresh_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resumed session keeps its old setup, so a config change must not resume."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 2)
+        assert handles == ["resume-1", None]
+
+
+async def test_handle_stored_during_config_restart_is_not_resumed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old socket can store one more handle before its receive task stops."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        await session.update_tools([_restart_tool])
+        session._session_resumption_handle = "late"
+        await _wait_for_socket(opened, 2)
+        assert handles == ["resume-1", None]
+
+
+async def test_config_change_during_error_restart_starts_a_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A config change made while an error restart is pending still forbids resuming."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._mark_restart_needed(on_error=True)
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 2)
+        assert handles == ["resume-1", None]
+
+
+async def test_tool_result_between_sockets_reaches_the_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result that arrives with no socket open is answered on the fresh connect."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._open_call_ids.add("call_1")
+        await session.update_tools([_restart_tool])
+        session._pending_chat_ctx = _tool_ctx()
+        await _wait_for_socket(opened, 2)
+        assert _tool_responses(opened[1].sent) == ["call_1"]
+
+
+async def test_queued_tool_result_survives_config_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result queued but unsent when a config change drains the channel is still sent once."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._open_call_ids.add("call_1")
+        await session.update_chat_ctx(_tool_ctx())
+        await session.update_tools([_restart_tool])
+        await _wait_for_socket(opened, 2)
+        assert _tool_responses(opened[0].sent) + _tool_responses(opened[1].sent) == ["call_1"]
+
+
+async def test_tool_result_queued_for_the_new_socket_is_sent_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result queued while the old socket closes is not sent again after the replay."""
+    async with _two_sockets(monkeypatch) as (session, opened, handles):
+        session._open_call_ids.add("call_1")
+        await session.update_tools([_restart_tool])
+        await session.update_chat_ctx(_tool_ctx())
+        await _wait_for_socket(opened, 2)
+        assert _tool_responses(opened[1].sent) == ["call_1"]
+
+
 async def test_failed_send_with_a_queued_update_replays_each_item_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
