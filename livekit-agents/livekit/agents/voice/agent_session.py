@@ -951,9 +951,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # defer to server-side setting for recording
                 record = job_ctx.job.enable_recording if job_ctx else False
 
-            self._opts.recording_options = _resolve_recording_options(  # type: ignore[arg-type]
-                record
-            )
+            self._opts.recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
             if self._text_only:
                 self._opts.recording_options["audio"] = False
 
