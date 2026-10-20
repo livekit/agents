@@ -141,7 +141,10 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         await stream.aclose()
 
 
-@pytest.mark.parametrize("endpoint_type", ["speech_final", "done", "empty_done"])
+@pytest.mark.parametrize(
+    "endpoint_type",
+    ["speech_final", "done", "empty_done", "wordless_done", "wordless_summary_done"],
+)
 @pytest.mark.parametrize("end_time", [0.4, 0.0])
 @pytest.mark.parametrize("prior_timed_chunk", [False, True])
 def test_endpoint_preserves_word_timing(endpoint_type, end_time, prior_timed_chunk):
@@ -178,6 +181,10 @@ def test_endpoint_preserves_word_timing(endpoint_type, end_time, prior_timed_chu
         if endpoint_type == "empty_done":
             endpoint["text"] = ""
             endpoint["words"] = []
+        elif endpoint_type in ("wordless_done", "wordless_summary_done"):
+            endpoint["words"] = []
+            if endpoint_type == "wordless_summary_done":
+                endpoint["text"] = "earlier hello"
     stream._process_stream_event(endpoint)
     assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
     if end_time:

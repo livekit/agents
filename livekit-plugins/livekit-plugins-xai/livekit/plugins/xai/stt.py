@@ -556,9 +556,8 @@ class SpeechStream(stt.RecognizeStream):
                     enable_diarization=self._opts.enable_diarization,
                     start_time_offset=self.start_time_offset,
                 )
-                self._final_alternatives = (
-                    [speech_data] if words and words[-1].get("end", 0) > 0 else []
-                )
+                if words and words[-1].get("end", 0) > 0:
+                    self._final_alternatives = [speech_data]
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
