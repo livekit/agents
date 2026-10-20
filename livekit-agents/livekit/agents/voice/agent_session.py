@@ -1712,7 +1712,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_user_state("speaking" if speaking else "listening")
 
     def clear_user_turn(self) -> None:
-        # clear the transcription or input audio buffer of the user turn
+        """Discard uncommitted user transcription and input audio."""
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
