@@ -263,6 +263,7 @@ class AudioRecognition:
         self._stt_consumer_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
+        self._end_of_turn_trigger: Literal["vad", "stt", "manual"] | None = None
         self._endpointing: BaseEndpointing = endpointing
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
@@ -395,6 +396,7 @@ class AudioRecognition:
                         if not self._end_of_turn_task.done():
                             self._end_of_turn_task.cancel()
                     self._end_of_turn_task = None
+                    self._end_of_turn_trigger = None
                     # the pending decision is abandoned with the mode; the user turn stays open
                     self._end_eou_wait_span("dropped")
                     self._user_turn_committed = False
@@ -1014,6 +1016,15 @@ class AudioRecognition:
         return stream
 
     def _clear_user_turn(self) -> None:
+        # the pending decision belongs to the turn being discarded: cancel it so it can't
+        # wake up and commit the now-empty transcript. a manual commit is an explicit
+        # application decision, so keep it alive.
+        if self._end_of_turn_task is not None and self._end_of_turn_trigger != "manual":
+            if not self._end_of_turn_task.done():
+                self._end_of_turn_task.cancel()
+            self._end_of_turn_task = None
+            self._end_of_turn_trigger = None
+
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
@@ -1749,6 +1760,12 @@ class AudioRecognition:
                     delay_completed = True
                     pass
 
+            if self._stt and not self._audio_transcript and trigger != "manual":
+                # belt and braces: the transcript was cleared while this decision was
+                # pending (e.g. clear_user_turn). never commit an empty turn.
+                self._end_eou_wait_span("dropped")
+                return
+
             confidence_avg = (
                 sum(self._final_transcript_confidence) / len(self._final_transcript_confidence)
                 if self._final_transcript_confidence
@@ -1835,6 +1852,7 @@ class AudioRecognition:
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
             self._end_of_turn_task.cancel()
+        self._end_of_turn_trigger = trigger
         # copy the last_speaking_time before awaiting (the value can change)
         self._end_of_turn_task = asyncio.create_task(
             _bounce_eou_task(

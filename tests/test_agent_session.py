@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import AsyncIterable
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -35,21 +37,35 @@ from livekit.agents.llm import (
     FunctionTool,
     FunctionToolCall,
     InputTranscriptionCompleted,
+    LLMStream,
     RawFunctionTool,
+    Tool,
+    ToolChoice,
     ToolContext,
     ToolFlag,
     Toolset,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
+from livekit.agents.voice.events import (
+    AgentState,
+    FunctionToolsExecutedEvent,
+    SpeechCreatedEvent,
+    UserState,
+)
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
+from livekit.agents.voice.transcription.synchronizer import (
+    TranscriptSynchronizer,
+    _SyncedAudioOutput,
+)
 
+from .fake_llm import FakeLLM
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -2151,6 +2167,200 @@ async def test_clear_user_turn_resets_transcription_timeout() -> None:
     finally:
         await recognition._aclose()
         await _close_test_session(session)
+
+
+class _RecordingLLM(FakeLLM):
+    """``FakeLLM`` that records the user input of every generation request."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.user_inputs: list[str] = []
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> LLMStream:
+        last_item = chat_ctx.items[-1] if chat_ctx.items else None
+        self.user_inputs.append(
+            last_item.text_content if last_item is not None and last_item.type == "message" else ""
+        )
+        return super().chat(
+            chat_ctx=chat_ctx,
+            tools=tools,
+            conn_options=conn_options,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            extra_kwargs=extra_kwargs,
+        )
+
+
+class _ClearProbeAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="probe agent")
+        self.user_turn_inputs: list[str] = []
+
+    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        self.user_turn_inputs.append(new_message.text_content)
+
+
+async def _arm_pending_end_of_turn(recognition: AudioRecognition) -> asyncio.Task[None]:
+    """Drive SOS -> final transcript -> EOS, leaving the endpointing decision pending."""
+    now = time.time()
+    await recognition._on_vad_event(
+        vad.VADEvent(
+            type=vad.VADEventType.START_OF_SPEECH,
+            samples_index=0,
+            timestamp=now,
+            speech_duration=1.0,
+            silence_duration=0.0,
+        )
+    )
+    await recognition._on_stt_event(
+        SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[
+                SpeechData(
+                    text="hello world",
+                    language=LanguageCode(""),
+                    start_time=0.0,
+                    end_time=1.0,
+                )
+            ],
+        )
+    )
+    await recognition._on_vad_event(
+        vad.VADEvent(
+            type=vad.VADEventType.END_OF_SPEECH,
+            samples_index=0,
+            timestamp=now,
+            speech_duration=1.0,
+            silence_duration=0.0,
+        )
+    )
+
+    eou_task = recognition._end_of_turn_task
+    assert eou_task is not None and not eou_task.done()
+    assert recognition._audio_transcript == "hello world"
+    return eou_task
+
+
+def _create_clear_test_session() -> tuple[AgentSession, _RecordingLLM, list[SpeechCreatedEvent]]:
+    session = create_session(
+        FakeActions(),
+        turn_handling={"endpointing": {"min_delay": 0.2, "max_delay": 0.5}},
+    )
+    llm = _RecordingLLM()
+    session._llm = llm
+    speeches: list[SpeechCreatedEvent] = []
+    session.on("speech_created", speeches.append)
+    return session, llm, speeches
+
+
+async def _close_clear_test_session(
+    session: AgentSession, synchronizer: TranscriptSynchronizer | None
+) -> None:
+    await session.aclose()
+    if synchronizer is not None:
+        await synchronizer.aclose()
+
+
+def _assert_cleared_turn_produced_nothing(
+    agent: _ClearProbeAgent,
+    llm: _RecordingLLM,
+    speeches: list[SpeechCreatedEvent],
+    session: AgentSession,
+) -> None:
+    assert agent.user_turn_inputs == []
+    # preemptive generation may already have run for the live transcript, but the
+    # empty (cleared) transcript must never reach the LLM as a reply
+    assert "" not in llm.user_inputs
+    # an unscheduled speech handle is preemptive generation, not a reply
+    assert [ev for ev in speeches if ev.speech_handle.scheduled] == []
+    assert [item for item in session.history.items if item.type == "message"] == []
+
+
+@pytest.mark.real_time
+async def test_clear_user_turn_cancels_pending_end_of_turn() -> None:
+    """``clear_user_turn`` must cancel the pending end-of-turn decision.
+
+    Regression: the endpointing bounce woke after the clear, committed the
+    now-empty transcript, ran ``on_user_turn_completed`` and generated an
+    agent reply for the discarded turn.
+    """
+    agent = _ClearProbeAgent()
+    session, llm, speeches = _create_clear_test_session()
+    # aclose detaches the outputs, so grab the synchronizer before starting
+    synchronizer = (
+        session.output.audio._synchronizer
+        if isinstance(session.output.audio, _SyncedAudioOutput)
+        else None
+    )
+
+    try:
+        await session.start(agent)
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+
+        eou_task = await _arm_pending_end_of_turn(recognition)
+
+        session.clear_user_turn()
+        assert recognition._audio_transcript == ""
+
+        # A leaked decision commits at the endpointing deadline; the reply
+        # pipeline runs before the bounced task returns.
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(eou_task, timeout=1.0)
+        await asyncio.sleep(0.1)
+
+        _assert_cleared_turn_produced_nothing(agent, llm, speeches, session)
+        assert eou_task.cancelled()
+    finally:
+        await _close_clear_test_session(session, synchronizer)
+
+
+@pytest.mark.real_time
+async def test_clear_user_turn_does_not_cancel_wait_for_idle() -> None:
+    """A cleared turn's cancelled decision must read as idle, not as cancellation.
+
+    ``wait_for_idle`` shields the pending end-of-turn task. When ``clear_user_turn``
+    cancels it, the shield forwards ``CancelledError`` and aborts the idle wait, so
+    work queued behind it (e.g. a deferred tool reply) is lost.
+    """
+    agent = _ClearProbeAgent()
+    session, llm, speeches = _create_clear_test_session()
+    synchronizer = (
+        session.output.audio._synchronizer
+        if isinstance(session.output.audio, _SyncedAudioOutput)
+        else None
+    )
+
+    try:
+        await session.start(agent)
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+        await _arm_pending_end_of_turn(recognition)
+
+        idle_waiter = asyncio.create_task(session.wait_for_idle())
+        await asyncio.sleep(0.05)  # let the waiter reach the shielded eou task
+        assert not idle_waiter.done()
+
+        session.clear_user_turn()
+
+        try:
+            await asyncio.wait_for(idle_waiter, timeout=1.0)
+        except asyncio.CancelledError:
+            pytest.fail("clear_user_turn surfaced CancelledError through wait_for_idle()")
+
+        await asyncio.sleep(0.1)
+        _assert_cleared_turn_produced_nothing(agent, llm, speeches, session)
+    finally:
+        await _close_clear_test_session(session, synchronizer)
 
 
 @pytest.mark.parametrize(
