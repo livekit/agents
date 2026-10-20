@@ -5,9 +5,9 @@
 # completing with a stale value) at the point where the old code fired a
 # separate generate_reply.
 #
-# Run from the repo root (requires lk >= 2.17.0, which resolves the SDK
-# version from the synced workspace environment):
-#   lk agent simulate examples/data_capture_sim/agent.py \
+# Run from the repo root (requires lk >= 2.18.7 for `simulate text`; lk
+# resolves the SDK version from the synced workspace environment):
+#   lk agent simulate text examples/data_capture_sim/agent.py \
 #     --scenarios examples/data_capture_sim/scenarios.yaml
 
 id: SCNG_Cb34zMzcx47p
