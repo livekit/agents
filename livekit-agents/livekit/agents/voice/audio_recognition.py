@@ -1467,6 +1467,9 @@ class AudioRecognition:
 
             if self._turn_detector_stream is not None:
                 self._turn_detector_stream.cancel_inference()
+                self._turn_detector_stream.mark_speech_start(
+                    ev.speech_duration + ev.inference_duration
+                )
             self._turn_detector_prediction_fut = None
             self._turn_detector_flushed = False
 

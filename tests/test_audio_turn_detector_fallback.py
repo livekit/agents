@@ -109,6 +109,9 @@ class _ScriptedTransport:
     def push_frame(self, frame: Any) -> None:
         self.events.append(("push_frame", frame))
 
+    def mark_speech_start(self, lookback: float) -> None:
+        self.events.append(("mark_speech_start", lookback))
+
     def flush(self) -> None:
         self.events.append(("flush", None))
 
