@@ -1687,7 +1687,8 @@ async def test_recorder_io_receives_bit_rate_options_from_record_dict() -> None:
         await _cleanup(session)
 
 
-async def test_recorder_io_bit_rate_options_default_to_recorder_ios_own_defaults() -> None:
+async def test_recorder_io_bit_rate_options_default_to_recorder_ios_own_defaults(
+) -> None:
     """record=True (no bit_rate/constant_bit_rate given) must not force a specific bit rate or
     constant-bit-rate on RecorderIO - its own defaults (None, False) decide."""
     session = _create_simple_session()
@@ -1701,7 +1702,8 @@ async def test_recorder_io_bit_rate_options_default_to_recorder_ios_own_defaults
         await _cleanup(session)
 
 
-async def test_invalid_recorder_bit_rate_fails_before_claiming_primary_session() -> None:
+async def test_invalid_recorder_bit_rate_fails_before_claiming_primary_session(
+) -> None:
     """Invalid recorder options must fail before session startup creates room tasks."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx()
@@ -1717,7 +1719,8 @@ async def test_invalid_recorder_bit_rate_fails_before_claiming_primary_session()
     assert not session._started
 
 
-async def test_invalid_recorder_bit_rate_is_ignored_when_audio_recording_disabled() -> None:
+async def test_invalid_recorder_bit_rate_is_ignored_when_audio_recording_disabled(
+) -> None:
     """An unused bit rate must not block a session that does not record audio."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx()
