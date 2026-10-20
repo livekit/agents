@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import dataclasses
 import json
 import os
@@ -157,10 +158,10 @@ class STTOptions:
     silence_duration_ms: int | None
     word_time_offsets: bool
     vocabulary: list[str] | None
-    profanity_filter: bool
     text_polishing: bool
     model: str | None
     language_detection: str | None
+    extra_kwargs: dict[str, Any]
 
 
 def _recognition_config(opts: STTOptions) -> dict[str, Any]:
@@ -172,11 +173,44 @@ def _recognition_config(opts: STTOptions) -> dict[str, Any]:
         config["language_detection"] = {"mode": opts.language_detection}
     if opts.diarization:
         config["diarization"] = True
-    if opts.profanity_filter:
-        config["profanity_filter"] = True
     if opts.vocabulary:
         config["vocabulary"] = {"phrases": list(opts.vocabulary)}
     return config
+
+
+def _merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    """``base`` with ``extra`` merged in, nested objects merged key by key; ``extra`` wins."""
+    merged = dict(base)
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+@dataclass(frozen=True)
+class _RequestView:
+    """What the plugin acts on, read from the final request (options plus extra_kwargs)."""
+
+    diarization: bool
+    word_time_offsets: bool
+    text_polishing: bool
+    language_detection: bool
+    silence_duration_ms: int | None
+
+    @classmethod
+    def of(cls, request: dict[str, Any]) -> _RequestView:
+        config = request.get("config") or {}
+        polishing = (request.get("outputs") or {}).get("text_polishing") or {}
+        silence = (request.get("turn_detection") or {}).get("silence_duration_ms")
+        return cls(
+            diarization=bool(config.get("diarization")),
+            word_time_offsets=bool(config.get("word_time_offsets")),
+            text_polishing=bool(polishing.get("enabled")),
+            language_detection=bool(config.get("language_detection")),
+            silence_duration_ms=silence if isinstance(silence, int) else None,
+        )
 
 
 class STT(stt.STT):
@@ -208,8 +242,8 @@ class STT(stt.STT):
         diarization: bool = False,
         word_time_offsets: bool = False,
         vocabulary: list[str] | None = None,
-        profanity_filter: bool = False,
         text_polishing: bool = False,
+        extra_kwargs: dict[str, Any] | None = None,
         base_url: str = BASE_URL,
         live_url: NotGivenOr[str] = NOT_GIVEN,
         fast_url: NotGivenOr[str] = NOT_GIVEN,
@@ -250,12 +284,15 @@ class STT(stt.STT):
                 ``SpeechData.words``. Off by default.
             vocabulary: Words and phrases that customize recognition
                 (``config.vocabulary.phrases``).
-            profanity_filter: Scribe's profanity filter (``config.profanity_filter``).
-                Off by default.
             text_polishing: Scribe's text polishing (``outputs.text_polishing``). The
                 polished text is the transcript, and the recognized text is in
                 ``metadata["transcript"]``; if polishing fails, the recognized text is
                 used. Word timings aren't returned with polished text. Off by default.
+            extra_kwargs: Scribe request fields to add or override, shaped like the
+                request, e.g. ``{"config": {"profanity_filter": True}}`` or
+                ``{"outputs": {...}}``. Merged into the Live ``session.update`` and the Fast
+                request, over the options above, so Scribe fields this plugin has no option
+                for can be used. ``audio.format`` stays ``pcm16``.
             base_url: Scribe API base URL; Live uses ``<base>/live`` (as ``wss``) and Fast
                 uses ``<base>/transcribe``. A plaintext (``http``/``ws``) URL to a host other
                 than localhost logs a warning.
@@ -265,11 +302,15 @@ class STT(stt.STT):
         """
         if mode not in ("live", "fast"):
             raise ValueError(f'mode must be "live" or "fast", got {mode!r}')
+        if extra_kwargs is not None and not isinstance(extra_kwargs, dict):
+            raise ValueError(f"extra_kwargs must be a dict, got {type(extra_kwargs).__name__}")
+        extra_kwargs = dict(extra_kwargs or {})
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=mode == "live",
                 interim_results=False,  # not in the GA Scribe Live API
-                diarization=diarization,
+                diarization=diarization
+                or bool((extra_kwargs.get("config") or {}).get("diarization")),
                 offline_recognize=True,
             )
         )
@@ -299,10 +340,10 @@ class STT(stt.STT):
             silence_duration_ms=silence_duration_ms,
             word_time_offsets=word_time_offsets,
             vocabulary=vocabulary,
-            profanity_filter=profanity_filter,
             text_polishing=text_polishing,
             model=model,
             language_detection=language_detection,
+            extra_kwargs=extra_kwargs,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -329,6 +370,18 @@ class STT(stt.STT):
             "x-zm-trackingid": f"{TRACKING_ID_PREFIX}{uuid.uuid4()}",
         }
 
+    def _fast_request(self, locale: str) -> dict[str, Any]:
+        """The Fast request fields besides the audio: the options, then extra_kwargs."""
+        config: dict[str, Any] = {"language": locale, **_recognition_config(self._opts)}
+        if self._opts.word_time_offsets:
+            config["word_time_offsets"] = True
+        request: dict[str, Any] = {"config": config}
+        if self._opts.text_polishing:
+            request["outputs"] = {"text_polishing": {"enabled": True}}
+        request = _merge(request, self._opts.extra_kwargs)
+        request.pop("file", None)  # the plugin uploads the audio
+        return request
+
     # ---------------------------------------------------------------- Scribe Fast
     async def _recognize_impl(
         self,
@@ -338,10 +391,10 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         locale = _to_locale(language) if is_given(language) else self._opts.language
-        config: dict[str, Any] = {"language": locale, **_recognition_config(self._opts)}
-        if self._opts.word_time_offsets:
-            config["word_time_offsets"] = True
-        # Upload the utterance as multipart form data (`file`, `config` and `outputs`).
+        request = self._fast_request(locale)
+        view = _RequestView.of(request)
+        # Upload the utterance as multipart form data: `file`, then one JSON field per
+        # top-level request field (`config`, `outputs`, ...).
         form = aiohttp.FormData()
         form.add_field(
             "file",
@@ -349,9 +402,8 @@ class STT(stt.STT):
             filename="utterance.wav",
             content_type="audio/wav",
         )
-        form.add_field("config", json.dumps(config))
-        if self._opts.text_polishing:
-            form.add_field("outputs", json.dumps({"text_polishing": {"enabled": True}}))
+        for field, value in request.items():
+            form.add_field(field, json.dumps(value))
         try:
             async with self._http.post(
                 self._fast_url,
@@ -390,11 +442,11 @@ class STT(stt.STT):
         )
         speaker_id: str | None = None
         metadata: dict[str, Any] | None = None
-        polished = _polished_text(result) if self._opts.text_polishing else None
+        polished = _polished_text(result) if view.text_polishing else None
         if polished is not None:
             metadata = {"transcript": text}
             text = polished
-        if self._opts.diarization:
+        if view.diarization:
             # One speaker: speaker_id. Several: speaker_id is empty and each one's span is
             # in metadata["speaker_segments"] (as Scribe Live does).
             speakers = {sg["speaker"] for sg in segments if sg.get("speaker")}
@@ -409,7 +461,7 @@ class STT(stt.STT):
                 }
         words = None
         # Word timings belong to the recognized text, not the polished one.
-        if self._opts.word_time_offsets and polished is None:
+        if view.word_time_offsets and polished is None:
             words = [
                 TimedString(text=w.get("word", ""), start_time=w["start"], end_time=w["end"])
                 for s in segments
@@ -421,9 +473,7 @@ class STT(stt.STT):
             request_id=result.get("request_id", ""),
             alternatives=[
                 stt.SpeechData(
-                    language=_reported_language(
-                        detected, bool(self._opts.language_detection), locale
-                    ),
+                    language=_reported_language(detected, view.language_detection, locale),
                     text=text,
                     start_time=segments[0].get("start", 0.0) if segments else 0.0,
                     end_time=segments[-1].get("end", 0.0) if segments else 0.0,
@@ -505,6 +555,8 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
         self._zoom = stt
         self._opts = opts
+        # What the current session was configured with (options plus extra_kwargs).
+        self._view = _RequestView.of(self._session_update())
         self._reconnect_event = asyncio.Event()
         self._audio_duration = 0.0
         self._speech_started = False
@@ -549,8 +601,16 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.silence_duration_ms is not None:
             update["turn_detection"] = {"silence_duration_ms": self._opts.silence_duration_ms}
         if self._opts.text_polishing:
-            # Live returns only the polished text unless the transcript is asked for too.
-            update["outputs"] = {"text_polishing": {"enabled": True, "include_transcript": True}}
+            update["outputs"] = {"text_polishing": {"enabled": True}}
+        update = _merge(update, self._opts.extra_kwargs)
+        # Fields the plugin depends on, whatever extra_kwargs says.
+        update["type"] = "session.update"
+        update["audio"] = {**(update.get("audio") or {}), "format": "pcm16"}
+        polishing = (update.get("outputs") or {}).get("text_polishing")
+        if isinstance(polishing, dict) and polishing.get("enabled"):
+            # Live returns only the polished text unless the transcript is asked for too,
+            # and the transcript is the fallback when polishing fails.
+            polishing["include_transcript"] = True
         return update
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
@@ -573,7 +633,9 @@ class SpeechStream(stt.SpeechStream):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to Zoom Scribe Live") from e
         try:
-            await ws.send_str(json.dumps(self._session_update()))
+            update = self._session_update()
+            self._view = _RequestView.of(update)
+            await ws.send_str(json.dumps(update))
         except (aiohttp.ClientError, ConnectionError) as e:
             await ws.close()
             raise APIConnectionError("failed to configure the Zoom Scribe Live session") from e
@@ -655,7 +717,7 @@ class SpeechStream(stt.SpeechStream):
                         and not gap_filled
                         and now - last_input_at >= INPUT_GAP_S
                     ):
-                        window_ms = self._opts.silence_duration_ms or 1000
+                        window_ms = self._view.silence_duration_ms or 1000
                         silence = bytes(SAMPLE_RATE * 2 * (window_ms + 100) // 1000)
                         gap_filled = True
                     elif now - last_audio_at >= KEEPALIVE_INTERVAL_S:
@@ -767,7 +829,7 @@ class SpeechStream(stt.SpeechStream):
         """
         if not end_ms:
             return None
-        silence_ms = self._opts.silence_duration_ms or 0
+        silence_ms = self._view.silence_duration_ms or 0
         return self.start_time + max(0, end_ms - silence_ms) / 1000
 
     def _process_event(self, ev: dict[str, Any]) -> bool:
@@ -789,12 +851,12 @@ class SpeechStream(stt.SpeechStream):
             start_ms, end_ms = ev.get("audio_start_ms") or 0, ev.get("audio_end_ms") or 0
             speaker_id: str | None = None
             metadata: dict[str, Any] | None = None
-            if self._opts.text_polishing:
+            if self._view.text_polishing:
                 polished = _polished_text(ev)
                 if polished is not None:
                     metadata = {"transcript": text}
                     text = polished
-            if self._opts.diarization:
+            if self._view.diarization:
                 # One speaker: speaker_id. Several: Scribe sends `speaker_segments`, and
                 # speaker_id is left empty (one field can't name several speakers).
                 spans = ev.get("speaker_segments") or []
@@ -823,7 +885,7 @@ class SpeechStream(stt.SpeechStream):
                             stt.SpeechData(
                                 language=_reported_language(
                                     ev.get("language"),
-                                    bool(self._opts.language_detection),
+                                    self._view.language_detection,
                                     self._opts.language,
                                 ),
                                 text=text,
@@ -855,7 +917,7 @@ class SpeechStream(stt.SpeechStream):
             self._report_usage()
         elif kind == "session.updated":
             # Scribe never rejects diarization; it reports whether labels will come.
-            if self._opts.diarization and ev.get("diarization_enabled") is False:
+            if self._view.diarization and ev.get("diarization_enabled") is False:
                 logger.warning("Zoom Scribe Live can't label speakers for this session")
         elif kind == "error":
             err = ev.get("error") or {}

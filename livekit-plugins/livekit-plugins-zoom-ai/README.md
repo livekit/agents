@@ -74,24 +74,19 @@ For transcription, a longer `silence_duration_ms` (such as 600) keeps sentences 
 
 ## Options
 
-Options map to the Scribe API fields of the same name. For what each feature does, and its availability, pricing and enablement, see the [Scribe docs](https://developers.zoom.us/docs/ai-services/scribe/) and [zoom.ai](https://www.zoom.ai/).
+Options map to the Scribe API fields of the same name; see the [Scribe docs](https://developers.zoom.us/docs/ai-services/scribe/) for what each one does and its availability. For a Scribe feature without an option here, pass its fields in `extra_kwargs`.
 
 | Option | Default | Description |
 |---|---|---|
 | `mode` | `"live"` | `"live"` (streaming) or `"fast"` (one request per utterance) |
-| `api_key` | `$ZOOM_SCRIBE_API_KEY` | Zoom AI Services API key (a JWT also works). It's sent on every request and reconnect, so it must stay valid while the STT is in use. |
-| `silence_duration_ms` | `350` | Live: silence (ms) that ends a turn in Scribe's VAD. 350 is tuned for voice agents; lower is faster, higher keeps sentences with longer pauses together (for transcription, try 600). `None` uses Scribe's default; see the [Scribe docs](https://developers.zoom.us/docs/ai-services/scribe/). |
-| `language` | `"en-US"` | A Scribe locale from the [supported languages](https://developers.zoom.us/docs/ai-services/scribe/#supported-languages); base codes such as `"en"` map to their locale. A language this version of the plugin doesn't support raises `ValueError`. |
-| `model` | `None` | Scribe speech recognition model (`config.model`). `None` uses Scribe's default model. |
-| `language_detection` | `None` | Scribe language detection mode (`config.language_detection.mode`). `None` turns it off. A detected language Scribe reports is in `SpeechData.language`; when Scribe reports none, it is empty. |
-| `diarization` | `False` | Label each final with a speaker. With one speaker in the utterance, `SpeechData.speaker_id` is Scribe's label; with several, `speaker_id` is empty and `metadata["speaker_segments"]` has each one's span. In Fast mode labels are per request, so they aren't consistent across utterances. LiveKit's `MultiSpeakerAdapter` needs Live mode. |
-| `word_time_offsets` | `False` | Fast: word timings (`config.word_time_offsets`), in `SpeechData.words` |
-| `vocabulary` | `None` | Words and phrases that customize recognition (`config.vocabulary.phrases`) |
-| `profanity_filter` | `False` | Scribe's profanity filter (`config.profanity_filter`) |
-| `text_polishing` | `False` | Scribe's text polishing (`outputs.text_polishing`). The polished text is the transcript, and the recognized text is in `metadata["transcript"]`; if polishing fails, the recognized text is used. Word timings aren't returned with polished text. |
-| `base_url` | `https://api.zoom.us/v2/aiservices/scribe` | Scribe API base; Live uses `<base>/live`, Fast `<base>/transcribe`. `live_url` / `fast_url` override either one. A plaintext (`http`/`ws`) URL to a host other than localhost logs a warning. |
-| `http_session` | the job's session | `aiohttp.ClientSession` to use |
-
-`stt.update_options(language=..., silence_duration_ms=...)` changes either; open Live streams reconnect with the new settings. An utterance in progress at that moment gets no final transcript; its turn is closed with `END_OF_SPEECH`.
-
-Live returns final transcripts only (no interim results), followed by `END_OF_SPEECH`.
+| `api_key` | `$ZOOM_SCRIBE_API_KEY` | Zoom AI Services API key or JWT |
+| `language` | `"en-US"` | Recognition language ([supported languages](https://developers.zoom.us/docs/ai-services/scribe/#supported-languages)) |
+| `model` | `None` | Recognition model; `None` uses Scribe's default |
+| `language_detection` | `None` | Language detection mode; the detected language is in `SpeechData.language` |
+| `silence_duration_ms` | `350` | Live: silence (ms) that ends a turn; `None` uses Scribe's default |
+| `diarization` | `False` | Speaker labels: `SpeechData.speaker_id`, or `metadata["speaker_segments"]` when several people speak in one final |
+| `word_time_offsets` | `False` | Fast: word timings in `SpeechData.words` |
+| `vocabulary` | `None` | Words and phrases to recognize, such as names and product terms |
+| `text_polishing` | `False` | Polished text as the transcript, with the original in `metadata["transcript"]`; if polishing fails, the original text |
+| `extra_kwargs` | `None` | Other Scribe request fields, e.g. `{"config": {"profanity_filter": True}}` |
+| `base_url` | `https://api.zoom.us/v2/aiservices/scribe` | Scribe API base URL |

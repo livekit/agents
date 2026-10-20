@@ -116,6 +116,7 @@ class FakeScribe:
                 "headers": dict(request.headers),
                 "config": json.loads(str(form["config"])),
                 "outputs": json.loads(str(form["outputs"])) if "outputs" in form else None,
+                "fields": {k: json.loads(str(v)) for k, v in form.items() if k != "file"},
                 "filename": upload.filename,
                 "content_type": upload.content_type,
                 "audio": upload.file.read(),
@@ -389,8 +390,8 @@ async def test_live_recognition_options_are_requested_only_when_set(scribe, http
         model="zoom-scribe-multilingual",
         language_detection="continuous",
         vocabulary=["Pipecat", "LiveKit"],
-        profanity_filter=True,
         text_polishing=True,
+        extra_kwargs={"config": {"profanity_filter": True}},
     )
 
     assert update["config"] == {
@@ -400,6 +401,54 @@ async def test_live_recognition_options_are_requested_only_when_set(scribe, http
         "vocabulary": {"phrases": ["Pipecat", "LiveKit"]},
     }
     assert update["outputs"] == {"text_polishing": {"enabled": True, "include_transcript": True}}
+
+
+async def test_live_extra_kwargs_are_merged_into_the_session_update(scribe, http) -> None:
+    extra = {
+        "config": {"vocabulary_id": "acct_vocab_1", "diarization": False},
+        "turn_detection": {"max_segment_duration_ms": 15000},
+        "outputs": {"future_output": {"enabled": True}},
+        "audio": {"format": "opus"},  # the plugin sends PCM16, so this is kept
+    }
+    update, _ = await _live_final(scribe, http, _completed(), diarization=True, extra_kwargs=extra)
+
+    assert update["config"] == {"diarization": False, "vocabulary_id": "acct_vocab_1"}
+    assert update["turn_detection"] == {
+        "silence_duration_ms": 350,
+        "max_segment_duration_ms": 15000,
+    }
+    assert update["outputs"] == {"future_output": {"enabled": True}}
+    assert update["audio"] == {"format": "pcm16"}
+    assert extra["audio"] == {"format": "opus"}  # the caller's dict isn't modified
+
+
+async def test_live_acts_on_options_set_through_extra_kwargs(scribe, http) -> None:
+    update, alt = await _live_final(
+        scribe,
+        http,
+        _completed(
+            transcript="[Speaker 1] Um, hello hello there.",
+            speaker="Speaker 1",
+            outputs={"text_polishing": {"text": "[Speaker 1] Hello there."}},
+        ),
+        extra_kwargs={
+            "config": {"diarization": True},
+            "outputs": {"text_polishing": {"enabled": True}},
+        },
+    )
+
+    # The transcript is the fallback when polishing fails, so it is always requested.
+    assert update["outputs"] == {"text_polishing": {"enabled": True, "include_transcript": True}}
+    assert alt.text == "Hello there."
+    assert alt.speaker_id == "Speaker 1"
+    assert alt.metadata == {"transcript": "Um, hello hello there."}
+
+
+def test_extra_kwargs_must_be_a_dict() -> None:
+    with pytest.raises(ValueError, match="extra_kwargs"):
+        zoom_ai.STT(api_key=API_KEY, extra_kwargs=[("config", {})])  # type: ignore[arg-type]
+    stt = zoom_ai.STT(api_key=API_KEY, extra_kwargs={"config": {"diarization": True}})
+    assert stt.capabilities.diarization
 
 
 async def test_live_language_is_empty_when_detection_reports_none(scribe, http) -> None:
@@ -1015,8 +1064,8 @@ async def test_fast_recognition_options_and_text_polishing(scribe, http) -> None
         model="zoom-scribe-en-pro",
         language_detection="once",
         vocabulary=["Pipecat"],
-        profanity_filter=True,
         text_polishing=True,
+        extra_kwargs={"config": {"profanity_filter": True}},
     )
     alt = (await stt.recognize(frames(0.5), conn_options=NO_RETRY)).alternatives[0]
 
@@ -1032,6 +1081,30 @@ async def test_fast_recognition_options_and_text_polishing(scribe, http) -> None
     assert request["outputs"] == {"text_polishing": {"enabled": True}}
     assert alt.text == "Hello there."
     assert alt.metadata == {"transcript": "Um, hello hello there."}
+
+
+async def test_fast_extra_kwargs_become_request_fields(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+    stt = make_stt(
+        http,
+        (live_url, fast_url),
+        mode="fast",
+        extra_kwargs={
+            "config": {"segmentation_mode": "none"},
+            "outputs": {"future_output": {"enabled": True}},
+            "reference_id": "req-42",
+            "file": "ignored",  # the plugin uploads the audio
+        },
+    )
+    await stt.recognize(frames(0.5), conn_options=NO_RETRY)
+
+    [request] = fake.fast_requests
+    assert request["fields"] == {
+        "config": {"language": "en-US", "segmentation_mode": "none"},
+        "outputs": {"future_output": {"enabled": True}},
+        "reference_id": "req-42",
+    }
+    assert request["audio"][:4] == b"RIFF"
 
 
 async def test_fast_polished_text_has_no_word_timings(scribe, http) -> None:
