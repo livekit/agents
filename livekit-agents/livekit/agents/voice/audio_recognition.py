@@ -179,6 +179,11 @@ class _STTPipeline:
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
         # wall-clock anchor for stream-based (STT and barge-in) timestamps
         self.input_started_at: float | None = None
+        # wall-clock time the last audio frame reached the STT stream. Unlike
+        # interim events (which providers may not emit), this tracks pending
+        # audio unconditionally — used to decide whether a previously received
+        # final transcript still covers everything the STT has been fed.
+        self.last_audio_at: float | None = None
 
     @property
     def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
@@ -770,6 +775,7 @@ class AudioRecognition:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
             if self._stt_pipeline.input_started_at is None:
                 self._stt_pipeline.input_started_at = time.time() - frame.duration
+            self._stt_pipeline.last_audio_at = time.time()
             self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
 
         if self._vad_ch is not None:
@@ -1019,6 +1025,9 @@ class AudioRecognition:
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
         self._last_final_transcript_time = None
+        # the final event belongs to the cleared turn — a new manual turn must
+        # not mistake it for its own transcript (livekit/agents#7517 follow-up)
+        self._final_transcript_received.clear()
         self._speech_start_time = None
         self._last_speaking_time = None
         self._vad_speech_started = False
@@ -1057,8 +1066,48 @@ class AudioRecognition:
             return fut
 
         async def _commit_user_turn() -> None:
-            if self._last_final_transcript_time is None or (
-                time.time() - self._last_final_transcript_time > 0.5
+            # A previously received final only covers the turn when no audio has
+            # reached the STT since that final. Two guards matter:
+            #   - interim events are optional (providers may disable them), so
+            #     an empty _audio_interim_transcript does NOT mean no new audio;
+            #     compare against the pipeline's last_audio_at instead.
+            #   - the final event must belong to THIS turn: _clear_user_turn and
+            #     the successful-commit cleanup below reset the timestamps but
+            #     leave the event set for the next turn.
+            final_is_current = (
+                self._final_transcript_received.is_set()
+                and self._last_final_transcript_time is not None
+                and (
+                    self._stt_pipeline is None
+                    or self._stt_pipeline.last_audio_at is None
+                    or self._stt_pipeline.last_audio_at <= self._last_final_transcript_time
+                )
+            )
+            if final_is_current and not self._audio_interim_transcript:
+                # A final transcript for this turn is already in hand and the STT has
+                # emitted nothing since it (an interim would have repopulated
+                # _audio_interim_transcript). A streaming STT will not re-finalize
+                # audio it already closed, so waiting the full transcript_timeout here
+                # can only add latency, not correctness (see livekit/agents#7517).
+                # Skip the flush-wait and commit the final we have.
+                logger.debug(
+                    "commit_user_turn: reusing last final transcript",
+                    extra={
+                        "final_age": (
+                            time.time() - self._last_final_transcript_time
+                            if self._last_final_transcript_time is not None
+                            else None
+                        )
+                    },
+                )
+            elif (
+                self._last_final_transcript_time is None
+                or (time.time() - self._last_final_transcript_time > 0.5)
+                or (
+                    self._stt_pipeline is not None
+                    and self._stt_pipeline.last_audio_at is not None
+                    and self._stt_pipeline.last_audio_at > self._last_final_transcript_time
+                )
             ):
                 # if the last final transcript is received more than 0.5s ago
                 # append a silence frame to the stt to flush the buffer
@@ -1812,6 +1861,9 @@ class AudioRecognition:
                 self._audio_transcript = ""
                 self._final_transcript_confidence = []
                 self._last_final_transcript_time = None
+                # the final event belonged to the committed turn; the next
+                # manual turn must wait for its own final (see #7517)
+                self._final_transcript_received.clear()
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
