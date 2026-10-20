@@ -4,9 +4,6 @@
 //! In a `log` key-value list, write a constant in parentheses, `(LK_PII_ERROR) = value`: `log`
 //! stringifies a bare identifier, so `LK_PII_ERROR = value` sends the key `LK_PII_ERROR`.
 
-/// Telemetry schema version; set as `schema_url` on every OTLP scope.
-pub const SCHEMA_URL: &str = "https://livekit.io/schemas/telemetry/0.7.0";
-
 /// The agent's name.
 pub const AGENT_NAME: &str = "agent_name";
 
