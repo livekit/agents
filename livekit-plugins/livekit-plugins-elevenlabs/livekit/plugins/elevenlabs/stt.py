@@ -867,7 +867,7 @@ class SpeechStream(stt.SpeechStream):
                 error_msg,
                 details_suffix,
             )
-            retryable = message_type not in ("auth_error", "quota_exceeded")
+            retryable = message_type not in ("auth_error", "quota_exceeded", "input_error")
             raise APIConnectionError(
                 f"{message_type}: {error_msg}{details_suffix}", retryable=retryable
             )

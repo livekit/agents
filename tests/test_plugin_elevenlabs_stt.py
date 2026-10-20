@@ -799,5 +799,6 @@ async def test_recv_task_propagates_api_error_on_error_message() -> None:
         with pytest.raises(APIConnectionError) as exc_info:
             await asyncio.wait_for(stream._task, timeout=1.0)
         assert "quota_exceeded" in str(exc_info.value)
+        assert exc_info.value.retryable is False
     finally:
         await stream.aclose()
