@@ -22,8 +22,11 @@ The application still decides whether to continue or end the call.
 
 The example hides `end_call` while AMD is active. After voicemail playback, it
 waits up to 10 seconds for another prompt (`voicemail_idle_timeout=10.0`). AMD
-handles any post-message menu before it completes. If the final result reports
-a played voicemail and no human, the application shuts down the job. Human
+handles any post-message menu before it completes. Once the message has played,
+a goodbye from the box does not make the result `machine-unavailable`: AMD
+completes with the stage before it, `machine-vm` or, after a menu, `machine-ivr`.
+If the final result reports a played voicemail and no human, the application
+shuts down the job. Human
 conversations can use `end_call` after AMD finishes. The shutdown callback
 deletes the room and disconnects the SIP participant.
 

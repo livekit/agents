@@ -93,6 +93,9 @@ class AMDPredictionEvent(BaseModel):
 class AMDCompletedEvent(BaseModel):
     type: Literal["amd_completed"] = "amd_completed"
     category: AMDCategory
+    """The call's category. Once the voicemail message has played, a goodbye that
+    ends the box does not make it ``machine-unavailable``: the category is the stage
+    before it, ``machine-vm``, or ``machine-ivr`` after a post-message menu."""
     reason: AMDReason
     turn_id: int
     transcript: str

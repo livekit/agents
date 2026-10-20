@@ -866,6 +866,40 @@ async def test_late_post_voicemail_menu_uses_the_normal_ivr_idle_timeout() -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("menu", "last", "expected"),
+    [
+        (False, AMDCategory.MACHINE_UNAVAILABLE, AMDCategory.MACHINE_VM),
+        (True, AMDCategory.MACHINE_UNAVAILABLE, AMDCategory.MACHINE_IVR),
+        (True, AMDCategory.HUMAN, AMDCategory.HUMAN),
+    ],
+)
+async def test_a_goodbye_after_the_voicemail_message_keeps_the_stage(
+    menu: bool, last: AMDCategory, expected: AMDCategory
+) -> None:
+    async with running() as (detector, session, classifier, model):
+        await commit(detector, session, classifier, reply=True)
+        classifier.prediction(1, AMDCategory.MACHINE_VM)
+        await asyncio.wait_for(model.calls.get(), 2)
+        await eventually(
+            lambda: detector._voicemail_message_played and session._activity._no_pending_speech
+        )
+        if menu:
+            hooks = await commit(detector, session, classifier)
+            classifier.prediction(2, AMDCategory.MACHINE_IVR)
+            assert hooks is not None
+            await hooks.should_reply(llm.ChatContext())
+        await commit(detector, session, classifier)
+        classifier.prediction(detector._turn_id, last)
+
+        result = await asyncio.wait_for(detector.execute(), 2)
+        assert result.reason == "finished"
+        # the box's goodbye is not an unreachable call; a person who picks up is human
+        assert result.category == expected
+        assert result.voicemail_message_played
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("category", [AMDCategory.MACHINE_VM, AMDCategory.MACHINE_IVR])
 async def test_late_prediction_preserves_stage_and_idle_timer(category: AMDCategory) -> None:
     async with running(idle_timeout=1.0, voicemail_idle_timeout=2.0, inference_timeout=0.01) as (

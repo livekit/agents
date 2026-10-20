@@ -1124,8 +1124,16 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     def _completion(self) -> AMDCompletedEvent:
         if self.lifecycle is not AMDLifecycle.FINISHED:
             raise RuntimeError("AMD has not completed")
+        category = self._state
+        if (
+            self._voicemail_message_played
+            and category is AMDCategory.MACHINE_UNAVAILABLE
+            and self._previous_stage is not None
+        ):
+            # the box's goodbye after the message ends the box, not an unreachable call
+            category = self._previous_stage
         return AMDCompletedEvent(
-            category=self._state,
+            category=category,
             reason=self._completion_reason,
             turn_id=self._latest.turn_id if self._latest else self._turn_id,
             transcript=self._latest.transcript if self._latest else "",
