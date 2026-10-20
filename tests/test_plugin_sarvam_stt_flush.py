@@ -140,3 +140,34 @@ async def test_aclose_does_not_send_end_of_stream(session: _Session) -> None:
         await stream.aclose()
         assert session.ws.sent.empty()
         assert session.ws.closed
+
+
+@pytest.mark.parametrize("flush_signal", [True, False, None])
+@pytest.mark.parametrize("client_flushed", [True, False])
+async def test_server_end_speech_does_not_flush_next_utterance(
+    session: _Session, flush_signal: bool | None, client_flushed: bool
+) -> None:
+    async with sarvam.STT(
+        api_key="test-key", flush_signal=flush_signal, input_audio_codec="pcm_s16le"
+    ) as model:
+        stream = model.stream()
+        first = _frame(50, 1, 16000)
+        stream.push_frame(first)
+        await _expect_audio(session.ws, first)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        if client_flushed:
+            stream.flush()
+            if flush_signal:
+                assert await session.ws.next_message() == {"type": "flush"}
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+        for ms in [50, 10]:
+            frame = _frame(ms, 2, 16000)
+            stream.push_frame(frame)
+            if ms == 10:
+                stream.flush()
+            await _expect_audio(session.ws, frame)
+        if flush_signal:
+            assert await session.ws.next_message() == {"type": "flush"}
+        assert session.ws.sent.empty()
+        assert not session.ws.closed
