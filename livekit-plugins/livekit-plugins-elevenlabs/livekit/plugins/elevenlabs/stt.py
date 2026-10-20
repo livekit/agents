@@ -582,15 +582,22 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_chunk,
             )
 
+            # Scribe closes the session on a commit with less than 0.3s of audio since the
+            # previous commit or the connect
+            min_commit_samples = self._opts.sample_rate * 3 // 10
+            uncommitted_samples = 0
             has_ended = False
             try:
                 async for data in self._input_ch:
                     # Write audio bytes to the buffer and get complete chunks
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
+                        uncommitted_samples += data.samples_per_channel
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif isinstance(data, self._FlushSentinel):
                         frames.extend(audio_bstream.flush())
+                        if (missing := min_commit_samples - uncommitted_samples) > 0:
+                            frames.append(rtc.AudioFrame.create(self._opts.sample_rate, 1, missing))
                         has_ended = True
 
                     for frame in frames:
@@ -619,6 +626,7 @@ class SpeechStream(stt.SpeechStream):
                                 }
                             )
                         )
+                        uncommitted_samples = 0
                         has_ended = False
 
                 closing_ws = True
