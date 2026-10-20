@@ -1,0 +1,19 @@
+livekit-agents/livekit/agents/voice/avatar/_datastream_io.py
+  s_a28f90a0f9e822::t_1b827fad43b687 151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "77ba50325b7281ff0d139b3198ce973198827403",
+  "prompts": {},
+  "sessions": {
+    "s_a28f90a0f9e822": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a158bb-b8ce-7223-8451-b6a5c65e326c",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
