@@ -285,7 +285,15 @@ class MetricsMetadata(TypedDict, total=False):
 
 class MetricsReport(TypedDict, total=False):
     started_speaking_at: float
+    """When the speech in this message started.
+
+    For a user `ChatMessage`, this is the start of the whole user turn, which can span
+    several VAD segments and so can predate agent speech that played before the turn
+    committed. Sort by `stopped_speaking_at` for the order in which turns completed.
+    """
+
     stopped_speaking_at: float
+    """When the speech in this message ended."""
 
     transcription_delay: float
     """Time taken to obtain the transcript after the end of the user's speech
