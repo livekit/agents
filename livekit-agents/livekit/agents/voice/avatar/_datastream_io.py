@@ -13,7 +13,7 @@ from livekit import rtc
 from ... import utils
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
-from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent
+from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent, _CaptureCancelledEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
@@ -153,9 +153,7 @@ class DataStreamAudioOutput(AudioOutput):
             try:
                 await asyncio.shield(self._clear_buffer_atask)
             except asyncio.CancelledError:
-                task = asyncio.create_task(
-                    self._finish_cancelled_capture(frame, self._clear_buffer_atask)
-                )
+                task = asyncio.create_task(self._finish_cancelled_capture(self._clear_buffer_atask))
                 self._clear_buffer_atask = task
                 self._tasks.add(task)
                 task.add_done_callback(self._tasks.discard)
@@ -182,14 +180,12 @@ class DataStreamAudioOutput(AudioOutput):
         await self._stream_writer.write(bytes(frame.data))
         self._pushed_duration += frame.duration
 
-    async def _finish_cancelled_capture(
-        self, frame: rtc.AudioFrame, clear_task: asyncio.Task[None]
-    ) -> None:
+    async def _finish_cancelled_capture(self, clear_task: asyncio.Task[None]) -> None:
         """Finish the zero-audio segment reserved by wrappers for a canceled capture."""
         await asyncio.shield(clear_task)
-        await super().capture_frame(frame)
-        super().flush()
-        self.on_playback_finished(playback_position=0, interrupted=True)
+        self._dispatch_playback_finished(
+            _CaptureCancelledEvent(playback_position=0, interrupted=True)
+        )
 
     def flush(self) -> None:
         """Mark end of current audio segment"""

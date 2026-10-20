@@ -337,11 +337,19 @@ async def test_new_segment_waits_for_clear_rpc_and_keeps_its_finish(
 
 
 @pytest.mark.parametrize("remote_finished", [False, True])
+@pytest.mark.parametrize("with_recorder", [False, True])
 async def test_cancelled_capture_releases_wrapper_without_cancelling_clear(
-    sink: tuple[ds.DataStreamAudioOutput, MagicMock], remote_finished: bool
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock], remote_finished: bool, with_recorder: bool
 ) -> None:
     leaf, room = sink
-    output = _PassthroughWrapper(next_in_chain=leaf)
+    inner = (
+        RecorderAudioOutput(
+            recording_io=MagicMock(recording=False), audio_output=leaf, on_played=MagicMock()
+        )
+        if with_recorder
+        else leaf
+    )
+    output = _PassthroughWrapper(next_in_chain=inner)
     await output.capture_frame(_frame())
     output.flush()
     called = asyncio.Event()
@@ -389,7 +397,7 @@ async def test_cancelled_capture_preserves_next_reply_captions(
     leaf, room = sink
     text = FakeTextOutput()
     sync = TranscriptSynchronizer(next_in_chain_audio=leaf, next_in_chain_text=text)
-    output = sync.audio_output
+    output = _PassthroughWrapper(next_in_chain=sync.audio_output)
     called = asyncio.Event()
     response = asyncio.Event()
 
@@ -433,6 +441,55 @@ async def test_cancelled_capture_preserves_next_reply_captions(
     finally:
         response.set()
         await asyncio.gather(*leaf._tasks)
+        await sync.aclose()
+
+
+async def test_cancelled_write_preserves_next_reply_captions(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+) -> None:
+    leaf, room = sink
+    text = FakeTextOutput()
+    sync = TranscriptSynchronizer(next_in_chain_audio=leaf, next_in_chain_text=text)
+    output = sync.audio_output
+    writing = asyncio.Event()
+    called = asyncio.Event()
+    response = asyncio.Event()
+
+    async def write(_data: bytes) -> None:
+        if not writing.is_set():
+            writing.set()
+            await asyncio.Event().wait()
+
+    async def clear_rpc(**_kwargs: object) -> str:
+        called.set()
+        await response.wait()
+        return ""
+
+    room.local_participant.stream_bytes.return_value.write.side_effect = write
+    room.local_participant.perform_rpc.side_effect = clear_rpc
+    capture_task = asyncio.create_task(output.capture_frame(_frame()))
+    try:
+        await writing.wait()
+        capture_task.cancel()
+        await asyncio.gather(capture_task, return_exceptions=True)
+        output.flush()
+        output.clear_buffer()
+        await called.wait()
+        await sync.barrier()
+
+        await sync.text_output.capture_text("future reply captions")
+        sync.text_output.flush()
+        response.set()
+        await output.capture_frame(_frame())
+        output.flush()
+        _finish(leaf)
+        await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+        await sync.barrier()
+        assert "future reply captions" in "".join(text._messages)
+    finally:
+        response.set()
+        capture_task.cancel()
+        await asyncio.gather(capture_task, *leaf._tasks, return_exceptions=True)
         await sync.aclose()
 
 
