@@ -107,14 +107,19 @@ class DecisionModel(llm.DecisionModel):
                 timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
                 allow_redirects=False,
             ) as response:
+                request_id = response.headers.get("x-request-id") or response.headers.get(
+                    "apim-request-id", ""
+                )
                 if response.status != 200:
                     raise APIStatusError(
                         "Microsoft AI decision request failed",
                         status_code=response.status,
+                        request_id=request_id or None,
+                        body=await response.text(),
                         retryable=response.status in (408, 429) or response.status >= 500,
                     )
                 parsed = systemone.Response.model_validate(await response.json())
-                request_id = parsed.id or response.headers.get("x-request-id", "")
+                request_id = parsed.id or request_id
             results, errors = systemone.decode_answers(
                 parsed.answers, invalid="invalid Microsoft AI decision answer"
             )

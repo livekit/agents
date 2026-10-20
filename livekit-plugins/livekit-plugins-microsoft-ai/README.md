@@ -325,8 +325,8 @@ The request body is `{"model", "state", "questions"}`: a conversation is sent as
 its transcript in `state`, and each decision as a named `noul`, `choice` or
 `score` question. An answer the model declines or that fails validation is
 reported in `DecisionResponse.errors` without dropping the rest of the batch.
-Non-2xx responses raise `APIStatusError`; 408, 429 and 5xx are retried according
-to `conn_options`.
+Non-2xx responses raise `APIStatusError` with the response body and request ID;
+408, 429 and 5xx are retried according to `conn_options`.
 
 ## Examples and validation
 

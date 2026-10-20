@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -56,6 +57,7 @@ def model_for(
     response.status = status
     response.headers = {"x-request-id": "request-1"}
     response.json = AsyncMock(return_value=body)
+    response.text = AsyncMock(return_value=json.dumps(body))
     http_session = MagicMock(spec=aiohttp.ClientSession)
     http_session.post.return_value = response
     kwargs.setdefault("api_key", "test-key")
@@ -222,3 +224,13 @@ async def test_remote_499_keeps_its_status_and_is_not_retried() -> None:
         )
     assert error.value.status_code == 499
     http.post.assert_called_once()
+
+
+async def test_error_carries_the_foundry_body_and_request_id() -> None:
+    body = {"error": {"code": "DeploymentNotFound", "message": "No such deployment."}}
+    model, http = model_for(body, status=404)
+    http.post.return_value.headers = {"apim-request-id": "apim-1"}
+    with pytest.raises(APIStatusError) as error:
+        await model.evaluate(input="", decisions=QUESTIONS)
+    assert error.value.request_id == "apim-1"
+    assert "DeploymentNotFound" in str(error.value.body)
