@@ -53,6 +53,13 @@ NUM_CHANNELS = 1
 CHUNK_DURATION_MS = 80
 # how long the end of the input waits for the last turn's transcript
 FINAL_DONE_TIMEOUT = 5.0
+# Voxtral Realtime spends one token of context per 80 ms of audio, silence included
+SECONDS_PER_TOKEN = 0.08
+# a run past this share of the context ends at the next pause, and past the second regardless
+ROLLOVER_AT_PAUSE = 0.6
+ROLLOVER_FORCED = 0.85
+# audio with no new text that counts as a pause
+ROLLOVER_PAUSE_SECONDS = 1.0
 
 
 @dataclass
@@ -61,6 +68,7 @@ class _SelfHostedSTTOptions:
     base_url: str
     api_key: str | None
     language: LanguageCode | None
+    max_model_len: int
 
 
 class SelfHostedSTT(stt.STT):
@@ -71,6 +79,7 @@ class SelfHostedSTT(stt.STT):
         model: str = DEFAULT_MODEL,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        max_model_len: int = 2048,
         vad: vad.VAD | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -91,6 +100,11 @@ class SelfHostedSTT(stt.STT):
             api_key: Sent as a bearer token, for a server started with ``--api-key``.
             language: Reported on transcripts. Voxtral Realtime detects the language itself
                 and vLLM's realtime endpoint takes no language hint.
+            max_model_len: The server's ``--max-model-len``. A run holds one token per 80 ms
+                of audio, silence between turns included (2048 is about 164 s), and degrades
+                near the limit, so a long run is ended at a pause past 60% of it, and
+                regardless at 85%. The text comes back as a final transcript and the next
+                run picks up the audio.
             vad: Optional VAD that ends turns from inside the STT and emits
                 START_OF_SPEECH / END_OF_SPEECH events.
             http_session: Optional aiohttp session to open the WebSocket with.
@@ -109,6 +123,7 @@ class SelfHostedSTT(stt.STT):
             base_url=base_url,
             api_key=api_key if is_given(api_key) else None,
             language=LanguageCode(language) if is_given(language) else None,
+            max_model_len=max_model_len,
         )
         self._vad = vad
         self._session = http_session
@@ -275,7 +290,11 @@ class _RealtimeSession:
         self._held: list[bytes] = []
         self._uncommitted_audio = False
         self._run_audio_duration = 0.0
+        self._audio_at_last_text = 0.0
         self._text = ""
+        run_seconds = stream._opts.max_model_len * SECONDS_PER_TOKEN
+        self._rollover_at_pause = run_seconds * ROLLOVER_AT_PAUSE
+        self._rollover_forced = run_seconds * ROLLOVER_FORCED
         self._input_ended = False
         self._turn_done = asyncio.Event()
         self._turn_done.set()
@@ -311,6 +330,7 @@ class _RealtimeSession:
     async def _start_run(self) -> None:
         await self._send({"type": "input_audio_buffer.commit"})
         self._run_audio_duration = 0.0
+        self._audio_at_last_text = 0.0
         self._text = ""
 
     async def _append(self, pcm: bytes) -> None:
@@ -322,16 +342,26 @@ class _RealtimeSession:
         )
         self._uncommitted_audio = True
         self._run_audio_duration += len(pcm) / (SAMPLE_RATE * NUM_CHANNELS * 2)
+        quiet = self._run_audio_duration - self._audio_at_last_text
+        if self._run_audio_duration >= self._rollover_forced or (
+            self._run_audio_duration >= self._rollover_at_pause and quiet >= ROLLOVER_PAUSE_SECONDS
+        ):
+            logger.debug("vLLM realtime run near max_model_len; ending it and starting another")
+            await self._final_commit()
+
+    async def _final_commit(self) -> None:
+        """End the current run, unless it has no audio or its end is already out. Called
+        with `_lock` held; the run's `done` starts the next one."""
+        if self._awaiting_done or not self._uncommitted_audio:
+            return
+        await self._send({"type": "input_audio_buffer.commit", "final": True})
+        self._awaiting_done = True
+        self._uncommitted_audio = False
+        self._turn_done.clear()
 
     async def _end_turn(self) -> None:
-        """Final commit for the current run, unless it has no audio or one is out."""
         async with self._lock:
-            if self._awaiting_done or not self._uncommitted_audio:
-                return
-            await self._send({"type": "input_audio_buffer.commit", "final": True})
-            self._awaiting_done = True
-            self._uncommitted_audio = False
-            self._turn_done.clear()
+            await self._final_commit()
 
     async def _send_task(self, vad_stream: vad.VADStream | None) -> None:
         audio_bstream = utils.audio.AudioByteStream(
@@ -401,6 +431,7 @@ class _RealtimeSession:
             if not delta:
                 return
             self._text += delta
+            self._audio_at_last_text = self._run_audio_duration
             if text := self._text.strip():
                 self._stream._emit_interim(text)
         elif kind == "transcription.done":
@@ -435,6 +466,6 @@ class _RealtimeSession:
                 self._turn_done.set()
                 return
             # the input ended while this turn was finishing: transcribe what came after it
-            await self._send({"type": "input_audio_buffer.commit", "final": True})
-            self._awaiting_done = True
-            self._uncommitted_audio = False
+            await self._final_commit()
+            if not self._awaiting_done:
+                self._turn_done.set()

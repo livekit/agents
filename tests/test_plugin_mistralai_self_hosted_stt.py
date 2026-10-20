@@ -271,6 +271,41 @@ async def test_a_run_the_server_ends_early_is_restarted() -> None:
     assert _finals(events) == ["w1 w2", "w3"]
 
 
+async def test_a_long_run_ends_at_a_pause_before_the_context_fills() -> None:
+    # max_model_len=25 holds 2 s of audio: a pause past 1.2 s ends the run
+    fake = FakeVLLM()
+
+    async def script(stream: stt.RecognizeStream) -> None:
+        stream.push_frame(_word(1))
+        for _ in range(20):
+            stream.push_frame(_word(0))
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.2)
+        stream.push_frame(_word(2))
+        stream.flush()
+
+    events = await _transcribe(fake, script, max_model_len=25)
+
+    assert _finals(events) == ["w1", "w2"]
+    assert fake.client_events.count("input_audio_buffer.commit:final") == 2
+
+
+async def test_a_run_with_no_pause_is_cut_before_the_context_fills_without_losing_words() -> None:
+    fake = FakeVLLM(done_delay=0.1)
+    words = list(range(1, 31))
+
+    async def script(stream: stt.RecognizeStream) -> None:
+        for n in words:
+            stream.push_frame(_word(n))
+        stream.flush()
+
+    events = await _transcribe(fake, script, max_model_len=25)
+
+    finals = _finals(events)
+    assert len(finals) == 2
+    assert " ".join(finals) == " ".join(f"w{n}" for n in words)
+
+
 async def test_an_unknown_model_fails_without_retrying() -> None:
     fake = FakeVLLM()
 
