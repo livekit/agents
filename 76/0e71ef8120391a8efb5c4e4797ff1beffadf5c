@@ -1,0 +1,37 @@
+livekit-plugins/livekit-plugins-assemblyai/livekit/plugins/assemblyai/stt.py
+  s_53f06f44353e8f::t_d3547af9980693 296,546,711-713
+livekit-plugins/livekit-plugins-cartesia/livekit/plugins/cartesia/stt.py
+  s_53f06f44353e8f::t_f7bd4ca0071122 224
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt.py
+  s_53f06f44353e8f::t_7de56427b3bdf8 170
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt_v2.py
+  s_53f06f44353e8f::t_3843b68e66bf9f 128,508
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_53f06f44353e8f::t_80af5ecffa56ca 495,1400-1415,1427-1428
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_53f06f44353e8f::t_3bfa1a7f670f52 277,408-409
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/stt.py
+  s_53f06f44353e8f::t_850aa5e8fd4508 187,448-449
+livekit-plugins/livekit-plugins-speechmatics/livekit/plugins/speechmatics/stt.py
+  s_53f06f44353e8f::t_86736b4a154579 262,310-311,726-733
+tests/test_plugin_sarvam_stt_streaming.py
+  s_53f06f44353e8f::t_db782d6ec4d8f6 469-479
+tests/test_plugin_speechmatics_stt.py
+  s_53f06f44353e8f::t_2c63dd3aebe10f 37,48-49,299-301,313,317,322,345-385
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "760e71ef8120391a8efb5c4e4797ff1beffadf5c",
+  "prompts": {},
+  "sessions": {
+    "s_53f06f44353e8f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11c56-c2b5-7053-adaa-a8ed327c96d4",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

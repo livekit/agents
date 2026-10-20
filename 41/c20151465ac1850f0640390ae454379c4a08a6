@@ -1,0 +1,23 @@
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_53f06f44353e8f::t_e2bb125494b57e 1399-1405
+livekit-plugins/livekit-plugins-speechmatics/livekit/plugins/speechmatics/stt.py
+  s_53f06f44353e8f::t_0543017e67b140 262,280-292
+tests/test_plugin_speechmatics_stt.py
+  s_53f06f44353e8f::t_e56482dac63ad6 296,308,312,317
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "41c20151465ac1850f0640390ae454379c4a08a6",
+  "prompts": {},
+  "sessions": {
+    "s_53f06f44353e8f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11c56-c2b5-7053-adaa-a8ed327c96d4",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
