@@ -953,8 +953,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._opts.recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
             bit_rate = self._opts.recording_options.get("bit_rate")
-            if self._opts.recording_options["audio"] and bit_rate is not None and not (
-                isinstance(bit_rate, int) and MIN_BIT_RATE <= bit_rate <= MAX_BIT_RATE
+            if (
+                self._opts.recording_options["audio"]
+                and bit_rate is not None
+                and not (
+                    isinstance(bit_rate, int)
+                    and MIN_BIT_RATE <= bit_rate <= MAX_BIT_RATE
+                )
             ):
                 # Validate before claiming the primary session or starting RoomIO.
                 raise ValueError(
