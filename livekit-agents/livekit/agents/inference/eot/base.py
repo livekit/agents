@@ -52,6 +52,7 @@ class _StreamingTurnDetectionTransport(Protocol):
 
     def run_inference(self, request_id: str) -> None: ...
     def push_frame(self, frame: rtc.AudioFrame) -> None: ...
+    def mark_speech_start(self, lookback: float) -> None: ...
     def flush(self) -> None: ...
 
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None: ...
@@ -93,6 +94,10 @@ class _BaseStreamingTurnDetectorStream:
     class _FlushSentinel:
         reason: str | None = None
 
+    @dataclass
+    class _SpeechStartSentinel:
+        lookback: float
+
     def __init__(
         self,
         *,
@@ -120,7 +125,9 @@ class _BaseStreamingTurnDetectorStream:
         self._audio_input_num_channels: int | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._audio_ch = aio.Chan[
-            rtc.AudioFrame | _BaseStreamingTurnDetectorStream._FlushSentinel
+            rtc.AudioFrame
+            | _BaseStreamingTurnDetectorStream._FlushSentinel
+            | _BaseStreamingTurnDetectorStream._SpeechStartSentinel
         ]()
 
         self._request_id: str | None = None
@@ -231,6 +238,15 @@ class _BaseStreamingTurnDetectorStream:
         for resampled_frame in self._resample_audio_frame(frame):
             self._audio_ch.send_nowait(resampled_frame)
 
+    def mark_speech_start(self, lookback: float) -> None:
+        """Mark that the user started speaking ``lookback`` seconds before the end of the
+        audio pushed so far. Only the first mark after a flush starts the turn."""
+        if self._audio_ch.closed:
+            return
+        self._audio_ch.send_nowait(
+            _BaseStreamingTurnDetectorStream._SpeechStartSentinel(lookback=lookback)
+        )
+
     def end_input(self) -> None:
         self.flush()
         self._audio_ch.close()
@@ -328,6 +344,8 @@ class _BaseStreamingTurnDetectorStream:
         async for item in self._audio_ch:
             if isinstance(item, _BaseStreamingTurnDetectorStream._FlushSentinel):
                 self._transport.flush()
+            elif isinstance(item, _BaseStreamingTurnDetectorStream._SpeechStartSentinel):
+                self._transport.mark_speech_start(item.lookback)
             else:
                 self._transport.push_frame(item)
 
