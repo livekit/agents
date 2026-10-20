@@ -992,7 +992,7 @@ def prerecorded_transcription_to_speech_event(
 
     # Use the detected language if enabled
     # https://developers.deepgram.com/docs/language-detection
-    detected_language = LanguageCode(channel.get("detected_language", ""))
+    detected_language = LanguageCode(channel.get("detected_language") or "")
 
     return stt.SpeechEvent(
         request_id=request_id,

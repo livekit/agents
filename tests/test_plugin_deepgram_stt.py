@@ -562,3 +562,17 @@ async def test_prerecorded_transcription_empty_channels() -> None:
     assert event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
     assert event.request_id == "req-empty-123"
     assert event.alternatives == []
+
+
+async def test_prerecorded_transcription_none_detected_language() -> None:
+    from livekit.agents import stt
+    from livekit.plugins.deepgram.stt import prerecorded_transcription_to_speech_event
+
+    payload = {
+        "metadata": {"request_id": "req-none-lang"},
+        "results": {"channels": [{"alternatives": [], "detected_language": None}]},
+    }
+    event = prerecorded_transcription_to_speech_event(None, payload)
+    assert event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+    assert event.request_id == "req-none-lang"
+    assert event.alternatives == []
