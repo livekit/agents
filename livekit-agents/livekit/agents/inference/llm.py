@@ -68,12 +68,28 @@ _XAI_REASONING_UNSUPPORTED_PARAMS: set[str] = {
     "stop",
 }
 
+# gpt-6 rejects these while it reasons, and accepts every one of them again at
+# reasoning_effort "none" (probed 2026-10-20 on gpt-6.1-sol over both the chat
+# and responses transports, gpt-6-sol and gpt-6-luna). n and seed are accepted
+# at any effort, so unlike the o-series/gpt-5 set this one leaves them out.
+_GPT6_REASONING_UNSUPPORTED_PARAMS: set[str] = {
+    "temperature",
+    "top_p",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "logprobs",
+    "top_logprobs",
+    "stop",
+}
+
 # Model prefix -> set of param names that should be dropped
 _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "o1": _REASONING_UNSUPPORTED_PARAMS,
     "o3": _REASONING_UNSUPPORTED_PARAMS,
     "o4": _REASONING_UNSUPPORTED_PARAMS,
     "gpt-5": _REASONING_UNSUPPORTED_PARAMS,
+    "gpt-6": _GPT6_REASONING_UNSUPPORTED_PARAMS,
     "grok-4-1-fast-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
     "grok-4.20-0309-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
     "grok-4.20-multi-agent": _XAI_REASONING_UNSUPPORTED_PARAMS,
@@ -82,6 +98,13 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
 # temperature/top_p are accepted by gpt-5.1+ only at reasoning_effort
 # "none"; see the note in drop_unsupported_params.
 _SAMPLING_PARAMS: set[str] = {"temperature", "top_p"}
+
+# Params OpenAI accepts again at reasoning_effort "none", by model prefix.
+# Anything outside a prefix's entry stays stripped at every effort.
+_KEPT_AT_EFFORT_NONE: dict[str, set[str]] = {
+    "gpt-5": _SAMPLING_PARAMS,
+    "gpt-6": _GPT6_REASONING_UNSUPPORTED_PARAMS,
+}
 
 # models that don't support reasoning_effort when function tools are present
 _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
@@ -106,20 +129,23 @@ def drop_unsupported_params(
         params = {k: v for k, v in params.items() if k != "reasoning_effort"}
     for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
         if model_name.startswith(prefix):
+            kept_at_none = _KEPT_AT_EFFORT_NONE.get(prefix)
             if (
-                unsupported is _REASONING_UNSUPPORTED_PARAMS
+                kept_at_none
                 and min_reasoning_effort(model_name) == "none"
                 and _reasoning_effort_is_none(params)
             ):
-                # OpenAI accepts temperature/top_p on gpt-5.1+ models only at
-                # effort "none" (the model's lowest supported effort). Verified
-                # against the API on gpt-5.6-luna (2026-10): "none" +
-                # temperature -> 200, "low" + temperature -> 400, on both the
-                # chat completions and responses APIs. The reasoning guide no
+                # These models accept their sampling params again at effort
+                # "none" (their lowest supported effort). Verified against the
+                # API on gpt-5.6-luna (2026-10): "none" + temperature -> 200,
+                # "low" + temperature -> 400, on both the chat completions and
+                # responses APIs; re-verified for gpt-6 on gpt-6.1-sol,
+                # gpt-6-sol and gpt-6-luna (2026-10-20). The reasoning guide no
                 # longer documents this restriction. Applies only to models in
-                # _MIN_REASONING_EFFORT — new gpt-5.1+ models must be added
-                # there or temperature stays stripped.
-                unsupported = unsupported - _SAMPLING_PARAMS
+                # _MIN_REASONING_EFFORT whose floor is "none" — new gpt-5.1+
+                # and gpt-6 models must be added there or the params stay
+                # stripped.
+                unsupported = unsupported - kept_at_none
             params = {k: v for k, v in params.items() if k not in unsupported}
             break
     return params
@@ -145,6 +171,9 @@ _MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
     "gpt-5.6-luna": "none",
     "gpt-5.6-sol": "none",
     "gpt-5.6-terra": "none",
+    "gpt-6-luna": "none",
+    "gpt-6-sol": "none",
+    "gpt-6.1-sol": "low",
     "gpt-5": "minimal",
     "gpt-5-mini": "minimal",
     "gpt-5-nano": "minimal",
@@ -202,6 +231,9 @@ OpenAIModels = Literal[
     "openai/gpt-5.6-luna",
     "openai/gpt-5.6-sol",
     "openai/gpt-5.6-terra",
+    "openai/gpt-6-luna",
+    "openai/gpt-6-sol",
+    "openai/gpt-6.1-sol",
     "openai/chat-latest",
     "openai/gpt-oss-120b",
 ]
