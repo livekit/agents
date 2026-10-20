@@ -1688,8 +1688,7 @@ async def test_recorder_io_receives_bit_rate_options_from_record_dict() -> None:
 
 
 async def test_recorder_io_defaults() -> None:
-    """record=True (no bit_rate/constant_bit_rate given) must not force a specific bit rate or
-    constant-bit-rate on RecorderIO - its own defaults (None, False) decide."""
+    """record=True should leave bit rate defaults (None, False) to RecorderIO."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx()
 
