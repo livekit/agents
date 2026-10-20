@@ -21,12 +21,12 @@ from typing import Literal
 
 import aiohttp
 
-from livekit.agents import APIConnectionError, APIError, APITimeoutError, llm
+from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import _systemone as systemone
 from livekit.agents.llm.decisions import Decision, DecisionCapabilities, DecisionResponse
 from livekit.agents.types import APIConnectOptions
 
-from ._http import Configuration, HTTPClient, status_error
+from ._http import Configuration, HTTPClient
 
 DecisionModels = Literal["Microsoft-Decision-1"]
 
@@ -108,7 +108,11 @@ class DecisionModel(llm.DecisionModel):
                 allow_redirects=False,
             ) as response:
                 if response.status != 200:
-                    raise status_error("decision", response.status)
+                    raise APIStatusError(
+                        "Microsoft AI decision request failed",
+                        status_code=response.status,
+                        retryable=response.status in (408, 429) or response.status >= 500,
+                    )
                 parsed = systemone.Response.model_validate(await response.json())
                 request_id = parsed.id or response.headers.get("x-request-id", "")
             results, errors = systemone.decode_answers(

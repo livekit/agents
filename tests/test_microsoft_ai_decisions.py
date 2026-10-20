@@ -210,3 +210,15 @@ async def test_borrowed_session_is_not_closed() -> None:
     model, http = model_for(response_body())
     await model.aclose()
     http.close.assert_not_called()
+
+
+async def test_remote_499_keeps_its_status_and_is_not_retried() -> None:
+    model, http = model_for({}, status=499)
+    with pytest.raises(APIStatusError) as error:
+        await model.evaluate(
+            input="",
+            decisions=QUESTIONS,
+            conn_options=APIConnectOptions(max_retry=2, retry_interval=0),
+        )
+    assert error.value.status_code == 499
+    http.post.assert_called_once()
