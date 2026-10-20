@@ -338,6 +338,8 @@ class AgentActivity(RecognitionHooks):
         self._realtime_user_input_answered_at: float = 0.0
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
+        # Serialize remote-context snapshots with their pushes, including provider acknowledgements.
+        self._rt_chat_ctx_lock = asyncio.Lock()
         # one awaited inline AgentTask may pause this activity at a time
         self._inline_task_lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
@@ -798,7 +800,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             remove_instructions(chat_ctx)
-            await self._rt_session.update_chat_ctx(chat_ctx)
+            async with self._rt_chat_ctx_lock:
+                await self._rt_session.update_chat_ctx(chat_ctx)
         else:
             update_instructions(
                 chat_ctx, instructions=self._agent.instructions, add_if_missing=True
@@ -2135,6 +2138,15 @@ class AgentActivity(RecognitionHooks):
                     agent_active = True
                     if (speech := self._current_speech) and speech._generations:
                         await speech._wait_for_generation()
+                    elif speech:
+                        # held by min_consecutive_speech_delay; wait instead of spinning
+                        authorized = asyncio.ensure_future(speech._wait_for_authorization())
+                        try:
+                            await asyncio.wait(
+                                [authorized, speech._done_fut], return_when=asyncio.FIRST_COMPLETED
+                            )
+                        finally:
+                            authorized.cancel()
                     await asyncio.sleep(0)
 
             if wait_for_user:
@@ -3379,16 +3391,17 @@ class AgentActivity(RecognitionHooks):
                 current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
                 _record_user_turn_stages(current_span, _previous_user_metrics)
 
+        spoken_msg: llm.ChatMessage | None = None
         if forwarded_text and add_to_chat_ctx:
-            msg = self._agent._chat_ctx.add_message(
+            spoken_msg = self._agent._chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
                 interrupted=speech_handle.interrupted,
                 created_at=started_speaking_at if started_speaking_at is not None else time.time(),
                 metrics=assistant_metrics,
             )
-            speech_handle._item_added([msg])
-            self._session._conversation_item_added(msg)
+            speech_handle._item_added([spoken_msg])
+            self._session._conversation_item_added(spoken_msg)
 
         if self._session.agent_state == "speaking":
             self._session._update_agent_state(
@@ -3400,6 +3413,26 @@ class AgentActivity(RecognitionHooks):
 
         if audio_out is not None and not audio_out.first_frame_fut.done():
             audio_out.first_frame_fut.cancel()
+
+        if (
+            spoken_msg is not None
+            and self._rt_session is not None
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.mutable_chat_context
+        ):
+            # playout is over, so the next speech can start while the update is acknowledged
+            speech_handle._mark_generation_done()
+            # send the spoken text, placed by when it started, so the model's history keeps
+            # the order it was said in even if the user spoke during playback
+            rt_chat_ctx = self._rt_session.chat_ctx.copy()
+            rt_chat_ctx.insert(spoken_msg)
+            try:
+                await self._rt_session.update_chat_ctx(rt_chat_ctx)
+            except llm.RealtimeError as e:
+                logger.warning(
+                    "failed to add the spoken message to the realtime chat context",
+                    extra={"error": str(e)},
+                )
 
     def _on_enter_ignored_tools(self, tool_ctx: llm.ToolContext) -> list[llm.Tool]:
         """Tools flagged IGNORE_ON_ENTER, when this reply runs inside on_enter."""
@@ -4158,10 +4191,11 @@ class AgentActivity(RecognitionHooks):
             return
 
         if user_input is not None:
-            chat_ctx = self._rt_session.chat_ctx.copy()
-            msg = chat_ctx.add_message(role="user", content=user_input)
             try:
-                await self._rt_session.update_chat_ctx(chat_ctx)
+                async with self._rt_chat_ctx_lock:
+                    chat_ctx = self._rt_session.chat_ctx.copy()
+                    msg = chat_ctx.add_message(role="user", content=user_input)
+                    await self._rt_session.update_chat_ctx(chat_ctx)
             except llm.RealtimeError as e:
                 # the push is best-effort (the items were sent; only the ack timed out),
                 # so still generate the reply rather than dropping the whole turn
@@ -4692,7 +4726,8 @@ class AgentActivity(RecognitionHooks):
         # them, or message_outputs entries left in "skipped")
         if speech_handle.interrupted and any_skipped and self.llm.capabilities.mutable_chat_context:
             try:
-                await self._rt_session.update_chat_ctx(self._agent._chat_ctx)
+                async with self._rt_chat_ctx_lock:
+                    await self._rt_session.update_chat_ctx(self._agent._chat_ctx)
             except llm.RealtimeError as e:
                 logger.warning(
                     "failed to sync chat context to remove never-played messages",
@@ -4738,10 +4773,11 @@ class AgentActivity(RecognitionHooks):
                 self._session._tool_items_added(interrupted_fnc_outputs)
 
                 # unlike the pipeline, a realtime model holds the call open server-side
-                chat_ctx = self._rt_session.chat_ctx.copy()
-                chat_ctx.items.extend(interrupted_fnc_outputs)
                 try:
-                    await self._rt_session.update_chat_ctx(chat_ctx)
+                    async with self._rt_chat_ctx_lock:
+                        chat_ctx = self._rt_session.chat_ctx.copy()
+                        chat_ctx.items.extend(interrupted_fnc_outputs)
+                        await self._rt_session.update_chat_ctx(chat_ctx)
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to sync the tool results of an interrupted generation",
@@ -4851,10 +4887,11 @@ class AgentActivity(RecognitionHooks):
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
                     run_state._watch_handle(task)
 
-                chat_ctx = self._rt_session.chat_ctx.copy()
-                chat_ctx.items.extend(new_fnc_outputs)
                 try:
-                    await self._rt_session.update_chat_ctx(chat_ctx)
+                    async with self._rt_chat_ctx_lock:
+                        chat_ctx = self._rt_session.chat_ctx.copy()
+                        chat_ctx.items.extend(new_fnc_outputs)
+                        await self._rt_session.update_chat_ctx(chat_ctx)
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to update chat context before generating the function calls results",  # noqa: E501

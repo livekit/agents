@@ -890,6 +890,22 @@ def test_resolve_template_identical_variants_collapse():
     assert instr.render(modality="audio") == "You are a helpful assistant.\n\nshared note"
 
 
+@pytest.mark.parametrize(
+    "template, expected",
+    [
+        ("Hello {name}, total {}", "Hello Alex, total "),
+        ("Hello {name}, item {0}", "Hello Alex, item "),
+        ("Hello {name}, price {price:.2f}", "Hello Alex, price "),
+        ("Hello {name}, caller {caller!s}", "Hello Alex, caller "),
+    ],
+)
+def test_render_missing_placeholders_become_empty(template: str, expected: str):
+    """Placeholders with no value render empty, whatever their field or format spec."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    assert Instructions(template).render(data={"name": "Alex"}) == expected
+
+
 def test_upsert_places_a_backdated_item_where_it_happened():
     """A realtime user turn is stamped when it began, which can predate what is already there."""
     ctx = ChatContext.empty()

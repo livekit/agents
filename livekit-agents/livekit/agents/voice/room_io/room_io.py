@@ -514,7 +514,8 @@ class RoomIO:
 
     def _on_chat_text_stream(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
         linked = self.linked_participant
-        if linked and participant_identity != linked.identity:
+        expected_identity = linked.identity if linked else self._participant_identity
+        if expected_identity is not None and participant_identity != expected_identity:
             return
 
         participant = self._room.remote_participants.get(participant_identity)
