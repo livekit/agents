@@ -1700,8 +1700,7 @@ async def test_recorder_io_bit_rate_options_default_to_recorder_ios_own_defaults
         await _cleanup(session)
 
 
-async def test_invalid_recorder_bit_rate_fails_before_claiming_primary_session(
-) -> None:
+async def test_invalid_recorder_bit_rate_fails_before_claiming_primary_session() -> None:
     """Invalid recorder options must fail before session startup creates room tasks."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx()
