@@ -1549,6 +1549,41 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
+        """Speak the given text to the user.
+
+        The text can carry markup to control delivery. The TTS gets the markup; the
+        transcript is always plain text.
+
+        - ``<expr/>`` markers are the provider-agnostic form, as in expressive mode
+          (e.g. ``<expr type="break" label="1s"/>``). They are converted to the TTS's
+          syntax by LiveKit Inference TTSs and by non-streaming TTSs (for example Azure,
+          AWS Polly with ``text_type="ssml"``, and Google with ``enable_ssml``). A
+          natively streaming TTS plugin, or a TTS with no markup support, drops them:
+          the words are spoken, the markers are not. Chat history keeps them only while
+          expressive mode is on, so the LLM can learn from them.
+        - Provider-specific markup that the active TTS reads, such as SSML (``<phoneme>``,
+          ``<break>``) or bracket cues (``[whispers]``), is sent to the TTS unchanged and
+          is never kept in chat history: the LLM is not taught it, and it breaks when the
+          TTS changes. Markup of another provider's dialect is not recognized, so use only
+          what the active TTS reads.
+
+        Args:
+            text (str | AsyncIterable[str]): The text to speak, as a whole string or a
+                stream of chunks.
+            audio (NotGivenOr[AsyncIterable[rtc.AudioFrame]], optional): Audio to play
+                instead of synthesizing ``text``. Then ``text`` is the transcript and
+                chat history entry as given, and no markup is processed.
+            allow_interruptions (NotGivenOr[bool], optional): Indicates whether the user
+                can interrupt this speech.
+            add_to_chat_ctx (bool, optional): Whether to add the spoken text to the chat
+                context. Defaults to True.
+
+        Returns:
+            SpeechHandle: A handle to the speech.
+
+        Example:
+            >>> session.say('Your code is <expr type="spell">A7X</expr>. <expr type="break" label="1s"/> Got it?')
+        """  # noqa: E501
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 

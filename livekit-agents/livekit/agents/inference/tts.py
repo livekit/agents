@@ -649,6 +649,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         # lazily in _run would race with the next turn/session mutating the shared
         # TTS instance.
         self._expressive = tts._expressive
+        self._markup_input = tts._markup_input
         # alignment arrives finer-grained than a cue, so drop_bracket_cues parks the tail
         # of an unclosed span here between messages
         self._held_tokens: list[TimedString] = []
@@ -660,7 +661,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         from ..tts._provider_format import sentence_tokenizer
 
         provider = self._opts.model.split("/")[0]
-        sent_tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
+        sent_tokenizer_stream = sentence_tokenizer(
+            provider, expressive=self._expressive, markup=self._markup_input
+        ).stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:

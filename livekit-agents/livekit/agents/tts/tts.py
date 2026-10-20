@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import datetime
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Iterator
@@ -89,9 +90,10 @@ class TTS(
 
         Plugins override this inner class to declare which markup dialect the TTS speaks:
         what the LLM is taught to write, and how those markers are normalized and lowered
-        to the provider's native syntax before synthesis. Stripping markup back out is not
-        here — the transcript sinks do it provider-agnostically (see
-        ``_provider_format.split_all_markup``).
+        to the provider's native syntax before synthesis. Stripping LLM markup back out is
+        not here — the transcript sinks do it provider-agnostically (see
+        ``_provider_format.split_all_markup``). ``say()`` text may also carry the TTS's
+        native markup, which ``_native_markup`` names so the framework can strip it.
         """
 
         def __init__(self, tts: TTS) -> None:
@@ -145,6 +147,16 @@ class TTS(
 
             return convert_markup(self._provider_key(), text)
 
+        def _native_markup(self) -> tuple[list[str], re.Pattern[str] | None]:
+            """The XML tag names this TTS reads natively, and the bracket cues it reads.
+
+            The framework strips these from ``say()`` text for the transcript and chat
+            history, while the TTS still gets them.
+            """
+            from ._provider_format import native_markup
+
+            return native_markup(self._provider_key())
+
     def __init__(
         self,
         *,
@@ -163,6 +175,10 @@ class TTS(
         # read this to batch into larger chunks (continuous prosody); False (the
         # default) means per-sentence chunking. See `_set_expressive`.
         self._expressive: bool = False
+        # Whether markers can appear in this synthesis's input: expressive is active, or
+        # a say() carries markup. Input chunking keeps a marker in one chunk while this is
+        # set, so a plain turn never stalls on a stray "<". See `_set_markup_input`.
+        self._markup_input: bool = False
 
     @property
     def markup(self) -> Markup:
@@ -177,6 +193,15 @@ class TTS(
         own input.
         """
         self._expressive = enabled
+
+    def _set_markup_input(self, enabled: bool) -> None:
+        """Framework-internal: mark whether markers can appear in this synthesis's input.
+
+        Set by the voice pipeline before each synthesis, next to `_set_expressive`. TTS
+        implementations that lower markers themselves read it to keep a marker in one
+        chunk.
+        """
+        self._markup_input = enabled
 
     @property
     def label(self) -> str:

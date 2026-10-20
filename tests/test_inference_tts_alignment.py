@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from collections import deque
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,6 +14,7 @@ import livekit.agents.inference.tts as inference_tts
 from livekit.agents import APIConnectOptions
 from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.tts import TTS
+from livekit.agents.tts._provider_format import TranscriptMarkupStripper, strip_markup_stream
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 
 pytestmark = pytest.mark.unit
@@ -133,3 +135,52 @@ async def test_connection_retains_header_session_id(monkeypatch: pytest.MonkeyPa
     assert http_session.headers[HEADER_SESSION_ID] == "inference_connection"
     assert connection.session_id == "inference_connection"
     assert connection.ws is websocket
+
+
+async def test_say_markup_lowered_without_expressive() -> None:
+    # a say() marker lowers to a bracket cue the provider aligns as a word; the say()
+    # transcript strip (the TTS's native markup) removes it from the aligned text
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "session-1"},
+            {"type": "output_audio", "audio": base64.b64encode(b"\0\0" * 2400).decode()},
+            {
+                "type": "output_alignment",
+                "words": [
+                    {"word": "[laugh]", "start": 0.0, "end": 0.1},
+                    {"word": "hello", "start": 0.1, "end": 0.3},
+                ],
+            },
+            {"type": "done"},
+        ]
+    )
+    tts = TTS(
+        model="inworld/inworld-tts-2",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+    )
+    tts._pool = _FakePool(websocket, session_id="inference_connection")  # type: ignore[assignment]
+
+    tts._set_markup_input(True)
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        stream.push_text('<expr type="sound" label="laugh"/> hello.')
+        stream.end_input()
+        events = [event async for event in stream]
+
+    sent = "".join(msg.get("transcript", "") for msg in websocket.sent)
+    assert "[laugh]" in sent and "<expr" not in sent
+    timed_transcript = [
+        timed_text
+        for event in events
+        for timed_text in event.frame.userdata[USERDATA_TIMED_TRANSCRIPT]
+    ]
+
+    async def _aligned() -> AsyncIterator[str]:
+        for timed_text in timed_transcript:
+            yield timed_text
+
+    xml_tags, brackets = tts.markup._native_markup()
+    stripper = TranscriptMarkupStripper(xml_tags=xml_tags, brackets=brackets)
+    shown = "".join([out async for out in strip_markup_stream(_aligned(), stripper)])
+    assert "[laugh]" not in shown and "hello" in shown
