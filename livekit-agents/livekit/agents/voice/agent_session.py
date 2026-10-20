@@ -88,7 +88,7 @@ from .keyterm_detection import (
     _resolve_stt_context_options,
     _stt_context_from_keyterms_options,
 )
-from .recorder_io.recorder_io import RecorderIO, _validate_bit_rate
+from .recorder_io.recorder_io import MAX_BIT_RATE, MIN_BIT_RATE, RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
@@ -952,11 +952,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 record = job_ctx.job.enable_recording if job_ctx else False
 
             self._opts.recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
-            if self._opts.recording_options["audio"]:
+            bit_rate = self._opts.recording_options.get("bit_rate")
+            if self._opts.recording_options["audio"] and bit_rate is not None and not (
+                isinstance(bit_rate, int) and MIN_BIT_RATE <= bit_rate <= MAX_BIT_RATE
+            ):
                 # Validate before claiming the primary session or starting RoomIO.
-                # RecorderIO also validates its own inputs, but constructing it later
-                # can fail after session startup has already created background tasks.
-                _validate_bit_rate(self._opts.recording_options.get("bit_rate"))
+                raise ValueError(
+                    f"bit_rate must be an int between {MIN_BIT_RATE} and {MAX_BIT_RATE}, "
+                    f"got {bit_rate!r}"
+                )
             if self._text_only:
                 self._opts.recording_options["audio"] = False
 
