@@ -43,14 +43,15 @@ import aiohttp
 from openai.types.realtime.conversation_item_input_audio_transcription_completed_event import (
     UsageTranscriptTextUsageDuration,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from livekit.agents import APIConnectionError, llm, utils
+from livekit.agents.llm._realtime.openai_utils import _shorten_call_id
 from livekit.agents.metrics import STTMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.plugins.openai.realtime import realtime_model as _openai, utils as _openai_utils
+from livekit.plugins.openai.realtime import realtime_model as _openai
 
 from ..log import logger
 
@@ -380,8 +381,9 @@ class RealtimeSession(_openai.RealtimeSession):
         # The base names the model after its OpenAI transcription config, which
         # ThunderPhone never uses: the call's engine transcribes the caller and
         # reports usage as seconds of caller audio (never tokens).
-        usage = _openai._coerce_transcription_usage(event.usage)
-        if not isinstance(usage, UsageTranscriptTextUsageDuration):
+        try:
+            usage = UsageTranscriptTextUsageDuration.model_validate(event.usage)
+        except ValidationError:
             return
         model = self._tp_model
         self.emit(
@@ -425,7 +427,7 @@ class RealtimeSession(_openai.RealtimeSession):
             if isinstance(item, dict) and item.get("type") == "function_call":
                 call_id = item.get("call_id")
                 if isinstance(call_id, str):
-                    self._tp_call_ids[_openai_utils._shorten_call_id(call_id)] = call_id
+                    self._tp_call_ids[_shorten_call_id(call_id)] = call_id
             return
         if event_type in ("session.created", "session.updated"):
             session = event.get("session") or {}

@@ -413,7 +413,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
         if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
             logger.warning(
-                "xAI anchored an item to one it never announced, appending it instead",
+                "xAI placed a chat history item after an unknown item; appended it instead",
                 extra={"item_id": event.item.id, "previous_item_id": event.previous_item_id},
             )
             event.previous_item_id = None

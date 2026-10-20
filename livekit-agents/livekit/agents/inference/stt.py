@@ -103,7 +103,7 @@ class DeepgramOptions(TypedDict, total=False):
     keyterm: str | list[str]
     profanity_filter: bool
     numerals: bool
-    mip_opt_out: bool  # default: False
+    mip_opt_out: bool  # always True for LiveKit Inference; the passed value is ignored
     vad_events: bool  # default: False
     diarize: bool  # when True, enables speaker diarization (default off)
     dictation: bool
@@ -126,7 +126,7 @@ class DeepgramFluxOptions(TypedDict, total=False):
     eot_threshold: float  # range 0.5-0.9
     eot_timeout_ms: int
     keyterm: str | list[str]
-    mip_opt_out: bool  # default: False
+    mip_opt_out: bool  # always True for LiveKit Inference; the passed value is ignored
     tag: str | list[str]
     detect_language: bool
     # flux-general-multi only: biases toward these languages without restricting
@@ -163,10 +163,10 @@ class SpeechmaticsOptions(TypedDict, total=False):
     enable_partials: bool  # default True (overridden by gateway)
     enable_entities: bool  # RT only
     punctuation_overrides: dict[str, Any]
-    additional_vocab: list[dict[str, Any]]  # RT only
+    additional_vocab: list[dict[str, Any]]  # [{"content": ..., "sounds_like": [...]}]
     end_of_utterance_silence_trigger: float  # seconds of silence before final; RT only
     audio_filtering_config: dict[str, Any]  # RT only
-    transcript_filtering_config: dict[str, Any]  # RT only
+    transcript_filtering_config: dict[str, Any]
 
 
 class XaiOptions(TypedDict, total=False):
@@ -236,8 +236,6 @@ def _keyterms_key_for_model(model: NotGivenOr[str]) -> str | None:
     """The ``extra`` key a model takes its keyterms under, or None if it has no keyterm
     prompting. Also serves as the capability check."""
     if not (is_given(model) and isinstance(model, str)):
-        return None
-    if model == "speechmatics/linden-1":
         return None
     if model.startswith("speechmatics/"):
         return "additional_vocab"
