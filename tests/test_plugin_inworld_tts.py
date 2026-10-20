@@ -224,18 +224,22 @@ async def test_ws_create_packet_auto_mode_strategy():
 
 
 @pytest.mark.parametrize(
-    ("model", "custom_tokenizer", "expected"),
+    ("model", "options", "expected"),
     [
-        ("inworld-tts-2", False, "SENTENCE_BOUNDARY"),
-        ("inworld-tts-2", True, "CLIENT_SEGMENTED"),
-        ("inworld-tts-1.5-max", False, "CLIENT_SEGMENTED"),
+        ("inworld-tts-2", {}, "SENTENCE_BOUNDARY"),
+        ("inworld-tts-2", {"retain_format": True}, "SENTENCE_BOUNDARY"),
+        ("inworld-tts-2", {"tokenizer": "blingfire"}, "CLIENT_SEGMENTED"),
+        ("inworld-tts-2", {"retain_format": False}, "CLIENT_SEGMENTED"),
+        ("inworld-tts-1.5-max", {}, "CLIENT_SEGMENTED"),
     ],
 )
-async def test_stream_auto_mode_strategy(model, custom_tokenizer, expected):
+async def test_stream_auto_mode_strategy(model, options, expected):
     from livekit.agents import tokenize
     from livekit.plugins.inworld import TTS
 
-    kwargs = {"tokenizer": tokenize.blingfire.SentenceTokenizer()} if custom_tokenizer else {}
+    kwargs = dict(options)
+    if kwargs.get("tokenizer") == "blingfire":
+        kwargs["tokenizer"] = tokenize.blingfire.SentenceTokenizer()
     tts = TTS(api_key="test-key", model=model, **kwargs)
     stream = tts.stream()
     try:

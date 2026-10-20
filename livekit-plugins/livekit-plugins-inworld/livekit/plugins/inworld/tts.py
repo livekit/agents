@@ -904,9 +904,9 @@ class TTS(tts.TTS):
                 Defaults to "wss://api.inworld.ai/".
             http_session (aiohttp.ClientSession, optional): The HTTP session to use.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use for streaming.
-                Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`. When not set,
-                inworld-tts-2 models stream text as it arrives and the server splits it at
-                sentence boundaries instead.
+                Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`. When neither
+                this nor `retain_format=False` is set, inworld-tts-2 models stream text as it
+                arrives and the server splits it at sentence boundaries instead.
             retain_format (bool, optional): Whether to retain the format of the text when tokenizing.
                 Defaults to True.
             max_connections (int, optional): Maximum number of concurrent WebSocket connections.
@@ -980,7 +980,7 @@ class TTS(tts.TTS):
         self._pool_lock = asyncio.Lock()
         self._prewarm_task: asyncio.Task[None] | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._custom_tokenizer = is_given(tokenizer)
+        self._client_segmentation = is_given(tokenizer) or retain_format is False
         self._sentence_tokenizer = (
             tokenizer
             if is_given(tokenizer)
@@ -1281,7 +1281,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        if not tts._custom_tokenizer and _supports_sentence_boundary(self._opts.model):
+        if not tts._client_segmentation and _supports_sentence_boundary(self._opts.model):
             self._opts.auto_mode_strategy = "SENTENCE_BOUNDARY"
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
