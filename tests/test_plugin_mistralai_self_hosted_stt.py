@@ -314,3 +314,39 @@ def test_capabilities_ask_the_framework_to_flush_turns() -> None:
     assert not engine.capabilities.offline_recognize
     assert engine.provider == "vLLM"
     assert engine.model == MODEL
+
+
+async def test_the_session_flush_at_end_of_turn_yields_the_user_transcript() -> None:
+    from livekit.agents import Agent, AgentSession, UserInputTranscribedEvent
+
+    from .fake_vad import FakeVAD
+
+    fake = FakeVLLM()
+    server = await _serve(fake)
+    async with aiohttp.ClientSession() as http:
+        session = AgentSession(
+            stt=SelfHostedSTT(base_url=str(server.make_url("")), http_session=http),
+            vad=FakeVAD(),
+            turn_handling={"turn_detection": "manual"},
+            session_close_transcript_timeout=0.0,
+        )
+        finals: asyncio.Queue[str] = asyncio.Queue()
+
+        @session.on("user_input_transcribed")
+        def _on_transcript(ev: UserInputTranscribedEvent) -> None:
+            if ev.is_final:
+                finals.put_nowait(ev.transcript)
+
+        await session.start(Agent(instructions="test"))
+        try:
+            pipeline = session._activity._audio_recognition._stt_pipeline
+            for n in (6, 7, 0):
+                pipeline.audio_ch.send_nowait(_word(n))
+            # what the session does at a VAD end of speech or a manual turn commit
+            assert pipeline.flush()
+            assert await asyncio.wait_for(finals.get(), 5) == "w6 w7"
+        finally:
+            await session.aclose()
+            await server.close()
+
+    assert "input_audio_buffer.commit:final" in fake.client_events
