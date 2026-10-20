@@ -117,6 +117,17 @@ def _polished_text(payload: dict[str, Any]) -> str | None:
     return _clean(text)
 
 
+def _reported_language(scribe_language: object, detecting: bool, configured: str) -> LanguageCode:
+    """The language to report: Scribe's, else empty when detecting, else the configured one.
+
+    With language detection on and no language from Scribe, the language isn't known, so it
+    is left empty (LiveKit treats an empty language as non-specific) rather than guessed.
+    """
+    if isinstance(scribe_language, str) and scribe_language:
+        return LanguageCode(scribe_language)
+    return LanguageCode("" if detecting else configured)
+
+
 def _is_config_error(code: object) -> bool:
     """A fatal Scribe error the same request would hit again, e.g. UNSUPPORTED_LANGUAGE."""
     code = str(code or "").upper()
@@ -222,7 +233,8 @@ class STT(stt.STT):
                 Scribe's default model.
             language_detection: Scribe language detection mode
                 (``config.language_detection.mode``). ``None`` turns it off. A detected
-                language Scribe reports is in ``SpeechData.language``.
+                language Scribe reports is in ``SpeechData.language``; when Scribe reports
+                none, it is empty.
             silence_duration_ms: Live only: milliseconds of silence that end a turn in
                 Scribe's voice activity detection. Defaults to 350, tuned for voice agents;
                 lower is faster, higher keeps sentences with longer pauses together. For
@@ -243,7 +255,7 @@ class STT(stt.STT):
             text_polishing: Scribe's text polishing (``outputs.text_polishing``). The
                 polished text is the transcript, and the recognized text is in
                 ``metadata["transcript"]``; if polishing fails, the recognized text is
-                used. Off by default.
+                used. Word timings aren't returned with polished text. Off by default.
             base_url: Scribe API base URL; Live uses ``<base>/live`` (as ``wss``) and Fast
                 uses ``<base>/transcribe``. A plaintext (``http``/``ws``) URL to a host other
                 than localhost logs a warning.
@@ -269,8 +281,8 @@ class STT(stt.STT):
         self._api_key = api_key
         self._mode = mode
         base = base_url.rstrip("/")
-        scheme, _, rest = base.partition("://")
-        if scheme.lower() not in ("http", "https"):
+        scheme, sep, rest = base.partition("://")
+        if not sep or scheme.lower() not in ("http", "https"):
             raise ValueError(f"base_url must be an http(s) URL, got {base_url!r}")
         _check_url(base, "base_url")
         ws_scheme = "wss" if scheme.lower() == "https" else "ws"
@@ -296,8 +308,8 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        """The Scribe mode in use: ``"scribe-live"`` or ``"scribe-fast"``."""
-        return f"scribe-{self._mode}"
+        """The Scribe model set with ``model``, else the mode: ``"scribe-live"`` or ``"scribe-fast"``."""
+        return self._opts.model or f"scribe-{self._mode}"
 
     @property
     def provider(self) -> str:
@@ -371,13 +383,17 @@ class STT(stt.STT):
 
         text = _clean((result.get("result") or {}).get("text_display"))
         segments = (result.get("result") or {}).get("segments") or []
+        # The detected language: the result's (one-time detection) or the first segment's
+        # (continuous detection), when Scribe reports one.
+        detected = (result.get("result") or {}).get("language") or next(
+            (s["language"] for s in segments if s.get("language")), None
+        )
         speaker_id: str | None = None
         metadata: dict[str, Any] | None = None
-        if self._opts.text_polishing:
-            polished = _polished_text(result)
-            if polished is not None:
-                metadata = {"transcript": text}
-                text = polished
+        polished = _polished_text(result) if self._opts.text_polishing else None
+        if polished is not None:
+            metadata = {"transcript": text}
+            text = polished
         if self._opts.diarization:
             # One speaker: speaker_id. Several: speaker_id is empty and each one's span is
             # in metadata["speaker_segments"] (as Scribe Live does).
@@ -392,7 +408,8 @@ class STT(stt.STT):
                     ],
                 }
         words = None
-        if self._opts.word_time_offsets:
+        # Word timings belong to the recognized text, not the polished one.
+        if self._opts.word_time_offsets and polished is None:
             words = [
                 TimedString(text=w.get("word", ""), start_time=w["start"], end_time=w["end"])
                 for s in segments
@@ -404,7 +421,9 @@ class STT(stt.STT):
             request_id=result.get("request_id", ""),
             alternatives=[
                 stt.SpeechData(
-                    language=LanguageCode(locale),
+                    language=_reported_language(
+                        detected, bool(self._opts.language_detection), locale
+                    ),
                     text=text,
                     start_time=segments[0].get("start", 0.0) if segments else 0.0,
                     end_time=segments[-1].get("end", 0.0) if segments else 0.0,
@@ -802,7 +821,11 @@ class SpeechStream(stt.SpeechStream):
                         request_id=ev.get("item_id", ""),
                         alternatives=[
                             stt.SpeechData(
-                                language=LanguageCode(ev.get("language") or self._opts.language),
+                                language=_reported_language(
+                                    ev.get("language"),
+                                    bool(self._opts.language_detection),
+                                    self._opts.language,
+                                ),
                                 text=text,
                                 start_time=start_ms / 1000
                                 + self.start_time_offset

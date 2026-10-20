@@ -248,6 +248,8 @@ def test_capabilities_and_labels() -> None:
     assert not fast.capabilities.streaming and fast.capabilities.diarization
     assert not live.capabilities.diarization  # off by default
     assert zoom_ai.STT(api_key=API_KEY, diarization=True).capabilities.diarization
+    # A chosen Scribe model is what metrics report.
+    assert zoom_ai.STT(api_key=API_KEY, model="zoom-scribe-en-pro").model == "zoom-scribe-en-pro"
 
 
 @pytest.mark.parametrize(
@@ -398,6 +400,12 @@ async def test_live_recognition_options_are_requested_only_when_set(scribe, http
         "vocabulary": {"phrases": ["Pipecat", "LiveKit"]},
     }
     assert update["outputs"] == {"text_polishing": {"enabled": True, "include_transcript": True}}
+
+
+async def test_live_language_is_empty_when_detection_reports_none(scribe, http) -> None:
+    _, alt = await _live_final(scribe, http, _completed(), language_detection="continuous")
+
+    assert alt.language == ""
 
 
 async def test_live_reports_the_detected_language(scribe, http) -> None:
@@ -605,7 +613,7 @@ async def test_live_speech_end_excludes_scribes_silence_window(
 def test_rejects_an_unknown_mode_or_url() -> None:
     with pytest.raises(ValueError, match="mode"):
         zoom_ai.STT(api_key=API_KEY, mode="Live")  # type: ignore[arg-type]
-    for bad in ("wss://api.zoom.us/x", "api.zoom.us/x"):
+    for bad in ("wss://api.zoom.us/x", "api.zoom.us/x", "https"):
         with pytest.raises(ValueError, match="base_url"):
             zoom_ai.STT(api_key=API_KEY, base_url=bad)
     assert zoom_ai.STT(api_key=API_KEY, base_url="HTTPS://h/x")._live_url == "wss://h/x/live"
@@ -1024,6 +1032,47 @@ async def test_fast_recognition_options_and_text_polishing(scribe, http) -> None
     assert request["outputs"] == {"text_polishing": {"enabled": True}}
     assert alt.text == "Hello there."
     assert alt.metadata == {"transcript": "Um, hello hello there."}
+
+
+async def test_fast_polished_text_has_no_word_timings(scribe, http) -> None:
+    """Word timings belong to the recognized text, so they aren't paired with polished text."""
+    fake, live_url, fast_url = scribe
+    words = [{"word": "Um", "start": 0.0, "end": 0.2}, {"word": "hello", "start": 0.3, "end": 0.6}]
+    fake.fast_body = {
+        "request_id": "req_6",
+        "result": {
+            "text_display": "Um, hello.",
+            "segments": [{"text": "Um, hello.", "words": words}],
+        },
+        "outputs": {"text_polishing": {"text": "Hello."}},
+    }
+    stt = make_stt(
+        http, (live_url, fast_url), mode="fast", word_time_offsets=True, text_polishing=True
+    )
+    alt = (await stt.recognize(frames(0.5), conn_options=NO_RETRY)).alternatives[0]
+
+    assert alt.text == "Hello."
+    assert alt.words is None
+
+
+@pytest.mark.parametrize(
+    ("result", "detection", "expected"),
+    [
+        ({"language": "es-ES", "segments": []}, "once", "es-ES"),  # one-time detection
+        ({"segments": [{"text": "Hola.", "language": "es"}]}, "continuous", "es"),  # per segment
+        ({"segments": [{"text": "Hola."}]}, "continuous", ""),  # detecting, none reported
+        ({"segments": [{"text": "Hola."}]}, None, "en-US"),  # not detecting: the configured one
+    ],
+)
+async def test_fast_reports_the_detected_language(
+    scribe, http, result: dict[str, Any], detection: str | None, expected: str
+) -> None:
+    fake, live_url, fast_url = scribe
+    fake.fast_body = {"request_id": "req_7", "result": {"text_display": "Hola.", **result}}
+    stt = make_stt(http, (live_url, fast_url), mode="fast", language_detection=detection)
+    alt = (await stt.recognize(frames(0.5), conn_options=NO_RETRY)).alternatives[0]
+
+    assert alt.language == expected
 
 
 @pytest.mark.parametrize("word_time_offsets", [False, True])
