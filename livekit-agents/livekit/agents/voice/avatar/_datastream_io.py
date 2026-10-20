@@ -148,6 +148,7 @@ class DataStreamAudioOutput(AudioOutput):
         # we want to avoid OOM & outdated speech?
         await asyncio.shield(self._start_atask)
 
+        # Callers must serialize capture calls, including awaiting their cancellation.
         # Finish the interrupted playback before newer audio can be queued.
         while self._clear_buffer_atask is not None and not self._clear_buffer_atask.done():
             try:
