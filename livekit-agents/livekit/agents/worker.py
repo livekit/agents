@@ -785,11 +785,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
 
-            # Startup begins here: any failure below must still run the full
-            # shutdown path in aclose() (the CLI calls it after run() raises).
-            # _close_future therefore has to exist before the first resource is
-            # started; creating it at the end of startup used to leak the
-            # inference executor when e.g. the HTTP port was already in use.
+            # create before starting resources so aclose() can clean up a failed startup
             self._closed = False
             self._close_future = asyncio.Future(loop=self._loop)
 
@@ -1058,10 +1054,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._closed = True
 
-            # _closed is only set to False once run() begins starting resources,
-            # and _close_future is created at the same time, so every resource
-            # below is individually null-checked rather than assuming a
-            # completed startup. This keeps a failure mid-startup cleanable.
             logger.info("shutting down worker", extra={"id": self.id})
 
             if self._conn_task is not None:
