@@ -5016,6 +5016,10 @@ class AgentActivity(RecognitionHooks):
             pause_is_allowed
             and self._session.agent_state != "speaking"
             and not self._user_silence_event.is_set()
+            # With the hold opted out there is nothing to create either: start-of-speech
+            # arriving before this handle became current means no pause was recorded, so
+            # the release above never fires and this block would pause the reply anyway.
+            and self._session.options.interruption["hold_reply_while_user_speaking"]
         ):
             assert audio_output is not None
             # SOS arrived before this handle became current so we pause here

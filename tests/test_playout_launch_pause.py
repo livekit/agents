@@ -283,3 +283,21 @@ async def test_uninterruptible_speech_never_waits(
     speech_handle = SpeechHandle.create(allow_interruptions=False)
 
     assert agent_activity._waits_for_user_silence(speech_handle) is False
+
+
+async def test_no_pause_is_created_when_noise_preceded_the_reply_becoming_current(
+    early_reply_activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    """Start-of-speech can arrive before this handle is current, so no pause was ever
+    recorded -- the release path has nothing to release, and the block that *creates*
+    a pause would hold the reply anyway. With the hold opted out, neither should.
+    """
+    agent_activity, audio_output = early_reply_activity
+    speech_handle = SpeechHandle.create()
+    agent_activity._user_silence_event.clear()  # the caller is making a noise
+    assert agent_activity._paused_speech is None  # nothing was recorded
+
+    agent_activity._reconcile_playout_pause(speech_handle)
+
+    assert audio_output._paused_at is None, "a fresh pause was created despite the opt-out"
+    assert agent_activity._paused_speech is None
