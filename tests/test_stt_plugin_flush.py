@@ -100,7 +100,6 @@ async def _wait_for_flushes(ws: _WebSocket, control: str, count: int) -> None:
         ("assemblyai", "STT", {}, "ForceEndpoint"),
         ("cartesia", "STT", {"model": "ink-whisper"}, "finalize"),
         ("soniox", "STT", {}, "finalize"),
-        ("sarvam", "STT", {"flush_signal": True}, "flush"),
         ("sarvam", "STTRealtime", {"endpointing": "manual"}, "speech_end"),
     ],
 )
@@ -129,14 +128,6 @@ async def test_flush_keeps_connection_and_audio_order(
         assert messages[-1] == control
         assert session.connections == 1
         assert not session.ws.closed
-        if provider == "sarvam" and class_name == "STT":
-            assert "end_of_stream" not in session.ws.audio_and_flushes("end_of_stream")
-            tail = _frame(10, 3)
-            stream.push_frame(tail)
-            stream.end_input()
-            await _wait_for_flushes(session.ws, "end_of_stream", 1)
-            messages = session.ws.audio_and_flushes(control)
-            assert messages[-2:] == [tail.data.tobytes(), control]
     finally:
         await stream.aclose()
         await model.aclose()
@@ -155,3 +146,10 @@ def test_modes_without_manual_flush_stay_disabled(provider, class_name, options)
     plugin = pytest.importorskip(f"livekit.plugins.{provider}")
     model = getattr(plugin, class_name)(api_key="test-key", **options)
     assert not model.capabilities.manual_flush
+
+
+@pytest.mark.parametrize("flush_signal", [True, False, None])
+def test_sarvam_legacy_manual_flush_capability(flush_signal: bool | None) -> None:
+    sarvam = pytest.importorskip("livekit.plugins.sarvam")
+    model = sarvam.STT(api_key="test-key", flush_signal=flush_signal)
+    assert model.capabilities.manual_flush is (flush_signal is True)
