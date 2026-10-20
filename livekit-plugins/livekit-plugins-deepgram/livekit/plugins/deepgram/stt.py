@@ -458,6 +458,7 @@ class SpeechStream(stt.SpeechStream):
     _KEEPALIVE_MSG: str = json.dumps({"type": "KeepAlive"})
     _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
     _FINALIZE_MSG: str = json.dumps({"type": "Finalize"})
+    _final_alternatives: list[stt.SpeechData]
 
     def __init__(
         self,
@@ -481,6 +482,7 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._opts.endpoint_url = base_url
         self._speaking = False
+        self._final_alternatives = []
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
             duration=5.0,
@@ -584,6 +586,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     def _on_end_of_speech(self) -> None:
+        self._final_alternatives = []
         if self._pending_keyterm is not None:
             self.update_options(keyterm=self._pending_keyterm)
             self._pending_keyterm = None
@@ -701,6 +704,8 @@ class SpeechStream(stt.SpeechStream):
             conn_start_time = 0.0
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
+                self._final_alternatives = []
                 conn_start_time = time.perf_counter()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -873,6 +878,8 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(start_event)
 
                 if is_final_transcript:
+                    words = data["channel"]["alternatives"][0]["words"]
+                    self._final_alternatives = alts if words and words[-1].get("end", 0) > 0 else []
                     final_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=request_id,
@@ -892,15 +899,37 @@ class SpeechStream(stt.SpeechStream):
             # a non-empty transcript (deepgram doesn't have a SpeechEnded event)
             if is_endpoint and self._speaking:
                 self._speaking = False
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                # An empty endpoint follows the last non-empty final on some turns.
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        alternatives=self._final_alternatives,
+                    )
+                )
                 self._on_end_of_speech()
 
         elif data["type"] == "UtteranceEnd":
             # Fired when utterance_end_ms is set and the configured silence duration has elapsed.
             # https://developers.deepgram.com/docs/understand-endpointing-interim-results
+            last_word_end = data.get("last_word_end", 0)
+            if last_word_end < 0:
+                return  # The utterance was already finalized.
             if self._speaking:
                 self._speaking = False
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        alternatives=[
+                            stt.SpeechData(
+                                language=LanguageCode(self._opts.language),
+                                text="",
+                                end_time=self.start_time_offset + last_word_end,
+                            )
+                        ]
+                        if last_word_end > 0
+                        else self._final_alternatives,
+                    )
+                )
                 self._on_end_of_speech()
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy

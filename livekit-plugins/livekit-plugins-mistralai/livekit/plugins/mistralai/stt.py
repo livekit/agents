@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import weakref
 from dataclasses import dataclass
 
@@ -333,12 +334,16 @@ class SpeechStream(stt.RecognizeStream):
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
             elif ev.type == vad.VADEventType.END_OF_SPEECH:
+                speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
                 # force Mistral to finalize the current speech segment
                 await connection.flush_audio()
                 if self._speaking:
                     self._speaking = False
                     self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.END_OF_SPEECH,
+                            speech_end_time=speech_end_time,
+                        )
                     )
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
@@ -421,6 +426,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             while True:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
+                    self._input_ch.restart_provider_clock()
                     vad_stream = self._vad.stream() if self._vad else None
 
                     tasks = [

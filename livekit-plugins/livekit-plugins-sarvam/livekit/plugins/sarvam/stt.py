@@ -45,6 +45,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.stt import SpeechData
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
@@ -923,6 +924,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._utterance_speech_start_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
+        self._final_alternatives: list[SpeechData] = []
         self._pending_eos = False
         self._eos_fallback_task: asyncio.Task[None] | None = None
         self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
@@ -994,6 +996,7 @@ class SpeechStream(stt.SpeechStream):
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
         self._pending_final_data = None
+        self._final_alternatives = []
         self._pending_eos = False
         self._utterance_speech_start_wall = time.time()
         self._final_received_for_utterance = False
@@ -1025,6 +1028,7 @@ class SpeechStream(stt.SpeechStream):
             end_time=self._positive_time(transcript_data.get("speech_end")) or 0.0,
             confidence=_extract_confidence(transcript_data, self._logger),
         )
+        self._final_alternatives = [speech_data] if speech_data.end_time > 0 else []
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -1051,15 +1055,15 @@ class SpeechStream(stt.SpeechStream):
 
         self._cancel_eos_fallback()
 
-        # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events. The
-        # speech-end timing lives on the FINAL_TRANSCRIPT's end_time, not here.
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.END_OF_SPEECH,
                 request_id=self._server_request_id or "",
+                alternatives=self._final_alternatives,
             )
         )
         self._eos_emitted_for_utterance = True
+        self._final_alternatives = []
         self._pending_eos = False
 
     async def _emit_pending_eos_after_timeout(self) -> None:

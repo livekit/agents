@@ -281,6 +281,13 @@ class _PrimarySpeakerDetector:
             self._rms_buffer = self._rms_buffer[-self._max_rms_size :]
 
     def on_stt_event(self, ev: SpeechEvent) -> SpeechEvent | None:
+        if ev.type not in (
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+        ):
+            return ev
+
         if not ev.alternatives:
             return ev
 

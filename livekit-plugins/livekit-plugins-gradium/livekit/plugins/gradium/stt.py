@@ -274,6 +274,7 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             buffered_text: list[str] = []
+            speech_end = 0.0
             speaking = False
             remaining_vad_steps: int | None = None
             while True:
@@ -307,6 +308,7 @@ class SpeechStream(stt.SpeechStream):
                     type_ = data.get("type", "")
 
                     if type_ == "text":
+                        speech_end = 0.0
                         if speaking is False:
                             speaking = True
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
@@ -354,6 +356,9 @@ class SpeechStream(stt.SpeechStream):
                                                 stt.SpeechData(
                                                     text=" ".join(buffered_text),
                                                     language=self._opts.language,
+                                                    end_time=speech_end + self.start_time_offset
+                                                    if speech_end > 0
+                                                    else 0.0,
                                                 )
                                             ],
                                         )
@@ -361,16 +366,22 @@ class SpeechStream(stt.SpeechStream):
 
                                         buffered_text = []
                                         self._event_ch.send_nowait(
-                                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                                            stt.SpeechEvent(
+                                                type=stt.SpeechEventType.END_OF_SPEECH,
+                                                alternatives=event.alternatives
+                                                if speech_end > 0
+                                                else [],
+                                            )
                                         )
+                                        speech_end = 0.0
                             else:
                                 remaining_vad_steps = None
 
                     elif type_ == "ready":
                         self._ready_msg = data
                     elif type_ == "end_text":
-                        # This message provides the end timestamp of the previous word in the stop_s field.
-                        pass
+                        if speaking:
+                            speech_end = data.get("stop_s", 0.0)
                     else:
                         logger.warning(f"Unknown message type from Gradium {type_}")
 
@@ -382,6 +393,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
