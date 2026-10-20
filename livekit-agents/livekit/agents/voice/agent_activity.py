@@ -4594,12 +4594,8 @@ class AgentActivity(RecognitionHooks):
 
         self._session._update_agent_state("thinking" if self._background_speeches else "listening")
         self._on_end_of_agent_speech(ended_at=time.time())
-        if audio_output is not None:
-            if self.interruption_enabled:
-                self.interruption_by_audio_activity_enabled = True
-            current_span.set_attribute(
-                trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted
-            )
+        if self.interruption_enabled:
+            self.interruption_by_audio_activity_enabled = True
 
         stopped_speaking_at = time.time()
 

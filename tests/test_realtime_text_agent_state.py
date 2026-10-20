@@ -36,6 +36,16 @@ class _SpeechStartVADStream(vad.VADStream):
                 frames=[],
             )
         )
+        self._event_ch.send_nowait(
+            vad.VADEvent(
+                type=vad.VADEventType.INFERENCE_DONE,
+                samples_index=512,
+                timestamp=0.032,
+                speech_duration=0.032,
+                silence_duration=0.0,
+                speaking=True,
+            )
+        )
         async for _ in self._input_ch:
             pass
 
@@ -158,3 +168,55 @@ async def test_user_transcript_is_delivered_after_realtime_text_reply(
         stt_stream.send_fake_transcript("Next user turn")
 
         assert await asyncio.wait_for(transcripts.recv(), timeout=5) == "Next user turn"
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("audio_output", [None, "disabled"])
+async def test_vad_interrupts_pending_reply_after_realtime_text_reply(
+    monkeypatch: pytest.MonkeyPatch, audio_output: str | None
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "test-secret")
+    verdicts = utils.aio.Chan[inference.OverlappingSpeechEvent]()
+    stream = MagicMock()
+    stream.__aiter__.side_effect = verdicts.__aiter__
+    stream.aclose = AsyncMock()
+    monkeypatch.setattr(inference.AdaptiveInterruptionDetector, "stream", lambda self: stream)
+
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False, user_transcription=False, audio_output=audio_output is not None
+        )
+    )
+    async with AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=_SpeechStartVAD(),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            interruption={"mode": "adaptive", "min_duration": 0.0, "backchannel_boundary": 0.0},
+        ),
+    ) as session:
+        audio_input = FakeAudioInput()
+        session.input.audio = audio_input
+        if audio_output is not None:
+            session.output.audio = FakeAudioOutput(can_pause=True)
+            session.output.set_audio_enabled(False)
+        session.output.transcription = FakeTextOutput()
+        await session.start(Agent(instructions="test"))
+
+        reply = session.generate_reply()
+        await asyncio.wait_for(_provide_text_reply(model.active_session), timeout=5)
+        await asyncio.wait_for(reply.wait_for_playout(), timeout=5)
+
+        pending_reply = session.generate_reply()
+
+        async def wait_for_next_request() -> None:
+            while model.active_session.generate_reply_calls < 2:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_next_request(), timeout=5)
+        audio_input.push(0.032)
+        await asyncio.wait_for(pending_reply.wait_for_playout(), timeout=5)
+
+        assert pending_reply.interrupted
