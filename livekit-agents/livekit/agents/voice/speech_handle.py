@@ -50,6 +50,7 @@ class SpeechHandle:
         self._interrupt_fut = asyncio.Future[None]()
         self._done_fut = asyncio.Future[None]()
         self._scheduled_fut = asyncio.Future[None]()
+        self._user_message_committed_fut: asyncio.Future[None] | None = None
         self._authorize_event = asyncio.Event()
 
         self._generations: list[asyncio.Future[None]] = []
