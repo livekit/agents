@@ -995,6 +995,39 @@ async def test_pre_connect_audio_does_not_retry_after_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_audio_input_trailing_silence_includes_all_channels() -> None:
+    """Trailing half-second silence must size data by num_channels (#7967)."""
+    room = _FakeRoom()
+    audio_input = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=2,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=None,
+    )
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=1)
+        rtc_stream.end()
+        assert audio_input._forward_atask is not None
+        await audio_input._forward_atask
+
+    assert audio_input._data_ch.qsize() == 1
+    frame = await audio_input._data_ch.recv()
+    await audio_input.aclose()
+
+    expected_samples = int(24000 * 0.5)
+    assert frame.num_channels == 2
+    assert frame.samples_per_channel == expected_samples
+    assert len(frame.data) == expected_samples * frame.num_channels  # int16 samples
+
+
+@pytest.mark.asyncio
 async def test_audio_input_does_not_flush_silence_when_detached() -> None:
     room = _FakeRoom()
     audio_input = _make_audio_input_stream(room, noise_cancellation=None)
