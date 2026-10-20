@@ -5,7 +5,7 @@ Run a [ThunderPhone](https://thunderphone.com) voice agent as the realtime
 speech recognition, the language model, the voice, turn-taking, 47 languages
 and tools; LiveKit handles the room, the transport and the telephony.
 
-See the docs at https://thunderphone.com/docs/guides/use-with-livekit for
+See the docs at https://docs.livekit.io/agents/models/realtime/thunderphone/ for
 setup and examples.
 
 ## Installation

@@ -41,7 +41,7 @@ def test_model_requires_thunderphone_secret_key() -> None:
 def test_model_reads_key_from_env() -> None:
     with patch.dict("os.environ", {"THUNDERPHONE_API_KEY": KEY}):
         model = RealtimeModel(agent_id=1)
-    assert model.agent_id == "1"
+    assert model._tp_agent_id == "1"
     assert model.provider == "ThunderPhone"
 
 
@@ -132,7 +132,7 @@ def _make_session(*, agent_mode: bool, live_transcripts: bool = False) -> Realti
     session = RealtimeSession.__new__(RealtimeSession)
     utils.EventEmitter.__init__(session)
     model = Mock()
-    model.agent_id = "12" if agent_mode else None
+    model._tp_agent_id = "12" if agent_mode else None
     model._tp_live_transcripts = live_transcripts
     session._tp_model = model
     session._tp_agent_mode = agent_mode

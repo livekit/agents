@@ -207,11 +207,6 @@ class RealtimeModel(_openai.RealtimeModel):
     def provider(self) -> str:
         return "ThunderPhone"
 
-    @property
-    def agent_id(self) -> str | None:
-        """The saved ThunderPhone agent this model runs, if any."""
-        return self._tp_agent_id
-
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         if turn_detection_disabled:
             logger.warning(
@@ -239,7 +234,7 @@ class RealtimeSession(_openai.RealtimeSession):
 
     def __init__(self, realtime_model: RealtimeModel) -> None:
         self._tp_model = realtime_model
-        self._tp_agent_mode = realtime_model.agent_id is not None
+        self._tp_agent_mode = realtime_model._tp_agent_id is not None
         # Inline sessions: hold session.update until the agent has supplied its
         # instructions and tools, then send one update that starts the call.
         self._tp_holding = not self._tp_agent_mode
