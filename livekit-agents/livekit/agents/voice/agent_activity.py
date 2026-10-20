@@ -3391,16 +3391,17 @@ class AgentActivity(RecognitionHooks):
                 current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
                 _record_user_turn_stages(current_span, _previous_user_metrics)
 
+        spoken_msg: llm.ChatMessage | None = None
         if forwarded_text and add_to_chat_ctx:
-            msg = self._agent._chat_ctx.add_message(
+            spoken_msg = self._agent._chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
                 interrupted=speech_handle.interrupted,
                 created_at=started_speaking_at if started_speaking_at is not None else time.time(),
                 metrics=assistant_metrics,
             )
-            speech_handle._item_added([msg])
-            self._session._conversation_item_added(msg)
+            speech_handle._item_added([spoken_msg])
+            self._session._conversation_item_added(spoken_msg)
 
         if self._session.agent_state == "speaking":
             self._session._update_agent_state(
@@ -3412,6 +3413,26 @@ class AgentActivity(RecognitionHooks):
 
         if audio_out is not None and not audio_out.first_frame_fut.done():
             audio_out.first_frame_fut.cancel()
+
+        if (
+            spoken_msg is not None
+            and self._rt_session is not None
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.mutable_chat_context
+        ):
+            # playout is over, so the next speech can start while the update is acknowledged
+            speech_handle._mark_generation_done()
+            # send the spoken text, placed by when it started, so the model's history keeps
+            # the order it was said in even if the user spoke during playback
+            rt_chat_ctx = self._rt_session.chat_ctx.copy()
+            rt_chat_ctx.insert(spoken_msg)
+            try:
+                await self._rt_session.update_chat_ctx(rt_chat_ctx)
+            except llm.RealtimeError as e:
+                logger.warning(
+                    "failed to add the spoken message to the realtime chat context",
+                    extra={"error": str(e)},
+                )
 
     def _on_enter_ignored_tools(self, tool_ctx: llm.ToolContext) -> list[llm.Tool]:
         """Tools flagged IGNORE_ON_ENTER, when this reply runs inside on_enter."""
