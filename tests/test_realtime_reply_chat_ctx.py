@@ -42,6 +42,7 @@ class _FakeActivity(SimpleNamespace):
 
         super().__init__(
             _rt_session=rt_session,
+            _rt_chat_ctx_lock=asyncio.Lock(),
             _authorization_allowed=authorization_allowed,
             _user_silence_event=user_silence,
             # the fake model reports supports_overlapping_speech=False, so the caller gates

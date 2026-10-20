@@ -231,6 +231,39 @@ async def test_non_markdown_preserved(text: str, chunk_size: int):
     assert await _filtered(text, chunk_size) == text
 
 
+# --- delimiters that can never pair up must not hold the stream ---
+
+STRAY_DELIMITER_CASES = [
+    "the confirmation went to first_last@example.com and your table is ready.",
+    "10*4 is 40 and that is four tens.",
+    "10 * 4 is 40 and that is four tens.",
+    "rates rose last year [1] and may rise again.",
+    "see ]( broken formatting and please continue.",
+]
+
+
+@pytest.mark.parametrize("text", STRAY_DELIMITER_CASES)
+async def test_stray_delimiter_does_not_hold_the_stream(text: str):
+    words = text.split(" ")
+    consumed = 0
+
+    async def word_stream():
+        nonlocal consumed
+        for word in words:
+            consumed += 1
+            yield word + " "
+
+    output = ""
+    consumed_at_and = None
+    async for chunk in filter_markdown(word_stream()):
+        output += chunk
+        if consumed_at_and is None and " and" in output:
+            consumed_at_and = consumed
+
+    assert output == text + " "
+    assert consumed_at_and is not None and consumed_at_and < len(words)
+
+
 # --- horizontal rules ---
 #
 # A rule carries no spoken content, so the whole line goes. Dashes that are
@@ -268,7 +301,10 @@ async def test_horizontal_rule(text: str, expected: str, chunk_size: int):
 
 @pytest.mark.parametrize(
     "text",
-    [t for t, _ in EMPHASIS_CASES] + PRESERVE_CASES + [t for t, _ in HORIZONTAL_RULE_CASES],
+    [t for t, _ in EMPHASIS_CASES]
+    + PRESERVE_CASES
+    + STRAY_DELIMITER_CASES
+    + [t for t, _ in HORIZONTAL_RULE_CASES],
 )
 async def test_output_independent_of_chunking(text: str):
     """Buffering must not change the result: every chunk size yields one output."""
@@ -397,18 +433,63 @@ async def test_replace_holds_only_potential_prefix():
 async def test_replace_prefers_longest_overlapping_key():
     """Overlapping keys resolve to the longest match, not dict/insertion order.
 
-    Longest-match holds when the longer key is buffered together; a key split
-    mid-token across chunks falls back to the shorter match (same as before —
-    correcting that needs incremental leftmost-longest matching).
+    The trailing run that can still grow into a longer key is held back, so the
+    longest match wins whether the key arrives in one chunk or split across chunks.
     """
     transform = replace({"a": "X", "ab": "Y"})
     assert await _collect(transform(_stream_text("ab", 100))) == "Y"
+    assert await _collect(transform(_stream_text("ab", 1))) == "Y"
 
 
 async def test_replace_does_not_cascade():
     """A replacement's output is not re-matched against other keys (single pass)."""
     transform = replace({"a": "b", "b": "c"})
     assert await _collect(transform(_stream_text("a", 100))) == "b"
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 5, 100])
+async def test_replace_does_not_cascade_across_chunks(chunk_size: int):
+    """The single-pass guarantee also holds when the text arrives in chunks.
+
+    ``hello`` becomes ``hi``, the held-back ``hi`` joins the next chunk, and the
+    result is re-matched against the ``hi there`` key.
+    """
+    transform = replace({"hello": "hi", "hi there": "GT"})
+    text = "hello there"
+    assert await _collect(transform(_stream_text(text, chunk_size))) == "hi there"
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 5, 100])
+async def test_replace_does_not_consume_input_after_a_held_replacement(chunk_size: int):
+    """Input right after a replacement is not swallowed by the held-back output."""
+    cases = [
+        ({"ab": "a"}, "abb", "ab"),
+        ({"Texas": "Tex"}, "Texasas", "Texas"),
+    ]
+    for replacements, text, expected in cases:
+        result = await _collect(replace(replacements)(_stream_text(text, chunk_size)))
+        assert result == expected
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 4, 7, 13, 100])
+@pytest.mark.parametrize(
+    "replacements, text",
+    [
+        ({"ab": "a"}, "abb"),
+        ({"Texas": "Tex"}, "Texasas"),
+        ({"hello": "hi", "hi there": "GT"}, "hello there, hello there"),
+        ({"LiveKit": "Lyve Kit"}, "a LiveKit and livekit agent"),
+        ({"um": ""}, "um well um"),
+        ({"a": "X", "ab": "Y"}, "ab"),
+        ({"SQL": "sequel", "LiveKit": "Lyve Kit"}, "uses SQL, LiveKit"),
+        ({"ab": "cab"}, "xabc ab"),
+    ],
+)
+async def test_replace_is_chunk_invariant(replacements: dict[str, str], text: str, chunk_size: int):
+    """Streamed output must not depend on where the chunk boundaries fall."""
+    expected = await _collect(replace(replacements)(_stream_text(text, len(text))))
+    result = await _collect(replace(replacements)(_stream_text(text, chunk_size)))
+    assert result == expected
 
 
 async def test_apply_text_transforms_with_callable():

@@ -7,6 +7,7 @@ import os
 import weakref
 from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict, overload
+from urllib.parse import urlencode
 
 import aiohttp
 from typing_extensions import NotRequired
@@ -154,7 +155,7 @@ class CartesiaOptions(TypedDict, total=False):
 
 
 class DeepgramOptions(TypedDict, total=False):
-    mip_opt_out: bool  # default: False
+    mip_opt_out: bool  # always True for LiveKit Inference; the passed value is ignored
 
 
 class RimeOptions(TypedDict, total=False):
@@ -522,7 +523,9 @@ class TTS(tts.TTS):
         ws = None
         try:
             ws = await asyncio.wait_for(
-                session.ws_connect(f"{base_url}/tts?model={self._opts.model}", headers=headers),
+                session.ws_connect(
+                    f"{base_url}/tts?{urlencode({'model': self._opts.model})}", headers=headers
+                ),
                 timeout,
             )
         except aiohttp.ClientResponseError as e:

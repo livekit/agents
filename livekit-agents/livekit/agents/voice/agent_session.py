@@ -142,6 +142,16 @@ class RecordingOptions(TypedDict, total=False):
     """Upload the conversation transcript (chat history). Defaults to ``True``."""
     redaction: bool
     """Enable redaction. ``False`` does not disable project redaction."""
+    input_delta: bool
+    """Record only what changed in LLM inputs on trace spans. Defaults to ``False``.
+    The model always receives the full input; this only affects telemetry.
+
+    Each span continues the input recorded for the last committed generation: its
+    ``gen_ai.input.messages`` / ``lk.pii.chat_ctx`` hold what follows the longest prefix
+    they share (usually the previous agent turn and the new user turn), and
+    ``gen_ai.system_instructions`` is left out while unchanged. Such spans carry
+    ``lk.input.*`` attributes pointing at the span that holds the rest.
+    """
 
 
 _RECORDING_ALL_ON: RecordingOptions = {
@@ -260,7 +270,10 @@ def _append_instructions(template: Instructions | str, extra: str) -> Instructio
     # concatenate the *raw* template text so any {placeholders} survive until render()
     if isinstance(template, Instructions):
         return Instructions(
-            template.common + "\n\n" + extra, audio=template.audio, text=template.text
+            template.common + "\n\n" + extra,
+            audio=template.audio,
+            text=template.text,
+            dynamic=template.dynamic,
         )
     return Instructions(template + "\n\n" + extra)
 
@@ -472,7 +485,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
-                Default ``3``.
+                Not enforced for realtime models that generate the tool reply
+                server-side. Default ``3``.
             video_sampler (_VideoSampler, optional): Uses
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
                 captures video at ~1 fps while the user is speaking and ~0.3 fps
@@ -1650,6 +1664,27 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt(force=force)
 
+    def reset_away_timer(self) -> None:
+        """Reset the user-away timeout after external user activity.
+
+        RoomIO calls this automatically for incoming DTMF from its linked participant.
+
+        If the user is ``"away"``, change their state to ``"listening"``.
+        Restart the full ``user_away_timeout`` when both user and agent are
+        listening. The countdown stays paused while tools are running or the
+        session is waiting for its participant.
+
+        Does nothing if away detection is disabled, the session has not started,
+        or the session is closing.
+        """
+        if not self._started or self._is_closing() or self._opts.user_away_timeout is None:
+            return
+
+        if self._user_state == "away":
+            self._update_user_state("listening")
+        elif self._user_state == "listening" and self._agent_state == "listening":
+            self._set_user_away_timer()
+
     @asynccontextmanager
     async def _claim_user_turn(self) -> AsyncIterator[None]:
         """Declare a programmatic user-driven turn.
@@ -1859,7 +1894,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
                 handoff_ctx = trace.set_span_in_context(handoff_span)
             under_handoff = (
-                tracer.use_span(handoff_span, end_on_exit=False)
+                tracer.use_span(
+                    handoff_span,
+                    end_on_exit=False,
+                    record_exception=False,
+                    set_status_on_exception=False,
+                )
                 if handoff_span is not None
                 else contextlib.nullcontext()
             )
@@ -2027,12 +2067,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a tool in flight will speak when it lands; the window restarts then (#6883)
             return
 
-        if (
-            (room_io := self._room_io)
-            and room_io.subscribed_fut
-            and not room_io.subscribed_fut.done()
+        if (room_io := self._room_io) and (
+            room_io.linked_participant is None
+            or (room_io.subscribed_fut is not None and not room_io.subscribed_fut.done())
         ):
-            # skip the timer before user join the room
             return
 
         self._user_away_timer = self._loop.call_later(
@@ -2054,6 +2092,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._aec_warmup_timer = None
 
     def _on_room_io_participant_linked(self, participant: rtc.RemoteParticipant) -> None:
+        self.reset_away_timer()
+
         if (span := self._session_span) is not None and span.is_recording():
             span.add_event("participant_linked", trace_utils.participant_attributes(participant))
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
@@ -2073,14 +2113,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._aec_warmup_duration_explicit:
             return
 
+        from ..job import current_simulation
+
         is_outbound_sip = (
             participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
             and not participant.attributes.get(_SIP_RULE_ID_ATTR)
         )
-        self._opts.aec_warmup_duration = None if is_outbound_sip else _DEFAULT_AEC_WARMUP_DURATION
+        # a simulator publishes synthesized audio, so the agent's speech never echoes back
+        no_warmup = is_outbound_sip or current_simulation() is not None
+        self._opts.aec_warmup_duration = None if no_warmup else _DEFAULT_AEC_WARMUP_DURATION
         self._aec_warmup_remaining = self._opts.aec_warmup_duration or 0.0
 
-        if is_outbound_sip and self._aec_warmup_timer is not None:
+        if no_warmup and self._aec_warmup_timer is not None:
             self._aec_warmup_timer.cancel()
             self._aec_warmup_timer = None
 
@@ -2143,9 +2187,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     _set_participant_attributes(
                         self._agent_speaking_span, self._room_io.room.local_participant
                     )
-                # self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._agent_speaking_span is not None:
-            # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
 
@@ -2206,10 +2248,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._user_speaking_span, self._room_io.linked_participant
                 )
 
-            # self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._user_speaking_span is not None:
-            # end_time = last_speaking_time or time.time()
-            # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
             end_time_ns = last_speaking_time_ns
             if (
                 end_time_ns is not None

@@ -240,7 +240,9 @@ class SonicEventBuilder:
     ):
         self.prompt_name = prompt_name
         self.audio_content_name = audio_content_name
-        self._nova_sonic_2 = "nova-2-sonic" in model
+        # Sonic 1 uses the legacy flat endpointingSensitivity field; Sonic 2 and
+        # later require the nested turnDetectionConfiguration in sessionStart.
+        self._uses_turn_detection_configuration = "amazon.nova-sonic-v1" not in model
 
     @classmethod
     def get_event_type(cls, json_data: dict) -> str:
@@ -380,7 +382,7 @@ class SonicEventBuilder:
         inference = InferenceConfiguration(
             maxTokens=max_tokens, topP=top_p, temperature=temperature
         )
-        if self._nova_sonic_2:
+        if self._uses_turn_detection_configuration:
             session_start = SessionStart(
                 inferenceConfiguration=inference,
                 turnDetectionConfiguration=TurnDetectionConfiguration(

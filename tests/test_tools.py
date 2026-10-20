@@ -817,7 +817,26 @@ class _NonNullableEnumModel(BaseModel):
     status: Literal["active", "inactive"] = Field(...)
 
 
+class _Color(str, enum.Enum):
+    RED = "red"
+    GREEN = "green"
+
+
+class _SharedEnumModel(BaseModel):
+    required: _Color
+    first: Annotated[_Color, Field(description="first")] | None
+    second: Annotated[_Color, Field(description="second")] | None
+
+
 class TestStrictJsonSchema:
+    def test_nullable_enum_does_not_add_null_to_the_shared_definition(self):
+        # each nullable use expands the same `$defs` entry; the null it adds must not
+        # reach that entry, the required field that refs it, or the other nullable use
+        schema = to_strict_json_schema(_SharedEnumModel)
+        assert schema["$defs"]["_Color"]["enum"] == ["red", "green"]
+        assert schema["properties"]["first"]["enum"] == ["red", "green", None]
+        assert schema["properties"]["second"]["enum"] == ["red", "green", None]
+
     def test_nullable_enum_includes_null_in_enum(self):
         schema = to_strict_json_schema(_NullableEnumModel)
         status = schema["properties"]["status"]
@@ -1108,10 +1127,13 @@ class TestExecuteFunctionCallToolResult:
         assert result.raw_output is tool_result
         assert result.raw_exception is None
 
-    async def test_invalid_wrapped_output_still_reports_an_error(self) -> None:
+    @pytest.mark.parametrize("reply_required", [True, False])
+    async def test_invalid_wrapped_output_preserves_reply_required(
+        self, reply_required: bool
+    ) -> None:
         from livekit.agents.llm import FunctionToolCall, execute_function_call
 
-        tool_result = ToolResult(object(), reply_required=False)
+        tool_result = ToolResult(object(), reply_required=reply_required)
 
         @function_tool
         async def invalid_output() -> ToolResult:
@@ -1125,7 +1147,9 @@ class TestExecuteFunctionCallToolResult:
 
         assert result.fnc_call_out.is_error
         assert result.fnc_call_out.output == "the tool returned an invalid output"
+        assert result.fnc_call_out.reply_required is reply_required
         assert result.raw_output is tool_result
+        assert result.raw_exception is None
 
 
 class TestExecuteFunctionCallValidationErrors:
@@ -2199,25 +2223,34 @@ class TestToolCallEvents:
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
     @pytest.mark.asyncio
-    async def test_sync_tool_started_then_done(self):
+    @pytest.mark.parametrize(
+        "output, message",
+        [
+            ("ok", "ok"),
+            (ToolResult("ok", reply_required=True), "ok"),
+            (ToolResult("ok", reply_required=False), "ok"),
+            (ToolResult(None, reply_required=False), None),
+        ],
+    )
+    async def test_sync_tool_started_then_done(self, output: Any, message: str | None):
         from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool
-        async def quick_tool() -> str:
+        async def quick_tool() -> Any:
             """q"""
-            return "ok"
+            return output
 
         executor = _ToolExecutor()
         run_ctx = _make_run_context(call_id="c1", name="quick_tool")
         result = await executor.execute(tool=quick_tool, run_ctx=run_ctx, raw_arguments={})
-        assert result == "ok"
+        assert result is output
         await _drain_executor(executor)
 
         items = _emitted_items(run_ctx.session)
         assert isinstance(items[0], ToolCallStarted)
         assert items[0].function_call.call_id == "c1"
-        assert items[1] == ToolCallEnded(id="c1", call_id="c1", message="ok", status="done")
+        assert items[1] == ToolCallEnded(id="c1", call_id="c1", message=message, status="done")
 
     @pytest.mark.asyncio
     async def test_error_before_update_uses_plain_call_id(self):
@@ -2382,8 +2415,12 @@ class TestToolCallEvents:
         assert completed.update_ids == ["c5_update_1", "c5_final"]
 
     @pytest.mark.parametrize("reply_flags", [(False,), (True,), (False, True), (True, False)])
+    @pytest.mark.parametrize(
+        "output, expected_output",
+        [("Sent", "Sent"), (object(), "the tool returned an invalid output")],
+    )
     async def test_deferred_tool_results_honor_reply_required(
-        self, reply_flags: tuple[bool, ...]
+        self, reply_flags: tuple[bool, ...], output: Any, expected_output: str
     ) -> None:
         import asyncio
 
@@ -2395,7 +2432,7 @@ class TestToolCallEvents:
         async def send_dtmf(ctx: RunContext, reply_required: bool) -> ToolResult:
             """Send DTMF events."""
             await ctx.update("Sending digits")
-            return ToolResult("Sent", reply_required=reply_required)
+            return ToolResult(output, reply_required=reply_required)
 
         session = _make_reply_session(_make_fake_speech())
         agent = Agent(instructions="test", tools=[send_dtmf])
@@ -2433,7 +2470,8 @@ class TestToolCallEvents:
                     if item.type == "function_call_output"
                 }
                 assert outputs == {
-                    f"{index}_final": ("Sent", flag) for index, flag in enumerate(reply_flags)
+                    f"{index}_final": (expected_output, flag)
+                    for index, flag in enumerate(reply_flags)
                 }
 
             replies = [
