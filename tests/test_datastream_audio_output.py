@@ -30,8 +30,14 @@ def _finish(output: ds.DataStreamAudioOutput, *, interrupted: bool = False) -> N
 
 
 @pytest.fixture
+def clear_buffer_timeout() -> float | None:
+    return 2.0
+
+
+@pytest.fixture
 async def sink(
     monkeypatch: pytest.MonkeyPatch,
+    clear_buffer_timeout: float | None,
 ) -> AsyncIterator[tuple[ds.DataStreamAudioOutput, MagicMock]]:
     room = MagicMock()
     room.isconnected.return_value = True
@@ -43,13 +49,155 @@ async def sink(
     room.local_participant.stream_bytes = AsyncMock(return_value=writer)
     monkeypatch.setattr(ds.utils, "wait_for_participant", AsyncMock())
 
-    output = ds.DataStreamAudioOutput(room, destination_identity="avatar")
+    output = ds.DataStreamAudioOutput(
+        room, destination_identity="avatar", clear_buffer_timeout=clear_buffer_timeout
+    )
     await output._start_task()
     try:
         yield output, room
     finally:
         await asyncio.gather(*output._tasks)
         ds.DataStreamAudioOutput._playback_finished_handlers.pop("avatar", None)
+
+
+@pytest.mark.parametrize("clear_buffer_timeout", [None])
+@pytest.mark.parametrize("rpc_pending", [False, True])
+async def test_clear_without_timeout_does_not_block_next_reply(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock], rpc_pending: bool
+) -> None:
+    leaf, room = sink
+    output = _PassthroughWrapper(next_in_chain=leaf)
+    await output.capture_frame(_frame())
+    output.flush()
+    response = asyncio.Event()
+    called = asyncio.Event()
+    if not rpc_pending:
+        response.set()
+
+    async def clear_rpc(**_kwargs: object) -> str:
+        called.set()
+        await response.wait()
+        return ""
+
+    room.local_participant.perform_rpc.side_effect = clear_rpc
+    output.clear_buffer()
+    await called.wait()
+    try:
+        await asyncio.wait_for(output.capture_frame(_frame()), timeout=1.0)
+        output.flush()
+        await asyncio.sleep(3.0)
+        assert room.local_participant.stream_bytes.await_count == 2
+        assert output._pending_playback_count == 2
+
+        response.set()
+        await asyncio.wait_for(asyncio.gather(*leaf._tasks), timeout=1.0)
+        assert output._pending_playback_count == 2
+    finally:
+        response.set()
+        while leaf._pending_playback_count:
+            _finish(leaf)
+
+
+@pytest.mark.parametrize("clear_buffer_timeout", [None])
+@pytest.mark.parametrize("rpc_fails", [False, True])
+async def test_clear_without_timeout_sends_overlapping_requests(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock], rpc_fails: bool
+) -> None:
+    output, room = sink
+    calls: asyncio.Queue[asyncio.Future[str]] = asyncio.Queue()
+    responses: list[asyncio.Future[str]] = []
+
+    async def clear_rpc(**_kwargs: object) -> str:
+        response = asyncio.Future[str]()
+        calls.put_nowait(response)
+        return await response
+
+    room.local_participant.perform_rpc.side_effect = clear_rpc
+    try:
+        for _ in range(2):
+            await asyncio.wait_for(output.capture_frame(_frame()), timeout=1.0)
+            output.flush()
+            output.clear_buffer()
+            responses.append(await asyncio.wait_for(calls.get(), timeout=1.0))
+
+        # The later clear can succeed before the first clear returns.
+        responses[1].set_result("")
+        if rpc_fails:
+            responses[0].set_exception(RuntimeError("clear failed"))
+        else:
+            responses[0].set_result("")
+        await asyncio.wait_for(asyncio.gather(*output._tasks), timeout=1.0)
+        await asyncio.sleep(3.0)
+        assert output._pending_playback_count == (1 if rpc_fails else 2)
+        assert room.local_participant.perform_rpc.await_count == 2
+    finally:
+        for response in responses:
+            if not response.done():
+                response.set_result("")
+        while output._pending_playback_count:
+            _finish(output)
+
+
+@pytest.mark.parametrize("clear_buffer_timeout", [None])
+async def test_clear_rpc_failure_keeps_boundary_before_task_starts(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+) -> None:
+    output, room = sink
+    await output.capture_frame(_frame())
+    output.flush()
+    room.local_participant.perform_rpc.side_effect = RuntimeError("clear failed")
+
+    output.clear_buffer()
+    await output.capture_frame(_frame())
+    output.flush()
+    await asyncio.gather(*output._tasks)
+    assert output._pending_playback_count == 1
+
+    _finish(output)
+    event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+    assert not event.interrupted
+
+
+@pytest.mark.parametrize("clear_buffer_timeout", [None])
+@pytest.mark.parametrize("remote_finishes", [0, 1, 2, 3])
+async def test_clear_without_timeout_rpc_failure_finishes_only_original_segments(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock], remote_finishes: int
+) -> None:
+    output, room = sink
+    for _ in range(2):
+        await output.capture_frame(_frame())
+        output.flush()
+    response = asyncio.Future[str]()
+    called = asyncio.Event()
+    on_finish = MagicMock()
+    output.on("playback_finished", on_finish)
+
+    async def clear_rpc(**_kwargs: object) -> str:
+        called.set()
+        return await response
+
+    room.local_participant.perform_rpc.side_effect = clear_rpc
+    output.clear_buffer()
+    await called.wait()
+    try:
+        await asyncio.wait_for(output.capture_frame(_frame()), timeout=1.0)
+        output.flush()
+        for _ in range(remote_finishes):
+            _finish(output)
+        response.set_exception(RuntimeError("clear failed"))
+        await asyncio.wait_for(asyncio.gather(*output._tasks), timeout=1.0)
+
+        assert on_finish.call_count == max(2, remote_finishes)
+        assert output._pending_playback_count == (0 if remote_finishes == 3 else 1)
+        if output._pending_playback_count:
+            _finish(output)
+        event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+        assert not event.interrupted
+    finally:
+        if not response.done():
+            response.set_result("")
+        while output._pending_playback_count:
+            _finish(output)
 
 
 @pytest.mark.parametrize("prior_reply", [False, True])

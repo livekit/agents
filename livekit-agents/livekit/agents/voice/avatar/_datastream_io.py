@@ -210,8 +210,12 @@ class DataStreamAudioOutput(AudioOutput):
         if self._clear_buffer_atask is not None and not self._clear_buffer_atask.done():
             return
 
-        task = asyncio.create_task(self._clear_buffer_task(self._pushed_duration))
-        self._clear_buffer_atask = task
+        task = asyncio.create_task(
+            self._clear_buffer_task(self._pushed_duration, self.captured_playout_segments)
+        )
+        # With no fallback, later captures must not wait for remote completion.
+        if self._clear_buffer_timeout is not None:
+            self._clear_buffer_atask = task
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -225,7 +229,7 @@ class DataStreamAudioOutput(AudioOutput):
             "disable `AgentSession.resume_false_interruption` if you are using an avatar plugin."
         )
 
-    async def _clear_buffer_task(self, pushed_duration: float) -> None:
+    async def _clear_buffer_task(self, pushed_duration: float, captured_segments: int) -> None:
         timeout = self._clear_buffer_timeout
         try:
             await self._room.local_participant.perform_rpc(
@@ -237,7 +241,7 @@ class DataStreamAudioOutput(AudioOutput):
             logger.error("failed to perform clear buffer rpc", exc_info=e)
             timeout = 0  # mark playout done immediately if clear buffer rpc fails
 
-        if not self._pending_playback_count:
+        if timeout is None or not self._pending_playback_count:
             return
 
         try:
@@ -246,7 +250,8 @@ class DataStreamAudioOutput(AudioOutput):
             logger.warning(
                 "didn't receive playback finished event after clear buffer, marking playout as done arbitrarily"
             )
-            for _ in range(self._pending_playback_count):
+            finished_segments = self.captured_playout_segments - self._pending_playback_count
+            for _ in range(captured_segments - finished_segments):
                 self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
 
     def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
