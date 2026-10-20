@@ -1077,6 +1077,31 @@ async def test_selector_returns_noise_cancellation_options() -> None:
     await stream.aclose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_nc", "agent_nc", "warns"),
+    [(True, True, True), (True, False, False), (False, True, False)],
+)
+async def test_warns_on_double_noise_cancellation(
+    client_nc: bool, agent_nc: bool, warns: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    room = _FakeRoom()
+    nc_options = rtc.NoiseCancellationOptions(module_id="bvc", options={})
+    stream = _make_audio_input_stream(room, noise_cancellation=nc_options if agent_nc else None)
+    stream.set_participant("test-user")
+
+    track, publication, participant = _make_track_available_args()
+    if client_nc:
+        publication.audio_features = [AudioTrackFeature.TF_ENHANCED_NOISE_CANCELLATION]
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+        stream._on_track_available(track, publication, participant)
+
+    assert ("enhanced noise cancellation" in caplog.text) is warns
+
+    await stream.aclose()
+
+
 # -- audio output tests -------------------------------------------------------
 
 

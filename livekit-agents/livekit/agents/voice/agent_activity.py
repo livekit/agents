@@ -520,6 +520,10 @@ class AgentActivity(RecognitionHooks):
     def _validate_turn_detection(
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
+        # text simulations commit user turns as text, there is no audio to detect turns in
+        if self._text_only and turn_detection not in ("manual", "realtime_llm"):
+            return None
+
         if turn_detection is not None and not isinstance(turn_detection, str):
             if isinstance(turn_detection, _StreamingTurnDetector):
                 if self.vad is None:
@@ -2131,6 +2135,15 @@ class AgentActivity(RecognitionHooks):
                     agent_active = True
                     if (speech := self._current_speech) and speech._generations:
                         await speech._wait_for_generation()
+                    elif speech:
+                        # held by min_consecutive_speech_delay; wait instead of spinning
+                        authorized = asyncio.ensure_future(speech._wait_for_authorization())
+                        try:
+                            await asyncio.wait(
+                                [authorized, speech._done_fut], return_when=asyncio.FIRST_COMPLETED
+                            )
+                        finally:
+                            authorized.cancel()
                     await asyncio.sleep(0)
 
             if wait_for_user:
@@ -5191,6 +5204,10 @@ class AgentActivity(RecognitionHooks):
         return self._session._using_default_vad
 
     def _resolve_interruption_detection(self) -> inference.AdaptiveInterruptionDetector | None:
+        # text simulations carry no audio to detect interruptions in
+        if self._text_only:
+            return None
+
         realtime_llm = self.llm if isinstance(self.llm, llm.RealtimeModel) else None
         if realtime_llm is not None:
             # realtime commits turns manually; barge-in withholds the commit, so no STT is needed

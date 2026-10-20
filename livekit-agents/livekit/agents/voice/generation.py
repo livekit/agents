@@ -1039,12 +1039,15 @@ async def _execute_tools_task(
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
                         if isinstance(e, ToolError):
+                            # Keep detail out of the message body so redaction can
+                            # drop it (a log body cannot be redacted). Same pattern
+                            # as the invalid-arguments warning above.
                             logger.warning(
-                                "ToolError while executing tool: %s",
-                                e.message,
+                                "ToolError while executing tool",
                                 extra={
                                     "function": fnc_call.name,
                                     "speech_id": speech_handle.id,
+                                    "lk.pii.error": e.message,
                                 },
                             )
                         elif not isinstance(e, StopResponse):
