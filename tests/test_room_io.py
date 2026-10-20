@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, utils
+from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -16,6 +17,7 @@ from livekit.agents.voice.room_io._input import (
 )
 from livekit.agents.voice.room_io._output import (
     _ParticipantAudioOutput,
+    _ParticipantLegacyTranscriptionOutput,
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
@@ -34,7 +36,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 
 class _FakeRoom:
     def __init__(self) -> None:
-        self._events: dict[str, list[object]] = defaultdict(list)
+        self._events: dict[str, list[Callable[..., None]]] = defaultdict(list)
         self.remote_participants: dict[str, object] = {}
         self.local_participant = SimpleNamespace(identity="local")
         self.name = "test-room"
@@ -42,14 +44,18 @@ class _FakeRoom:
         self._server_url = "wss://test.livekit.cloud"
         self.connected = True
 
-    def on(self, event: str, callback: object) -> None:
+    def on(self, event: str, callback: Callable[..., None]) -> None:
         self._events[event].append(callback)
 
-    def off(self, event: str, callback: object) -> None:
+    def off(self, event: str, callback: Callable[..., None]) -> None:
         callbacks = self._events[event]
         callbacks.remove(callback)
         if not callbacks:
             self._events.pop(event, None)
+
+    def emit(self, event: str, *args: object) -> None:
+        for callback in list(self._events.get(event, [])):
+            callback(*args)
 
     def listener_count(self, event: str) -> int:
         return len(self._events.get(event, []))
@@ -57,7 +63,7 @@ class _FakeRoom:
     def isconnected(self) -> bool:
         return self.connected
 
-    def register_text_stream_handler(self, topic: str, callback: object) -> None:
+    def register_text_stream_handler(self, topic: str, callback: Callable[..., None]) -> None:
         self.on(f"text:{topic}", callback)
 
     def unregister_text_stream_handler(self, topic: str) -> None:
@@ -147,6 +153,50 @@ class _FakeWriter:
 
     async def aclose(self, attributes: dict[str, str] | None = None) -> None:
         self.close_calls += 1
+
+
+def _fake_remote(
+    identity: str,
+    *,
+    client_protocol: int = 0,
+    kind: rtc.ParticipantKind.ValueType = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+    on_behalf: str | None = None,
+) -> SimpleNamespace:
+    """A remote participant stand-in for the legacy-transcription gate.
+
+    `attributes` must be a real dict -- the gate calls `.get` on it -- and
+    `client_protocol` is read off `_info`, matching livekit-rtc's private shape.
+    """
+    attributes: dict[str, str] = {}
+    if on_behalf is not None:
+        attributes["lk.publish_on_behalf"] = on_behalf
+    return SimpleNamespace(
+        identity=identity,
+        kind=kind,
+        attributes=attributes,
+        _info=SimpleNamespace(client_protocol=client_protocol),
+    )
+
+
+def _make_legacy_output(
+    room: _FakeRoom,
+    *,
+    participant_identity: str = "agent",
+) -> _ParticipantLegacyTranscriptionOutput:
+    """A legacy sink wired up without going through `set_participant`, which would walk
+    `track_publications` that the fakes do not have."""
+    output = _ParticipantLegacyTranscriptionOutput(room=room, participant=None)
+    output._participant_identity = participant_identity
+    output._represented_by = participant_identity
+    output._track_id = "TR_legacy"
+    return output
+
+
+async def _capture_and_flush(output: _ParticipantLegacyTranscriptionOutput, text: str) -> None:
+    await output.capture_text(text)
+    output.flush()
+    if output._flush_task is not None:
+        await output._flush_task
 
 
 def _make_track_available_args(
@@ -316,6 +366,7 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
     room.on("participant_connected", room_io._on_participant_connected)
     room.on("connection_state_changed", room_io._on_connection_state_changed)
     room.on("participant_disconnected", room_io._on_participant_disconnected)
+    room.on("sip_dtmf_received", room_io._on_sip_dtmf_received)
 
     order: list[str] = []
 
@@ -342,10 +393,242 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
     assert room.listener_count("participant_connected") == 0
     assert room.listener_count("connection_state_changed") == 0
     assert room.listener_count("participant_disconnected") == 0
+    assert room.listener_count("sip_dtmf_received") == 0
     assert order == ["sync", "user", "agent"]
     room_io._tr_synchronizer.aclose.assert_awaited_once()
     room_io._user_tr_output.aclose.assert_awaited_once()
     room_io._agent_tr_output.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("event_source", ["linked", "other", "unattributed"])
+async def test_roomio_dtmf_resets_away_only_for_linked_participant(event_source: str) -> None:
+    room = _FakeRoom()
+    room.connected = False
+    caller = MagicMock(spec=rtc.RemoteParticipant)
+    caller.identity = "caller"
+    caller.attributes = {}
+    caller.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    other = MagicMock(spec=rtc.RemoteParticipant)
+    other.identity = "other"
+
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        await session.start(
+            Agent(instructions="Collect DTMF input."),
+            room=room,
+            session_host=False,
+            room_options=RoomOptions(
+                audio_input=False,
+                audio_output=False,
+                text_input=False,
+                text_output=False,
+            ),
+        )
+        room.emit("participant_connected", caller)
+
+        sender = (
+            None if event_source == "unattributed" else other if event_source == "other" else caller
+        )
+        digit = rtc.SipDTMF(code=1, digit="1", participant=sender)
+        assert room.listener_count("sip_dtmf_received") == 1
+
+        await asyncio.sleep(2.0)
+        room.emit("sip_dtmf_received", digit)
+        await asyncio.sleep(2.0)
+        assert session.user_state == ("listening" if event_source == "linked" else "away")
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "away"
+        room.emit("sip_dtmf_received", digit)
+        assert session.user_state == ("listening" if event_source == "linked" else "away")
+
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+        session.room_io.unset_participant()
+        room.emit("sip_dtmf_received", digit)
+        assert session.user_state == "away"
+
+    assert room.listener_count("sip_dtmf_received") == 0
+
+
+@pytest.mark.parametrize(
+    "unlinked_reason",
+    ["before_join", "disconnect", "unset", "switch", "reselect_same", "reselect_other"],
+)
+async def test_roomio_away_timer_waits_for_linked_participant(unlinked_reason: str) -> None:
+    room = _FakeRoom()
+    room.local_participant.set_attributes = AsyncMock()
+    caller = MagicMock(
+        spec=rtc.RemoteParticipant,
+        identity="caller",
+        sid="PA_caller",
+        attributes={},
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        disconnect_reason=rtc.DisconnectReason.CLIENT_INITIATED,
+    )
+    replacement = MagicMock(
+        spec=rtc.RemoteParticipant,
+        identity="replacement",
+        sid="PA_replacement",
+        attributes={},
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+    )
+    next_participant = (
+        caller if unlinked_reason in ("before_join", "disconnect", "reselect_same") else replacement
+    )
+    if unlinked_reason != "before_join":
+        room.remote_participants[caller.identity] = caller
+    if unlinked_reason == "reselect_other":
+        room.remote_participants[replacement.identity] = replacement
+
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        await session.start(
+            Agent(instructions="Collect DTMF input."),
+            room=room,
+            session_host=False,
+            room_options=RoomOptions(
+                audio_input=False,
+                audio_output=False,
+                text_input=False,
+                text_output=False,
+                close_on_disconnect=False,
+            ),
+        )
+        if unlinked_reason != "before_join":
+            await asyncio.wait_for(session.room_io.wait_for_ready(), timeout=1.0)
+            await asyncio.sleep(2.0)
+            assert session.user_state == "listening"
+
+        if unlinked_reason == "disconnect":
+            del room.remote_participants[caller.identity]
+            room.emit("participant_disconnected", caller)
+        elif unlinked_reason in ("unset", "reselect_same", "reselect_other"):
+            session.room_io.unset_participant()
+        elif unlinked_reason == "switch":
+            session.room_io.set_participant(replacement.identity)
+
+        assert session.room_io.linked_participant is None
+        await asyncio.sleep(4.0)
+        assert session.user_state == "listening"
+
+        session.reset_away_timer()
+        room.emit("sip_dtmf_received", rtc.SipDTMF(code=1, digit="1", participant=caller))
+        await asyncio.sleep(4.0)
+        assert session.user_state == "listening"
+
+        if unlinked_reason in ("reselect_same", "reselect_other"):
+            session.room_io.set_participant(next_participant.identity)
+        else:
+            room.remote_participants[next_participant.identity] = next_participant
+            room.emit("participant_connected", next_participant)
+        assert session.room_io.linked_participant is next_participant
+        await asyncio.sleep(2.0)
+        room.emit("sip_dtmf_received", rtc.SipDTMF(code=1, digit="1", participant=next_participant))
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        await asyncio.sleep(2.0)
+        assert session.user_state == "away"
+
+
+@pytest.mark.parametrize("initial_identity", [None, "waiting-caller"])
+async def test_roomio_set_participant_wakes_initial_waiter(initial_identity: str | None) -> None:
+    room = _FakeRoom()
+    caller = MagicMock(
+        spec=rtc.RemoteParticipant,
+        identity="caller",
+        sid="PA_caller",
+        attributes={},
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+    )
+    room_io = RoomIO(
+        MagicMock(spec=AgentSession),
+        room,
+        participant=initial_identity,
+        options=RoomOptions(
+            audio_input=False, audio_output=False, text_input=False, text_output=False
+        ),
+    )
+    await room_io.start()
+    try:
+        await asyncio.sleep(0)
+        room.remote_participants[caller.identity] = caller
+        room_io.set_participant(caller.identity)
+        await asyncio.wait_for(room_io.wait_for_ready(), timeout=1.0)
+        assert room_io.linked_participant is caller
+    finally:
+        await room_io.aclose()
+
+
+@pytest.mark.parametrize("replacement_connected", [True, False])
+async def test_roomio_dtmf_follows_participant_switch(replacement_connected: bool) -> None:
+    room = _FakeRoom()
+    room.local_participant.set_attributes = AsyncMock()
+    caller = MagicMock(
+        spec=rtc.RemoteParticipant,
+        identity="caller",
+        sid="PA_caller",
+        attributes={},
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+    )
+    replacement = MagicMock(
+        spec=rtc.RemoteParticipant,
+        identity="replacement",
+        sid="PA_replacement",
+        attributes={},
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+    )
+    room.remote_participants[caller.identity] = caller
+    if replacement_connected:
+        room.remote_participants[replacement.identity] = replacement
+    caller_digit = rtc.SipDTMF(code=1, digit="1", participant=caller)
+    replacement_digit = rtc.SipDTMF(code=2, digit="2", participant=replacement)
+
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        await session.start(
+            Agent(instructions="Collect DTMF input."),
+            room=room,
+            session_host=False,
+            room_options=RoomOptions(
+                audio_input=False,
+                audio_output=False,
+                text_input=False,
+                text_output=False,
+            ),
+        )
+        await asyncio.wait_for(session.room_io.wait_for_ready(), timeout=1.0)
+        assert session.room_io.linked_participant is caller
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+
+        session.room_io.set_participant(replacement.identity)
+        room.emit("sip_dtmf_received", caller_digit)
+        assert session.user_state == ("listening" if replacement_connected else "away")
+
+        if not replacement_connected:
+            assert session.room_io.linked_participant is None
+            room.emit("sip_dtmf_received", replacement_digit)
+            assert session.user_state == "away"
+            room.remote_participants[replacement.identity] = replacement
+            room.emit("participant_connected", replacement)
+
+        assert session.room_io.linked_participant is replacement
+        assert room.listener_count("sip_dtmf_received") == 1
+        assert session.user_state == "listening"
+
+        await asyncio.sleep(2.0)
+        room.emit("sip_dtmf_received", replacement_digit)
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        room.emit("sip_dtmf_received", caller_digit)
+        await asyncio.sleep(2.0)
+        assert session.user_state == "away"
+
+    assert room.listener_count("sip_dtmf_received") == 0
 
 
 @pytest.mark.parametrize(
@@ -794,6 +1077,31 @@ async def test_selector_returns_noise_cancellation_options() -> None:
     await stream.aclose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_nc", "agent_nc", "warns"),
+    [(True, True, True), (True, False, False), (False, True, False)],
+)
+async def test_warns_on_double_noise_cancellation(
+    client_nc: bool, agent_nc: bool, warns: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    room = _FakeRoom()
+    nc_options = rtc.NoiseCancellationOptions(module_id="bvc", options={})
+    stream = _make_audio_input_stream(room, noise_cancellation=nc_options if agent_nc else None)
+    stream.set_participant("test-user")
+
+    track, publication, participant = _make_track_available_args()
+    if client_nc:
+        publication.audio_features = [AudioTrackFeature.TF_ENHANCED_NOISE_CANCELLATION]
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+        stream._on_track_available(track, publication, participant)
+
+    assert ("enhanced noise cancellation" in caplog.text) is warns
+
+    await stream.aclose()
+
+
 # -- audio output tests -------------------------------------------------------
 
 
@@ -1105,3 +1413,189 @@ async def test_audio_output_waits_for_active_submission_and_source_playout() -> 
 
     assert not finished.interrupted
     assert finished.playback_position == pytest.approx(frame.duration)
+
+
+# -- legacy transcription gate ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_skipped_when_all_clients_are_modern() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "a": _fake_remote("a", client_protocol=3),
+        "b": _fake_remote("b", client_protocol=3),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_published_when_a_client_is_legacy() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "modern": _fake_remote("modern", client_protocol=3),
+        "legacy": _fake_remote("legacy", client_protocol=0),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    calls = room.local_participant.publish_transcription.await_args_list
+    assert len(calls) == 2
+
+    partial = calls[0].args[0].segments[0]
+    assert partial.text == "hello"
+    assert partial.final is False
+
+    final = calls[1].args[0].segments[0]
+    assert final.text == "hello"
+    assert final.final is True
+    assert final.id == partial.id
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_skipped_with_no_standard_participants() -> None:
+    """An empty considered set means skip: a SIP-only room has nobody who renders text."""
+    for remotes in (
+        {},
+        {"sip": _fake_remote("sip", kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP)},
+    ):
+        room = _FakeRoom()
+        room.local_participant.publish_transcription = AsyncMock()
+        room.remote_participants = dict(remotes)
+
+        await _capture_and_flush(_make_legacy_output(room), "hello")
+
+        assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind",
+    [
+        rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        rtc.ParticipantKind.PARTICIPANT_KIND_INGRESS,
+        rtc.ParticipantKind.PARTICIPANT_KIND_AGENT,
+        rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
+    ],
+)
+async def test_legacy_transcription_ignores_non_standard_kinds(kind) -> None:
+    """Only user-created client SDK instances gate the legacy packet."""
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "user": _fake_remote("user", client_protocol=3),
+        "service": _fake_remote("service", client_protocol=0, kind=kind),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_published_for_legacy_standard_participant() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {"user": _fake_remote("user", client_protocol=0)}
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_excludes_our_own_avatar_worker() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "user": _fake_remote("user", client_protocol=3),
+        "avatar": _fake_remote("avatar", client_protocol=0, on_behalf="local"),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_counts_another_agents_avatar_worker() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "user": _fake_remote("user", client_protocol=3),
+        "avatar": _fake_remote("avatar", client_protocol=0, on_behalf="other-agent"),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_never_mistakes_the_user_for_a_proxy() -> None:
+    """Regression guard: the exclusion must not reuse `_is_local_proxy_participant`, which
+    also matches the participant the output is attributed to."""
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {"test-user": _fake_remote("test-user", client_protocol=0)}
+
+    output = _make_legacy_output(room, participant_identity="test-user")
+    await _capture_and_flush(output, "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_gate_is_dynamic_and_keeps_state_warm() -> None:
+    """A legacy client joining mid-segment gets the whole accumulated segment, which only
+    holds while the gate sits at the publish site rather than in capture_text."""
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {"modern": _fake_remote("modern", client_protocol=3)}
+
+    output = _make_legacy_output(room)
+
+    await output.capture_text("hello ")
+    assert room.local_participant.publish_transcription.await_count == 0
+
+    room.remote_participants["legacy"] = _fake_remote("legacy", client_protocol=0)
+
+    await output.capture_text("world")
+    assert room.local_participant.publish_transcription.await_count == 1
+    partial = room.local_participant.publish_transcription.await_args_list[0].args[0].segments[0]
+    assert partial.text == "hello world"
+    assert partial.final is False
+
+    output.flush()
+    assert output._flush_task is not None
+    await output._flush_task
+
+    final = room.local_participant.publish_transcription.await_args_list[1].args[0].segments[0]
+    assert final.text == "hello world"
+    assert final.final is True
+    assert final.id == partial.id
+
+
+@pytest.mark.asyncio
+async def test_modern_stream_still_published_when_legacy_is_skipped() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    writer = _FakeWriter()
+    room.local_participant.stream_text = AsyncMock(return_value=writer)
+    room.remote_participants = {"modern": _fake_remote("modern", client_protocol=3)}
+
+    output = _ParticipantTranscriptionOutput(room=room, participant="agent")
+    legacy_output, _ = output._ParticipantTranscriptionOutput__outputs
+    legacy_output._track_id = "TR_legacy"
+
+    await output.capture_text("hello")
+    output.flush()
+    if legacy_output._flush_task is not None:
+        await legacy_output._flush_task
+
+    assert "".join(writer.chunks) == "hello"
+    assert room.local_participant.publish_transcription.await_count == 0

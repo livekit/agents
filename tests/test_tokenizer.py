@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from livekit.agents import tokenize
@@ -118,6 +120,47 @@ async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, ex
     for i in range(len(expected)):
         ev = await stream.__anext__()
         assert ev.token == expected[i]
+
+
+MULTILINGUAL_SENT_CASES = [
+    # Arabic question mark
+    (
+        "هل تريد حجز موعد غداً؟ لدينا مواعيد متاحة في الصباح.",
+        ["هل تريد حجز موعد غداً؟", "لدينا مواعيد متاحة في الصباح."],
+    ),
+    # Urdu full stop
+    ("آپ کیسے ہیں۔ میں ٹھیک ہوں۔", ["آپ کیسے ہیں۔", "میں ٹھیک ہوں۔"]),
+    # Devanagari danda (Hindi)
+    ("आप कैसे हैं। मैं ठीक हूँ। धन्यवाद", ["आप कैसे हैं।", "मैं ठीक हूँ।", "धन्यवाद"]),
+    # Devanagari double danda
+    ("श्लोक एक॥ श्लोक दो॥", ["श्लोक एक॥", "श्लोक दो॥"]),
+    # Bengali also uses the danda
+    ("আপনি কেমন আছেন। আমি ভালো আছি।", ["আপনি কেমন আছেন।", "আমি ভালো আছি।"]),
+    # the closing quote stays with the sentence it ends
+    ("वह बोली “मैं ठीक हूँ।” अगला वाक्य।", ["वह बोली “मैं ठीक हूँ।”", "अगला वाक्य।"]),
+]
+
+
+@pytest.mark.parametrize(
+    "tokenizer",
+    [basic.SentenceTokenizer(min_sentence_len=1), blingfire.SentenceTokenizer(min_sentence_len=1)],
+)
+@pytest.mark.parametrize("text, expected", MULTILINGUAL_SENT_CASES)
+def test_sent_tokenizer_non_latin_terminators(
+    tokenizer: tokenize.SentenceTokenizer, text: str, expected: list[str]
+):
+    assert tokenizer.tokenize(text=text) == expected
+
+
+async def test_streamed_sent_tokenizer_emits_hindi_before_end_of_input():
+    # the first sentence must reach TTS while the LLM is still generating
+    stream = blingfire.SentenceTokenizer().stream()
+    for word in "आप कैसे हैं, आज का दिन कैसा रहा। मैं ठीक हूँ, धन्यवाद आपका".split(" "):
+        stream.push_text(word + " ")
+
+    ev = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+    assert ev.token == "आप कैसे हैं, आज का दिन कैसा रहा।"
+    await stream.aclose()
 
 
 WORDS_TEXT = "This is a test. Blabla another test! multiple consecutive spaces:     done"
@@ -248,6 +291,21 @@ async def test_streamed_punct_word_tokenizer(tokenizer: tokenize.WordTokenizer):
         assert ev.token == WORDS_PUNCT_EXPECTED[i]
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("مرحبا، كيف حالك؟", ["مرحبا", "كيف", "حالك"]),  # Arabic comma and question mark
+        ("تم الحجز؛ شكراً", ["تم", "الحجز", "شكراً"]),  # Arabic semicolon
+        ("آپ کیسے ہیں۔", ["آپ", "کیسے", "ہیں"]),  # Urdu full stop
+        ("आप कैसे हैं।", ["आप", "कैसे", "हैं"]),  # Devanagari danda
+        ("你好，我很好。", ["你", "好", "我", "很", "好"]),  # fullwidth CJK punctuation
+    ],
+)
+def test_word_tokenizer_ignores_non_ascii_punctuation(text: str, expected: list[str]):
+    tokenizer = basic.WordTokenizer(ignore_punctuation=True, split_character=True)
+    assert tokenizer.tokenize(text=text) == expected
+
+
 HYPHENATOR_TEXT = [
     "Segment",
     "expected",
@@ -294,6 +352,23 @@ REPLACE_REPLACEMENTS = {
 def test_replace_words():
     replaced = tokenize.utils.replace_words(text=REPLACE_TEXT, replacements=REPLACE_REPLACEMENTS)
     assert replaced == REPLACE_EXPECTED
+
+
+@pytest.mark.parametrize(
+    "text, replacements, expected",
+    [
+        ("مرحبا، كيف حالك؟", {"مرحبا": "أهلاً", "حالك": "أحوالك"}, "أهلاً، كيف أحوالك؟"),
+        ("नमस्ते। आप कैसे हैं", {"नमस्ते": "नमस्कार"}, "नमस्कार। आप कैसे हैं"),
+        # a key that ends in punctuation still matches as a whole word
+        ("ג׳ שלום", {"ג׳": "ד׳"}, "ד׳ שלום"),
+        # ...and keeps any punctuation that follows it
+        ("ג׳, שלום", {"ג׳": "ד׳"}, "ד׳, שלום"),
+    ],
+)
+def test_replace_words_non_ascii_punctuation(
+    text: str, replacements: dict[str, str], expected: str
+):
+    assert tokenize.utils.replace_words(text=text, replacements=replacements) == expected
 
 
 async def test_replace_words_async():

@@ -21,6 +21,9 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
@@ -65,6 +68,7 @@ EmbeddingModels = Literal[
 ]
 
 AssistantTools = Literal["code_interpreter", "file_search", "function"]
+DecisionModels = Literal["gpt-6-luna-decisions"]
 
 # adapters for OpenAI-compatible LLMs
 
@@ -105,6 +109,7 @@ NebiusChatModels = Literal[
 
 CerebrasChatModels = Literal[
     "gpt-oss-120b",
+    "qwen-3.8-27b",
     "zai-glm-4.7",
     "gemma-4-31b",
 ]
@@ -274,6 +279,9 @@ SambaNovaChatModels = Literal[
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
         "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",

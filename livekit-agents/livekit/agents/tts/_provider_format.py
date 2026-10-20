@@ -25,6 +25,7 @@ from ._mood import match_mood
 from .markup_utils import (
     LEADING_WS,
     _dedup_removal_space,
+    _strip_one,
     convert_expression_tags,
     extract_and_strip,
 )
@@ -199,6 +200,59 @@ def _fishaudio_break_to_bracket(match: re.Match[str]) -> str:
     except ValueError:
         secs = 0.0
     return "[long-break]" if secs >= 1.0 else "[break]"
+
+
+# Gemini TTS (the 3.8 family), from Gemini's controllable speech
+# generation docs (https://ai.google.dev/gemini-api/docs/speech-generation#controllable).
+#
+# Direction is split across two channels, so the expr dialect lowers onto both.
+# Sustained direction rides ``speech_metadata.style`` beside the words; a discrete vocal
+# event is an inline tag where it happens::
+#
+#     {"parts": [{"text": "\"<chuckle> What's on your mind?\"",
+#                 "speech_metadata": {"style": "Wistful, British accent"}}]}
+#
+# So an <expr type="expression"/> marker is not lowered at all — convert_markup leaves it
+# for the plugin to lift out — while sound, break and emphasis lower to the inline tags.
+# The native names stay in _GEMINI_TAGS so a hallucinated one is stripped from transcripts.
+# Style labels are free-form natural language, not a closed set.
+# square brackets work too, but the docs measured angle brackets as more reliable
+_GEMINI_SOUNDS = [
+    # the model's own documented list
+    "laugh",
+    "chuckle",
+    "sigh",
+    "breath",
+    "cough",
+    "argh",
+    # named by the general TTS docs, which also warn there is no exhaustive list; the
+    # rest of what they name (amazed, curious, sarcastic, whispers, ...) is sustained
+    # delivery, and belongs in the style field rather than inline
+    "gasp",
+    "giggle",
+    "cry",
+]
+# Gemini documents one pause length, so every break duration lowers to the same tag
+_GEMINI_PAUSE = "short pause"
+_GEMINI_TAGS = [*_GEMINI_SOUNDS, _GEMINI_PAUSE]
+
+# expr labels that differ from Gemini's native tag names
+_GEMINI_SOUND_ALIASES = {
+    "breathe": "breath",
+    "laughing": "laugh",
+    "laughs": "laugh",
+    "chuckling": "chuckle",
+    "sighing": "sigh",
+    "sighs": "sigh",
+    "groan": "argh",
+    "groaning": "argh",
+    "giggles": "giggle",
+    "giggling": "giggle",
+    "gasping": "gasp",
+    "crying": "cry",
+    "sob": "cry",
+    "sobbing": "cry",
+}
 
 
 # --- LiveKit expression markers (expr) ---
@@ -587,12 +641,118 @@ English — labels are a fixed vocabulary, never translated.""",
     return "\n\n".join(parts)
 
 
+_GEMINI_EXAMPLES = [
+    '<expr type="expression" label="Thoughtful, Quiet"/> Sienna? <expr type="expression" label="Wistful"/> What\'s on your mind?',  # noqa: E501
+    '<expr type="expression" label="Warm, Welcoming"/> Hey, good to hear from you. <expr type="expression" label="Gently curious"/> What can I help you with today?',  # noqa: E501
+    '<expr type="expression" label="Sincere, Subdued"/> Oh no, I\'m really sorry. <expr type="break" label="300ms"/> <expr type="expression" label="Calm, Steady"/> Let me see what I can do about it.',  # noqa: E501
+    '<expr type="expression" label="Gently amused"/> Okay, why did the burger go to the gym? <expr type="expression" label="Bright, Playful"/> Because it wanted better buns! <expr type="sound" label="laugh"/>',  # noqa: E501
+    '<expr type="expression" label="Easygoing, Warm"/> Yeah, <expr type="sound" label="chuckle"/> I get that a lot.',  # noqa: E501
+    '<expr type="expression" label="Measured, Clear"/> Your confirmation code is <expr type="prosody" label="emphasis">B four J seven</expr>.',  # noqa: E501
+]
+
+_GEMINI_DELIVERY = """Delivery - the style this sentence is spoken in. Self-closing; \
+place before EVERY sentence.
+   <expr type="expression" label="DESCRIPTORS"/>
+   The label is free-form natural language, not a fixed vocabulary — it is read as a \
+stage direction. Write one to three descriptors, comma-separated and capitalized, like \
+"Thoughtful, Quiet", "Wistful", "Warm, Unhurried", "Bright, Eager", "Measured, Clear".
+   Use ADJECTIVES — name the feeling or the manner ("Gently amused", "Subdued, \
+Sincere"). A mechanical direction ("rising tone", "120 words per minute") steers far \
+worse than the mood that would produce it.
+   Make the descriptors agree with each other. Clashing ones ("Calm, Excited") cancel \
+out and flatten the delivery into neither.
+   Match the label to the sentence's punctuation: an exclamation needs a bright or \
+eager descriptor, and a calm label flattens the "!". Never lead an exclamatory sentence \
+with a subdued tag.
+   Put each question in its own sentence — write "Welcome back. What can I do for \
+you?", not "Welcome back, what can I do for you?" — so the question gets its own style \
+instead of inheriting the statement's. Never put "Questioning" in a label; the question \
+mark already carries the intonation.
+   A style applies to exactly the sentence it precedes and does NOT carry over, so an \
+untagged sentence is spoken flat. Tag every one.
+   Carry your persona into the labels — they should read like this character's stage \
+directions, not generic ones. A relaxed persona tags with "Easygoing, Amiable"; a \
+formal one tags the same sentence "Courteous, Composed".
+   Rotate the descriptors — don't reuse the same label twice in a row. A starting \
+palette:
+     greeting: "Warm, Welcoming" / "Bright, Glad" / "Easygoing, Friendly"
+     asking a question: "Gently curious" / "Open, Attentive" / "Interested, Light"
+     good news: "Delighted" / "Bright, Pleased" / "Buoyant"
+     reassuring: "Calm, Steady" / "Grounded, Confident" / "Unhurried, Kind"
+     bad news or empathy: "Sincere, Subdued" / "Soft, Caring" / "Quiet, Gentle"
+     reading back a total, date, or code: "Measured, Clear\""""
+
+_GEMINI_ACCENT = """Accent - OPTIONAL last descriptor, written "<PLACE> accent" \
+("American accent", "British accent", "Irish accent").
+   <expr type="expression" label="Thoughtful, Quiet, American accent"/>
+   An accent is who the speaker IS, not how they feel, so use the SAME accent in every \
+tag for the whole conversation. Switching it mid-conversation swaps the speaker \
+out from under the listener. If you are not deliberately playing an accent, leave it \
+out entirely rather than naming a different one each turn."""
+
+
+def _gemini_expr_llm_instructions(sounds: list[str]) -> str:
+    """Instruction block for Gemini's two direction channels.
+
+    The ``expression`` label becomes the part's ``speech_metadata.style``, so its label
+    space is Gemini's own natural-language style prompt, not a vocabulary of ours.
+    """
+    sections = [_GEMINI_DELIVERY, _GEMINI_ACCENT]
+    if sounds:
+        sections.append(f"""Sounds - one non-verbal sound, at the exact point it happens. \
+Self-closing.
+   <expr type="sound" label="{sounds[0]}"/>
+   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Unlike the delivery style, which colours a whole sentence, a sound is a single event: \
+put the marker where the sound belongs, mid-sentence if that is where it lands.
+   Keep it clear of punctuation: put it after the mark that ends the sentence, never \
+between a word and that mark. "Better buns! <expr type="sound" label="{sounds[0]}"/>", \
+not "Better buns <expr type="sound" label="{sounds[0]}"/>!".
+   {_sound_guidance(sounds)}""")
+    sections.append("""Pauses - a beat of silence. Self-closing.
+   <expr type="break" label="500ms"/>
+   Gemini has ONE pause length, so the duration is only a hint that a beat belongs here.
+   A period or an ellipsis (...) already creates a pause, so don't put a break marker \
+right next to one — pick one or the other.""")
+    sections.append("""Emphasis - stresses the words it wraps.
+   <expr type="prosody" label="emphasis">one word</expr>
+   Use it on a single word, rarely — at most once in a turn, and not every turn. It is \
+the only in-text prosody this voice has; pace, pitch and volume all belong in the \
+delivery label instead.""")
+
+    return "\n\n".join(
+        [
+            _EXPR_PREAMBLE,
+            _numbered_sections(sections),
+            "There are no other marker types for this voice — no spell marker, and no "
+            "wrapping prosody beyond emphasis. Don't invent one.",
+            "Write the whole turn as one continuous line. A marker goes immediately "
+            "before the words it governs, not at the head of a new line — don't put each "
+            "sentence on its own line. This is speech, so line breaks buy nothing and a "
+            "marker heading a line reads as a pause that isn't there.",
+            "Write for the EAR, not the page: no em or en dashes anywhere in spoken text — "
+            "use a comma or a period for a short beat, or a break marker for a real pause. "
+            "Avoid semicolons, mid-sentence colons, and parenthetical asides; rewrite them "
+            "as separate sentences or commas.",
+            "When the conversation is in another language, still write every label in "
+            "English — the style descriptions and sound names steer the voice and are never "
+            "translated. Name that language's accent only if you are deliberately playing "
+            "one.",
+            "Examples:\n"
+            + "\n".join(
+                f"  {ex}" for ex in _sound_examples(_GEMINI_EXAMPLES, sounds, _GEMINI_SOUNDS)
+            ),
+        ]
+    )
+
+
 # Every provider's full expr sound vocabulary (the advertised labels before any
 # speech_steering filtering). Providers absent here have no non-verbal sounds.
 _PROVIDER_SOUNDS: dict[str, list[str]] = {
     "inworld": _INWORLD_SOUNDS,
     "xai": _XAI_INLINE,
     "fishaudio": _FISHAUDIO_SOUNDS,
+    "gemini": _GEMINI_SOUNDS,
 }
 
 
@@ -673,6 +833,15 @@ _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
         "mouth_sounds": [],
         "reflex_sounds": ["clear throat", "yawning"],
     },
+    "gemini": {
+        "laughing": ["laugh", "chuckle", "giggle"],
+        "breathing": ["breath", "gasp"],
+        "sighing": ["sigh"],
+        "crying": ["cry"],
+        "vocalizing": ["argh"],
+        "mouth_sounds": [],
+        "reflex_sounds": ["cough"],
+    },
 }
 
 # NonverbalOptions field -> the provider's wrapping-prosody labels it governs.
@@ -721,6 +890,10 @@ _SOUND_USAGE_HINTS: dict[str, str] = {
     "tsk": "a tsk for mock-disapproval",
     "clear throat": "a clear-throat when shifting to a new step or topic",
     "groaning": "a groan at a groan-worthy pun or an unwelcome chore",
+    "argh": "a groan at a groan-worthy pun or an unwelcome chore",
+    "cough": "a cough only when a cough is the point",
+    "gasp": "a gasp at a sudden shock or reveal",
+    "cry": "a sob reserved for real heartbreak",
     "yawning": "a yawn when tiredness itself is the topic",
     "sobbing": "a sob reserved for real heartbreak",
 }
@@ -823,6 +996,8 @@ _EXPR_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
 _EXPR_OPEN_RE = re.compile(LEADING_WS + r"<expr\b(?P<attrs>[^>]*?)/?\s*>")
 _EXPR_CLOSE_RE = re.compile(LEADING_WS + r"</expr\s*>")
 # self-closing markers only (the trailing / is required)
+# any expr marker, opening or self-closing or closing; ``attrs`` is None for a closing one
+_EXPR_ANY_RE = re.compile(LEADING_WS + r"(?:<expr\b(?P<attrs>[^>]*?)/?\s*>|</expr\s*>)")
 _EXPR_SELF_RE = re.compile(LEADING_WS + r"<expr\b(?P<attrs>[^>]*?)/\s*>")
 # a wrapping marker (prosody/spell) and its span; non-greedy, instructed not to nest
 _EXPR_WRAP_RE = re.compile(
@@ -865,7 +1040,7 @@ def _expr_attrs(attrs: str) -> dict[str, str]:
     return dict(_EXPR_ATTR_RE.findall(attrs))
 
 
-def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
+def _split_expr(text: str, *, at_line_start: bool = True) -> tuple[str, list[ExpressiveTag]]:
     """Strip expr markers and collect (type, label) pairs, in document order.
 
     The generic ``extract_and_strip`` pass can't produce the right ExpressiveTag for
@@ -878,15 +1053,59 @@ def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
         return text, []
 
     tags: list[ExpressiveTag] = []
+    out: list[str] = ["" if at_line_start else "\u0000"]
+    pos = 0
 
-    def _repl(m: re.Match[str]) -> str:
+    for m in _EXPR_ANY_RE.finditer(text):
+        out.append(text[pos : m.start()])
+        pos = m.end()
+        if (attrs := m.group("attrs")) is not None:
+            marker = _expr_attrs(attrs)
+            tags.append({"type": marker.get("type", ""), "value": marker.get("label", "")})
+        pos = _strip_one(out, text, pos, m, "")
+
+    out.append(text[pos:])
+    return "".join(out).lstrip("\u0000"), tags
+
+
+def _convert_gemini_expr(text: str) -> str:
+    """Lower expr markers onto Gemini's inline tags, leaving the delivery marker standing.
+
+    A discrete event (sound, pause, emphasis) lowers here like any other provider's. The
+    ``expression`` marker is not text at all — it rides ``speech_metadata.style`` — so it
+    passes through for the plugin to lift out.
+    """
+    if "<expr" not in text and "</expr" not in text:
+        return text
+
+    def _wrap(m: re.Match[str]) -> str:
         attrs = _expr_attrs(m.group("attrs"))
-        tags.append({"type": attrs.get("type", ""), "value": attrs.get("label", "")})
+        inner = m.group("inner")
+        if attrs.get("type") == "prosody" and attrs.get("label", "").strip().lower() == "emphasis":
+            # Gemini stresses a word by capitalizing it, its one in-text prosody control
+            return _dedup_removal_space(m, inner.upper())
+        return _dedup_removal_space(m, inner)  # spell, and prosody it has no control for
+
+    text = _EXPR_WRAP_RE.sub(_wrap, text)
+
+    def _self(m: re.Match[str]) -> str:
+        attrs = _expr_attrs(m.group("attrs"))
+        marker_type = attrs.get("type", "")
+        if marker_type == "expression":
+            return m.group(0)  # the style channel: not text, and not ours to remove
+        label = attrs.get("label", "").strip().lower()
+        if marker_type == "sound":
+            label = _GEMINI_SOUND_ALIASES.get(label, label)
+            return _dedup_removal_space(m, f"<{label}>" if label in _GEMINI_SOUNDS else "")
+        if marker_type == "break":
+            return _dedup_removal_space(m, f"<{_GEMINI_PAUSE}>")
         return _dedup_removal_space(m, "")
 
-    clean = _EXPR_OPEN_RE.sub(_repl, text)
-    clean = _EXPR_CLOSE_RE.sub(lambda m: _dedup_removal_space(m, ""), clean)
-    return clean, tags
+    text = _EXPR_SELF_RE.sub(_self, text)
+    # a stray unpaired wrapper (split across stream chunks) must never reach the TTS as
+    # literal text; the expression marker is self-closing, so this can't eat one
+    text = _EXPR_CLOSE_RE.sub(lambda m: _dedup_removal_space(m, ""), text)
+    return text
 
 
 def _convert_expr(provider: str, text: str) -> str:
@@ -996,6 +1215,8 @@ def llm_instructions(provider: str, steering: SpeechSteeringOptions | None = Non
             _allowed_sounds(provider, steering),
             disfluencies=steering.get("disfluencies", True) if steering else True,
         )
+    if provider == "gemini":
+        return _gemini_expr_llm_instructions(_allowed_sounds(provider, steering))
     return None
 
 
@@ -1009,6 +1230,10 @@ _PROVIDER_MARKUP: dict[str, list[str]] = {
     # fish's native dialect is square brackets, produced only by convert_markup for
     # the TTS; these names exist to catch hallucinated XML natives in transcripts
     "fishaudio": _FISHAUDIO_TAGS,
+    # gemini has no native inline tags at all (its style rides out of band, on each part
+    # of the request); membership here is what marks it markup-capable for
+    # normalize_markup, and what tells convert_markup to leave its markers in place
+    "gemini": _GEMINI_TAGS,
 }
 
 # Union of every provider's XML tag names — used by the transcript sinks to strip markup
@@ -1016,7 +1241,20 @@ _PROVIDER_MARKUP: dict[str, list[str]] = {
 _ALL_MARKUP_TAGS: list[str] = sorted({tag for tags in _PROVIDER_MARKUP.values() for tag in tags})
 
 
-def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+def _drop_trailing_separator(clean: str, stripped_any: bool) -> str:
+    """Drop the space a marker ending the text leaves with nothing to pair against.
+
+    ``_split_expr`` handles the other three sides at the point of removal, where it still
+    knows whether the marker headed a line. It cannot handle this one: mid-stream a
+    trailing space is the separator for words still arriving, so only a caller holding
+    the whole segment may drop it.
+    """
+    return clean.rstrip(" \t") if stripped_any else clean
+
+
+def split_all_markup(
+    text: str, *, at_line_start: bool = True, at_text_end: bool = True
+) -> tuple[str, list[ExpressiveTag]]:
     """Strip the union of every provider's expressive XML markup (provider-agnostic).
 
     The transcript sinks strip downstream, where the originating TTS/provider is no
@@ -1027,6 +1265,15 @@ def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     Square-bracket spans are *not* stripped: the LLM only writes expr, so brackets in its
     output are prose (a ``[text](url)`` link) that a strip would mangle. Provider-native
     brackets never arrive here — :func:`drop_bracket_cues` removes them at their source.
+
+    Args:
+        text: The text to strip.
+        at_line_start: Whether *text* begins a line, so a marker heading it takes the
+            space after it along. ``False`` for a chunk picked up mid-line, where that
+            whitespace is a real separator between two words.
+        at_text_end: Whether *text* really ends here, so a marker ending it takes the
+            space before it along (:func:`_drop_trailing_separator`). ``False``
+            mid-stream, where that whitespace belongs to words still arriving.
     """
     # every markup shape is angle-bracketed, so text without "<" cannot contain any. The
     # sinks call this per streamed chunk and expressive is off by default, making this the
@@ -1034,9 +1281,14 @@ def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     if "<" not in text:
         return text, []
 
-    text, expr_tags = _split_expr(text)
-    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS)
-    return clean, expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
+    text, expr_tags = _split_expr(text, at_line_start=at_line_start)
+    clean, raw_tags = extract_and_strip(
+        text, xml_tags=_ALL_MARKUP_TAGS, at_line_start=at_line_start
+    )
+    tags = expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
+    if at_text_end:
+        clean = _drop_trailing_separator(clean, bool(tags))
+    return clean, tags
 
 
 def strip_all_markup(text: str) -> str:
@@ -1044,13 +1296,20 @@ def strip_all_markup(text: str) -> str:
     return split_all_markup(text)[0]
 
 
-def strip_expr_markup(text: str) -> str:
-    """Strip only the ``<expr/>`` dialect, leaving all other markup untouched.
+def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+    """Strip only the ``<expr/>`` dialect, returning the clean text and its markers.
 
-    Unlike :func:`strip_all_markup`, provider-native tags survive (both leave
-    square-bracket spans alone).
+    Unlike :func:`split_all_markup`, provider-native tags survive — what a provider whose
+    direction is split across channels needs: Gemini's inline ``<laugh>`` stays in the
+    words, while the ``expression`` marker beside it has to come out.
     """
-    return _split_expr(text)[0]
+    clean, tags = _split_expr(text)
+    return _drop_trailing_separator(clean, bool(tags)), tags
+
+
+def strip_expr_markup(text: str) -> str:
+    """:func:`split_expr_markup` returning only the clean text (markers discarded)."""
+    return split_expr_markup(text)[0]
 
 
 def expression_attribute(tags: list[ExpressiveTag]) -> dict[str, str] | None:
@@ -1082,6 +1341,8 @@ class TranscriptMarkupStripper:
         self._buf = ""
         self._tags: list[ExpressiveTag] = []
         self._seam_after_strip = False
+        self._eat_leading_ws = False
+        self._line_start = True  # the next words open the segment's first line
 
     def _consume(self, text: str, *, final: bool) -> str:
         """Strip *text*, record its tags, and keep a removed tag from doubling a space.
@@ -1091,21 +1352,34 @@ class TranscriptMarkupStripper:
         emitted, so a tag opening the *next* chunk is still stripped against the space
         before it; ``final`` releases the held whitespace at segment end.
         """
-        if self._seam_after_strip and text[:1] in (" ", "\t"):
+        if self._eat_leading_ws:
+            # the chunk ended on a tag that headed a line, so the space it stranded is
+            # the one this chunk starts with
+            text = text.lstrip(" \t")
+        elif self._seam_after_strip and text[:1] in (" ", "\t"):
             # a tag was stripped right at the held whitespace: collapse that whitespace
             # with the run following it, leaving the single separator the words need
             text = text[:1] + text[1:].lstrip(" \t")
 
-        clean, tags = split_all_markup(text)
+        # at_text_end is handled below against the segment's tags, not this chunk's: the
+        # flush that ends a segment often carries only held whitespace and no marker
+        clean, tags = split_all_markup(text, at_line_start=self._line_start, at_text_end=False)
         self._tags.extend(tags)
+        if final:
+            clean = _drop_trailing_separator(clean, bool(self._tags))
 
         held = "" if final else clean[len(clean.rstrip(" \t")) :]
         self._buf = held
-        # the held whitespace only abuts a removal when this chunk *ended* on a tag; a tag
-        # stripped earlier in the chunk leaves whitespace the LLM itself wrote, which is
-        # passed through rather than collapsed
-        self._seam_after_strip = bool(tags) and bool(held) and text.rstrip(" \t").endswith(">")
-        return clean[: len(clean) - len(held)]
+        out = clean[: len(clean) - len(held)]
+        if out:
+            self._line_start = out.endswith("\n")  # the next chunk heads a fresh line
+
+        # a tag only abuts the next chunk when this one *ended* on it; a tag stripped
+        # earlier leaves whitespace the LLM itself wrote, which is passed through
+        ended_on_tag = bool(tags) and text.rstrip(" \t").endswith(">")
+        self._seam_after_strip = ended_on_tag and bool(held)
+        self._eat_leading_ws = ended_on_tag and self._line_start
+        return out
 
     def _has_open_tag(self) -> bool:
         # hold a tag-shaped trailing "<" (partial XML tag) so "3 < 5" isn't stalled. An
@@ -1236,6 +1510,8 @@ def normalize_markup(provider: str, text: str) -> str:
 
 def convert_markup(provider: str, text: str) -> str:
     """Convert framework-standard markup to a provider's native syntax."""
+    if provider == "gemini":
+        return _convert_gemini_expr(text)
     if provider in _PROVIDER_MARKUP:
         # lower expr markers first; the per-provider conversions below then
         # handle the intermediate framework-standard tags they produce
