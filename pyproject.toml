@@ -13,6 +13,7 @@ required-environments = [
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
+livekit-plugins-addisai = { workspace = true }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
