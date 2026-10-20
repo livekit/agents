@@ -54,8 +54,13 @@ DEFAULT_VOICE_ID = "4SZHfMpw-p46Ywgs"
 _NON_RETRYABLE_CLOSE_CODES = frozenset({1002, 1003})
 
 
-def _close_error(message: str, *, code: int | None, body: Any) -> APIStatusError:
+def _close_error(
+    message: str, *, code: int | None, body: Any, reason: Any = None
+) -> APIStatusError:
     code = code if isinstance(code, int) else -1
+    if isinstance(reason, str) and reason:
+        # the close frame's reason is the server's own explanation of the failure
+        message = f"{message}: {reason}"
     return APIStatusError(
         message,
         status_code=code,
@@ -299,6 +304,7 @@ class ChunkedStream(tts.ChunkedStream):
                             "Gradium connection closed unexpectedly",
                             code=ws.close_code,
                             body=f"{msg.data=} {msg.extra=}",
+                            reason=msg.extra,
                         )
 
                     if msg.type == aiohttp.WSMsgType.TEXT:
@@ -436,6 +442,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "Gradium connection closed unexpectedly",
                         code=ws.close_code,
                         body=f"{msg.data=} {msg.extra=}",
+                        reason=msg.extra,
                     )
 
                 if msg.type == aiohttp.WSMsgType.TEXT:

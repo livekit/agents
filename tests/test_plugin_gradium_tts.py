@@ -63,6 +63,7 @@ class FakeWebSocket:
         frames: list[Any],
         *,
         close_code: int | None = None,
+        close_reason: str = "",
         block_when_empty: bool = False,
         fail_send_on: str | None = None,
     ) -> None:
@@ -73,6 +74,7 @@ class FakeWebSocket:
         self._block_when_empty = block_when_empty
         self._fail_send_on = fail_send_on
         self.close_code = close_code
+        self._close_reason = close_reason
         self.sent: list[dict[str, Any]] = []
         self._exception: BaseException | None = None
 
@@ -96,7 +98,7 @@ class FakeWebSocket:
         if frame == "timeout":
             raise asyncio.TimeoutError
         if frame == "close":
-            return _Msg(self._ws_type.CLOSE, self.close_code, "")
+            return _Msg(self._ws_type.CLOSE, self.close_code, self._close_reason)
         if isinstance(frame, tuple) and frame[0] == "error":
             self._exception = frame[1]
             return _Msg(self._ws_type.ERROR, frame[1])
@@ -188,9 +190,9 @@ async def test_synthesize_raises_on_error_frame():
 
 
 async def test_synthesize_raises_on_close_before_eos():
-    tts, _, _ = _make_tts([READY, "close"], close_code=1011)
+    tts, _, _ = _make_tts([READY, "close"], close_code=1011, close_reason="Worker failure")
 
-    with pytest.raises(APIStatusError) as excinfo:
+    with pytest.raises(APIStatusError, match="closed unexpectedly: Worker failure") as excinfo:
         await _drain(tts, CONN_OPTS)
     assert type(excinfo.value) is APIStatusError
     assert excinfo.value.status_code == 1011
