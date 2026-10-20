@@ -88,7 +88,7 @@ from .keyterm_detection import (
     _resolve_stt_context_options,
     _stt_context_from_keyterms_options,
 )
-from .recorder_io import RecorderIO, _validate_bit_rate
+from .recorder_io.recorder_io import RecorderIO, _validate_bit_rate
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
