@@ -1698,3 +1698,16 @@ async def test_recorder_io_bit_rate_options_default_to_recorder_ios_own_defaults
         assert mock_cls.call_args.kwargs["bit_rate"] is None
         assert mock_cls.call_args.kwargs["constant_bit_rate"] is False
         await _cleanup(session)
+
+async def test_invalid_recorder_bit_rate_fails_before_claiming_primary_session() -> None:
+    """Invalid recorder options must fail before session startup creates room tasks."""
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+
+    with _patch_job_ctx(mock_ctx):
+        with pytest.raises(ValueError, match="bit_rate"):
+            await session.start(SimpleAgent(), record={"audio": True, "bit_rate": 1_000_000})
+
+    assert mock_ctx._primary_agent_session is None
+    assert session._room_io is None
+    assert not session._started
