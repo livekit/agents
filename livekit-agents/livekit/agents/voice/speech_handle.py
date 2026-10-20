@@ -81,7 +81,6 @@ class SpeechHandle:
                     logger.warning(f"error in done_callback: {cb}", exc_info=e)
 
         self._done_fut.add_done_callback(_on_done)
-        self._maybe_run_final_output: Any = None  # kept private
         self._error: BaseException | None = None
 
     @staticmethod

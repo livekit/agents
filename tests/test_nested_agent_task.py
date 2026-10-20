@@ -431,3 +431,108 @@ async def test_run_includes_next_task_reply_after_task_completes():
             ev.type == "message" and ev.item.text_content == "what is your ID number?"
             for ev in result.events
         )
+
+
+class DeclinableStepTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(instructions="step task")
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="step_greeting")
+
+    @function_tool
+    async def decline(self, ctx: RunContext) -> None:
+        """Called when the user refuses."""
+        self.complete(ToolError("declined"))
+
+
+class CaptureTask(AgentTask[None]):
+    """Runs its step from on_enter and completes with the step's error, like
+    GetCreditCardTask does with its TaskGroup."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="capture task")
+
+    async def on_enter(self) -> None:
+        try:
+            await DeclinableStepTask()
+        except ToolError as e:
+            self.complete(e)
+            return
+        self.complete(None)
+
+
+class CaptureAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+
+    @function_tool
+    async def capture(self, ctx: RunContext) -> str:
+        """Starts the capture."""
+        await CaptureTask()
+        return "captured"
+
+
+@pytest.mark.asyncio
+async def test_inline_task_error_reported_to_model_does_not_fail_run() -> None:
+    """A task awaited inside a tool hands its outcome to that tool; a ToolError the tool
+    raises becomes the model's tool output, so the run that drove the turn succeeds."""
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="capture", arguments="{}", call_id="call_1")],
+            ),
+            FakeLLMResponse(input="step_greeting", content="what is it?", ttft=0, duration=0),
+            FakeLLMResponse(
+                input="no",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="decline", arguments="{}", call_id="call_2")],
+            ),
+            FakeLLMResponse(input="declined", content="no problem", ttft=0, duration=0),
+        ]
+    )
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(CaptureAgent())
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+        assert isinstance(sess.current_agent, DeclinableStepTask)
+
+        await asyncio.wait_for(sess.run(user_input="no"), timeout=5.0)
+
+        assert isinstance(sess.current_agent, CaptureAgent)
+        await asyncio.sleep(1)
+        assert any(
+            item.type == "function_call_output" and item.call_id == "call_1" and item.is_error
+            for item in sess.history.items
+        )
+
+
+@pytest.mark.asyncio
+async def test_root_task_completed_from_on_enter_is_run_output() -> None:
+    """A root task's outcome is the run's output even when it completes from on_enter,
+    after a step it awaited, rather than from one of its own tool calls."""
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(input="step_greeting", content="what is it?", ttft=0, duration=0),
+            FakeLLMResponse(
+                input="no",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="decline", arguments="{}", call_id="call_1")],
+            ),
+        ]
+    )
+
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(CaptureTask())
+        await asyncio.sleep(1)
+        assert isinstance(sess.current_agent, DeclinableStepTask)
+
+        with pytest.raises(ToolError, match="declined"):
+            await asyncio.wait_for(sess.run(user_input="no"), timeout=5.0)
