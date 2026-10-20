@@ -9,37 +9,6 @@ import pytest
 pytestmark = pytest.mark.plugin("gnani")
 
 
-@pytest.mark.parametrize("event_type", ["speech_end", "vad_end"])
-async def test_endpoint_does_not_use_processing_duration_as_speech_end(event_type):
-    import json
-    from types import SimpleNamespace
-
-    from livekit.agents import stt
-    from livekit.plugins.gnani.stt import SpeechStream
-
-    async def messages():
-        for message in [
-            {
-                "type": "transcript",
-                "text": "hello",
-                "audio_duration_ms": 400,
-                "timestamp": "2026-10-14T00:00:00Z",
-            },
-            {"type": event_type, "timestamp": "2026-10-14T00:00:01Z"},
-        ]:
-            yield json.dumps(message)
-
-    stream = object.__new__(SpeechStream)
-    stream._opts = SimpleNamespace(language="en")
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
-    events = []
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
-    await stream._recv_messages(messages())
-    assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
-    assert events[-1].alternatives == []
-    assert events[-1].speech_end_time is None
-
-
 def test_stt_requires_api_key():
     """STT constructor raises when no API key is provided."""
     from livekit.plugins.gnani import STT

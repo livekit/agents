@@ -35,7 +35,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.language import LanguageCode
-from livekit.agents.stt import SpeechData
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -277,7 +276,6 @@ class SpeechStream(stt.RecognizeStream):
         self._session = http_session
         self._speaking = False
         self._emitted_chunk_final = False
-        self._final_alternatives: list[SpeechData] = []
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
             duration=5.0,
@@ -400,8 +398,6 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 closing_ws = False
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
-                self._final_alternatives = []
                 self._server_ready.clear()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -507,31 +503,43 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
             if is_final:
-                speech_data = _words_to_speech_data(
-                    words,
-                    text,
-                    language=language,
-                    enable_diarization=self._opts.enable_diarization,
-                    start_time_offset=self.start_time_offset,
-                )
-                if not speech_final or not self._emitted_chunk_final:
-                    self._final_alternatives = (
-                        [speech_data] if words and words[-1].get("end", 0) > 0 else []
-                    )
+                if not speech_final:
+                    self._emitted_chunk_final = True
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                             request_id=self._request_id,
-                            alternatives=[speech_data],
+                            alternatives=[
+                                _words_to_speech_data(
+                                    words,
+                                    text,
+                                    language=language,
+                                    enable_diarization=self._opts.enable_diarization,
+                                )
+                            ],
                         )
                     )
-                elif words and words[-1].get("end", 0) > 0:
-                    self._final_alternatives = [speech_data]
-
-                if speech_final:
-                    self._end_speech()
                 else:
-                    self._emitted_chunk_final = True
+                    if not self._emitted_chunk_final:
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                request_id=self._request_id,
+                                alternatives=[
+                                    _words_to_speech_data(
+                                        words,
+                                        text,
+                                        language=language,
+                                        enable_diarization=self._opts.enable_diarization,
+                                    )
+                                ],
+                            )
+                        )
+                    self._emitted_chunk_final = False
+                    self._speaking = False
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    )
             else:
                 if self._opts.enable_interim_results:
                     self._event_ch.send_nowait(
@@ -549,25 +557,23 @@ class SpeechStream(stt.RecognizeStream):
             words = data.get("words", [])
             language = data.get("language", "")
             if text:
-                speech_data = _words_to_speech_data(
-                    words,
-                    text,
-                    language=language,
-                    enable_diarization=self._opts.enable_diarization,
-                    start_time_offset=self.start_time_offset,
-                )
-                self._final_alternatives = (
-                    [speech_data] if words and words[-1].get("end", 0) > 0 else []
-                )
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=self._request_id,
-                        alternatives=[speech_data],
+                        alternatives=[
+                            _words_to_speech_data(
+                                words,
+                                text,
+                                language=language,
+                                enable_diarization=self._opts.enable_diarization,
+                            )
+                        ],
                     )
                 )
             if self._speaking:
-                self._end_speech()
+                self._speaking = False
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif msg_type == "error":
             logger.error("xAI STT error: %s", data.get("message", "unknown error"))
@@ -575,25 +581,9 @@ class SpeechStream(stt.RecognizeStream):
         else:
             logger.warning("received unexpected message from xAI: %s", msg_type)
 
-    def _end_speech(self) -> None:
-        self._speaking = False
-        self._emitted_chunk_final = False
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.END_OF_SPEECH,
-                alternatives=self._final_alternatives,
-            )
-        )
-        self._final_alternatives = []
-
 
 def _words_to_speech_data(
-    words: list[dict],
-    text: str,
-    *,
-    language: str,
-    enable_diarization: bool,
-    start_time_offset: float = 0.0,
+    words: list[dict], text: str, *, language: str, enable_diarization: bool
 ) -> stt.SpeechData:
     speaker_id = (
         f"S{words[0]['speaker']}"
@@ -603,17 +593,12 @@ def _words_to_speech_data(
     return stt.SpeechData(
         language=LanguageCode(language),
         text=text,
-        start_time=words[0].get("start", 0.0) + start_time_offset if words else 0.0,
-        end_time=words[-1]["end"] + start_time_offset
-        if words and words[-1].get("end", 0.0) > 0
-        else 0.0,
+        start_time=words[0].get("start", 0.0) if words else 0.0,
+        end_time=words[-1].get("end", 0.0) if words else 0.0,
         speaker_id=speaker_id,
         words=[
             TimedString(
-                w.get("text", ""),
-                start_time=w.get("start", 0.0) + start_time_offset,
-                end_time=w.get("end", 0.0) + start_time_offset,
-                start_time_offset=start_time_offset,
+                w.get("text", ""), start_time=w.get("start", 0.0), end_time=w.get("end", 0.0)
             )
             for w in words
         ]

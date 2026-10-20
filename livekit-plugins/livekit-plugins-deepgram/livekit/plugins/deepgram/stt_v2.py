@@ -19,7 +19,7 @@ import json
 import os
 import weakref
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import aiohttp
@@ -563,7 +563,6 @@ class SpeechStreamv2(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
                 # expose the connection for in-band Configure updates
                 self._ws = ws
                 tasks = [
@@ -679,9 +678,7 @@ class SpeechStreamv2(stt.SpeechStream):
         )
         self._event_ch.send_nowait(usage_event)
 
-    def _send_transcript_event(
-        self, event_type: stt.SpeechEventType, data: dict
-    ) -> list[stt.SpeechData]:
+    def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict) -> None:
         alts = _parse_transcription(self._opts.language, data, self.start_time_offset)
         if alts:
             event = stt.SpeechEvent(
@@ -690,7 +687,6 @@ class SpeechStreamv2(stt.SpeechStream):
                 alternatives=alts,
             )
             self._event_ch.send_nowait(event)
-        return alts
 
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None
@@ -736,19 +732,9 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 self._speaking = False
 
-                alts = self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, data)
-                words = data.get("words") or []
-                last_word_end = words[-1].get("end", 0) if words else 0
+                self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, data)
 
-                end_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=[
-                        replace(alt, end_time=self.start_time_offset + last_word_end)
-                        for alt in alts
-                    ]
-                    if last_word_end > 0
-                    else [],
-                )
+                end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
 
         elif data["type"] == "ConfigureSuccess":

@@ -123,39 +123,6 @@ def _segment_message(
     }
 
 
-@pytest.mark.parametrize("end", [0.4, 0.0])
-async def test_endpoint_preserves_final_segment_timing_and_clears_it(end: float) -> None:
-    stream = _stream()
-    stream.start_time_offset = 7.0
-    try:
-        stream._handle_start_of_turn({})
-        stream._handle_segment(_segment_message(start=0.1, end=end), is_final=True)
-        stream._handle_end_of_turn({})
-        endpoint = next(e for e in _events(stream) if e.type == stt.SpeechEventType.END_OF_SPEECH)
-        if end:
-            assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
-        else:
-            assert endpoint.alternatives == []
-
-        stream._handle_start_of_turn({})
-        stream._handle_end_of_turn({})
-        endpoint = next(e for e in _events(stream) if e.type == stt.SpeechEventType.END_OF_SPEECH)
-        assert endpoint.alternatives == []
-    finally:
-        await stream.aclose()
-
-
-async def test_untimed_final_clears_previous_speechmatics_endpoint_timing() -> None:
-    stream = _stream()
-    try:
-        stream._handle_segment(_segment_message(end=0.4), is_final=True)
-        stream._handle_segment(_segment_message(end=0.0), is_final=True)
-        stream._handle_end_of_turn({})
-        assert _events(stream)[-1].alternatives == []
-    finally:
-        await stream.aclose()
-
-
 class _StubClient:
     """Stands in for `AgentSttAsyncClient` where only `finalize()` is under test."""
 

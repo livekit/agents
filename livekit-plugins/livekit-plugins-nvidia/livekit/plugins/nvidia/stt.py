@@ -279,15 +279,9 @@ class SpeechStream(stt.SpeechStream):
                     )
 
                     if self._speaking:
-                        words = getattr(alternative, "words", [])
                         self._event_loop.call_soon_threadsafe(
                             self._event_ch.send_nowait,
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.END_OF_SPEECH,
-                                alternatives=[speech_data]
-                                if words and getattr(words[-1], "end_time", 0) > 0
-                                else [],
-                            ),
+                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
                         )
                 else:
                     self._event_loop.call_soon_threadsafe(

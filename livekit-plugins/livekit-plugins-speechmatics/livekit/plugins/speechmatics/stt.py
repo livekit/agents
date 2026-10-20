@@ -32,7 +32,6 @@ from livekit.agents import (
     utils,
     vad,
 )
-from livekit.agents.stt import SpeechData
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -558,7 +557,6 @@ class SpeechStream(stt.RecognizeStream):
         self._client: AgentSttAsyncClient | None = None
         self._msg_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._speech_duration: float = 0
-        self._final_alternatives: list[SpeechData] = []
 
         self._vad: vad.VAD | None = vad_instance
         self._vad_stream: vad.VADStream | None = None
@@ -583,7 +581,6 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         """Run the STT stream."""
-        self._final_alternatives = []
         logger.debug("Connecting to Speechmatics STT service")
 
         # Config is required
@@ -846,25 +843,17 @@ class SpeechStream(stt.RecognizeStream):
         )
 
         # Send the event
-        if is_final:
-            self._final_alternatives = [speech_data] if seg.end_time > 0 else []
         self._event_ch.send_nowait(stt.SpeechEvent(type=event_type, alternatives=[speech_data]))
 
     def _handle_start_of_turn(self, message: dict[str, Any]) -> None:
         """Handle StartOfTurn events."""
         logger.debug("StartOfTurn received")
-        self._final_alternatives = []
         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _handle_end_of_turn(self, message: dict[str, Any]) -> None:
         """Handle EndOfTurn events."""
         logger.debug("EndOfTurn received")
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.END_OF_SPEECH, alternatives=self._final_alternatives
-            )
-        )
-        self._final_alternatives = []
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         if self._speech_duration > 0.0:
             usage_event = stt.SpeechEvent(

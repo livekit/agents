@@ -518,7 +518,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._utterance_start_audio_pos = 0.0
         self._utterance_speech_end_audio_pos: float | None = None
         self._utterance_speech_end_wall: float | None = None
-        self._final_speech_end_time = 0.0
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
         self._stream_started_at = time.time()
@@ -816,7 +815,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._utterance_start_audio_pos = self._audio_position
         self._utterance_speech_end_audio_pos = None
         self._utterance_speech_end_wall = None
-        self._final_speech_end_time = 0.0
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
 
@@ -1089,12 +1087,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
         elif event == "transcript.partial":
             self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
         elif event == "transcript.final":
-            end_s = data.get("end_s")
-            self._final_speech_end_time = (
-                float(end_s) + self.start_time_offset
-                if isinstance(end_s, (int, float)) and not isinstance(end_s, bool) and end_s > 0
-                else 0.0
-            )
             if self._active_endpointing == "vad":
                 if self._is_valid_transcript(data):
                     self._pending_final_data = data
@@ -1233,21 +1225,13 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if self._eos_emitted_for_utterance:
             return
 
-        # The sent-audio position includes trailing silence. Only the provider's
-        # final timestamp identifies where speech ended.
+        # Emitted without alternatives so the agent pipeline treats it as a sentinel
+        # it can hold and release with a concrete transcript. The speech-end timing
+        # travels on the FINAL_TRANSCRIPT event instead.
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.END_OF_SPEECH,
                 request_id=self._request_id,
-                alternatives=[
-                    stt.SpeechData(
-                        language=LanguageCode(self._opts.language),
-                        text="",
-                        end_time=self._final_speech_end_time,
-                    )
-                ]
-                if self._final_speech_end_time > 0
-                else [],
             )
         )
         self._eos_emitted_for_utterance = True
@@ -1302,8 +1286,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         speech_data = stt.SpeechData(
             language=LanguageCode(language),
             text=text,
-            start_time=start_time + self.start_time_offset if end_time > 0 else 0.0,
-            end_time=end_time + self.start_time_offset if end_time > 0 else 0.0,
+            start_time=start_time,
+            end_time=end_time,
             confidence=float(confidence),
             metadata=metadata or None,
         )

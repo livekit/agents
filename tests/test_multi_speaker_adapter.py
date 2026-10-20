@@ -27,14 +27,11 @@ from livekit.agents.stt import (
     SpeechEventType,
     STTCapabilities,
 )
-from livekit.agents.stt.multi_speaker_adapter import PrimarySpeakerDetectionOptions
 from livekit.agents.stt.stt import RecognitionUsage
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.keyterm_detection import KeytermDetector
-
-from .test_transcription_delay_anchor import _make_recognition
 
 pytestmark = pytest.mark.unit
 
@@ -182,72 +179,6 @@ def _metrics(label: str) -> STTMetrics:
 def test_wrapped_stt_exposed() -> None:
     adapter, wrapped = _adapter()
     assert adapter.wrapped_stt is wrapped
-
-
-@pytest.mark.parametrize("timed_endpoint", [False, True])
-async def test_mixed_speaker_turn_ends_after_suppressed_final(timed_endpoint: bool) -> None:
-    primary = SpeechData(
-        language="en", text="primary speech", speaker_id="A", start_time=0.0, end_time=0.2
-    )
-    background = SpeechData(
-        language="en", text="background speech", speaker_id="B", start_time=0.2, end_time=0.4
-    )
-    events = [
-        SpeechEvent(type=SpeechEventType.START_OF_SPEECH),
-        SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT, alternatives=[primary]),
-        SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT, alternatives=[background]),
-        SpeechEvent(
-            type=SpeechEventType.END_OF_SPEECH,
-            alternatives=[background] if timed_endpoint else [],
-        ),
-    ]
-
-    class _TurnStream(RecognizeStream):
-        async def _run(self) -> None:
-            async for _ in self._input_ch:
-                pass
-            for event in events:
-                self._event_ch.send_nowait(event)
-
-    class _TurnSTT(_RecordingSTT):
-        def stream(self, *, language=NOT_GIVEN, conn_options=_CONN):
-            return _TurnStream(stt=self, conn_options=conn_options)
-
-    adapter = MultiSpeakerAdapter(
-        stt=_TurnSTT(),
-        suppress_background_speaker=True,
-        primary_detection_options=PrimarySpeakerDetectionOptions(min_rms_samples=1),
-    )
-    stream = adapter.stream(conn_options=_CONN)
-    recognition = _make_recognition(vad=None, input_started_at=100.0, mode="stt")
-    recognition._eou_wait_not_committed = 0
-    try:
-        for amplitude in [3000, 3000, 50, 50]:
-            stream.push_frame(
-                rtc.AudioFrame(
-                    data=amplitude.to_bytes(2, "little", signed=True) * 1600,
-                    sample_rate=16000,
-                    num_channels=1,
-                    samples_per_channel=1600,
-                )
-            )
-        stream.end_input()
-        forwarded = [event async for event in stream]
-        finals = [
-            e.alternatives[0].text for e in forwarded if e.type == SpeechEventType.FINAL_TRANSCRIPT
-        ]
-        assert finals == ["primary speech", ""]
-
-        for event in forwarded:
-            await recognition._on_stt_event(event)
-
-        assert recognition._audio_transcript == "primary speech"
-        assert recognition._user_turn_committed
-        assert not recognition._speaking
-        recognition._run_eou_detection.assert_called_once()
-    finally:
-        await stream.aclose()
-        await adapter.aclose()
 
 
 def test_keyterms_reach_the_wrapped_stt() -> None:

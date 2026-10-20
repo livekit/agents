@@ -290,8 +290,6 @@ class SpeechStream(stt.RecognizeStream):
     def _process_stream_event(self, data: dict) -> None:
         transcript = data.get("transcript", "")
         is_final = data.get("is_final", False)
-        words = data.get("words") or []
-        end_time = words[-1].get("end", 0.0) if words else 0.0
 
         if not transcript:
             return
@@ -305,10 +303,6 @@ class SpeechStream(stt.RecognizeStream):
                 language=self._language,
                 text=transcript,
                 confidence=data.get("confidence", 0.0),
-                start_time=words[0].get("start", 0.0) + self.start_time_offset
-                if end_time > 0
-                else 0.0,
-                end_time=end_time + self.start_time_offset if end_time > 0 else 0.0,
             )
         ]
 
@@ -320,12 +314,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
             )
             self._speaking = False
-            self._event_ch.send_nowait(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=alternatives if end_time > 0 else [],
-                )
-            )
+            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
         else:
             self._event_ch.send_nowait(
                 stt.SpeechEvent(

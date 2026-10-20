@@ -13,15 +13,11 @@ from types import SimpleNamespace
 import pytest
 
 import livekit.agents.inference.stt as inference_stt
-from livekit.agents import NOT_GIVEN, APIConnectOptions
+from livekit.agents import APIConnectOptions
 from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.stt import SpeechStream as InferenceSpeechStream
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.aio.channel import Chan, ChanEmpty
-from livekit.agents.voice import audio_recognition
-
-from .test_inference_stt_aligned_transcript_claim import GATEWAY_INK2_FINAL
-from .test_transcription_delay_anchor import _make_recognition
 
 pytestmark = [pytest.mark.unit]
 
@@ -34,7 +30,7 @@ def _stream() -> InferenceSpeechStream:
     stream._speech_duration = 0.0
     stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._pending_extra = None
-    stream._opts = SimpleNamespace(language="en", model="auto", fallback=NOT_GIVEN)
+    stream._opts = SimpleNamespace(language="en")
     return stream
 
 
@@ -119,132 +115,6 @@ def test_onset_resets_after_the_turn_ends() -> None:
 
     stream._process_start_of_speech()
     assert SpeechEventType.START_OF_SPEECH in _drain(stream)
-
-
-@pytest.mark.parametrize(
-    ("timing", "end_time"),
-    [
-        ({"start": 1.0, "duration": 2.0, "words": [{"word": "hello", "end": 2.4}]}, 10.9),
-        ({"start": 1.0, "duration": 1.4}, None),
-        ({"words": [{"word": "hello", "end": 2.4}]}, 10.9),
-        ({}, None),
-        ({"words": [{"word": "hello"}]}, None),
-    ],
-)
-def test_eos_reports_provider_speech_end_time(timing, end_time):
-    stream = _stream()
-    stream.start_time_offset = 8.5
-    stream._process_transcript({"transcript": "hello", **timing}, is_final=True)
-
-    assert stream._event_ch.recv_nowait().type == SpeechEventType.START_OF_SPEECH
-    final = stream._event_ch.recv_nowait()
-    endpoint = stream._event_ch.recv_nowait()
-    assert final.type == SpeechEventType.FINAL_TRANSCRIPT
-    assert final.alternatives[0].end_time == pytest.approx(
-        8.5 + timing.get("start", 0) + timing.get("duration", 0)
-    )
-    assert endpoint.type == SpeechEventType.END_OF_SPEECH
-    if end_time is None:
-        assert endpoint.alternatives == []
-    else:
-        assert endpoint.alternatives[0].end_time == pytest.approx(end_time)
-
-
-@pytest.mark.parametrize(
-    ("model", "words"),
-    [
-        ("deepgram/nova-3", [{"end": 1.4}]),
-        ("soniox/stt-rt-v5", []),
-        ("speechmatics/linden-1", []),
-    ],
-)
-async def test_eos_preserves_transcription_delay_in_stt_turn_detection(monkeypatch, model, words):
-    now = 1_700_000_010.0
-    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
-    stream = _stream()
-    stream._opts.model = model
-    stream.start_time_offset = 8.0
-    stream._process_transcript(
-        {"transcript": "hello", "start": 0.0, "duration": 1.4, "words": words},
-        is_final=True,
-    )
-    assert stream._event_ch.recv_nowait().type == SpeechEventType.START_OF_SPEECH
-    recognition = _make_recognition(vad=None, input_started_at=now - 10.0, mode="stt")
-    recognition._stt_aligned_transcript = bool(words)
-
-    while True:
-        try:
-            event = stream._event_ch.recv_nowait()
-        except ChanEmpty:
-            break
-        await recognition._on_stt_event(event)
-
-    assert recognition._user_turn_committed
-    assert recognition._last_speaking_time == pytest.approx(now - 0.6, abs=1e-6, rel=0)
-    metrics = audio_recognition._compute_end_of_turn_metrics(
-        speech_start_time=now - 2.0,
-        last_speaking_time=recognition._last_speaking_time,
-        last_final_transcript_time=recognition._last_final_transcript_time,
-        now=now,
-    )
-    assert metrics.transcription_delay == pytest.approx(0.6)
-
-
-@pytest.mark.parametrize(
-    ("model", "fallback", "timed"),
-    [
-        ("soniox/stt-rt", NOT_GIVEN, True),
-        ("soniox/stt-rt-v4", NOT_GIVEN, True),
-        ("soniox/stt-rt-v5", NOT_GIVEN, True),
-        ("speechmatics/linden-1", NOT_GIVEN, True),
-        ("soniox/stt-rt-v5", [{"model": "speechmatics/linden-1"}], True),
-        ("soniox/stt-rt-v5", [{"model": "cartesia/ink-2"}], False),
-        ("cartesia/ink-2", [{"model": "soniox/stt-rt-v5"}], False),
-        ("soniox/stt-rt-v5", [{"model": "auto"}], False),
-        ("soniox/stt-rt-v5", [{"model": "unknown/model"}], False),
-        ("auto", NOT_GIVEN, False),
-        ("unknown/model", NOT_GIVEN, False),
-    ],
-)
-def test_eos_uses_duration_only_when_every_configured_model_reports_utterance_timing(
-    model, fallback, timed
-):
-    stream = _stream()
-    stream._opts.model = model
-    stream._opts.fallback = fallback
-    stream.start_time_offset = 8.5
-    stream._process_transcript(
-        {"transcript": "hello", "start": 1.0, "duration": 1.4, "words": []}, is_final=True
-    )
-    assert stream._event_ch.recv_nowait().type == SpeechEventType.START_OF_SPEECH
-    assert stream._event_ch.recv_nowait().type == SpeechEventType.FINAL_TRANSCRIPT
-    endpoint = stream._event_ch.recv_nowait()
-    assert endpoint.type == SpeechEventType.END_OF_SPEECH
-    if timed:
-        assert endpoint.alternatives[0].end_time == pytest.approx(10.9)
-    else:
-        assert endpoint.alternatives == []
-
-
-async def test_eos_without_utterance_timing_uses_arrival_time(monkeypatch):
-    now = 1_700_000_030.0
-    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
-    stream = _stream()
-    stream._opts.model = "cartesia/ink-2"
-    stream.start_time_offset = 8.5
-    stream._process_transcript(GATEWAY_INK2_FINAL, is_final=True)
-    assert stream._event_ch.recv_nowait().type == SpeechEventType.START_OF_SPEECH
-    recognition = _make_recognition(vad=None, input_started_at=now - 30.0, mode="stt")
-
-    while True:
-        try:
-            event = stream._event_ch.recv_nowait()
-        except ChanEmpty:
-            break
-        await recognition._on_stt_event(event)
-
-    assert recognition._user_turn_committed
-    assert recognition._last_speaking_time == now
 
 
 async def test_connection_session_id_becomes_fallback_request_id(

@@ -330,43 +330,6 @@ async def test_vad_drains_pending_frames_before_each_commit_under_backpressure()
     assert all(item.closed and item._task.done() for item in detector.streams)
 
 
-async def test_endpoint_preserves_vad_time_across_delayed_completion(monkeypatch):
-    from livekit.plugins.microsoft_ai import stt as microsoft_stt
-
-    from .microsoft_ai_fakes import ScriptedVADStream
-
-    now = 1000.0
-    monkeypatch.setattr(microsoft_stt.time, "time", lambda: now)
-    original_next = ScriptedVADStream.__anext__
-
-    async def next_vad_event(self):
-        event = await original_next(self)
-        event.silence_duration = 0.3
-        event.inference_duration = 0.05
-        return event
-
-    monkeypatch.setattr(ScriptedVADStream, "__anext__", next_vad_event)
-    detector = ScriptedVAD(
-        {512: vad.VADEventType.START_OF_SPEECH, 1024: vad.VADEventType.END_OF_SPEECH}
-    )
-    socket = FakeSocket(auto_commit=False)
-    instance, _ = provider(socket, detector=detector)
-    async with instance, instance.stream(conn_options=OPTIONS) as stream:
-        stream.push_frame(audio_frame(1024))
-        stream.end_input()
-        await socket.wait_sent("input_audio_buffer.commit")
-        now += 2.0
-        socket.emit({"type": "input_audio_buffer.committed", "item_id": "item-1"})
-        socket.transcript("completed", transcript="hello")
-        endpoints = [
-            event
-            for event in await collect(stream)
-            if event.type == stt.SpeechEventType.END_OF_SPEECH
-        ]
-        assert len(endpoints) == 1
-        assert endpoints[0].speech_end_time == pytest.approx(999.65)
-
-
 async def test_vad_end_input_preserves_incomplete_inference_window() -> None:
     socket = FakeSocket()
     detector = ScriptedVAD({512: vad.VADEventType.START_OF_SPEECH})

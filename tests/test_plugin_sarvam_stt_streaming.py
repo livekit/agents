@@ -56,8 +56,6 @@ def _make_stream(
     stream._utterance_start_audio_pos = 0.0
     stream._utterance_speech_end_audio_pos = None
     stream._utterance_speech_end_wall = None
-    stream._final_speech_end_time = 0.0
-    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._final_received_for_utterance = False
     stream._eos_emitted_for_utterance = False
     stream._manual_speech_started = False
@@ -1702,7 +1700,14 @@ async def test_manual_final_uses_current_turn_timings_after_first_turn() -> None
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpointing", ["vad", "manual"])
-async def test_endpoint_does_not_treat_sent_audio_as_speech_timing(endpointing: str) -> None:
+async def test_end_of_speech_is_emitted_as_a_bare_pipeline_sentinel(endpointing: str) -> None:
+    """END_OF_SPEECH must carry no alternatives.
+
+    livekit-agents treats an event without alternatives as a sentinel it holds until a
+    concrete transcript releases it (``_should_hold_stt_event``) and always flushes from
+    (``_flush_held_transcripts``). An alternative with ``start_time == 0`` would bypass
+    the hold check and be timestamp-compared like a transcript instead.
+    """
     stream = _make_stream(endpointing=endpointing)
     stream._audio_position = 2.0
     stream._utterance_speech_end_audio_pos = 2.0
@@ -1718,35 +1723,6 @@ async def test_endpoint_does_not_treat_sent_audio_as_speech_timing(endpointing: 
     assert len(eos_events) == 1
     assert eos_events[0].alternatives == []
     assert eos_events[0].request_id == stream._request_id
-
-
-@pytest.mark.parametrize("endpointing", ["vad", "manual"])
-@pytest.mark.parametrize("end_s", [0.4, 0.0, None])
-async def test_endpoint_preserves_final_timestamp(endpointing, end_s):
-    stream = _make_stream(endpointing=endpointing)
-    stream.start_time_offset = 7.0
-    await stream._handle_message({"event": "vad.speech_start"})
-    await stream._handle_message({"event": "transcript.final", "text": "hello", "end_s": end_s})
-    await stream._handle_message({"event": "vad.speech_end"})
-    endpoints = [
-        e
-        for e in stream._event_ch.events
-        if e.type == stt_streaming.stt.SpeechEventType.END_OF_SPEECH
-    ]
-    assert len(endpoints) == 1
-    if end_s:
-        assert endpoints[0].alternatives[0].end_time == pytest.approx(7.4)
-        final = next(
-            e
-            for e in stream._event_ch.events
-            if e.type == stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT
-        )
-        assert final.alternatives[0].end_time == pytest.approx(7.4)
-    else:
-        assert endpoints[0].alternatives == []
-    await stream._handle_message({"event": "vad.speech_start"})
-    await stream._handle_message({"event": "vad.speech_end"})
-    assert stream._event_ch.events[-1].alternatives == []
 
 
 @pytest.mark.asyncio

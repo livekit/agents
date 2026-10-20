@@ -64,7 +64,6 @@ from openai.types.realtime.realtime_transcription_session_audio_input import (
 )
 from openai.types.realtime.realtime_transcription_session_audio_input_turn_detection import (
     RealtimeTranscriptionSessionAudioInputTurnDetection,
-    ServerVad,
 )
 from openai.types.realtime.realtime_transcription_session_create_request import (
     RealtimeTranscriptionSessionCreateRequest,
@@ -320,9 +319,6 @@ class STT(stt.STT):
 
         self._streams = weakref.WeakSet[SpeechStream]()
         self._session: aiohttp.ClientSession | None = None
-        self._audio_duration_by_ws = weakref.WeakKeyDictionary[
-            aiohttp.ClientWebSocketResponse, float
-        ]()
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             max_session_duration=_max_session_duration,
             connect_cb=self._connect_ws,
@@ -698,7 +694,6 @@ class SpeechStream(stt.SpeechStream):
         # serializes the config a connection is set up with against any later change to it
         self._config_lock = asyncio.Lock()
         self._vad = vad_instance
-        self._audio_duration_by_ws = stt._audio_duration_by_ws
         self._speaking = False
 
     def update_options(self, *, language: NotGivenOr[str | list[str]] = NOT_GIVEN) -> None:
@@ -755,32 +750,15 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = True
         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
-    def _stop_speaking(
-        self, *, end_time: float = 0.0, speech_end_time: float | None = None
-    ) -> None:
+    def _stop_speaking(self) -> None:
         if not self._speaking:
             return
         self._speaking = False
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.END_OF_SPEECH,
-                speech_end_time=speech_end_time,
-                alternatives=[
-                    stt.SpeechData(
-                        language=LanguageCode(""),
-                        text="",
-                        end_time=end_time + self.start_time_offset,
-                    )
-                ]
-                if end_time > 0
-                else [],
-            )
-        )
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
         closing_ws = False
-        connection_audio_offset = 0.0
 
         @utils.log_exceptions(logger=logger)
         async def send_task(
@@ -811,9 +789,6 @@ class SpeechStream(stt.SpeechStream):
                             "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
                         }
                         await ws.send_json(encoded_frame)
-                        self._audio_duration_by_ws[ws] = (
-                            self._audio_duration_by_ws.get(ws, 0.0) + frame.duration
-                        )
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws:
                     return
@@ -833,11 +808,7 @@ class SpeechStream(stt.SpeechStream):
                     if ev.type == vad.VADEventType.START_OF_SPEECH:
                         self._start_speaking()
                     elif ev.type == vad.VADEventType.END_OF_SPEECH:
-                        self._stop_speaking(
-                            speech_end_time=time.time()
-                            - ev.silence_duration
-                            - ev.inference_duration
-                        )
+                        self._stop_speaking()
                         # a server-endpointed model closes the segment itself; this would cut it twice
                         if _is_realtime_only(self._opts.model):
                             await ws.send_json({"type": "input_audio_buffer.commit"})
@@ -894,17 +865,7 @@ class SpeechStream(stt.SpeechStream):
                         if item_id in item_audio_timing:
                             item_audio_timing[item_id]["end_ms"] = audio_end_ms
                         if self._vad is None:
-                            end_time = 0.0
-                            turn_detection = self._opts.turn_detection
-                            if audio_end_ms > 0 and isinstance(turn_detection, ServerVad):
-                                # audio_end_ms includes the server's trailing silence.
-                                silence_ms = turn_detection.silence_duration_ms
-                                if silence_ms is None:
-                                    silence_ms = 500
-                                end_time = (
-                                    audio_end_ms - silence_ms
-                                ) / 1000 - connection_audio_offset
-                            self._stop_speaking(end_time=end_time)
+                            self._stop_speaking()
 
                     elif msg_type == "conversation.item.input_audio_transcription.delta":
                         delta = data.get("delta", "")
@@ -1011,8 +972,6 @@ class SpeechStream(stt.SpeechStream):
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused
                 )
-                connection_audio_offset = self._audio_duration_by_ws.get(ws, 0.0)
-                self._input_ch.restart_provider_clock()
                 # published before the config is sent, so a change made during the send lands
                 # after it rather than finding no live connection
                 self._ws = ws

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,34 +19,6 @@ pytestmark = [
         reason="AWS Transcribe Streaming SDK requires Python 3.12 or later",
     ),
 ]
-
-
-@pytest.mark.parametrize("end_time", [0.4, 0.0, None])
-def test_aws_endpoint_preserves_valid_result_timing(end_time: float | None) -> None:
-    events: list[stt.SpeechEvent] = []
-    stream = object.__new__(aws_stt.SpeechStream)
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
-    stream._opts = SimpleNamespace(
-        language="en-US", identify_language=False, identify_multiple_languages=False
-    )
-    result = SimpleNamespace(
-        start_time=0.1,
-        end_time=end_time,
-        is_partial=False,
-        language_code="en-US",
-        alternatives=[SimpleNamespace(transcript="hello", items=[])],
-    )
-
-    stream._process_transcript_event(SimpleNamespace(transcript=SimpleNamespace(results=[result])))
-
-    endpoint = events[-1]
-    assert endpoint.type == stt.SpeechEventType.END_OF_SPEECH
-    if end_time:
-        assert events[-2].type == stt.SpeechEventType.FINAL_TRANSCRIPT
-        assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
-    else:
-        assert endpoint.alternatives == []
 
 
 class _FakeAudioStream:
