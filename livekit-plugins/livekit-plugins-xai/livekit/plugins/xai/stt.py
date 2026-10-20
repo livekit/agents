@@ -400,6 +400,7 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 closing_ws = False
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 self._final_alternatives = []
                 self._server_ready.clear()
                 tasks = [

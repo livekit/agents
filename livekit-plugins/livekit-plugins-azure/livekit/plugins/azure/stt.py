@@ -282,6 +282,8 @@ class SpeechStream(stt.SpeechStream):
                     self._session_started_event.wait(), self._conn_options.timeout
                 )
 
+                self._input_ch.restart_provider_clock()
+
                 async def process_input() -> None:
                     async for input in self._input_ch:
                         if isinstance(input, rtc.AudioFrame):

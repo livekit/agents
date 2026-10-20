@@ -1041,6 +1041,7 @@ class SpeechStream(stt.SpeechStream):
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()
+                    self._input_ch.restart_provider_clock()
                     stream = await client.streaming_recognize(
                         requests=input_generator(client, should_stop),
                     )

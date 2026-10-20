@@ -877,6 +877,7 @@ class SpeechStream(stt.SpeechStream):
 
                 # Connect to the WebSocket
                 async with self._session.ws_connect(session_url) as ws:
+                    self._input_ch.restart_provider_clock()
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 

@@ -55,3 +55,20 @@ def test_endpoint_uses_words_instead_of_billed_duration(end_time):
         else:
             assert events[-1].alternatives == []
             assert events[-2].alternatives[0].end_time == 0.0
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.cartesia.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", model="ink-whisper", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(language="fr"))
+    finally:
+        await stream.aclose()
+        await provider.aclose()

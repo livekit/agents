@@ -798,3 +798,20 @@ async def test_recognize_does_not_retry_a_client_error(
     assert exc_info.value.message == message
     assert exc_info.value.body == parsed
     assert requests == 1
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.elevenlabs.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", use_realtime=True, http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(keyterms=["LiveKit"]))
+    finally:
+        await stream.aclose()
+        await provider.aclose()

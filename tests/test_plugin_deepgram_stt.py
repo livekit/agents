@@ -661,3 +661,42 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         assert sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.deepgram.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(language="fr"))
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+@pytest.mark.no_concurrent
+async def test_flux_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.deepgram import STTv2
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STTv2(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(model="flux-general-multi"))
+        stream.update_options(keyterm=["LiveKit"])
+        await stream._reconfigure_atask
+        await clock.push(stream, captured_at=1020.0)
+        assert len(clock.sockets) == 2
+        assert stream.start_time_offset == pytest.approx(17.0)
+    finally:
+        await stream.aclose()
+        await provider.aclose()

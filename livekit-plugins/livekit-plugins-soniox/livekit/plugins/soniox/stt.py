@@ -338,6 +338,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 self._ws = ws
                 # Create task for audio processing, voice turn detection and message handling.
                 tasks: list[asyncio.Task[None]] = [

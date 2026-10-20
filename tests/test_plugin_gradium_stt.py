@@ -134,3 +134,20 @@ async def test_speech_stream_sends_language_in_json_config():
 
     setup_msg = json.loads(sent_messages[0])
     assert setup_msg["json_config"] == {"language": "pt", "temp": 0.3}
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.gradium.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(buffer_size_seconds=0.1))
+    finally:
+        await stream.aclose()
+        await provider.aclose()

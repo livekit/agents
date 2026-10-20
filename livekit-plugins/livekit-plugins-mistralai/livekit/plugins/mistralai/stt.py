@@ -426,6 +426,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             while True:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
+                    self._input_ch.restart_provider_clock()
                     vad_stream = self._vad.stream() if self._vad else None
 
                     tasks = [

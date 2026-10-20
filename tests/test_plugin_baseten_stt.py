@@ -61,3 +61,20 @@ async def test_qwen3_endpoint_preserves_segment_timing(end_time, empty_final):
         assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
     else:
         assert endpoint.alternatives == []
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.baseten.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", model_endpoint="wss://test.invalid/stt", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(language="fr"))
+    finally:
+        await stream.aclose()
+        await provider.aclose()

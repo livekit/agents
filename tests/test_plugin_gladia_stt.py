@@ -50,3 +50,27 @@ def test_endpoint_preserves_source_timing(translate, end_time):
         assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
     else:
         assert endpoint.alternatives == []
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.gladia.stt import STT, SpeechStream
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    monkeypatch.setattr(
+        SpeechStream,
+        "_init_live_session",
+        AsyncMock(return_value={"url": "wss://test.invalid", "id": "test"}),
+    )
+    provider = STT(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(languages=["fr"]))
+    finally:
+        await stream.aclose()
+        await provider.aclose()

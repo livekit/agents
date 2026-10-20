@@ -563,6 +563,7 @@ class SpeechStreamv2(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 # expose the connection for in-band Configure updates
                 self._ws = ws
                 tasks = [

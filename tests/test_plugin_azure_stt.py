@@ -108,3 +108,39 @@ def test_azure_canceled_without_error_is_ignored():
 
     assert not stream._session_stopped_event.is_set()
     assert stream._cancellation_error is None
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.azure import stt as azure_stt
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+
+    def create_recognizer(*, config, stream):
+        recognizer = MagicMock()
+        recognizer.start_continuous_recognition.side_effect = lambda: (
+            recognizer.session_started.connect.call_args.args[0](None)
+        )
+        stream.close.side_effect = lambda: recognizer.session_stopped.connect.call_args.args[0](
+            None
+        )
+        recognizer.stop_continuous_recognition.side_effect = stream.close
+        clock.sockets.append(recognizer)
+        return recognizer
+
+    monkeypatch.setattr(
+        azure_stt.speechsdk.audio, "PushAudioInputStream", lambda **kwargs: MagicMock()
+    )
+    monkeypatch.setattr(azure_stt, "_create_speech_recognizer", create_recognizer)
+    provider = azure_stt.STT(speech_key="test-key", speech_region="test")
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(language="fr"))
+    finally:
+        await stream.aclose()
+        await provider.aclose()

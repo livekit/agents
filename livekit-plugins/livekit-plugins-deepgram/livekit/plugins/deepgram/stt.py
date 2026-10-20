@@ -704,6 +704,7 @@ class SpeechStream(stt.SpeechStream):
             conn_start_time = 0.0
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 self._final_alternatives = []
                 conn_start_time = time.perf_counter()
                 tasks = [

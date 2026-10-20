@@ -57,3 +57,111 @@ async def test_endpoint_preserves_word_timing(monkeypatch, end_time):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+async def _next_endpoint(stream):
+    async with asyncio.timeout(2):
+        async for event in stream:
+            if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                return event.alternatives[0].end_time
+    pytest.fail("missing endpoint")
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from .stt_reconnect import ReconnectClock, wait_until
+
+    clock = ReconnectClock(monkeypatch, ready={"type": "ready"})
+    provider = slng_stt.STT(api_key="test-key", model="deepgram/nova:3", http_session=clock)
+    stream = provider.stream()
+    stream.start_time_offset = 7.0
+    try:
+        await clock.push(stream, captured_at=1000.0)
+        await wait_until(lambda: len(clock.sockets) == 1)
+        stream.update_options(language="fr")
+        await wait_until(lambda: clock.sockets[0].closed)
+        await clock.push(stream, captured_at=1010.0)
+        await wait_until(lambda: len(clock.sockets) == 2)
+        clock.sockets[1].respond(
+            {
+                "type": "final_transcript",
+                "transcript": "hello",
+                "words": [{"start": 0.1, "end": 0.4}],
+            }
+        )
+        assert await _next_endpoint(stream) == pytest.approx(17.4)
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("replay_failure", [None, "connect", "partial"])
+async def test_replayed_audio_keeps_its_original_timestamp(monkeypatch, replay_failure):
+    from .stt_reconnect import ReconnectClock, wait_until
+
+    clock = ReconnectClock(monkeypatch, ready={"type": "ready"})
+    provider = slng_stt.STT(
+        api_key="test-key", model="deepgram/nova:3", buffer_size_seconds=0.1, http_session=clock
+    )
+    stream = provider.stream()
+    stream.start_time_offset = 7.0
+    from livekit.agents import APIConnectionError
+
+    connect = stream._connect_ws
+    attempts = 0
+
+    async def reconnect(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2 and replay_failure == "connect":
+            raise APIConnectionError("replacement connection failed")
+        ws = await connect(**kwargs)
+        if attempts == 2 and replay_failure == "partial":
+            send = ws.send_bytes
+            writes = 0
+
+            async def send_prefix(payload):
+                nonlocal writes
+                writes += 1
+                if writes == 2:
+                    raise APIConnectionError("replay interrupted")
+                await send(payload)
+
+            ws.send_bytes = send_prefix
+        return ws
+
+    monkeypatch.setattr(stream, "_connect_ws", reconnect)
+    try:
+        await clock.push(stream, captured_at=1000.0)
+        await wait_until(lambda: len(clock.sockets) == 1)
+        first = clock.sockets[0]
+        await wait_until(lambda: sum(len(x) for x in first.sent if isinstance(x, bytes)) == 32000)
+        first.respond(
+            {
+                "type": "final_transcript",
+                "transcript": "one",
+                "words": [{"start": 0.0, "end": 1.0}],
+            }
+        )
+        assert await _next_endpoint(stream) == pytest.approx(8.0)
+
+        clock.now = 1001.2
+        stream.push_frame(rtc.AudioFrame.create(16000, 1, 3200))
+        await wait_until(lambda: sum(len(x) for x in first.sent if isinstance(x, bytes)) == 38400)
+        first.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, ""))
+        await wait_until(lambda: len(clock.sockets) == (3 if replay_failure == "partial" else 2))
+        second = clock.sockets[-1]
+        await wait_until(lambda: sum(len(x) for x in second.sent if isinstance(x, bytes)) == 6400)
+        # This provider starts at zero on the replayed suffix, after the already final first turn.
+        second.respond(
+            {
+                "type": "final_transcript",
+                "transcript": "two",
+                "words": [{"start": 0.0, "end": 0.2}],
+            }
+        )
+        assert await _next_endpoint(stream) == pytest.approx(8.2)
+    finally:
+        await stream.aclose()
+        await provider.aclose()

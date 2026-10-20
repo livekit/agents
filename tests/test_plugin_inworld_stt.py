@@ -32,3 +32,20 @@ def test_endpoint_requests_and_preserves_word_timing(end_ms):
         assert events[-2].alternatives[0].end_time == pytest.approx(7.4)
     else:
         assert events[-1].alternatives == []
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.inworld.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream._reconnect_event.set())
+    finally:
+        await stream.aclose()
+        await provider.aclose()

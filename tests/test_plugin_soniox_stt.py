@@ -879,3 +879,20 @@ async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
     assert ws.receives == 1
     assert stream._reconnect_event.is_set()
     assert any("No PONG received" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.soniox.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream._request_reconnect("test"))
+    finally:
+        await stream.aclose()
+        await provider.aclose()
