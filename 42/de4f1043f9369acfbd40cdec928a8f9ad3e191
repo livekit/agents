@@ -1,0 +1,79 @@
+livekit-agents/livekit/agents/inference/stt.py
+  s_bcd3e70328118e::t_61e93d744a5750 1447
+livekit-plugins/livekit-plugins-assemblyai/livekit/plugins/assemblyai/stt.py
+  s_bcd3e70328118e::t_f98525227a2b13 1116
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py
+  s_bcd3e70328118e::t_a9d13413abb4ff 460,468,473
+livekit-plugins/livekit-plugins-azure/livekit/plugins/azure/stt.py
+  s_bcd3e70328118e::t_0b7c74682895aa 427,436
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/qwen3_stt.py
+  s_bcd3e70328118e::t_22b6c58b95bc75 381
+livekit-plugins/livekit-plugins-cartesia/livekit/plugins/cartesia/_recognize_streams/legacy_recognize_stream.py
+  s_bcd3e70328118e::t_c02a28c8ded2e0 169,180,370-375,391-392,419
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt.py
+  s_bcd3e70328118e::t_18a8c3a25f3c34 895,903
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt_v2.py
+  s_bcd3e70328118e::t_68b044e1bbe9c4 22,681,735-737
+livekit-plugins/livekit-plugins-gladia/livekit/plugins/gladia/stt.py
+  s_bcd3e70328118e::t_1015e6d1701390 1161
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/stt.py
+  s_bcd3e70328118e::t_59922c473f9526 985,998
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/stt.py
+  s_bcd3e70328118e::t_f94d02dbeb06e3 364,372-373
+livekit-plugins/livekit-plugins-microsoft-ai/livekit/plugins/microsoft_ai/stt.py
+  s_bcd3e70328118e::t_728c7e5ccb017b 413,553,670
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/stt.py
+  s_bcd3e70328118e::t_7d19726c124f98 341
+livekit-plugins/livekit-plugins-nvidia/livekit/plugins/nvidia/stt.py
+  s_bcd3e70328118e::t_86bf0f2b798bee 284
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/stt.py
+  s_bcd3e70328118e::t_795445763e4fce 753,757,811,868
+livekit-plugins/livekit-plugins-palabra/livekit/plugins/palabra/stt.py
+  s_bcd3e70328118e::t_5fe7edcf4ebbac 314
+livekit-plugins/livekit-plugins-rtzr/livekit/plugins/rtzr/stt.py
+  s_bcd3e70328118e::t_d04d2ac9eec513 21,48,65-73,155-156,158-159,205-207,209,211-213,219-230,233-248,250-263,289-291,294-297,299,301-303,305,307-310,312-322,409
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_bcd3e70328118e::t_6343a11f5f12bb 1054-1055
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_bcd3e70328118e::t_b4752bfffb1218 1228-1230,1289-1290
+livekit-plugins/livekit-plugins-sarvam/tests/test_speech_timing.py
+  s_bcd3e70328118e::t_1aa0a0fab8305a 78
+livekit-plugins/livekit-plugins-slng/livekit/plugins/slng/stt.py
+  s_bcd3e70328118e::t_50bea3e68eb5d0 571,713,793,847,874,1114-1115,1127
+livekit-plugins/livekit-plugins-smallestai/livekit/plugins/smallestai/stt.py
+  s_bcd3e70328118e::t_686501d4d664bb 749,752,765
+livekit-plugins/livekit-plugins-speechmatics/livekit/plugins/speechmatics/stt.py
+  s_bcd3e70328118e::t_444b4418337458 856
+livekit-plugins/livekit-plugins-telnyx/livekit/plugins/telnyx/stt.py
+  s_bcd3e70328118e::t_81b00fdd53d617 317
+livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/stt.py
+  s_bcd3e70328118e::t_ddb15d85ac9c17 506-507,512-519,523-542,564-571,575-576,586,596-597,601
+tests/test_inference_stt_start_of_speech.py
+  s_bcd3e70328118e::t_4eb6b688c29963 16,33
+tests/test_meta_stt.py
+  s_bcd3e70328118e::t_b0ad5dc8b076d4 552
+tests/test_multi_speaker_primary_speaker.py
+  s_bcd3e70328118e::t_f82c7198b0e986 4
+tests/test_plugin_openai_stt_context.py
+  s_bcd3e70328118e::t_546f5605741bb0 501
+tests/test_plugin_palabra.py
+  s_bcd3e70328118e::t_e94cc465f2652f 536,552,577,587
+tests/test_plugin_sarvam_stt_streaming.py
+  s_bcd3e70328118e::t_dc13b094198824 1703-1710
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "42de4f1043f9369acfbd40cdec928a8f9ad3e191",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
