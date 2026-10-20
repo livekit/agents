@@ -979,20 +979,13 @@ def prerecorded_transcription_to_speech_event(
     use_punctuated_word: bool = True,
 ) -> stt.SpeechEvent:
     # We only support one channel for now
-    request_id = data.get("metadata", {}).get("request_id", "")
-    channels: list[dict] = data.get("results", {}).get("channels", [])
-    if not channels:
-        return stt.SpeechEvent(
-            request_id=request_id,
-            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[],
-        )
-    channel: dict = channels[0]
-    dg_alts = channel.get("alternatives", [])
+    request_id = data["metadata"]["request_id"]
+    channel: dict = data["results"]["channels"][0]
+    dg_alts = channel["alternatives"]
 
     # Use the detected language if enabled
     # https://developers.deepgram.com/docs/language-detection
-    detected_language = LanguageCode(channel.get("detected_language") or "")
+    detected_language = LanguageCode(channel.get("detected_language", ""))
 
     return stt.SpeechEvent(
         request_id=request_id,
@@ -1000,10 +993,10 @@ def prerecorded_transcription_to_speech_event(
         alternatives=[
             stt.SpeechData(
                 language=LanguageCode(language or detected_language),
-                start_time=alt["words"][0].get("start", 0) if alt.get("words") else 0,
-                end_time=alt["words"][-1].get("end", 0) if alt.get("words") else 0,
-                confidence=alt.get("confidence", 0.0),
-                text=alt.get("transcript", ""),
+                start_time=alt["words"][0]["start"] if alt["words"] else 0,
+                end_time=alt["words"][-1]["end"] if alt["words"] else 0,
+                confidence=alt["confidence"],
+                text=alt["transcript"],
                 words=[
                     TimedString(
                         text=_word_text(word, use_punctuated_word=use_punctuated_word),
@@ -1011,7 +1004,7 @@ def prerecorded_transcription_to_speech_event(
                         end_time=word.get("end", 0),
                         confidence=word.get("confidence", NOT_GIVEN),
                     )
-                    for word in alt.get("words", [])
+                    for word in alt["words"]
                 ],
             )
             for alt in dg_alts
