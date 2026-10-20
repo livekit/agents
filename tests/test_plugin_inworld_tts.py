@@ -194,3 +194,95 @@ async def test_http_body_omits_delivery_mode_when_not_given():
     body = captured.get("json")
     assert isinstance(body, dict)
     assert "deliveryMode" not in body
+
+
+async def test_ws_create_packet_auto_mode_strategy():
+    from livekit.plugins.inworld.tts import _TTSOptions
+
+    opts = _TTSOptions(
+        model="inworld-tts-2",
+        encoding="PCM",
+        voice="Ashley",
+        sample_rate=24000,
+        bit_rate=64000,
+        speaking_rate=1.0,
+        temperature=1.0,
+    )
+    pkt = await _capture_first_ws_create_packet(opts)
+    assert pkt["create"]["autoMode"] is True
+    assert "autoModeStrategy" not in pkt["create"]
+    assert pkt["create"]["bufferCharThreshold"] == 250
+
+    opts.auto_mode_strategy = "SENTENCE_BOUNDARY"
+    pkt = await _capture_first_ws_create_packet(opts)
+    assert pkt["create"]["autoModeStrategy"] == "SENTENCE_BOUNDARY"
+    assert "bufferCharThreshold" not in pkt["create"]
+
+    opts.buffer_char_threshold = 400
+    pkt = await _capture_first_ws_create_packet(opts)
+    assert pkt["create"]["bufferCharThreshold"] == 400
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_tokenizer", "expected"),
+    [
+        ("inworld-tts-2", False, "SENTENCE_BOUNDARY"),
+        ("inworld-tts-2", True, "CLIENT_SEGMENTED"),
+        ("inworld-tts-1.5-max", False, "CLIENT_SEGMENTED"),
+    ],
+)
+async def test_stream_auto_mode_strategy(model, custom_tokenizer, expected):
+    from livekit.agents import tokenize
+    from livekit.plugins.inworld import TTS
+
+    kwargs = {"tokenizer": tokenize.blingfire.SentenceTokenizer()} if custom_tokenizer else {}
+    tts = TTS(api_key="test-key", model=model, **kwargs)
+    stream = tts.stream()
+    try:
+        assert stream._opts.auto_mode_strategy == expected
+    finally:
+        await stream.aclose()
+
+
+async def test_sentence_boundary_stream_forwards_raw_text():
+    """With SENTENCE_BOUNDARY, text reaches the connection as pushed, without
+    client-side sentence splitting, and the end of input flushes the context."""
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key", model="inworld-tts-2")
+    calls: list[tuple[str, str | None]] = []
+    waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+    conn = MagicMock()
+    conn.send_text.side_effect = lambda ctx, text: calls.append(("text", text))
+    conn.flush_context.side_effect = lambda ctx: calls.append(("flush", None))
+
+    def _close(ctx: str) -> None:
+        calls.append(("close", None))
+        if not waiter.done():
+            waiter.set_result(None)
+
+    conn.close_context.side_effect = _close
+
+    pool = MagicMock()
+    pool.acquire_context = AsyncMock(return_value=("ctx-1", waiter, conn))
+    tts._get_pool = AsyncMock(return_value=pool)
+
+    stream = tts.stream()
+    for token in ["Hello ", "there. How", " are", " you?"]:
+        stream.push_text(token)
+    stream.end_input()
+    try:
+        await asyncio.wait_for(waiter, timeout=2.0)
+        sent = list(calls)
+    finally:
+        await stream.aclose()
+
+    assert sent == [
+        ("text", "Hello "),
+        ("text", "there. How"),
+        ("text", " are"),
+        ("text", " you?"),
+        ("flush", None),
+        ("close", None),
+    ]
