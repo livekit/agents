@@ -274,7 +274,6 @@ class STTRealtime(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                manual_flush=endpointing == "manual",
                 interim_results=True,
                 aligned_transcript=False,
                 offline_recognize=False,
@@ -405,8 +404,6 @@ class STTRealtime(stt.STT):
             else self._opts.vad_prefix_padding_ms,
         )
         self._opts = opts
-        if is_given(endpointing):
-            self._capabilities.manual_flush = opts.endpointing == "manual"
         # Forward the given fields only, so a stream created with a per-stream
         # override (e.g. `stream(language=...)`) keeps it through unrelated updates.
         for stream in self._streams:
