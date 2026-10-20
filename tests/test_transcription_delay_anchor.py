@@ -78,6 +78,7 @@ def _make_recognition(
     ar._last_final_transcript_time = None
     ar._turn_tracker = MagicMock()
     ar._last_speaking_time = None
+    ar._last_speaking_time_is_end = False
     ar._sample_rate = None
     ar._vad_ch = None
     ar._interruption_ch = None
@@ -238,6 +239,7 @@ async def test_stt_end_of_speech_keeps_the_vad_anchor_over_word_timestamps() -> 
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
     ar._last_speaking_time = now - 0.6  # VAD end-of-speech
+    ar._last_speaking_time_is_end = True
 
     await ar._on_stt_event(_speech_event(stt.SpeechEventType.END_OF_SPEECH, end_time=9.0, text=""))
 
@@ -306,6 +308,7 @@ async def test_stt_end_of_speech_without_timestamps_keeps_the_existing_anchor() 
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
     vad_anchor = now - 0.6  # VAD end-of-speech, 0.6 s of transport/endpointing ago
     ar._last_speaking_time = vad_anchor
+    ar._last_speaking_time_is_end = True  # VAD EOS: a measured end
 
     await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=[]))
 
@@ -319,6 +322,47 @@ async def test_stt_end_of_speech_without_timestamps_keeps_the_existing_anchor() 
         now=time.time(),
     )
     assert metrics.transcription_delay == pytest.approx(0.6, abs=0.1)
+
+
+async def test_stt_end_of_speech_with_missed_vad_does_not_keep_the_onset_anchor() -> None:
+    """A wired VAD that MISSED the segment leaves an onset anchor behind
+    (``START_OF_SPEECH`` or a live ``INFERENCE_DONE`` signal). That anchor only
+    bounds speech from below, so keeping it through an untimestamped EOS would
+    report a transcription_delay of roughly the whole utterance duration and
+    collapse ``extra_sleep`` to zero. Arrival time is the honest fallback there.
+
+    Runs in stt mode (where the stt EOS branch commits the turn); the anchor rule
+    itself is shared, so a vad-mode EOS reaching the same state behaves the same.
+
+    Contrast ``test_stt_end_of_speech_without_timestamps_keeps_the_existing_anchor``:
+    same missing timestamps, but that anchor was measured at a speech END.
+    """
+    now = time.time()
+    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
+    ar._speech_start_time = now - 4.0
+    ar._last_speaking_time = now - 4.0  # START_OF_SPEECH onset, VAD never fired EOS
+    ar._last_speaking_time_is_end = False
+
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=[]))
+
+    # anchored at (or within clock-read noise of) arrival time, not at the onset
+    assert ar._last_speaking_time >= now - 0.05
+    assert ar._user_turn_committed is True
+
+
+async def test_stt_end_of_speech_keeps_a_measured_end_anchor_from_word_timestamps() -> None:
+    """The word timestamps an earlier final transcript stored DO bound speech from
+    above (they are a measured end), so the untimestamped EOS keeps them — same
+    rule as the VAD anchor case, stt mode."""
+    now = time.time()
+    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
+    ar._last_speaking_time = now - 0.6  # word-timestamp-derived end anchor
+    ar._last_speaking_time_is_end = True
+
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=[]))
+
+    assert ar._last_speaking_time == pytest.approx(now - 0.6, abs=0.05)
+    assert ar._user_turn_committed is True
 
 
 async def test_stt_end_of_speech_without_timestamps_anchors_when_nothing_better_exists() -> None:
