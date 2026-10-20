@@ -186,13 +186,14 @@ pub enum InboundFrame {
 }
 
 impl InboundFrame {
-    /// The spellings both bindings report.
+    /// The spellings both bindings report: the `lk.frame.resolution` values of the registry.
     pub fn kind(&self) -> &'static str {
+        use crate::telemetry::semconv::lk_frame_resolution as resolution;
         match self {
-            InboundFrame::Root => "root",
-            InboundFrame::Live(_) => "live",
-            InboundFrame::Stale(_) => "stale",
-            InboundFrame::Unknown => "unknown",
+            InboundFrame::Root => resolution::ROOT,
+            InboundFrame::Live(_) => resolution::LIVE,
+            InboundFrame::Stale(_) => resolution::STALE,
+            InboundFrame::Unknown => resolution::UNKNOWN,
         }
     }
 }

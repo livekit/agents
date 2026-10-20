@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from .. import utils
 from ..log import logger
+from ..telemetry import trace_types
 from ..tokenize import SentenceStream, TokenData
 from .tts import AudioEmitter
 
@@ -148,7 +149,7 @@ class StreamPacerWrapper(SentenceStream):
                     self._event_ch.send_nowait(TokenData(token=text))
                     logger.debug(
                         "sent text to tts",
-                        extra={"lk.pii.text": text, "remaining_audio": remaining_audio},
+                        extra={trace_types.ATTR_PII_TEXT: text, "remaining_audio": remaining_audio},
                     )
                     generation_started = False
                     generation_stopped = False

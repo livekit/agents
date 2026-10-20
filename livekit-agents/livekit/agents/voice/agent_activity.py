@@ -291,7 +291,7 @@ def _agent_turn(
     span = speech_handle._agent_turn_span
     if span is None:
         span = tracer.start_span(
-            "agent_turn",
+            trace_types.SPAN_AGENT_TURN,
             context=root_context,
             attributes={trace_types.ATTR_SPEECH_ID: speech_handle.id},
         )
@@ -312,7 +312,7 @@ def _agent_turn(
     }
     if parent_id := speech_handle._parent_generation_id:
         generation_attrs[trace_types.ATTR_AGENT_PARENT_TURN_ID] = parent_id
-    span.add_event("generation", generation_attrs)
+    span.add_event(trace_types.CHECKPOINT_GENERATION, generation_attrs)
     span.set_attributes(
         {
             trace_types.ATTR_AGENT_TURN_ID: speech_handle._generation_id,
@@ -1085,7 +1085,7 @@ class AgentActivity(RecognitionHooks):
                 return
 
             start_span = tracer.start_span(
-                "start_agent_activity",
+                trace_types.SPAN_START_AGENT_ACTIVITY,
                 context=trace_context,
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
@@ -1116,7 +1116,7 @@ class AgentActivity(RecognitionHooks):
                 # detached: MCP servers connect here and their tasks live on; a current
                 # span would become the parent of whatever those tasks emit later
                 with tracer.detached_span(
-                    "setup_toolsets", context=trace.set_span_in_context(start_span)
+                    trace_types.SPAN_SETUP_TOOLSETS, context=trace.set_span_in_context(start_span)
                 ):
                     await self._setup_toolsets()
 
@@ -1125,7 +1125,7 @@ class AgentActivity(RecognitionHooks):
                 self._started = True
 
                 @tracer.start_as_current_span(
-                    "on_enter",
+                    trace_types.SPAN_ON_ENTER,
                     context=trace.set_span_in_context(start_span),
                     attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
                 )
@@ -1439,7 +1439,7 @@ class AgentActivity(RecognitionHooks):
             if self.stt.capabilities.chat_context and forward_chat_ctx:
                 self._session.on("conversation_item_added", self.stt._push_conversation_item)
 
-    @tracer.start_as_current_span("drain_agent_activity")
+    @tracer.start_as_current_span(trace_types.SPAN_DRAIN_AGENT_ACTIVITY)
     async def drain(
         self, *, new_activity: AgentActivity | None = None
     ) -> _ReusableResources | None:
@@ -1449,7 +1449,7 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, self._agent.label)
 
         @tracer.start_as_current_span(
-            "on_exit", attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
+            trace_types.SPAN_ON_EXIT, attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label}
         )
         @utils.log_exceptions(logger=logger)
         async def _traceable_on_exit() -> None:
@@ -1594,7 +1594,7 @@ class AgentActivity(RecognitionHooks):
             async with self._lock:
                 # not made current: _start_session spawns the tasks that live for the session
                 span = tracer.start_span(
-                    "resume_agent_activity",
+                    trace_types.SPAN_RESUME_AGENT_ACTIVITY,
                     context=trace_context,
                     attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
                 )
@@ -1627,7 +1627,7 @@ class AgentActivity(RecognitionHooks):
                 return None
 
             span = tracer.start_span(
-                "pause_agent_activity",
+                trace_types.SPAN_PAUSE_AGENT_ACTIVITY,
                 attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
             )
 
@@ -2808,7 +2808,7 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
-                extra={"lk.pii.user_input": info.new_transcript},
+                extra={trace_types.ATTR_USER_INPUT: info.new_transcript},
             )
 
             if self._session._closing:
@@ -2946,7 +2946,7 @@ class AgentActivity(RecognitionHooks):
             if not current_speech.allow_interruptions:
                 logger.warning(
                     "skipping reply to user input, current speech generation cannot be interrupted",
-                    extra={"lk.pii.user_input": info.new_transcript},
+                    extra={trace_types.ATTR_USER_INPUT: info.new_transcript},
                 )
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
@@ -2959,7 +2959,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
-                extra={"lk.pii.user_input": info.new_transcript},
+                extra={trace_types.ATTR_USER_INPUT: info.new_transcript},
             )
             if self._session._closing:
                 self._chat_ctx.items.append(user_message)
@@ -2973,7 +2973,7 @@ class AgentActivity(RecognitionHooks):
         start_time = time.perf_counter()
         # user code that gates the reply; without a span a slow hook is an unexplained gap
         with tracer.start_as_current_span(
-            "on_user_turn_completed",
+            trace_types.SPAN_ON_USER_TURN_COMPLETED,
             context=(
                 trace.set_span_in_context(info.user_turn_span)
                 if info.user_turn_span_adopted and info.user_turn_span is not None
@@ -2986,7 +2986,7 @@ class AgentActivity(RecognitionHooks):
                     temp_mutable_chat_ctx, new_message=user_message
                 )
             except StopResponse:
-                hook_span.add_event("stop_response")
+                hook_span.add_event(trace_types.CHECKPOINT_STOP_RESPONSE)
                 return  # ignore this turn
             except Exception as e:
                 # the message may quote the transcript: honour the session's redaction too
@@ -3010,7 +3010,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping reply to user input, speech scheduling is paused",
-                extra={"lk.pii.user_input": info.new_transcript},
+                extra={trace_types.ATTR_USER_INPUT: info.new_transcript},
             )
             if user_message and self._session._closing:
                 self._chat_ctx.items.append(user_message)
@@ -4512,7 +4512,7 @@ class AgentActivity(RecognitionHooks):
             root_context=self._session._root_span_context,
             agent_label=self._agent.label,
         ):
-            inference_span = tracer.start_span("realtime_inference")
+            inference_span = tracer.start_span(trace_types.SPAN_REALTIME_INFERENCE)
             try:
                 await self._realtime_generation_task_impl(
                     speech_handle=speech_handle,

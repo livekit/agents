@@ -80,31 +80,37 @@ pub fn marks_pii(key: &str) -> bool {
     key.split('.').any(|segment| segment == "pii")
 }
 
-/// Every string is a dashboard wire contract. None carries user content.
+/// Every string is a dashboard wire contract. None carries user content. The strings come from
+/// the protocol registry ([`semconv`], vendored by `lk-agents-codegen`); these are the
+/// names this crate has always used for them. `semconv_pins` holds the old literals.
 pub mod attrs {
-    pub const SPEECH_ID: &str = "lk.speech_id";
-    /// Provider correlation ids, for joining against provider logs.
-    pub const PROVIDER_REQUEST_IDS: &str = "lk.provider_request_ids";
-    pub const TTS_LABEL: &str = "lk.tts.label";
-    pub const TTS_STREAMING: &str = "lk.tts.streaming";
+    use super::semconv;
 
-    pub const IS_INTERRUPTION: &str = "lk.is_interruption";
-    pub const INTERRUPTION_PROBABILITY: &str = "lk.interruption.probability";
-    pub const INTERRUPTION_TOTAL_DURATION: &str = "lk.interruption.total_duration";
-    pub const INTERRUPTION_PREDICTION_DURATION: &str = "lk.interruption.prediction_duration";
-    pub const INTERRUPTION_DETECTION_DELAY: &str = "lk.interruption.detection_delay";
+    pub const SPEECH_ID: &str = semconv::LK_SPEECH_ID;
+    /// Provider correlation ids, for joining against provider logs.
+    pub const PROVIDER_REQUEST_IDS: &str = semconv::LK_PROVIDER_REQUEST_IDS;
+    pub const TTS_LABEL: &str = semconv::LK_TTS_LABEL;
+    pub const TTS_STREAMING: &str = semconv::LK_TTS_STREAMING;
+
+    pub const IS_INTERRUPTION: &str = semconv::LK_IS_INTERRUPTION;
+    pub const INTERRUPTION_PROBABILITY: &str = semconv::LK_INTERRUPTION_PROBABILITY;
+    pub const INTERRUPTION_TOTAL_DURATION: &str = semconv::LK_INTERRUPTION_TOTAL_DURATION;
+    pub const INTERRUPTION_PREDICTION_DURATION: &str = semconv::LK_INTERRUPTION_PREDICTION_DURATION;
+    pub const INTERRUPTION_DETECTION_DELAY: &str = semconv::LK_INTERRUPTION_DETECTION_DELAY;
 
     /// Not declared in `trace_types.py`: adding them would fail its byte-for-byte comparison with
     /// the reference.
     pub mod node {
-        pub const METRIC: &str = "lk.metric";
-        /// `root`, `live`, `stale` or `unknown`.
-        pub const FRAME_RESOLUTION: &str = "lk.frame.resolution";
+        use super::semconv;
+
+        pub const METRIC: &str = semconv::LK_METRIC;
+        /// `root`, `live`, `stale` or `unknown` ([`semconv::lk_frame_resolution`]).
+        pub const FRAME_RESOLUTION: &str = semconv::LK_FRAME_RESOLUTION;
         /// The TTS reported no duplex path, so the adapter was selected. Not a failure.
-        pub const TTS_NO_DUPLEX_PATH: &str = "lk.tts.no_duplex_path";
-        pub const TTS_FRAMES: &str = "lk.tts.frames";
-        pub const TTS_BYTES: &str = "lk.tts.bytes";
-        pub const ERROR_RETRYABLE: &str = "lk.error.retryable";
+        pub const TTS_NO_DUPLEX_PATH: &str = semconv::LK_TTS_NO_DUPLEX_PATH;
+        pub const TTS_FRAMES: &str = semconv::LK_TTS_FRAMES;
+        pub const TTS_BYTES: &str = semconv::LK_TTS_BYTES;
+        pub const ERROR_RETRYABLE: &str = semconv::LK_ERROR_RETRYABLE;
     }
 }
 
@@ -331,8 +337,8 @@ mod tests {
     fn a_span_lands_on_the_real_timeline_and_lasts_as_long_as_the_work_did() {
         let buf = TelemetryBuffer::default();
         let frame = FrameId::from_raw(42);
-        let mut s = SpanBuilder::start("llm_node", frame, Some("00-a-b-01".to_owned()));
-        s.attr("lk.tts.label", attr_str("fake"));
+        let mut s = SpanBuilder::start(semconv::span::LLM_NODE, frame, Some("00-a-b-01".to_owned()));
+        s.attr(attrs::TTS_LABEL, attr_str("fake"));
         std::thread::sleep(std::time::Duration::from_millis(2));
         s.end(&buf);
 
@@ -416,7 +422,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "no dot-delimited `pii` segment")]
     fn an_unmarked_sensitive_attribute_fails_a_test_rather_than_a_code_review() {
-        let mut s = SpanBuilder::start("llm_node", FrameId::ROOT, None);
+        let mut s = SpanBuilder::start(semconv::span::LLM_NODE, FrameId::ROOT, None);
         s.pii_attr("lk.user_input", attr_str("my card number is"));
     }
 }
@@ -424,3 +430,7 @@ mod tests {
 pub mod attributes;
 pub mod gen_ai;
 pub mod report;
+#[rustfmt::skip]
+pub mod semconv;
+#[cfg(test)]
+mod semconv_pins;

@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .telemetry._semconv import LK_FAIL, LK_SUCCESS
+
 if TYPE_CHECKING:
     from .evals import EvaluationResult
 
@@ -56,8 +58,8 @@ class Tagger:
             reason: Optional reason for the success (stored separately from the tag).
         """
         # Remove any existing outcome tag
-        self._tags.pop("lk.fail", None)
-        self._tags["lk.success"] = _TagEntry()
+        self._tags.pop(LK_FAIL, None)
+        self._tags[LK_SUCCESS] = _TagEntry()
         self._outcome_reason = reason
 
     def fail(self, reason: str | None = None) -> None:
@@ -67,8 +69,8 @@ class Tagger:
             reason: Optional reason for the failure (stored separately from the tag).
         """
         # Remove any existing outcome tag
-        self._tags.pop("lk.success", None)
-        self._tags["lk.fail"] = _TagEntry()
+        self._tags.pop(LK_SUCCESS, None)
+        self._tags[LK_FAIL] = _TagEntry()
         self._outcome_reason = reason
 
     def add(self, tag: str, *, metadata: dict[str, Any] | None = None) -> None:
@@ -101,9 +103,9 @@ class Tagger:
     @property
     def outcome(self) -> str | None:
         """The session outcome: 'success', 'fail', or None if not set."""
-        if "lk.success" in self._tags:
+        if LK_SUCCESS in self._tags:
             return "success"
-        elif "lk.fail" in self._tags:
+        elif LK_FAIL in self._tags:
             return "fail"
         return None
 

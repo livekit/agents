@@ -117,8 +117,8 @@ class InputDeltaSite:
     ``gen_ai.input.messages`` and ``gen_ai.system_instructions``."""
 
 
-LLM_NODE = InputDeltaSite("llm_node", chat_ctx=True)
-LLM_REQUEST = InputDeltaSite("llm_request", chat_ctx=False)
+LLM_NODE = InputDeltaSite(trace_types.SPAN_LLM_NODE, chat_ctx=True)
+LLM_REQUEST = InputDeltaSite(trace_types.SPAN_LLM_REQUEST, chat_ctx=False)
 
 
 @dataclass

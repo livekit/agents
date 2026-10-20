@@ -670,7 +670,7 @@ class JobContext:
 
         # nests under session_start when the session is starting, else the ambient context
         with session_context.session_span(
-            "wait_for_participant",
+            trace_types.SPAN_WAIT_FOR_PARTICIPANT,
             attributes={trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
             job_ctx=self,
         ) as span:
@@ -710,7 +710,7 @@ class JobContext:
             )
 
             with session_context.session_span(
-                "room_connect",
+                trace_types.SPAN_ROOM_CONNECT,
                 attributes={
                     trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
                     trace_types.ATTR_ROOM_SID: self._info.job.room.sid,

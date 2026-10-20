@@ -348,12 +348,12 @@ class _JobProc:
                 try:
                     await self._job_entrypoint_fnc(job_ctx)
                 except asyncio.CancelledError:
-                    job_span.add_event("entrypoint_cancelled")
+                    job_span.add_event(trace_types.CHECKPOINT_ENTRYPOINT_CANCELLED)
                     raise
                 except Exception as e:
                     trace_utils.record_exception(job_span, e)
                     raise
-                job_span.add_event("entrypoint_returned")
+                job_span.add_event(trace_types.CHECKPOINT_ENTRYPOINT_RETURNED)
 
         job_entry_task = asyncio.create_task(
             _traceable_entrypoint(self._job_ctx), name="job_user_entrypoint"
@@ -399,7 +399,7 @@ class _JobProc:
         try:
             shutdown_info = await self._shutdown_fut
             with tracer.start_as_current_span(
-                "job_shutdown",
+                trace_types.SPAN_JOB_SHUTDOWN,
                 context=self._entrypoint_span_context,
                 attributes={
                     trace_types.ATTR_SHUTDOWN_REASON: shutdown_info.reason,
@@ -446,7 +446,7 @@ class _JobProc:
 
         if self._session_end_fnc:
             with tracer.start_as_current_span(
-                "on_session_end",
+                trace_types.SPAN_ON_SESSION_END,
                 attributes={trace_types.ATTR_CALLBACK_NAME: _callback_name(self._session_end_fnc)},
             ) as span:
                 try:
@@ -461,7 +461,7 @@ class _JobProc:
                     trace_utils.record_exception(span, e)
                     logger.exception("error while executing the on_session_end callback")
 
-        with tracer.start_as_current_span("session_end_upload") as span:
+        with tracer.start_as_current_span(trace_types.SPAN_SESSION_END_UPLOAD) as span:
             try:
                 await self._job_ctx._on_session_end()
             except Exception as e:
@@ -475,7 +475,7 @@ class _JobProc:
             extra={"reason": shutdown_info.reason, "user_initiated": shutdown_info.user_initiated},
         )
         await self._client.send(Exiting(reason=shutdown_info.reason))
-        with tracer.start_as_current_span("room_disconnect"):
+        with tracer.start_as_current_span(trace_types.SPAN_ROOM_DISCONNECT):
             await self._room.disconnect()
 
         async def _traced_shutdown_callback(
@@ -487,7 +487,7 @@ class _JobProc:
                 return
             # a hung callback here is why jobs hit the supervisor's shutdown deadline
             with tracer.start_as_current_span(
-                "shutdown_callback",
+                trace_types.SPAN_SHUTDOWN_CALLBACK,
                 attributes={trace_types.ATTR_CALLBACK_NAME: _callback_name(callback)},
             ):
                 await callback(shutdown_info.reason)
@@ -534,7 +534,7 @@ def _start_job_span(job_ctx: JobContext) -> trace.Span:
     entrypoint_started_at = time.time()
     start_time_ns = int(info.received_at * 1e9) if info.received_at else None
     span = tracer.start_span(
-        "job_entrypoint",
+        trace_types.SPAN_JOB_ENTRYPOINT,
         start_time=start_time_ns,
         attributes={
             trace_types.ATTR_JOB_ID: job.id,
@@ -559,11 +559,11 @@ def _record_dispatch_timeline(
     Timestamps travel from the worker through ``StartJobRequest``; a zero means the stage
     is unknown (simulation, console, resumed job) and is skipped rather than guessed."""
     stages = [
-        ("job_received", info.received_at),
-        ("job_accepted", info.accepted_at),
-        ("job_assigned", info.assigned_at),
-        ("process_assigned", info.launched_at),
-        ("entrypoint_started", entrypoint_started_at),
+        (trace_types.CHECKPOINT_JOB_RECEIVED, info.received_at),
+        (trace_types.CHECKPOINT_JOB_ACCEPTED, info.accepted_at),
+        (trace_types.CHECKPOINT_JOB_ASSIGNED, info.assigned_at),
+        (trace_types.CHECKPOINT_PROCESS_ASSIGNED, info.launched_at),
+        (trace_types.CHECKPOINT_ENTRYPOINT_STARTED, entrypoint_started_at),
     ]
     for event_name, ts in stages:
         if ts:
@@ -581,7 +581,7 @@ def _record_dispatch_timeline(
     if (server_started := info.job.state.started_at) > 0:
         # the server's own start time, for lining up with server-side traces
         started = _server_timestamp_seconds(server_started)
-        span.add_event("job_started_on_server", timestamp=int(started * 1e9))
+        span.add_event(trace_types.CHECKPOINT_JOB_STARTED_ON_SERVER, timestamp=int(started * 1e9))
 
 
 @dataclass

@@ -388,7 +388,8 @@ class SpeechHandle:
         # adopted even when sampled out: the duration metric still needs the start time
         span, started_at, agent_name = carry
         span.add_event(
-            "preemptive_generation_discarded", {trace_types.ATTR_SPEECH_ID: discarded.id}
+            trace_types.CHECKPOINT_PREEMPTIVE_GENERATION_DISCARDED,
+            {trace_types.ATTR_SPEECH_ID: discarded.id},
         )
         span.set_attribute(trace_types.ATTR_SPEECH_ID, self.id)
         self._agent_turn_span = span

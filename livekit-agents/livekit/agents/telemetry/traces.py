@@ -83,7 +83,7 @@ if TYPE_CHECKING:
 
 
 _SESSION_OPTION_KEY_ALIASES = {
-    "keyterms": "lk.pii.keyterms",
+    "keyterms": trace_types.ATTR_PII_KEYTERMS,
 }
 
 # Option keys never written to the report: prompt text authored by the customer

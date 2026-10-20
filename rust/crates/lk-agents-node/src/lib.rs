@@ -49,6 +49,7 @@ use std::sync::{Arc, Mutex};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, RealClock, StreamSource, Tts};
 use lk_agents_abi::FrameId;
 use lk_agents_abi::utils::frame::{Frame, FrameTable, InboundFrame};
+use lk_agents_abi::telemetry::semconv;
 use lk_agents_abi::telemetry::{
     LogRecord, Severity, SpanBuilder, TelemetryBuffer, attr_bool, attr_num, attr_str, attrs,
 };
@@ -153,7 +154,7 @@ impl AgentCore {
             InboundFrame::Root | InboundFrame::Unknown => None,
             InboundFrame::Live(f) | InboundFrame::Stale(f) => f.speech,
         };
-        let mut span = SpanBuilder::start("metrics", frame, None);
+        let mut span = SpanBuilder::start(semconv::span::METRICS, frame, None);
         span.attr(attrs::node::METRIC, attr_str(metric));
         span.attr(attrs::node::FRAME_RESOLUTION, attr_str(kind));
         if let Some(s) = speech {
@@ -276,7 +277,7 @@ impl AgentCore {
     pub async fn drive_synthesize(&self, frame: i64, text: String) -> Result<DriveOutcome> {
         let frame = FrameId::from_raw(frame);
         let tts = self.tts()?;
-        let mut span = SpanBuilder::start("tts_synthesize", frame, None);
+        let mut span = SpanBuilder::start(semconv::span::TTS_SYNTHESIZE, frame, None);
         span.attr(attrs::TTS_LABEL, attr_str(tts.label()));
         span.attr(attrs::TTS_STREAMING, attr_bool(tts.capabilities().streaming));
 
@@ -304,7 +305,7 @@ impl AgentCore {
     pub async fn drive_stream(&self, frame: i64, tokens: Vec<String>) -> Result<DriveOutcome> {
         let frame = FrameId::from_raw(frame);
         let tts = self.tts()?;
-        let mut span = SpanBuilder::start("tts_stream", frame, None);
+        let mut span = SpanBuilder::start(semconv::span::TTS_STREAM, frame, None);
         span.attr(attrs::TTS_LABEL, attr_str(tts.label()));
 
         if !tts.capabilities().streaming {

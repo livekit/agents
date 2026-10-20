@@ -489,8 +489,8 @@ pub enum Outcome {
 }
 
 /// Public because the outcome is derived from tag *presence*.
-pub const TAG_SUCCESS: &str = "lk.success";
-pub const TAG_FAIL: &str = "lk.fail";
+pub const TAG_SUCCESS: &str = super::semconv::LK_SUCCESS;
+pub const TAG_FAIL: &str = super::semconv::LK_FAIL;
 
 /// `observability.py:17`.
 #[crate::class(mutable)]

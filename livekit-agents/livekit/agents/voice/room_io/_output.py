@@ -103,7 +103,9 @@ class _ParticipantAudioOutput(io.AudioOutput):
     async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
         self._forwarding_task = asyncio.create_task(self._forward_audio())
         # detached: publishing spawns the track's tasks, which must not inherit this span
-        with tracer.detached_span("publish_audio_output", context=trace_context) as span:
+        with tracer.detached_span(
+            trace_types.SPAN_PUBLISH_AUDIO_OUTPUT, context=trace_context
+        ) as span:
             await self._publish_track()
             if self._publication is not None:
                 span.set_attribute(trace_types.ATTR_TRACK_SID, self._publication.sid)

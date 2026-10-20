@@ -81,3 +81,8 @@ serde = ["dep:serde"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync", "test-util"] }
+# `telemetry/semconv_pins.rs` lexes every source file in the workspace to find a telemetry name
+# written by hand; a tokenizer, not a regex, so quoting, escapes and layout cannot hide one. Both
+# are already in the build graph through `lk-agents-host-derive`.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", default-features = false, features = ["parsing"] }

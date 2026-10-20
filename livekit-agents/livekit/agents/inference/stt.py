@@ -25,6 +25,7 @@ from .._exceptions import (
 )
 from ..language import LanguageCode
 from ..log import logger
+from ..telemetry import trace_types
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -1045,7 +1046,7 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "error":
                     logger.error(
                         "received error from LiveKit Inference STT",
-                        extra={"lk.pii.event": data},
+                        extra={trace_types.ATTR_PII_EVENT: data},
                     )
                     code = data.get("code", -1)
                     raise APIError(

@@ -92,6 +92,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.generation import remove_instructions
 
+from ...telemetry import trace_types
 from .openai_types import RealtimeModels
 from .openai_utils import (
     AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
@@ -1189,7 +1190,7 @@ class RealtimeSession(
                         self._sent_chat_ctx_events[event_id] = msg
 
                     if lk_oai_debug and msg["type"] != "input_audio_buffer.append":
-                        logger.debug(">>>", extra={"lk.pii.event": msg})
+                        logger.debug(">>>", extra={trace_types.ATTR_PII_EVENT: msg})
                 except Exception:
                     logger.exception("failed to send event")
 
@@ -1241,7 +1242,7 @@ class RealtimeSession(
                         if event_copy["type"] == "response.output_audio.delta":
                             event_copy = {**event_copy, "delta": "..."}
 
-                        logger.debug("<<<", extra={"lk.pii.event": event_copy})
+                        logger.debug("<<<", extra={trace_types.ATTR_PII_EVENT: event_copy})
 
                     if event["type"] == "input_audio_buffer.speech_started":
                         self._handle_input_audio_buffer_speech_started(
@@ -1301,7 +1302,8 @@ class RealtimeSession(
                         self._handle_error(RealtimeErrorEvent.construct(**event))
                     elif lk_oai_debug:
                         logger.debug(
-                            f"unhandled event: {event['type']}", extra={"lk.pii.event": event}
+                            f"unhandled event: {event['type']}",
+                            extra={trace_types.ATTR_PII_EVENT: event},
                         )
                 except Exception as e:
                     # terminal server errors (e.g. insufficient_quota) must break the recv
@@ -1311,7 +1313,9 @@ class RealtimeSession(
                         raise
                     if event["type"] == "response.output_audio.delta":
                         event["delta"] = event["delta"][:10] + "..."
-                    logger.exception("failed to handle event", extra={"lk.pii.event": event})
+                    logger.exception(
+                        "failed to handle event", extra={trace_types.ATTR_PII_EVENT: event}
+                    )
 
         tasks = [
             asyncio.create_task(_recv_task(), name="_recv_task"),

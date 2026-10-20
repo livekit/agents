@@ -32,6 +32,7 @@ except ImportError as e:
     ) from e
 
 
+from ..telemetry import trace_types
 from ..voice.events import RunContext
 from .async_toolset import AsyncToolset
 from .tool_context import (
@@ -266,7 +267,7 @@ class MCPServer(ABC):
                             "tool_name": name,
                             "progress": progress,
                             "total": total,
-                            "lk.pii.progress_message": message,
+                            trace_types.ATTR_PII_PROGRESS_MESSAGE: message,
                         },
                     )
                     await ctx.update(message)
