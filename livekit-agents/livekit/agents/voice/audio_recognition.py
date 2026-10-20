@@ -324,6 +324,8 @@ class AudioRecognition:
 
         self._stt_pipeline: _STTPipeline | None = None
         self._stt_flush_requested = False
+        # set by a non-empty final transcript, cleared by VAD start of speech
+        self._segment_transcribed = False
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_stream: VADStream | None = None
 
@@ -1271,6 +1273,7 @@ class AudioRecognition:
             self._final_transcript_received.set()
             if not transcript:
                 return
+            self._segment_transcribed = True
 
             self._hooks.on_final_transcript(
                 ev,
@@ -1439,6 +1442,7 @@ class AudioRecognition:
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             self._stt_flush_requested = False
+            self._segment_transcribed = False
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
             self._active_vad_speech_started_at = speech_start_time
             if not self._vad_speech_started:
@@ -1575,6 +1579,14 @@ class AudioRecognition:
         ):
             return
 
+        awaiting_final = False
+        if auto_flush and not self._stt_flush_requested and self._stt_pipeline is not None:
+            # The transcript covers the latest VAD segment only if a final arrived after its
+            # start and no interim text followed that final.
+            awaiting_final = not self._segment_transcribed or bool(self._audio_interim_transcript)
+            self._final_transcript_received.clear()
+            self._stt_flush_requested = self._stt_pipeline.flush()
+
         chat_ctx = chat_ctx.copy()
         if self._audio_transcript:
             chat_ctx.add_message(role="user", content=self._audio_transcript)
@@ -1610,7 +1622,25 @@ class AudioRecognition:
                 endpointing_delay=endpointing_delay,
             )
 
-            negative_eot = False
+            if awaiting_final:
+                # A non-empty final re-enters EOT detection and cancels this task. An empty
+                # final, or none within the maximum endpointing delay, continues it.
+                timeout = self._endpointing.max_delay
+                if last_speaking_time is not None:
+                    timeout += last_speaking_time - time.time()
+                waiters = [
+                    asyncio.ensure_future(self._final_transcript_received.wait()),
+                    asyncio.ensure_future(self._closing.wait()),
+                ]
+                try:
+                    await asyncio.wait(
+                        waiters, timeout=max(timeout, 0.0), return_when=asyncio.FIRST_COMPLETED
+                    )
+                finally:
+                    await aio.cancel_and_wait(*waiters)
+                if self._closing.is_set():
+                    return
+
             end_of_turn_probability: float | None = None
             unlikely_threshold: float | None = None
             backchannel_threshold: float | None = None
@@ -1674,7 +1704,6 @@ class AudioRecognition:
                             and unlikely_threshold is not None
                             and end_of_turn_probability < unlikely_threshold
                         ):
-                            negative_eot = True
                             endpointing_delay = self._endpointing.max_delay
 
                         eou_span_attributes: dict[str, Any] = {
@@ -1779,24 +1808,6 @@ class AudioRecognition:
                                 trace_types.ATTR_EOU_DETECTION_DELAY,
                                 prediction_event.detection_delay,
                             )
-
-            if auto_flush and not self._stt_flush_requested:
-                if negative_eot:
-                    # Keep context through short pauses. Reserve the rest of the maximum
-                    # endpointing delay for the final transcript, without awaiting an ack.
-                    flush_delay = endpointing_delay / 2
-                    if last_speaking_time is not None:
-                        flush_delay += last_speaking_time - time.time()
-                    if flush_delay > 0:
-                        try:
-                            await asyncio.wait_for(self._closing.wait(), timeout=flush_delay)
-                            return
-                        except asyncio.TimeoutError:
-                            pass
-                if self._closing.is_set():
-                    return
-                if self._stt_pipeline is not None:
-                    self._stt_flush_requested = self._stt_pipeline.flush()
 
             if eou_wait_span.is_recording():  # the wait may have ended with resumed speech
                 eou_wait_span.set_attribute(trace_types.ATTR_EOU_DELAY, endpointing_delay)

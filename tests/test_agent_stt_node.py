@@ -292,24 +292,92 @@ async def test_only_final_text_restarts_eot_after_vad_eos(event_type) -> None:
             )
         )
         assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
+        assert isinstance(
+            await asyncio.wait_for(stream.inputs.get(), 1),
+            stt.RecognizeStream._FlushSentinel,
+        )
         await asyncio.wait_for(negative_prediction.wait(), 1)
-        assert stream.inputs.empty()
         await recognition._on_stt_event(
             stt.SpeechEvent(
                 type=event_type,
                 alternatives=[stt.SpeechData(language="en", text="hello there")],
             )
         )
-        if event_type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            assert isinstance(
-                await asyncio.wait_for(stream.inputs.get(), 1),
-                stt.RecognizeStream._FlushSentinel,
-            )
         recognition._push_audio(frame)
         assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
         assert detector.predict_end_of_turn.await_count == (
             2 if event_type == stt.SpeechEventType.FINAL_TRANSCRIPT else 1
         )
         detector.supports_language.assert_awaited_with("en")
+    finally:
+        await session.aclose()
+
+
+async def test_text_eot_waits_for_final_of_latest_segment() -> None:
+    predicted: asyncio.Queue[str] = asyncio.Queue()
+
+    async def predict(chat_ctx):
+        predicted.put_nowait(chat_ctx.items[-1].text_content)
+        return 0.1
+
+    detector = MagicMock()
+    detector.model = "test"
+    detector.provider = "test"
+    detector.supports_language = AsyncMock(return_value=True)
+    detector.unlikely_threshold = AsyncMock(return_value=0.5)
+    detector.predict_end_of_turn = AsyncMock(side_effect=predict)
+    stt_impl = _FlushableSTT(manual_flush=True)
+    session = AgentSession(
+        stt=stt_impl,
+        vad=FakeVAD(),
+        turn_handling={
+            "turn_detection": detector,
+            "endpointing": {"min_delay": 0.01, "max_delay": 6.0},
+        },
+        session_close_transcript_timeout=0.0,
+    )
+    await session.start(_PassthroughAgent())
+    try:
+        stream = await asyncio.wait_for(stt_impl.streams.get(), 5)
+        recognition = session._activity._audio_recognition
+        frame = rtc.AudioFrame.create(16000, 1, 160)
+        # the STT finalizes each segment only when flushed
+        for text, expected in (
+            ("could you", "could you"),
+            ("book a table", "could you book a table"),
+        ):
+            await recognition._on_vad_event(
+                vad.VADEvent(
+                    type=vad.VADEventType.START_OF_SPEECH,
+                    samples_index=0,
+                    timestamp=0,
+                    speech_duration=0,
+                    silence_duration=0,
+                )
+            )
+            recognition._push_audio(frame)
+            await recognition._on_vad_event(
+                vad.VADEvent(
+                    type=vad.VADEventType.END_OF_SPEECH,
+                    samples_index=160,
+                    timestamp=0.01,
+                    speech_duration=0.01,
+                    silence_duration=0,
+                )
+            )
+            assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
+            assert isinstance(
+                await asyncio.wait_for(stream.inputs.get(), 1),
+                stt.RecognizeStream._FlushSentinel,
+            )
+            await asyncio.sleep(0.05)
+            assert predicted.empty()
+            await recognition._on_stt_event(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="en", text=text)],
+                )
+            )
+            assert await asyncio.wait_for(predicted.get(), 1) == expected
     finally:
         await session.aclose()

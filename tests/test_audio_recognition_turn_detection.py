@@ -60,6 +60,8 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._stt = None
     ar._stt_pipeline = None
     ar._stt_flush_requested = False
+    ar._segment_transcribed = False
+    ar._final_transcript_received = asyncio.Event()
     ar._audio_interim_transcript = ""
     ar._turn_backchannel_over_agent = False
     ar._transcription_timeout_handle = None
@@ -730,64 +732,118 @@ class TestSTTFlushAtEOT:
         ar._turn_detector_prediction_fut, _ = _resolved_prediction(probability)
         return ar
 
-    async def test_positive_eot_flushes_before_final_and_does_not_commit_empty_turn(self) -> None:
+    def _text_detector(self, ar: AudioRecognition) -> MagicMock:
+        ar._turn_detector = MagicMock()
+        ar._turn_detector.supports_language = AsyncMock(return_value=True)
+        ar._turn_detector.predict_end_of_turn = AsyncMock(return_value=0.9)
+        ar._turn_detector.unlikely_threshold = AsyncMock(return_value=0.5)
+        return ar._turn_detector
+
+    async def test_end_of_speech_flushes_and_final_reenters_detection(self) -> None:
         ar = self._recognition()
         ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
-        await ar._end_of_turn_task
         ar._stt_pipeline.flush.assert_called_once_with()
-        ar._hooks.on_end_of_turn.assert_not_called()
-
-        ar._audio_transcript = "hello there"
-        ar._audio_interim_transcript = ""
-        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="stt")
-        await ar._end_of_turn_task
-        ar._hooks.on_end_of_turn.assert_called_once()
-        ar._stt_pipeline.flush.assert_called_once_with()
-
-    async def test_negative_eot_flushes_before_maximum_delay(self) -> None:
-        ar = self._recognition(0.1)
-        ar._endpointing.max_delay = 0.3
-        flushed = asyncio.Event()
-        ar._stt_pipeline.flush.side_effect = lambda: (flushed.set(), True)[1]
-        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
         await asyncio.sleep(0.05)
-        ar._stt_pipeline.flush.assert_not_called()
-        await asyncio.wait_for(flushed.wait(), 0.2)
         assert not ar._end_of_turn_task.done()
         ar._hooks.on_end_of_turn.assert_not_called()
 
-        # A final re-enters EOT detection but keeps the same maximum deadline.
         ar._audio_transcript = "hello there"
         ar._audio_interim_transcript = ""
+        ar._segment_transcribed = True
         ar._run_eou_detection(_make_chat_ctx_stub(), trigger="stt")
         await ar._end_of_turn_task
+        ar._hooks.on_end_of_turn.assert_called_once()
+        ar._stt_pipeline.flush.assert_called_once_with()
+
+    async def test_audio_detector_flushes_while_prediction_is_pending(self) -> None:
+        ar = self._recognition()
+        ar._turn_detector_stream.prediction_timeout = 1.0
+        pending: asyncio.Future[TurnDetectionEvent] = asyncio.Future()
+        ar._turn_detector_prediction_fut = pending
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        ar._stt_pipeline.flush.assert_called_once_with()
+
+        ar._audio_transcript = "hello there"
+        ar._audio_interim_transcript = ""
+        ar._segment_transcribed = True
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="stt")
+        await asyncio.sleep(0.05)
+        ar._hooks.on_end_of_turn.assert_not_called()
+
+        pending.set_result(_resolved_prediction(0.9)[1])
+        await ar._end_of_turn_task
+        ar._hooks.on_end_of_turn.assert_called_once()
+
+    @pytest.mark.parametrize("text_detector", [True, False])
+    async def test_eot_waits_for_final_covering_latest_speech(self, text_detector) -> None:
+        ar = self._recognition()
+        detector = self._text_detector(ar) if text_detector else None
+        ar._audio_transcript = "I'd like to book a table for"
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        await asyncio.sleep(0.05)
+        ar._stt_pipeline.flush.assert_called_once_with()
+        ar._hooks.on_end_of_turn.assert_not_called()
+        if detector is not None:
+            detector.predict_end_of_turn.assert_not_called()
+
+        ar._audio_transcript += " four people"
+        ar._audio_interim_transcript = ""
+        ar._segment_transcribed = True
+        chat_ctx = _make_chat_ctx_stub()
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        await ar._end_of_turn_task
+        info = ar._hooks.on_end_of_turn.call_args.args[0]
+        assert info.new_transcript == "I'd like to book a table for four people"
+        if detector is not None:
+            detector.predict_end_of_turn.assert_awaited_once_with(chat_ctx)
+
+    async def test_interim_after_final_waits_for_flushed_final(self) -> None:
+        ar = self._recognition()
+        # a final that answered the previous segment's flush, then this segment's interim
+        ar._audio_transcript = "perfect, thanks"
+        ar._segment_transcribed = True
+        ar._audio_interim_transcript = "that's all"
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        try:
+            await asyncio.sleep(0.05)
+            ar._stt_pipeline.flush.assert_called_once_with()
+            ar._hooks.on_end_of_turn.assert_not_called()
+        finally:
+            await aio.cancel_and_wait(ar._end_of_turn_task)
+
+    async def test_transcribed_segment_does_not_wait_for_flush(self) -> None:
+        ar = self._recognition()
+        ar._audio_transcript = "hello there"
+        ar._audio_interim_transcript = ""
+        ar._segment_transcribed = True
+        ar._endpointing.max_delay = 6.0
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        await asyncio.wait_for(ar._end_of_turn_task, 0.1)
         ar._stt_pipeline.flush.assert_called_once_with()
         ar._hooks.on_end_of_turn.assert_called_once()
 
-    async def test_resumed_speech_cancels_fallback_flush(self) -> None:
-        ar = self._recognition(0.1)
-        ar._endpointing.max_delay = 0.1
+    async def test_empty_final_ends_wait(self) -> None:
+        ar = self._recognition()
+        ar._audio_transcript = "hello there"
+        ar._endpointing.max_delay = 6.0
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        await asyncio.sleep(0.05)
+        ar._hooks.on_end_of_turn.assert_not_called()
+        ar._final_transcript_received.set()
+        await asyncio.wait_for(ar._end_of_turn_task, 0.1)
+        ar._hooks.on_end_of_turn.assert_called_once()
+
+    async def test_resumed_speech_cancels_wait_for_final(self) -> None:
+        ar = self._recognition()
+        ar._audio_transcript = "hello there"
         ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
         await asyncio.sleep(0)
         pending = ar._end_of_turn_task
         await ar._on_vad_event(_start_of_speech())
         await aio.cancel_and_wait(pending)
-        ar._stt_pipeline.flush.assert_not_called()
+        assert pending.cancelled()
+        assert not ar._stt_flush_requested
         ar._hooks.on_end_of_turn.assert_not_called()
-
-    async def test_text_detector_uses_only_final_text(self) -> None:
-        ar = self._recognition()
-        ar._turn_detector = MagicMock()
-        ar._turn_detector.supports_language = AsyncMock(return_value=True)
-        ar._turn_detector.predict_end_of_turn = AsyncMock(return_value=0.9)
-        ar._turn_detector.unlikely_threshold = AsyncMock(return_value=0.5)
-        ar._audio_transcript = "first sentence"
-        chat_ctx = _make_chat_ctx_stub()
-        ar._run_eou_detection(chat_ctx, trigger="vad")
-        await ar._end_of_turn_task
-        chat_ctx.add_message.assert_called_once_with(role="user", content="first sentence")
-        ar._turn_detector.predict_end_of_turn.assert_awaited_once()
-        ar._stt_pipeline.flush.assert_called_once_with()
 
     @pytest.mark.parametrize("interim", ["", "ghost interim"])
     async def test_missing_final_flushes_without_committing_interim(self, interim) -> None:
@@ -796,6 +852,7 @@ class TestSTTFlushAtEOT:
         ar._audio_interim_transcript = interim
         ar._endpointing.max_delay = 6.0
         ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        ar._final_transcript_received.set()
         try:
             await asyncio.wait_for(ar._end_of_turn_task, 0.1)
         finally:
@@ -811,29 +868,25 @@ class TestSTTFlushAtEOT:
         assert ar._end_of_turn_task is None
         ar._stt_pipeline.flush.assert_not_called()
 
-    async def test_fallback_is_anchored_to_speech_end(self) -> None:
-        ar = self._recognition(0.1)
+    async def test_wait_for_final_is_anchored_to_speech_end(self) -> None:
+        ar = self._recognition()
+        ar._audio_transcript = "hello there"
         ar._endpointing.max_delay = 6.0
-        ar._last_speaking_time = time.time() - 2.8
-        flushed = asyncio.Event()
-        ar._stt_pipeline.flush.side_effect = lambda: (flushed.set(), True)[1]
+        ar._last_speaking_time = time.time() - 5.8
         ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
-        try:
-            await asyncio.sleep(0.05)
-            ar._stt_pipeline.flush.assert_not_called()
-            await asyncio.wait_for(flushed.wait(), 0.3)
-            assert not ar._end_of_turn_task.done()
-            ar._hooks.on_end_of_turn.assert_not_called()
-        finally:
-            await aio.cancel_and_wait(ar._end_of_turn_task)
+        await asyncio.sleep(0.05)
+        ar._hooks.on_end_of_turn.assert_not_called()
+        await asyncio.wait_for(ar._end_of_turn_task, 0.5)
+        ar._hooks.on_end_of_turn.assert_called_once()
 
-    async def test_close_cancels_fallback_flush(self) -> None:
-        ar = self._recognition(0.1)
+    async def test_close_ends_wait_for_final(self) -> None:
+        ar = self._recognition()
+        ar._audio_transcript = "hello there"
         ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
         await asyncio.sleep(0)
         ar._closing.set()
-        await ar._end_of_turn_task
-        ar._stt_pipeline.flush.assert_not_called()
+        await asyncio.wait_for(ar._end_of_turn_task, 0.1)
+        ar._stt_pipeline.flush.assert_called_once_with()
         ar._hooks.on_end_of_turn.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -843,6 +896,7 @@ class TestSTTFlushAtEOT:
         ar = self._recognition()
         ar._audio_transcript = "hello there"
         ar._audio_interim_transcript = ""
+        ar._segment_transcribed = True
         ar._endpointing.max_delay = 6.0
         if unavailable == "timeout":
             ar._turn_detector_prediction_fut = asyncio.Future()
