@@ -327,10 +327,17 @@ class TestCachedContentRequestSuppression:
         a healthy Gemini answer streaming for longer than the read timeout is killed
         mid-sentence with a 504 or a CancelledError. The other plugins pass
         conn_options.timeout to httpx, where it bounds the silence between chunks. The
-        request must (a) force the httpx transport so the timeout keeps those semantics,
-        and (b) preset X-Server-Timeout with the long-decode ceiling so the header does not
-        re-introduce a server-side deadline derived from the read timeout."""
+        client must (a) force the httpx transport at CLIENT level (genai reads
+        async_client_args from client options only, see google.genai._api_client._use_aiohttp)
+        so the timeout keeps read-timeout semantics, and (b) preset X-Server-Timeout with
+        the long-decode ceiling so the header does not re-introduce a server-side deadline
+        derived from the read timeout."""
         llm = LLM(model="gemini-2.5-flash", api_key="test")
+
+        # client-level: the transport genai will actually consult at request time
+        client_opts = llm._client._api_client._http_options
+        assert client_opts.async_client_args is not None
+        assert isinstance(client_opts.async_client_args["transport"], httpx.AsyncHTTPTransport)
 
         fake, captured = self._patched_stream_capture()
         with patch.object(llm._client.aio.models, "generate_content_stream", fake):
@@ -345,10 +352,6 @@ class TestCachedContentRequestSuppression:
                 await stream.aclose()
 
         http_options = captured["config"].http_options
-        # httpx transport forced: genai only routes async calls to aiohttp when
-        # async_client_args has no transport (see google.genai._api_client._use_aiohttp)
-        assert http_options.async_client_args is not None
-        assert isinstance(http_options.async_client_args["transport"], httpx.AsyncHTTPTransport)
         # timeout stays the read timeout in ms
         assert http_options.timeout == 5500
         # server deadline no longer derived from the read timeout

@@ -309,12 +309,34 @@ class LLM(llm.LLM):
             cached_content=cached_content,
             media_resolution=media_resolution,
         )
+        # genai reads async_client_args (its transport choice) from CLIENT-level options only,
+        # so request-level transport injection is a no-op at runtime (#7987). Forcing httpx here
+        # makes the ms timeout a per-phase read timeout instead of aiohttp's ClientTimeout(total)
+        # whole-request deadline, matching the openai/inference plugins' semantics.
+        client_http_options = http_options if is_given(http_options) else types.HttpOptions()
+        client_async_args = dict(client_http_options.async_client_args or {})
+        if "transport" not in client_async_args:
+            client_async_args["transport"] = httpx.AsyncHTTPTransport()
+            client_http_options.async_client_args = client_async_args
+            http_options = client_http_options
+        # genai reads async_client_args (its transport choice) from CLIENT-level options only,
+        # so request-level transport injection is a no-op at runtime (#7987). Forcing httpx at
+        # client construction makes the ms timeout a per-phase read timeout instead of aiohttp's
+        # ClientTimeout(total) whole-request deadline, matching the openai/inference plugins.
+        client_http_options = (
+            http_options.model_copy() if is_given(http_options) else types.HttpOptions()
+        )
+        client_async_args = dict(client_http_options.async_client_args or {})
+        if "transport" not in client_async_args:
+            client_async_args["transport"] = httpx.AsyncHTTPTransport()
+            client_http_options.async_client_args = client_async_args
         self._client = Client(
             api_key=gemini_api_key,
             vertexai=use_vertexai,
             project=gcp_project,
             location=gcp_location,
             credentials=credentials,
+            http_options=client_http_options,
         )
         # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
@@ -607,16 +629,6 @@ class LLMStream(llm.LLMStream):
                 # than the read timeout (#7987). Presetting the header suppresses that
                 # derivation; the read timeout below still bounds per-chunk silence.
                 headers["X-Server-Timeout"] = str(int(LONG_DECODE_HTTP_TIMEOUT_MS / 1000))
-            if http_options.async_client_args and "transport" in http_options.async_client_args:
-                pass  # user-provided transport wins
-            else:
-                # genai picks aiohttp when it is importable and its ClientTimeout(total=...)
-                # turns the ms timeout into a whole-request deadline. Passing a transport
-                # forces httpx, where the timeout bounds the silence between chunks — the
-                # same semantics conn_options.timeout has on the other plugins (#7987).
-                async_args = dict(http_options.async_client_args or {})
-                async_args["transport"] = httpx.AsyncHTTPTransport()
-                http_options.async_client_args = async_args
             http_options.headers = headers
             config = types.GenerateContentConfig(
                 system_instruction=(
