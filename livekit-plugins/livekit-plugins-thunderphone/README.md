@@ -38,4 +38,5 @@ the new configuration. With a saved agent, handoffs keep the call.
 
 Every reply uses the session's instructions and tools (the saved agent's, or the inline
 `Agent`'s). ThunderPhone has no per-reply overrides, so `generate_reply(instructions=...)`
-replies normally and the plugin logs a warning.
+replies normally and the plugin logs a warning. Framework features that steer a single reply
+with instructions, such as the beta workflows, do not steer it on ThunderPhone.

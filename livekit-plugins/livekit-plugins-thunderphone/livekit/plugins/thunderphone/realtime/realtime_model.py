@@ -135,8 +135,9 @@ class RealtimeModel(_openai.RealtimeModel):
             conn_options: Connection options. Retries default to 0: a ThunderPhone
                 session is a call, and reconnecting would start a new one.
             **kwargs: Passed to ``livekit.plugins.openai.realtime.RealtimeModel``
-                (``modalities``, ...). ThunderPhone transcribes the caller with its
-                own engine, so ``input_audio_transcription`` is not sent.
+                (``turn_detection``, ``modalities``, ...). ThunderPhone transcribes the
+                caller with the call's own engine, so ``input_audio_transcription``
+                is not sent; ``None`` still turns off the caller transcripts.
         """
         key = (api_key or os.environ.get(API_KEY_ENV, "")).strip()
         if not key.startswith(API_KEY_PREFIX):
@@ -339,8 +340,8 @@ class RealtimeSession(_openai.RealtimeSession):
         if is_given(instructions) and not self._tp_warned_reply_instructions:
             self._tp_warned_reply_instructions = True
             logger.warning(
-                "ThunderPhone does not support per-reply instructions; "
-                "generate_reply(instructions=...) replies with the session's instructions"
+                "ThunderPhone ignores per-reply instructions; "
+                "replies use the session's instructions"
             )
         return super().generate_reply(
             instructions=instructions, tool_choice=tool_choice, tools=tools
@@ -378,7 +379,7 @@ class RealtimeSession(_openai.RealtimeSession):
     def _emit_transcription_metrics(self, event: Any) -> None:
         # The base names the model after its OpenAI transcription config, which
         # ThunderPhone never uses: the call's engine transcribes the caller and
-        # reports usage as seconds of caller audio.
+        # reports usage as seconds of caller audio (never tokens).
         usage = _openai._coerce_transcription_usage(event.usage)
         if not isinstance(usage, UsageTranscriptTextUsageDuration):
             return

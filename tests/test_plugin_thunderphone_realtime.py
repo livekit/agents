@@ -285,7 +285,7 @@ async def test_generate_reply_warns_once_that_instructions_are_ignored(
     with caplog.at_level(logging.WARNING):
         futures = [session.generate_reply(instructions="Greet the caller.") for _ in range(2)]
 
-    warnings = [r for r in caplog.records if "per-reply instructions" in r.getMessage()]
+    warnings = [r for r in caplog.records if "ignores per-reply instructions" in r.getMessage()]
     assert len(warnings) == 1
     assert len(session._sent) == 2
     for event in session._sent:
