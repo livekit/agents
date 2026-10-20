@@ -709,6 +709,10 @@ class _SyncedAudioOutput(io.AudioOutput):
         interrupted: bool,
         synchronized_transcript: str | None = None,
     ) -> None:
+        # A downstream capture can be canceled before this wrapper counts its segment.
+        if not self._pending_playback_count:
+            return
+
         if not self._synchronizer.enabled:
             super().on_playback_finished(
                 playback_position=playback_position,
