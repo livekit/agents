@@ -35,3 +35,7 @@ await session.start(agent=Agent(instructions="You are Acme Dental's receptionist
 An inline call fixes its instructions and tools when it starts. A handoff to an `Agent` with
 different instructions or tools therefore ends that ThunderPhone call and starts a new one with
 the new configuration. With a saved agent, handoffs keep the call.
+
+Every reply uses the session's instructions and tools (the saved agent's, or the inline
+`Agent`'s). ThunderPhone has no per-reply overrides, so `generate_reply(instructions=...)`
+replies normally and the plugin logs a warning.

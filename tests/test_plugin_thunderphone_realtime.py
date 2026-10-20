@@ -11,6 +11,7 @@ import aiohttp
 import pytest
 
 from livekit.agents import utils
+from livekit.agents.metrics import STTMetrics
 from livekit.plugins.openai.realtime import realtime_model as _openai, utils as _openai_utils
 from livekit.plugins.thunderphone import RealtimeModel
 from livekit.plugins.thunderphone.realtime import realtime_model as _realtime_model
@@ -137,6 +138,7 @@ def _make_session(*, agent_mode: bool, live_transcripts: bool = False) -> Realti
     session._tp_holding = not agent_mode
     session._tp_pending_session = {}
     session._tp_call_ended = False
+    session._tp_warned_reply_instructions = False
     session.call_id = None
     session._response_created_futures = {}
     session._tp_call_ids = {}
@@ -224,6 +226,9 @@ async def test_inline_update_is_held_until_flush_then_opts_into_call_events(
     for key in ("tracing", "truncation", "max_output_tokens"):
         assert key not in shaped
     assert shaped["audio"]["output"]["voice"] == "marin"
+    # ThunderPhone transcribes with the call's engine; the OpenAI model is not sent
+    assert "transcription" not in shaped["audio"]["input"]
+    assert shaped["audio"]["input"]["turn_detection"] == {"type": "server_vad"}
 
 
 async def test_inline_non_audio_event_flushes_configuration_first(
@@ -246,6 +251,69 @@ async def test_inline_audio_passes_through_while_holding(capture_upstream_send: 
 
     assert [e["type"] for e in session._sent] == ["input_audio_buffer.append"]
     assert session._tp_holding is True
+
+
+@pytest.mark.parametrize("agent_mode", [True, False])
+async def test_response_create_drops_per_reply_overrides(
+    capture_upstream_send: None, agent_mode: bool
+) -> None:
+    session = _make_session(agent_mode=agent_mode)
+    session._tp_holding = False
+    session.send_event(
+        {
+            "type": "response.create",
+            "event_id": "response_create_x",
+            "response": {
+                "instructions": "You are a receptionist.\nGreet the caller.",
+                "tools": [{"type": "function", "name": "book"}],
+                "tool_choice": "auto",
+                "metadata": {"client_event_id": "response_create_x"},
+            },
+        }
+    )
+
+    assert session._sent[0]["response"] == {"metadata": {"client_event_id": "response_create_x"}}
+
+
+async def test_generate_reply_warns_once_that_instructions_are_ignored(
+    capture_upstream_send: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    session = _make_session(agent_mode=True)
+    session._instructions = "You are a receptionist."  # the LiveKit Agent's, never applied
+    session._discarded_event_ids = set()
+
+    with caplog.at_level(logging.WARNING):
+        futures = [session.generate_reply(instructions="Greet the caller.") for _ in range(2)]
+
+    warnings = [r for r in caplog.records if "per-reply instructions" in r.getMessage()]
+    assert len(warnings) == 1
+    assert len(session._sent) == 2
+    for event in session._sent:
+        assert set(event["response"]) == {"metadata"}
+    for fut in futures:
+        fut.cancel()
+
+
+async def test_transcription_metrics_name_the_thunderphone_engine() -> None:
+    session = _make_session(agent_mode=False)
+    session._tp_model.model = "bolt"
+    session._tp_model.provider = "ThunderPhone"
+    session._tp_model.label = "thunderphone.RealtimeModel"
+    seen: list[object] = []
+    session.on("metrics_collected", seen.append)
+
+    session._emit_transcription_metrics(
+        Mock(event_id="evt_1", usage={"type": "duration", "seconds": 2.5})
+    )
+    session._emit_transcription_metrics(Mock(event_id="evt_2", usage=None))
+
+    assert len(seen) == 1
+    metrics = seen[0]
+    assert isinstance(metrics, STTMetrics)
+    assert metrics.audio_duration == 2.5
+    assert metrics.metadata is not None
+    assert metrics.metadata.model_name == "bolt"
+    assert metrics.metadata.model_provider == "ThunderPhone"
 
 
 async def test_unlabeled_response_is_credited_to_the_pending_reply() -> None:

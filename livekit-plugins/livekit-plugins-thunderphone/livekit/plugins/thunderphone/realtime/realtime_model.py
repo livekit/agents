@@ -35,13 +35,19 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
+import time
 from typing import Any, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import aiohttp
+from openai.types.realtime.conversation_item_input_audio_transcription_completed_event import (
+    UsageTranscriptTextUsageDuration,
+)
 from pydantic import BaseModel
 
 from livekit.agents import APIConnectionError, llm, utils
+from livekit.agents.metrics import STTMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.openai.realtime import realtime_model as _openai, utils as _openai_utils
@@ -68,6 +74,9 @@ CALL_ENDED_EVENT: Any = "thunderphone_call_ended"
 _AGENT_OWNED_KEYS = ("instructions", "tools", "tool_choice")
 # OpenAI-only knobs ThunderPhone does not use; harmless, but keep the wire clean.
 _OPENAI_ONLY_KEYS = ("tracing", "truncation", "reasoning", "max_output_tokens")
+# Per-reply overrides on response.create. ThunderPhone ignores them: a reply
+# always runs on the session's (or saved agent's) instructions and tools.
+_RESPONSE_OVERRIDE_KEYS = ("instructions", "tools", "tool_choice")
 
 
 class RealtimeModel(_openai.RealtimeModel):
@@ -126,7 +135,8 @@ class RealtimeModel(_openai.RealtimeModel):
             conn_options: Connection options. Retries default to 0: a ThunderPhone
                 session is a call, and reconnecting would start a new one.
             **kwargs: Passed to ``livekit.plugins.openai.realtime.RealtimeModel``
-                (``turn_detection``, ``input_audio_transcription``, ``modalities``, ...).
+                (``modalities``, ...). ThunderPhone transcribes the caller with its
+                own engine, so ``input_audio_transcription`` is not sent.
         """
         key = (api_key or os.environ.get(API_KEY_ENV, "")).strip()
         if not key.startswith(API_KEY_PREFIX):
@@ -233,6 +243,7 @@ class RealtimeSession(_openai.RealtimeSession):
         self._tp_holding = not self._tp_agent_mode
         self._tp_pending_session: dict[str, Any] = {}
         self._tp_call_ended = False
+        self._tp_warned_reply_instructions = False
         # Function call ids longer than OpenAI's 32-character cap come back
         # from the framework hashed; map the hash back to the id the server
         # expects on the function_call_output.
@@ -258,6 +269,11 @@ class RealtimeSession(_openai.RealtimeSession):
             # Anything but audio is meaningful only once the call exists;
             # flush the configuration first so ordering is preserved.
             self._tp_flush()
+        if payload.get("type") == "response.create":
+            response = payload.get("response")
+            if isinstance(response, dict):
+                for key in _RESPONSE_OVERRIDE_KEYS:
+                    response.pop(key, None)
         if payload.get("type") == "conversation.item.create":
             item = payload.get("item")
             if isinstance(item, dict) and item.get("type") == "function_call_output":
@@ -271,6 +287,11 @@ class RealtimeSession(_openai.RealtimeSession):
         session["model"] = SERVER_MODEL
         for key in _OPENAI_ONLY_KEYS:
             session.pop(key, None)
+        audio = session.get("audio")
+        leg = audio.get("input") if isinstance(audio, dict) else None
+        if isinstance(leg, dict):
+            # ThunderPhone transcribes the caller with the call's own engine.
+            leg.pop("transcription", None)
         if self._tp_agent_mode:
             # A saved agent is already running with its own prompt, tools,
             # voice, transcription and turn-taking; the server rejects any
@@ -308,6 +329,23 @@ class RealtimeSession(_openai.RealtimeSession):
             )
             self._tp_pending_session = {}
 
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if is_given(instructions) and not self._tp_warned_reply_instructions:
+            self._tp_warned_reply_instructions = True
+            logger.warning(
+                "ThunderPhone does not support per-reply instructions; "
+                "generate_reply(instructions=...) replies with the session's instructions"
+            )
+        return super().generate_reply(
+            instructions=instructions, tool_choice=tool_choice, tools=tools
+        )
+
     async def _update_session(
         self,
         *,
@@ -336,6 +374,27 @@ class RealtimeSession(_openai.RealtimeSession):
                 logger.exception("failed to update the chat_ctx")
 
     # ----------------------------------------------------------- incoming
+
+    def _emit_transcription_metrics(self, event: Any) -> None:
+        # The base names the model after its OpenAI transcription config, which
+        # ThunderPhone never uses: the call's engine transcribes the caller and
+        # reports usage as seconds of caller audio.
+        usage = _openai._coerce_transcription_usage(event.usage)
+        if not isinstance(usage, UsageTranscriptTextUsageDuration):
+            return
+        model = self._tp_model
+        self.emit(
+            "metrics_collected",
+            STTMetrics(
+                request_id=event.event_id,
+                timestamp=time.time(),
+                duration=0.0,
+                label=model.label,
+                audio_duration=usage.seconds,
+                streamed=True,
+                metadata=Metadata(model_name=model.model, model_provider=model.provider),
+            ),
+        )
 
     def _tp_close_expected(self) -> bool:
         # After call.ended the server hangs up; after aclose() we do.
