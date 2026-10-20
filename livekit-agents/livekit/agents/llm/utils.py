@@ -680,7 +680,7 @@ def prepare_function_arguments(
         try:
             args_dict = parse_function_arguments(json_arguments)
         except ValueError as e:
-            logger.error(
+            logger.warning(
                 f"error parsing arguments for `{fnc.info.name}`",
                 extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
             )
@@ -699,7 +699,7 @@ def prepare_function_arguments(
     except ToolError:
         raise
     except (pydantic.ValidationError, ValueError, TypeError) as e:
-        logger.error(
+        logger.warning(
             f"error parsing arguments for `{fnc.info.name}`",
             extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
