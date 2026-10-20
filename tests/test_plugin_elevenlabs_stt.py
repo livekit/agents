@@ -583,6 +583,10 @@ def _live_stream(ws: _FakeWS, **kwargs: Any) -> elevenlabs_stt.SpeechStream:
     return stream
 
 
+# Scribe rejects a commit with less audio than this since the previous one
+_MIN_COMMIT_MS = 300
+
+
 def _frame(ms: int, sample_rate: int = 16000) -> rtc.AudioFrame:
     samples = sample_rate * ms // 1000
     return rtc.AudioFrame(
@@ -601,19 +605,19 @@ async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) ->
 
 
 async def test_flush_commits_the_turn_when_no_audio_is_left_to_send() -> None:
-    # 50ms is exactly one repack chunk, so AudioByteStream.flush() returns no frames.
+    # 300ms is a whole number of repack chunks, so AudioByteStream.flush() returns no frames.
     # The commit must still go out: Scribe v2 does not finalize a turn without one, and
     # gating it on the per-frame loop dropped it here (roughly 1 flush in 5).
     ws = _FakeWS()
     stream = _live_stream(ws)
     try:
-        stream.push_frame(_frame(50))
-        await _wait_until(lambda: len(ws.sent) == 1)
+        stream.push_frame(_frame(_MIN_COMMIT_MS))
+        await _wait_until(lambda: len(ws.sent) == 6)
 
         stream.flush()
-        await _wait_until(lambda: len(ws.sent) == 2)
+        await _wait_until(lambda: len(ws.sent) == 7)
 
-        assert [msg["commit"] for msg in ws.sent] == [False, True]
+        assert [msg["commit"] for msg in ws.sent] == [False] * 6 + [True]
         assert ws.sent[-1]["audio_base_64"] == ""
     finally:
         await stream.aclose()
@@ -625,12 +629,53 @@ async def test_flush_commits_after_the_buffered_audio() -> None:
     ws = _FakeWS()
     stream = _live_stream(ws)
     try:
-        stream.push_frame(_frame(30))
+        stream.push_frame(_frame(_MIN_COMMIT_MS + 30))
         stream.flush()
-        await _wait_until(lambda: len(ws.sent) == 2)
+        await _wait_until(lambda: len(ws.sent) == 8)
 
-        assert [msg["commit"] for msg in ws.sent] == [False, True]
-        assert ws.sent[0]["audio_base_64"] != ""
+        assert [msg["commit"] for msg in ws.sent] == [False] * 7 + [True]
+        assert ws.sent[-2]["audio_base_64"] != ""
+    finally:
+        await stream.aclose()
+
+
+def _audio_ms_before_each_commit(sent: list[dict], sample_rate: int = 16000) -> list[float]:
+    audio_ms: list[float] = []
+    samples = 0
+    for msg in sent:
+        if msg["commit"]:
+            audio_ms.append(samples * 1000 / sample_rate)
+            samples = 0
+        else:
+            samples += len(base64.b64decode(msg["audio_base_64"])) // 2
+    return audio_ms
+
+
+async def test_flush_pads_a_short_turn_with_silence() -> None:
+    # Scribe answers a commit with less than 300ms of audio since the previous one with
+    # commit_throttled and closes the session, dropping the uncommitted audio. The commit still
+    # has to go out on the flush: the caller waits on its final transcript, and no more audio
+    # may follow (push-to-talk, session close).
+    ws = _FakeWS()
+    stream = _live_stream(ws)
+    speech = bytes(range(1, 201)) * 16  # 100ms without a zero sample
+    try:
+        # the first commit on a connection counts the audio since the connect
+        stream.push_frame(
+            rtc.AudioFrame(
+                data=speech, sample_rate=16000, num_channels=1, samples_per_channel=len(speech) // 2
+            )
+        )
+        stream.flush()
+        await _wait_until(lambda: sum(msg["commit"] for msg in ws.sent) == 1)
+
+        stream.flush()
+        await _wait_until(lambda: sum(msg["commit"] for msg in ws.sent) == 2)
+
+        assert _audio_ms_before_each_commit(ws.sent) == [300, 300]
+        silence_ms = (_MIN_COMMIT_MS - 100) + _MIN_COMMIT_MS
+        audio = b"".join(base64.b64decode(msg["audio_base_64"]) for msg in ws.sent)
+        assert audio == speech + bytes(16000 * 2 * silence_ms // 1000)
     finally:
         await stream.aclose()
 
@@ -701,7 +746,7 @@ async def test_configured_audio_chunks_preserve_audio_and_commit(
     ws = _FakeWS()
     stream = _live_stream(ws, sample_rate=sample_rate, audio_chunk_duration_ms=duration)
     # Distinct PCM bytes reveal drops, duplication and reordering across input frames.
-    total_samples = sample_rate * (duration * 2 + tail_ms) // 1000
+    total_samples = sample_rate * (max(duration * 2, _MIN_COMMIT_MS) + tail_ms) // 1000
     audio = bytes(i % 251 for i in range(total_samples * 2))
     input_frame_bytes = sample_rate * 20 // 1000 * 2
     chunk_bytes = sample_rate * duration // 1000 * 2
