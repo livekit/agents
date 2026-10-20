@@ -951,7 +951,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # defer to server-side setting for recording
                 record = job_ctx.job.enable_recording if job_ctx else False
 
-            self._opts.recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
+            self._opts.recording_options = _resolve_recording_options(  # type: ignore[arg-type]
+                record
+            )
             if self._text_only:
                 self._opts.recording_options["audio"] = False
 
@@ -966,14 +968,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if recorder_may_start and bit_rate is not None and invalid_bit_rate:
                 # Validate before claiming the primary session or starting RoomIO.
                 raise ValueError(
-                    f"bit_rate must be an int between {MIN_BIT_RATE} and {MAX_BIT_RATE}, "
-                    f"got {bit_rate!r}"
+                    f"bit_rate must be between {MIN_BIT_RATE} and {MAX_BIT_RATE}; got {bit_rate!r}"
                 )
 
             is_primary = True
             if job_ctx:
                 # set the primary session
-                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
+                if (
+                    job_ctx._primary_agent_session is None
+                    or job_ctx._primary_agent_session is self
+                ):
                     job_ctx._primary_agent_session = self
                 else:
                     is_primary = False
