@@ -128,7 +128,7 @@ _genai_token_usage = _meter.create_histogram(
 )
 _genai_operation_duration = _meter.create_histogram(
     trace_types.METRIC_GEN_AI_CLIENT_OPERATION_DURATION,
-    unit="s",
+    unit=_semconv.METRIC_GEN_AI_CLIENT_OPERATION_DURATION_UNIT,
     description="GenAI operation duration",
 )
 _genai_time_to_first_chunk = _meter.create_histogram(
@@ -138,12 +138,12 @@ _genai_time_to_first_chunk = _meter.create_histogram(
 )
 _genai_execute_tool_duration = _meter.create_histogram(
     trace_types.METRIC_GEN_AI_EXECUTE_TOOL_DURATION,
-    unit="s",
+    unit=_semconv.METRIC_GEN_AI_EXECUTE_TOOL_DURATION_UNIT,
     description="Tool execution duration",
 )
 _genai_invoke_agent_duration = _meter.create_histogram(
     trace_types.METRIC_GEN_AI_INVOKE_AGENT_DURATION,
-    unit="s",
+    unit=_semconv.METRIC_GEN_AI_INVOKE_AGENT_DURATION_UNIT,
     description="Agent invocation duration",
 )
 

@@ -296,17 +296,14 @@ class GenAIOutputType:
 
 
 class GenAIFinishReason:
-    """Well-known ``gen_ai.response.finish_reasons`` values.
+    """Well-known ``gen_ai.response.finish_reasons`` values."""
 
-    ponytail: literals; upstream types the attribute as a free-form string[] with no members.
-    """
-
-    STOP = "stop"
-    LENGTH = "length"
-    CONTENT_FILTER = "content_filter"
-    TOOL_CALL = "tool_call"
-    COMPACTION = "compaction"
-    ERROR = "error"
+    STOP = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_STOP
+    LENGTH = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_LENGTH
+    CONTENT_FILTER = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_CONTENT_FILTER
+    TOOL_CALL = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_TOOL_CALL
+    COMPACTION = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_COMPACTION
+    ERROR = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_ERROR
 
 
 GEN_AI_PROVIDER_NAMES: frozenset[str] = frozenset(
@@ -325,7 +322,7 @@ GEN_AI_PROVIDER_NAMES: frozenset[str] = frozenset(
         "x_ai",
         "deepseek",
         "groq",
-        "mistral_ai",  # ponytail: upstream spells it `mistral` (GEN_AI_PROVIDER_NAME_MISTRAL); shipped value kept, see the conflict list
+        _semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI,
         "moonshot_ai",
     }
 )
@@ -346,7 +343,7 @@ _PROVIDER_BY_HOST: dict[str, str] = {
     "api.cohere.com": "cohere",
     "api.deepseek.com": "deepseek",
     "api.groq.com": "groq",
-    "api.mistral.ai": "mistral_ai",
+    "api.mistral.ai": _semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI,
     "api.moonshot.ai": "moonshot_ai",
     "api.moonshot.cn": "moonshot_ai",
     "api.openai.com": "openai",
@@ -377,8 +374,8 @@ _PROVIDER_BY_NAME: dict[str, str] = {
     "googlegenai": "gcp.gen_ai",
     "groq": "groq",
     "ibmwatsonxai": "ibm.watsonx.ai",
-    "mistral": "mistral_ai",
-    "mistralai": "mistral_ai",
+    "mistral": _semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI,
+    "mistralai": _semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI,
     "moonshot": "moonshot_ai",
     "moonshotai": "moonshot_ai",
     "openai": "openai",
@@ -433,18 +430,12 @@ EVENT_GEN_AI_CLIENT_INFERENCE_OPERATION_DETAILS = (
 
 # OpenTelemetry GenAI metric names
 METRIC_GEN_AI_CLIENT_TOKEN_USAGE = _semconv.METRIC_GEN_AI_CLIENT_TOKEN_USAGE
-METRIC_GEN_AI_CLIENT_OPERATION_DURATION = (
-    "gen_ai.client.operation.duration"  # ponytail: not in the registry, see the conflict list
-)
+METRIC_GEN_AI_CLIENT_OPERATION_DURATION = _semconv.METRIC_GEN_AI_CLIENT_OPERATION_DURATION
 METRIC_GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = (
     _semconv.METRIC_GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK
 )
-METRIC_GEN_AI_INVOKE_AGENT_DURATION = (
-    "gen_ai.invoke_agent.duration"  # ponytail: not in the registry, see the conflict list
-)
-METRIC_GEN_AI_EXECUTE_TOOL_DURATION = (
-    "gen_ai.execute_tool.duration"  # ponytail: not in the registry, see the conflict list
-)
+METRIC_GEN_AI_INVOKE_AGENT_DURATION = _semconv.METRIC_GEN_AI_INVOKE_AGENT_DURATION
+METRIC_GEN_AI_EXECUTE_TOOL_DURATION = _semconv.METRIC_GEN_AI_EXECUTE_TOOL_DURATION
 
 # Exception attributes
 ATTR_EXCEPTION_TRACE = _semconv.EXCEPTION_STACKTRACE

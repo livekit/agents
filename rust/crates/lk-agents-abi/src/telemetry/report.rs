@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use super::{HrTime, LogRecord, Severity, epoch_nanos, hr_time, hr_wall};
+use super::{HrTime, LogRecord, Severity, epoch_nanos, hr_time, hr_wall, semconv};
 
 // -----------------------------------------------------------------------------------------
 // the session report's log records
@@ -228,14 +228,14 @@ pub fn session_records(
         };
         let tags = tagger.sorted_tags();
         let summary = json!({
-            "session.options": report.options,
-            "session.report_timestamp": report.timestamp,
+            (semconv::SESSION_OPTIONS): report.options,
+            (semconv::SESSION_REPORT_TIMESTAMP): report.timestamp,
             // An empty tag set is `None`, not `[]`.
-            "session.tags": if tags.is_empty() { Value::Null } else { json!(tags) },
-            "agent_name": report.agent_name,
-            "sdk_version": report.sdk_version,
+            (semconv::SESSION_TAGS): if tags.is_empty() { Value::Null } else { json!(tags) },
+            (semconv::AGENT_NAME): report.agent_name,
+            (semconv::SDK_VERSION): report.sdk_version,
             // No usage at all is `None`, not `[]`.
-            "usage": if report.model_usage.is_empty() {
+            (semconv::USAGE): if report.model_usage.is_empty() {
                 Value::Null
             } else {
                 Value::Array(report.model_usage.iter().map(usage_attributes).collect())
@@ -246,7 +246,7 @@ pub fn session_records(
 
     if opts.transcript {
         for item in &report.chat_history {
-            let attributes = json!({ "chat.item": project_item(item) });
+            let attributes = json!({ (semconv::CHAT_ITEM): project_item(item) });
             let at = hr_wall(item.created_at());
             out.push(record(LoggerName::ChatHistory, "chat item", at, attributes, chat_item_is_error(item)));
         }
@@ -257,7 +257,7 @@ pub fn session_records(
         for (k, v) in e.attributes() {
             m.insert(k.into(), Value::String(v.into()));
         }
-        let attributes = json!({ "evaluation": m });
+        let attributes = json!({ (semconv::EVALUATION): m });
         let at = hr_seconds(report.timestamp);
         out.push(record(LoggerName::Evaluations, "evaluation", at, attributes, e.verdict == "fail"));
     }
@@ -268,7 +268,7 @@ pub fn session_records(
         if metadata.as_object().is_some_and(|o| o.is_empty()) {
             continue;
         }
-        let attributes = json!({ "tag": { "name": name, "metadata": metadata } });
+        let attributes = json!({ (semconv::TAG): { "name": name, "metadata": metadata } });
         out.push(record(LoggerName::Evaluations, "tag", hr_wall(entry.timestamp), attributes, false));
     }
 
@@ -279,7 +279,7 @@ pub fn session_records(
         if let Some(r) = tagger.outcome_reason().filter(|r| !r.is_empty()) {
             m.insert("reason".into(), Value::String(r.into()));
         }
-        let attributes = json!({ "outcome": m });
+        let attributes = json!({ (semconv::OUTCOME): m });
         let at = hr_seconds(report.timestamp);
         out.push(record(LoggerName::Evaluations, "outcome", at, attributes, outcome == Outcome::Fail));
     }

@@ -65,6 +65,7 @@ from opentelemetry.util.types import AttributeValue
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
 
+from .. import _semconv
 from .._proto import encode_chat_item
 from ..log import TRACE_LEVEL, logger
 from ..types import (
@@ -1309,12 +1310,12 @@ async def _upload_session_report(
             body="session report",
             timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
             attributes={
-                "session.options": _serialize_session_options(report.options),
-                "session.report_timestamp": report.timestamp,
-                "session.tags": sorted(tagger.tags) if tagger.tags else None,
-                "agent_name": agent_name,
-                "sdk_version": report.sdk_version,
-                "usage": [
+                _semconv.SESSION_OPTIONS: _serialize_session_options(report.options),
+                _semconv.SESSION_REPORT_TIMESTAMP: report.timestamp,
+                _semconv.SESSION_TAGS: sorted(tagger.tags) if tagger.tags else None,
+                _semconv.AGENT_NAME: agent_name,
+                _semconv.SDK_VERSION: report.sdk_version,
+                _semconv.USAGE: [
                     {k: v for k, v in u.model_dump().items() if v != 0 and v != 0.0}
                     for u in report.model_usage
                 ]
@@ -1337,7 +1338,7 @@ async def _upload_session_report(
                 chat_logger,
                 body="chat item",
                 timestamp=int(item.created_at * 1e9),
-                attributes={"chat.item": item_log},
+                attributes={_semconv.CHAT_ITEM: item_log},
                 severity=severity,
                 severity_text=severity_text,
             )
@@ -1356,7 +1357,7 @@ async def _upload_session_report(
                 eval_logger,
                 body="evaluation",
                 timestamp=int(report.timestamp * 1e9),
-                attributes={"evaluation": evaluation},
+                attributes={_semconv.EVALUATION: evaluation},
                 severity=severity,
                 severity_text=severity_text,
             )
@@ -1367,7 +1368,7 @@ async def _upload_session_report(
                 eval_logger,
                 body="tag",
                 timestamp=int(entry.timestamp * 1e9),
-                attributes={"tag": {"name": tag, "metadata": entry.metadata}},
+                attributes={_semconv.TAG: {"name": tag, "metadata": entry.metadata}},
             )
 
     if tagger.outcome:
@@ -1380,7 +1381,7 @@ async def _upload_session_report(
             eval_logger,
             body="outcome",
             timestamp=int(report.timestamp * 1e9),
-            attributes={"outcome": outcome_data},
+            attributes={_semconv.OUTCOME: outcome_data},
             severity=SeverityNumber.ERROR if is_fail else SeverityNumber.UNSPECIFIED,
             severity_text="error" if is_fail else "unspecified",
         )

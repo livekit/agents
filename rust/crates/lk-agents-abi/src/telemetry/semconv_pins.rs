@@ -50,6 +50,21 @@ const PINS: &[(&str, &str)] = &[
     ("lk.redaction.enabled", ATTRIBUTE_REDACTION_ENABLED),
     // voice/agent_activity/events.rs
     ("lk.pii.user_input", semconv::LK_PII_USER_INPUT),
+    // llm/tool_arguments.rs `log::warn!` keys
+    ("lk.pii.raw_arguments", semconv::LK_PII_RAW_ARGUMENTS),
+    ("lk.pii.repaired", semconv::LK_PII_REPAIRED),
+    ("lk.pii.error", semconv::LK_PII_ERROR),
+    // telemetry/report.rs session report log-record attribute keys
+    ("session.options", semconv::SESSION_OPTIONS),
+    ("session.report_timestamp", semconv::SESSION_REPORT_TIMESTAMP),
+    ("session.tags", semconv::SESSION_TAGS),
+    ("agent_name", semconv::AGENT_NAME),
+    ("sdk_version", semconv::SDK_VERSION),
+    ("usage", semconv::USAGE),
+    ("chat.item", semconv::CHAT_ITEM),
+    ("evaluation", semconv::EVALUATION),
+    ("tag", semconv::TAG),
+    ("outcome", semconv::OUTCOME),
     // lk-agents-node/src/lib.rs span names (and the two the tests use)
     ("metrics", semconv::span::METRICS),
     ("tts_synthesize", semconv::span::TTS_SYNTHESIZE),
@@ -173,11 +188,6 @@ const LITERAL_ALLOWLIST: &[(&str, &[&str], &str)] = &[
         "lk-agents-abi/src/telemetry/report.rs",
         &["lk.judge.{name}:{}", "lk.judge.booked:fail"],
         "a dynamic tag and its tests",
-    ),
-    (
-        "lk-agents-abi/src/llm/tool_arguments.rs",
-        &["lk.pii.raw_arguments", "lk.pii.repaired", "lk.pii.error"],
-        "`log::warn!` key-values take literal keys; its test asserts the same keys",
     ),
     (
         "lk-agents-inference/src/mcp/session.rs",

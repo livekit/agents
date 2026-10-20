@@ -2,7 +2,10 @@
 """LiveKit telemetry semantic conventions."""
 
 #: Telemetry schema version; set as `schema_url` on every OTLP scope.
-SCHEMA_URL = "https://livekit.io/schemas/telemetry/0.6.1"
+SCHEMA_URL = "https://livekit.io/schemas/telemetry/0.7.0"
+
+#: The agent's name.
+AGENT_NAME = "agent_name"
 
 #: Browser name.
 BROWSER_NAME = "browser.name"
@@ -10,8 +13,14 @@ BROWSER_NAME = "browser.name"
 #: Browser version.
 BROWSER_VERSION = "browser.version"
 
+#: One chat history item, as a map. Carries conversation content. PII: redacted by the collector.
+CHAT_ITEM = "chat.item"
+
 #: Whether a pooled connection was reused, as the string `true`/`false`.
 CONNECTION_REUSED = "connection_reused"
+
+#: One evaluation result, as a map of string fields.
+EVALUATION = "evaluation"
 
 #: Token type (`input` or `output`); deprecated upstream, a dimension of `gen_ai.client.token.usage`.
 GEN_AI_TOKEN_TYPE = "gen_ai.token.type"
@@ -893,6 +902,27 @@ MODEL_NAME = "model_name"
 #: Provider the plugin reported.
 MODEL_PROVIDER = "model_provider"
 
+#: The session outcome, as a map with the field `outcome` (`success` or `fail`) and an optional `reason`.
+OUTCOME = "outcome"
+
+#: The Agents SDK version.
+SDK_VERSION = "sdk_version"
+
+#: The session's options, as a map of option name to value.
+SESSION_OPTIONS = "session.options"
+
+#: When the report was made, in Unix seconds.
+SESSION_REPORT_TIMESTAMP = "session.report_timestamp"
+
+#: The session's tags, sorted. Absent when the session has none.
+SESSION_TAGS = "session.tags"
+
+#: One tag with metadata, as a map with the fields `name` and `metadata`.
+TAG = "tag"
+
+#: Model usage, as a list of maps, one per model. Absent when there was none.
+USAGE = "usage"
+
 
 # Upstream OTel keys that LiveKit signals reference (defined by the registry's dependencies,
 # never here), so a producer can name them from one place.
@@ -1036,6 +1066,8 @@ GEN_AI_PROVIDER_NAME_GROQ = "groq"
 GEN_AI_PROVIDER_NAME_MISTRAL = "mistral"
 #: [Moonshot AI](https://www.moonshot.ai/)
 GEN_AI_PROVIDER_NAME_MOONSHOT_AI = "moonshot_ai"
+#: Mistral, as Agents sends it. The upstream member is `mistral`. Sent by LiveKit, not an upstream value.
+GEN_AI_PROVIDER_NAME_MISTRAL_AI = "mistral_ai"
 
 #: The name of the GenAI model a request is being made to.
 GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
@@ -1045,6 +1077,18 @@ GEN_AI_REQUEST_STREAM = "gen_ai.request.stream"
 
 #: Array of reasons the model stopped generating tokens, corresponding to each generation received.
 GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
+#: Declared in Agents' `GenAIFinishReason`. No Agents code path sends it today. Sent by LiveKit, not an upstream value.
+GEN_AI_RESPONSE_FINISH_REASONS_COMPACTION = "compaction"
+#: A content filter stopped the output. Sent by LiveKit, not an upstream value.
+GEN_AI_RESPONSE_FINISH_REASONS_CONTENT_FILTER = "content_filter"
+#: The generation ended abnormally. The upstream note names this value. Sent by LiveKit, not an upstream value.
+GEN_AI_RESPONSE_FINISH_REASONS_ERROR = "error"
+#: The output reached the token limit. Sent by LiveKit, not an upstream value.
+GEN_AI_RESPONSE_FINISH_REASONS_LENGTH = "length"
+#: The generation finished normally. Sent by LiveKit, not an upstream value.
+GEN_AI_RESPONSE_FINISH_REASONS_STOP = "stop"
+#: The generation ended with a tool call. Sent by LiveKit, not an upstream value.
+GEN_AI_RESPONSE_FINISH_REASONS_TOOL_CALL = "tool_call"
 
 #: The unique identifier for the completion.
 GEN_AI_RESPONSE_ID = "gen_ai.response.id"
@@ -1196,6 +1240,16 @@ TELEMETRY_SDK_NAME = "telemetry.sdk.name"
 #: The version string of the telemetry SDK.
 TELEMETRY_SDK_VERSION = "telemetry.sdk.version"
 
+
+# Upstream metrics that LiveKit producers create, imported from the registry's dependencies.
+#: The duration of a single tool execution. Instrument: histogram, unit: `s`.
+METRIC_GEN_AI_EXECUTE_TOOL_DURATION = "gen_ai.execute_tool.duration"
+#: Unit of the instrument above, as the upstream definition gives it (empty = none).
+METRIC_GEN_AI_EXECUTE_TOOL_DURATION_UNIT = "s"
+#: The end-to-end duration of a single in-process agent invocation, from the moment the invocation starts until the agent emits the last chunk of its final response or terminates with an error. Instrument: histogram, unit: `s`.
+METRIC_GEN_AI_INVOKE_AGENT_DURATION = "gen_ai.invoke_agent.duration"
+#: Unit of the instrument above, as the upstream definition gives it (empty = none).
+METRIC_GEN_AI_INVOKE_AGENT_DURATION_UNIT = "s"
 
 # Event names (OTLP `LogRecord.event_name`).
 #: Namespace of app-defined events, named `custom.<name>` and carrying the app's own attributes.
@@ -1423,6 +1477,10 @@ CHECKPOINT_USER_STATE_CHANGED = "user_state_changed"
 CHECKPOINT_WS_OPEN = "ws_open"
 
 # Metric names.
+#: GenAI operation duration, as the GenAI registry defines it (declared here because weaver cannot import it). Instrument: histogram, unit: `s`.
+METRIC_GEN_AI_CLIENT_OPERATION_DURATION = "gen_ai.client.operation.duration"
+#: Unit of the instrument above, exactly as the producer creates it (empty = none).
+METRIC_GEN_AI_CLIENT_OPERATION_DURATION_UNIT = "s"
 #: Time to the first chunk of a streaming GenAI response (deprecated upstream; declared as emitted). Instrument: histogram, unit: `s`.
 METRIC_GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_to_first_chunk"
 #: Unit of the instrument above, exactly as the producer creates it (empty = none).

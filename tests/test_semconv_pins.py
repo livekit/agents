@@ -16,7 +16,9 @@ from livekit.agents.telemetry import otel_metrics, trace_types
 pytestmark = pytest.mark.unit
 
 # (`module.NAME` as it was before the change, the literal the source held): the 196 trace_types
-# constants, the 20 `lk.agents.*` instruments, the telemetry metadata keys and the report tags.
+# constants, the 20 `lk.agents.*` instruments, the telemetry metadata keys, the report tags, and
+# the session report's log-record attribute keys and the shipped provider value, which the source
+# held inline (`telemetry/traces.py`, `trace_types`'s provider tables).
 PINS: list[tuple[str, str]] = [
     ("trace_types.ATTR_SPEECH_ID", "lk.speech_id"),
     ("trace_types.ATTR_AGENT_LABEL", "lk.agent_label"),
@@ -270,6 +272,17 @@ PINS: list[tuple[str, str]] = [
     ("types.ATTRIBUTE_REDACTION_ENABLED", "lk.redaction.enabled"),
     ("observability.TAG_SUCCESS", "lk.success"),
     ("observability.TAG_FAIL", "lk.fail"),
+    ("_semconv.SESSION_OPTIONS", "session.options"),
+    ("_semconv.SESSION_REPORT_TIMESTAMP", "session.report_timestamp"),
+    ("_semconv.SESSION_TAGS", "session.tags"),
+    ("_semconv.AGENT_NAME", "agent_name"),
+    ("_semconv.SDK_VERSION", "sdk_version"),
+    ("_semconv.USAGE", "usage"),
+    ("_semconv.CHAT_ITEM", "chat.item"),
+    ("_semconv.EVALUATION", "evaluation"),
+    ("_semconv.TAG", "tag"),
+    ("_semconv.OUTCOME", "outcome"),
+    ("_semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI", "mistral_ai"),
     # enum values the emitters pass through (`gen_ai.operation.name`, `gen_ai.output.type`,
     # `gen_ai.response.finish_reasons`, `lk.eou.outcome`), as they were before the change
     ("trace_types.GenAIOperationName.CHAT", "chat"),
@@ -333,14 +346,6 @@ UNITS: list[tuple[str, str]] = [
     ("_genai_execute_tool_duration", "s"),
     ("_genai_invoke_agent_duration", "s"),
 ]
-
-# Metrics the registry cannot declare (weaver cannot `ref` an upstream metric): their unit is
-# pinned above but has no `METRIC_*_UNIT` constant to agree with.
-UNREGISTERED_METRICS = {
-    "gen_ai.client.operation.duration",
-    "gen_ai.execute_tool.duration",
-    "gen_ai.invoke_agent.duration",
-}
 
 # Every span-event name the package passes to `add_event`, as it was before the change.
 EVENTS = [
@@ -441,7 +446,7 @@ def _current(path: str) -> str:
         return getattr(inst, "name", None) or inst._name
     if module == "observability":
         return {"TAG_SUCCESS": observability.LK_SUCCESS, "TAG_FAIL": observability.LK_FAIL}[name]
-    value: object = {"trace_types": trace_types, "types": types}[module]
+    value: object = {"trace_types": trace_types, "types": types, "_semconv": _semconv}[module]
     for attr in name.split("."):
         value = getattr(value, attr)
     return value  # type: ignore[return-value]
@@ -463,8 +468,6 @@ def test_every_instrument_keeps_the_unit_it_shipped_with(name: str, old: str) ->
     unit = getattr(inst, "unit", None)
     assert (unit if unit is not None else inst._unit) == old, f"the unit of {name} changed"
     metric = getattr(inst, "name", None) or inst._name
-    if metric in UNREGISTERED_METRICS:
-        return
     key = "METRIC_" + metric.upper().replace(".", "_")
     assert getattr(_semconv, key + "_UNIT") == old, "the registry declares a different unit"
 
