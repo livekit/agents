@@ -25,6 +25,7 @@ from ..llm import (
     LLMError,
     RealtimeModel,
     RealtimeModelError,
+    ToolChoice,
 )
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
@@ -67,6 +68,11 @@ class RunContext(Generic[Userdata_T]):
         # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
+
+        # set by the first update(): whether anything voices its output, and what the step
+        # that answers it may call
+        self._suppress_reply = False
+        self._reply_tool_choice: ToolChoice | None = None
 
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
@@ -176,6 +182,8 @@ class RunContext(Generic[Userdata_T]):
         message: str | Any,
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
+        silent: bool = False,
+        tool_choice: ToolChoice = "none",
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -189,6 +197,13 @@ class RunContext(Generic[Userdata_T]):
             template: Per-call override — either a ``str.format()`` template or a
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
+            silent: Whether the user hears anything about this update. The message is
+                recorded for the model either way; True keeps it to the model alone, and
+                on the first update releases control without speaking.
+            tool_choice: What the reply to this update may call. ``"none"`` by default: a
+                report is not a result, so the model speaks to it rather than acting on it,
+                and without that it can answer a report by calling the same tool again. Set
+                it where the report is genuinely something to act on.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -234,17 +249,22 @@ class RunContext(Generic[Userdata_T]):
                     id=pair[0].call_id,
                     call_id=self.function_call.call_id,
                     message=raw_message,
+                    silent=silent,
                 )
             ),
         )
 
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
+            self._suppress_reply = silent
+            self._reply_tool_choice = tool_choice
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+        await self._executor._enqueue_reply(
+            self, [pair[0], pair[1]], silent=silent, tool_choice=tool_choice
+        )
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]
@@ -489,6 +509,8 @@ class ToolCallUpdated(BaseModel):
     """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
     call_id: str
     message: str
+    silent: bool = False
+    """Kept to the model: the user hears nothing about it."""
 
 
 class ToolCallEnded(BaseModel):
