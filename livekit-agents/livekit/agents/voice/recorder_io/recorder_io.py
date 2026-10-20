@@ -33,8 +33,6 @@ MIN_BIT_RATE = 500
 MAX_BIT_RATE = 512_000
 
 
-
-
 # how long the writer waits on a source that stopped delivering before taking the silence as real
 INPUT_STALL_TIMEOUT = 1.0
 
