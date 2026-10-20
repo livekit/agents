@@ -910,6 +910,46 @@ async def test_pre_connect_audio_does_not_retry_after_timeout() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("num_channels", [1, 2])
+async def test_audio_input_trailing_silence_includes_all_channels(num_channels: int) -> None:
+    """The 0.5s pad after a remote track ends must cover every configured channel.
+
+    ``rtc.AudioFrame`` rejects a buffer shorter than
+    ``num_channels * samples_per_channel * sizeof(int16)``.
+    """
+    sample_rate = 24000
+    room = _FakeRoom()
+    audio_input = _ParticipantAudioInputStream(
+        room,
+        sample_rate=sample_rate,
+        num_channels=num_channels,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=None,
+    )
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=1)
+        rtc_stream.end()
+        assert audio_input._forward_atask is not None
+        await audio_input._forward_atask
+
+    frame = audio_input._data_ch.recv_nowait()
+    expected_samples = int(sample_rate * 0.5)
+    assert frame.sample_rate == sample_rate
+    assert frame.num_channels == num_channels
+    assert frame.samples_per_channel == expected_samples
+    assert frame.duration == pytest.approx(0.5)
+    assert frame.data.tobytes() == b"\x00\x00" * expected_samples * num_channels
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
 async def test_audio_input_does_not_flush_silence_when_detached() -> None:
     room = _FakeRoom()
     audio_input = _make_audio_input_stream(room, noise_cancellation=None)

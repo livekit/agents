@@ -14,7 +14,7 @@ from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
 from ...log import logger
 from ...telemetry import trace_types, tracer
-from ...utils import aio, log_exceptions
+from ...utils import aio, audio, log_exceptions
 from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
 from .types import NoiseCancellationParams, NoiseCancellationSelector
@@ -460,14 +460,9 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
         await super()._forward_task(None, stream, track, publication, participant)
         if self._attached:
-            silent_samples = int(self._sample_rate * 0.5)
+            # trailing silence so downstream VAD/STT can observe the pause after the track ends
             await self._data_ch.send(
-                rtc.AudioFrame(
-                    b"\x00\x00" * silent_samples,
-                    sample_rate=self._sample_rate,
-                    num_channels=self._num_channels,
-                    samples_per_channel=silent_samples,
-                )
+                audio.silence_frame(0.5, self._sample_rate, self._num_channels)
             )
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
