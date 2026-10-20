@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
+from livekit.agents import Agent, AgentSession, AgentTask, CloseEvent, RunContext, function_tool
 from livekit.agents.llm import FunctionToolCall, ToolError
 
 from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
@@ -194,6 +194,123 @@ async def test_public_drain_while_tool_awaits_agent_task(
         if drain_task is not None:
             await asyncio.wait_for(drain_task, timeout=5.0)
         await asyncio.wait_for(session.aclose(), timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_aclose_after_update_agent_while_tool_awaits_agent_task() -> None:
+    """Closing after update_agent() replaces the agent of an in-flight AgentTask must
+    not deadlock: the task's unwind from inside the tool task awaits the old activity,
+    whose drain waits for that very tool task."""
+    tool_started = asyncio.Event()
+    task_entered = asyncio.Event()
+    close_events: list[CloseEvent] = []
+
+    class InlineTask(AgentTask[str]):
+        def __init__(self) -> None:
+            super().__init__(instructions="Run an inline task")
+
+        async def on_enter(self) -> None:
+            task_entered.set()
+
+    class Target(Agent):
+        pass
+
+    class Source(Agent):
+        @function_tool
+        async def start_task(self, ctx: RunContext) -> str:
+            """Run an inline task."""
+            ctx.speech_handle.allow_interruptions = False
+            tool_started.set()
+            return await InlineTask()
+
+    session = AgentSession(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="start_task",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[
+                        FunctionToolCall(name="start_task", arguments="{}", call_id="task")
+                    ],
+                )
+            ]
+        )
+    )
+    session.on("close", close_events.append)
+
+    await session.start(Source(instructions="Source agent"))
+    session.generate_reply(user_input="start_task")
+    await asyncio.wait_for(tool_started.wait(), timeout=5.0)
+    await asyncio.wait_for(task_entered.wait(), timeout=5.0)
+
+    session.update_agent(Target(instructions="Target agent"))
+    await asyncio.wait_for(session.aclose(), timeout=5.0)
+
+    assert len(close_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_task_completion_after_update_agent_returns_to_tool() -> None:
+    """A tool blocked in await AgentTask() must return when the task completes after
+    update_agent(); the task's unwind must not await the activity that owns the tool."""
+    tool_started = asyncio.Event()
+    task_entered = asyncio.Event()
+    target_entered = asyncio.Event()
+    tool_returned = asyncio.Event()
+
+    class InlineTask(AgentTask[str]):
+        def __init__(self) -> None:
+            super().__init__(instructions="Run an inline task")
+
+        async def on_enter(self) -> None:
+            task_entered.set()
+
+    class Target(Agent):
+        async def on_enter(self) -> None:
+            target_entered.set()
+
+    inline_task = InlineTask()
+
+    class Source(Agent):
+        @function_tool
+        async def start_task(self, ctx: RunContext) -> str:
+            """Run an inline task."""
+            ctx.speech_handle.allow_interruptions = False
+            tool_started.set()
+            result = await inline_task
+            tool_returned.set()
+            return result
+
+    session = AgentSession(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="start_task",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[
+                        FunctionToolCall(name="start_task", arguments="{}", call_id="task")
+                    ],
+                )
+            ]
+        )
+    )
+
+    await session.start(Source(instructions="Source agent"))
+    session.generate_reply(user_input="start_task")
+    await asyncio.wait_for(tool_started.wait(), timeout=5.0)
+    await asyncio.wait_for(task_entered.wait(), timeout=5.0)
+
+    session.update_agent(Target(instructions="Target agent"))
+    await asyncio.wait_for(target_entered.wait(), timeout=5.0)
+
+    inline_task.complete("done")
+    await asyncio.wait_for(tool_returned.wait(), timeout=5.0)
+
+    await asyncio.wait_for(session.aclose(), timeout=5.0)
 
 
 @pytest.mark.asyncio

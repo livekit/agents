@@ -1390,6 +1390,10 @@ class AgentActivity(RecognitionHooks):
             await self._agent.on_exit()
 
         async with self._lock:
+            if self._closed:
+                # aclose() already ran on_exit and released this activity
+                return None
+
             if self._on_exit_task is None:
                 self._on_exit_task = task = self._create_speech_task(
                     _traceable_on_exit(), name="AgentTask_on_exit"

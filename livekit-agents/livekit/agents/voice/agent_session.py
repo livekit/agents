@@ -696,6 +696,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._forward_audio_atask: asyncio.Task[None] | None = None
         self._forward_video_atask: asyncio.Task[None] | None = None
         self._update_activity_atask: asyncio.Task[None] | None = None
+        self._detached_activity_close_tasks: set[asyncio.Task[None]] = set()
         self._activity_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
 
@@ -1261,6 +1262,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def shutdown(self, *, drain: bool = True) -> None:
         self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
 
+    def _close_detached_activity(self, activity: AgentActivity) -> None:
+        """Close an activity without awaiting it from the caller's task.
+
+        ``AgentActivity.aclose()`` drains the tool executor, which waits for its
+        non-cancellable tool tasks. An ``AgentTask`` awaited from inside such a tool
+        unwinds on that very task, so awaiting the close there waits on itself.
+        """
+
+        async def _aclose() -> None:
+            try:
+                await activity.aclose()
+            except Exception:
+                logger.exception("error closing the previous agent's activity")
+
+        task = asyncio.create_task(_aclose(), name="detached_activity_close")
+        self._detached_activity_close_tasks.add(task)
+        task.add_done_callback(self._detached_activity_close_tasks.discard)
+
     def _is_closing(self) -> bool:
         # _closing_task is set synchronously when close begins, earlier than _closing
         return self._closing_task is not None or self._closing
@@ -1325,6 +1344,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             try:
                 await self._teardown_activity(reason=reason, drain=drain)
 
+                # detached activity closes started by an AgentTask unwind are not
+                # awaited by their caller; finish them before announcing the close
+                if detached_tasks := self._detached_activity_close_tasks:
+                    await asyncio.gather(*detached_tasks, return_exceptions=True)
+
                 self._started = False
 
                 self.emit("close", CloseEvent(error=error, reason=reason))
@@ -1373,6 +1397,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         activity = self._activity
         while activity and isinstance(agent_task := activity.agent, AgentTask):
+            task_activity = activity
             # notify AgentTask to complete and wait it to resume the parent agent
             agent_task.cancel()
             await agent_task._wait_for_inactive()
@@ -1381,6 +1406,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 activity = old_agent._activity
             else:
                 break
+
+            # the AgentTask's own activity is only closed by the handoff. When
+            # `update_agent()` superseded the task, the handoff is skipped while
+            # closing, so close it here.
+            if not task_activity._closed:
+                await task_activity.drain()
+                await task_activity.aclose()
 
         if activity is not None:
             if not drain:
