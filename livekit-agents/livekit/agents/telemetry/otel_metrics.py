@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from opentelemetry import metrics as metrics_api
 
+from .. import _semconv
 from ..metrics.base import (
     AgentMetrics,
     InterruptionMetrics,
@@ -13,7 +14,7 @@ from ..metrics.base import (
     STTMetrics,
     TTSMetrics,
 )
-from . import _semconv, trace_types
+from . import trace_types
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext, MetricsMetadata, MetricsReport

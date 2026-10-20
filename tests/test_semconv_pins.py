@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from livekit import rtc
-from livekit.agents import observability, types
-from livekit.agents.telemetry import _semconv, otel_metrics, trace_types
+from livekit.agents import _semconv, observability, types
+from livekit.agents.telemetry import otel_metrics, trace_types
 
 pytestmark = pytest.mark.unit
 
@@ -495,7 +495,21 @@ PACKAGE = Path(trace_types.__file__).resolve().parents[1]
 # a dynamic tag). Everything else must come from `trace_types` / `_semconv`. An f-string is listed
 # with its placeholders as `{expr}`.
 LITERAL_ALLOWLIST: dict[str, set[str]] = {
-    "types.py": {"*"},  # participant attributes, topics, userdata keys, telemetry metadata
+    "types.py": {  # participant attributes, topics, userdata keys
+        "lk.segment_id",
+        "lk.transcribed_track_id",
+        "lk.transcription_final",
+        "lk.expression",
+        "lk.publish_on_behalf",
+        "lk.agent.state",
+        "lk.agent.name",
+        "lk.simulator",
+        "lk.simulator.dispatch",
+        "lk.chat",
+        "lk.transcription",
+        "lk.timed_transcripts",
+        "lk.tts_started_time",
+    },
     "telemetry/trace_types.py": {"lk.sip."},  # the conflict list
     "observability.py": {"lk.judge.{name}:{judgment.verdict}"},  # a dynamic tag
     "voice/amd/detector.py": {"lk.amd:{result.category.value}"},  # a dynamic tag
@@ -823,7 +837,7 @@ def test_no_telemetry_name_is_hand_written_at_an_emitter_site() -> None:
     offenders: list[str] = []
     for path in sorted(PACKAGE.rglob("*.py")):
         rel = path.relative_to(PACKAGE).as_posix()
-        if rel == "telemetry/_semconv.py":
+        if rel == "_semconv.py":
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
         offenders += _offenders(rel, tree, LITERAL_ALLOWLIST.get(rel, set()))

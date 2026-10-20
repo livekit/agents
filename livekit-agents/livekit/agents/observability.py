@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .telemetry._semconv import LK_FAIL, LK_SUCCESS
+from ._semconv import LK_FAIL, LK_SUCCESS
 
 if TYPE_CHECKING:
     from .evals import EvaluationResult

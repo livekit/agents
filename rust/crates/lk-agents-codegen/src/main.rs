@@ -215,7 +215,7 @@ const NODE_BINDING_ROOT: &str = "rust/crates/lk-agents-node/src/generated";
 /// layout only: the `protocol` submodule and the `livekit-agents` destination are both its own.
 const SEMCONV: &[(&str, &str)] = &[
     ("protocol/otel/gen/rust/semconv.rs", "rust/crates/lk-agents-abi/src/telemetry/semconv.rs"),
-    ("protocol/otel/gen/python/semconv.py", "livekit-agents/livekit/agents/telemetry/_semconv.py"),
+    ("protocol/otel/gen/python/semconv.py", "livekit-agents/livekit/agents/_semconv.py"),
 ];
 
 fn main() -> std::process::ExitCode {

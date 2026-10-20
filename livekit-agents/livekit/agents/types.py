@@ -5,6 +5,8 @@ from typing import Any, Literal, TypeAlias, TypeVar
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 
+from . import _semconv
+
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
@@ -52,10 +54,10 @@ delivered with the agent dispatch and read by
 ``JobContext.simulation_context()``.
 """
 
-ATTRIBUTE_SIMULATION_ENABLED = "lk.simulation.enabled"
+ATTRIBUTE_SIMULATION_ENABLED = _semconv.LK_SIMULATION_ENABLED
 """Telemetry metadata key marking the session as a simulation."""
 
-ATTRIBUTE_SIMULATION_RUN_ID = "lk.simulation.run_id"
+ATTRIBUTE_SIMULATION_RUN_ID = _semconv.LK_SIMULATION_RUN_ID
 """Telemetry metadata key naming the simulation run this session belongs to.
 
 Sits alongside :data:`ATTRIBUTE_SIMULATION_ENABLED`: the boolean says a session is
@@ -63,11 +65,11 @@ synthetic, this says which run it came from, so a run's sessions can be aggregat
 without resolving each one's room first.
 """
 
-ATTRIBUTE_SIMULATION_JOB_ID = "lk.simulation.job_id"
+ATTRIBUTE_SIMULATION_JOB_ID = _semconv.LK_SIMULATION_JOB_ID
 """Telemetry metadata key naming the simulation run job (one scenario) behind the
 session."""
 
-ATTRIBUTE_REDACTION_ENABLED = "lk.redaction.enabled"
+ATTRIBUTE_REDACTION_ENABLED = _semconv.LK_REDACTION_ENABLED
 """Telemetry metadata key requesting PII redaction for the session."""
 
 _RECORDING_OPTION_KEYS = ("audio", "traces", "logs", "transcript")

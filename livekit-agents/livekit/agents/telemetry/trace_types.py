@@ -7,7 +7,7 @@ segment is the only marker it honors. Attributes must never embed such content
 in span names, event names, or log message bodies — those are not redactable.
 """
 
-from . import _semconv
+from .. import _semconv
 
 # The strings come from the protocol registry (`_semconv`, vendored by `lk-agents-codegen`);
 # these are the names the package has always used for them. `tests/test_semconv_pins.py` holds
