@@ -2651,8 +2651,15 @@ class AgentActivity(RecognitionHooks):
         )
 
     def on_interim_after_preflight(self, transcript: str) -> None:
-        # once the transcript moved past the preflight, the end of turn cannot adopt the
-        # preemptive reply, so stop it now instead of at the next preflight or final transcript
+        """Cancel the preemptive generation once the transcript has moved past the preflight.
+
+        Called for each non-empty interim transcript that arrives while a preflight is pending.
+        A reply whose transcript is no longer equivalent cannot be adopted at the end of turn,
+        so it is stopped now instead of at the next preflight or final transcript.
+
+        Args:
+            transcript: The current turn transcript, including the interim text.
+        """
         if (preemptive := self._preemptive_generation) is not None and not _transcripts_equivalent(
             preemptive.info.new_transcript, transcript
         ):
