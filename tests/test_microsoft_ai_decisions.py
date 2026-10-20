@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from livekit.agents import APIError, APIStatusError
+from livekit.agents import APIError, APIStatusError, utils
 from livekit.agents.llm import ChatContext, decisions
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins import microsoft_ai
@@ -234,3 +234,16 @@ async def test_error_carries_the_foundry_body_and_request_id() -> None:
         await model.evaluate(input="", decisions=QUESTIONS)
     assert error.value.request_id == "apim-1"
     assert "DeploymentNotFound" in str(error.value.body)
+
+
+async def test_default_session_comes_from_the_http_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, http = model_for(response_body())
+    monkeypatch.setattr(utils.http_context, "http_session", lambda: http)
+    model = microsoft_ai.DecisionModel(url=URL, model="decision-deployment", api_key="test-key")
+
+    response = await model.evaluate(input="", decisions=QUESTIONS)
+
+    assert set(response.results) == set(QUESTIONS)
+    http.post.assert_called_once()

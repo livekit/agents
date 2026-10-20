@@ -111,8 +111,9 @@ Explicit `headers` (including `{}`) override the STT selector and credential
 environment settings and cannot be combined with `api_key` or `auth_header`
 constructor arguments. Use them only for a confirmed alternate authentication
 scheme. No credentials are read from OpenAI/Azure variables. Caller-supplied
-`http_session` objects are borrowed; otherwise providers own lazy sessions and
-close them in `aclose()`.
+`http_session` objects are borrowed; otherwise STT and TTS own lazy sessions and
+close them in `aclose()`, and `DecisionModel` uses the job's HTTP session (outside
+a job, wrap calls in `async with utils.http_context.open()`).
 
 Keep actual connection information in your environment or a user-selected
 local dotenv file **outside the checkout** (or a deliberately ignored file).
