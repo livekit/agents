@@ -14,7 +14,6 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..utils import aio
 from ..utils.audio import AudioBuffer
 from ..vad import VAD
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
@@ -40,6 +39,8 @@ class _STTStatus:
     available: bool
     recovering_recognize_task: asyncio.Task[None] | None
     recovering_stream_task: asyncio.Task[None] | None
+    waiting_streams: dict[FallbackRecognizeStream, None]
+    recovery_closed: bool
 
 
 class FallbackAdapter(
@@ -109,6 +110,8 @@ class FallbackAdapter(
                 available=True,
                 recovering_recognize_task=None,
                 recovering_stream_task=None,
+                waiting_streams={},
+                recovery_closed=False,
             )
             for _ in self._stt_instances
         ]
@@ -119,6 +122,7 @@ class FallbackAdapter(
         for stt_instance in self._stt_instances:
             stt_instance.on("metrics_collected", self._on_metrics_collected)
         self._recognize_metrics_needed = False  # don't emit metrics via fallback adapter
+        self._closed = False
 
     def _next_instance(self) -> STT:
         """The instance the next request goes to first: the first one marked available, or
@@ -178,43 +182,36 @@ class FallbackAdapter(
                 ),
             )
         except asyncio.TimeoutError:
-            if recovering:
-                logger.warning(f"{stt.label} recovery timed out", extra={"streamed": False})
-                raise
-
             logger.warning(
-                f"{stt.label} timed out, switching to next STT",
-                extra={"streamed": False},
+                "STT recovery timed out"
+                if recovering
+                else "STT timed out, switching to next provider",
+                extra={
+                    "stt": stt.label,
+                    "streamed": False,
+                    "error_type": "TimeoutError",
+                },
             )
-
             raise
         except APIError as e:
-            if recovering:
-                logger.warning(
-                    "%s recovery failed: %s",
-                    stt.label,
-                    e,
-                    extra={"streamed": False},
-                )
-                raise
-
             logger.warning(
-                "%s failed, switching to next STT: %s",
-                stt.label,
-                e,
-                extra={"streamed": False},
+                "STT recovery failed" if recovering else "STT failed, switching to next provider",
+                extra={
+                    "stt": stt.label,
+                    "streamed": False,
+                    "error_type": type(e).__name__,
+                },
             )
             raise
-        except Exception:
-            if recovering:
-                logger.exception(
-                    f"{stt.label} recovery unexpected error", extra={"streamed": False}
-                )
-                raise
-
-            logger.exception(
-                f"{stt.label} unexpected error, switching to next STT",
-                extra={"streamed": False},
+        except Exception as e:
+            log = logger.debug if recovering else logger.warning
+            log(
+                "STT recovery failed" if recovering else "STT failed, switching to next provider",
+                extra={
+                    "stt": stt.label,
+                    "streamed": False,
+                    "error_type": type(e).__name__,
+                },
             )
             raise
 
@@ -227,6 +224,8 @@ class FallbackAdapter(
         conn_options: APIConnectOptions,
     ) -> None:
         stt_status = self._status[self._stt_instances.index(stt)]
+        if self._closed or stt_status.recovery_closed:
+            return
         if (
             stt_status.recovering_recognize_task is None
             or stt_status.recovering_recognize_task.done()
@@ -242,17 +241,25 @@ class FallbackAdapter(
                         recovering=True,
                     )
 
+                    if self._closed or stt_status.recovery_closed:
+                        return
                     stt_status.available = True
                     logger.info(f"{stt.label} recovered")
                     self.emit(
                         "stt_availability_changed",
                         AvailabilityChangedEvent(stt=stt, available=True),
                     )
-                except Exception as e:
-                    logger.debug("%s recovery attempt failed: %s", stt.label, e)
+                except Exception:
                     return
 
-            stt_status.recovering_recognize_task = asyncio.create_task(_recover_stt_task(stt))
+            task = asyncio.create_task(_recover_stt_task(stt))
+            stt_status.recovering_recognize_task = task
+
+            def _clear_recovery(done: asyncio.Task[None]) -> None:
+                if stt_status.recovering_recognize_task is done:
+                    stt_status.recovering_recognize_task = None
+
+            task.add_done_callback(_clear_recovery)
 
     async def _recognize_impl(
         self,
@@ -321,18 +328,29 @@ class FallbackAdapter(
             self._stt_instances[0].prewarm()
 
     async def aclose(self) -> None:
+        was_closed = self._closed
+        self._closed = True
+        tasks: set[asyncio.Task[None]] = set()
         for stt_status in self._status:
+            stt_status.recovery_closed = True
+            stt_status.waiting_streams.clear()
             if stt_status.recovering_recognize_task is not None:
-                await aio.cancel_and_wait(stt_status.recovering_recognize_task)
+                tasks.add(stt_status.recovering_recognize_task)
 
             if stt_status.recovering_stream_task is not None:
-                await aio.cancel_and_wait(stt_status.recovering_stream_task)
+                tasks.add(stt_status.recovering_stream_task)
 
-        for stt in self._stt_instances:
-            stt.off("metrics_collected", self._on_metrics_collected)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.wait(tasks, timeout=1.0)
 
-        for stream_adapter in self._owned_stream_adapters:
-            await stream_adapter.aclose()
+        if not was_closed:
+            for stt in self._stt_instances:
+                stt.off("metrics_collected", self._on_metrics_collected)
+
+            for stream_adapter in self._owned_stream_adapters:
+                await stream_adapter.aclose()
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
@@ -349,9 +367,130 @@ class FallbackRecognizeStream(RecognizeStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=NOT_GIVEN)
         self._language = language
         self._fallback_adapter = stt
-        self._recovering_streams: list[RecognizeStream] = []
+        self._recovering_streams: dict[RecognizeStream, asyncio.Task[None]] = {}
+        self._input_ended = False
+        self._closing = False
+        self._run_generation = 0
+        self._close_tasks: set[asyncio.Task[None]] = set()
+
+    async def aclose(self) -> None:
+        self._closing = True
+        await super().aclose()
+
+    def _close_stream(self, stream: RecognizeStream) -> None:
+        task = asyncio.create_task(stream.aclose())
+        self._close_tasks.add(task)
+
+        def _close_done(done: asyncio.Task[None]) -> None:
+            self._close_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+            child_task = stream._task
+            if child_task.done() and not child_task.cancelled():
+                child_task.exception()
+
+        task.add_done_callback(_close_done)
+
+    def _try_recovery(self, stt: STT) -> bool:
+        generation = self._run_generation
+        stt_status = self._fallback_adapter._status[
+            self._fallback_adapter._stt_instances.index(stt)
+        ]
+        if self._closing or self._task.done() or stt_status.available or stt_status.recovery_closed:
+            return False
+        if (
+            stt_status.recovering_stream_task is not None
+            and not stt_status.recovering_stream_task.done()
+        ):
+            stt_status.waiting_streams[self] = None
+            return False
+
+        stt_status.waiting_streams.pop(self, None)
+        try:
+            stream = stt.stream(
+                language=self._language,
+                conn_options=dataclasses.replace(
+                    self._conn_options,
+                    max_retry=0,
+                    timeout=self._fallback_adapter._attempt_timeout,
+                    retry_interval=self._fallback_adapter._retry_interval,
+                ),
+            )
+        except Exception as e:
+            logger.warning(
+                "STT recovery failed",
+                extra={
+                    "stt": stt.label,
+                    "streamed": True,
+                    "error_type": type(e).__name__,
+                },
+            )
+            return False
+
+        async def _recover_stt_task() -> None:
+            try:
+                async with stream:
+                    async for ev in stream:
+                        if (
+                            self._closing
+                            or generation != self._run_generation
+                            or stt_status.recovery_closed
+                        ):
+                            return
+                        if (
+                            ev.type == SpeechEventType.FINAL_TRANSCRIPT
+                            and ev.alternatives
+                            and ev.alternatives[0].text
+                        ):
+                            if not stt_status.available:
+                                stt_status.available = True
+                                logger.info("stt.FallbackAdapter, %s recovered", stt.label)
+                                self._fallback_adapter.emit(
+                                    "stt_availability_changed",
+                                    AvailabilityChangedEvent(stt=stt, available=True),
+                                )
+                            return
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log = logger.warning if isinstance(e, APIError) else logger.debug
+                log(
+                    "STT recovery failed",
+                    extra={
+                        "stt": stt.label,
+                        "streamed": True,
+                        "error_type": type(e).__name__,
+                    },
+                )
+
+        task = asyncio.create_task(_recover_stt_task())
+        self._recovering_streams[stream] = task
+        stt_status.recovering_stream_task = task
+
+        def _recovery_done(done: asyncio.Task[None]) -> None:
+            if self._recovering_streams.get(stream) is done:
+                del self._recovering_streams[stream]
+            if stt_status.recovering_stream_task is not done:
+                return
+            stt_status.recovering_stream_task = None
+            if stt_status.available or stt_status.recovery_closed:
+                stt_status.waiting_streams.clear()
+                return
+            while stt_status.waiting_streams:
+                waiter = next(iter(stt_status.waiting_streams))
+                stt_status.waiting_streams.pop(waiter, None)
+                if waiter._try_recovery(stt):
+                    break
+
+        task.add_done_callback(_recovery_done)
+        if self._input_ended:
+            with contextlib.suppress(RuntimeError):
+                stream.end_input()
+        return True
 
     async def _run(self) -> None:
+        self._run_generation += 1
+        generation = self._run_generation
         start_time = time.time()
 
         all_failed = all(not stt_status.available for stt_status in self._fallback_adapter._status)
@@ -359,39 +498,56 @@ class FallbackRecognizeStream(RecognizeStream):
             logger.error("all STTs are unavailable, retrying..")
 
         main_stream: RecognizeStream | None = None
-        forward_input_task: asyncio.Task[None] | None = None
 
         async def _forward_input_task() -> None:
-            async for data in self._input_ch:
-                for stream in list(self._recovering_streams):
-                    try:
-                        if isinstance(data, rtc.AudioFrame):
-                            stream.push_frame(data)
-                        elif isinstance(data, self._FlushSentinel):
-                            stream.flush()
-                    except Exception:
-                        pass
+            try:
+                async for data in self._input_ch:
+                    for stream in list(self._recovering_streams):
+                        try:
+                            if isinstance(data, rtc.AudioFrame):
+                                stream.push_frame(data)
+                            elif isinstance(data, self._FlushSentinel):
+                                stream.flush()
+                        except Exception:
+                            pass
 
-                if main_stream is not None:
+                    current = main_stream
+                    if current is None:
+                        continue
                     try:
                         if isinstance(data, rtc.AudioFrame):
-                            main_stream.push_frame(data)
+                            current.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
-                            main_stream.flush()
-                    except Exception:
-                        logger.exception(
-                            "error happened in forwarding input", extra={"streamed": True}
+                            current.flush()
+                    except Exception as e:
+                        logger.debug(
+                            "error forwarding input to main stream",
+                            extra={
+                                "stt": current._stt.label,
+                                "streamed": True,
+                                "error_type": type(e).__name__,
+                            },
                         )
+            finally:
+                self._input_ended = True
+                for end_target in [main_stream, *list(self._recovering_streams)]:
+                    if end_target is not None:
+                        with contextlib.suppress(RuntimeError):
+                            end_target.end_input()
 
-            if main_stream is not None:
-                with contextlib.suppress(RuntimeError):
-                    main_stream.end_input()
+        forward_input_task = asyncio.create_task(_forward_input_task())
 
-        for i, stt in enumerate(self._fallback_adapter._stt_instances):
-            stt_status = self._fallback_adapter._status[i]
-            if stt_status.available or all_failed:
+        try:
+            for i, stt in enumerate(self._fallback_adapter._stt_instances):
+                if self._closing:
+                    return
+                stt_status = self._fallback_adapter._status[i]
+                if not stt_status.available and not all_failed:
+                    self._try_recovery(stt)
+                    continue
+
                 try:
-                    main_stream = stt.stream(
+                    child = stt.stream(
                         language=self._language,
                         conn_options=dataclasses.replace(
                             self._conn_options,
@@ -400,122 +556,88 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
-                    # update main_stream start time offset so transcript timestamps are properly adjusted
-                    main_stream.start_time_offset = self.start_time_offset + (
-                        time.time() - self._start_time
-                    )
-
-                    if forward_input_task is None or forward_input_task.done():
-                        forward_input_task = asyncio.create_task(_forward_input_task())
-
+                    child.start_time_offset = self.start_time_offset + (time.time() - start_time)
+                    main_stream = child
                     try:
-                        should_set_active = True
-                        async with main_stream:
-                            async for ev in main_stream:
-                                if should_set_active:
-                                    should_set_active = False
-                                    self._fallback_adapter._active_instance = stt
-                                self._event_ch.send_nowait(ev)
+                        if self._closing:
+                            return
+                        if self._input_ended:
+                            with contextlib.suppress(RuntimeError):
+                                child.end_input()
+                        async for ev in child:
+                            if self._closing or self._event_ch.closed:
+                                return
+                            self._fallback_adapter._active_instance = stt
+                            self._event_ch.send_nowait(ev)
+                    finally:
+                        self._close_stream(child)
 
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            f"{stt.label} timed out, switching to next STT",
-                            extra={"streamed": True},
-                        )
-                        raise
-                    except APIError as e:
-                        logger.warning(
-                            "%s failed, switching to next STT: %s",
-                            stt.label,
-                            e,
-                            extra={"streamed": True},
-                        )
-                        raise
-                    except Exception:
-                        logger.exception(
-                            f"{stt.label} unexpected error, switching to next STT",
-                            extra={"streamed": True},
-                        )
-                        raise
-
-                    return
-                except Exception:
+                    if self._closing or self._input_ended:
+                        return
                     if stt_status.available:
                         stt_status.available = False
                         self._stt.emit(
                             "stt_availability_changed",
                             AvailabilityChangedEvent(stt=stt, available=False),
                         )
-
-            self._try_recovery(stt)
-
-        if forward_input_task is not None:
-            await aio.cancel_and_wait(forward_input_task)
-
-        await asyncio.gather(*[stream.aclose() for stream in self._recovering_streams])
-
-        raise APIConnectionError(
-            f"all STTs failed ({[stt.label for stt in self._fallback_adapter._stt_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
-        )
-
-    def _try_recovery(self, stt: STT) -> None:
-        stt_status = self._fallback_adapter._status[
-            self._fallback_adapter._stt_instances.index(stt)
-        ]
-        if stt_status.recovering_stream_task is None or stt_status.recovering_stream_task.done():
-            stream = stt.stream(
-                language=self._language,
-                conn_options=dataclasses.replace(
-                    self._conn_options,
-                    max_retry=0,
-                    timeout=self._fallback_adapter._attempt_timeout,
-                ),
-            )
-            self._recovering_streams.append(stream)
-
-            async def _recover_stt_task() -> None:
-                try:
-                    nb_transcript = 0
-                    async with stream:
-                        async for ev in stream:
-                            if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
-                                if not ev.alternatives or not ev.alternatives[0].text:
-                                    continue
-
-                                nb_transcript += 1
-                                break
-
-                    if nb_transcript == 0:
-                        return
-
-                    stt_status.available = True
-                    logger.info(f"stt.FallbackAdapter, {stt.label} recovered")
-                    self._fallback_adapter.emit(
-                        "stt_availability_changed",
-                        AvailabilityChangedEvent(stt=stt, available=True),
-                    )
-
-                except asyncio.TimeoutError:
+                        await asyncio.sleep(0)
+                        if self._closing:
+                            return
                     logger.warning(
-                        f"{stream._stt.label} recovery timed out",
-                        extra={"streamed": True},
+                        "STT failed, switching to next provider",
+                        extra={"stt": stt.label, "streamed": True},
                     )
-                except APIError as e:
-                    logger.warning(
-                        "%s recovery failed: %s",
-                        stream._stt.label,
-                        e,
-                        extra={"streamed": True},
-                    )
-                except Exception:
-                    logger.exception(
-                        f"{stream._stt.label} recovery unexpected error",
-                        extra={"streamed": True},
-                    )
+                except asyncio.CancelledError:
                     raise
+                except Exception as e:
+                    await asyncio.sleep(0)
+                    if self._closing:
+                        return
+                    logger.warning(
+                        "STT failed, switching to next provider",
+                        extra={
+                            "stt": stt.label,
+                            "streamed": True,
+                            "error_type": type(e).__name__,
+                        },
+                    )
+                    if stt_status.available:
+                        stt_status.available = False
+                        self._stt.emit(
+                            "stt_availability_changed",
+                            AvailabilityChangedEvent(stt=stt, available=False),
+                        )
+                        await asyncio.sleep(0)
+                        if self._closing:
+                            return
+                finally:
+                    main_stream = None
 
-            stt_status.recovering_stream_task = task = asyncio.create_task(_recover_stt_task())
-            task.add_done_callback(lambda _: self._recovering_streams.remove(stream))
+                if self._closing:
+                    return
+                self._try_recovery(stt)
+
+            if self._closing:
+                return
+            raise APIConnectionError(
+                f"all STTs failed ({[stt.label for stt in self._fallback_adapter._stt_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
+            )
+        finally:
+            if self._run_generation == generation:
+                self._run_generation += 1
+            if not self._input_ch.closed:
+                self._input_ch.close()
+            for stt_status in self._fallback_adapter._status:
+                stt_status.waiting_streams.pop(self, None)
+            recovery_tasks = list(self._recovering_streams.values())
+            for task in recovery_tasks:
+                task.cancel()
+            for stream in list(self._recovering_streams):
+                self._close_stream(stream)
+            forward_input_task.cancel()
+            tasks = {forward_input_task, *recovery_tasks, *self._close_tasks}
+            if tasks:
+                await asyncio.wait(tasks, timeout=1.0)
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         async for _ in event_aiter:
