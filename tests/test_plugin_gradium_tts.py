@@ -188,13 +188,24 @@ async def test_synthesize_raises_on_error_frame():
 
 
 async def test_synthesize_raises_on_close_before_eos():
-    tts, _, _ = _make_tts([READY, AUDIO, "close"], close_code=1011)
+    tts, _, _ = _make_tts([READY, "close"], close_code=1011)
 
     with pytest.raises(APIStatusError) as excinfo:
         await _drain(tts, CONN_OPTS)
     assert type(excinfo.value) is APIStatusError
     assert excinfo.value.status_code == 1011
     assert excinfo.value.retryable is True
+
+
+async def test_synthesize_is_not_retried_after_audio():
+    # a retry would replay the start of the text, after its audio already went out
+    tts, session, _ = _make_tts([READY, AUDIO, "close"], close_code=1011)
+
+    with pytest.raises(APIStatusError) as excinfo:
+        await _drain(tts, APIConnectOptions(max_retry=2, timeout=5))
+    assert excinfo.value.status_code == 1011
+    assert excinfo.value.retryable is False
+    assert len(session.connects) == 1
 
 
 async def test_error_frame_with_client_error_code_is_not_retried():

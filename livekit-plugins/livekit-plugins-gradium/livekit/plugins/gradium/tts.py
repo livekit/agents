@@ -48,8 +48,9 @@ DEFAULT_VOICE_ID = "4SZHfMpw-p46Ywgs"
 # which frees up when another session ends, next to credits and API-key failures
 # that will not; the frame does not tell them apart, so the transient reading wins.
 # 1011 covers worker failures and "no worker available" (but also unknown voice ids,
-# which the server does not distinguish for clients either), 1000/1001 before
-# end_of_stream are server-side idle or duration limits.
+# which the server does not distinguish for clients either). The server's idle and
+# duration limits close with 1008 after an error frame; a 1000/1001 before
+# end_of_stream means the server shut the socket mid-session, also worth a retry.
 _NON_RETRYABLE_CLOSE_CODES = frozenset({1002, 1003})
 
 
@@ -242,8 +243,20 @@ class ChunkedStream(tts.ChunkedStream):
         self._model_endpoint = model_endpoint
         self._model_name = model_name
         self._opts = replace(tts._opts)
+        self._pushed_audio = False
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        self._pushed_audio = False
+        try:
+            await self._synthesize(output_emitter)
+        except APIError as e:
+            if self._pushed_audio:
+                # The base class retries a one-shot synthesis even after audio went out,
+                # so a retry would replay the start of the text: fail instead.
+                e.retryable = False
+            raise
+
+    async def _synthesize(self, output_emitter: tts.AudioEmitter) -> None:
         # TODO(laurent): once we support the POST requests, we should use it here rather than the websocket API.
         try:
             async with await self._tts._connect_ws(self._conn_options.timeout) as ws:
@@ -299,6 +312,7 @@ class ChunkedStream(tts.ChunkedStream):
                         elif type_ == "audio":
                             audio = base64.b64decode(msg_data["audio"])
                             output_emitter.push(audio)
+                            self._pushed_audio = True
                         elif type_ == "end_of_stream":
                             break
                         elif type_ == "error":
