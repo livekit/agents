@@ -21,6 +21,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
+import httpx
+
 import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client, types
@@ -599,6 +601,22 @@ class LLMStream(llm.LLMStream):
 
             headers = dict(http_options.headers or {})
             headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
+            if "X-Server-Timeout" not in headers:
+                # genai derives an X-Server-Timeout from the ms timeout and Vertex enforces
+                # it as a WHOLE-REQUEST deadline, killing healthy answers that stream longer
+                # than the read timeout (#7987). Presetting the header suppresses that
+                # derivation; the read timeout below still bounds per-chunk silence.
+                headers["X-Server-Timeout"] = str(int(LONG_DECODE_HTTP_TIMEOUT_MS / 1000))
+            if http_options.async_client_args and "transport" in http_options.async_client_args:
+                pass  # user-provided transport wins
+            else:
+                # genai picks aiohttp when it is importable and its ClientTimeout(total=...)
+                # turns the ms timeout into a whole-request deadline. Passing a transport
+                # forces httpx, where the timeout bounds the silence between chunks — the
+                # same semantics conn_options.timeout has on the other plugins (#7987).
+                async_args = dict(http_options.async_client_args or {})
+                async_args["transport"] = httpx.AsyncHTTPTransport()
+                http_options.async_client_args = async_args
             http_options.headers = headers
             config = types.GenerateContentConfig(
                 system_instruction=(

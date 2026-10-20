@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from google.genai import types
 
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, function_tool
 from livekit.agents.types import APIConnectOptions
-from livekit.plugins.google.llm import LLM, LLMStream
+from livekit.plugins.google.llm import LLM, LONG_DECODE_HTTP_TIMEOUT_MS, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 from livekit.plugins.google.tools import GoogleSearch
 
@@ -318,6 +319,40 @@ class TestCachedContentRequestSuppression:
         assert "livekit-agents/" in config.http_options.headers["x-goog-api-client"]
         assert caller_http_options.timeout is None
         assert caller_http_options.headers == {"X-Vertex-Test": "1"}
+
+    @pytest.mark.asyncio
+    async def test_timeout_is_read_timeout_not_whole_request_deadline(self) -> None:
+        """#7987: genai turns the ms timeout into aiohttp ClientTimeout(total=...) and an
+        X-Server-Timeout header, both of which Vertex enforces as a WHOLE-REQUEST deadline:
+        a healthy Gemini answer streaming for longer than the read timeout is killed
+        mid-sentence with a 504 or a CancelledError. The other plugins pass
+        conn_options.timeout to httpx, where it bounds the silence between chunks. The
+        request must (a) force the httpx transport so the timeout keeps those semantics,
+        and (b) preset X-Server-Timeout with the long-decode ceiling so the header does not
+        re-introduce a server-side deadline derived from the read timeout."""
+        llm = LLM(model="gemini-2.5-flash", api_key="test")
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(
+                chat_ctx=ChatContext.empty(),
+                conn_options=APIConnectOptions(timeout=5.5),
+            )
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        http_options = captured["config"].http_options
+        # httpx transport forced: genai only routes async calls to aiohttp when
+        # async_client_args has no transport (see google.genai._api_client._use_aiohttp)
+        assert http_options.async_client_args is not None
+        assert isinstance(http_options.async_client_args["transport"], httpx.AsyncHTTPTransport)
+        # timeout stays the read timeout in ms
+        assert http_options.timeout == 5500
+        # server deadline no longer derived from the read timeout
+        assert http_options.headers["X-Server-Timeout"] == str(LONG_DECODE_HTTP_TIMEOUT_MS // 1000)
 
 
 class TestMediaResolution:
