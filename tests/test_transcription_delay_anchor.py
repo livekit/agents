@@ -232,19 +232,26 @@ async def test_preflight_transcript_follows_the_same_rules(mode: str) -> None:
     assert ar._last_speaking_time == pytest.approx(expected, abs=0.05)
 
 
-async def test_stt_end_of_speech_keeps_the_vad_anchor_over_word_timestamps() -> None:
-    """Word-derived estimates (end_time mapped against input_started_at) beat the VAD
-    anchor only when the VAD missed the segment. When the anchor exists, it stays —
-    same precedence as the FINAL_TRANSCRIPT path above."""
+@both_modes
+async def test_stt_end_of_speech_keeps_the_vad_anchor_over_word_timestamps(mode: str) -> None:
+    """Word-derived estimates on END_OF_SPEECH follow the FINAL_TRANSCRIPT precedence:
+    in stt mode they win (the provider owns the boundary and the timestamps are a
+    measured end). The stt EOS branch is stt-only, so vad mode exercises nothing
+    here beyond the anchor staying untouched; kept in the matrix for symmetry."""
     now = time.time()
-    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
+    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     ar._last_speaking_time = now - 0.6  # VAD end-of-speech
     ar._last_speaking_time_is_end = True
 
     await ar._on_stt_event(_speech_event(stt.SpeechEventType.END_OF_SPEECH, end_time=9.0, text=""))
 
-    assert ar._last_speaking_time == pytest.approx(now - 0.6, abs=0.05)
-    assert ar._user_turn_committed is True
+    if mode == "stt":
+        assert ar._last_speaking_time == pytest.approx(now - 1.0, abs=0.05)
+        assert ar._user_turn_committed is True
+    else:
+        # the stt-mode EOS branch never runs; nothing moves
+        assert ar._last_speaking_time == pytest.approx(now - 0.6, abs=0.05)
+        assert ar._user_turn_committed is False
 
 
 async def test_stt_end_of_speech_prefers_the_provider_speech_end_time() -> None:

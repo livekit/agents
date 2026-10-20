@@ -1388,24 +1388,19 @@ class AudioRecognition:
                 # delaying the turn commit by the skew
                 self._last_speaking_time = min(ev.speech_end_time, now)
                 self._last_speaking_time_is_end = True
-            elif (
-                self._vad is None
-                or self._last_speaking_time is None
-                or not self._last_speaking_time_is_end
-            ):
-                # use an implied version computed based on either word timestamps or current time
+            elif use_stt_speaking_time or not self._last_speaking_time_is_end:
+                # same precedence as the FINAL_TRANSCRIPT path: no VAD, a real provider
+                # timestamp in stt mode (word timestamps bound speech from above, so
+                # they replace the anchor there), or an anchor that is only an onset
+                # (a wired VAD that missed the segment leaves START_OF_SPEECH behind;
+                # it bounds speech from below, so arrival is the honest fallback)
                 self._last_speaking_time = stt_last_speaking_time
-                self._last_speaking_time_is_end = (
-                    False  # arrival: an upper bound, not a measured end
-                )
+                self._last_speaking_time_is_end = has_stt_end_time
             # else: an END_OF_SPEECH with no timestamps (e.g. Deepgram Flux's EndOfTurn)
             # is an explicit boundary but says nothing about when speech ended — its
             # arrival instant includes STT endpointing and transport delay. A measured
             # end anchor (a VAD backdate, or the word timestamps the turn's final
             # transcript already stored) is the better estimate, so keep it (#7960).
-            # An onset/live anchor under a wired VAD that missed the segment is NOT
-            # measured: it only bounds speech from below, so arrival is the honest
-            # fallback there (#7960 review).
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
