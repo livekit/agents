@@ -182,10 +182,12 @@ class DataStreamAudioOutput(AudioOutput):
         self._stream_writer = None
 
     def clear_buffer(self) -> None:
-        if not self._started:
+        if not self._started or not self._pending_playback_count:
             return
 
-        task = asyncio.create_task(self._clear_buffer_task(self._pushed_duration))
+        task = asyncio.create_task(
+            self._clear_buffer_task(self._pushed_duration, self.captured_playout_segments)
+        )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -199,7 +201,7 @@ class DataStreamAudioOutput(AudioOutput):
             "disable `AgentSession.resume_false_interruption` if you are using an avatar plugin."
         )
 
-    async def _clear_buffer_task(self, pushed_duration: float) -> None:
+    async def _clear_buffer_task(self, pushed_duration: float, segment_count: int) -> None:
         timeout = self._clear_buffer_timeout
         try:
             await self._room.local_participant.perform_rpc(
@@ -211,12 +213,19 @@ class DataStreamAudioOutput(AudioOutput):
             logger.error("failed to perform clear buffer rpc", exc_info=e)
             timeout = 0  # mark playout done immediately if clear buffer rpc fails
 
+        # The interrupted segment may finish while the RPC is in flight.
+        if self.captured_playout_segments != segment_count or not self._pending_playback_count:
+            return
+
         def _on_timeout() -> None:
+            self._clear_buffer_timeout_handler = None
+            if self.captured_playout_segments != segment_count or not self._pending_playback_count:
+                return
+
             logger.warning(
                 "didn't receive playback finished event after clear buffer, marking playout as done arbitrarily"
             )
             self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
-            self._reset_playback_count()
 
         if self._clear_buffer_timeout_handler:
             self._clear_buffer_timeout_handler.cancel()
