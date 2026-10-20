@@ -1671,8 +1671,7 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
 
 async def test_recorder_io_receives_bit_rate_options_from_record_dict() -> None:
-    """record={"bit_rate": ..., "constant_bit_rate": ...} must reach RecorderIO: this is the
-    only path session.start(record=...) has to it, since RecorderIO itself isn't exported."""
+    """Ensure session.start forwards recorder options to RecorderIO."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx()
 
