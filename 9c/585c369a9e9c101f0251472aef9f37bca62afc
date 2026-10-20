@@ -1,0 +1,90 @@
+livekit-plugins/livekit-plugins-slng/livekit/plugins/slng/stt.py
+  s_bcd3e70328118e::t_45f1da4936adce 571-573,715,723,796-799,853-860,887,1127-1128,1161,1166-1169
+  s_bcd3e70328118e::t_75a99da345f981 1170
+livekit-plugins/livekit-plugins-azure/livekit/plugins/azure/stt.py
+  s_bcd3e70328118e::t_75e1d8f10ee79a 285-286
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/stt.py
+  s_bcd3e70328118e::t_cce3ab05de36a3 598
+livekit-plugins/livekit-plugins-cartesia/livekit/plugins/cartesia/_recognize_streams/legacy_recognize_stream.py
+  s_bcd3e70328118e::t_00b117c7abbb0c 266
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt.py
+  s_bcd3e70328118e::t_1c789044ea6ef9 707
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt_v2.py
+  s_bcd3e70328118e::t_81476b6e55a3df 566
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_bcd3e70328118e::t_009ca4de582f23 647
+livekit-plugins/livekit-plugins-fireworksai/livekit/plugins/fireworksai/stt.py
+  s_bcd3e70328118e::t_372a55a4a517c4 389
+livekit-plugins/livekit-plugins-gladia/livekit/plugins/gladia/stt.py
+  s_bcd3e70328118e::t_afe7dd10cfef7c 880
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/stt.py
+  s_bcd3e70328118e::t_5d515797355cfa 1044
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/stt.py
+  s_bcd3e70328118e::t_6cdd059555c6d8 396
+livekit-plugins/livekit-plugins-inworld/livekit/plugins/inworld/stt.py
+  s_bcd3e70328118e::t_c5031081da761d 292
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/stt.py
+  s_bcd3e70328118e::t_4edb2e1d2855c8 429
+livekit-plugins/livekit-plugins-rtzr/livekit/plugins/rtzr/stt.py
+  s_bcd3e70328118e::t_70dfd55e0aeedf 191,198-200,203-205,207-211,237-247,250-252,254,256-257,260-262,264-270
+livekit-plugins/livekit-plugins-simplismart/livekit/plugins/simplismart/stt.py
+  s_bcd3e70328118e::t_729f85676361c2 413
+livekit-plugins/livekit-plugins-smallestai/livekit/plugins/smallestai/stt.py
+  s_bcd3e70328118e::t_3ac2adec7d4836 632
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/stt.py
+  s_bcd3e70328118e::t_76e7887f899b33 341
+livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/stt.py
+  s_bcd3e70328118e::t_e76a07df35a951 403
+tests/stt_reconnect.py
+  s_bcd3e70328118e::t_39479976e4902b 1-109
+tests/test_plugin_azure_stt.py
+  s_bcd3e70328118e::t_a8c8d0b4706cb3 111-146
+tests/test_plugin_baseten_stt.py
+  s_bcd3e70328118e::t_61f7ea727cefd3 64-80
+tests/test_plugin_cartesia_stt.py
+  s_bcd3e70328118e::t_5e9c0490bb4472 58-74
+tests/test_plugin_deepgram_stt.py
+  s_bcd3e70328118e::t_496466154af3b8 664-702
+tests/test_plugin_elevenlabs_stt.py
+  s_bcd3e70328118e::t_c3827bee616e4a 801-817
+tests/test_plugin_fireworksai_stt.py
+  s_bcd3e70328118e::t_e3decb33225948 1-22
+tests/test_plugin_gladia_stt.py
+  s_bcd3e70328118e::t_cfa8e388562c2b 53-76
+tests/test_plugin_google_stt.py
+  s_bcd3e70328118e::t_f4d0951829a0f2 802-881
+tests/test_plugin_gradium_stt.py
+  s_bcd3e70328118e::t_c81f72eb82b490 137-153
+tests/test_plugin_inworld_stt.py
+  s_bcd3e70328118e::t_e230b1883145e7 35-51
+tests/test_plugin_mistralai_stt.py
+  s_bcd3e70328118e::t_69e767e84281d5 38-65
+tests/test_plugin_rtzr_stt.py
+  s_bcd3e70328118e::t_53a5c0a904efa6 30-128
+tests/test_plugin_simplismart_stt.py
+  s_bcd3e70328118e::t_01db9284fb06c4 235-257
+tests/test_plugin_slng_stt.py
+  s_bcd3e70328118e::t_ea50d21c9cad17 60-167
+tests/test_plugin_smallestai_stt.py
+  s_bcd3e70328118e::t_8e9103a18a7c4a 49-65
+tests/test_plugin_soniox_stt.py
+  s_bcd3e70328118e::t_d542f22c240bd7 882-898
+tests/test_plugin_xai_stt.py
+  s_bcd3e70328118e::t_aa0a7a99606608 190-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9c585c369a9e9c101f0251472aef9f37bca62afc",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
