@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import io
 import json
 import logging
 import time
+import wave
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -1146,6 +1148,43 @@ async def test_fast_reports_the_detected_language(
     alt = (await stt.recognize(frames(0.5), conn_options=NO_RETRY)).alternatives[0]
 
     assert alt.language == expected
+
+
+@pytest.mark.parametrize("channel_separation", [False, True])
+async def test_fast_channel_separation(scribe, http, channel_separation: bool) -> None:
+    fake, live_url, fast_url = scribe
+    fake.fast_body = {
+        "request_id": "req_ch",
+        "result": {
+            "text_display": "Hi there. Hello.",
+            "segments": [
+                {"channel": 0, "start": 0.1, "end": 0.9, "speaker": "", "text": "Hi there."},
+                {"channel": 1, "start": 1.2, "end": 1.8, "speaker": "", "text": "Hello."},
+            ],
+        },
+    }
+    stt = make_stt(http, (live_url, fast_url), mode="fast", channel_separation=channel_separation)
+    stereo = [
+        rtc.AudioFrame(
+            b"\x00\x00" * 320 * 2, sample_rate=16000, num_channels=2, samples_per_channel=320
+        )
+        for _ in range(25)
+    ]
+    alt = (await stt.recognize(stereo, conn_options=NO_RETRY)).alternatives[0]
+
+    assert ("channel_separation" in fake.fast_requests[0]["config"]) is channel_separation
+    with wave.open(io.BytesIO(fake.fast_requests[0]["audio"])) as wav:
+        assert wav.getnchannels() == 2  # the upload keeps the input's channels
+    if channel_separation:
+        assert alt.metadata == {
+            "channel_segments": [
+                {"channel": 0, "text": "Hi there.", "start": 0.1, "end": 0.9},
+                {"channel": 1, "text": "Hello.", "start": 1.2, "end": 1.8},
+            ]
+        }
+    else:
+        assert alt.metadata is None
+    assert alt.text == "Hi there. Hello."
 
 
 @pytest.mark.parametrize("word_time_offsets", [False, True])

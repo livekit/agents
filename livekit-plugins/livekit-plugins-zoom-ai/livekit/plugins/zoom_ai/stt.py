@@ -157,6 +157,7 @@ class STTOptions:
     diarization: bool
     silence_duration_ms: int | None
     word_time_offsets: bool
+    channel_separation: bool
     vocabulary: list[str] | None
     text_polishing: bool
     model: str | None
@@ -195,6 +196,7 @@ class _RequestView:
 
     diarization: bool
     word_time_offsets: bool
+    channel_separation: bool
     text_polishing: bool
     language_detection: bool
     silence_duration_ms: int | None
@@ -207,6 +209,7 @@ class _RequestView:
         return cls(
             diarization=bool(config.get("diarization")),
             word_time_offsets=bool(config.get("word_time_offsets")),
+            channel_separation=bool(config.get("channel_separation")),
             text_polishing=bool(polishing.get("enabled")),
             language_detection=bool(config.get("language_detection")),
             silence_duration_ms=silence if isinstance(silence, int) else None,
@@ -241,6 +244,7 @@ class STT(stt.STT):
         silence_duration_ms: int | None = DEFAULT_SILENCE_DURATION_MS,
         diarization: bool = False,
         word_time_offsets: bool = False,
+        channel_separation: bool = False,
         vocabulary: list[str] | None = None,
         text_polishing: bool = False,
         extra_kwargs: dict[str, Any] | None = None,
@@ -282,6 +286,9 @@ class STT(stt.STT):
                 ``MultiSpeakerAdapter`` works with Live mode only.
             word_time_offsets: Fast only: word timings (``config.word_time_offsets``), in
                 ``SpeechData.words``. Off by default.
+            channel_separation: Fast only: recognize each channel of stereo audio
+                separately (``config.channel_separation``); each segment's channel is in
+                ``metadata["channel_segments"]``. Off by default.
             vocabulary: Words and phrases that customize recognition
                 (``config.vocabulary.phrases``).
             text_polishing: Scribe's text polishing (``outputs.text_polishing``). The
@@ -339,6 +346,7 @@ class STT(stt.STT):
             diarization=diarization,
             silence_duration_ms=silence_duration_ms,
             word_time_offsets=word_time_offsets,
+            channel_separation=channel_separation,
             vocabulary=vocabulary,
             text_polishing=text_polishing,
             model=model,
@@ -375,6 +383,8 @@ class STT(stt.STT):
         config: dict[str, Any] = {"language": locale, **_recognition_config(self._opts)}
         if self._opts.word_time_offsets:
             config["word_time_offsets"] = True
+        if self._opts.channel_separation:
+            config["channel_separation"] = True
         request: dict[str, Any] = {"config": config}
         if self._opts.text_polishing:
             request["outputs"] = {"text_polishing": {"enabled": True}}
@@ -459,6 +469,13 @@ class STT(stt.STT):
                         {k: s.get(k) for k in ("speaker", "text", "start", "end")} for s in segments
                     ],
                 }
+        if view.channel_separation:
+            metadata = {
+                **(metadata or {}),
+                "channel_segments": [
+                    {k: s.get(k) for k in ("channel", "text", "start", "end")} for s in segments
+                ],
+            }
         words = None
         # Word timings belong to the recognized text, not the polished one.
         if view.word_time_offsets and polished is None:

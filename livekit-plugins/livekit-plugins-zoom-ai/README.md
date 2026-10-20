@@ -86,6 +86,7 @@ Options map to the Scribe API fields of the same name; see the [Scribe docs](htt
 | `silence_duration_ms` | `350` | Live: silence (ms) that ends a turn; `None` uses Scribe's default |
 | `diarization` | `False` | Speaker labels: `SpeechData.speaker_id`, or `metadata["speaker_segments"]` when several people speak in one final |
 | `word_time_offsets` | `False` | Fast: word timings in `SpeechData.words` |
+| `channel_separation` | `False` | Fast: recognize each stereo channel separately; channels in `metadata["channel_segments"]` |
 | `vocabulary` | `None` | Words and phrases to recognize, such as names and product terms |
 | `text_polishing` | `False` | Polished text as the transcript, with the original in `metadata["transcript"]`; if polishing fails, the original text |
 | `extra_kwargs` | `None` | Other Scribe request fields, e.g. `{"config": {"profanity_filter": True}}` |
