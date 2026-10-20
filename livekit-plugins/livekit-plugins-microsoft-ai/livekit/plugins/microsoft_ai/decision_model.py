@@ -119,7 +119,7 @@ class DecisionModel(llm.DecisionModel):
                         status_code=response.status,
                         request_id=request_id or None,
                         body=await response.text(),
-                        retryable=response.status in (408, 429) or response.status >= 500,
+                        retryable=response.status in (408, 429) or 500 <= response.status < 600,
                     )
                 parsed = systemone.Response.model_validate(await response.json())
                 request_id = parsed.id or request_id
