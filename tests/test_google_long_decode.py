@@ -42,6 +42,7 @@ def _response(
     continuation_token: bytes | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
+    thoughts_tokens: int | None = None,
 ) -> types.GenerateContentResponse:
     candidate = types.Candidate(
         content=types.Content(parts=[types.Part(text=text)]) if text is not None else None,
@@ -54,7 +55,10 @@ def _response(
             types.GenerateContentResponseUsageMetadata(
                 prompt_token_count=prompt_tokens,
                 candidates_token_count=completion_tokens,
-                total_token_count=(prompt_tokens or 0) + (completion_tokens or 0),
+                thoughts_token_count=thoughts_tokens,
+                total_token_count=(prompt_tokens or 0)
+                + (completion_tokens or 0)
+                + (thoughts_tokens or 0),
             )
             if prompt_tokens is not None or completion_tokens is not None
             else None
@@ -462,6 +466,54 @@ class TestUsageAcrossRequests:
         _, usage = await _collect_with_usage(_llm(), streams)
         assert usage is not None
         assert (usage.prompt_tokens, usage.completion_tokens) == (100, 30)
+
+    async def test_thinking_tokens_are_part_of_the_completion(self) -> None:
+        streams = _FakeStreams(
+            [
+                [
+                    _response(
+                        text="hi",
+                        finish_reason=types.FinishReason.STOP,
+                        prompt_tokens=100,
+                        completion_tokens=50,
+                        thoughts_tokens=300,
+                    )
+                ]
+            ]
+        )
+        _, usage = await _collect_with_usage(_llm(), streams)
+        assert usage is not None
+        assert usage.completion_tokens == 350
+        assert usage.reasoning_tokens == 300
+        assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens
+
+    async def test_thinking_tokens_are_added_up_across_requests(self) -> None:
+        streams = _FakeStreams(
+            [
+                [
+                    _response(
+                        text="one", prompt_tokens=100, completion_tokens=1000, thoughts_tokens=200
+                    ),
+                    _response(
+                        finish_reason=types.FinishReason.CONTINUATION, continuation_token=b"tok-1"
+                    ),
+                ],
+                [
+                    _response(
+                        text=" two",
+                        finish_reason=types.FinishReason.STOP,
+                        prompt_tokens=100,
+                        completion_tokens=1000,
+                        thoughts_tokens=200,
+                    )
+                ],
+            ]
+        )
+        _, usage = await _collect_with_usage(_llm(), streams)
+        assert usage is not None
+        assert usage.completion_tokens == 2400
+        assert usage.reasoning_tokens == 400
+        assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens
 
 
 class TestExtraKwargs:
