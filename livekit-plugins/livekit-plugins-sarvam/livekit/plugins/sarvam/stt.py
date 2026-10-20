@@ -915,11 +915,7 @@ class SpeechStream(stt.SpeechStream):
         self._client_request_id = client_request_id
         self._server_request_id = server_request_id
 
-        # Add flush mechanism
-        self._ws: aiohttp.ClientWebSocketResponse | None = (
-            None  # Store WebSocket reference for flush
-        )
-        self._should_flush = False  # Flag to trigger flush
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
         self._utterance_speech_start_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
@@ -1396,23 +1392,24 @@ class SpeechStream(stt.SpeechStream):
                         raise
 
                 elif isinstance(frame, self._FlushSentinel):
-                    # LiveKit VAD FlushSentinel - handles stream termination
-                    self._logger.debug(
-                        "Received FlushSentinel, sending end of stream",
-                        extra=self._build_log_context(),
-                    )
-                    await ws.send_str(self._end_of_stream_msg)
-                    break
+                    if audio_buffer:
+                        tail = np.array(audio_buffer, dtype=np.int16).tobytes()
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "audio": {
+                                        "data": base64.b64encode(tail).decode("utf-8"),
+                                        "encoding": self._audio_encoding,
+                                        "sample_rate": self._opts.sample_rate,
+                                    }
+                                }
+                            )
+                        )
+                        audio_buffer.clear()
+                    if self._opts.flush_signal:
+                        await ws.send_str(json.dumps({"type": "flush"}))
 
-                # Check if Sarvam VAD triggered flush
-                if self._should_flush:
-                    self._logger.debug(
-                        "VAD triggered flush, sending flush message",
-                        extra=self._build_log_context(),
-                    )
-                    flush_message = {"type": "flush"}
-                    await ws.send_str(json.dumps(flush_message))
-                    self._should_flush = False  # Reset flag
+            await ws.send_str(self._end_of_stream_msg)
 
         except Exception as e:
             self._logger.error(
@@ -1683,13 +1680,6 @@ class SpeechStream(stt.SpeechStream):
                             self._eos_fallback_task = asyncio.create_task(
                                 self._emit_pending_eos_after_timeout()
                             )
-
-                    # Set flag to trigger flush when Sarvam detects end of speech
-                    self._should_flush = True
-                    self._logger.debug(
-                        "Speech ended, flush triggered",
-                        extra=self._build_log_context(),
-                    )
             else:
                 self._logger.debug(
                     f"Unknown VAD signal type: {signal_type}",
