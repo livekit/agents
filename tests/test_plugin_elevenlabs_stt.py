@@ -763,3 +763,41 @@ async def test_recognize_does_not_retry_a_client_error(
     assert exc_info.value.message == message
     assert exc_info.value.body == parsed
     assert requests == 1
+
+
+async def test_recv_task_propagates_api_error_on_error_message() -> None:
+    from livekit.agents import APIConnectionError
+
+    class _ErrorWS:
+        def __init__(self) -> None:
+            self.sent: list[dict] = []
+            self.received = False
+            self.closed = asyncio.Event()
+
+        async def send_str(self, data: str) -> None:
+            self.sent.append(json.loads(data))
+
+        async def receive(self) -> Any:
+            if not self.received:
+                self.received = True
+                return aiohttp.WSMessage(
+                    aiohttp.WSMsgType.TEXT,
+                    json.dumps(
+                        {"message_type": "quota_exceeded", "message": "credit quota reached"}
+                    ),
+                    None,
+                )
+            await self.closed.wait()
+            return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None)
+
+        async def close(self) -> None:
+            self.closed.set()
+
+    ws = _ErrorWS()
+    stream = _live_stream(ws)
+    try:
+        with pytest.raises(APIConnectionError) as exc_info:
+            await asyncio.wait_for(stream._task, timeout=1.0)
+        assert "quota_exceeded" in str(exc_info.value)
+    finally:
+        await stream.aclose()
