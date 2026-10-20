@@ -21,12 +21,12 @@ from typing import Literal
 
 import aiohttp
 
-from livekit.agents import APIConnectionError, APIError, APITimeoutError, llm
+from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, llm, utils
 from livekit.agents.llm import _systemone as systemone
 from livekit.agents.llm.decisions import Decision, DecisionCapabilities, DecisionResponse
 from livekit.agents.types import APIConnectOptions
 
-from ._http import Configuration, HTTPClient, status_error
+from ._http import Configuration, HTTPClient
 
 DecisionModels = Literal["Microsoft-Decision-1"]
 
@@ -52,7 +52,8 @@ class DecisionModel(llm.DecisionModel):
         auth_header: api-key (the default) or Authorization (with Bearer prefix, for
             an Entra ID token), or MICROSOFT_AI_DECISION_AUTH_HEADER.
         headers: Explicit authentication headers instead of api_key/auth_header.
-        http_session: Optional caller-owned aiohttp session.
+        http_session: Optional caller-owned aiohttp session. Defaults to the job's HTTP
+            session; outside a job, use ``async with utils.http_context.open()``.
         env_file: Explicit dotenv file, or MICROSOFT_AI_ENV_FILE. Constructor
             arguments override environment variables, which override this file.
     """
@@ -73,6 +74,7 @@ class DecisionModel(llm.DecisionModel):
         )
         config = Configuration(env_file)
         self._model = config.required(model, "MICROSOFT_AI_DECISION_MODEL")
+        self._session = http_session
         self._client = HTTPClient(
             config=config,
             service="DECISION",
@@ -99,18 +101,28 @@ class DecisionModel(llm.DecisionModel):
         conn_options: APIConnectOptions,
     ) -> DecisionResponse:
         questions = {name: systemone.encode_question(d) for name, d in decisions.items()}
+        session = self._session or utils.http_context.http_session()
         try:
-            async with self._client.session().post(
+            async with session.post(
                 self._client.url,
                 headers=self._client.headers,
                 json={"model": self._model, "state": input, "questions": questions},
                 timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
                 allow_redirects=False,
             ) as response:
+                request_id = response.headers.get("x-request-id") or response.headers.get(
+                    "apim-request-id", ""
+                )
                 if response.status != 200:
-                    raise status_error("decision", response.status)
+                    raise APIStatusError(
+                        "Microsoft AI decision request failed",
+                        status_code=response.status,
+                        request_id=request_id or None,
+                        body=await response.text(),
+                        retryable=response.status in (408, 429) or response.status >= 500,
+                    )
                 parsed = systemone.Response.model_validate(await response.json())
-                request_id = parsed.id or response.headers.get("x-request-id", "")
+                request_id = parsed.id or request_id
             results, errors = systemone.decode_answers(
                 parsed.answers, invalid="invalid Microsoft AI decision answer"
             )
@@ -131,6 +143,3 @@ class DecisionModel(llm.DecisionModel):
             raise APIConnectionError("Microsoft AI decision transport failed") from None
         except ValueError:
             raise APIError("invalid Microsoft AI decision response", retryable=False) from None
-
-    async def aclose(self) -> None:
-        await self._client.aclose()

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
 
-from livekit.agents import APIError, APIStatusError
+from livekit.agents import APIError, APIStatusError, utils
 from livekit.agents.llm import ChatContext, decisions
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins import microsoft_ai
@@ -56,6 +57,7 @@ def model_for(
     response.status = status
     response.headers = {"x-request-id": "request-1"}
     response.json = AsyncMock(return_value=body)
+    response.text = AsyncMock(return_value=json.dumps(body))
     http_session = MagicMock(spec=aiohttp.ClientSession)
     http_session.post.return_value = response
     kwargs.setdefault("api_key", "test-key")
@@ -210,3 +212,38 @@ async def test_borrowed_session_is_not_closed() -> None:
     model, http = model_for(response_body())
     await model.aclose()
     http.close.assert_not_called()
+
+
+async def test_remote_499_keeps_its_status_and_is_not_retried() -> None:
+    model, http = model_for({}, status=499)
+    with pytest.raises(APIStatusError) as error:
+        await model.evaluate(
+            input="",
+            decisions=QUESTIONS,
+            conn_options=APIConnectOptions(max_retry=2, retry_interval=0),
+        )
+    assert error.value.status_code == 499
+    http.post.assert_called_once()
+
+
+async def test_error_carries_the_foundry_body_and_request_id() -> None:
+    body = {"error": {"code": "DeploymentNotFound", "message": "No such deployment."}}
+    model, http = model_for(body, status=404)
+    http.post.return_value.headers = {"apim-request-id": "apim-1"}
+    with pytest.raises(APIStatusError) as error:
+        await model.evaluate(input="", decisions=QUESTIONS)
+    assert error.value.request_id == "apim-1"
+    assert "DeploymentNotFound" in str(error.value.body)
+
+
+async def test_default_session_comes_from_the_http_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, http = model_for(response_body())
+    monkeypatch.setattr(utils.http_context, "http_session", lambda: http)
+    model = microsoft_ai.DecisionModel(url=URL, model="decision-deployment", api_key="test-key")
+
+    response = await model.evaluate(input="", decisions=QUESTIONS)
+
+    assert set(response.results) == set(QUESTIONS)
+    http.post.assert_called_once()
