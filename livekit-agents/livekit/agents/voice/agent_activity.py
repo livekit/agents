@@ -2616,6 +2616,12 @@ class AgentActivity(RecognitionHooks):
         ):
             return
 
+        # end of turn reuses an attempt whose transcript differs only in formatting
+        if self._preemptive_generation is not None and _transcripts_equivalent(
+            self._preemptive_generation.info.new_transcript, info.new_transcript
+        ):
+            return
+
         # a newer attempt supersedes the current one; if one is created below it continues the
         # discarded attempt's agent_turn (the cancelled speech only ends once the loop runs)
         discarded = (

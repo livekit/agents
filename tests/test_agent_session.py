@@ -44,12 +44,17 @@ from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
-from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
+from livekit.agents.voice.audio_recognition import (
+    AudioRecognition,
+    _EndOfTurnInfo,
+    _PreemptiveGenerationInfo,
+)
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
+from .fake_llm import FakeLLM
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -2220,6 +2225,48 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
 )
 def test_preemptive_transcripts_equivalent(preflight: str, final: str, expected: bool) -> None:
     assert _transcripts_equivalent(preflight, final) is expected
+
+
+@pytest.mark.parametrize(
+    "revision, restarted",
+    [
+        ("Could you tell me the opening hours?", False),
+        ("could you tell me the opening hours.", False),
+        ("Could you tell me the opening hours today?", True),
+    ],
+)
+async def test_preemptive_generation_restarts_only_on_new_words(
+    revision: str, restarted: bool
+) -> None:
+    session = AgentSession(llm=FakeLLM())
+    await session.start(agent=Agent(instructions="answer the caller"))
+    activity = session._activity
+    assert activity is not None
+
+    try:
+        activity.on_preemptive_generation(
+            _PreemptiveGenerationInfo(
+                new_transcript="Could you tell me the opening hours",
+                transcript_confidence=1.0,
+                started_speaking_at=time.time(),
+            )
+        )
+        first = activity._preemptive_generation
+        assert first is not None
+
+        activity.on_preemptive_generation(
+            _PreemptiveGenerationInfo(
+                new_transcript=revision,
+                transcript_confidence=1.0,
+                started_speaking_at=time.time(),
+            )
+        )
+
+        assert (activity._preemptive_generation is not first) is restarted
+        assert first.speech_handle.interrupted is restarted
+        assert activity._preemptive_generation_count == (2 if restarted else 1)
+    finally:
+        await session.aclose()
 
 
 @pytest.mark.parametrize(
