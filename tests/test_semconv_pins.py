@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import observability, types
 from livekit.agents.telemetry import _semconv, otel_metrics, trace_types
 
@@ -473,6 +474,20 @@ def test_every_span_event_name_is_registered(event: str) -> None:
     assert getattr(trace_types, "CHECKPOINT_" + event.upper().replace(".", "_")) == event
 
 
+# The values are the protobuf enum names `room_io` emits at runtime (`rtc.<Enum>.Name(..)`).
+@pytest.mark.parametrize(
+    ("names", "prefix"),
+    [
+        (rtc.TrackSource.keys(), "LK_TRACK_SOURCE_"),
+        (rtc.DisconnectReason.keys(), "LK_DISCONNECT_REASON_"),
+    ],
+    ids=["lk.track_source", "lk.disconnect_reason"],
+)
+def test_every_runtime_enum_name_is_a_registered_value(names: list[str], prefix: str) -> None:
+    unregistered = [n for n in names if getattr(_semconv, prefix + n, None) != n]
+    assert not unregistered, f"emitted but not registered: {unregistered}"
+
+
 PACKAGE = Path(trace_types.__file__).resolve().parents[1]
 
 # `lk.*` string constants that are not telemetry (participant attributes, data-channel topics,
@@ -481,12 +496,7 @@ PACKAGE = Path(trace_types.__file__).resolve().parents[1]
 # with its placeholders as `{expr}`.
 LITERAL_ALLOWLIST: dict[str, set[str]] = {
     "types.py": {"*"},  # participant attributes, topics, userdata keys, telemetry metadata
-    "telemetry/trace_types.py": {
-        "lk.agent_name",
-        "lk.track_source",
-        "lk.disconnect_reason",
-        "lk.sip.",
-    },  # the conflict list
+    "telemetry/trace_types.py": {"lk.sip."},  # the conflict list
     "observability.py": {"lk.judge.{name}:{judgment.verdict}"},  # a dynamic tag
     "voice/amd/detector.py": {"lk.amd:{result.category.value}"},  # a dynamic tag
     "delegation/tool.py": {

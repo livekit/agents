@@ -31,7 +31,7 @@ ATTR_PARTICIPANT_KIND = _semconv.LK_PARTICIPANT_KIND
 
 # session start
 ATTR_JOB_ID = _semconv.LK_JOB_ID
-ATTR_AGENT_NAME = "lk.agent_name"  # ponytail: not in the registry, see the conflict list
+ATTR_AGENT_NAME = _semconv.LK_AGENT_NAME
 ATTR_CLOUD_AGENT_ID = _semconv.LK_CLOUD_AGENT_ID
 ATTR_DEPLOYMENT_ID = _semconv.LK_DEPLOYMENT_ID
 ATTR_ROOM_NAME = _semconv.LK_PII_ROOM_NAME
@@ -76,14 +76,12 @@ ATTR_ROOM_REMOTE_PARTICIPANT_COUNT = _semconv.LK_ROOM_REMOTE_PARTICIPANT_COUNT
 ATTR_ROOM_IO_PARTICIPANT_FILTER = _semconv.LK_ROOM_IO_PARTICIPANT_FILTER
 """Whether RoomIO waited for a specific participant identity (true) or the first eligible one."""
 ATTR_TRACK_SID = _semconv.LK_TRACK_SID
-ATTR_TRACK_SOURCE = "lk.track_source"  # ponytail: not in the registry, see the conflict list
+ATTR_TRACK_SOURCE = _semconv.LK_TRACK_SOURCE
 ATTR_FIRST_FRAME_DELAY = _semconv.LK_FIRST_FRAME_DELAY
 """Seconds from linking the participant to the first media frame received from them."""
 ATTR_PRE_CONNECT_AUDIO_DURATION = _semconv.LK_PRE_CONNECT_AUDIO_DURATION
 ATTR_CONNECTION_STATE = _semconv.LK_CONNECTION_STATE
-ATTR_DISCONNECT_REASON = (
-    "lk.disconnect_reason"  # ponytail: not in the registry, see the conflict list
-)
+ATTR_DISCONNECT_REASON = _semconv.LK_DISCONNECT_REASON
 ATTR_OLD_STATE = _semconv.LK_OLD_STATE
 ATTR_NEW_STATE = _semconv.LK_NEW_STATE
 

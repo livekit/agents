@@ -2,7 +2,7 @@
 """LiveKit telemetry semantic conventions."""
 
 #: Telemetry schema version; set as `schema_url` on every OTLP scope.
-SCHEMA_URL = "https://livekit.io/schemas/telemetry/0.5.0"
+SCHEMA_URL = "https://livekit.io/schemas/telemetry/0.6.1"
 
 #: Browser name.
 BROWSER_NAME = "browser.name"
@@ -39,6 +39,9 @@ LANGFUSE_OBSERVATION_COMPLETION_START_TIME = "langfuse.observation.completion_st
 
 #: Label of the agent running the activity.
 LK_AGENT_LABEL = "lk.agent_label"
+
+#: Name of the agent a job was dispatched to.
+LK_AGENT_NAME = "lk.agent_name"
 
 #: AMD classification.
 LK_AMD_CATEGORY = "lk.amd.category"
@@ -202,44 +205,44 @@ LK_DEVICE_THERMAL_STATE_SERIOUS = "serious"
 #: Critical; the device needs to cool down.
 LK_DEVICE_THERMAL_STATE_CRITICAL = "critical"
 
-#: Why the session ended.
-LK_DISCONNECT_REASON = "lk.disconnect.reason"
-#: The client hung up (CLIENT_INITIATED).
-LK_DISCONNECT_REASON_CLIENT_INITIATED = "client_initiated"
-#: Another participant joined with the same identity (DUPLICATE_IDENTITY).
-LK_DISCONNECT_REASON_DUPLICATE_IDENTITY = "duplicate_identity"
-#: The server instance shut down (SERVER_SHUTDOWN).
-LK_DISCONNECT_REASON_SERVER_SHUTDOWN = "server_shutdown"
-#: RoomService.RemoveParticipant was called (PARTICIPANT_REMOVED).
-LK_DISCONNECT_REASON_PARTICIPANT_REMOVED = "participant_removed"
-#: RoomService.DeleteRoom was called (ROOM_DELETED).
-LK_DISCONNECT_REASON_ROOM_DELETED = "room_deleted"
-#: The server did not know the session the client tried to resume (STATE_MISMATCH).
-LK_DISCONNECT_REASON_STATE_MISMATCH = "state_mismatch"
-#: The client could not connect fully (JOIN_FAILURE).
-LK_DISCONNECT_REASON_JOIN_FAILURE = "join_failure"
-#: The server asked the participant to migrate (MIGRATION, Cloud only).
-LK_DISCONNECT_REASON_MIGRATION = "migration"
-#: The signal WebSocket closed unexpectedly (SIGNAL_CLOSE).
-LK_DISCONNECT_REASON_SIGNAL_CLOSE = "signal_close"
-#: The room closed after its participants left (ROOM_CLOSED).
-LK_DISCONNECT_REASON_ROOM_CLOSED = "room_closed"
-#: The SIP callee did not answer in time (USER_UNAVAILABLE).
-LK_DISCONNECT_REASON_USER_UNAVAILABLE = "user_unavailable"
-#: The SIP callee rejected the call (USER_REJECTED).
-LK_DISCONNECT_REASON_USER_REJECTED = "user_rejected"
-#: SIP protocol failure (SIP_TRUNK_FAILURE).
-LK_DISCONNECT_REASON_SIP_TRUNK_FAILURE = "sip_trunk_failure"
-#: The server timed out the session (CONNECTION_TIMEOUT).
-LK_DISCONNECT_REASON_CONNECTION_TIMEOUT = "connection_timeout"
-#: Media failed or timed out (MEDIA_FAILURE).
-LK_DISCONNECT_REASON_MEDIA_FAILURE = "media_failure"
-#: The agent failed (AGENT_ERROR).
-LK_DISCONNECT_REASON_AGENT_ERROR = "agent_error"
-#: The client ran out of reconnect attempts (client only).
-LK_DISCONNECT_REASON_RECONNECT_FAILED = "reconnect_failed"
-#: UNKNOWN_REASON or a number the client does not know.
-LK_DISCONNECT_REASON_UNKNOWN = "unknown"
+#: Why a participant left the room, as the protobuf `DisconnectReason` enum name.
+LK_DISCONNECT_REASON = "lk.disconnect_reason"
+#: No reason given, or a number the producer does not know.
+LK_DISCONNECT_REASON_UNKNOWN_REASON = "UNKNOWN_REASON"
+#: The participant hung up.
+LK_DISCONNECT_REASON_CLIENT_INITIATED = "CLIENT_INITIATED"
+#: Another participant joined with the same identity.
+LK_DISCONNECT_REASON_DUPLICATE_IDENTITY = "DUPLICATE_IDENTITY"
+#: The server instance shut down.
+LK_DISCONNECT_REASON_SERVER_SHUTDOWN = "SERVER_SHUTDOWN"
+#: RoomService.RemoveParticipant was called.
+LK_DISCONNECT_REASON_PARTICIPANT_REMOVED = "PARTICIPANT_REMOVED"
+#: RoomService.DeleteRoom was called.
+LK_DISCONNECT_REASON_ROOM_DELETED = "ROOM_DELETED"
+#: The server did not know the session the client tried to resume.
+LK_DISCONNECT_REASON_STATE_MISMATCH = "STATE_MISMATCH"
+#: The client could not connect fully.
+LK_DISCONNECT_REASON_JOIN_FAILURE = "JOIN_FAILURE"
+#: The server asked the participant to migrate (Cloud only).
+LK_DISCONNECT_REASON_MIGRATION = "MIGRATION"
+#: The signal WebSocket closed unexpectedly.
+LK_DISCONNECT_REASON_SIGNAL_CLOSE = "SIGNAL_CLOSE"
+#: The room closed after its participants left.
+LK_DISCONNECT_REASON_ROOM_CLOSED = "ROOM_CLOSED"
+#: The SIP callee did not answer in time.
+LK_DISCONNECT_REASON_USER_UNAVAILABLE = "USER_UNAVAILABLE"
+#: The SIP callee rejected the call.
+LK_DISCONNECT_REASON_USER_REJECTED = "USER_REJECTED"
+#: SIP protocol failure.
+LK_DISCONNECT_REASON_SIP_TRUNK_FAILURE = "SIP_TRUNK_FAILURE"
+#: The server timed out the session.
+LK_DISCONNECT_REASON_CONNECTION_TIMEOUT = "CONNECTION_TIMEOUT"
+#: Media failed or timed out.
+LK_DISCONNECT_REASON_MEDIA_FAILURE = "MEDIA_FAILURE"
+#: The agent failed.
+LK_DISCONNECT_REASON_AGENT_ERROR = "AGENT_ERROR"
+#: The client ran out of reconnect attempts (client only, not a protobuf value).
+LK_DISCONNECT_REASON_RECONNECT_FAILED = "RECONNECT_FAILED"
 
 #: Agent dispatch id.
 LK_DISPATCH_ID = "lk.dispatch_id"
@@ -844,21 +847,21 @@ LK_TRACK_KIND_AUDIO = "audio"
 #: Video.
 LK_TRACK_KIND_VIDEO = "video"
 
-#: Source of the track.
-LK_TRACK_SOURCE = "lk.track.source"
-#: Camera (TrackSource CAMERA).
-LK_TRACK_SOURCE_CAMERA = "camera"
-#: Microphone (TrackSource MICROPHONE).
-LK_TRACK_SOURCE_MICROPHONE = "microphone"
-#: Screen share video (TrackSource SCREEN_SHARE).
-LK_TRACK_SOURCE_SCREEN_SHARE = "screen_share"
-#: Screen share audio (TrackSource SCREEN_SHARE_AUDIO).
-LK_TRACK_SOURCE_SCREEN_SHARE_AUDIO = "screen_share_audio"
-#: Unknown source (TrackSource UNKNOWN).
-LK_TRACK_SOURCE_UNKNOWN = "unknown"
-
 #: Server-assigned track SID (`TR_...`).
 LK_TRACK_SID = "lk.track_sid"
+
+#: Source of the track, as the Agents RTC FFI `TrackSource` enum name.
+LK_TRACK_SOURCE = "lk.track_source"
+#: Unknown source.
+LK_TRACK_SOURCE_SOURCE_UNKNOWN = "SOURCE_UNKNOWN"
+#: Camera.
+LK_TRACK_SOURCE_SOURCE_CAMERA = "SOURCE_CAMERA"
+#: Microphone.
+LK_TRACK_SOURCE_SOURCE_MICROPHONE = "SOURCE_MICROPHONE"
+#: Screen share video.
+LK_TRACK_SOURCE_SOURCE_SCREENSHARE = "SOURCE_SCREENSHARE"
+#: Screen share audio.
+LK_TRACK_SOURCE_SOURCE_SCREENSHARE_AUDIO = "SOURCE_SCREENSHARE_AUDIO"
 
 #: Confidence of the final transcript.
 LK_TRANSCRIPT_CONFIDENCE = "lk.transcript_confidence"
@@ -1384,6 +1387,8 @@ CHECKPOINT_JOB_STARTED_ON_SERVER = "job_started_on_server"
 CHECKPOINT_JOIN_RECV = "join_recv"
 #: The publisher's SDP offer went out.
 CHECKPOINT_OFFER_SENT = "offer_sent"
+#: The linked participant left the room, with `lk.disconnect_reason`.
+CHECKPOINT_PARTICIPANT_DISCONNECTED = "participant_disconnected"
 #: The session linked to its participant.
 CHECKPOINT_PARTICIPANT_LINKED = "participant_linked"
 #: The primary peer connection connected.
@@ -1408,7 +1413,7 @@ CHECKPOINT_STOP_RESPONSE = "stop_response"
 CHECKPOINT_SUBSCRIBED = "subscribed"
 #: A newer detection superseded this one.
 CHECKPOINT_SUPERSEDED = "superseded"
-#: The track was subscribed.
+#: The track was subscribed, with `lk.track_sid` and `lk.track_source`.
 CHECKPOINT_TRACK_SUBSCRIBED = "track_subscribed"
 #: The user spoke again during the wait.
 CHECKPOINT_USER_RESUMED = "user_resumed"

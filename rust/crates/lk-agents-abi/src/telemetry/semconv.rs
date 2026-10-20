@@ -2,7 +2,7 @@
 //! LiveKit telemetry semantic conventions.
 
 /// Telemetry schema version; set as `schema_url` on every OTLP scope.
-pub const SCHEMA_URL: &str = "https://livekit.io/schemas/telemetry/0.5.0";
+pub const SCHEMA_URL: &str = "https://livekit.io/schemas/telemetry/0.6.1";
 
 /// Browser name.
 pub const BROWSER_NAME: &str = "browser.name";
@@ -39,6 +39,9 @@ pub const LANGFUSE_OBSERVATION_COMPLETION_START_TIME: &str = "langfuse.observati
 
 /// Label of the agent running the activity.
 pub const LK_AGENT_LABEL: &str = "lk.agent_label";
+
+/// Name of the agent a job was dispatched to.
+pub const LK_AGENT_NAME: &str = "lk.agent_name";
 
 /// AMD classification.
 pub const LK_AMD_CATEGORY: &str = "lk.amd.category";
@@ -230,47 +233,47 @@ pub mod lk_device_thermal_state {
     pub const CRITICAL: &str = "critical";
 }
 
-/// Why the session ended.
-pub const LK_DISCONNECT_REASON: &str = "lk.disconnect.reason";
+/// Why a participant left the room, as the protobuf `DisconnectReason` enum name.
+pub const LK_DISCONNECT_REASON: &str = "lk.disconnect_reason";
 
 /// Values of [`LK_DISCONNECT_REASON`].
 pub mod lk_disconnect_reason {
-    /// The client hung up (CLIENT_INITIATED).
-    pub const CLIENT_INITIATED: &str = "client_initiated";
-    /// Another participant joined with the same identity (DUPLICATE_IDENTITY).
-    pub const DUPLICATE_IDENTITY: &str = "duplicate_identity";
-    /// The server instance shut down (SERVER_SHUTDOWN).
-    pub const SERVER_SHUTDOWN: &str = "server_shutdown";
-    /// RoomService.RemoveParticipant was called (PARTICIPANT_REMOVED).
-    pub const PARTICIPANT_REMOVED: &str = "participant_removed";
-    /// RoomService.DeleteRoom was called (ROOM_DELETED).
-    pub const ROOM_DELETED: &str = "room_deleted";
-    /// The server did not know the session the client tried to resume (STATE_MISMATCH).
-    pub const STATE_MISMATCH: &str = "state_mismatch";
-    /// The client could not connect fully (JOIN_FAILURE).
-    pub const JOIN_FAILURE: &str = "join_failure";
-    /// The server asked the participant to migrate (MIGRATION, Cloud only).
-    pub const MIGRATION: &str = "migration";
-    /// The signal WebSocket closed unexpectedly (SIGNAL_CLOSE).
-    pub const SIGNAL_CLOSE: &str = "signal_close";
-    /// The room closed after its participants left (ROOM_CLOSED).
-    pub const ROOM_CLOSED: &str = "room_closed";
-    /// The SIP callee did not answer in time (USER_UNAVAILABLE).
-    pub const USER_UNAVAILABLE: &str = "user_unavailable";
-    /// The SIP callee rejected the call (USER_REJECTED).
-    pub const USER_REJECTED: &str = "user_rejected";
-    /// SIP protocol failure (SIP_TRUNK_FAILURE).
-    pub const SIP_TRUNK_FAILURE: &str = "sip_trunk_failure";
-    /// The server timed out the session (CONNECTION_TIMEOUT).
-    pub const CONNECTION_TIMEOUT: &str = "connection_timeout";
-    /// Media failed or timed out (MEDIA_FAILURE).
-    pub const MEDIA_FAILURE: &str = "media_failure";
-    /// The agent failed (AGENT_ERROR).
-    pub const AGENT_ERROR: &str = "agent_error";
-    /// The client ran out of reconnect attempts (client only).
-    pub const RECONNECT_FAILED: &str = "reconnect_failed";
-    /// UNKNOWN_REASON or a number the client does not know.
-    pub const UNKNOWN: &str = "unknown";
+    /// No reason given, or a number the producer does not know.
+    pub const UNKNOWN_REASON: &str = "UNKNOWN_REASON";
+    /// The participant hung up.
+    pub const CLIENT_INITIATED: &str = "CLIENT_INITIATED";
+    /// Another participant joined with the same identity.
+    pub const DUPLICATE_IDENTITY: &str = "DUPLICATE_IDENTITY";
+    /// The server instance shut down.
+    pub const SERVER_SHUTDOWN: &str = "SERVER_SHUTDOWN";
+    /// RoomService.RemoveParticipant was called.
+    pub const PARTICIPANT_REMOVED: &str = "PARTICIPANT_REMOVED";
+    /// RoomService.DeleteRoom was called.
+    pub const ROOM_DELETED: &str = "ROOM_DELETED";
+    /// The server did not know the session the client tried to resume.
+    pub const STATE_MISMATCH: &str = "STATE_MISMATCH";
+    /// The client could not connect fully.
+    pub const JOIN_FAILURE: &str = "JOIN_FAILURE";
+    /// The server asked the participant to migrate (Cloud only).
+    pub const MIGRATION: &str = "MIGRATION";
+    /// The signal WebSocket closed unexpectedly.
+    pub const SIGNAL_CLOSE: &str = "SIGNAL_CLOSE";
+    /// The room closed after its participants left.
+    pub const ROOM_CLOSED: &str = "ROOM_CLOSED";
+    /// The SIP callee did not answer in time.
+    pub const USER_UNAVAILABLE: &str = "USER_UNAVAILABLE";
+    /// The SIP callee rejected the call.
+    pub const USER_REJECTED: &str = "USER_REJECTED";
+    /// SIP protocol failure.
+    pub const SIP_TRUNK_FAILURE: &str = "SIP_TRUNK_FAILURE";
+    /// The server timed out the session.
+    pub const CONNECTION_TIMEOUT: &str = "CONNECTION_TIMEOUT";
+    /// Media failed or timed out.
+    pub const MEDIA_FAILURE: &str = "MEDIA_FAILURE";
+    /// The agent failed.
+    pub const AGENT_ERROR: &str = "AGENT_ERROR";
+    /// The client ran out of reconnect attempts (client only, not a protobuf value).
+    pub const RECONNECT_FAILED: &str = "RECONNECT_FAILED";
 }
 
 /// Agent dispatch id.
@@ -908,25 +911,25 @@ pub mod lk_track_kind {
     pub const VIDEO: &str = "video";
 }
 
-/// Source of the track.
-pub const LK_TRACK_SOURCE: &str = "lk.track.source";
+/// Server-assigned track SID (`TR_...`).
+pub const LK_TRACK_SID: &str = "lk.track_sid";
+
+/// Source of the track, as the Agents RTC FFI `TrackSource` enum name.
+pub const LK_TRACK_SOURCE: &str = "lk.track_source";
 
 /// Values of [`LK_TRACK_SOURCE`].
 pub mod lk_track_source {
-    /// Camera (TrackSource CAMERA).
-    pub const CAMERA: &str = "camera";
-    /// Microphone (TrackSource MICROPHONE).
-    pub const MICROPHONE: &str = "microphone";
-    /// Screen share video (TrackSource SCREEN_SHARE).
-    pub const SCREEN_SHARE: &str = "screen_share";
-    /// Screen share audio (TrackSource SCREEN_SHARE_AUDIO).
-    pub const SCREEN_SHARE_AUDIO: &str = "screen_share_audio";
-    /// Unknown source (TrackSource UNKNOWN).
-    pub const UNKNOWN: &str = "unknown";
+    /// Unknown source.
+    pub const SOURCE_UNKNOWN: &str = "SOURCE_UNKNOWN";
+    /// Camera.
+    pub const SOURCE_CAMERA: &str = "SOURCE_CAMERA";
+    /// Microphone.
+    pub const SOURCE_MICROPHONE: &str = "SOURCE_MICROPHONE";
+    /// Screen share video.
+    pub const SOURCE_SCREENSHARE: &str = "SOURCE_SCREENSHARE";
+    /// Screen share audio.
+    pub const SOURCE_SCREENSHARE_AUDIO: &str = "SOURCE_SCREENSHARE_AUDIO";
 }
-
-/// Server-assigned track SID (`TR_...`).
-pub const LK_TRACK_SID: &str = "lk.track_sid";
 
 /// Confidence of the final transcript.
 pub const LK_TRANSCRIPT_CONFIDENCE: &str = "lk.transcript_confidence";
@@ -1419,6 +1422,8 @@ pub mod checkpoint {
     pub const JOIN_RECV: &str = "join_recv";
     /// The publisher's SDP offer went out.
     pub const OFFER_SENT: &str = "offer_sent";
+    /// The linked participant left the room, with `lk.disconnect_reason`.
+    pub const PARTICIPANT_DISCONNECTED: &str = "participant_disconnected";
     /// The session linked to its participant.
     pub const PARTICIPANT_LINKED: &str = "participant_linked";
     /// The primary peer connection connected.
@@ -1443,7 +1448,7 @@ pub mod checkpoint {
     pub const SUBSCRIBED: &str = "subscribed";
     /// A newer detection superseded this one.
     pub const SUPERSEDED: &str = "superseded";
-    /// The track was subscribed.
+    /// The track was subscribed, with `lk.track_sid` and `lk.track_source`.
     pub const TRACK_SUBSCRIBED: &str = "track_subscribed";
     /// The user spoke again during the wait.
     pub const USER_RESUMED: &str = "user_resumed";
