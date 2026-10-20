@@ -952,16 +952,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 record = job_ctx.job.enable_recording if job_ctx else False
 
             self._opts.recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
+            if self._text_only:
+                self._opts.recording_options["audio"] = False
+
+            c = cli.AgentsConsole.get_instance()
             bit_rate = self._opts.recording_options.get("bit_rate")
-            if bit_rate is not None:
+            recorder_may_start = self._opts.recording_options["audio"] or (
+                c.enabled and c.record
+            )
+            if recorder_may_start and bit_rate is not None:
                 if not isinstance(bit_rate, int) or not MIN_BIT_RATE <= bit_rate <= MAX_BIT_RATE:
                     # Validate before claiming the primary session or starting RoomIO.
                     raise ValueError(
                         f"bit_rate must be an int between {MIN_BIT_RATE} and {MAX_BIT_RATE}, "
                         f"got {bit_rate!r}"
                     )
-            if self._text_only:
-                self._opts.recording_options["audio"] = False
 
             is_primary = True
             if job_ctx:
@@ -1032,7 +1037,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             tasks: list[asyncio.Task[None]] = []
 
-            c = cli.AgentsConsole.get_instance()
             if c.enabled and not c.io_acquired:
                 if self.input.audio is not None or self.output.audio is not None:
                     logger.warning(
