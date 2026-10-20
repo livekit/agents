@@ -199,7 +199,8 @@ class RunContext(Generic[Userdata_T]):
                 resolved ``update`` template (or the module default when standalone).
             silent: Whether the user hears anything about this update. The message is
                 recorded for the model either way; True keeps it to the model alone, and
-                on the first update releases control without speaking.
+                on the first update releases control without speaking. A realtime model
+                that cannot keep a tool result silent may still answer it.
             tool_choice: What the reply to this update may call. ``"none"`` by default: a
                 report is not a result, so the model speaks to it rather than acting on it,
                 and without that it can answer a report by calling the same tool again. Set
@@ -237,6 +238,9 @@ class RunContext(Generic[Userdata_T]):
         out = self._make_update_output(
             message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
         )
+        if silent:
+            # realtime providers read this to decide whether the output starts a turn
+            out.fnc_call_out.reply_required = False
         pair = (out.fnc_call, out.fnc_call_out)
         self._updates.append(pair)
 
@@ -262,9 +266,7 @@ class RunContext(Generic[Userdata_T]):
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(
-            self, [pair[0], pair[1]], silent=silent, tool_choice=tool_choice
-        )
+        await self._executor._enqueue_reply(self, [pair[0], pair[1]], tool_choice=tool_choice)
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]

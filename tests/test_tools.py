@@ -2574,6 +2574,14 @@ class TestToolCallEvents:
             for item in call.args[0].items
         ]
         assert recorded == ["c6_update_1", "c6_update_1", "c6_final", "c6_final"]
+        # realtime providers read reply_required to decide whether the output starts a turn
+        silent_out = next(
+            item
+            for call in session.current_agent.update_chat_ctx.await_args_list
+            for item in call.args[0].items
+            if item.type == "function_call_output" and item.call_id == "c6_update_1"
+        )
+        assert silent_out.reply_required is False
         assert items[3] == ToolCallEnded(
             id="c6_final", call_id="c6", message="all done", status="done"
         )
