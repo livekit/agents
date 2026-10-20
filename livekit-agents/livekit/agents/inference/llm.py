@@ -70,8 +70,9 @@ _XAI_REASONING_UNSUPPORTED_PARAMS: set[str] = {
 
 # gpt-6 rejects these while it reasons, and accepts every one of them again at
 # reasoning_effort "none" (probed 2026-10-20 on gpt-6.1-sol over both the chat
-# and responses transports, gpt-6-sol and gpt-6-luna). n and seed are accepted
-# at any effort, so unlike the o-series/gpt-5 set this one leaves them out.
+# and responses transports, gpt-6-sol and gpt-6-luna). It differs from the
+# o-series/gpt-5 set in two ways: n is accepted while reasoning so it is absent
+# here, and stop is rejected so it is added. seed is in neither set.
 _GPT6_REASONING_UNSUPPORTED_PARAMS: set[str] = {
     "temperature",
     "top_p",
@@ -99,8 +100,9 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
 # "none"; see the note in drop_unsupported_params.
 _SAMPLING_PARAMS: set[str] = {"temperature", "top_p"}
 
-# Params OpenAI accepts again at reasoning_effort "none", by model prefix.
-# Anything outside a prefix's entry stays stripped at every effort.
+# Params OpenAI accepts again at reasoning_effort "none", by model prefix. The
+# keys mirror the prefixes in _UNSUPPORTED_PARAMS, and these sets are read-only:
+# drop_unsupported_params subtracts from them, never mutates them.
 _KEPT_AT_EFFORT_NONE: dict[str, set[str]] = {
     "gpt-5": _SAMPLING_PARAMS,
     "gpt-6": _GPT6_REASONING_UNSUPPORTED_PARAMS,

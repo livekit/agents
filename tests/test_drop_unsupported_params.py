@@ -266,8 +266,11 @@ def test_gpt_6_luna_strips_temperature_while_reasoning() -> None:
 
 
 def test_gpt_6_1_sol_strips_even_when_the_client_asks_for_effort_none() -> None:
-    # gpt-6.1-sol has no "none" rung: the gateway coerces the effort to its
-    # floor, so the strip must not trust the client's spelling of it.
+    # gpt-6.1-sol has no "none" rung, so the gateway coerces the value to the
+    # model's floor ("low", its reasoning_effort_fallback) and the request
+    # reasons: the strip must not trust the client's spelling of the effort.
+    # The coercion is what the gateway's "unexpected reasoning_effort value for
+    # model, defaulting to supported value" warn records.
     params = drop_unsupported_params(
         "openai/gpt-6.1-sol",
         {"temperature": 0.2, "reasoning_effort": "none"},
