@@ -6,6 +6,7 @@ can insert it after items that were said later (#7916).
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -40,6 +41,40 @@ async def test_say_adds_spoken_message_to_realtime_chat_ctx(mutable_chat_context
         assert [msg.id for msg in remote_msgs] == [local_msgs[0].id]
     else:
         assert remote_msgs == []
+
+
+async def test_say_lets_next_speech_start_while_chat_ctx_update_is_pending() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(supports_say=False))
+    agent = Agent(instructions="test")
+
+    async with AgentSession(llm=model) as session:
+        await session.start(agent)
+        rt_session = model.active_session
+        release_update = asyncio.Event()
+        apply_update = rt_session.update_chat_ctx
+
+        async def unacknowledged_update(chat_ctx: llm.ChatContext) -> None:
+            await release_update.wait()
+            await apply_update(chat_ctx)
+
+        rt_session.update_chat_ctx = unacknowledged_update  # type: ignore[method-assign]
+
+        first = session.say("first")
+        second = session.say("second")
+
+        async def second_spoken() -> None:
+            while not any(
+                isinstance(item, llm.ChatMessage) and item.text_content == "second"
+                for item in agent.chat_ctx.items
+            ):
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(second_spoken(), timeout=5)
+        assert not first.done()
+
+        release_update.set()
+        await first
+        await second
 
 
 async def test_say_places_spoken_message_before_later_remote_items() -> None:
