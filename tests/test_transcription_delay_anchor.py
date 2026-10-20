@@ -10,9 +10,11 @@ clamped to ``now``) takes over when there is no VAD anchor to beat: no VAD at
 all, or a segment the VAD missed.
 
 ``turn_detection="stt"`` adds one exception: the provider owns the turn boundary
-there, so a *real* provider timestamp replaces the VAD anchor, as does an explicit
-``END_OF_SPEECH``. A transcript with a missing ``end_time`` does not — the estimate
-would collapse to the transcript-arrival instant and report a ~0 delay.
+there, so a *real* provider timestamp replaces the VAD anchor. An explicit
+``END_OF_SPEECH`` with no timestamps of its own (e.g. Deepgram Flux's EndOfTurn)
+keeps the existing anchor when one exists — its arrival instant includes STT
+endpointing and transport delay, so anchoring there underreports the delays
+(#7960) — and falls back to arrival time only when nothing better is known.
 
 Every test below runs under both turn detection modes; where the two disagree,
 the expectation is spelled out per mode rather than duplicated into a second
@@ -229,15 +231,17 @@ async def test_preflight_transcript_follows_the_same_rules(mode: str) -> None:
     assert ar._last_speaking_time == pytest.approx(expected, abs=0.05)
 
 
-async def test_stt_end_of_speech_anchors_on_a_real_provider_timestamp() -> None:
-    """The stt-mode END_OF_SPEECH branch commits the turn, so it anchors it too."""
+async def test_stt_end_of_speech_keeps_the_vad_anchor_over_word_timestamps() -> None:
+    """Word-derived estimates (end_time mapped against input_started_at) beat the VAD
+    anchor only when the VAD missed the segment. When the anchor exists, it stays —
+    same precedence as the FINAL_TRANSCRIPT path above."""
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
-    ar._last_speaking_time = now - 0.6
+    ar._last_speaking_time = now - 0.6  # VAD end-of-speech
 
     await ar._on_stt_event(_speech_event(stt.SpeechEventType.END_OF_SPEECH, end_time=9.0, text=""))
 
-    assert ar._last_speaking_time == pytest.approx(now - 1.0, abs=0.05)
+    assert ar._last_speaking_time == pytest.approx(now - 0.6, abs=0.05)
     assert ar._user_turn_committed is True
 
 
@@ -288,22 +292,45 @@ async def test_stt_end_of_speech_clamps_a_future_speech_end_time() -> None:
     assert now <= ar._last_speaking_time <= time.time()
 
 
-async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> None:
-    """END_OF_SPEECH commonly carries no alternatives, leaving arrival time as the
-    only estimate — but unlike an untimestamped transcript it is an *explicit*
-    endpointing signal, so the provider is taken at its word and the anchor moves.
+async def test_stt_end_of_speech_without_timestamps_keeps_the_existing_anchor() -> None:
+    """Regression for #7960: Deepgram Flux's EndOfTurn emits END_OF_SPEECH with no
+    ``speech_end_time`` and no alternatives. The event is an explicit boundary but
+    its arrival instant carries STT endpointing + transport delay — the VAD anchor
+    (or the word timestamps an earlier final transcript stored) is the better
+    estimate, so the clobber-to-arrival fallback must not fire.
 
-    Contrast ``test_vad_anchor_survives_a_transcript_without_timestamps[stt]``,
-    where the same missing ``end_time`` on a FINAL_TRANSCRIPT keeps the VAD anchor:
-    there the provider said nothing about the boundary, here it said "now".
+    Contrast ``test_vad_anchor_survives_a_transcript_without_timestamps[stt]``:
+    same missing ``end_time``, same conclusion, different event type.
     """
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
-    ar._last_speaking_time = now - 0.6
+    vad_anchor = now - 0.6  # VAD end-of-speech, 0.6 s of transport/endpointing ago
+    ar._last_speaking_time = vad_anchor
 
     await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=[]))
 
-    # the anchor moved from 0.6 s ago to arrival time (bounded by the clock reads around the call)
+    assert ar._last_speaking_time == pytest.approx(vad_anchor, abs=0.05)
+    assert ar._user_turn_committed is True
+
+    metrics = _compute_end_of_turn_metrics(
+        speech_start_time=now - 3.0,
+        last_speaking_time=ar._last_speaking_time,
+        last_final_transcript_time=now,
+        now=time.time(),
+    )
+    assert metrics.transcription_delay == pytest.approx(0.6, abs=0.1)
+
+
+async def test_stt_end_of_speech_without_timestamps_anchors_when_nothing_better_exists() -> None:
+    """No VAD and no prior anchor: arrival time is the only estimate, so the turn
+    still anchors there rather than staying unanchored."""
+    now = time.time()
+    ar = _make_recognition(vad=None, input_started_at=now - 10.0, mode="stt")
+    ar._last_speaking_time = None
+
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=[]))
+
+    # the anchor moved to arrival time (bounded by the clock reads around the call)
     assert now <= ar._last_speaking_time <= time.time()
     assert ar._user_turn_committed is True
 

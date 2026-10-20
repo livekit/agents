@@ -1376,9 +1376,14 @@ class AudioRecognition:
                 # otherwise push the anchor into the future and extend `extra_sleep`,
                 # delaying the turn commit by the skew
                 self._last_speaking_time = min(ev.speech_end_time, now)
-            else:
+            elif self._vad is None or self._last_speaking_time is None:
                 # use an implied version computed based on either word timestamps or current time
                 self._last_speaking_time = stt_last_speaking_time
+            # else: an END_OF_SPEECH with no timestamps (e.g. Deepgram Flux's EndOfTurn)
+            # is an explicit boundary but says nothing about when speech ended — its
+            # arrival instant includes STT endpointing and transport delay. The existing
+            # anchor (a VAD backdate, or the word timestamps the turn's final transcript
+            # already stored) is the better estimate, so keep it (#7960)
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
