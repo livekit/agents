@@ -1784,7 +1784,7 @@ class AgentActivity(RecognitionHooks):
                     add_to_chat_ctx=add_to_chat_ctx,
                     # a streamed text may carry markup anywhere; a string is known up front
                     model_settings=ModelSettings(
-                        _say_markup=not isinstance(text, str) or "<" in text
+                        _say_markup=not isinstance(text, str) or "<" in text or "[" in text
                     ),
                     _previous_user_metrics=user_metrics,
                 ),
@@ -3070,11 +3070,11 @@ class AgentActivity(RecognitionHooks):
         streaming plugin owns its own input task — several declare a dialect today without
         lowering anything — so its markers would be spoken. A ``StreamAdapter`` handed in
         directly is streaming only at its surface; inside it is that same lowering path,
-        so it is exempt.
+        so it is exempt. A ``FallbackAdapter`` converts for each instance it tries.
         """
         return self.tts is not None and (
             not self.tts.capabilities.streaming
-            or isinstance(self.tts, (inference.TTS, tts.StreamAdapter))
+            or isinstance(self.tts, (inference.TTS, tts.StreamAdapter, tts.FallbackAdapter))
         )
 
     def _strip_say_markup(self, text: AsyncIterable[str]) -> AsyncIterable[str]:
