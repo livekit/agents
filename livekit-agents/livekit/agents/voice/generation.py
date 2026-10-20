@@ -22,9 +22,9 @@ from ..llm import (
     ToolError,
     utils as llm_utils,
 )
-from ..llm.chat_context import Instructions
+from ..llm.chat_context import DYNAMIC_INSTRUCTIONS_MESSAGE_ID, Instructions
 from ..log import logger
-from ..telemetry import gen_ai as gen_ai_telemetry, otel_metrics, trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, otel_metrics, trace_types, tracer
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -35,7 +35,7 @@ from ..utils import aio
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
-from .tool_executor import _build_executor_map
+from .tool_executor import _build_executor_map, _RunningTasks
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
@@ -68,6 +68,13 @@ class _LLMGenerationData:
 _RUNNING_TOOL_PLACEHOLDER = "The tool call is still in progress."
 # extra flag marking an injected pair so it can be stripped before the ctx is forwarded.
 _RUNNING_PLACEHOLDER_KEY = "__lk_running_placeholder__"
+# first update of a tool an interrupted turn stopped waiting for; a model that can still call
+# tools, such as GPT-Live's backend, otherwise calls the tool again
+_RELEASED_TOOL_TEMPLATE = (
+    "{message} It keeps running in the background, and its result will be delivered to you "
+    "automatically when it finishes. Do not call `{function_name}` again, and do not guess its "
+    "result."
+)
 
 
 def _inject_running_tool_calls(
@@ -88,14 +95,20 @@ def _inject_running_tool_calls(
         if fnc_call.call_id in existing:
             continue
         existing.add(fnc_call.call_id)
-        # copy so the executor's live FunctionCall stays unflagged
+        # copy so the executor's live FunctionCall stays unflagged. The pair gets ids of its
+        # own, stable across turns: telemetry tells items apart by id, so the pair matches
+        # itself while the tool runs and is never mistaken for the real call once it ends
         call = fnc_call.model_copy(
-            update={"extra": {**fnc_call.extra, _RUNNING_PLACEHOLDER_KEY: True}}
+            update={
+                "id": f"{fnc_call.id}_running",
+                "extra": {**fnc_call.extra, _RUNNING_PLACEHOLDER_KEY: True},
+            }
         )
         chat_ctx.insert(
             [
                 call,
                 llm.FunctionCallOutput(
+                    id=f"{fnc_call.id}_running_output",
                     call_id=fnc_call.call_id,
                     name=fnc_call.name,
                     output=placeholder,
@@ -192,10 +205,14 @@ async def _llm_inference_task(
     text_ch, function_ch = data.text_ch, data.function_ch
     tools = tool_ctx.flatten()
 
+    # the input as this span records it: the full context, or only what was added since
+    # the last committed generation when the session records with `input_delta`
+    delta = input_delta.compute(input_delta.LLM_NODE, chat_ctx, current_span)
+
     if current_span.is_recording():
         attrs: dict[str, Any] = {
             trace_types.ATTR_CHAT_CTX: json.dumps(
-                chat_ctx.to_dict(
+                delta.chat_ctx.to_dict(
                     exclude_audio=True,
                     exclude_image=True,
                     exclude_timestamp=True,
@@ -209,6 +226,7 @@ async def _llm_inference_task(
             trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
         }
         current_span.set_attributes(attrs)
+        input_delta.set_attributes(current_span, delta)
 
     # the GenAI inference attributes belong to the nested `llm_request` span, which is the
     # provider call the convention describes — setting them here as well would make a
@@ -235,7 +253,7 @@ async def _llm_inference_task(
         _record_uninstrumented_inference(
             current_span,
             inference_recorded,
-            chat_ctx,
+            delta,
             tools,
             data,
             streaming=False,
@@ -317,7 +335,7 @@ async def _llm_inference_task(
     except BaseException as exc:
         # a node that raises still made a request; without this it leaves no inference span
         _record_uninstrumented_inference(
-            current_span, inference_recorded, chat_ctx, tools, data, error=exc
+            current_span, inference_recorded, delta, tools, data, error=exc
         )
         raise
     finally:
@@ -341,7 +359,7 @@ async def _llm_inference_task(
     if data.ttft is not None:
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
     _record_uninstrumented_inference(
-        current_span, inference_recorded, chat_ctx, tools, data, usage=usage
+        current_span, inference_recorded, delta, tools, data, usage=usage
     )
     return True
 
@@ -349,7 +367,7 @@ async def _llm_inference_task(
 def _record_uninstrumented_inference(
     span: trace.Span,
     inference_recorded: list[bool],
-    chat_ctx: ChatContext,
+    delta: input_delta.InputDelta,
     tools: list[llm.Tool],
     data: _LLMGenerationData,
     *,
@@ -386,8 +404,8 @@ def _record_uninstrumented_inference(
     if span.is_recording() and gen_ai_telemetry.capture_content_enabled():
         gen_ai_telemetry.set_content_attributes(
             span,
-            system_instructions=gen_ai_telemetry.to_system_instructions(chat_ctx),
-            input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
+            system_instructions=delta.system_instructions(),
+            input_messages=delta.input_messages(),
             tool_definitions=gen_ai_telemetry.to_tool_definitions(tools),
             output_messages=gen_ai_telemetry.to_output_messages(
                 text=data.generated_text,
@@ -407,6 +425,8 @@ class _TTSGenerationData:
     # perf_counter when the first text of this segment reached the TTS provider, as stamped
     # by the TTS stream itself; None when a custom tts_node publishes no stamp
     synthesis_started_at: float | None = None
+    # the exception that ended the inference, e.g. a TTS that failed after its retries
+    error: BaseException | None = None
 
 
 def _time_to_first_sentence(
@@ -434,7 +454,11 @@ def perform_tts_inference(
         _tts_inference_task(node, input, model_settings, data, text_transforms, model, provider)
     )
 
-    def _inference_done(_: asyncio.Task[bool]) -> None:
+    def _inference_done(task: asyncio.Task[bool]) -> None:
+        if not task.cancelled():
+            # set before the audio channel closes, so the forwarder sees why it ended
+            data.error = task.exception()
+
         if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
             timed_text_ch.close()
 
@@ -580,6 +604,7 @@ def perform_audio_forwarding(
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
     reconcile_playout_pause: Callable[[], None],
+    tts_data: _TTSGenerationData | None = None,
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
     out = _AudioOutput(
         first_frame_fut=asyncio.Future(),
@@ -601,6 +626,7 @@ def perform_audio_forwarding(
             tts_output,
             out,
             reconcile_playout_pause=reconcile_playout_pause,
+            tts_data=tts_data,
         )
     )
     return task, out
@@ -613,6 +639,7 @@ async def _audio_forwarding_task(
     out: _AudioOutput,
     *,
     reconcile_playout_pause: Callable[[], None],
+    tts_data: _TTSGenerationData | None,
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
@@ -659,6 +686,8 @@ async def _audio_forwarding_task(
             except Exception as e:
                 logger.warning("error while closing tts output: %s", e)
 
+        if not cancelled and tts_data is not None and tts_data.error is not None:
+            audio_output._mark_input_truncated()
         audio_output.flush()
         if cancelled:
             audio_output.clear_buffer()
@@ -673,6 +702,8 @@ class _ForwardOutput:
     played: Literal["full", "partial", "skipped"] = "skipped"
     playback_position: float = 0.0
     synchronized_transcript: str | None = None
+    tts_failed: bool = False
+    """The segment's TTS failed; whatever audio it made still played out."""
 
     @property
     def forwarded_text(self) -> str:
@@ -693,13 +724,15 @@ async def forward_generation(
     text_source: AsyncIterable[str] | None,
     on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
     reconcile_playout_pause: Callable[[], None],
+    tts_data: _TTSGenerationData | None = None,
 ) -> _ForwardOutput:
     """Forward one segment's audio/text to the outputs, then wait for its playout.
 
     Returns when the segment has fully played, been interrupted, or never started
-    (e.g. interrupted before the first frame). Callers resolve the audio/text sources
-    and own message creation; this is the shared core between the pipeline and realtime
-    generation paths.
+    (e.g. interrupted before the first frame). A segment whose ``tts_data`` failed ends as
+    ``"partial"``, or ``"skipped"`` if none of its audio played. Callers resolve the
+    audio/text sources and own message creation; this is the shared core between the
+    pipeline and realtime generation paths.
     """
     out = _ForwardOutput()
     forward_tasks: list[asyncio.Task[Any]] = []
@@ -710,6 +743,7 @@ async def forward_generation(
                 audio_output=audio_output,
                 tts_output=audio_source,
                 reconcile_playout_pause=reconcile_playout_pause,
+                tts_data=tts_data,
             )
             forward_tasks.append(forward_audio_task)
             audio_out.first_frame_fut.add_done_callback(lambda fut: on_first_frame(fut, audio_out))
@@ -762,8 +796,12 @@ async def forward_generation(
 
         if audio_output is not None:
             assert playout_fut is not None
+            out.tts_failed = tts_data is not None and tts_data.error is not None
+            if out.tts_failed and (audio_out is None or not audio_out.has_captured_own_frame):
+                # none of its audio played, so the playout event belongs to an earlier segment
+                return out
             playback_ev = playout_fut.result()
-            out.played = "full"
+            out.played = "partial" if out.tts_failed else "full"
             out.playback_position = playback_ev.playback_position
             out.synchronized_transcript = playback_ev.synchronized_transcript
         elif text_out is not None and text_out.text:
@@ -1001,12 +1039,15 @@ async def _execute_tools_task(
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
                         if isinstance(e, ToolError):
+                            # Keep detail out of the message body so redaction can
+                            # drop it (a log body cannot be redacted). Same pattern
+                            # as the invalid-arguments warning above.
                             logger.warning(
-                                "ToolError while executing tool: %s",
-                                e.message,
+                                "ToolError while executing tool",
                                 extra={
                                     "function": fnc_call.name,
                                     "speech_id": speech_handle.id,
+                                    "lk.pii.error": e.message,
                                 },
                             )
                         elif not isinstance(e, StopResponse):
@@ -1214,10 +1255,38 @@ def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput
     return fnc_call_out
 
 
+async def _release_running_tools(
+    session: AgentSession, started_calls: list[llm.FunctionCall], speech_handle: SpeechHandle
+) -> None:
+    """Hand the tools an interrupted turn stopped waiting for to their executor.
+
+    Each one answers with the running placeholder as its first ``ctx.update()``, so its final
+    result arrives later as a deferred reply, like any async tool's.
+    """
+    running = _RunningTasks.get(session, {})
+    released: list[str] = []
+    for fnc_call in started_calls:
+        task = running.get(fnc_call.call_id)
+        if task is None or task.ctx._first_update_fut is None or task.ctx._first_update_fut.done():
+            continue
+        await task.ctx.update(_RUNNING_TOOL_PLACEHOLDER, template=_RELEASED_TOOL_TEMPLATE)
+        released.append(fnc_call.name)
+
+    if released:
+        logger.warning(
+            "tools still running when the interrupted speech timed out, their results will "
+            "arrive as a deferred reply; a long-running tool should call `ctx.update()`",
+            extra={"functions": released, "speech_id": speech_handle.id},
+        )
+
+
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
 """
 The ID of the instructions message in the chat context. (only for stateless LLMs)
 """
+
+# DYNAMIC_INSTRUCTIONS_MESSAGE_ID lives in llm.chat_context: the provider formatters that
+# take one system text fold that message back into the preamble, and truncate() keeps it
 
 
 def update_instructions(
@@ -1230,41 +1299,75 @@ def update_instructions(
     """
     Update the instruction message in the chat context or insert a new one if missing.
 
-    Instructions are resolved to a plain string using the given modality before storage.
+    Instructions are rendered for the given modality before storage. A ``dynamic`` section
+    becomes its own system message right after the instructions message, so the
+    instructions message stays identical across calls and can end a cached prompt prefix.
+    Inside one system message the per-call text would defeat the cache: with tools in the
+    request, a cache breakpoint partway through a system message is not matched.
     """
-    text = (
-        instructions.render(modality=modality)
-        if isinstance(instructions, Instructions)
-        else instructions
-    )
+    if isinstance(instructions, Instructions):
+        text = instructions.render_static(modality=modality)
+        dynamic = instructions.dynamic or None
+    else:
+        text, dynamic = instructions, None
 
-    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
-    if idx is not None:
-        if chat_ctx.items[idx].type == "message":
-            chat_ctx.items[idx] = llm.ChatMessage(
-                id=INSTRUCTIONS_MESSAGE_ID,
-                role="system",
-                content=[text],
-                created_at=chat_ctx.items[idx].created_at,
-            )
-        else:
-            raise ValueError(
-                "expected the instructions inside the chat_ctx to be of type 'message'"
-            )
-    elif add_if_missing:
+    _remove_by_id(chat_ctx, DYNAMIC_INSTRUCTIONS_MESSAGE_ID)
+    idx = _update_instructions_message(chat_ctx, text=text, add_if_missing=add_if_missing)
+    if idx is not None and dynamic:
         chat_ctx.items.insert(
-            0,
-            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[text]),
+            idx + 1,
+            llm.ChatMessage(id=DYNAMIC_INSTRUCTIONS_MESSAGE_ID, role="system", content=[dynamic]),
         )
 
 
+def _update_instructions_message(
+    chat_ctx: ChatContext, *, text: str, add_if_missing: bool
+) -> int | None:
+    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    if idx is not None:
+        if chat_ctx.items[idx].type != "message":
+            raise ValueError(
+                "expected the instructions inside the chat_ctx to be of type 'message'"
+            )
+        chat_ctx.items[idx] = llm.ChatMessage(
+            id=INSTRUCTIONS_MESSAGE_ID,
+            role="system",
+            content=[text],
+            created_at=chat_ctx.items[idx].created_at,
+        )
+        return idx
+    if add_if_missing:
+        chat_ctx.items.insert(
+            0, llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[text])
+        )
+        return 0
+    return None
+
+
+def mark_instructions_cache_boundary(chat_ctx: ChatContext) -> None:
+    """End the instructions message with a :class:`llm.CacheBreakpoint`.
+
+    Run on a turn's working copy, never on the stored history. ``ChatContext.copy()``
+    shares message objects, so the message is replaced rather than edited in place.
+    """
+    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    if idx is None:
+        return
+    msg = chat_ctx.items[idx]
+    if msg.type != "message" or (msg.content and isinstance(msg.content[-1], llm.CacheBreakpoint)):
+        return
+    chat_ctx.items[idx] = msg.model_copy(update={"content": [*msg.content, llm.CacheBreakpoint()]})
+
+
 def remove_instructions(chat_ctx: ChatContext) -> None:
+    _remove_by_id(chat_ctx, INSTRUCTIONS_MESSAGE_ID)
+    _remove_by_id(chat_ctx, DYNAMIC_INSTRUCTIONS_MESSAGE_ID)
+
+
+def _remove_by_id(chat_ctx: ChatContext, item_id: str) -> None:
     # loop in case there are items with the same id (shouldn't happen!)
-    while True:
-        if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
-            chat_ctx.items.remove(msg)
-        else:
-            break
+    while (msg := chat_ctx.get_by_id(item_id)) is not None:
+        chat_ctx.items.remove(msg)
 
 
 EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID = "lk.expressive.instructions"  #  value must not change

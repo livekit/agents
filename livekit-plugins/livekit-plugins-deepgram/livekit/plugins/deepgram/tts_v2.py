@@ -58,6 +58,26 @@ def _encoding_to_mimetype(encoding: str) -> str:
         ) from None
 
 
+# Speaking rate accepted by Flux TTS: 0.5 to 1.5 in 0.05 steps. Anything else is rejected
+# with a 400, which on the WebSocket path surfaces only as a failed handshake.
+MIN_SPEED = 0.5
+MAX_SPEED = 1.5
+SPEED_STEP = 0.05
+
+
+def _validated_speed(speed: float) -> float:
+    # a little slack at the ends for float noise (0.1 * 3 * 5 == 1.5000000000000002);
+    # also rejects nan and infinities before any rounding
+    if not MIN_SPEED - 1e-6 <= speed <= MAX_SPEED + 1e-6:
+        raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+    steps = speed / SPEED_STEP
+    if abs(steps - round(steps)) > 1e-6:
+        raise ValueError(f"speed must be a multiple of {SPEED_STEP}, but got {speed}")
+    # the exact step (1.5, not 1.5000000000000002), since the API rejects anything off
+    # the 0.05 grid
+    return round(round(steps) * SPEED_STEP, 2)
+
+
 @dataclass
 class _TTSOptionsV2:
     model: FluxTTSModels | str
@@ -68,6 +88,7 @@ class _TTSOptionsV2:
     api_key: str
     mip_opt_out: bool = False
     bit_rate: int | None = None
+    speed: float | None = None
 
 
 class TTSv2(tts.TTS):
@@ -78,6 +99,7 @@ class TTSv2(tts.TTS):
         encoding: str = "linear16",
         sample_rate: int = 24000,
         bit_rate: int | None = None,
+        speed: float | None = None,
         api_key: str | None = None,
         base_url: str = BASE_URL_V2,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
@@ -99,6 +121,9 @@ class TTSv2(tts.TTS):
             bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3). Defaults to None.
                 Applies to the batch synthesize() path only; it has no effect on the
                 linear16 streaming path.
+            speed (float | None): Speaking rate, from 0.5 to 1.5 in 0.05 steps; 1.0 is the normal
+                rate. Defaults to None, which leaves it out of the request.
+                See https://developers.deepgram.com/docs/tts-voice-controls
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
             base_url (str): Base URL for Deepgram Flux TTS API. Defaults to "https://api.deepgram.com/v2/speak"
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
@@ -117,6 +142,9 @@ class TTSv2(tts.TTS):
         if not api_key:
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
 
+        if speed is not None:
+            speed = _validated_speed(speed)
+
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
@@ -125,6 +153,7 @@ class TTSv2(tts.TTS):
             encoding=encoding,
             sample_rate=sample_rate,
             bit_rate=bit_rate,
+            speed=speed,
             word_tokenizer=word_tokenizer,
             base_url=base_url,
             api_key=api_key,
@@ -158,6 +187,8 @@ class TTSv2(tts.TTS):
             "sample_rate": self._opts.sample_rate,
             "mip_opt_out": self._opts.mip_opt_out,
         }
+        if self._opts.speed is not None:
+            config["speed"] = self._opts.speed
         ws = await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
@@ -205,6 +236,7 @@ class TTSv2(tts.TTS):
         encoding: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         bit_rate: NotGivenOr[int | None] = NOT_GIVEN,
+        speed: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -212,7 +244,12 @@ class TTSv2(tts.TTS):
             encoding (str): Audio encoding to use.
             sample_rate (int): Sample rate of audio in Hz.
             bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3).
+            speed (float | None): Speaking rate, from 0.5 to 1.5 in 0.05 steps; None leaves it
+                out of the request.
         """
+        if is_given(speed) and speed is not None:
+            speed = _validated_speed(speed)
+
         connection_params_changed = False
         if is_given(model):
             self._opts.model = model
@@ -227,11 +264,14 @@ class TTSv2(tts.TTS):
         if is_given(bit_rate):
             self._opts.bit_rate = bit_rate
             connection_params_changed = True
+        if is_given(speed):
+            self._opts.speed = speed
+            connection_params_changed = True
 
         if connection_params_changed:
             # These params are baked into the WebSocket URL at connection time, so any
             # existing pooled connection must be invalidated to avoid serving audio at
-            # the wrong rate/encoding.
+            # the wrong rate/encoding/speed.
             self._pool.invalidate()
 
     def synthesize(
@@ -275,6 +315,8 @@ class ChunkedStreamv2(tts.ChunkedStream):
             }
             if self._opts.bit_rate is not None:
                 http_params["bit_rate"] = self._opts.bit_rate
+            if self._opts.speed is not None:
+                http_params["speed"] = self._opts.speed
             async with self._tts._ensure_session().post(
                 _to_deepgram_url(http_params, self._opts.base_url, websocket=False),
                 headers={

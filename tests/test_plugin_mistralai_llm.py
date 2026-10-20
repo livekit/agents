@@ -3,7 +3,7 @@ from __future__ import annotations
 import types
 from collections.abc import Callable
 
-import httpx
+import httpx2 as httpx
 import pytest
 from mistralai.client.errors import (
     HTTPValidationError,

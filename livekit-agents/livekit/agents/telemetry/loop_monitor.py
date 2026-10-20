@@ -502,15 +502,15 @@ class EventLoopMonitor:
 
         Two sources, since the two threads race when a descheduled process resumes: the
         watchdog's recorded late wake-up if it fell inside the window (an older one belongs to
-        a stall already reported), and the time since its last run if it has not run since
-        before the window opened."""
+        a stall already reported), and the time since its last run. The watchdog wakes every
+        tick, so any wait past one tick since its last wake is starvation, wherever in the
+        window that wake fell: a watchdog that ran early in the window and then waited for the
+        GIL has not yet recorded a late wake-up."""
         late, self._watchdog_late = self._watchdog_late, None
         gap = 0.0
         if late is not None and late[0] >= window_start:
             gap = late[1]
-        if self._watchdog_last_wake < window_start:
-            gap = max(gap, now - self._watchdog_last_wake - self._tick)
-        return max(gap, 0.0)
+        return max(gap, now - self._watchdog_last_wake - self._tick, 0.0)
 
     def _watchdog_main(self) -> None:
         while True:
@@ -567,6 +567,9 @@ class EventLoopMonitor:
 
         frames: list[traceback.FrameSummary] = []
         current_frames = sys._current_frames()
+        # the entry for this thread is this function's own frame, which holds the dict in a
+        # local: the cycle would keep every thread's frame and locals alive until a gc pass
+        current_frames.pop(threading.get_ident(), None)
         frame = current_frames.get(self._loop_thread_ident) if self._loop_thread_ident else None
         if frame is None and task is not None:
             # the loop moved to another thread since the heartbeat was armed: find the thread
@@ -584,7 +587,8 @@ class EventLoopMonitor:
         if frame is not None:
             importing = _module_being_imported(frame)
             # no source lookup here: the watchdog holds the GIL while it samples, and the loop
-            # thread is what it is taking it from. Lines load lazily when a report is formatted.
+            # thread is what it is taking it from. Its wake-ups also measure host starvation,
+            # so it must never wait on a file.
             frames = list(
                 traceback.StackSummary.extract(traceback.walk_stack(frame), lookup_lines=False)
             )
@@ -677,7 +681,9 @@ def _format_frames(frames: list[traceback.FrameSummary], *, importing: str | Non
         if run:
             entries.append(_import_run_line(run, importing))
             run = 0
-        entries.append("".join(traceback.format_list([f])))
+        # file, line and function, like faulthandler: the source text would be read from the
+        # file here, on the loop thread that just unblocked
+        entries.append(f'  File "{f.filename}", line {f.lineno}, in {f.name}\n')
     if run:
         entries.append(_import_run_line(run, importing))
     return "".join(entries[-MAX_STACK_FRAMES:]).rstrip()

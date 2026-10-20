@@ -26,9 +26,9 @@ import enum
 import json
 import os
 import platform
+import re
 import weakref
 from dataclasses import dataclass, replace
-from typing import Literal
 
 import aiohttp
 import numpy as np
@@ -47,6 +47,13 @@ from livekit.agents import (
 )
 
 from .log import logger
+from .models import (
+    MODEL_SPEAKER_COMPATIBILITY,
+    SarvamTTSLanguages,
+    SarvamTTSModels,
+    SarvamTTSOutputAudioBitrate,
+    SarvamTTSSpeakers,
+)
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
@@ -68,9 +75,9 @@ SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 _WS_HEARTBEAT_INTERVAL: float = 20.0
 _KEEPALIVE_INTERVAL: float = 30.0
 
-# Sarvam TTS specific models and speakers
-SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
-SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
+# bulbul:v4-flash rides the same pipeline as v3/v3-beta: temperature and the websocket
+# buffering knobs apply to all three.
+_V3_PIPELINE_MODELS = ("bulbul:v3", "bulbul:v3-beta", "bulbul:v4-flash")
 
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
 ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
@@ -157,203 +164,6 @@ def _decode_telephony(codec: str, data: bytes) -> bytes:
     return pcm.astype("<i2").tobytes()
 
 
-# Supported languages in BCP-47 format
-SarvamTTSLanguages = Literal[
-    "bn-IN",  # Bengali
-    "en-IN",  # English (India)
-    "gu-IN",  # Gujarati
-    "hi-IN",  # Hindi
-    "kn-IN",  # Kannada
-    "ml-IN",  # Malayalam
-    "mr-IN",  # Marathi
-    "od-IN",  # Odia
-    "pa-IN",  # Punjabi
-    "ta-IN",  # Tamil
-    "te-IN",  # Telugu
-]
-
-SarvamTTSSpeakers = Literal[
-    # bulbul:v2 Female (lowercase)
-    "anushka",
-    "manisha",
-    "vidya",
-    "arya",
-    # bulbul:v2 Male (lowercase)
-    "abhilash",
-    "karun",
-    "hitesh",
-    # bulbul:v3-beta Customer Care
-    "shubh",
-    "ritu",
-    "rahul",
-    "pooja",
-    "simran",
-    "kavya",
-    "amit",
-    "ratan",
-    "rohan",
-    "dev",
-    "ishita",
-    "shreya",
-    "manan",
-    "sumit",
-    "priya",
-    # bulbul:v3-beta Content Creation
-    "aditya",
-    "kabir",
-    "neha",
-    "varun",
-    "roopa",
-    "aayan",
-    "ashutosh",
-    "advait",
-    # bulbul:v3-beta International
-    "amelia",
-    "sophia",
-    # bulbul:v3
-    "suhani",
-    "rupali",
-    "tanya",
-    "shruti",
-    "kavitha",
-]
-
-# Model-Speaker compatibility mapping
-MODEL_SPEAKER_COMPATIBILITY = {
-    "bulbul:v2": {
-        "female": ["anushka", "manisha", "vidya", "arya"],
-        "male": ["abhilash", "karun", "hitesh"],
-        "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
-    },
-    "bulbul:v3-beta": {
-        "female": [
-            "ritu",
-            "pooja",
-            "simran",
-            "kavya",
-            "ishita",
-            "shreya",
-            "priya",
-            "neha",
-            "roopa",
-            "amelia",
-            "sophia",
-        ],
-        "male": [
-            "shubh",
-            "rahul",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "manan",
-            "sumit",
-            "aditya",
-            "kabir",
-            "varun",
-            "aayan",
-            "ashutosh",
-            "advait",
-        ],
-        "all": [
-            "shubh",
-            "ritu",
-            "rahul",
-            "pooja",
-            "simran",
-            "kavya",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "ishita",
-            "shreya",
-            "manan",
-            "sumit",
-            "priya",
-            "aditya",
-            "kabir",
-            "neha",
-            "varun",
-            "roopa",
-            "aayan",
-            "ashutosh",
-            "advait",
-            "amelia",
-            "sophia",
-        ],
-    },
-    "bulbul:v3": {
-        "female": [
-            "ritu",
-            "pooja",
-            "simran",
-            "kavya",
-            "ishita",
-            "shreya",
-            "priya",
-            "neha",
-            "roopa",
-            "amelia",
-            "sophia",
-            "suhani",
-            "rupali",
-            "tanya",
-            "shruti",
-            "kavitha",
-        ],
-        "male": [
-            "shubh",
-            "rahul",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "manan",
-            "sumit",
-            "aditya",
-            "kabir",
-            "varun",
-            "aayan",
-            "ashutosh",
-            "advait",
-        ],
-        "all": [
-            "shubh",
-            "ritu",
-            "rahul",
-            "pooja",
-            "simran",
-            "kavya",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "ishita",
-            "shreya",
-            "manan",
-            "sumit",
-            "priya",
-            "aditya",
-            "kabir",
-            "neha",
-            "varun",
-            "roopa",
-            "aayan",
-            "ashutosh",
-            "advait",
-            "amelia",
-            "sophia",
-            "suhani",
-            "rupali",
-            "tanya",
-            "shruti",
-            "kavitha",
-        ],
-    },
-}
-
-
 class ConnectionState(enum.Enum):
     """WebSocket connection states for TTS."""
 
@@ -379,6 +189,48 @@ def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     return True
 
 
+# Accepted [min, max] per synthesis parameter. bulbul:v4-flash is stricter than v2/v3.
+_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "pitch": (-0.75, 0.75),
+    "pace": (0.3, 3.0),
+    "loudness": (0.5, 2.0),
+    "temperature": (0.01, 2.0),
+}
+_V4_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "pitch": (-0.5, 0.5),
+    "pace": (0.5, 2.0),
+    "loudness": (0.1, 2.5),
+    "temperature": (0.01, 1.0),
+}
+
+
+def _param_bounds(model: str, param: str) -> tuple[float, float]:
+    """Accepted range for a synthesis parameter on the given model."""
+    return (_V4_PARAM_BOUNDS if model == "bulbul:v4-flash" else _PARAM_BOUNDS)[param]
+
+
+def _validate_param(model: str, param: str, value: float) -> None:
+    """Raise if a synthesis parameter is outside the range the model accepts."""
+    low, high = _param_bounds(model, param)
+    if not low <= value <= high:
+        raise ValueError(f"{param} must be between {low} and {high} for model '{model}'")
+
+
+def _clamp_pitch(model: str, pitch: float) -> float:
+    low, high = _param_bounds(model, "pitch")
+    if not low <= pitch <= high:
+        logger.warning(
+            "pitch value %.2f is outside the Sarvam API accepted range [%s, %s] for %s; "
+            "clamping to nearest bound. Please update your code.",
+            pitch,
+            low,
+            high,
+            model,
+        )
+        return max(low, min(high, pitch))
+    return pitch
+
+
 @dataclass
 class SarvamTTSOptions:
     """Options for the Sarvam.ai TTS service.
@@ -388,16 +240,20 @@ class SarvamTTSOptions:
         api_key: Sarvam.ai API key
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
-        pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.3 to 3.0)
-        loudness: Volume multiplier (0.5 to 2.0)
-        temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
+        pitch: Voice pitch adjustment (-0.75 to 0.75; -0.5 to 0.5 for bulbul:v4-flash)
+        pace: Speech rate multiplier (0.3 to 3.0; 0.5 to 2.0 for bulbul:v4-flash)
+        loudness: Volume multiplier (0.5 to 2.0; 0.1 to 2.5 for bulbul:v4-flash)
+        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash),
+            used for v3, v3-beta and v4-flash. bulbul:v4-flash accepts the value then
+            forces it to 0.6 server-side, so setting it there has no effect.
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
-        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000)
-        enable_preprocessing: Whether to use text preprocessing (bulbul:v2 only)
-        dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
+        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000;
+            streaming bulbul:v4-flash is limited to 8000, 16000, 22050 or 24000)
+        enable_preprocessing: Whether to use text preprocessing (bulbul:v2 and bulbul:v4-flash;
+            bulbul:v4-flash forces it on server-side regardless of this value)
+        dict_id: Custom pronunciation dictionary ID (bulbul:v3 and bulbul:v4-flash)
         enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
         model: The Sarvam TTS model to use
         base_url: API endpoint URL
@@ -428,6 +284,74 @@ class SarvamTTSOptions:
     output_audio_codec: str = "mp3"
 
 
+# Streaming bulbul:v4-flash rejects the higher REST sample rates, and OPUS narrows it further.
+_V4_STREAM_SAMPLE_RATES = (8000, 16000, 22050, 24000)
+_V4_STREAM_OPUS_SAMPLE_RATES = (8000, 16000, 24000)
+
+
+def _model_extra_fields(opts: SarvamTTSOptions) -> dict[str, object]:
+    """Model-specific fields shared by the REST body and the websocket config."""
+    extra: dict[str, object] = {}
+    if opts.model in ("bulbul:v2", "bulbul:v4-flash"):
+        extra["pitch"] = opts.pitch
+        extra["loudness"] = opts.loudness
+        extra["enable_preprocessing"] = opts.enable_preprocessing
+    # v3 and v4 silently ignore caching, so it is only ever sent for v2
+    if opts.model == "bulbul:v2" and opts.enable_cached_responses is not None:
+        extra["enable_cached_responses"] = opts.enable_cached_responses
+    if opts.model in _V3_PIPELINE_MODELS:
+        extra["temperature"] = opts.temperature
+    if opts.model in ("bulbul:v3", "bulbul:v4-flash") and opts.dict_id is not None:
+        extra["dict_id"] = opts.dict_id
+    return extra
+
+
+def _websocket_url(opts: SarvamTTSOptions) -> str:
+    """Build the TTS websocket URL, validating the stream-only limits of bulbul:v4-flash."""
+
+    url = opts.ws_url
+    if opts.model == "bulbul:v4-flash":
+        allowed = (
+            _V4_STREAM_OPUS_SAMPLE_RATES
+            if opts.output_audio_codec == "opus"
+            else _V4_STREAM_SAMPLE_RATES
+        )
+        if opts.speech_sample_rate not in allowed:
+            raise ValueError(
+                f"speech_sample_rate must be one of {', '.join(str(r) for r in allowed)} "
+                f"when streaming bulbul:v4-flash with codec '{opts.output_audio_codec}'"
+            )
+        if not url.rstrip("/").endswith("/v2"):
+            url = f"{url.rstrip('/')}/v2"
+    return f"{url}?model={opts.model}&send_completion_event={opts.send_completion_event}"
+
+
+_MESSAGE_STATUS_RE = re.compile(r"\s*(\d{3})\s*:")
+_CODE_STATUS_RE = re.compile(r"\s*\d{3}\s*")
+
+
+def _error_status_code(error_data: object) -> int:
+    """Extract the HTTP-equivalent status code from a Sarvam websocket error frame.
+
+    Schema rejections carry ``code`` (e.g. 422, or the string ``"422"``). Others omit
+    it and prefix the message instead, as in ``"400: Speaker '...' is not compatible
+    with model bulbul:v4-flash"``. Returns -1 when neither form is present.
+    """
+    if not isinstance(error_data, dict):
+        return -1
+
+    code = error_data.get("code")
+    if isinstance(code, bool):  # bool is an int subclass; never a status code
+        return -1
+    if isinstance(code, int):
+        return code
+    if isinstance(code, str) and _CODE_STATUS_RE.fullmatch(code):
+        return int(code)
+
+    match = _MESSAGE_STATUS_RE.match(str(error_data.get("message", "")))
+    return int(match.group(1)) if match else -1
+
+
 class TTS(tts.TTS):
     """Sarvam.ai Text-to-Speech implementation.
 
@@ -440,16 +364,21 @@ class TTS(tts.TTS):
         speaker: Voice to use for synthesis
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
-        pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.3 to 3.0)
-        loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
-        temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
-        dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
+        pitch: Voice pitch adjustment (-0.75 to 0.75; -0.5 to 0.5 for bulbul:v4-flash) -
+            only supported in v2 and v4-flash
+        pace: Speech rate multiplier (0.3 to 3.0; 0.5 to 2.0 for bulbul:v4-flash)
+        loudness: Volume multiplier (0.5 to 2.0; 0.1 to 2.5 for bulbul:v4-flash) -
+            only supported in v2 and v4-flash
+        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash),
+            only used in v3, v3-beta and v4-flash. bulbul:v4-flash accepts the value then
+            forces it to 0.6 server-side, so setting it there has no effect.
+        dict_id: Custom pronunciation dictionary ID (bulbul:v3 and bulbul:v4-flash)
         enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
         output_audio_bitrate: Output audio bitrate (default 128k)
         min_buffer_size: Minimum character length for flushing (30 to 200)
         max_chunk_length: Maximum chunk length for sentence splitting (50 to 500)
-        enable_preprocessing: Whether to use text preprocessing
+        enable_preprocessing: Whether to use text preprocessing (bulbul:v4-flash forces it
+            on server-side regardless of this value)
         api_key: Sarvam.ai API key (required)
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
@@ -501,25 +430,18 @@ class TTS(tts.TTS):
             raise ValueError("Model is required and cannot be empty")
         if speaker is None:
             # speaker = "shubh"
-            if model == "bulbul:v3-beta" or model == "bulbul:v3":
+            if model == "bulbul:v4-flash":
+                speaker = "shubh_en_narration_gentle"
+            elif model == "bulbul:v3-beta" or model == "bulbul:v3":
                 speaker = "shubh"
             else:
                 speaker = "anushka"
 
         # Validate parameter ranges
-        if not -0.75 <= pitch <= 0.75:
-            logger.warning(
-                "pitch value %.2f is outside the Sarvam API accepted range [-0.75, 0.75]; "
-                "clamping to nearest bound. Please update your code.",
-                pitch,
-            )
-            pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
-        if not 0.5 <= loudness <= 2.0:
-            raise ValueError("Loudness must be between 0.5 and 2.0")
-        if not 0.01 <= temperature <= 2.0:
-            raise ValueError("Temperature must be between 0.01 and 2.0")
+        pitch = _clamp_pitch(model, pitch)
+        _validate_param(model, "pace", pace)
+        _validate_param(model, "loudness", loudness)
+        _validate_param(model, "temperature", temperature)
         if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
             raise ValueError(
                 f"output_audio_bitrate must be one of {', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
@@ -576,6 +498,12 @@ class TTS(tts.TTS):
         # the connection sits idle in the pool. Sarvam closes idle connections
         # after 60 s; pinging every 30 s keeps them alive for reuse.
         self._ws_keepalive_tasks: dict[int, asyncio.Task[None]] = {}
+        # ids of the sockets this TTS has opened and not yet closed
+        self._open_ws_ids: set[int] = set()
+        # ids of sockets that were open when update_options last changed a handshake
+        # option. The pool will not hand them out again but only closes them on its
+        # next acquisition, so a stream returning one closes it instead.
+        self._retired_ws: set[int] = set()
 
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
@@ -593,7 +521,7 @@ class TTS(tts.TTS):
             "Accept-Encoding": "gzip, deflate, br",
         }
         # Add model parameter to URL like the client does
-        ws_url = f"{self._opts.ws_url}?model={self._opts.model}&send_completion_event={self._opts.send_completion_event}"
+        ws_url = _websocket_url(self._opts)
 
         logger.info("Connecting to Sarvam TTS WebSocket")
 
@@ -621,10 +549,13 @@ class TTS(tts.TTS):
             raise APIConnectionError(f"WebSocket connection failed: {e}") from e
 
         self._start_keepalive(ws)
+        self._open_ws_ids.add(id(ws))
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await self._stop_keepalive(ws)
+        self._open_ws_ids.discard(id(ws))
+        self._retired_ws.discard(id(ws))
         await ws.close()
 
     def _start_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -752,62 +683,41 @@ class TTS(tts.TTS):
         send_completion_event: bool | None = None,
         output_audio_codec: str | None = None,
     ) -> None:
-        """Update TTS options with validation."""
+        """Update TTS options with validation.
+
+        Changes land on a copy that is committed only after every model-dependent
+        limit validates against the resulting model. A rejected update therefore
+        leaves the live options untouched, and switching models cannot carry over
+        a speaker or a pitch/pace/loudness/temperature the new model refuses.
+        """
+        opts = replace(self._opts)
+
         if target_language_code is not None:
             if not target_language_code.strip():
                 raise ValueError("Target language code cannot be empty")
-            self._opts.target_language_code = LanguageCode(target_language_code)
+            opts.target_language_code = LanguageCode(target_language_code)
 
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            self._opts.model = model
-            if speaker is None and self._opts.speaker is not None:
-                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
-                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                        "all", []
-                    )
-                    raise ValueError(
-                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
-                        f"Compatible speakers: {', '.join(compatible_speakers)}"
-                    )
+            opts.model = model
+
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
-            if not validate_model_speaker_compatibility(self._opts.model, speaker):
-                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                    "all", []
-                )
-                raise ValueError(
-                    f"Speaker '{speaker}' incompatible with {self._opts.model}. "
-                    f"Compatible speakers: {', '.join(compatible_speakers)}"
-                )
-            self._opts.speaker = speaker
+            opts.speaker = speaker
 
         if pitch is not None:
-            if not -0.75 <= pitch <= 0.75:
-                logger.warning(
-                    "pitch value %.2f is outside the Sarvam API accepted range [-0.75, 0.75]; "
-                    "clamping to nearest bound. Please update your code.",
-                    pitch,
-                )
-                pitch = max(-0.75, min(0.75, pitch))
-            self._opts.pitch = pitch
+            opts.pitch = pitch
 
         if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
-            self._opts.pace = pace
+            opts.pace = pace
 
         if loudness is not None:
-            if not 0.5 <= loudness <= 2.0:
-                raise ValueError("Loudness must be between 0.5 and 2.0")
-            self._opts.loudness = loudness
+            opts.loudness = loudness
 
         if temperature is not None:
-            if not 0.01 <= temperature <= 2.0:
-                raise ValueError("Temperature must be between 0.01 and 2.0")
-            self._opts.temperature = temperature
+            opts.temperature = temperature
 
         if output_audio_bitrate is not None:
             if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
@@ -815,29 +725,29 @@ class TTS(tts.TTS):
                     "output_audio_bitrate must be one of "
                     f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
                 )
-            self._opts.output_audio_bitrate = output_audio_bitrate
+            opts.output_audio_bitrate = output_audio_bitrate
 
         if min_buffer_size is not None:
             if not 30 <= min_buffer_size <= 200:
                 raise ValueError("min_buffer_size must be between 30 and 200")
-            self._opts.min_buffer_size = min_buffer_size
+            opts.min_buffer_size = min_buffer_size
 
         if max_chunk_length is not None:
             if not 50 <= max_chunk_length <= 500:
                 raise ValueError("max_chunk_length must be between 50 and 500")
-            self._opts.max_chunk_length = max_chunk_length
+            opts.max_chunk_length = max_chunk_length
 
         if enable_preprocessing is not None:
-            self._opts.enable_preprocessing = enable_preprocessing
+            opts.enable_preprocessing = enable_preprocessing
 
         if dict_id is not None:
-            self._opts.dict_id = dict_id
+            opts.dict_id = dict_id
 
         if enable_cached_responses is not None:
-            self._opts.enable_cached_responses = enable_cached_responses
+            opts.enable_cached_responses = enable_cached_responses
 
         if send_completion_event is not None:
-            self._opts.send_completion_event = send_completion_event
+            opts.send_completion_event = send_completion_event
 
         if output_audio_codec is not None:
             if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
@@ -845,7 +755,35 @@ class TTS(tts.TTS):
                     "output_audio_codec must be one of "
                     f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
                 )
-            self._opts.output_audio_codec = output_audio_codec
+            opts.output_audio_codec = output_audio_codec
+
+        # Re-check every model-dependent limit against the resulting model, not just
+        # the arguments this call passed: the v4-flash speaker catalogue and bounds
+        # are disjoint from v3's, so a bare model switch can invalidate stored values.
+        if opts.speaker is not None and not validate_model_speaker_compatibility(
+            opts.model, opts.speaker
+        ):
+            compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(opts.model, {}).get("all", [])
+            raise ValueError(
+                f"Speaker '{opts.speaker}' incompatible with {opts.model}. "
+                f"Compatible speakers: {', '.join(compatible_speakers)}"
+            )
+        _validate_param(opts.model, "pace", opts.pace)
+        _validate_param(opts.model, "loudness", opts.loudness)
+        _validate_param(opts.model, "temperature", opts.temperature)
+        opts.pitch = _clamp_pitch(opts.model, opts.pitch)
+
+        # model and send_completion_event are pinned in the handshake URL (and v4-flash
+        # is served on a different path), so a pooled socket would keep synthesising
+        # with the previous ones. Retire them; checked-out streams finish untouched.
+        reconnect = (opts.model, opts.send_completion_event) != (
+            self._opts.model,
+            self._opts.send_completion_event,
+        )
+        self._opts = opts
+        if reconnect:
+            self._retired_ws.update(self._open_ws_ids)
+            self._pool.invalidate()
 
     # Implement the abstract synthesize method
     def synthesize(
@@ -885,7 +823,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the Sarvam.ai TTS request and emit audio via the output emitter."""
-        payload = {
+        payload: dict[str, object] = {
             "target_language_code": self._opts.target_language_code,
             "text": self._input_text,
             "speaker": self._opts.speaker,
@@ -897,19 +835,7 @@ class ChunkedStream(tts.ChunkedStream):
             "max_chunk_length": self._opts.max_chunk_length,
             "output_audio_codec": self._opts.output_audio_codec,
         }
-        # Only include pitch and loudness for v2 model (not supported in v3 or v3-beta)
-        if self._opts.model == "bulbul:v2":
-            payload["pitch"] = self._opts.pitch
-            payload["loudness"] = self._opts.loudness
-            payload["enable_preprocessing"] = self._opts.enable_preprocessing
-            if self._opts.enable_cached_responses is not None:
-                payload["enable_cached_responses"] = self._opts.enable_cached_responses
-        # temperature is supported only for v3 and v3-beta; ignored for v2
-        if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
-            payload["temperature"] = self._opts.temperature
-        # dict_id is supported only for v3 (not v3-beta)
-        if self._opts.model == "bulbul:v3" and self._opts.dict_id is not None:
-            payload["dict_id"] = self._opts.dict_id
+        payload.update(_model_extra_fields(self._opts))
         headers = {
             "api-subscription-key": self._opts.api_key,
             "Content-Type": "application/json",
@@ -1066,22 +992,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "speech_sample_rate": self._opts.speech_sample_rate,
                     "output_audio_codec": self._opts.output_audio_codec,
                 }
-                if self._opts.model == "bulbul:v2":
-                    data["pitch"] = self._opts.pitch
-                    data["loudness"] = self._opts.loudness
-                    data["enable_preprocessing"] = self._opts.enable_preprocessing
-                    if self._opts.enable_cached_responses is not None:
-                        data["enable_cached_responses"] = self._opts.enable_cached_responses
-                if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
-                    data["temperature"] = self._opts.temperature
+                data.update(_model_extra_fields(self._opts))
+                if self._opts.model in _V3_PIPELINE_MODELS:
                     data["output_audio_bitrate"] = self._opts.output_audio_bitrate
                     data["min_buffer_size"] = self._opts.min_buffer_size
                     data["max_chunk_length"] = self._opts.max_chunk_length
-                if self._opts.model == "bulbul:v3" and self._opts.dict_id is not None:
-                    data["dict_id"] = self._opts.dict_id
                 config_msg = {"type": "config", "data": data}
                 logger.debug(
-                    "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
+                    "Sending TTS config",
+                    # carries speaker and dict_id, so it is tagged for redaction
+                    extra={**self._build_log_context(), "lk.pii.config": config_msg},
                 )
                 await ws.send_str(json.dumps(config_msg))
                 input_sent_event.set()
@@ -1217,47 +1137,55 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                # Pause the keepalive task while we own the connection so its
-                # ping frames don't interleave with config / text / flush
-                # traffic. The task was started either by ``_connect_ws`` (for
-                # a fresh connection) or by the previous ``_run_ws`` invocation
-                # that returned this connection to the pool.
+                # Nothing suspends between the pool's get() and here, and every change to a
+                # handshake option invalidates the pool, so this socket was opened with the
+                # TTS's current model and completion setting. Adopt every model-coupled
+                # option at once: update_options validates them as one set, so taking only
+                # some could pair a model with a speaker or language it rejects. Sample
+                # rate and codec stay this stream's own, as the output emitter is already
+                # initialized from them.
+                self._opts = replace(
+                    self._tts._opts,
+                    speech_sample_rate=self._opts.speech_sample_rate,
+                    output_audio_codec=self._opts.output_audio_codec,
+                )
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
+                # Pause the keepalive while this stream holds the socket so its pings don't
+                # interleave with config, text and flush frames. It was started by
+                # _connect_ws for a fresh socket, or by the stream that last returned it.
                 await self._tts._stop_keepalive(ws)
-                keepalive_should_resume = False
+
+                self._ws_conn = ws
+                self._connection_state = ConnectionState.CONNECTED
+
+                logger.info("WebSocket connected successfully", extra=self._build_log_context())
+
+                self._send_task = asyncio.create_task(send_task(ws))
+                self._recv_task = asyncio.create_task(recv_task(ws))
+
+                tasks = [self._send_task, self._recv_task]
 
                 try:
-                    self._acquire_time = self._tts._pool.last_acquire_time
-                    self._connection_reused = self._tts._pool.last_connection_reused
-                    self._ws_conn = ws
-                    self._connection_state = ConnectionState.CONNECTED
-
-                    logger.info("WebSocket connected successfully", extra=self._build_log_context())
-
-                    self._send_task = asyncio.create_task(send_task(ws))
-                    self._recv_task = asyncio.create_task(recv_task(ws))
-
-                    tasks = [self._send_task, self._recv_task]
-
-                    try:
-                        await asyncio.gather(*tasks)
-                        logger.info(
-                            "WebSocket session completed successfully",
-                            extra=self._build_log_context(),
-                        )
-                        keepalive_should_resume = True
-                    finally:
-                        input_sent_event.set()
-                        await utils.aio.gracefully_cancel(*tasks)
-                        self._send_task = None
-                        self._recv_task = None
+                    await asyncio.gather(*tasks)
+                    logger.info(
+                        "WebSocket session completed successfully",
+                        extra=self._build_log_context(),
+                    )
                 finally:
-                    # Resume the keepalive only when the session completed
-                    # cleanly. On exception the pool will discard the
-                    # connection via ``remove(conn)`` and ``_close_ws`` will
-                    # run, so restarting here would be wasted work (and the
-                    # task would be cancelled immediately anyway).
-                    if keepalive_should_resume:
-                        self._tts._start_keepalive(ws)
+                    input_sent_event.set()
+                    await utils.aio.gracefully_cancel(*tasks)
+                    self._send_task = None
+                    self._recv_task = None
+
+                # Only reached when the session completed cleanly; on an exception the
+                # pool removes the socket and closes it with its next drain. A socket that
+                # update_options retired meanwhile would otherwise stay open until the
+                # pool's next acquisition, which may not come, so close it now.
+                if id(ws) in self._tts._retired_ws:
+                    await self._tts._close_ws(ws)
+                else:
+                    self._tts._start_keepalive(ws)
 
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._connection_state = ConnectionState.FAILED
@@ -1360,31 +1288,34 @@ class SynthesizeStream(tts.SynthesizeStream):
         """Handle error messages from the API."""
         error_data = resp.get("data", {})
         error_msg = error_data.get("message", "Unknown error")
-        error_code = error_data.get("code", "unknown")
-        raw_error_message = json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
+        error_code = _error_status_code(error_data)
 
+        # The provider decides what goes in these fields, so they are tagged for
+        # redaction and kept out of the log body, which collectors cannot redact.
+        # This is the one place the frame is recorded in full.
         logger.error(
-            f"TTS API error: {error_msg}",
+            "TTS API error",
             extra={
                 **self._build_log_context(),
                 "error_code": error_code,
-                "error_message": error_msg,
+                "lk.pii.error_message": error_msg,
                 "lk.pii.raw_message": resp,
             },
         )
 
-        # Determine if error is recoverable based on error code/type
-        recoverable_errors = ["rate_limit", "temporary_unavailable", "timeout"]
-        is_recoverable = any(err in str(error_msg).lower() for err in recoverable_errors)
-
-        if is_recoverable:
-            raise APIConnectionError(f"Recoverable TTS API error from Sarvam: {raw_error_message}")
-        else:
-            raise APIStatusError(
-                message=f"TTS API error from Sarvam: {raw_error_message}",
-                status_code=500,
-                body=resp,
-            )
+        # APIStatusError derives retryability from the status code (4xx permanent
+        # except 408/429/499, 5xx transient), so forwarding Sarvam's own code is
+        # all that is needed -- an unrecognized frame stays retryable via -1.
+        #
+        # Nothing provider-written goes on the exception: its __str__ renders both
+        # message and body, and the framework logs that with %s when it retries,
+        # where no collector can redact it. status_code and request_id carry the
+        # non-PII identifiers a caller needs to correlate against Sarvam's logs.
+        raise APIStatusError(
+            message=f"TTS API error from Sarvam (status {error_code})",
+            status_code=error_code,
+            request_id=error_data.get("request_id") if isinstance(error_data, dict) else None,
+        )
 
     async def _handle_event_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle event messages from the API."""
