@@ -526,3 +526,39 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         assert sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+async def test_live_transcription_empty_languages_multilingual() -> None:
+    from livekit.plugins.deepgram.stt import live_transcription_to_speech_data
+
+    payload = {
+        "channel": {
+            "alternatives": [
+                {
+                    "transcript": "bonjour",
+                    "confidence": 0.95,
+                    "words": [{"word": "bonjour", "start": 0.1, "end": 0.6, "confidence": 0.95}],
+                    "languages": [],
+                }
+            ]
+        }
+    }
+    speech_data = live_transcription_to_speech_data(
+        "multi", payload, is_final=True, start_time_offset=0.0
+    )
+    assert len(speech_data) == 1
+    assert speech_data[0].text == "bonjour"
+
+
+async def test_prerecorded_transcription_empty_channels() -> None:
+    from livekit.agents import stt
+    from livekit.plugins.deepgram.stt import prerecorded_transcription_to_speech_event
+
+    payload = {
+        "metadata": {"request_id": "req-empty-123"},
+        "results": {"channels": []},
+    }
+    event = prerecorded_transcription_to_speech_event("en", payload)
+    assert event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+    assert event.request_id == "req-empty-123"
+    assert event.alternatives == []
