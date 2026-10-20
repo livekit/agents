@@ -115,6 +115,7 @@ class FakeScribe:
             {
                 "headers": dict(request.headers),
                 "config": json.loads(str(form["config"])),
+                "outputs": json.loads(str(form["outputs"])) if "outputs" in form else None,
                 "filename": upload.filename,
                 "content_type": upload.content_type,
                 "audio": upload.file.read(),
@@ -283,16 +284,15 @@ async def test_live_handshake_matches_docs(scribe, http) -> None:
     [session] = fake.sessions
     assert session.protocol == "live-asr"
     assert session.headers["Authorization"] == f"Bearer {API_KEY}"
-    assert session.headers["User-Agent"].startswith(
-        "ZoomAI/1.0 (integration=LiveKit; plugin=livekit-plugins-zoom-ai/"
-    )
+    assert session.headers["User-Agent"].startswith("livekit-plugins-zoom-ai/")
+    assert session.headers["x-zm-trackingid"].startswith("zoom_ai_community_integration_livekit_")
     # The documented session.update, plus the 350 ms end-of-turn silence.
     assert session.updates == [
         {
             "type": "session.update",
             "language": "en-US",
             "audio": {"format": "pcm16"},
-            "config": {"turn_detection": {"type": "acoustic_vad", "silence_duration_ms": 350}},
+            "turn_detection": {"silence_duration_ms": 350},
         }
     ]
     assert session.controls == [{"type": "session.close"}]
@@ -373,13 +373,87 @@ async def test_live_diarization(scribe, http, diarization: bool) -> None:
         diarization=diarization,
     )
 
-    expected = {"turn_detection": {"type": "acoustic_vad", "silence_duration_ms": 350}}
-    if diarization:
-        expected["diarization"] = True
-    assert update["config"] == expected
+    assert update.get("config") == ({"diarization": True} if diarization else None)
     assert alt.text == "Hello there."
     assert alt.speaker_id == ("Speaker 1" if diarization else None)
     assert alt.metadata is None  # one speaker: no speaker_segments
+
+
+async def test_live_recognition_options_are_requested_only_when_set(scribe, http) -> None:
+    update, _ = await _live_final(
+        scribe,
+        http,
+        _completed(),
+        model="zoom-scribe-multilingual",
+        language_detection="continuous",
+        vocabulary=["Pipecat", "LiveKit"],
+        profanity_filter=True,
+        text_polishing=True,
+    )
+
+    assert update["config"] == {
+        "model": "zoom-scribe-multilingual",
+        "language_detection": {"mode": "continuous"},
+        "profanity_filter": True,
+        "vocabulary": {"phrases": ["Pipecat", "LiveKit"]},
+    }
+    assert update["outputs"] == {"text_polishing": {"enabled": True, "include_transcript": True}}
+
+
+async def test_live_reports_the_detected_language(scribe, http) -> None:
+    _, alt = await _live_final(
+        scribe,
+        http,
+        _completed(transcript="Buenos días.", language="es"),
+        language_detection="continuous",
+    )
+
+    assert alt.language == "es"
+
+
+async def test_live_text_polishing_reports_the_polished_text(scribe, http) -> None:
+    _, alt = await _live_final(
+        scribe,
+        http,
+        _completed(
+            transcript="Um, hello hello there.",
+            outputs={"text_polishing": {"text": "Hello there."}},
+        ),
+        text_polishing=True,
+    )
+
+    assert alt.text == "Hello there."
+    assert alt.metadata == {"transcript": "Um, hello hello there."}
+
+
+async def test_live_failed_polishing_falls_back_to_the_transcript(scribe, http) -> None:
+    _, alt = await _live_final(
+        scribe,
+        http,
+        _completed(
+            transcript="Um, hello there.",
+            outputs={"text_polishing": {"text": "[polishing_failed: timeout]"}},
+        ),
+        text_polishing=True,
+    )
+
+    assert alt.text == "Um, hello there."
+    assert alt.metadata is None
+
+
+async def test_live_polished_text_loses_speaker_tags(scribe, http) -> None:
+    _, alt = await _live_final(
+        scribe,
+        http,
+        _completed(
+            transcript="[Speaker 1] um, hi [Speaker 2] uh, hello",
+            outputs={"text_polishing": {"text": "[Speaker 1] Hi. [Speaker 2] Hello."}},
+        ),
+        text_polishing=True,
+    )
+
+    assert alt.text == "Hi. Hello."
+    assert alt.metadata == {"transcript": "um, hi uh, hello"}
 
 
 async def test_live_mixed_speakers_have_segments_and_no_speaker_id(scribe, http) -> None:
@@ -450,7 +524,7 @@ async def test_live_handshake_rejection_is_a_status_error_without_the_key(http) 
     server = TestServer(app)
     await server.start_server()
     try:
-        stt = make_stt(http, (str(server.make_url("/live")), "http://unused"))
+        stt = make_stt(http, (str(server.make_url("/live")), "http://127.0.0.1:9/unused"))
         with pytest.raises(APIStatusError) as exc:
             await run_stream(stt.stream(conn_options=NO_RETRY), frames(0.1))
     finally:
@@ -461,25 +535,25 @@ async def test_live_handshake_rejection_is_a_status_error_without_the_key(http) 
 
 
 async def test_fast_connection_error_raises_connection_error(http) -> None:
-    stt = make_stt(http, ("ws://unused", "http://127.0.0.1:9/transcribe"), mode="fast")
+    stt = make_stt(http, ("ws://127.0.0.1:9/unused", "http://127.0.0.1:9/transcribe"), mode="fast")
     with pytest.raises(APIConnectionError):
         await stt.recognize(frames(0.1), conn_options=NO_RETRY)
 
 
 @pytest.mark.parametrize(
-    ("silence_duration_ms", "expected_config"),
+    ("silence_duration_ms", "expected"),
     [
-        (500, {"turn_detection": {"type": "acoustic_vad", "silence_duration_ms": 500}}),
+        (500, {"silence_duration_ms": 500}),
         (None, None),  # Scribe's server default: exactly the documented session.update
     ],
 )
 async def test_live_silence_duration(
-    scribe, http, silence_duration_ms: int | None, expected_config: Any
+    scribe, http, silence_duration_ms: int | None, expected: Any
 ) -> None:
     fake, live_url, fast_url = scribe
     stt = make_stt(http, (live_url, fast_url), silence_duration_ms=silence_duration_ms)
     await run_stream(stt.stream(), frames(0.1))
-    assert fake.sessions[0].updates[0].get("config") == expected_config
+    assert fake.sessions[0].updates[0].get("turn_detection") == expected
 
 
 async def test_live_update_options_changes_the_silence_duration(scribe, http) -> None:
@@ -495,9 +569,7 @@ async def test_live_update_options_changes_the_silence_duration(scribe, http) ->
     )
     await run_stream(stream, frames(0.1))
 
-    silences = [
-        s.updates[0]["config"]["turn_detection"]["silence_duration_ms"] for s in fake.sessions
-    ]
+    silences = [s.updates[0]["turn_detection"]["silence_duration_ms"] for s in fake.sessions]
     assert silences == [350, 500]
 
 
@@ -517,7 +589,11 @@ async def test_live_speech_end_excludes_scribes_silence_window(
     # Scribe ends a segment after the silence window we set, so audio_end_ms (900 ms here)
     # is that much later than the end of speech. With None the window is Scribe's own, so
     # audio_end_ms is used as is.
-    stt = make_stt(http, ("ws://unused", "http://unused"), silence_duration_ms=silence_duration_ms)
+    stt = make_stt(
+        http,
+        ("ws://127.0.0.1:9/unused", "http://127.0.0.1:9/unused"),
+        silence_duration_ms=silence_duration_ms,
+    )
     stream = stt.stream()
     try:
         assert stream._speech_end_time(900) == pytest.approx(stream.start_time + expected)
@@ -533,6 +609,18 @@ def test_rejects_an_unknown_mode_or_url() -> None:
         with pytest.raises(ValueError, match="base_url"):
             zoom_ai.STT(api_key=API_KEY, base_url=bad)
     assert zoom_ai.STT(api_key=API_KEY, base_url="HTTPS://h/x")._live_url == "wss://h/x/live"
+
+
+def test_plaintext_urls_warn_except_for_localhost(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING):
+        zoom_ai.STT(api_key=API_KEY, base_url="http://scribe.example.com/x")
+    warned = [r.getMessage() for r in caplog.records if "not encrypted" in r.getMessage()]
+    assert len(warned) == 3  # base_url, and the live_url and fast_url derived from it
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        zoom_ai.STT(api_key=API_KEY, base_url="http://localhost:8080/x")
+        zoom_ai.STT(api_key=API_KEY)
+    assert not [r for r in caplog.records if "not encrypted" in r.getMessage()]
 
 
 async def test_live_empty_final_closes_the_turn_without_a_transcript(scribe, http) -> None:
@@ -681,12 +769,20 @@ async def test_live_reconnects_when_scribe_ends_the_session(scribe, http) -> Non
     assert fake.sessions[1].controls == [{"type": "session.close"}]
 
 
-@pytest.mark.parametrize("code", ["invalid_config", "UNSUPPORTED_LANGUAGE"])
-async def test_live_fatal_error_is_raised(scribe, http, code: str) -> None:
+@pytest.mark.parametrize(
+    ("code", "fatal"),
+    [
+        ("invalid_config", True),
+        ("UNSUPPORTED_LANGUAGE", True),
+        # Scribe sends this one as non-fatal, but it didn't apply the session.update.
+        ("invalid_config", False),
+    ],
+)
+async def test_live_fatal_error_is_raised(scribe, http, code: str, fatal: bool) -> None:
     fake, live_url, fast_url = scribe
 
     async def reject(ws: web.WebSocketResponse, session: LiveSession) -> None:
-        error = {"code": code, "message": "bad language", "fatal": True}
+        error = {"code": code, "message": "bad language", "fatal": fatal}
         await ws.send_json({"type": "error", "error": error})
 
     fake.on_start = reject
@@ -697,7 +793,9 @@ async def test_live_fatal_error_is_raised(scribe, http, code: str) -> None:
     assert len(fake.sessions) == 1  # a config error is not retried
 
 
-async def test_live_non_fatal_error_keeps_the_session(scribe, http) -> None:
+async def test_live_non_fatal_error_keeps_the_session(
+    scribe, http, caplog: pytest.LogCaptureFixture
+) -> None:
     fake, live_url, fast_url = scribe
 
     async def warn(ws: web.WebSocketResponse, session: LiveSession) -> None:
@@ -711,6 +809,50 @@ async def test_live_non_fatal_error_keeps_the_session(scribe, http) -> None:
 
     assert any(e.type == SpeechEventType.FINAL_TRANSCRIPT for e in events)
     assert len(fake.sessions) == 1
+    # Scribe's message stays out of the log text, under the lk.pii key telemetry filters.
+    [record] = [r for r in caplog.records if "warning (audio_gap)" in r.getMessage()]
+    assert "late audio" not in record.getMessage()
+    assert record.__dict__["lk.pii.message"] == "late audio"
+
+
+async def test_live_input_gap_mid_turn_sends_silence_to_end_it(
+    scribe, http, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Input stopping mid-turn (e.g. a mute) gets enough silence for Scribe to end the turn."""
+    fake, live_url, fast_url = scribe
+    monkeypatch.setattr(zoom_stt, "INPUT_GAP_S", 0.1)
+
+    async def start_speech(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        if not getattr(session, "_started", False):
+            session._started = True  # type: ignore[attr-defined]
+            await ws.send_json({"type": "input_audio_buffer.speech_started", "audio_start_ms": 0})
+
+    fake.on_audio = start_speech
+    stt = make_stt(http, (live_url, fast_url))
+    stream = stt.stream()
+    for f in frames(0.2):  # 6400 bytes, then the input stops
+        stream.push_frame(f)
+    window = 16000 * 2 * (350 + 100) // 1000  # silence_duration_ms plus 100 ms
+    await wait_until(
+        lambda: bool(fake.sessions) and len(fake.sessions[0].audio) >= 6400 + window, "gap silence"
+    )
+    await asyncio.sleep(0.3)
+    assert len(fake.sessions[0].audio) == 6400 + window  # sent once per gap
+    await stream.aclose()
+
+
+async def test_stt_aclose_closes_open_streams(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+    stt = make_stt(http, (live_url, fast_url))
+    stream = stt.stream()
+    for f in frames(0.2):
+        stream.push_frame(f)
+    await wait_until(lambda: bool(fake.sessions and fake.sessions[0].audio), "audio")
+
+    await stt.aclose()
+
+    assert stream._task.done()
+    assert not stt._streams
 
 
 async def test_live_keepalive_sends_silence_when_input_is_idle(
@@ -798,10 +940,12 @@ async def test_fast_uploads_wav_and_config(scribe, http) -> None:
 
     [request] = fake.fast_requests
     assert request["headers"]["Authorization"] == f"Bearer {API_KEY}"
-    assert request["headers"]["User-Agent"].startswith(
-        "ZoomAI/1.0 (integration=LiveKit; plugin=livekit-plugins-zoom-ai/"
+    assert request["headers"]["User-Agent"].startswith("livekit-plugins-zoom-ai/")
+    assert request["headers"]["x-zm-trackingid"].startswith(
+        "zoom_ai_community_integration_livekit_"
     )
     assert request["config"] == {"language": "en-US"}
+    assert request["outputs"] is None
     assert request["content_type"] == "audio/wav"
     assert request["audio"][:4] == b"RIFF"
 
@@ -847,6 +991,39 @@ async def test_fast_mixed_speakers_have_segments_and_no_speaker_id(scribe, http)
             for s in segments
         ]
     }
+
+
+async def test_fast_recognition_options_and_text_polishing(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+    fake.fast_body = {
+        "request_id": "req_5",
+        "result": {"text_display": "Um, hello hello there.", "segments": []},
+        "outputs": {"text_polishing": {"text": "Hello there."}},
+    }
+    stt = make_stt(
+        http,
+        (live_url, fast_url),
+        mode="fast",
+        model="zoom-scribe-en-pro",
+        language_detection="once",
+        vocabulary=["Pipecat"],
+        profanity_filter=True,
+        text_polishing=True,
+    )
+    alt = (await stt.recognize(frames(0.5), conn_options=NO_RETRY)).alternatives[0]
+
+    [request] = fake.fast_requests
+    assert request["config"] == {
+        "language": "en-US",
+        "model": "zoom-scribe-en-pro",
+        "language_detection": {"mode": "once"},
+        "profanity_filter": True,
+        "vocabulary": {"phrases": ["Pipecat"]},
+    }
+    # Text polishing is its own multipart field, as `outputs` sits beside `config`.
+    assert request["outputs"] == {"text_polishing": {"enabled": True}}
+    assert alt.text == "Hello there."
+    assert alt.metadata == {"transcript": "Um, hello hello there."}
 
 
 @pytest.mark.parametrize("word_time_offsets", [False, True])

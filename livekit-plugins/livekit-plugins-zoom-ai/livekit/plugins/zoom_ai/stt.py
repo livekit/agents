@@ -34,9 +34,11 @@ import json
 import os
 import re
 import time
+import uuid
 import weakref
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -58,10 +60,13 @@ from .log import logger
 from .version import __version__
 
 BASE_URL = "https://api.zoom.us/v2/aiservices/scribe"
-# Identifies this integration to Zoom (name and version only, no user data).
-USER_AGENT = f"ZoomAI/1.0 (integration=LiveKit; plugin=livekit-plugins-zoom-ai/{__version__})"
+USER_AGENT = f"livekit-plugins-zoom-ai/{__version__}"
+TRACKING_ID_PREFIX = "zoom_ai_community_integration_livekit_"
 SAMPLE_RATE = 16000  # Scribe Live accepts 16 kHz mono PCM16 only
 KEEPALIVE_INTERVAL_S = 10.0  # Scribe closes a session after 30 s without audio
+# When input stops mid-turn (e.g. the user muted), Scribe's VAD hears no silence and
+# the turn stays open. After this long without input, send enough silence to end it.
+INPUT_GAP_S = 1.0
 # Silence that ends a Scribe Live turn, tuned for voice agents.
 DEFAULT_SILENCE_DURATION_MS = 350
 
@@ -82,6 +87,34 @@ _TAG = re.compile(r"\[(?:speaker[ _]?\d+|spk_\d+|channel\d+)\]\s*", re.IGNORECAS
 def _clean(text: str | None) -> str:
     """Remove the [Speaker N] / [channelN] tags Scribe adds when diarization is on."""
     return _TAG.sub("", text or "").strip()
+
+
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _check_url(url: str, name: str) -> str:
+    """Return ``url``, warning if it sends the API key and audio unencrypted to a remote host."""
+    parsed = urlparse(url)
+    if parsed.scheme.lower() in ("http", "ws") and parsed.hostname not in _LOOPBACK_HOSTS:
+        logger.warning(
+            "%s is not encrypted (%s://); the API key and audio are sent in plaintext",
+            name,
+            parsed.scheme,
+        )
+    return url
+
+
+def _polished_text(payload: dict[str, Any]) -> str | None:
+    """Scribe's polished text (``outputs.text_polishing.text``), or None if absent or failed.
+
+    When polishing fails, Scribe still returns the transcription and puts a
+    ``[polishing_failed: <reason>]`` marker in place of the polished text.
+    """
+    polishing = (payload.get("outputs") or {}).get("text_polishing") or {}
+    text = polishing.get("text")
+    if not isinstance(text, str) or text.lstrip().startswith("[polishing_failed"):
+        return None
+    return _clean(text)
 
 
 def _is_config_error(code: object) -> bool:
@@ -112,6 +145,27 @@ class STTOptions:
     diarization: bool
     silence_duration_ms: int | None
     word_time_offsets: bool
+    vocabulary: list[str] | None
+    profanity_filter: bool
+    text_polishing: bool
+    model: str | None
+    language_detection: str | None
+
+
+def _recognition_config(opts: STTOptions) -> dict[str, Any]:
+    """The optional ``config`` fields shared by Scribe Live and Fast."""
+    config: dict[str, Any] = {}
+    if opts.model:
+        config["model"] = opts.model
+    if opts.language_detection:
+        config["language_detection"] = {"mode": opts.language_detection}
+    if opts.diarization:
+        config["diarization"] = True
+    if opts.profanity_filter:
+        config["profanity_filter"] = True
+    if opts.vocabulary:
+        config["vocabulary"] = {"phrases": list(opts.vocabulary)}
+    return config
 
 
 class STT(stt.STT):
@@ -137,15 +191,24 @@ class STT(stt.STT):
         mode: Literal["live", "fast"] = "live",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en-US",
+        model: str | None = None,
+        language_detection: str | None = None,
         silence_duration_ms: int | None = DEFAULT_SILENCE_DURATION_MS,
         diarization: bool = False,
         word_time_offsets: bool = False,
+        vocabulary: list[str] | None = None,
+        profanity_filter: bool = False,
+        text_polishing: bool = False,
         base_url: str = BASE_URL,
         live_url: NotGivenOr[str] = NOT_GIVEN,
         fast_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Create a Zoom Scribe STT.
+
+        Options map to the Scribe API fields of the same name. For what each feature
+        does, and its availability, pricing and enablement, see
+        https://developers.zoom.us/docs/ai-services/scribe/ and https://www.zoom.ai/
 
         Args:
             mode: ``"live"`` (streaming, default) or ``"fast"`` (one request per utterance).
@@ -155,6 +218,11 @@ class STT(stt.STT):
             language: A Scribe locale, e.g. ``"en-US"``; base codes such as ``"en"`` map to
                 their locale. Raises ``ValueError`` for a language this version of the plugin
                 doesn't support: https://developers.zoom.us/docs/ai-services/scribe/#supported-languages
+            model: Scribe speech recognition model (``config.model``). ``None`` uses
+                Scribe's default model.
+            language_detection: Scribe language detection mode
+                (``config.language_detection.mode``). ``None`` turns it off. A detected
+                language Scribe reports is in ``SpeechData.language``.
             silence_duration_ms: Live only: milliseconds of silence that end a turn in
                 Scribe's voice activity detection. Defaults to 350, tuned for voice agents;
                 lower is faster, higher keeps sentences with longer pauses together. For
@@ -166,10 +234,19 @@ class STT(stt.STT):
                 ``metadata["speaker_segments"]`` has each one's span. In Fast mode labels
                 are per request, so they aren't consistent across utterances.
                 ``MultiSpeakerAdapter`` works with Live mode only.
-            word_time_offsets: Fast only: fill ``SpeechData.words`` with word timings.
+            word_time_offsets: Fast only: word timings (``config.word_time_offsets``), in
+                ``SpeechData.words``. Off by default.
+            vocabulary: Words and phrases that customize recognition
+                (``config.vocabulary.phrases``).
+            profanity_filter: Scribe's profanity filter (``config.profanity_filter``).
                 Off by default.
-            base_url: Scribe API base URL (``http`` or ``https``); Live uses
-                ``<base>/live`` (as ``ws``/``wss``) and Fast uses ``<base>/transcribe``.
+            text_polishing: Scribe's text polishing (``outputs.text_polishing``). The
+                polished text is the transcript, and the recognized text is in
+                ``metadata["transcript"]``; if polishing fails, the recognized text is
+                used. Off by default.
+            base_url: Scribe API base URL; Live uses ``<base>/live`` (as ``wss``) and Fast
+                uses ``<base>/transcribe``. A plaintext (``http``/``ws``) URL to a host other
+                than localhost logs a warning.
             live_url: Override the Scribe Live WebSocket URL.
             fast_url: Override the Scribe Fast HTTP URL.
             http_session: Optional aiohttp session; the job's session is used otherwise.
@@ -192,18 +269,28 @@ class STT(stt.STT):
         self._api_key = api_key
         self._mode = mode
         base = base_url.rstrip("/")
-        scheme, sep, rest = base.partition("://")
-        if not sep or scheme.lower() not in ("http", "https"):
+        scheme, _, rest = base.partition("://")
+        if scheme.lower() not in ("http", "https"):
             raise ValueError(f"base_url must be an http(s) URL, got {base_url!r}")
+        _check_url(base, "base_url")
         ws_scheme = "wss" if scheme.lower() == "https" else "ws"
-        self._live_url = live_url if is_given(live_url) else f"{ws_scheme}://{rest}/live"
-        self._fast_url = fast_url if is_given(fast_url) else base + "/transcribe"
+        self._live_url = _check_url(
+            live_url if is_given(live_url) else f"{ws_scheme}://{rest}/live", "live_url"
+        )
+        self._fast_url = _check_url(
+            fast_url if is_given(fast_url) else base + "/transcribe", "fast_url"
+        )
         self._session = http_session
         self._opts = STTOptions(
             language=_to_locale(language),
             diarization=diarization,
             silence_duration_ms=silence_duration_ms,
             word_time_offsets=word_time_offsets,
+            vocabulary=vocabulary,
+            profanity_filter=profanity_filter,
+            text_polishing=text_polishing,
+            model=model,
+            language_detection=language_detection,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -224,7 +311,11 @@ class STT(stt.STT):
         return self._session
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._api_key}", "User-Agent": USER_AGENT}
+        return {
+            "Authorization": f"Bearer {self._api_key}",
+            "User-Agent": USER_AGENT,
+            "x-zm-trackingid": f"{TRACKING_ID_PREFIX}{uuid.uuid4()}",
+        }
 
     # ---------------------------------------------------------------- Scribe Fast
     async def _recognize_impl(
@@ -235,12 +326,10 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         locale = _to_locale(language) if is_given(language) else self._opts.language
-        config: dict[str, Any] = {"language": locale}
-        if self._opts.diarization:
-            config["diarization"] = True
+        config: dict[str, Any] = {"language": locale, **_recognition_config(self._opts)}
         if self._opts.word_time_offsets:
             config["word_time_offsets"] = True
-        # Upload the utterance as multipart form data (`file` + `config`).
+        # Upload the utterance as multipart form data (`file`, `config` and `outputs`).
         form = aiohttp.FormData()
         form.add_field(
             "file",
@@ -249,6 +338,8 @@ class STT(stt.STT):
             content_type="audio/wav",
         )
         form.add_field("config", json.dumps(config))
+        if self._opts.text_polishing:
+            form.add_field("outputs", json.dumps({"text_polishing": {"enabled": True}}))
         try:
             async with self._http.post(
                 self._fast_url,
@@ -280,7 +371,13 @@ class STT(stt.STT):
 
         text = _clean((result.get("result") or {}).get("text_display"))
         segments = (result.get("result") or {}).get("segments") or []
-        speaker_id, metadata = None, None
+        speaker_id: str | None = None
+        metadata: dict[str, Any] | None = None
+        if self._opts.text_polishing:
+            polished = _polished_text(result)
+            if polished is not None:
+                metadata = {"transcript": text}
+                text = polished
         if self._opts.diarization:
             # One speaker: speaker_id. Several: speaker_id is empty and each one's span is
             # in metadata["speaker_segments"] (as Scribe Live does).
@@ -289,9 +386,10 @@ class STT(stt.STT):
                 speaker_id = next(iter(speakers))
             elif len(speakers) > 1:
                 metadata = {
+                    **(metadata or {}),
                     "speaker_segments": [
                         {k: s.get(k) for k in ("speaker", "text", "start", "end")} for s in segments
-                    ]
+                    ],
                 }
         words = None
         if self._opts.word_time_offsets:
@@ -343,6 +441,17 @@ class STT(stt.STT):
         stream = SpeechStream(stt=self, opts=opts, conn_options=conn_options)
         self._streams.add(stream)
         return stream
+
+    async def aclose(self) -> None:
+        """Close every Live stream opened by :meth:`stream`.
+
+        The HTTP session is left open: it is either supplied by the caller or owned by the
+        job's HTTP context.
+        """
+        streams = list(self._streams)
+        self._streams.clear()
+        # return_exceptions=True so one stream failing to close doesn't leave the rest open
+        await asyncio.gather(*(stream.aclose() for stream in streams), return_exceptions=True)
 
     def update_options(
         self,
@@ -409,22 +518,20 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     def _session_update(self) -> dict[str, Any]:
-        """The session.update from the Live docs."""
+        """The session.update for this stream's options."""
         update: dict[str, Any] = {
             "type": "session.update",
             "language": self._opts.language,
             "audio": {"format": "pcm16"},
         }
-        config: dict[str, Any] = {}
-        if self._opts.silence_duration_ms is not None:
-            config["turn_detection"] = {
-                "type": "acoustic_vad",
-                "silence_duration_ms": self._opts.silence_duration_ms,
-            }
-        if self._opts.diarization:
-            config["diarization"] = True
+        config = _recognition_config(self._opts)
         if config:
             update["config"] = config
+        if self._opts.silence_duration_ms is not None:
+            update["turn_detection"] = {"silence_duration_ms": self._opts.silence_duration_ms}
+        if self._opts.text_polishing:
+            # Live returns only the polished text unless the transcript is asked for too.
+            update["outputs"] = {"text_polishing": {"enabled": True, "include_transcript": True}}
         return update
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
@@ -464,11 +571,13 @@ class SpeechStream(stt.SpeechStream):
         self._session_offset = 0.0
         closing = False
         closed = asyncio.Event()  # Scribe confirmed our session.close
-        last_audio_at = time.monotonic()
+        last_audio_at = time.monotonic()  # last audio sent, input or silence
+        last_input_at = time.monotonic()  # last input audio sent
+        gap_filled = False  # silence already sent for the current input gap
         session_audio_s = 0.0  # audio sent on the current Scribe session, keepalive included
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing, last_audio_at
+            nonlocal closing, last_audio_at, last_input_at, gap_filled
             # ~50 ms chunks (Scribe recommends ~100 ms; smaller keeps end-of-speech latency low)
             bstream = utils.audio.AudioByteStream(
                 sample_rate=SAMPLE_RATE, num_channels=1, samples_per_channel=SAMPLE_RATE // 20
@@ -484,7 +593,8 @@ class SpeechStream(stt.SpeechStream):
                     for frame in frames:
                         self._audio_duration += frame.duration
                         await ws.send_bytes(frame.data.tobytes())
-                        last_audio_at = time.monotonic()
+                        last_audio_at = last_input_at = time.monotonic()
+                        gap_filled = False
                         # Scribe's audio_*_ms count from the session's first audio. Audio queued
                         # while connecting goes out in a burst, so anchor that 0 ms at the
                         # earliest "now minus audio sent", which is when that audio was captured.
@@ -510,16 +620,32 @@ class SpeechStream(stt.SpeechStream):
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # Scribe Live ends a session after 30 s without audio (e.g. the user muted), and it
             # has no keepalive message, so send a little silence when the input has gone quiet.
-            nonlocal last_audio_at, session_audio_s
-            silence = bytes(SAMPLE_RATE * 2 // 10)  # 100 ms
+            # If input stops while a turn is open, send enough silence for Scribe's VAD to end
+            # the turn now rather than at the next keepalive.
+            nonlocal last_audio_at, session_audio_s, gap_filled
+            keepalive = bytes(SAMPLE_RATE * 2 // 10)  # 100 ms
             try:
                 while not closing:
-                    await asyncio.sleep(KEEPALIVE_INTERVAL_S)
-                    if not closing and time.monotonic() - last_audio_at >= KEEPALIVE_INTERVAL_S:
+                    await asyncio.sleep(INPUT_GAP_S / 2)
+                    if closing:
+                        break
+                    now = time.monotonic()
+                    silence = b""
+                    if (
+                        self._speech_started
+                        and not gap_filled
+                        and now - last_input_at >= INPUT_GAP_S
+                    ):
+                        window_ms = self._opts.silence_duration_ms or 1000
+                        silence = bytes(SAMPLE_RATE * 2 * (window_ms + 100) // 1000)
+                        gap_filled = True
+                    elif now - last_audio_at >= KEEPALIVE_INTERVAL_S:
+                        silence = keepalive
+                    if silence:
                         await ws.send_bytes(silence)
                         self._audio_duration += len(silence) / (2 * SAMPLE_RATE)
                         session_audio_s += len(silence) / (2 * SAMPLE_RATE)
-                        last_audio_at = time.monotonic()
+                        last_audio_at = now
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing or self._zoom._http.closed:
                     return
@@ -642,13 +768,19 @@ class SpeechStream(stt.SpeechStream):
         elif kind == "transcription.completed":
             text = _clean(ev.get("transcript"))
             start_ms, end_ms = ev.get("audio_start_ms") or 0, ev.get("audio_end_ms") or 0
-            speaker_id, metadata = None, None
+            speaker_id: str | None = None
+            metadata: dict[str, Any] | None = None
+            if self._opts.text_polishing:
+                polished = _polished_text(ev)
+                if polished is not None:
+                    metadata = {"transcript": text}
+                    text = polished
             if self._opts.diarization:
                 # One speaker: speaker_id. Several: Scribe sends `speaker_segments`, and
                 # speaker_id is left empty (one field can't name several speakers).
                 spans = ev.get("speaker_segments") or []
                 if spans:
-                    metadata = {"speaker_segments": spans}
+                    metadata = {**(metadata or {}), "speaker_segments": spans}
                 else:
                     speaker_id = ev.get("speaker") or None
             if text and not self._speech_started:
@@ -670,7 +802,7 @@ class SpeechStream(stt.SpeechStream):
                         request_id=ev.get("item_id", ""),
                         alternatives=[
                             stt.SpeechData(
-                                language=LanguageCode(self._opts.language),
+                                language=LanguageCode(ev.get("language") or self._opts.language),
                                 text=text,
                                 start_time=start_ms / 1000
                                 + self.start_time_offset
@@ -704,14 +836,21 @@ class SpeechStream(stt.SpeechStream):
                 logger.warning("Zoom Scribe Live can't label speakers for this session")
         elif kind == "error":
             err = ev.get("error") or {}
-            if err.get("fatal"):
+            # invalid_config means Scribe didn't apply our session.update (e.g. text polishing
+            # for an unsupported locale), so the session can't work: fail without retrying.
+            if err.get("fatal") or str(err.get("code")).lower() == "invalid_config":
                 raise APIStatusError(
                     f"Zoom Scribe Live error: {err.get('message')}",
                     status_code=-1,
                     body=err,
                     retryable=not _is_config_error(err.get("code")),
                 )
-            logger.warning("Zoom Scribe Live: %s (%s)", err.get("message"), err.get("code"))
+            # Scribe's message is kept out of the log text in case it quotes user content.
+            logger.warning(
+                "Zoom Scribe Live warning (%s)",
+                err.get("code"),
+                extra={"lk.pii.message": err.get("message")},
+            )
         elif kind == "session.closed":
             self._report_usage()  # audio sent after the last final transcript
             return True
