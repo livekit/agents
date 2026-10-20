@@ -1,0 +1,21 @@
+tests/test_plugin_sarvam_stt_flush.py
+  s_53f06f44353e8f::t_dd812253694c80 1-142
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_53f06f44353e8f::t_088b7c9814fb0b 1399-1414,1426-1427
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "db9481fc0f1f27b1c0cba0adc3216240a558f7ec",
+  "prompts": {},
+  "sessions": {
+    "s_53f06f44353e8f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11c56-c2b5-7053-adaa-a8ed327c96d4",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
