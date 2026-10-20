@@ -1699,6 +1699,7 @@ async def test_recorder_io_bit_rate_options_default_to_recorder_ios_own_defaults
         assert mock_cls.call_args.kwargs["constant_bit_rate"] is False
         await _cleanup(session)
 
+
 async def test_invalid_recorder_bit_rate_fails_before_claiming_primary_session() -> None:
     """Invalid recorder options must fail before session startup creates room tasks."""
     session = _create_simple_session()
