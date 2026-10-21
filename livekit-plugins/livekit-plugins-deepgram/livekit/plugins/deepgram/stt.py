@@ -32,6 +32,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -313,6 +314,8 @@ class STT(stt.STT):
                 request_id=None,
                 body=None,
             ) from e
+        except (APIStatusError, APIError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -837,13 +840,15 @@ class SpeechStream(stt.SpeechStream):
                 self._conn_options.timeout,
             )
         except asyncio.TimeoutError:
-            raise APIConnectionError("failed to connect to deepgram") from None
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             # RequestInfo carries the request headers, so chaining this error or
             # formatting it puts the API key in the exception repr (#6739).
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except (APIStatusError, APIError):
+            raise
         except Exception as e:
             raise APIConnectionError(
                 f"failed to connect to deepgram ({type(e).__name__})"
