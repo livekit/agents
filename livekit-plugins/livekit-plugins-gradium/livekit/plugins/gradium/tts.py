@@ -44,6 +44,14 @@ SUPPORTED_SAMPLE_RATE = 48000
 # Catalog voice "Everly" (en-us), used when neither `voice` nor `voice_id` is given.
 DEFAULT_VOICE_ID = "vjFyp2BcCyTlUmYb"
 
+# Client-side ping interval. The server answers with pongs; a missing pong (aiohttp
+# allows half the interval) closes the socket, which is how a dead transport is
+# detected while sessions wait for the server, silent itself while it waits for text
+# (a slow LLM, a tool call mid-reply). The server closes sessions that produce nothing
+# for 120s on its own. A false alarm fails every session on the shared socket, so the
+# 5s pong window leaves room for an event loop stalled by inference or GC.
+WS_HEARTBEAT_S = 10.0
+
 # Websocket close codes the server uses for requests it would reject again verbatim:
 # protocol error and unsupported data (unknown model, setup validation). Everything
 # else is worth a retry. 1008 (policy violation) covers the org's concurrency cap,
@@ -112,14 +120,20 @@ def _setup_msg(opts: _TTSOptions, model_name: str, client_req_id: str) -> dict[s
 
 
 async def _consume_session(
-    ws: aiohttp.ClientWebSocketResponse, *, on_audio: Callable[[bytes], None]
+    ws: aiohttp.ClientWebSocketResponse,
+    *,
+    ready_timeout: float,
+    on_audio: Callable[[bytes], None],
 ) -> None:
     """Consume one session's frames until its end_of_stream.
 
-    Raises on an error frame, on a transport error and on the socket closing first.
+    `ready_timeout` bounds the wait for the server's `ready` only. After that the
+    session waits as long as the socket lives: the server is silent while it waits for
+    text (a slow LLM), and a dead socket is noticed by the heartbeat.
     """
+    ready = False
     while True:
-        msg = await ws.receive()
+        msg = await (ws.receive() if ready else asyncio.wait_for(ws.receive(), ready_timeout))
         if msg.type == aiohttp.WSMsgType.ERROR:
             raise APIConnectionError("Gradium websocket error") from ws.exception()
         if msg.type in (
@@ -144,7 +158,9 @@ async def _consume_session(
             return
         elif type_ == "error":
             raise _api_error(msg_data)
-        elif type_ in ("text", "ready"):
+        elif type_ == "ready":
+            ready = True
+        elif type_ == "text":
             # TODO(laurent): handle text timestamps?
             pass
         else:
@@ -239,7 +255,8 @@ class TTS(tts.TTS):
             self._ensure_session().ws_connect(
                 self._model_endpoint,
                 headers=ws_headers(self._api_key),
-                timeout=aiohttp.ClientWSTimeout(ws_receive=timeout, ws_close=10),
+                heartbeat=WS_HEARTBEAT_S,
+                timeout=aiohttp.ClientWSTimeout(ws_close=10),
             ),
             timeout,
         )
@@ -310,7 +327,9 @@ class ChunkedStream(tts.ChunkedStream):
                 flush_msg = {"type": "end_of_stream", "client_req_id": client_req_id}
                 await ws.send_str(json.dumps(flush_msg))
 
-                await _consume_session(ws, on_audio=output_emitter.push)
+                await _consume_session(
+                    ws, ready_timeout=self._conn_options.timeout, on_audio=output_emitter.push
+                )
                 output_emitter.flush()
 
         except asyncio.TimeoutError:
@@ -407,7 +426,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps(flush_msg))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            await _consume_session(ws, on_audio=output_emitter.push)
+            await _consume_session(
+                ws, ready_timeout=self._conn_options.timeout, on_audio=output_emitter.push
+            )
             output_emitter.end_segment()
 
         async with await self._tts._connect_ws(self._conn_options.timeout) as ws:
