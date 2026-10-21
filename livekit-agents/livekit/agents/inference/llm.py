@@ -659,7 +659,13 @@ class LLMStream(llm.LLMStream):
                 if not tool.function:
                     continue
 
-                if self._tool_call_id and tool.id and tool.index != self._tool_index:
+                # A call with another index or another id starts a new call; some providers
+                # send no index, so then only the id can tell the calls apart.
+                if (
+                    self._tool_call_id
+                    and tool.id
+                    and (tool.index != self._tool_index or tool.id != self._tool_call_id)
+                ):
                     completed.append(
                         llm.FunctionToolCall(
                             arguments=self._fnc_raw_arguments or "",
