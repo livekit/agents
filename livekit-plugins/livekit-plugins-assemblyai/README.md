@@ -31,9 +31,14 @@ session = AgentSession(
 
 ### Speech-to-text
 
-`assemblyai.STT` streams Universal-3.6 Pro by default (`model`). Useful options: `mode`
-(`"min_latency"`, `"balanced"` or `"max_accuracy"`), `language_detection` or `language_code`, and
-`keyterms_prompt` to boost names and terms the model should get right.
+`assemblyai.STT` streams Universal-3.6 Pro by default (`model`). Useful options:
+
+- `mode`: `"min_latency"`, `"balanced"` or `"max_accuracy"`.
+- `language_codes`: steer transcription toward one or more expected languages (`"es"` or
+  `["en", "es"]`).
+- `prompt`: free-text instructions for how to transcribe (Universal-3 Pro models, up to 1,750
+  characters).
+- `keyterms_prompt`: names and terms the model should get right.
 
 ### Text-to-speech
 
