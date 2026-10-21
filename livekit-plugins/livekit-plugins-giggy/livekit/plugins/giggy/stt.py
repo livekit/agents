@@ -5,8 +5,12 @@ import json
 import math
 import os
 import re
+import tempfile
+import threading
+import wave
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from typing import BinaryIO
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -253,14 +257,76 @@ class STT(stt.STT):
         if rate <= 0 or any(frame.sample_rate != rate for frame in frames):
             raise ValueError("Giggy STT requires consistent positive input sample rates.")
         duration = sum(frame.samples_per_channel for frame in frames) / rate
-        if not 0.5 <= duration <= 30:
-            raise ValueError("Giggy STT accepts utterances from 0.5 to 30 seconds.")
-        # Bound the utterance before allocating a merged frame, resampled PCM or WAV.
-        frame = rtc.combine_audio_frames(frames)
-        if frame.sample_rate != SAMPLE_RATE:
-            resampler = rtc.AudioResampler(frame.sample_rate, SAMPLE_RATE, num_channels=1)
-            frame = rtc.combine_audio_frames(resampler.push(frame) + resampler.flush())
+        if not 0.5 <= duration <= 43200:
+            raise ValueError("Giggy STT accepts recordings from 0.5 seconds to 12 hours.")
         session = self._ensure_session()
+        cancelled = threading.Event()
+        # Stage native WAV on disk without copying or merging the full recording.
+        # Await the encoder on cancellation so it cannot write to a closed file.
+        # A concrete binary file is recognized by aiohttp on Windows as well.
+        with (
+            tempfile.TemporaryFile(mode="w+b") as temporary,
+            open(temporary.fileno(), "r+b", closefd=False) as recording,
+        ):
+            encoding = asyncio.create_task(
+                asyncio.to_thread(self._encode_wav, frames, recording, cancelled)
+            )
+            try:
+                samples = await asyncio.shield(encoding)
+            except BaseException:
+                cancelled.set()
+                await asyncio.gather(encoding, return_exceptions=True)
+                raise
+            return await self._transcribe_wav(
+                session, recording, samples, selected_language, conn_options
+            )
+
+    def _encode_wav(
+        self, frames: list[rtc.AudioFrame], destination: BinaryIO, cancelled: threading.Event
+    ) -> int:
+        rate = frames[0].sample_rate
+        resampler = (
+            rtc.AudioResampler(rate, SAMPLE_RATE, num_channels=1) if rate != SAMPLE_RATE else None
+        )
+        samples = 0
+        with wave.open(destination, "wb") as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(SAMPLE_RATE)
+            for frame in frames:
+                source = frame.data.cast("B")
+                for start in range(0, len(source), 8192):
+                    if cancelled.is_set():
+                        raise asyncio.CancelledError
+                    pcm = source[start : start + 8192]
+                    if resampler is None:
+                        writer.writeframesraw(pcm)
+                        samples += len(pcm) // 2
+                    else:
+                        chunk = rtc.AudioFrame(
+                            data=pcm,
+                            sample_rate=rate,
+                            num_channels=1,
+                            samples_per_channel=len(pcm) // 2,
+                        )
+                        for output in resampler.push(chunk):
+                            writer.writeframesraw(output.data)
+                            samples += output.samples_per_channel
+            if resampler is not None:
+                for output in resampler.flush():
+                    writer.writeframesraw(output.data)
+                    samples += output.samples_per_channel
+        destination.seek(0)
+        return samples
+
+    async def _transcribe_wav(
+        self,
+        session: aiohttp.ClientSession,
+        recording: BinaryIO,
+        samples: int,
+        selected_language: str | None,
+        conn_options: APIConnectOptions,
+    ) -> stt.SpeechEvent:
         headers = {"xi-api-key": self._api_key}
         request_id = str(uuid4())
         params = {"mode": "streaming", "client_request_id": request_id}
@@ -282,7 +348,7 @@ class STT(stt.STT):
                 GIGGY_ORIGIN + "/v1/audio/transcriptions",
                 params=params,
                 headers={**headers, "Content-Type": "audio/wav", "Accept": "text/event-stream"},
-                data=frame.to_wav_bytes(),
+                data=recording,
                 timeout=timeout,
                 allow_redirects=False,
             ) as response:
@@ -395,7 +461,7 @@ class STT(stt.STT):
                 or result["text"] != final_text
                 or (
                     type(result.get("audio_duration_ms")) is not int
-                    or result["audio_duration_ms"] != math.ceil(frame.samples_per_channel / 16)
+                    or result["audio_duration_ms"] != math.ceil(samples / 16)
                 )
             ):
                 raise ValueError("Invalid canonical transcript")
@@ -420,7 +486,7 @@ class STT(stt.STT):
                         if languages
                         else LanguageCode(selected_language or ""),
                         source_languages=languages,
-                        end_time=frame.samples_per_channel / SAMPLE_RATE,
+                        end_time=samples / SAMPLE_RATE,
                     )
                 ],
             )

@@ -63,8 +63,10 @@ Direct callers can also use `await recognizer.recognize(audio_frame)`.
 
 Recognition accepts mono LiveKit audio frames, resamples to native 16 kHz PCM16
 when necessary, and uploads a complete WAV without padding. Audio must be at
-least 0.5 seconds and at most 30 seconds for this utterance provider. The duration
-bound is checked before merging or encoding frames, keeping allocations bounded.
+least 0.5 seconds and at most 12 hours, matching V21's uploaded-recording limit.
+Encoding stages the WAV in a temporary file using bounded audio chunks, and
+aiohttp streams the file upload without merging the full recording in memory.
+The separate live-microphone protocol's 30-second limit does not apply here.
 Configure VAD to capture valid utterances. The default overall recognition
 deadline is 90 seconds; `recognition_timeout` can be set explicitly.
 `APIConnectOptions.timeout` controls connection acquisition, socket connection,

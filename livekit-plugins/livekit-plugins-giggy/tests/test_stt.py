@@ -95,7 +95,16 @@ def session(monkeypatch):
     client.auth = None
     client.headers = {}
     client.cookie_jar = []
+    client.uploads = []
     client.post.return_value = Response(transcript_events())
+
+    def capture_upload(*args, **kwargs):
+        source = kwargs["data"]
+        client.uploads.append(source.read())
+        source.seek(0)
+        return client.post.return_value
+
+    client.post.side_effect = capture_upload
     client.get.side_effect = [
         Response(
             {
@@ -159,7 +168,7 @@ async def test_stt_native_request(session, language, rate, monkeypatch):
     }
     assert kwargs["allow_redirects"] is False
     assert kwargs["timeout"].sock_read == 7
-    with wave.open(io.BytesIO(kwargs["data"]), "rb") as wav:
+    with wave.open(io.BytesIO(session.uploads[0]), "rb") as wav:
         assert (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) == (16000, 1, 2)
         assert wav.getnframes() == 8000
     expected_language = {
@@ -456,11 +465,35 @@ async def test_stt_cookie_session_rejected(session):
     session.post.assert_not_called()
 
 
-async def test_stt_utterance_bound_before_merging(session, monkeypatch):
+async def test_stt_long_recording_without_merging(session, monkeypatch):
     frames = [audio()] * 61  # 30.5 seconds without allocating a long recording.
-    merger = MagicMock()
+    merger = MagicMock(side_effect=AssertionError("Recordings must not be merged in memory"))
     monkeypatch.setattr(rtc, "combine_audio_frames", merger)
-    with pytest.raises(ValueError, match="30 seconds"):
-        await giggy.STT(api_key=KEY, http_session=session).recognize(frames)
+    session.get.side_effect = [
+        Response(
+            {
+                "generation": {
+                    "generation_uuid": GENERATION,
+                    "status": "completed",
+                    "result": {"url": RESULT_URL},
+                }
+            }
+        ),
+        Response({"text": "Hello LiveKit.", "languages": ["English"], "audio_duration_ms": 30500}),
+    ]
+    result = await giggy.STT(api_key=KEY, http_session=session).recognize(frames)
+    assert result.alternatives[0].end_time == 30.5
+    with wave.open(io.BytesIO(session.uploads[0]), "rb") as wav:
+        assert wav.getnframes() == 488000
     merger.assert_not_called()
+
+
+async def test_stt_recording_api_limit_checked_before_encoding(session, monkeypatch):
+    frames = [audio()] * 86401  # 12 hours plus 0.5 seconds, using shared frame references.
+    provider = giggy.STT(api_key=KEY, http_session=session)
+    encoder = MagicMock()
+    monkeypatch.setattr(provider, "_encode_wav", encoder, raising=False)
+    with pytest.raises(ValueError, match="12 hours"):
+        await provider.recognize(frames)
+    encoder.assert_not_called()
     session.post.assert_not_called()
