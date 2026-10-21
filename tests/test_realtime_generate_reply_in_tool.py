@@ -211,3 +211,97 @@ async def test_awaiting_deferred_generate_reply_in_tool_raises() -> None:
             await asyncio.sleep(0)
 
         await asyncio.wait_for(speech.wait_for_playout(), timeout=5)
+
+
+def _deferring_model() -> FakeRealtimeModel:
+    return FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            audio_output=False,
+            auto_tool_reply_generation=False,
+            generate_reply_during_tool_call=False,
+        )
+    )
+
+
+async def _drain(model: FakeRealtimeModel, speech) -> None:  # type: ignore[no-untyped-def]
+    for _ in range(500):
+        for fut in model.active_session._reply_futs[1:]:
+            if not fut.done():
+                fut.set_result(_text_generation(response_id="f", text="ok", message_id="f"))
+        if speech.done():
+            return
+        await asyncio.sleep(0)
+
+
+async def test_interrupt_cancels_deferred_generate_reply_in_tool() -> None:
+    model = _deferring_model()
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+    handles: list = []
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def next_topic(self) -> str:
+            """Move on to the next topic."""
+            handles.append(self.session.generate_reply(instructions="Introduce cafes."))
+            tool_started.set()
+            await release_tool.wait()
+            return "ok"
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(ToolAgent())
+
+        speech = session.generate_reply()
+        await _wait_for_reply_fut(model, min_count=1)
+        model.active_session._reply_futs[0].set_result(_tool_generation(tool_name="next_topic"))
+        await asyncio.wait_for(tool_started.wait(), timeout=5)
+
+        session.interrupt(force=True)
+        assert handles[0].interrupted
+        assert not session._activity._deferred_tool_replies  # type: ignore[union-attr]
+
+        release_tool.set()
+        await _drain(model, speech)
+
+    assert handles[0].interrupted
+
+
+async def test_failed_tool_output_sync_cancels_deferred_generate_reply() -> None:
+    from livekit.agents.llm import RealtimeError
+
+    model = _deferring_model()
+    handles: list = []
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def next_topic(self) -> str:
+            """Move on to the next topic."""
+            handles.append(self.session.generate_reply(instructions="Introduce cafes."))
+            model.active_session.update_error = RealtimeError("sync failed")
+            return "ok"
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(ToolAgent())
+
+        speech = session.generate_reply()
+        await _wait_for_reply_fut(model, min_count=1)
+        model.active_session._reply_futs[0].set_result(_tool_generation(tool_name="next_topic"))
+        await _drain(model, speech)
+        for _ in range(200):
+            if handles and handles[0].done():
+                break
+            await asyncio.sleep(0)
+
+        assert handles
+        # the function call is still open server-side: the in-tool reply must not go out
+        assert handles[0].interrupted
+        assert "function_call_output" not in model.active_session.event_log
+        model.active_session.update_error = None

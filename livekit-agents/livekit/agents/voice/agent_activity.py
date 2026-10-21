@@ -1978,6 +1978,8 @@ class AgentActivity(RecognitionHooks):
                 ``force`` is False.
         """
         self._cancel_preemptive_generation()
+        # replies deferred until a tool output (#7915) must not outlive an interrupt
+        self._cancel_deferred_tool_replies()
 
         future = asyncio.Future[None]()
 
@@ -4952,11 +4954,13 @@ class AgentActivity(RecognitionHooks):
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
                     run_state._watch_handle(task)
 
+                tool_outputs_synced = False
                 try:
                     async with self._rt_chat_ctx_lock:
                         chat_ctx = self._rt_session.chat_ctx.copy()
                         chat_ctx.items.extend(new_fnc_outputs)
                         await self._rt_session.update_chat_ctx(chat_ctx)
+                    tool_outputs_synced = True
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to update chat context before generating the function calls results",  # noqa: E501
@@ -4967,8 +4971,13 @@ class AgentActivity(RecognitionHooks):
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
 
-                # tool outputs are on the server: release replies deferred for #7915
-                self._flush_deferred_tool_replies()
+                if tool_outputs_synced:
+                    # tool outputs are on the server: release replies deferred for #7915
+                    self._flush_deferred_tool_replies()
+                else:
+                    # the function call is still open server-side; a reply now would be
+                    # cancelled or answer without the tool output
+                    self._cancel_deferred_tool_replies()
 
             tool_reply_expected = fnc_executed_ev.has_tool_reply
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
