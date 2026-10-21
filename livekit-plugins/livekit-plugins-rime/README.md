@@ -25,7 +25,8 @@ STT uses the Rime Python SDK. Install the `stt` extra:
 pip install 'livekit-plugins-rime[stt]'
 ```
 
-The extra installs `rimelabs-sdk>=0.1.0a16`, which provides `stt.transcribe()`.
+The extra installs `rimelabs-sdk>=0.1.0a18`, which provides unary transcription,
+revised-hypothesis streaming, and append-fragment streaming.
 
 ```python
 from livekit.agents import AgentSession
@@ -82,13 +83,8 @@ session = AgentSession(
 )
 ```
 
-**SDK availability:** append fragments require an SDK build exposing
-`TranscriptionOutputContract`, merged into SDK `main` in
-[PR #88](https://github.com/rimelabs/rime-sdk/pull/88) (commit `369f04d`).
-The plugin's existing dependency floor guarantees unary and revised streaming,
-not append support; merging SDK source does not establish a published release minimum. Selecting append mode with an older
-SDK raises an actionable import error. No local SDK source override is added to
-this workspace or its lockfile.
+Append-fragment support is available in the published `rimelabs-sdk>=0.1.0a18`
+installed by the `stt` extra; no SDK source checkout is required.
 
 The plugin concatenates deltas exactly, preserving spaces and newlines, and sends
 cumulative `INTERIM_TRANSCRIPT` snapshots to LiveKit. Revised hypotheses replace
@@ -107,8 +103,11 @@ Options and merged session keyterms are captured at each utterance start.
 Streaming timeouts include speaking and upload time: use a sufficiently long
 `stt_conn_options.timeout` (the example uses 120 seconds). Live audio is never
 replayed automatically, regardless of `max_retry`. SDK errors retain the request
-ID without including provider messages. Pending upload audio is bounded to ten
-seconds; overflow fails explicitly. SDK/service duration and size limits still
+ID without including provider messages. Later utterances upload while earlier
+requests finish; transcripts are published in utterance order. While waiting to publish, only the latest cumulative interim
+snapshot is retained per utterance. Pending upload audio is bounded to ten seconds
+across all requests, and at most eight utterances may await completion/publication;
+overflow fails explicitly. SDK/service duration and size limits still
 apply. The caller retains ownership of the supplied VAD.
 
 ## Streaming WebSocket v1 API

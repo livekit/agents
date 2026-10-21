@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
+import rimelabs_sdk as sdk
 
 from livekit import rtc
 from livekit.agents import (
@@ -29,7 +30,6 @@ from livekit.plugins import rime
 
 pytestmark = pytest.mark.unit
 
-sdk = pytest.importorskip("rimelabs_sdk", reason="Rime STT requires the stt extra")
 
 NO_RETRY = APIConnectOptions(max_retry=0, timeout=2)
 

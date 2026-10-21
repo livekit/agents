@@ -2,15 +2,13 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+import rimelabs_sdk as sdk
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIStatusError, stt, vad
 from livekit.plugins import rime
 
 pytestmark = pytest.mark.unit
-sdk = pytest.importorskip("rimelabs_sdk")
-if not hasattr(sdk, "TranscriptionOutputContract"):
-    pytest.skip("Requires the append-fragment SDK build", allow_module_level=True)
 
 
 class DetectorStream:
@@ -343,3 +341,219 @@ async def test_flush_restarts_vad_and_resamples_live_frames(setup, monkeypatch):
         assert all(d.closed for d in detectors)
     finally:
         await owner.aclose()
+
+
+async def wait_until(predicate):
+    async def poll():
+        while not predicate():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(poll(), 2)
+
+
+@pytest.mark.parametrize("contract", ["append_fragments", "revised_hypotheses"])
+async def test_later_utterance_uploads_while_first_final_waits(setup, monkeypatch, contract):
+    owner, detector, streams, _, _, _ = setup
+    owner._output_contract = contract
+    release = asyncio.Event()
+    first_eof = asyncio.Event()
+    second_done = asyncio.Event()
+
+    async def delayed(self):
+        first = self is streams[0]
+        self.request_id = "first" if first else "second"
+        text = ""
+        async for chunk in self.source:
+            self.audio.append(chunk)
+            text += "a" if first else "b"
+            if contract == "append_fragments":
+                yield sdk.TranscriptionDelta(text="a" if first else "b")
+            else:
+                yield sdk.TranscriptionPartial(text=text)
+        if first:
+            first_eof.set()
+            await release.wait()
+        yield sdk.TranscriptionFinal(text=text, language=self.options["language"])
+        if not first:
+            second_done.set()
+
+    monkeypatch.setattr(SDKStream, "updates", delayed)
+    stream = owner.stream(conn_options=APIConnectOptions(timeout=120))
+    observed = []
+
+    async def collect():
+        async for event in stream:
+            observed.append(event)
+
+    reader = asyncio.create_task(collect())
+    try:
+        detector.send(vad.VADEventType.START_OF_SPEECH, b"aa")
+        await wait_until(lambda: streams and streams[0].audio)
+        detector.send(vad.VADEventType.END_OF_SPEECH, b"aa")
+        await asyncio.wait_for(first_eof.wait(), 2)
+        owner.update_options(mode="verbatim", language="es", context_terms=["Second"])
+        detector.send(vad.VADEventType.START_OF_SPEECH, bytes(32000))
+        await wait_until(lambda: len(streams) == 2 and len(streams[1].audio) == 1)
+        # Eleven seconds consumed while the previous final is still unavailable.
+        for count in range(2, 12):
+            detector.send(vad.VADEventType.INFERENCE_DONE, bytes(32000))
+            await wait_until(lambda count=count: len(streams[1].audio) == count)
+        detector.send(vad.VADEventType.END_OF_SPEECH, bytes(352000))
+        await asyncio.wait_for(second_done.wait(), 2)
+        await wait_until(
+            lambda: sum(e.type == stt.SpeechEventType.END_OF_SPEECH for e in observed) == 2
+        )
+        assert sum(e.type == stt.SpeechEventType.START_OF_SPEECH for e in observed) == 2
+        assert not any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in observed)
+        assert streams[1].options["language"] == "es"
+        assert streams[1].options["mode"] == sdk.TranscriptionMode.VERBATIM
+        assert streams[1].options["context_terms"] == ("Second",)
+        ends = [e.speech_end_time for e in observed if e.type == stt.SpeechEventType.END_OF_SPEECH]
+        stream.end_input()
+        release.set()
+        await asyncio.wait_for(reader, 2)
+        finals = [e for e in observed if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+        assert [e.request_id for e in finals] == ["first", "second"]
+        assert [e.alternatives[0].text for e in finals] == ["a", "b" * 11]
+        assert [e.speech_end_time for e in finals] == ends
+        usage = [e.recognition_usage.audio_duration for e in observed if e.recognition_usage]
+        assert usage == pytest.approx([1 / 16000, 11])
+        assert all(s.closed for s in streams)
+    finally:
+        await owner.aclose()
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+
+
+@pytest.mark.parametrize("failing", [0, 1, None])
+async def test_parallel_requests_cancel_on_error_or_close(setup, monkeypatch, failing):
+    owner, detector, streams, _, _, _ = setup
+    fail_now = asyncio.Event()
+
+    async def delayed(self):
+        index = streams.index(self)
+        async for chunk in self.source:
+            self.audio.append(chunk)
+        await fail_now.wait()
+        if index == failing:
+            raise sdk.RimeUnavailableError("private-provider-content", request_id="failed-request")
+        await asyncio.Event().wait()
+        yield  # keep this an async generator
+
+    monkeypatch.setattr(SDKStream, "updates", delayed)
+    stream = owner.stream()
+    observed = []
+
+    async def collect():
+        async for event in stream:
+            observed.append(event)
+
+    reader = asyncio.create_task(collect())
+    try:
+        for count in (1, 2):
+            detector.send(vad.VADEventType.START_OF_SPEECH, b"aa")
+            detector.send(vad.VADEventType.END_OF_SPEECH, b"aa")
+            await wait_until(lambda count=count: len(streams) == count and streams[-1].audio)
+        if failing is None:
+            await owner.aclose()
+        else:
+            fail_now.set()
+            with pytest.raises(APIStatusError):
+                await asyncio.wait_for(reader, 2)
+        assert all(s.closed for s in streams)
+        assert detector.closed
+        assert not any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in observed)
+    finally:
+        await owner.aclose()
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+
+
+async def test_flush_accepts_new_audio_before_previous_final(setup, monkeypatch):
+    owner, _, streams, _, _, _ = setup
+    release = asyncio.Event()
+    first_eof = asyncio.Event()
+    second_eof = asyncio.Event()
+
+    class LiveDetector(DetectorStream):
+        def push_frame(self, frame):
+            self.send(vad.VADEventType.START_OF_SPEECH, bytes(frame.data))
+
+    owner._vad = SimpleNamespace(stream=LiveDetector)
+
+    async def delayed(self):
+        async for chunk in self.source:
+            self.audio.append(chunk)
+        if self is streams[0]:
+            first_eof.set()
+            await release.wait()
+        else:
+            second_eof.set()
+        yield sdk.TranscriptionFinal(text=str(streams.index(self)), language="en")
+
+    monkeypatch.setattr(SDKStream, "updates", delayed)
+    stream = owner.stream()
+    frame = rtc.AudioFrame(
+        data=bytes(3200), sample_rate=16000, num_channels=1, samples_per_channel=1600
+    )
+    observed = []
+
+    async def collect():
+        async for event in stream:
+            observed.append(event)
+
+    reader = asyncio.create_task(collect())
+    try:
+        stream.push_frame(frame)
+        stream.flush()
+        await asyncio.wait_for(first_eof.wait(), 2)
+        stream.push_frame(frame)
+        stream.end_input()
+        await asyncio.wait_for(second_eof.wait(), 2)
+        assert not any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in observed)
+        release.set()
+        await asyncio.wait_for(reader, 2)
+        assert [
+            e.alternatives[0].text
+            for e in observed
+            if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        ] == ["0", "1"]
+    finally:
+        await owner.aclose()
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+
+
+async def test_pending_utterances_are_bounded(setup, monkeypatch):
+    from livekit.agents import APIError
+
+    owner, detector, streams, _, _, _ = setup
+
+    async def delayed(self):
+        async for chunk in self.source:
+            self.audio.append(chunk)
+        await asyncio.Event().wait()
+        yield
+
+    monkeypatch.setattr(SDKStream, "updates", delayed)
+    stream = owner.stream()
+
+    async def collect():
+        return [event async for event in stream]
+
+    reader = asyncio.create_task(collect())
+    try:
+        for count in range(1, 9):
+            detector.send(vad.VADEventType.START_OF_SPEECH, b"aa")
+            detector.send(vad.VADEventType.END_OF_SPEECH, b"aa")
+            await wait_until(lambda count=count: len(streams) == count and streams[-1].audio)
+        detector.send(vad.VADEventType.START_OF_SPEECH, b"aa")
+        with pytest.raises(APIError, match="pending utterance limit"):
+            await asyncio.wait_for(reader, 2)
+        assert len(streams) == 8
+        assert all(s.closed for s in streams)
+        assert detector.closed
+    finally:
+        await owner.aclose()
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
