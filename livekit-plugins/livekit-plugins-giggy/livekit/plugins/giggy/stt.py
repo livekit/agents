@@ -284,6 +284,7 @@ class STT(stt.STT):
     def _encode_wav(
         self, frames: list[rtc.AudioFrame], destination: BinaryIO, cancelled: threading.Event
     ) -> int:
+        """Stage native WAV in bounded chunks and return the encoded sample count."""
         rate = frames[0].sample_rate
         resampler = (
             rtc.AudioResampler(rate, SAMPLE_RATE, num_channels=1) if rate != SAMPLE_RATE else None
@@ -327,6 +328,7 @@ class STT(stt.STT):
         selected_language: str | None,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
+        """Upload the staged WAV and verify the completed transcript artifact."""
         headers = {"xi-api-key": self._api_key}
         request_id = str(uuid4())
         params = {"mode": "streaming", "client_request_id": request_id}
