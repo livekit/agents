@@ -169,7 +169,6 @@ async def test_machine_fallbacks_and_uncertain_keep_the_silence_wait(reason: str
             AMDCategory.MACHINE_SCREENING if reason == "reused" else AMDCategory.UNCERTAIN
         )
         assert prediction.stage == AMDCategory.MACHINE_SCREENING
-        assert not prediction.state_changed
         assert await reply
         assert ctx.items[-1].extra["amd_stage"] == "machine-screening"
         assert not playback_allowed(session)
@@ -816,7 +815,7 @@ async def test_untranscribed_speech_restarts_idle_timer(source: str) -> None:
             assert detector.lifecycle is AMDLifecycle.ACTIVE
             result = await asyncio.wait_for(detector.execute(), 0.2)
             assert result.reason == "idle_timeout"
-            assert result.turn_id == 0
+            assert result.last_prediction is None
     finally:
         await session.aclose()
 

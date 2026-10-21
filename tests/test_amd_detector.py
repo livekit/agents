@@ -52,7 +52,7 @@ from .fake_tts import FakeTTS
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent, pytest.mark.virtual_time]
 
 
-def test_prediction_event_carries_stage_and_state_changed() -> None:
+def test_prediction_event_carries_its_stage() -> None:
     event = AMDPredictionEvent(
         category=AMDCategory.WAIT,
         reason="prediction",
@@ -61,22 +61,18 @@ def test_prediction_event_carries_stage_and_state_changed() -> None:
         delay=0,
     )
     assert event.stage is AMDCategory.UNCERTAIN
-    assert event.state_changed is False
     dumped = json.loads(event.model_dump_json())
     assert dumped["stage"] == "uncertain"
-    assert dumped["state_changed"] is False
 
     event = AMDPredictionEvent(
         category=AMDCategory.MACHINE_VM,
         stage=AMDCategory.MACHINE_VM,
-        state_changed=True,
-        prev_turn_category=AMDCategory.UNCERTAIN,
         reason="prediction",
         transcript="hello",
         speech_duration=0,
         delay=0,
     )
-    assert event.model_dump()["state_changed"] is True
+    assert event.model_dump()["stage"] == "machine-vm"
 
 
 class ClassifierLLM(FakeLLM):
@@ -494,7 +490,7 @@ async def test_a_fallback_is_uncertain_and_a_reuse_repeats_the_prediction(reason
         classifier.prediction(1, AMDCategory.MACHINE_VM)
         await asyncio.wait_for(detector._should_reply(1, llm.ChatContext()), 2)
         first = events[-1]
-        assert first.state_changed
+        assert first.stage is AMDCategory.MACHINE_VM
 
         if reason == "reused":
             commit_turn(detector, end_of_turn(""))
@@ -510,16 +506,12 @@ async def test_a_fallback_is_uncertain_and_a_reuse_repeats_the_prediction(reason
         # a turn with no prediction is unknown; an empty turn repeats the last one
         expected = AMDCategory.MACHINE_VM if reason == "reused" else AMDCategory.UNCERTAIN
         assert fallback.category == expected
-        assert fallback.prev_turn_category == AMDCategory.MACHINE_VM
-        assert fallback.prev_stage_category == AMDCategory.UNCERTAIN
-        assert not fallback.state_changed
-        assert fallback.model_dump()["state_changed"] is False
+        assert fallback.stage is first.stage
 
         await detector.aclose()
         completed = await detector.execute()
         latest = first if reason == "reused" else fallback
-        assert completed.turn_id == latest.turn_id
-        assert completed.prev_turn_category == latest.prev_turn_category
+        assert completed.last_prediction == latest
 
 
 @pytest.mark.asyncio
@@ -1235,7 +1227,8 @@ async def test_empty_turn_does_not_cancel_a_pending_terminal_prediction() -> Non
         assert detector._turns[2].prediction is None
         classifier.prediction(1, AMDCategory.HUMAN)
         result = await asyncio.wait_for(detector.execute(), 2)
-        assert result.turn_id == 1
+        assert result.last_prediction is not None
+        assert result.last_prediction.turn_id == 1
         assert result.category == AMDCategory.HUMAN
 
 
@@ -2004,7 +1997,9 @@ async def test_superseded_inference_keeps_the_classification_context() -> None:
         assert classifier.responses[1].cancelled()
         classifier.prediction(2, AMDCategory.HUMAN)
         assert await hooks.should_reply(llm.ChatContext())
-        assert (await detector.execute()).transcript == request.current_turn.text_content
+        result = await detector.execute()
+        assert result.last_prediction is not None
+        assert result.last_prediction.transcript == request.current_turn.text_content
 
 
 @pytest.mark.asyncio
@@ -2048,7 +2043,6 @@ async def test_empty_turns_do_not_cancel_or_count_against_pending_inference(reas
             assert reused.category == source.category
             assert reused.stage == source.stage
             assert reused.transcript == ""
-            assert not reused.state_changed
         assert [(e.turn_id, e.reason) for e in events] == [
             (1, reason),
             (2, "reused"),
@@ -2063,7 +2057,8 @@ async def test_empty_turns_do_not_cancel_or_count_against_pending_inference(reas
             assert (detector.lifecycle is AMDLifecycle.ACTIVE) == (turn_id < final_turn_id)
         result = await asyncio.wait_for(detector.execute(), 2)
         assert result.reason == "max_uncertain_turns"
-        assert result.turn_id == final_turn_id
+        assert result.last_prediction is not None
+        assert result.last_prediction.turn_id == final_turn_id
 
 
 @pytest.mark.asyncio
@@ -2101,7 +2096,6 @@ async def test_inference_error_falls_back_and_uncertain_keeps_the_stage() -> Non
             assert events[-1].reason == reason
             assert detector._state is state
             assert events[-1].stage is state
-            assert not events[-1].state_changed
             # the stage instructions still apply while the stage is kept
             assert ctx.items[-1].text_content == _DEFAULT_VOICEMAIL_INSTRUCTIONS
             assert events[-1].category is AMDCategory.UNCERTAIN
@@ -2382,7 +2376,7 @@ async def test_split_screening_rollover_retains_all_turns() -> None:
             classifier.prediction(index, category)
             await eventually(lambda turn_id=index: detector._turns[turn_id].prediction is not None)
         assert detector._state == AMDCategory.MACHINE_VM
-        assert detector._turns[4].prediction.prev_stage_category == AMDCategory.MACHINE_SCREENING
+        assert detector._previous_stage == AMDCategory.MACHINE_SCREENING
         assert detector._turns[3].prediction.category == AMDCategory.UNCERTAIN
         assert detector._turns[3].prediction.stage == AMDCategory.MACHINE_SCREENING
 
@@ -2494,7 +2488,8 @@ async def test_prediction_listener_cannot_mutate_saved_decision() -> None:
         await detector.aclose()
         result = await detector.execute()
         assert result.category == AMDCategory.MACHINE_VM
-        assert result.transcript == "hello"
+        assert result.last_prediction is not None
+        assert result.last_prediction.transcript == "hello"
 
 
 @pytest.mark.asyncio
@@ -2711,7 +2706,8 @@ async def test_human_instructions_remember_machine_history(bridge: AMDCategory) 
                 else:
                     assert ctx.items[-1].extra["amd_stage"] == "machine-screening"
         assert ctx.items[-1].text_content == _DEFAULT_HUMAN_INSTRUCTIONS
-        assert (await detector.execute()).prev_stage_category == AMDCategory.MACHINE_SCREENING
+        await detector.execute()
+        assert detector._previous_stage == AMDCategory.MACHINE_SCREENING
 
 
 @pytest.mark.asyncio
@@ -2752,7 +2748,6 @@ async def test_wait_skips_reply_and_allows_a_fresh_prediction(
         assert events[:-1] == predictions
         assert events[-1].category is AMDCategory.WAIT
         assert events[-1].stage is previous
-        assert not events[-1].state_changed
         assert not detector._reply_held_at(asyncio.get_running_loop().time())
         assert detector._voicemail_turn_id is None
         assert model.calls.empty()

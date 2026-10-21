@@ -90,8 +90,8 @@ async def test_correction_uses_current_turn_and_persists(
         prediction = detector._turns[current_turn].prediction
         assert prediction.reason == AMDReason.PREDICTION
         assert prediction.corrects_stage
-        assert prediction.state_changed
-        assert prediction.prev_stage_category == initial
+        assert prediction.stage is corrected
+        assert detector._previous_stage is initial
         assert prediction.inference_duration is not None
         assert detector._turns[1].prediction == saved_prediction
 

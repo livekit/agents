@@ -65,8 +65,6 @@ async def test_outbound_call_setup(monkeypatch: pytest.MonkeyPatch, outcome: str
     result = AMDCompletedEvent(
         category=category,
         reason=AMDReason.FINISHED if category == AMDCategory.HUMAN else AMDReason.IDLE_TIMEOUT,
-        turn_id=1,
-        transcript="Please leave a message." if outcome == "voicemail" else "Hello.",
         voicemail_message_played=outcome
         in {"voicemail", "voicemail_menu", "human_after_voicemail"},
     )

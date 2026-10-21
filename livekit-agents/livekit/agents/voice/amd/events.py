@@ -67,14 +67,9 @@ class AMDPredictionEvent(BaseModel):
     turn_id: int = 0
     stage: AMDCategory = AMDCategory.UNCERTAIN
     """Stage after this prediction. Never ``wait``."""
-    state_changed: bool = False
-    """Whether this prediction started a new stage."""
     corrects_stage: bool = False
     """Whether this prediction left the recommended transitions to correct an earlier stage."""
-    prev_turn_category: AMDCategory | None = None
-    prev_stage_category: AMDCategory | None = None
     inference_duration: float | None = None
-    voicemail_message_played: bool = False
 
     @property
     def is_human(self) -> bool:
@@ -97,11 +92,9 @@ class AMDCompletedEvent(BaseModel):
     ends the box does not make it ``machine-unavailable``: the category is the stage
     before it, ``machine-vm``, or ``machine-ivr`` after a post-message menu."""
     reason: AMDReason
-    turn_id: int
-    transcript: str
-    prev_turn_category: AMDCategory | None = None
-    prev_stage_category: AMDCategory | None = None
     voicemail_message_played: bool = False
+    last_prediction: AMDPredictionEvent | None = None
+    """The last classified turn's prediction; None when the run ended before one."""
 
 
 class IVRMenuOption(BaseModel):

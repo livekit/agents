@@ -17,7 +17,9 @@ State events carry the accepted speech-boundary time,
 including the STT timestamp when STT controls turn detection.
 
 This replaces the one-shot AMD API. `execute()` now returns `AMDCompletedEvent`,
-not the first `AMDPredictionEvent`. Use `amd_prediction` to observe each prediction.
+not the first `AMDPredictionEvent`: the final `category` and `reason`, whether the
+voicemail message played, and the last classified prediction (`last_prediction`).
+Use `amd_prediction` to observe each prediction.
 The application still decides whether to continue or end the call.
 
 The example hides `end_call` while AMD is active. After voicemail playback, it
@@ -231,7 +233,8 @@ history. The DTMF tool is available only to IVR replies and their tool follow-up
 
 `uncertain` and `wait` are per-turn predictions, not stages. Each
 `amd_prediction` event carries both the `category` predicted for the turn and the
-`stage` AMD keeps after it. `state_changed` is true only when the stage changes.
+`stage` AMD keeps after it; the stage changed when it differs from the previous
+event's `stage`.
 The stage recommends the predictions for the next turn. An uncertain turn in
 voicemail keeps the voicemail stage; a later screening prediction corrects it.
 

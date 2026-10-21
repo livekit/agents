@@ -657,16 +657,12 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             turn_id=turn.turn_id,
             category=self._category,
             stage=self._state,
-            state_changed=state_changed,
             corrects_stage=corrects_stage,
             reason=reason,
             transcript=turn.transcript.transcript,
             speech_duration=turn.speech_duration,
             delay=time.monotonic() - turn.committed_at,
             inference_duration=turn.inference_duration if reason is AMDReason.PREDICTION else None,
-            prev_turn_category=self._latest.category if self._latest else None,
-            prev_stage_category=self._previous_stage,
-            voicemail_message_played=self._voicemail_message_played,
         )
         turn.prediction = event
         if reason is not AMDReason.REUSED:
@@ -681,13 +677,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 update={
                     "turn_id": later.turn_id,
                     "reason": AMDReason.REUSED,
-                    "state_changed": False,
                     "corrects_stage": False,
                     "transcript": later.transcript.transcript,
                     "speech_duration": later.speech_duration,
                     "delay": time.monotonic() - later.committed_at,
                     "inference_duration": None,
-                    "prev_turn_category": events[-1].category,
                 }
             )
             events.append(later.prediction)
@@ -707,10 +701,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._update_idle()
 
         try:
+            if state_changed and (activity := self._session._activity):
+                activity._cancel_preemptive_generation()
 
             def _release_prediction(event: AMDPredictionEvent) -> None:
-                if event.state_changed and (activity := self._session._activity):
-                    activity._cancel_preemptive_generation()
                 self.emit("amd_prediction", event)
                 self._session._on_amd_prediction(event)
                 logger.info(
@@ -1135,11 +1129,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         return AMDCompletedEvent(
             category=category,
             reason=self._completion_reason,
-            turn_id=self._latest.turn_id if self._latest else self._turn_id,
-            transcript=self._latest.transcript if self._latest else "",
-            prev_turn_category=self._latest.prev_turn_category if self._latest else None,
-            prev_stage_category=self._previous_stage,
             voicemail_message_played=self._voicemail_message_played,
+            last_prediction=self._latest,
         )
 
     async def _close_resources(self) -> None:
