@@ -25,6 +25,8 @@ session = AgentSession(
     tts=assemblyai.TTS(model="assemblyai-tts-1", voice="jane"),
     # let AssemblyAI decide when the user has finished speaking
     turn_handling=TurnHandlingOptions(turn_detection="stt"),
+    # use the TTS word timings for the transcript and for what an interrupted reply said
+    use_tts_aligned_transcript=True,
     # ... llm, vad, etc.
 )
 ```
@@ -50,6 +52,8 @@ interrupts. Useful options:
 - `model`: defaults to `assemblyai-tts-1`.
 - `voice_id`: a custom (cloned) voice, instead of `voice`.
 - `base_url`: the US data zone by default; `wss://tts.eu.assemblyai.com` keeps data in the EU.
-- `word_timestamps`: per-word timings for synchronized transcripts (default `True`).
+- `word_timestamps`: per-word timings (default `True`). With
+  `AgentSession(use_tts_aligned_transcript=True)`, LiveKit uses them to sync the transcript and to
+  record an interrupted reply up to the word the user heard.
 
 Call `tts.prewarm()` to open the session before the first reply.
