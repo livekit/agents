@@ -162,6 +162,7 @@ select = [
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
     "RUF006", # asyncio-dangling-task: the event loop only weakly references a bare task
+    "RUF018", # assignment-in-assert: python -O strips the assert, so the name is never bound
 ]
 ignore = ["E501"]
 
