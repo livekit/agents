@@ -290,7 +290,7 @@ async def test_sentence_boundary_stream_forwards_raw_text():
         ("flush", None),
         ("close", None),
     ]
-    
+
 
 async def _sent_close_packet(cancel: bool) -> dict:
     from livekit.plugins.inworld.tts import _InworldConnection
