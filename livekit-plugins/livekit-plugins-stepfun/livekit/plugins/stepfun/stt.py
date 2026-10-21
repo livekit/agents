@@ -527,6 +527,8 @@ class RecognizeStream(stt.RecognizeStream):
         self._commits.clear()
         self._expected_finals = 0
         self._finals_received = 0
+        # Per attempt: a reconnect with nothing to resend has no upload to wait
+        # for. Replayed or new frames set it again.
         self._consumed_audio = False
         self._input_finished_at = 0.0
         self._last_event_at = 0.0
@@ -542,8 +544,9 @@ class RecognizeStream(stt.RecognizeStream):
             try:
                 await self._configure_session(ws)
             except BaseException:
+                # Closing is up to us: the pool only marks the connection for
+                # closing on its next drain.
                 await ws.close()
-                self._stt_impl._pool.remove(ws)
                 raise
 
             tasks = [
@@ -708,8 +711,8 @@ class RecognizeStream(stt.RecognizeStream):
         for frame in frames:
             self._uncommitted_audio = True
             duration = frame.samples_per_channel / frame.sample_rate
-            self._audio_duration += duration
             self._attempt_audio += duration
+            self._audio_duration += duration
             await self._append(ws, frame.data.tobytes())
 
         if flushing:
@@ -787,10 +790,10 @@ class RecognizeStream(stt.RecognizeStream):
         return self._expected_finals > 0 and time.monotonic() < self._end_input_grace_deadline()
 
     def _speech_at_risk(self) -> bool:
-        """A fresh session cannot recover any audio consumed by this attempt.
+        """Whether a retry could lose speech.
 
-        Speech detection is asynchronous; absent speech events do not establish
-        that consumed audio was silent or safely finalized.
+        A fresh session cannot replay what this attempt already uploaded, and
+        speech detection is asynchronous, so any consumed audio counts.
         """
         return self._consumed_audio or self._final_pending()
 
@@ -1138,7 +1141,15 @@ class RecognizeStream(stt.RecognizeStream):
         """Keep the socket alive through long silences."""
         while True:
             await asyncio.sleep(10.0)
-            await ws.ping()
+            try:
+                await ws.ping()
+            except Exception as exc:
+                # The send and receive tasks own tearing the attempt down, so
+                # a failed ping is only recorded here. Catching it keeps the
+                # exception from vanishing with the task, which would leave a
+                # failing transport with no trace at all.
+                logger.warning("stepfun stt: keepalive ping failed: %s", exc)
+                return
 
 
 # Deprecated alias. The base class renamed SpeechStream to RecognizeStream and

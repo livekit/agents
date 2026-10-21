@@ -122,7 +122,14 @@ class _FakeConnectionPool:
 
     @contextlib.asynccontextmanager
     async def connection(self, *, timeout: float) -> AsyncIterator[Any]:
-        yield self._conn
+        # Mirrors utils.ConnectionPool: a failed attempt drops the connection
+        # rather than returning it, so callers must not rely on removing it
+        # themselves.
+        try:
+            yield self._conn
+        except BaseException:
+            self.remove(self._conn)
+            raise
 
     def remove(self, conn: Any) -> None:
         self.removed.append(conn)
@@ -174,9 +181,9 @@ async def _drive(
                 "transcript": "",
             }
         )
-    ws.queue_server_event(
-        {"type": "input_audio_buffer.speech_stopped", "audio_start_ms": frames * 100 + 800}
-    )
+    # A stop closes the last reported utterance so the stream can settle. No
+    # end position is sent: nothing consumes one.
+    ws.queue_server_event({"type": "input_audio_buffer.speech_stopped"})
     ws.queue_close()
 
     stream = s.stream()
@@ -1283,6 +1290,76 @@ class _ReadyPeer(_FakeWebSocket):
             self.queue_server_event(_SESSION_READY)
 
 
+async def test_connection_loss_after_input_ends_is_not_retried() -> None:
+    """A retry cannot replay consumed audio, even once input has ended.
+
+    The stop and the final arrive after both frames were uploaded, and the
+    transport then fails rather than closing cleanly. The audio is gone from
+    the input channel either way, so the loss is reported instead of retried.
+    """
+
+    class Failing(_ReadyPeer):
+        async def send_str(self, data: str) -> None:
+            await super().send_str(data)
+            if self.sent[-1]["type"] == "input_audio_buffer.append":
+                self.queue_server_event(
+                    {"type": "input_audio_buffer.speech_started", "item_id": "a"}
+                )
+
+    failing = Failing()
+    pool = _SequencedPool([failing, _ReadyPeer()])
+    s = stepfun.STT()
+    s._pool = pool  # type: ignore[assignment]
+    stream = s.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0, timeout=2))
+    try:
+        stream.push_frame(_frame())
+        stream.push_frame(_frame())
+        for _ in range(100):
+            if failing.frames_of_type("input_audio_buffer.append"):
+                break
+            await asyncio.sleep(0.01)
+        # The stop arrives late and carries no position.
+        failing.queue_server_event({"type": "input_audio_buffer.speech_stopped", "item_id": "a"})
+        failing.queue_server_event({"type": _COMPLETED, "item_id": "a", "transcript": "A"})
+        failing.queue_error()
+        stream.end_input()
+        with pytest.raises(APIConnectionError, match="cannot be recovered") as excinfo:
+            await asyncio.wait_for(_collect(stream), 5)
+        assert excinfo.value.retryable is False
+        assert pool.handed_out == 1
+    finally:
+        await stream.aclose()
+
+
+async def test_connection_loss_after_a_final_is_not_retried() -> None:
+    """A retry cannot replay consumed audio, even after a delivered final."""
+
+    class Failing(_ReadyPeer):
+        async def send_str(self, data: str) -> None:
+            await super().send_str(data)
+            if self.sent[-1]["type"] == "input_audio_buffer.append":
+                for event in (
+                    {"type": "input_audio_buffer.speech_started", "item_id": "item-1"},
+                    {"type": "input_audio_buffer.speech_stopped", "item_id": "item-1"},
+                    {"type": _COMPLETED, "item_id": "item-1", "transcript": "hello"},
+                ):
+                    self.queue_server_event(event)
+                self.queue_error()
+
+    pool = _SequencedPool([Failing(), _ReadyPeer()])
+    s = stepfun.STT()
+    s._pool = pool  # type: ignore[assignment]
+    stream = s.stream(conn_options=APIConnectOptions(max_retry=3, retry_interval=0, timeout=1))
+    stream.push_frame(_frame())
+    try:
+        with pytest.raises(APIConnectionError, match="cannot be recovered") as excinfo:
+            await asyncio.wait_for(_collect(stream), 5)
+        assert excinfo.value.retryable is False
+        assert pool.handed_out == 1
+    finally:
+        await stream.aclose()
+
+
 async def test_connection_loss_with_speech_in_flight_fails_instead_of_retrying() -> None:
     """Do not retry consumed audio while its transcription is pending."""
 
@@ -1346,30 +1423,6 @@ async def test_connection_loss_before_consuming_audio_still_retries() -> None:
         assert uploaded == 16000 * 100 // 1000 * 2 + silence_bytes
         usage = [e for e in events if e.recognition_usage]
         assert sum(e.recognition_usage.audio_duration for e in usage) == pytest.approx(0.1)
-    finally:
-        await stream.aclose()
-
-
-async def test_connection_loss_after_input_ends_is_not_retried() -> None:
-    """Once input has ended, unprocessed audio may hold speech no retry can resend."""
-
-    class Failing(_ReadyPeer):
-        async def send_str(self, data: str) -> None:
-            await super().send_str(data)
-            if self.sent[-1]["type"] == "input_audio_buffer.append":
-                self.queue_error()
-
-    pool = _SequencedPool([Failing(), _ReadyPeer()])
-    s = stepfun.STT()
-    s._pool = pool  # type: ignore[assignment]
-    stream = s.stream(conn_options=APIConnectOptions(max_retry=3, retry_interval=0, timeout=1))
-    stream.push_frame(_frame())
-    stream.end_input()
-    try:
-        with pytest.raises(APIConnectionError) as excinfo:
-            await asyncio.wait_for(_collect(stream), 5)
-        assert excinfo.value.retryable is False
-        assert pool.handed_out == 1
     finally:
         await stream.aclose()
 
@@ -1954,9 +2007,16 @@ async def test_transport_error_closes_socket(configured):
         await s.aclose()
 
 
-async def test_stream_send_error_is_mapped_for_fallback():
+async def test_stream_send_error_after_audio_is_not_retried() -> None:
+    """A failed upload is mapped, and never retried once audio was consumed.
+
+    The frame has already left the input channel, so a retry would resume
+    from after it and drop that speech silently. Marking the error
+    non-retryable is what makes consuming audio without retaining it safe.
+    """
+
     class BrokenSocket(_FakeWebSocket):
-        async def send_str(self, data):
+        async def send_str(self, data: str) -> None:
             if "input_audio_buffer.append" in data:
                 raise aiohttp.ClientConnectionError("upload failed")
             await super().send_str(data)
@@ -1965,12 +2025,13 @@ async def test_stream_send_error_is_mapped_for_fallback():
     ws.queue_server_event(_SESSION_READY)
     s = stepfun.STT()
     s._pool = _FakeConnectionPool(ws)  # type: ignore[assignment]
-    stream = s.stream(conn_options=_no_retry())
+    stream = s.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
     stream.push_frame(_frame())
     stream.end_input()
     try:
-        with pytest.raises(APIConnectionError, match="upload failed"):
+        with pytest.raises(APIConnectionError, match="upload failed") as excinfo:
             await asyncio.wait_for(anext(stream), 1)
+        assert excinfo.value.retryable is False
         assert ws.closed
     finally:
         await s.aclose()
