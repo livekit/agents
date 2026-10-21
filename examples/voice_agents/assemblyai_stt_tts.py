@@ -78,6 +78,7 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
 
     tts = assemblyai.TTS(
+        model="assemblyai-tts-1",
         # See https://www.assemblyai.com/docs/tts/voices. Every voice speaks every
         # language; pick one with e.g. language="es".
         voice="jane",

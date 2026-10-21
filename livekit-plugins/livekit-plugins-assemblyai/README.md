@@ -21,8 +21,8 @@ from livekit.agents import AgentSession, TurnHandlingOptions
 from livekit.plugins import assemblyai
 
 session = AgentSession(
-    stt=assemblyai.STT(),
-    tts=assemblyai.TTS(voice="jane"),
+    stt=assemblyai.STT(model="universal-3-6-pro", mode="balanced"),
+    tts=assemblyai.TTS(model="assemblyai-tts-1", voice="jane"),
     # let AssemblyAI decide when the user has finished speaking
     turn_handling=TurnHandlingOptions(turn_detection="stt"),
     # ... llm, vad, etc.
