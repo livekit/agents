@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
@@ -115,6 +115,67 @@ def test_token_accumulator_lang_segments_empty_initially():
     assert accumulator._lang_segments == []
 
 
+def test_token_accumulator_span_covers_all_timed_tokens():
+    """A token that carries timing late must not collapse the span onto itself.
+
+    Regression for #6885: when the leading tokens of an utterance arrive
+    without ``start_ms``/``end_ms`` and only a trailing token has them, the
+    emitted span used to collapse onto that trailing token (e.g. two words in
+    180ms).
+    """
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update({"text": " He's", "language": "en", "is_final": True})
+    accumulator.update({"text": " trying", "language": "en", "is_final": True})
+    accumulator.update(
+        {"text": ".", "language": "en", "is_final": True, "start_ms": 43663, "end_ms": 43843}
+    )
+
+    assert accumulator.text == " He's trying."
+    assert accumulator.start_time == 43663
+    assert accumulator.end_time == 43843
+
+
+def test_token_accumulator_end_time_never_regresses():
+    """A trailing token whose ``end_ms`` regresses must not pull the end back.
+
+    Regression for #6885: ``end_time`` was overwritten by every token that
+    carried ``end_ms``, so a non-monotonic trailing token shortened the span.
+    """
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update(
+        {"text": " He's", "language": "en", "is_final": True, "start_ms": 41000, "end_ms": 41400}
+    )
+    accumulator.update(
+        {"text": " trying", "language": "en", "is_final": True, "start_ms": 41400, "end_ms": 43843}
+    )
+    accumulator.update(
+        {"text": ".", "language": "en", "is_final": True, "start_ms": 43663, "end_ms": 43700}
+    )
+
+    assert accumulator.start_time == 41000
+    assert accumulator.end_time == 43843
+
+
+def test_token_accumulator_start_time_takes_earliest():
+    """The earliest ``start_ms`` wins even if a later token carries an earlier one."""
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update(
+        {"text": " He's", "language": "en", "is_final": True, "start_ms": 41000, "end_ms": 41400}
+    )
+    accumulator.update(
+        {"text": " trying", "language": "en", "is_final": True, "start_ms": 40000, "end_ms": 43843}
+    )
+
+    assert accumulator.start_time == 40000
+    assert accumulator.end_time == 43843
+
+
 # ---------------------------------------------------------------------------
 # _lang_segments_to_fields helper
 # ---------------------------------------------------------------------------
@@ -195,6 +256,22 @@ def _make_stream(translation: Any = None):
     with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
         stream = SpeechStream(stt=stt_instance, conn_options=DEFAULT_API_CONNECT_OPTIONS)
     return stream
+
+
+async def test_websocket_authenticates_with_header():
+    stream = _make_stream()
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.send_str = AsyncMock()
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.ws_connect = AsyncMock(return_value=ws)
+    stream._stt._http_session = session
+
+    await stream._connect_ws()
+
+    assert session.ws_connect.call_args.kwargs["headers"] == {"Authorization": "Bearer test-key"}
+    config = json.loads(ws.send_str.call_args.args[0])
+    assert "api_key" not in config
+    assert config["model"] == stream._stt._params.model
 
 
 @pytest.mark.parametrize("level", [None, 0, 2])
@@ -477,6 +554,126 @@ async def test_interim_transcript_no_translation_populates_source_runs():
     assert sd.source_texts == ["こんにちは、", "My name is Sam."]
     assert sd.target_languages is None
     assert sd.target_texts is None
+
+
+# --- RECOGNITION_USAGE: output tokens ---------------------------------------
+
+
+async def test_usage_event_reports_final_tokens_as_output_tokens():
+    """Each final transcription token counts once toward `output_tokens`;
+    the `<end>` control token does not."""
+    stream = _make_stream(translation=None)
+
+    messages = [
+        {
+            "tokens": [
+                _final_token("Hello", "en"),
+                _final_token(" world.", "en"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 500,
+        }
+    ]
+
+    events = await _drive_recv(stream, messages, expect_events=3)
+    usage = next(e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE)
+
+    assert usage.recognition_usage is not None
+    assert usage.recognition_usage.audio_duration == 0.5
+    assert usage.recognition_usage.output_tokens == 2
+
+
+async def test_usage_event_excludes_non_final_tokens():
+    """Non-final tokens are re-sent as final later — counting them would
+    double-bill. Only the final occurrences count."""
+    stream = _make_stream(translation=None)
+
+    messages = [
+        {
+            "tokens": [
+                _nonfinal_token("Hel", "en"),
+                _nonfinal_token("lo", "en"),
+            ],
+            "total_audio_proc_ms": 300,
+        },
+        {
+            "tokens": [
+                _final_token("Hello", "en"),
+                _final_token(" world.", "en"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 800,
+        },
+    ]
+
+    # message 1: START_OF_SPEECH + INTERIM; message 2: FINAL + END_OF_SPEECH + USAGE.
+    events = await _drive_recv(stream, messages, expect_events=5)
+    usage = next(e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE)
+
+    assert usage.recognition_usage is not None
+    assert usage.recognition_usage.output_tokens == 2
+
+
+async def test_usage_events_report_incremental_output_tokens():
+    """A second endpoint reports only the tokens accumulated since the
+    previous usage event, mirroring the incremental audio_duration."""
+    stream = _make_stream(translation=None)
+
+    messages = [
+        {
+            "tokens": [
+                _final_token("First.", "en"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 1000,
+        },
+        {
+            "tokens": [
+                _final_token("Second", "en"),
+                _final_token(" utterance.", "en"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 2500,
+        },
+    ]
+
+    # Per endpoint: START_OF_SPEECH is not emitted before endpoint flush
+    # (tokens are final-only), so each message yields FINAL + END_OF_SPEECH + USAGE.
+    events = await _drive_recv(stream, messages, expect_events=6)
+    usages = [e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE]
+
+    assert len(usages) == 2
+    assert usages[0].recognition_usage is not None
+    assert usages[0].recognition_usage.audio_duration == 1.0
+    assert usages[0].recognition_usage.output_tokens == 1
+    assert usages[1].recognition_usage is not None
+    assert usages[1].recognition_usage.audio_duration == 1.5
+    assert usages[1].recognition_usage.output_tokens == 2
+
+
+async def test_usage_event_counts_translation_tokens():
+    """In translation mode both original and translated final tokens are
+    provider output and count toward `output_tokens`."""
+    from livekit.plugins.soniox.stt import TranslationConfig
+
+    stream = _make_stream(translation=TranslationConfig(type="one_way", target_language="es"))
+
+    messages = [
+        {
+            "tokens": [
+                _final_token("Hello world.", "en", translation_status="original"),
+                _final_token("Hola mundo.", "es", translation_status="translation"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 500,
+        }
+    ]
+
+    events = await _drive_recv(stream, messages, expect_events=3)
+    usage = next(e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE)
+
+    assert usage.recognition_usage is not None
+    assert usage.recognition_usage.output_tokens == 2
 
 
 async def test_recv_messages_raises_on_server_error_frame():

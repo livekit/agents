@@ -142,6 +142,16 @@ class RecordingOptions(TypedDict, total=False):
     """Upload the conversation transcript (chat history). Defaults to ``True``."""
     redaction: bool
     """Enable redaction. ``False`` does not disable project redaction."""
+    input_delta: bool
+    """Record only what changed in LLM inputs on trace spans. Defaults to ``False``.
+    The model always receives the full input; this only affects telemetry.
+
+    Each span continues the input recorded for the last committed generation: its
+    ``gen_ai.input.messages`` / ``lk.pii.chat_ctx`` hold what follows the longest prefix
+    they share (usually the previous agent turn and the new user turn), and
+    ``gen_ai.system_instructions`` is left out while unchanged. Such spans carry
+    ``lk.input.*`` attributes pointing at the span that holds the rest.
+    """
 
 
 _RECORDING_ALL_ON: RecordingOptions = {
@@ -260,7 +270,10 @@ def _append_instructions(template: Instructions | str, extra: str) -> Instructio
     # concatenate the *raw* template text so any {placeholders} survive until render()
     if isinstance(template, Instructions):
         return Instructions(
-            template.common + "\n\n" + extra, audio=template.audio, text=template.text
+            template.common + "\n\n" + extra,
+            audio=template.audio,
+            text=template.text,
+            dynamic=template.dynamic,
         )
     return Instructions(template + "\n\n" + extra)
 
@@ -472,7 +485,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
-                Default ``3``.
+                Not enforced for realtime models that generate the tool reply
+                server-side. Default ``3``.
             video_sampler (_VideoSampler, optional): Uses
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
                 captures video at ~1 fps while the user is speaking and ~0.3 fps
@@ -1721,8 +1735,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 to be received after committing the user turn.
                 Default ``2.0`` s. Increase this value if the STT is slow to respond.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
-                to flush the buffer and generate the final transcript.
-                Default ``2.0`` s.
+                to flush the buffer and generate the final transcript when audio input is
+                detached and STT does not support manual flushing. STT with manual flush
+                support receives a flush request instead. Default ``2.0`` s.
             skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
 
         Returns:
@@ -2098,14 +2113,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._aec_warmup_duration_explicit:
             return
 
+        from ..job import current_simulation
+
         is_outbound_sip = (
             participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
             and not participant.attributes.get(_SIP_RULE_ID_ATTR)
         )
-        self._opts.aec_warmup_duration = None if is_outbound_sip else _DEFAULT_AEC_WARMUP_DURATION
+        # a simulator publishes synthesized audio, so the agent's speech never echoes back
+        no_warmup = is_outbound_sip or current_simulation() is not None
+        self._opts.aec_warmup_duration = None if no_warmup else _DEFAULT_AEC_WARMUP_DURATION
         self._aec_warmup_remaining = self._opts.aec_warmup_duration or 0.0
 
-        if is_outbound_sip and self._aec_warmup_timer is not None:
+        if no_warmup and self._aec_warmup_timer is not None:
             self._aec_warmup_timer.cancel()
             self._aec_warmup_timer = None
 
@@ -2168,9 +2187,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     _set_participant_attributes(
                         self._agent_speaking_span, self._room_io.room.local_participant
                     )
-                # self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._agent_speaking_span is not None:
-            # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
 
@@ -2231,10 +2248,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._user_speaking_span, self._room_io.linked_participant
                 )
 
-            # self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._user_speaking_span is not None:
-            # end_time = last_speaking_time or time.time()
-            # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
             end_time_ns = last_speaking_time_ns
             if (
                 end_time_ns is not None

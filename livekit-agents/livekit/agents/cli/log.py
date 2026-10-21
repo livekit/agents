@@ -16,7 +16,9 @@ from ..plugin import Plugin
 # noisy loggers are set to warn by default
 NOISY_LOGGERS = [
     "httpx",
+    "httpx2",
     "httpcore",
+    "httpcore2",
     "openai",
     "watchfiles",
     "anthropic",
@@ -35,6 +37,17 @@ def _silence_noisy_loggers() -> None:
         logger = logging.getLogger(noisy_logger)
         if logger.level == logging.NOTSET:
             logger.setLevel(logging.WARN)
+
+
+def _configure_stdout_for_logging() -> bool:
+    """Keep stdout's encoding, escaping unsupported characters in text output."""
+    encoding = getattr(sys.stdout, "encoding", None)
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(errors="backslashreplace")
+
+    normalized_encoding = (encoding or "").lower().replace("_", "-")
+    return normalized_encoding not in {"utf-8", "utf8"}
 
 
 # skip default LogRecord attributes
@@ -108,8 +121,9 @@ class JsonFormatter(logging.Formatter):
                 except Exception:
                     return None
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, ensure_ascii: bool = False, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self._ensure_ascii = ensure_ascii
         self._required_fields = _parse_style(self)
 
     def format(self, record: logging.LogRecord) -> str:
@@ -145,7 +159,9 @@ class JsonFormatter(logging.Formatter):
 
         log_record["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
-        return json.dumps(log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=False)
+        return json.dumps(
+            log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=self._ensure_ascii
+        )
 
 
 class ColoredFormatter(logging.Formatter):
@@ -204,6 +220,7 @@ class ColoredFormatter(logging.Formatter):
 
 
 def setup_logging(log_level: str, devmode: bool, console: bool, compact: bool = False) -> None:
+    ensure_ascii = _configure_stdout_for_logging()
     root = logging.getLogger()
 
     handler = logging.StreamHandler(sys.stdout)
@@ -228,7 +245,7 @@ def setup_logging(log_level: str, devmode: bool, console: bool, compact: bool = 
         handler.setFormatter(colored_formatter)
     else:
         # production logs (serialized of json)
-        json_formatter = JsonFormatter()
+        json_formatter = JsonFormatter(ensure_ascii=ensure_ascii)
         handler.setFormatter(json_formatter)
 
     _add_global_log_fields(handler)

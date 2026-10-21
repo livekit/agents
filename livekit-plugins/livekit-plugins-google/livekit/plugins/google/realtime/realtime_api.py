@@ -18,6 +18,7 @@ from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, llm, utils
+from livekit.agents.llm._provider_format.utils import _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -66,6 +67,7 @@ MAX_TOOL_CALL_REJECTIONS = 3
 # See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
 KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
     {
+        "gemini-3.8-live",
         "gemini-live-2.5-flash-native-audio",
     }
 )
@@ -83,7 +85,8 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
 
 
 # generate_reply() appends a "." user turn so Gemini sees a completed turn. These models
-# answer that placeholder with an empty turn instead, so they must not get it.
+# answer that placeholder with an empty turn instead, so they must not get it, and take
+# reply instructions as a user turn instead.
 MODELS_WITHOUT_REPLY_PLACEHOLDER: tuple[str, ...] = ("3.1", "3.8")
 
 
@@ -102,28 +105,20 @@ def _default_tool_behavior(model: str) -> NotGivenOr[types.Behavior]:
     return NOT_GIVEN
 
 
-def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
-    """
-    Validate that the model name matches the API being used.
-
-    Raises ValueError if a known model is used with the wrong API configuration.
-
-    Args:
-        model: The model name being used
-        use_vertexai: Whether VertexAI is enabled
-    """
-    if use_vertexai and model in KNOWN_GEMINI_API_MODELS:
-        raise ValueError(
-            f"Model '{model}' is a Gemini API model, but vertexai=True. "
-            f"Use a VertexAI model (e.g., 'gemini-live-2.5-flash-native-audio') "
-            f"or set vertexai=False."
+def _warn_model_api_mismatch(model: str, use_vertexai: bool) -> None:
+    """Warn when a known model may not be available on the selected API."""
+    if use_vertexai and model in KNOWN_GEMINI_API_MODELS and model not in KNOWN_VERTEXAI_MODELS:
+        logger.warning(
+            f"Model '{model}' may not be available on VertexAI (vertexai=True). "
+            "If the connection fails, use a VertexAI model "
+            "(e.g., 'gemini-live-2.5-flash-native-audio') or set vertexai=False."
         )
 
-    if not use_vertexai and model in KNOWN_VERTEXAI_MODELS:
-        raise ValueError(
-            f"Model '{model}' is a VertexAI model, but vertexai=False. "
-            f"Use a Gemini API model (e.g., 'gemini-2.5-flash-native-audio-preview-12-2025') "
-            f"or set vertexai=True."
+    if not use_vertexai and model in KNOWN_VERTEXAI_MODELS and model not in KNOWN_GEMINI_API_MODELS:
+        logger.warning(
+            f"Model '{model}' may not be available on the Gemini API (vertexai=False). "
+            "If the connection fails, use a Gemini API model "
+            "(e.g., 'gemini-2.5-flash-native-audio-preview-12-2025') or set vertexai=True."
         )
 
 
@@ -216,8 +211,6 @@ class _ResponseGeneration:
 
     _created_timestamp: float = field(default_factory=time.time)
     """The timestamp when the generation is created"""
-    _first_token_timestamp: float | None = None
-    """The timestamp when the first audio token is received"""
     _completed_timestamp: float | None = None
     """The timestamp when the generation is completed"""
     _done: bool = False
@@ -317,10 +310,11 @@ class RealtimeModel(llm.RealtimeModel):
             tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
+                thinking_level is not supported by gemini-3.8-live on the Gemini API.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
 
         Raises:
-            ValueError: If the API key is required but not found.
+            ValueError: If the API key or VertexAI project is missing, or thinking_level is unsupported.
         """  # noqa: E501
         if not is_given(input_audio_transcription):
             input_audio_transcription = types.AudioTranscriptionConfig()
@@ -395,8 +389,18 @@ class RealtimeModel(llm.RealtimeModel):
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
-        # Validate model/API compatibility for known models
-        _validate_model_api_match(model, use_vertexai)
+        _warn_model_api_mismatch(model, use_vertexai)
+
+        if (
+            not use_vertexai
+            and model.removeprefix("models/") == "gemini-3.8-live"
+            and is_given(thinking_config)
+            and thinking_config.thinking_level is not None
+        ):
+            raise ValueError(
+                f"Model '{model}' does not support thinking_level on the Gemini API. "
+                "Omit thinking_level or use 'gemini-3.8-live-extended-thinking'."
+            )
 
         self._opts = _RealtimeOptions(
             model=model,
@@ -549,6 +553,10 @@ class RealtimeSession(llm.RealtimeSession):
         # means we're draining that turn's trailing events (which have no generation to attach
         # to). reset when the next generation starts.
         self._rejected_tool_calls = 0
+        # call ids we made up for tool calls the server sent without one; their responses must
+        # not carry an id, since the server never issued it. kept for the session's lifetime: a
+        # resumption can replay a response long after it was first queued
+        self._synthetic_call_ids: set[str] = set()
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -741,6 +749,7 @@ class RealtimeSession(llm.RealtimeSession):
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
                 supports_silent_scheduling=supports_silent_scheduling,
+                synthetic_call_ids=self._synthetic_call_ids,
             )
             turns: list[types.Content] = []
             if self._realtime_model.capabilities.mutable_chat_context:
@@ -834,13 +843,12 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
-        if not self._realtime_model.capabilities.mutable_chat_context:
-            logger.warning(
-                f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
-            )
+        if not self._realtime_model.capabilities.mutable_chat_context and is_given(instructions):
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
             fut.set_exception(
-                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
+                llm.RealtimeError(
+                    f"generate_reply with 'instructions' is not compatible with '{self._opts.model}'"
+                )
             )
             return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -865,9 +873,16 @@ class RealtimeSession(llm.RealtimeSession):
             self._in_user_activity = False
 
         turns = []
+        placeholder = _needs_reply_placeholder(self._opts.model)
         if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        if _needs_reply_placeholder(self._opts.model):
+            if placeholder:
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            else:
+                # a trailing model turn is continued: these models speak their reasoning
+                # or stay silent. Unwrapped, they later quote it back as the user's words.
+                text = _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE.format(content=instructions)
+                turns.append(types.Content(parts=[types.Part(text=text)], role="user"))
+        if placeholder:
             turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
         self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
@@ -1409,8 +1424,6 @@ class RealtimeSession(llm.RealtimeSession):
                                 "Gemini sent audio after generation completed; dropping it"
                             )
                         continue
-                    if not current_gen._first_token_timestamp:
-                        current_gen._first_token_timestamp = time.time()
                     frame_data = part.inline_data.data
                     try:
                         if not isinstance(frame_data, bytes):
@@ -1555,6 +1568,7 @@ class RealtimeSession(llm.RealtimeSession):
                 ),
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
+                send_id=bool(fnc_call.id),
             )
             for fnc_call in function_calls
         ]
@@ -1568,10 +1582,14 @@ class RealtimeSession(llm.RealtimeSession):
         gen = self._current_generation
         for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
+            call_id = fnc_call.id
+            if not call_id:
+                call_id = utils.shortuuid("fnc-call-")
+                self._synthetic_call_ids.add(call_id)
 
             gen.function_ch.send_nowait(
                 llm.FunctionCall(
-                    call_id=fnc_call.id or utils.shortuuid("fnc-call-"),
+                    call_id=call_id,
                     name=fnc_call.name,
                     arguments=arguments,
                 )
@@ -1595,11 +1613,6 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.warning("no active generation to report metrics for")
             return
 
-        ttft = (
-            current_gen._first_token_timestamp - current_gen._created_timestamp
-            if current_gen._first_token_timestamp
-            else -1
-        )
         duration = (
             current_gen._completed_timestamp or time.time()
         ) - current_gen._created_timestamp
@@ -1628,7 +1641,9 @@ class RealtimeSession(llm.RealtimeSession):
             request_id=current_gen.response_id,
             timestamp=current_gen._created_timestamp,
             duration=duration,
-            ttft=ttft,
+            # Gemini has no response-start event; generation creation can be triggered
+            # by an input transcript or by the first output packet.
+            ttft=-1,
             cancelled=False,
             input_tokens=usage_metadata.prompt_token_count or 0,
             output_tokens=usage_metadata.response_token_count or 0,

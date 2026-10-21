@@ -26,7 +26,6 @@ import logging
 import os
 import platform
 import time
-import weakref
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal
@@ -530,7 +529,10 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
-        self._streams = weakref.WeakSet[SpeechStream]()
+        # Strong ownership: a stream that finishes and gets garbage-collected would
+        # otherwise take its still-open per-stream aiohttp.ClientSession with it.
+        # Streams discard themselves in SpeechStream.aclose() once closed.
+        self._streams: set[SpeechStream] = set()
         _warn_if_sunset_stt_model(model)
 
     @property
@@ -864,6 +866,23 @@ class STT(stt.STT):
         self._streams.add(stream)
         return stream
 
+    async def aclose(self) -> None:
+        """Close every stream this instance created.
+
+        ``stream()`` gives each ``SpeechStream`` its own ``aiohttp.ClientSession``,
+        and only ``SpeechStream.aclose()`` closes it. Streams are owned strongly
+        (see ``self._streams``) so a finished, garbage-collected stream cannot
+        take its open session with it; closed streams discard themselves, so the
+        set never grows without bound. ``stt_streaming.py`` in this package
+        already does the same.
+        """
+        closed = list(self._streams)
+        for stream in closed:
+            await stream.aclose()
+        # Remove only what this call closed: a stream created concurrently (or one
+        # whose aclose was cancelled mid-cleanup) stays tracked for a later close.
+        self._streams.difference_update(closed)
+
 
 class SpeechStream(stt.SpeechStream):
     """Sarvam.ai streaming speech-to-text implementation."""
@@ -896,11 +915,7 @@ class SpeechStream(stt.SpeechStream):
         self._client_request_id = client_request_id
         self._server_request_id = server_request_id
 
-        # Add flush mechanism
-        self._ws: aiohttp.ClientWebSocketResponse | None = (
-            None  # Store WebSocket reference for flush
-        )
-        self._should_flush = False  # Flag to trigger flush
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
         self._utterance_speech_start_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
@@ -1105,6 +1120,10 @@ class SpeechStream(stt.SpeechStream):
         finally:
             self._client_request_id = None
             self._server_request_id = None
+            # Release the STT's strong ownership only after session cleanup succeeds.
+            stt = self._stt
+            if self._session.closed and isinstance(stt, STT):
+                stt._streams.discard(self)
 
     def update_options(
         self,
@@ -1373,23 +1392,24 @@ class SpeechStream(stt.SpeechStream):
                         raise
 
                 elif isinstance(frame, self._FlushSentinel):
-                    # LiveKit VAD FlushSentinel - handles stream termination
-                    self._logger.debug(
-                        "Received FlushSentinel, sending end of stream",
-                        extra=self._build_log_context(),
-                    )
-                    await ws.send_str(self._end_of_stream_msg)
-                    break
+                    if audio_buffer:
+                        tail = np.array(audio_buffer, dtype=np.int16).tobytes()
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "audio": {
+                                        "data": base64.b64encode(tail).decode("utf-8"),
+                                        "encoding": self._audio_encoding,
+                                        "sample_rate": self._opts.sample_rate,
+                                    }
+                                }
+                            )
+                        )
+                        audio_buffer.clear()
+                    if self._opts.flush_signal:
+                        await ws.send_str(json.dumps({"type": "flush"}))
 
-                # Check if Sarvam VAD triggered flush
-                if self._should_flush:
-                    self._logger.debug(
-                        "VAD triggered flush, sending flush message",
-                        extra=self._build_log_context(),
-                    )
-                    flush_message = {"type": "flush"}
-                    await ws.send_str(json.dumps(flush_message))
-                    self._should_flush = False  # Reset flag
+            await ws.send_str(self._end_of_stream_msg)
 
         except Exception as e:
             self._logger.error(
@@ -1660,13 +1680,6 @@ class SpeechStream(stt.SpeechStream):
                             self._eos_fallback_task = asyncio.create_task(
                                 self._emit_pending_eos_after_timeout()
                             )
-
-                    # Set flag to trigger flush when Sarvam detects end of speech
-                    self._should_flush = True
-                    self._logger.debug(
-                        "Speech ended, flush triggered",
-                        extra=self._build_log_context(),
-                    )
             else:
                 self._logger.debug(
                     f"Unknown VAD signal type: {signal_type}",

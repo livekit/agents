@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiobotocore.session import AioSession  # type: ignore
 from botocore.config import Config  # type: ignore
+from botocore.exceptions import ClientError  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
@@ -49,6 +50,10 @@ _MODELS_REJECTING_SAMPLING_PARAMS = (
     "claude-opus-5",
     "claude-sonnet-5",
     "claude-fable-5",
+    # OpenAI GPT-5.6/GPT-6: "This model doesn't support the temperature field. Remove
+    # temperature and try again." gpt-oss still accepts both, so it stays off this list.
+    "gpt-5.6",
+    "gpt-6",
 )
 
 # Model IDs that reject a forced ``toolChoice`` (``any``/``tool``) with a
@@ -122,7 +127,7 @@ class LLM(llm.LLM):
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
                 Ignored (with a warning) for models that reject sampling parameters, e.g. Claude
-                Opus 4.7/4.8, Opus 5, Sonnet 5 and Fable 5.
+                Opus 4.7/4.8, Opus 5, Sonnet 5, Fable 5 and OpenAI GPT-5.6/GPT-6.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
@@ -322,7 +327,18 @@ class LLMStream(llm.LLMStream):
         try:
             config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
             async with self._session.create_client("bedrock-runtime", config=config) as client:
-                response = await client.converse_stream(**self._opts)
+                try:
+                    response = await client.converse_stream(**self._opts)
+                except ClientError as e:
+                    # Bedrock rejected the request itself, e.g. a ValidationException
+                    # ("This model doesn't support the temperature field."). Keep the HTTP
+                    # status so a 4xx is not retried; throttling and 5xx still are.
+                    meta = e.response.get("ResponseMetadata", {})
+                    raise APIStatusError(
+                        f"aws bedrock llm: error generating content: {e}",
+                        status_code=meta.get("HTTPStatusCode", -1),
+                        request_id=meta.get("RequestId"),
+                    ) from e
                 request_id = response["ResponseMetadata"]["RequestId"]
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                     raise APIStatusError(
@@ -340,6 +356,8 @@ class LLMStream(llm.LLMStream):
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
 
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError(
                 f"aws bedrock llm: error generating content: {e}",
@@ -364,6 +382,11 @@ class LLMStream(llm.LLMStream):
                     id=request_id,
                     delta=llm.ChoiceDelta(content=delta["text"], role="assistant"),
                 )
+            elif "reasoningContent" in delta:
+                # Reasoning deltas (text/signature, or the redactedContent OpenAI GPT-6
+                # streams) are not surfaced; skip them quietly, as the anthropic plugin
+                # does for thinking deltas.
+                pass
             else:
                 logger.warning("aws bedrock llm: unknown chunk type", extra={"lk.pii.chunk": chunk})
 
