@@ -36,7 +36,7 @@ with the [Finesse API](https://docs.finesse.flamapp.ai/voice-api/list-voices).
 | --- | --- | --- |
 | `voice` | required | id of a ready Finesse voice, including cloned voices |
 | `language` | `"en"` | language code or name, for example `"hi"`, `"ta-IN"` or `"tamil"` |
-| `sample_rate` | `24000` | 24000 (native) to 48000 Hz |
+| `sample_rate` | `24000` | 8000 (telephony), or 24000 (native) to 48000 Hz |
 | `num_step` | server default (32) | 1-32, quality vs latency |
 | `guidance_scale` | server default (2.0) | 0-10 |
 | `length_scale` | server default (1.0) | speaking rate, greater than 0 up to 5; higher is slower |
