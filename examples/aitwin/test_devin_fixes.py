@@ -153,9 +153,11 @@ def test_token_server_requires_secret_and_ignores_client_room(monkeypatch):
     denied = client.post("/token", json={"room": "stolen-room"})
     assert denied.status_code == 401
 
-    with patch.object(ts, "create_room_and_dispatch_agent", return_value=None), patch.object(
-        ts, "_mint_aitwin_auth_token", return_value="aitwin-jwt"
-    ), patch.object(ts.asyncio, "run", side_effect=lambda coro: None):
+    with (
+        patch.object(ts, "create_room_and_dispatch_agent", return_value=None),
+        patch.object(ts, "_mint_aitwin_auth_token", return_value="aitwin-jwt"),
+        patch.object(ts.asyncio, "run", side_effect=lambda coro: None),
+    ):
         # asyncio.run expects a coroutine; stub create path differently
         async def _ok(_room: str) -> None:
             return None

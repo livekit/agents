@@ -20,9 +20,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from openai import AsyncOpenAI
-
 from aitwin_auth import mint_aitwin_auth_token
+from openai import AsyncOpenAI
 
 logger = logging.getLogger("aitwin-livekit-demo.speech")
 
@@ -164,9 +163,7 @@ def synthesize_headtts(
         raise RuntimeError("HeadTTS response missing audio")
 
     pcm = base64.b64decode(audio_b64)
-    sample_rate = int(
-        data.get("sampleRate") or data.get("sample_rate") or DEFAULT_PCM_SAMPLE_RATE
-    )
+    sample_rate = int(data.get("sampleRate") or data.get("sample_rate") or DEFAULT_PCM_SAMPLE_RATE)
 
     raw_visemes = data.get("visemes") or []
     vtimes = data.get("vtimes") or []

@@ -23,11 +23,7 @@ def mint_aitwin_auth_token(*, force: bool = False) -> str:
     global _cached_token, _cached_expires_at
 
     now = time.time()
-    if (
-        not force
-        and _cached_token
-        and now < _cached_expires_at - 60
-    ):
+    if not force and _cached_token and now < _cached_expires_at - 60:
         return _cached_token
 
     client_id = (os.getenv("AITWIN_CLIENT_ID") or "").strip()
@@ -56,9 +52,7 @@ def mint_aitwin_auth_token(*, force: bool = False) -> str:
     )
     data = response.json() if response.content else {}
     if not response.ok or not data.get("success") or not data.get("authToken"):
-        raise RuntimeError(
-            data.get("error") or f"AiTwin auth failed ({response.status_code})"
-        )
+        raise RuntimeError(data.get("error") or f"AiTwin auth failed ({response.status_code})")
 
     token = str(data["authToken"])
     _cached_token = token

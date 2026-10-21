@@ -18,8 +18,12 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Coroutine
+from typing import Any
 
 from dotenv import load_dotenv
+from speech_synth import synthesize_speech
+
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -32,8 +36,6 @@ from livekit.agents import (
 )
 from livekit.agents.voice.room_io import RoomOptions
 from livekit.plugins import openai, silero
-
-from speech_synth import synthesize_speech
 
 load_dotenv()
 
@@ -83,6 +85,12 @@ async def entrypoint(ctx: JobContext) -> None:
     speak_lock = asyncio.Lock()
     # Bumped on interrupt / newer speak so stale synth results are not published.
     speak_epoch = 0
+    background_tasks: set[asyncio.Task[None]] = set()
+
+    def _spawn(coro: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(coro)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
 
     async def publish_json(payload: dict) -> None:
         if not ctx.room.isconnected():
@@ -157,7 +165,7 @@ async def entrypoint(ctx: JobContext) -> None:
             return
         speak_epoch += 1
         epoch = speak_epoch
-        asyncio.create_task(publish_speech(text, epoch=epoch))
+        _spawn(publish_speech(text, epoch=epoch))
 
     # Speak-text UI: exact words, no LLM — same OpenAI TTS + /avatar_alignVisemes path.
     # LiveKit TextStreamHandler is Callable[[TextStreamReader, str], None] (identity str).
@@ -182,7 +190,7 @@ async def entrypoint(ctx: JobContext) -> None:
             epoch = speak_epoch
             await publish_speech(text, epoch=epoch)
 
-        asyncio.create_task(_read_and_speak())
+        _spawn(_read_and_speak())
 
     ctx.room.register_text_stream_handler(TOPIC_SAY, _on_say_stream)
 
