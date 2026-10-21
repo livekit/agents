@@ -470,6 +470,10 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             await sink.capture_frame(frame)
 
     def _discard_resampler(self) -> None:
+        """Forget the resampler and the pair it was built for, dropping anything it holds.
+
+        Used where that tail cannot be placed, or once :meth:`_drain_resampler` has emptied it.
+        """
         self._resampler = None
         self._resampler_key = None
         self._resampler_sink = None
@@ -494,17 +498,27 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             sink.flush()
 
     def _arm_segment_timer(self) -> None:
+        """Restart the silence that ends a segment, for a model that marks none itself.
+
+        Armed after every frame, so the segment ends only once the model has gone quiet for
+        ``output_segment_timeout``.
+        """
         self._cancel_segment_timer()
         self._segment_timer = self._loop.call_later(
             self._output_segment_timeout, self._close_output_segment_soon
         )
 
     def _cancel_segment_timer(self) -> None:
+        """Disarm the silence timer, leaving the current segment open."""
         if self._segment_timer is not None:
             self._segment_timer.cancel()
             self._segment_timer = None
 
     def _close_output_segment_soon(self) -> None:
+        """Close the segment from the timer, which cannot await the drain itself.
+
+        The work runs as a task, tracked so closing the session can wait on it.
+        """
         self._segment_timer = None
         task = asyncio.create_task(self._close_output_segment())
         self._segment_tasks.add(task)

@@ -360,6 +360,7 @@ class TranslationRoomIO:
         )
 
     def unset_track(self) -> None:
+        """Stop translating any track, leaving the session with nothing to hear."""
         self._track_sid = None
         self._participant_identity = None
         self._track_available_fut = asyncio.Future[_LinkedTrack]()
