@@ -303,7 +303,7 @@ def _is_ignorable_task(task) -> bool:
     try:
         coro = task.get_coro()
         # async_generator_athrow tasks are created by Python's GC when finalizing
-        # async generators (e.g. httpx/httpcore streaming generators)
+        # async generators (e.g. httpx/httpx2/httpcore streaming generators)
         coro_name = getattr(coro, "__qualname__", "") or type(coro).__name__
         if "async_generator_athrow" in coro_name:
             return True

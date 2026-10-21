@@ -1,38 +1,50 @@
-# Microsoft AI speech plugin for LiveKit Agents
+# Microsoft AI plugin for LiveKit Agents
 
-**STT and Azure Speech TTS have bounded live smoke coverage.** The TTS path has
-been verified with MAI-Voice-2-Flash (Harper, PCM16 mono at 24 kHz), including
-playback through a local LiveKit room using the installed plugin wheel and
-released `livekit-agents==1.8.2`.
+## Service availability
 
-The current package follows the synchronized 1.8.3 release and requires
-`livekit-agents>=1.8.3`. The live results below describe the earlier 1.8.2
-validation; the updated wheel and examples are checked offline against released
-1.8.3 without claiming an additional live run.
+**TTS** uses Microsoft's public, documented
+[MAI-Voice](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-voices)
+path: SSML posted to the Azure Speech REST synthesis endpoint with a Speech
+resource key. It has been verified with `en-US-Harper:MAI-Voice-2-Flash` and
+`en-US-Harper:MAI-Voice-2.1-Flash` (PCM16 mono at 24 kHz) on an `eastus` Speech
+resource, including playback through a local LiveKit room. MAI voices are in
+public preview.
 
-The streaming STT path has separately transcribed one short synthetic English
-utterance through the installed wheel, using the Azure GA transcription route,
-explicit `api-key` authentication, PCM16 mono at 16 kHz, and a client commit.
-The acknowledged final matched every expected word, including the last word,
-without added silence or promoting an interim hypothesis. The endpoint
-acknowledged the configured 16 kHz rate before any audio was sent.
+**STT** has no publicly documented Microsoft endpoint. The plugin speaks a
+realtime streaming transcription websocket protocol (described below), but
+Microsoft documents
+[MAI-Transcribe](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe)
+only through:
 
-A separate five-turn synthetic browser/WebRTC test passed through a local
-LiveKit server, real MAI STT with its own local VAD, the model-less echo example,
-and real MAI TTS back to browser audio. All five STT finals matched the complete
-expected words without duplicates. The test covered a brief internal pause,
-barge-in that cleared the old echo without stale output, explicit
-disconnect/reconnect, and closure of both sessions and providers. The fourth
-echo was intentionally interrupted; the other echoes completed. The microphone
-track remained open with ordinary inter-turn silence; no extra tail padding
-or manual per-utterance commits were used.
+- the Speech **fast transcription** REST API
+  (`speechtotext/transcriptions:transcribe` with `enhancedMode.model`), which
+  is file-based, not streaming, and is **not** used by this plugin; and
+- **Voice Live**, as input-audio transcription inside a Voice Live session.
 
-This does **not** establish access in every resource/region, recognition
+Neither is a streaming endpoint that `microsoft_ai.STT` can connect to. Use
+`microsoft_ai.STT` only with a MAI realtime transcription endpoint that
+Microsoft has provided to you directly, and confirm its contract against the
+protocol below. **Do not point it at an Azure OpenAI endpoint**
+(`*.openai.azure.com` or `/openai/v1/realtime`): MAI-Transcribe is not
+deployable there, so transcription fails with `DeploymentNotFound`.
+
+Supported MAI-Transcribe models are `MAI-Transcribe-2` and `MAI-Transcribe-1.5`;
+`MAI-Transcribe-1` was deprecated on August 20, 2026.
+
+**Decisions** use
+[Microsoft-Decision-1](https://ai.azure.com/catalog/models/Microsoft-Decision-1)
+deployed in Microsoft Foundry, through the resource's System One endpoint
+(`POST <resource endpoint>/providers/microsoft/v1/systemone`). See
+[Decision model contract](#decision-model-contract).
+
+None of this establishes access in every resource or region, recognition
 accuracy across inputs/languages, every backend tail boundary, long-session
 reliability, physical microphone behavior, or subjective voice quality.
-Hermetic tests also cover the client lifecycle and VAD ordering. None of these
+Hermetic tests cover the client lifecycle and VAD ordering. None of these
 results is a model-latency benchmark. An Azure Speech TTS resource/key does
-**not** establish access to the separate STT service.
+**not** establish access to any STT endpoint.
+
+The package requires `livekit-agents>=1.8.3`.
 
 There is no LLM, speech-to-speech realtime model, Azure OpenAI convenience
 constructor, provider catalog, token minting, or OpenAI credential/model default.
@@ -70,7 +82,11 @@ Obtain these values and the exact contract from your deployment owner.
 | `MICROSOFT_AI_TTS_MODEL` | `TTS(model=...)` (optional with a full voice ID) |
 | `MICROSOFT_AI_TTS_VOICE` | `TTS(voice=...)` |
 | `MICROSOFT_AI_TTS_SAMPLE_RATE` | `TTS(sample_rate=...)` |
-| `MICROSOFT_AI_ENV_FILE` | `STT(env_file=...)`, `TTS(env_file=...)` |
+| `MICROSOFT_AI_DECISION_URL` | `DecisionModel(url=...)` |
+| `MICROSOFT_AI_DECISION_API_KEY` | `DecisionModel(api_key=...)` |
+| `MICROSOFT_AI_DECISION_AUTH_HEADER` | `DecisionModel(auth_header=...)`: `api-key` or `Authorization` |
+| `MICROSOFT_AI_DECISION_MODEL` | `DecisionModel(model=...)` (Foundry deployment name) |
+| `MICROSOFT_AI_ENV_FILE` | `STT(env_file=...)`, `TTS(env_file=...)`, `DecisionModel(env_file=...)` |
 
 URLs are complete endpoints, including any required path and query string. For
 example, `wss://stt.example.invalid/v1/realtime?intent=transcription` is a **dummy**,
@@ -84,7 +100,7 @@ values also fail rather than falling back silently.
 
 TTS sends the Azure Speech resource key as `Ocp-Apim-Subscription-Key`, **not**
 as a raw-key Bearer token. STT preserves its `Authorization: Bearer ...` default.
-For an Azure realtime endpoint using resource-key authentication, explicitly set
+For an STT endpoint that expects a raw resource key, explicitly set
 `MICROSOFT_AI_STT_AUTH_HEADER=api-key` (or `auth_header="api-key"`); it sends the
 raw credential from `MICROSOFT_AI_STT_API_KEY` as the `api-key` header, with no
 Bearer prefix. The selector accepts only the exact values `Authorization` and
@@ -95,8 +111,9 @@ Explicit `headers` (including `{}`) override the STT selector and credential
 environment settings and cannot be combined with `api_key` or `auth_header`
 constructor arguments. Use them only for a confirmed alternate authentication
 scheme. No credentials are read from OpenAI/Azure variables. Caller-supplied
-`http_session` objects are borrowed; otherwise providers own lazy sessions and
-close them in `aclose()`.
+`http_session` objects are borrowed; otherwise STT and TTS own lazy sessions and
+close them in `aclose()`, and `DecisionModel` uses the job's HTTP session (outside
+a job, wrap calls in `async with utils.http_context.open()`).
 
 Keep actual connection information in your environment or a user-selected
 local dotenv file **outside the checkout** (or a deliberately ignored file).
@@ -117,16 +134,15 @@ could echo this information.
 
 ## STT contract and lifecycle
 
-For the Azure GA **transcription** endpoint, the official
-[transcription example](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets#transcribe-audio-in-real-time)
-uses `/openai/v1/realtime?intent=transcription`; the deployment name is sent in
-`session.audio.input.transcription.model`, not added as a URL query parameter.
-Configure the full URL in `MICROSOFT_AI_STT_URL` and the deployment in
-`MICROSOFT_AI_STT_MODEL`. The plugin sends that URL unchanged; it does not add
-the conversation API's `model=` query or preview `deployment`/`api-version`
-parameters. Do not put a key in the URL. This routing/auth documentation alone
-does not establish audio-rate or transcript-event compatibility for a new
-deployment; validate the MAI contract below independently.
+See [Service availability](#service-availability) first: there is no publicly
+documented MAI streaming STT endpoint, and Azure OpenAI endpoints do not serve
+MAI-Transcribe. Configure the full URL of the endpoint Microsoft provided in
+`MICROSOFT_AI_STT_URL` and its model identifier in `MICROSOFT_AI_STT_MODEL`.
+The model is sent in `session.audio.input.transcription.model`, not added as a
+URL query parameter. The plugin sends the URL unchanged; it does not add a
+`model=`, `deployment` or `api-version` query. Do not put a key in the URL.
+Validate the endpoint's audio-rate and transcript-event compatibility against
+the contract below before relying on it.
 
 ```python
 from livekit.agents import inference
@@ -239,8 +255,11 @@ Confirm that the provided URL is correct before live validation.
 
 Alternatively, supply `region` / `MICROSOFT_AI_TTS_REGION` without a URL. It
 constructs `https://<region>.tts.speech.microsoft.com/cognitiveservices/v1`,
-following the standard public-cloud Azure Speech convention. This is not a
-region-availability catalog or access guarantee. Sovereign clouds and
+following the standard public-cloud Azure Speech convention. The plugin does
+not check region availability: MAI voices are offered only in some Speech
+regions (see the **MAI voices** column of
+[Speech service regions](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/regions?tabs=tts)),
+and the resource key must belong to the selected region. Sovereign clouds and
 custom/private deployments require an explicit full URL. There is no automatic
 region detection, failover or redirection to a different region.
 
@@ -276,6 +295,39 @@ Client-side safeguards, not advertised provider limits, are configurable:
 `max_text_length=4096`, `max_audio_bytes=10485760`, and
 `request_timeout=30` seconds. HTTP errors and safety refusals remain errors.
 Only transient failures retry, with no audio emitted from incomplete attempts.
+
+## Decision model contract
+
+`microsoft_ai.DecisionModel` answers a batch of probability, choice, and score
+decisions about the same input in one request:
+
+```python
+from livekit.agents import llm
+from livekit.plugins import microsoft_ai
+
+model = microsoft_ai.DecisionModel()
+response = await model.evaluate(
+    input=chat_ctx,
+    decisions={
+        "handoff": llm.Probability("The caller requests a human."),
+        "intent": llm.Choice("Intent?", options={"booking": "Reservation", "other": "Other"}),
+    },
+)
+```
+
+Configure the full System One URL of your Foundry resource in
+`MICROSOFT_AI_DECISION_URL`, for example
+`https://<resource>.services.ai.azure.com/providers/microsoft/v1/systemone`, and
+the deployment name in `MICROSOFT_AI_DECISION_MODEL`. The resource key is sent
+as the raw `api-key` header by default; set `auth_header="Authorization"` to send
+an Entra ID token as `Authorization: Bearer ...`.
+
+The request body is `{"model", "state", "questions"}`: a conversation is sent as
+its transcript in `state`, and each decision as a named `noul`, `choice` or
+`score` question. An answer the model declines or that fails validation is
+reported in `DecisionResponse.errors` without dropping the rest of the batch.
+Non-2xx responses raise `APIStatusError` with the response body and request ID;
+408, 429 and 5xx are retried according to `conn_options`.
 
 ## Examples and validation
 

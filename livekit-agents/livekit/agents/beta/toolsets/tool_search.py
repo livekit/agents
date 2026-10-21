@@ -196,6 +196,33 @@ def _get_tool_params(tool: FunctionTool | RawFunctionTool) -> dict[str, str]:
     }
 
 
+# a plain word, optionally followed by sentence punctuation; anything else may
+# carry regex syntax (^get_weather$) or term-identifying punctuation (c++, c#)
+# and must be kept verbatim when tokenizing keyword queries
+_PROSE_TOKEN = re.compile(r"([^\W_]+)[.,!?;:']*")
+# terms whose punctuation is part of their identity and must not collapse to
+# the bare word (c++ vs c#)
+_SPECIAL_TERM = re.compile(r"[^\W_]+[+#]+")
+
+
+def _keywords(query: str) -> list[str]:
+    """Keyword query tokens: plain words drop trailing sentence punctuation,
+    other tokens keep their matching rules (regex syntax, term punctuation)."""
+    tokens: list[str] = []
+    for token in query.lower().split():
+        m = _PROSE_TOKEN.fullmatch(token)
+        tokens.append(m.group(1) if m else token)
+    return list(set(tokens))
+
+
+def _bm25_tokens(text: str) -> list[str]:
+    """Lowercase word tokens (punctuation dropped, underscores split) plus
+    punctuation-bearing terms (c++, c#) kept verbatim so distinct terms stay
+    distinct."""
+    lowered = text.lower()
+    return re.findall(r"[^\W_]+", lowered) + _SPECIAL_TERM.findall(lowered)
+
+
 class KeywordSearchStrategy:
     """Keyword search using regex matching.
 
@@ -211,7 +238,7 @@ class KeywordSearchStrategy:
             }
 
     def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:
-        keywords = list(set(query.lower().split()))
+        keywords = _keywords(query)
         if not keywords:
             return []
 
@@ -304,7 +331,7 @@ class BM25SearchStrategy:
             self._idf[term] = math.log((n - freq + 0.5) / (freq + 0.5) + 1.0)
 
     def search(self, query: str, items: list[SearchItem], max_results: int) -> list[SearchItem]:
-        query_terms = query.lower().replace("_", " ").split()
+        query_terms = _bm25_tokens(query)
         if not query_terms:
             return []
 
@@ -323,12 +350,12 @@ class BM25SearchStrategy:
 
     def _tokenize(self, item: SearchItem) -> list[str]:
         """Tokenize with field weighting: name 3x, description 2x, parameters 1x."""
-        name_tokens = item.name.lower().replace("_", " ").split()
-        desc_tokens = item.description.lower().split()
+        name_tokens = _bm25_tokens(item.name)
+        desc_tokens = _bm25_tokens(item.description)
         param_tokens = []
         for k, v in item.parameters.items():
-            param_tokens.extend(k.lower().replace("_", " ").split())
-            param_tokens.extend(v.lower().split())
+            param_tokens.extend(_bm25_tokens(k))
+            param_tokens.extend(_bm25_tokens(v))
 
         # weight by repeating tokens
         return name_tokens * 3 + desc_tokens * 2 + param_tokens

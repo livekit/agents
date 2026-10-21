@@ -140,6 +140,16 @@ class STTCapabilities:
     """Whether the STT supports keyterm prompting"""
     chat_context: bool = False
     """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
+    manual_flush: bool = False
+    """Whether the STT supports flushing the stream to finalize a segment.
+
+    When enabled, manual turn commits request a flush. With a turn detector, automatic
+    flushing occurs immediately for positive or unavailable EOT predictions, or halfway
+    through the maximum endpointing delay for negative predictions. Without a turn
+    detector, VAD end-of-speech requests the flush. Text-based EOT uses final transcripts
+    only, so flushing precedes its first prediction if no final transcript is available.
+    Disable this for custom STT nodes that buffer audio and manage flushing themselves.
+    """
 
 
 class STTError(BaseModel):

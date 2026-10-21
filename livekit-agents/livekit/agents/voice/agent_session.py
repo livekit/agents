@@ -271,7 +271,10 @@ def _append_instructions(template: Instructions | str, extra: str) -> Instructio
     # concatenate the *raw* template text so any {placeholders} survive until render()
     if isinstance(template, Instructions):
         return Instructions(
-            template.common + "\n\n" + extra, audio=template.audio, text=template.text
+            template.common + "\n\n" + extra,
+            audio=template.audio,
+            text=template.text,
+            dynamic=template.dynamic,
         )
     return Instructions(template + "\n\n" + extra)
 
@@ -1376,10 +1379,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._turn_hooks = None
 
         activity = self._activity
+        cancelled = False
         while activity and isinstance(agent_task := activity.agent, AgentTask):
+            parent_interrupted: asyncio.Future[None] | None = None
+            if drain:
+                # cancel() interrupts with force: let the task play out what it has queued
+                # first, such as the goodbye of the tool that called shutdown()
+                await activity.drain()
+                # once a task is cancelled, the parents' speech that awaits the chain would only
+                # answer the cancellation, even when a TaskGroup in between completes with it
+                cancelled = cancelled or not agent_task.done()
+                old_agent = agent_task._old_agent
+                if cancelled and old_agent and old_agent._activity:
+                    parent_interrupted = old_agent._activity.interrupt(force=True)
             # notify AgentTask to complete and wait it to resume the parent agent
             agent_task.cancel()
             await agent_task._wait_for_inactive()
+            if parent_interrupted is not None:
+                # the parent's speech is waiting on this task, it can only end after cancel()
+                await parent_interrupted
 
             if old_agent := agent_task._old_agent:
                 activity = old_agent._activity
@@ -1739,8 +1757,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 to be received after committing the user turn.
                 Default ``2.0`` s. Increase this value if the STT is slow to respond.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
-                to flush the buffer and generate the final transcript.
-                Default ``2.0`` s.
+                to flush the buffer and generate the final transcript when audio input is
+                detached and STT does not support manual flushing. STT with manual flush
+                support receives a flush request instead. Default ``2.0`` s.
             skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
 
         Returns:

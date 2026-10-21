@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 
