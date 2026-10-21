@@ -52,7 +52,7 @@ from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
-DEFAULT_BASE_URL = "wss://streaming-tts.assemblyai.com"
+DEFAULT_BASE_URL = "wss://tts.us.assemblyai.com"
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 # Generate's limit, in code points. A longer sentence becomes several requests rather
@@ -142,9 +142,8 @@ class TTS(tts.TTS):
                 transcript. Defaults to True.
             api_key: AssemblyAI API key. Defaults to the ``ASSEMBLYAI_API_KEY``
                 environment variable.
-            base_url: The Streaming TTS host. Defaults to the global endpoint, which
-                routes to the nearest region. Use ``"wss://tts.us.assemblyai.com"``
-                or ``"wss://tts.eu.assemblyai.com"`` to keep data in one zone.
+            base_url: The Streaming TTS host. Defaults to the US data zone; use
+                ``"wss://tts.eu.assemblyai.com"`` to keep text and audio in the EU.
             tokenizer: Splits the LLM output into the requests sent to the server; each
                 sentence is synthesized as its own request. Defaults to
                 ``livekit.agents.tokenize.blingfire.SentenceTokenizer``.

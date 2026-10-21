@@ -43,7 +43,7 @@ class _Session:
 
 
 class _FakeServer:
-    """A local stand-in for wss://streaming-tts.assemblyai.com/v1/ws.
+    """A local stand-in for wss://tts.us.assemblyai.com/v1/ws.
 
     Each Flush is answered with `frames_per_request` Audio frames, a FlushDone and
     (unless disabled) a WordBoundaries frame with one entry per whitespace token. The
