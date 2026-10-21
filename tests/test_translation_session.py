@@ -533,15 +533,31 @@ async def test_audio_at_the_rooms_own_rate_is_passed_through() -> None:
         await session.aclose()
 
 
-async def test_closing_detaches_the_io_it_was_given() -> None:
-    # room io closes what it made, so a restart must not find the closed devices still set
-    session, *_ = _session()
+async def test_closing_keeps_the_devices_the_caller_supplied() -> None:
+    # room io closes only the devices it made; a caller's own were never closed here, and
+    # dropping the reference would strand them
+    session, audio_in, audio_out, text_out = _session()
     await session.start()
     await session.aclose()
 
-    assert session.input.audio is None
-    assert session.output.audio is None
-    assert session.output.transcription is None
+    assert session.input.audio is audio_in
+    assert session.output.audio is audio_out
+    assert session.output.transcription is text_out
+
+
+async def test_a_session_restarts_on_the_devices_it_was_given() -> None:
+    model = _FakeTranslationModel()
+    session, _, audio_out, _ = _session(model)
+    await session.start()
+    await session.aclose()
+
+    await session.start()
+    try:
+        assert len(model.sessions) == 2
+        model.sessions[1].speak()
+        await _wait_for(lambda: audio_out._pushed_duration > 0)
+    finally:
+        await session.aclose()
 
 
 async def test_a_refused_retarget_leaves_the_model_language_alone() -> None:
@@ -676,5 +692,56 @@ async def test_a_speech_mark_ends_the_segment_even_while_output_is_muted() -> No
 
         await _wait_for(lambda: bool(played))
         assert played[0] > 0
+    finally:
+        await session.aclose()
+
+
+async def test_replacing_the_output_rebuilds_the_resampler_for_its_rate() -> None:
+    model = _FakeTranslationModel(output_segmentation=True)
+    session = TranslationSession(model=model)
+    first = _RecordingAudioOutput(sample_rate=24000)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = first
+
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        model_session.speak(_frame(duration=0.1, sample_rate=16000))
+        await _wait_for(lambda: bool(first.frames))
+        assert {f.sample_rate for f in first.frames} == {24000}
+
+        # the caller swaps in a sink that plays at another rate
+        second = _RecordingAudioOutput(sample_rate=48000)
+        session.output.audio = second
+
+        model_session.speak(_frame(duration=0.1, sample_rate=16000))
+        await _wait_for(lambda: bool(second.frames))
+        assert {f.sample_rate for f in second.frames} == {48000}
+    finally:
+        await session.aclose()
+
+
+async def test_the_silence_timer_drains_the_resampler_into_its_own_segment() -> None:
+    # a tail the resampler holds belongs to the segment being closed, not the next one
+    model = _FakeTranslationModel()  # marks no boundaries, so the timer ends the segment
+    session = TranslationSession(model=model, output_segment_timeout=0.05)
+    audio_out = _RecordingAudioOutput(sample_rate=24000)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = audio_out
+
+    played: list[float] = []
+    audio_out.on("playback_finished", lambda ev: played.append(ev.playback_position))
+
+    await session.start()
+    try:
+        # short enough that resampling holds a partial frame back
+        model.sessions[0].speak(_frame(duration=0.03, sample_rate=16000))
+
+        # the timer drains before it flushes, so the tail reaches the sink inside this
+        # segment; undrained, the flush would find nothing and the tail would surface later
+        await _wait_for(lambda: bool(played))
+        assert session._resampler is None
+        assert audio_out.frames
+        assert {f.sample_rate for f in audio_out.frames} == {24000}
     finally:
         await session.aclose()

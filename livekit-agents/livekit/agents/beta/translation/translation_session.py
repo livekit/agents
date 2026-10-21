@@ -122,6 +122,13 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._output_transcript_ch: aio.Chan[OutputTranscript] | None = None
         self._output_transcript_atask: asyncio.Task[None] | None = None
         self._segment_timer: asyncio.TimerHandle | None = None
+        self._segment_tasks: set[asyncio.Task[None]] = set()
+        # serialises capturing a frame against ending a segment, so a tail the resampler
+        # holds cannot be flushed out from under a frame being captured
+        self._output_lock = asyncio.Lock()
+        self._resampler: rtc.AudioResampler | None = None
+        self._resampler_key: tuple[int, int, int | None] | None = None
+        self._resampler_sink: io.AudioOutput | None = None
 
     @property
     def model(self) -> TranslationModel:
@@ -272,6 +279,9 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = False
             self._cancel_segment_timer()
+            if self._segment_tasks:
+                await aio.cancel_and_wait(*self._segment_tasks)
+                self._segment_tasks.clear()
 
             await aio.cancel_and_wait(
                 *[
@@ -293,12 +303,16 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._model_session.aclose()
                 self._model_session = None
 
-            # detach the inputs and outputs: room io closes the ones it made, and a
-            # restarted session must not mistake them for sinks the caller supplied
-            self.input.audio = None
-            self.input.video = None
-            self.output.audio = None
-            self.output.transcription = None
+            # detach what room io made, since it closes those on the way out and a restart
+            # would otherwise reuse the closed devices. A caller's own stay attached: they
+            # were never closed here, and losing the reference would strand them
+            if (room_io := self._room_io) is not None:
+                if self.input.audio is room_io.audio_input:
+                    self.input.audio = None
+                if self.output.audio is room_io.audio_output:
+                    self.output.audio = None
+                if self.output.transcription is room_io.transcription_output:
+                    self.output.transcription = None
 
             self.emit("close", CloseEvent(reason=reason))
 
@@ -306,6 +320,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._room_io.aclose()
                 self._room_io = None
 
+            self._discard_resampler()
             self._user_state = "listening"
 
     # -- model session --
@@ -322,56 +337,33 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @log_exceptions(logger=logger)
     async def _forward_output_audio_task(self, model_session: TranslationModelSession) -> None:
-        resampler: rtc.AudioResampler | None = None
         marks_segments = self._model.capabilities.output_segmentation
-
-        async def _capture(frame: rtc.AudioFrame, audio_output: io.AudioOutput) -> None:
-            nonlocal resampler
-            if (
-                audio_output.sample_rate is not None
-                and frame.sample_rate != audio_output.sample_rate
-                and resampler is None
-            ):
-                resampler = rtc.AudioResampler(
-                    input_rate=frame.sample_rate,
-                    output_rate=audio_output.sample_rate,
-                    num_channels=frame.num_channels,
-                )
-
-            if resampler is not None:
-                for resampled in resampler.push(frame):
-                    await audio_output.capture_frame(resampled)
-            else:
-                await audio_output.capture_frame(frame)
-
-        async def _drain(audio_output: io.AudioOutput) -> None:
-            if resampler is not None:
-                for resampled in resampler.flush():
-                    await audio_output.capture_frame(resampled)
-
         try:
             async for ev in model_session.audio_stream:
-                audio_output = self.output.audio
-
                 if isinstance(ev, OutputSpeechStopped):
                     # read in order behind the audio it closes, so nothing it ended is
                     # still waiting to be captured. Honoured even while the output is
                     # muted: whatever was captured before the mute is still a segment, and
                     # dropping the mark would merge the next translation into it
-                    if audio_output is not None:
-                        await _drain(audio_output)
-                    self._end_output_segment()
+                    await self._close_output_segment()
                     continue
 
-                if audio_output is None or not self.output.audio_enabled:
+                if self.output.audio is None or not self.output.audio_enabled:
                     continue
 
-                await _capture(ev.frame, audio_output)
+                async with self._output_lock:
+                    if (audio_output := self.output.audio) is None:
+                        continue
+
+                    await self._capture_output_frame(ev.frame, audio_output)
+
                 if not marks_segments:
                     self._arm_segment_timer()
         finally:
-            if (audio_output := self.output.audio) is not None:
-                await _drain(audio_output)
+            self._cancel_segment_timer()
+            async with self._output_lock:
+                if (final_output := self.output.audio) is not None:
+                    await self._drain_resampler(final_output)
 
     @log_exceptions(logger=logger)
     async def _forward_output_transcript_task(self, event_ch: aio.Chan[OutputTranscript]) -> None:
@@ -426,10 +418,77 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     # -- output segments --
 
+    async def _capture_output_frame(
+        self, frame: rtc.AudioFrame, audio_output: io.AudioOutput
+    ) -> None:
+        """Hand one frame to the sink, at the rate that sink plays at.
+
+        The resampler is rebuilt whenever the model's format or the sink changes, since one
+        built for the old pair would tag frames with a rate the new one does not play.
+        """
+        target_rate = audio_output.sample_rate
+        key = (frame.sample_rate, frame.num_channels, target_rate)
+
+        if self._resampler is not None and (
+            self._resampler_key != key or self._resampler_sink is not audio_output
+        ):
+            if self._resampler_sink is audio_output:
+                # same sink, new format: its tail still belongs there
+                await self._drain_resampler(audio_output)
+            else:
+                # the sink was replaced; its tail cannot be played at the new rate
+                logger.debug("audio output replaced, dropping the resampler's tail")
+                self._discard_resampler()
+
+        if target_rate is None or frame.sample_rate == target_rate:
+            await audio_output.capture_frame(frame)
+            return
+
+        if self._resampler is None:
+            self._resampler = rtc.AudioResampler(
+                input_rate=frame.sample_rate,
+                output_rate=target_rate,
+                num_channels=frame.num_channels,
+            )
+            self._resampler_key = key
+            self._resampler_sink = audio_output
+
+        for resampled in self._resampler.push(frame):
+            await audio_output.capture_frame(resampled)
+
+    async def _drain_resampler(self, audio_output: io.AudioOutput) -> None:
+        """Push whatever the resampler still holds, then drop it."""
+        resampler = self._resampler
+        self._discard_resampler()
+        if resampler is None:
+            return
+
+        for frame in resampler.flush():
+            await audio_output.capture_frame(frame)
+
+    def _discard_resampler(self) -> None:
+        self._resampler = None
+        self._resampler_key = None
+        self._resampler_sink = None
+
+    async def _close_output_segment(self) -> None:
+        """End the segment the model has been speaking into.
+
+        Drains the resampler first: a partial frame it is still holding belongs to the
+        segment being closed, not to whatever the model says next.
+        """
+        self._cancel_segment_timer()
+        async with self._output_lock:
+            if (audio_output := self.output.audio) is None:
+                return
+
+            await self._drain_resampler(audio_output)
+            audio_output.flush()
+
     def _arm_segment_timer(self) -> None:
         self._cancel_segment_timer()
         self._segment_timer = self._loop.call_later(
-            self._output_segment_timeout, self._end_output_segment
+            self._output_segment_timeout, self._close_output_segment_soon
         )
 
     def _cancel_segment_timer(self) -> None:
@@ -437,11 +496,11 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._segment_timer.cancel()
             self._segment_timer = None
 
-    def _end_output_segment(self) -> None:
-        self._cancel_segment_timer()
-
-        if (audio_output := self.output.audio) is not None:
-            audio_output.flush()
+    def _close_output_segment_soon(self) -> None:
+        self._segment_timer = None
+        task = asyncio.create_task(self._close_output_segment())
+        self._segment_tasks.add(task)
+        task.add_done_callback(self._segment_tasks.discard)
 
     # -- state --
 
