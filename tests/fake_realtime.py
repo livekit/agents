@@ -214,13 +214,11 @@ async def run_realtime_tool_turn(
     *,
     tool_executed: asyncio.Event,
     interrupt: bool = False,
-    text: str = "let me check",
     on_session: Callable[[AgentSession], None] | None = None,
 ) -> tuple[AgentSession, FakeRealtimeModel]:
     """Drive one realtime turn that speaks a second of audio and calls the agent's first tool.
 
     With ``interrupt`` the turn is cut short as soon as the tool returns; otherwise it plays out.
-    An empty ``text`` leaves the turn without an assistant message.
     """
     model = FakeRealtimeModel(capabilities=fake_capabilities())
 
@@ -250,7 +248,7 @@ async def run_realtime_tool_turn(
             )
         )
         message_ch.close()
-        text_ch.send_nowait(text)
+        text_ch.send_nowait("let me check")
         text_ch.close()
         # a full second of audio, so the turn is still playing when the tool returns
         audio_ch.send_nowait(_audio_frame(1.0))

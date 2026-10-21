@@ -341,10 +341,19 @@ def test_end_call_tool_ignore_on_enter_flag():
     assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
 
 
-@pytest.mark.parametrize("spoke", [True, False])
-async def test_end_call_tool_waits_for_a_reply_only_if_the_turn_was_silent(monkeypatch, spoke):
-    # GPT-Live says goodbye while its backend calls end_call; the tool reply would
-    # only repeat it, or never come, so the session ends with the turn
+@pytest.mark.parametrize(
+    "end_instructions, output",
+    [
+        (None, None),
+        ("say goodbye to the user", "say goodbye to the user"),
+        ("say goodbye to the user", None),  # cleared by on_tool_completed
+    ],
+)
+async def test_end_call_tool_waits_for_a_reply_only_if_it_asks_for_one(
+    monkeypatch, end_instructions, output
+):
+    # a None result asks for no reply; GPT-Live answers it anyway, and when the answer
+    # was silent the call stayed open for the 5 s tool reply timeout
     from livekit.agents.beta import EndCallTool
     from livekit.agents.beta.tools import end_call
 
@@ -354,7 +363,15 @@ async def test_end_call_tool_waits_for_a_reply_only_if_the_turn_was_silent(monke
     async def on_tool_called(_: Toolset.ToolCalledEvent) -> None:
         called.set()
 
-    agent = Agent(instructions="test", tools=EndCallTool(on_tool_called=on_tool_called).tools)
+    async def on_tool_completed(ev: Toolset.ToolCompletedEvent) -> None:
+        ev.output = output
+
+    tool = EndCallTool(
+        end_instructions=end_instructions,
+        on_tool_called=on_tool_called,
+        on_tool_completed=on_tool_completed,
+    )
+    agent = Agent(instructions="test", tools=tool.tools)
     events: list[str] = []
 
     def on_session(session: Any) -> None:
@@ -362,11 +379,9 @@ async def test_end_call_tool_waits_for_a_reply_only_if_the_turn_was_silent(monke
         session.shutdown = lambda **kw: (events.append("shutdown"), shutdown(**kw))
         session.on("close", lambda _: events.append("close"))
 
-    await run_realtime_tool_turn(
-        agent, tool_executed=called, on_session=on_session, text="goodbye" if spoke else ""
-    )
-    # a silent turn is still waiting for the tool reply when the session closes
-    assert events[0] == ("shutdown" if spoke else "close")
+    await run_realtime_tool_turn(agent, tool_executed=called, on_session=on_session)
+    # a tool that asked for a reply is still waiting for it when the session closes
+    assert events[0] == ("shutdown" if output is None else "close")
 
 
 class TestToolExecution:
