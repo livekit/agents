@@ -575,7 +575,7 @@ async def test_usage_event_reports_final_tokens_as_output_tokens():
         }
     ]
 
-    events = await _drive_recv(stream, messages, expect_events=3)
+    events = await _drive_recv(stream, messages, expect_events=4)
     usage = next(e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE)
 
     assert usage.recognition_usage is not None
@@ -637,9 +637,8 @@ async def test_usage_events_report_incremental_output_tokens():
         },
     ]
 
-    # Per endpoint: START_OF_SPEECH is not emitted before endpoint flush
-    # (tokens are final-only), so each message yields FINAL + END_OF_SPEECH + USAGE.
-    events = await _drive_recv(stream, messages, expect_events=6)
+    # Each message yields START_OF_SPEECH + FINAL + END_OF_SPEECH + USAGE.
+    events = await _drive_recv(stream, messages, expect_events=8)
     usages = [e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE]
 
     assert len(usages) == 2
@@ -669,7 +668,7 @@ async def test_usage_event_counts_translation_tokens():
         }
     ]
 
-    events = await _drive_recv(stream, messages, expect_events=3)
+    events = await _drive_recv(stream, messages, expect_events=4)
     usage = next(e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE)
 
     assert usage.recognition_usage is not None
@@ -797,14 +796,15 @@ async def test_endpoint_after_full_retraction_emits_end_of_speech():
         },
     ]
 
-    # Event cadence is deterministic here: 5 speech events + one
+    # Event cadence is deterministic here: 6 speech events + one
     # RECOGNITION_USAGE per increase of total_audio_proc_ms (3 messages = 3).
-    events = await _drive_recv(stream, messages, expect_events=8)
+    events = await _drive_recv(stream, messages, expect_events=9)
     # RECOGNITION_USAGE rides the same channel per audio cadence — filter it;
     # we only assert the speech-event sequence.
     events = [e for e in events if e.type != SpeechEventType.RECOGNITION_USAGE]
 
     assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
         SpeechEventType.FINAL_TRANSCRIPT,
         SpeechEventType.END_OF_SPEECH,
         SpeechEventType.START_OF_SPEECH,
@@ -821,16 +821,17 @@ async def test_endpoint_after_full_retraction_emits_end_of_speech():
         {"tokens": [END_TOKEN_FINAL], "total_audio_proc_ms": 200},
         {"tokens": [_final_token(" Halo.", "en"), END_TOKEN_FINAL], "total_audio_proc_ms": 900},
     ]
-    events2 = await _drive_recv(stream2, messages2, expect_events=8)
+    events2 = await _drive_recv(stream2, messages2, expect_events=9)
     events2 = [e for e in events2 if e.type != SpeechEventType.RECOGNITION_USAGE]
     assert [e.type for e in events2] == [
         SpeechEventType.START_OF_SPEECH,
         SpeechEventType.INTERIM_TRANSCRIPT,
         SpeechEventType.END_OF_SPEECH,
+        SpeechEventType.START_OF_SPEECH,
         SpeechEventType.FINAL_TRANSCRIPT,
         SpeechEventType.END_OF_SPEECH,
     ]
-    assert events2[3].alternatives[0].text == " Halo."
+    assert events2[4].alternatives[0].text == " Halo."
 
 
 # --- RECOGNITION_USAGE reporting cadence -----------------------------------
@@ -909,16 +910,58 @@ async def test_recognition_usage_still_reported_on_endpoint_frame():
                 "total_audio_proc_ms": 1500,
             }
         ],
-        expect_events=3,
+        expect_events=4,
     )
 
     assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
         SpeechEventType.FINAL_TRANSCRIPT,
         SpeechEventType.END_OF_SPEECH,
         SpeechEventType.RECOGNITION_USAGE,
     ]
     assert events[-1].recognition_usage is not None
     assert events[-1].recognition_usage.audio_duration == pytest.approx(1.5)
+
+
+# --- Speaking state across endpoints ----------------------------------------
+
+
+async def test_endpoint_without_speech_emits_nothing():
+    """An endpoint with no open segment does not emit a stray END_OF_SPEECH."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {"tokens": [END_TOKEN_FINAL]},
+            {"tokens": [_final_token("Hello.", "en"), END_TOKEN_FINAL]},
+        ],
+        expect_events=3,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+    ]
+
+
+async def test_final_and_endpoint_in_one_message_opens_speech():
+    """Final tokens that arrive with their endpoint, with no earlier message to
+    open the segment, still get a START_OF_SPEECH."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [{"tokens": [_final_token("Hello.", "en"), END_TOKEN_FINAL]}],
+        expect_events=3,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+    ]
 
 
 # ---------------------------------------------------------------------------
