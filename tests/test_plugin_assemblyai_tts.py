@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import struct
 import time
 from dataclasses import dataclass, field
@@ -65,15 +66,14 @@ class _FakeServer:
         drop_word_boundaries: bool | set[int] = False,
         connect_error: dict[str, Any] | None = None,
         error_after_begin: dict[str, Any] | None = None,
-        echo_sample_rate: int | None = None,
         tail_frames_after_cancel: int = 0,
         cancelled_delay: float = 0.0,
         late_word_boundaries: bool = False,
+        hold_late_word_boundaries: bool = False,
         error_after_flush_dones: tuple[int, dict[str, Any]] | None = None,
         begin_delay: float = 0.0,
         flush_id_model: Literal["live", "documented"] = "live",
         session_seconds: float = 3600,
-        inactivity_timeout: float | None = None,
         word_boundaries_after_cancelled: bool = False,
     ) -> None:
         self.frames_per_request = frames_per_request
@@ -82,19 +82,20 @@ class _FakeServer:
         self.drop_word_boundaries = drop_word_boundaries
         self.connect_error = connect_error
         self.error_after_begin = error_after_begin
-        self.echo_sample_rate = echo_sample_rate
         # Audio frames of the cancelled request still sent between Cancel and Cancelled
         self.tail_frames_after_cancel = tail_frames_after_cancel
         self.cancelled_delay = cancelled_delay
         # send WordBoundaries(N) after the first Audio of request N+1
         self.late_word_boundaries = late_word_boundaries
+        # keep a late WordBoundaries for the next request even when none is queued, so it
+        # can outlast the stream that owns it
+        self.hold_late_word_boundaries = hold_late_word_boundaries
         # (count, Error frame): Error + close after that many FlushDone frames
         self.error_after_flush_dones = error_after_flush_dones
         self.begin_delay = begin_delay
         self.flush_id_model = flush_id_model
         self.session_seconds = session_seconds
         # echoed in Begin as if the account set it; the fake doesn't enforce it
-        self.inactivity_timeout = inactivity_timeout
         # hold the WordBoundaries of completed requests until the first Cancel, then send
         # them right after its Cancelled
         self.word_boundaries_after_cancelled = word_boundaries_after_cancelled
@@ -150,10 +151,9 @@ class _FakeServer:
                 "configuration": {
                     "voice": session.params.get("voice", "jane"),
                     "language": session.params.get("language", "english"),
-                    "sample_rate": self.echo_sample_rate
-                    or int(session.params.get("sample_rate", SAMPLE_RATE)),
+                    "sample_rate": int(session.params.get("sample_rate", SAMPLE_RATE)),
                     "encoding": session.params.get("encoding"),
-                    "inactivity_timeout": self.inactivity_timeout,
+                    "inactivity_timeout": None,
                     "word_boundaries": self.word_boundaries
                     and session.params.get("word_boundaries") == "true",
                     "voice_clone": False,
@@ -231,7 +231,7 @@ class _FakeServer:
     ) -> None:
         late: dict[str, Any] | None = None
         while True:
-            if late is not None and queue.empty():
+            if late is not None and queue.empty() and not self.hold_late_word_boundaries:
                 # nothing follows to trail behind
                 await ws.send_json(late)
                 late = None
@@ -784,10 +784,8 @@ async def test_word_boundaries_after_cancelled_are_dropped(flush_id_model: str) 
     assert timed[0].start_time == pytest.approx(0.0)
 
 
-@pytest.mark.parametrize(("flush_id_model", "next_flush_id"), [("live", 3), ("documented", 4)])
-async def test_cancel_after_some_requests_completed(
-    flush_id_model: str, next_flush_id: int
-) -> None:
+@FLUSH_ID_MODELS
+async def test_cancel_after_some_requests_completed(flush_id_model: str) -> None:
     """FlushDone(0) arrives, then a Cancel cuts request 1; the next reply's id is learned."""
     # request 1 runs until ~0.6s at the fake; the Cancel lands at ~0.4s
     async with _FakeServer(
@@ -807,15 +805,28 @@ async def test_cancel_after_some_requests_completed(
         srv.frames_per_request = 2
         srv.frame_delay = 0.0
         audio, timed, _ = await _speak(tts, ["A fresh reply."])
-        (conn,) = tts._pool._available
         await tts.aclose()
 
     assert len(srv.frames("Cancel")) == 1
-    # live: the fresh reply reuses id 2; documented: Flush 0, Flush 1, Cancel, so id 3
-    assert conn._next_flush_id == next_flush_id
     expected = srv.audio_by_request[-1]
     assert _strip_padding(audio, len(expected)) == expected
     assert "".join(timed) == "A fresh reply. "
+
+
+async def test_word_boundaries_from_the_previous_stream_are_ignored(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The last request's timings outlast the grace and land in the next stream."""
+    async with _FakeServer(late_word_boundaries=True, hold_late_word_boundaries=True) as srv:
+        tts = _make_tts(srv)
+        await _speak(tts, ["The first reply."])
+        with caplog.at_level(logging.WARNING):
+            _, timed, _ = await _speak(tts, ["The second reply."])
+        await tts.aclose()
+
+    assert len(srv.sessions) == 1
+    assert "".join(timed) == "The second reply. "
+    assert "unknown request" not in caplog.text
 
 
 async def test_word_boundaries_trailing_the_next_requests_audio() -> None:
@@ -929,7 +940,6 @@ async def test_transient_error_is_retried_on_a_new_session() -> None:
     ("frame", "retryable"),
     [
         # servers that send only the code and the text
-        (_error(3006, "No message received for 30 seconds."), True),
         (_error(3006, "Generate text is 2500 characters, over the 2000-character limit."), False),
         (_error(3010, "Input text rate exceeded"), False),
         (_error(3009, "Too many sessions opened for this account"), True),
@@ -1015,16 +1025,6 @@ async def test_short_session_is_still_used() -> None:
     assert audio
 
 
-async def test_keepalive_follows_the_echoed_inactivity_timeout() -> None:
-    async with _FakeServer(inactivity_timeout=0.2) as srv:
-        tts = _make_tts(srv)
-        await _speak(tts, ["Hello."])
-        await asyncio.sleep(0.35)  # idle in the pool
-        await tts.aclose()
-
-    assert len(srv.frames("KeepAlive")) >= 2
-
-
 async def test_unbroken_run_is_sent_in_speakable_pieces() -> None:
     from livekit.plugins.assemblyai.tts import _MAX_UNBROKEN_CHARS
 
@@ -1036,16 +1036,6 @@ async def test_unbroken_run_is_sent_in_speakable_pieces() -> None:
 
     runs = [run for f in srv.frames("Generate") for run in f["text"].split()]
     assert max(len(r) for r in runs) <= _MAX_UNBROKEN_CHARS
-
-
-async def test_sample_rate_mismatch_is_rejected() -> None:
-    async with _FakeServer(echo_sample_rate=16000) as srv:
-        tts = _make_tts(srv)
-        with pytest.raises(Exception, match="16000 Hz"):
-            await _speak(tts, ["Hello."], max_retry=2)
-        await tts.aclose()
-
-    assert len(srv.sessions) == 1
 
 
 async def test_error_mid_stream_is_raised_after_partial_audio() -> None:

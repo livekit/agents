@@ -76,14 +76,11 @@ _WORD_BOUNDARIES_GRACE = 0.5
 
 # For Error frames without `retryable`: a rejected credential, a bad parameter, frame or
 # voice, input sent / audio read at the wrong pace, a custom voice that is gone (3012) or
-# not paired with the model (3014). Retrying unchanged can't help...
+# not paired with the model (3014). Retrying unchanged can't help.
 _NON_RETRYABLE_CODES = (1008, 3006, 3010, 3011, 3012, 3014)
-# ...except a 3006 from the inactivity timeout
-_INACTIVITY_PREFIX = "No message received"
 
 _FLUSH_FRAME = json.dumps({"type": "Flush"})
 _CANCEL_FRAME = json.dumps({"type": "Cancel"})
-_KEEPALIVE_FRAME = json.dumps({"type": "KeepAlive"})
 
 
 @dataclass
@@ -389,14 +386,6 @@ class TTS(tts.TTS):
             extra={"session_id": conn.session_id, "configuration": conn.configuration},
         )
 
-        if conn.sample_rate != opts.sample_rate:
-            # the stream would play every frame at the wrong speed and pitch
-            await conn.aclose()
-            raise APIError(
-                f"AssemblyAI TTS session {conn.session_id} was created at "
-                f"{conn.sample_rate} Hz instead of the requested {opts.sample_rate} Hz",
-                retryable=False,
-            )
         if opts.word_timestamps and not conn.word_boundaries:
             logger.warning(
                 "AssemblyAI TTS cannot supply word timings for this session, "
@@ -630,7 +619,9 @@ class _StreamRun:
         if not isinstance(flush_id, int) or base is None:
             return None
         index = flush_id - base
-        if not 0 <= index < len(self._requests):
+        if index < 0:
+            return None  # word timings trailing the previous holder's last request
+        if index >= len(self._requests):
             logger.warning(
                 "AssemblyAI TTS sent a frame for an unknown request",
                 extra={"session_id": self.conn.session_id, "flush_id": flush_id},
@@ -725,8 +716,7 @@ class _Listener:
 
     def __init__(self) -> None:
         self._ch = utils.aio.Chan[dict[str, Any] | APIError]()
-        # flush_id of the stream's first request; unknown after a Cancel from the previous
-        # holder until the first frame that follows its `Cancelled`
+        # flush_id of the holder's first request, read from its first Audio or FlushDone
         self.base_flush_id: int | None = None
 
     def push(self, item: dict[str, Any] | APIError) -> None:
@@ -757,14 +747,8 @@ class _Connection:
         self.expires_at = (
             float(expires_at) if isinstance(expires_at, (int, float)) else time.time() + 3600
         )
-        self.sample_rate = self.configuration.get("sample_rate")
         self.word_boundaries = self.configuration.get("word_boundaries") is True
-        inactivity_timeout = self.configuration.get("inactivity_timeout")
 
-        # The flush_id the next request will get. A Cancel makes it unknown: the server
-        # numbers the requests after it its own way (and has changed how), so it is read
-        # from the first Audio or FlushDone after the last `Cancelled` instead.
-        self._next_flush_id: int | None = 0
         self._cancels_pending = 0
         self._listener: _Listener | None = None
         self._error: APIError | None = None
@@ -774,18 +758,7 @@ class _Connection:
 
         self._send_ch = utils.aio.Chan[str]()
         self._recv_atask = asyncio.create_task(self._recv_loop(), name="AssemblyAITTS.recv")
-        self._send_atask = asyncio.create_task(
-            self._send_loop(
-                # the server closes an idle session after `inactivity_timeout` seconds
-                # without a client frame; that is in effect only when Begin echoes one
-                keepalive_interval=(
-                    inactivity_timeout / 2
-                    if isinstance(inactivity_timeout, (int, float)) and inactivity_timeout > 0
-                    else None
-                )
-            ),
-            name="AssemblyAITTS.send",
-        )
+        self._send_atask = asyncio.create_task(self._send_loop(), name="AssemblyAITTS.send")
 
     @property
     def usable(self) -> bool:
@@ -800,13 +773,9 @@ class _Connection:
         return self._error
 
     def attach(self) -> _Listener:
-        # After a previous holder's Cancel the new holder has no base, so nothing reaches
-        # it until the server's numbering is known again. This relies on cancel() being
-        # called before the socket is put back in the pool.
         listener = _Listener()
         if self._error is not None:
             listener.push(self._error)
-        listener.base_flush_id = self._next_flush_id
         self._listener = listener
         return listener
 
@@ -826,7 +795,6 @@ class _Connection:
         """Barge-in: drop every request the server has not finished yet."""
         self.send(_CANCEL_FRAME)
         self._cancels_pending += 1
-        self._next_flush_id = None
 
     async def aclose(self) -> None:
         self._closed = True
@@ -842,18 +810,10 @@ class _Connection:
         if self._listener is not None:
             self._listener.push(error)
 
-    async def _send_loop(self, *, keepalive_interval: float | None) -> None:
+    async def _send_loop(self) -> None:
+        # sessions are opened without `inactivity_timeout`, so an idle one needs no KeepAlive
         try:
-            while True:
-                try:
-                    if keepalive_interval is None:
-                        frame = await self._send_ch.recv()
-                    else:
-                        frame = await asyncio.wait_for(self._send_ch.recv(), keepalive_interval)
-                except asyncio.TimeoutError:
-                    frame = _KEEPALIVE_FRAME
-                except utils.aio.ChanClosed:
-                    return
+            async for frame in self._send_ch:
                 await self._ws.send_str(frame)
         except Exception as e:
             self._fail(
@@ -931,24 +891,18 @@ class _Connection:
             return  # Begin, Termination, and frame types added later
 
         flush_id = data.get("flush_id")
-        if not isinstance(flush_id, int) or self._cancels_pending:
+        listener = self._listener
+        if not isinstance(flush_id, int) or self._cancels_pending or listener is None:
             # until `Cancelled`, everything belongs to the requests being cancelled (the
             # server sends nothing of theirs after it)
             return
-        if self._next_flush_id is None:
+        if listener.base_flush_id is None:
             if kind == "WordBoundaries":
-                return  # trails a request from before the Cancel
-            # the first request sent after the Cancel
-            self._next_flush_id = flush_id
-            if self._listener is not None:
-                self._listener.base_flush_id = flush_id
-        if kind == "FlushDone":
-            self._next_flush_id = max(self._next_flush_id, flush_id + 1)
-
-        listener = self._listener
-        if listener is None or listener.base_flush_id is None or flush_id < listener.base_flush_id:
-            # no holder, or a WordBoundaries trailing the previous holder's last request
-            return
+                return  # trails the previous holder's last request
+            # A previous holder either saw every one of its requests done or cancelled
+            # them, so the first Audio or FlushDone is this holder's first request. Reading
+            # the id instead of counting holds however the server numbers after a Cancel.
+            listener.base_flush_id = flush_id
         listener.push(data)
 
 
@@ -971,8 +925,7 @@ def _error_from_frame(data: dict[str, Any], *, session_id: str | None) -> APISta
     retryable = data.get("retryable")
     if not isinstance(retryable, bool):
         # servers that send only the code and the text
-        inactivity = error_type == "inactivity_timeout" or text.startswith(_INACTIVITY_PREFIX)
-        retryable = code not in _NON_RETRYABLE_CODES or inactivity
+        retryable = code not in _NON_RETRYABLE_CODES
     kind = f" ({error_type})" if isinstance(error_type, str) else ""
     return APIStatusError(
         f"AssemblyAI TTS error {code}{kind}: {text}",
