@@ -230,6 +230,7 @@ class SpeechStream(stt.SpeechStream):
         self._http_client: AWSCRTHTTPClient | None = None
         self._audio_duration = 0.0
         self._last_audio_duration_report_time = time.monotonic()
+        self._speaking = False
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -446,7 +447,10 @@ class SpeechStream(stt.SpeechStream):
 
         stream = transcript_event.transcript.results
         for resp in stream:
-            if resp.start_time is not None and resp.start_time == 0.0:
+            # Transcribe has no speech-start event, and start_time is measured from the
+            # start of the stream, so open the segment on its first transcript instead
+            if resp.alternatives and resp.alternatives[0].transcript and not self._speaking:
+                self._speaking = True
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                 )
@@ -468,7 +472,8 @@ class SpeechStream(stt.SpeechStream):
                         )
                     )
 
-            if not resp.is_partial:
+            if not resp.is_partial and self._speaking:
+                self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     def _streaming_recognize_response_to_speech_data(self, resp: Result) -> stt.SpeechData:
