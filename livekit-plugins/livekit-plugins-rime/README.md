@@ -104,9 +104,13 @@ Streaming timeouts include speaking and upload time: use a sufficiently long
 `stt_conn_options.timeout` (the example uses 120 seconds). Live audio is never
 replayed automatically, regardless of `max_retry`. SDK errors retain the request
 ID without including provider messages. Later utterances upload while earlier
-requests finish; transcripts are published in utterance order. While waiting to publish, only the latest cumulative interim
-snapshot is retained per utterance. Pending upload audio is bounded to ten seconds
-across all requests, and at most eight utterances may await completion/publication;
+requests finish. Speech boundaries and transcripts are published together in
+utterance order: start, interim updates, final transcript, then end. The end event
+waits for successful transcription; its timestamp still reflects when speech ended.
+While waiting to publish, only the latest cumulative interim snapshot is retained
+per utterance. Supply a VAD to `AgentSession` as shown above for immediate speech
+activity and interruption detection while STT events await earlier results.
+Pending upload audio is bounded to ten seconds across all requests, and at most eight utterances may await completion/publication;
 overflow fails explicitly. SDK/service duration and size limits still
 apply. The caller retains ownership of the supplied VAD.
 

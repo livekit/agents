@@ -34,6 +34,7 @@ class _Utterance:
     audio: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     done: asyncio.Event = field(default_factory=asyncio.Event)
     audio_duration: float = 0.0
+    speech_start_time: float = field(default_factory=time.time)
     speech_end_time: float | None = None
     publishing: bool = False
     interim: stt.SpeechEvent | None = None
@@ -141,12 +142,28 @@ class SpeechStream(stt.RecognizeStream):
 
         async def emit_results() -> None:
             while (utterance := await ordered.get()) is not None:
+                # Boundaries and transcripts must describe the same utterance. Later
+                # requests can upload now, but cannot advance LiveKit's turn state.
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        stt.SpeechEventType.START_OF_SPEECH,
+                        speech_start_time=utterance.speech_start_time,
+                    )
+                )
                 utterance.publishing = True
                 for event in (utterance.interim, utterance.final, utterance.usage):
                     if event is not None:
                         self._event_ch.send_nowait(event)
                 utterance.interim = utterance.final = utterance.usage = None
                 await utterance.done.wait()
+                # Closing the audio source is not a transcript completion signal.
+                # Publish the end only after the final, including buffered results.
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        stt.SpeechEventType.END_OF_SPEECH,
+                        speech_end_time=utterance.speech_end_time,
+                    )
+                )
                 pending.remove(utterance)
 
         def upload(utterance: _Utterance, frames: list[rtc.AudioFrame]) -> None:
@@ -169,12 +186,6 @@ class SpeechStream(stt.RecognizeStream):
         def finish(utterance: _Utterance) -> None:
             if utterance.speech_end_time is None:
                 utterance.speech_end_time = time.time()
-            self._event_ch.send_nowait(
-                stt.SpeechEvent(
-                    stt.SpeechEventType.END_OF_SPEECH,
-                    speech_end_time=utterance.speech_end_time,
-                )
-            )
             utterance.audio.put_nowait(None)
 
         async def segment() -> bool:
@@ -221,9 +232,6 @@ class SpeechStream(stt.RecognizeStream):
                         upload(active, event.frames)
                         pending.add(active)
                         ordered.put_nowait(active)
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(stt.SpeechEventType.START_OF_SPEECH)
-                        )
                         task = asyncio.create_task(transcribe(active, options))
                         requests.add(task)
                         task.add_done_callback(finished)

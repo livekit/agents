@@ -1,11 +1,14 @@
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 import rimelabs_sdk as sdk
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, stt, vad
+from livekit.agents import AgentSession, APIConnectOptions, APIStatusError, llm, stt, vad
+from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.plugins import rime
 
 pytestmark = pytest.mark.unit
@@ -147,9 +150,10 @@ async def test_live_audio_prefix_deltas_and_final(setup, backend):
         assert final.request_id == "test-request"
 
         stream.end_input()
-        assert all(
-            e.type == stt.SpeechEventType.RECOGNITION_USAGE for e in [e async for e in stream]
-        )
+        assert [e.type async for e in stream] == [
+            stt.SpeechEventType.RECOGNITION_USAGE,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ]
     finally:
         await owner.aclose()
     assert detector.closed
@@ -230,11 +234,11 @@ async def test_end_input_finishes_active_utterance_without_vad_end(setup):
         stream.end_input()
         events = [event async for event in stream]
         assert [e.type for e in events] == [
-            stt.SpeechEventType.END_OF_SPEECH,
             stt.SpeechEventType.FINAL_TRANSCRIPT,
             stt.SpeechEventType.RECOGNITION_USAGE,
+            stt.SpeechEventType.END_OF_SPEECH,
         ]
-        assert events[1].alternatives[0].text == "Ice"
+        assert events[0].alternatives[0].text == "Ice"
         assert streams[0].audio == [b"aa"]
     finally:
         await owner.aclose()
@@ -400,22 +404,34 @@ async def test_later_utterance_uploads_while_first_final_waits(setup, monkeypatc
             await wait_until(lambda count=count: len(streams[1].audio) == count)
         detector.send(vad.VADEventType.END_OF_SPEECH, bytes(352000))
         await asyncio.wait_for(second_done.wait(), 2)
-        await wait_until(
-            lambda: sum(e.type == stt.SpeechEventType.END_OF_SPEECH for e in observed) == 2
-        )
-        assert sum(e.type == stt.SpeechEventType.START_OF_SPEECH for e in observed) == 2
+        assert sum(e.type == stt.SpeechEventType.START_OF_SPEECH for e in observed) == 1
+        assert not any(e.type == stt.SpeechEventType.END_OF_SPEECH for e in observed)
         assert not any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in observed)
         assert streams[1].options["language"] == "es"
         assert streams[1].options["mode"] == sdk.TranscriptionMode.VERBATIM
         assert streams[1].options["context_terms"] == ("Second",)
-        ends = [e.speech_end_time for e in observed if e.type == stt.SpeechEventType.END_OF_SPEECH]
         stream.end_input()
         release.set()
         await asyncio.wait_for(reader, 2)
         finals = [e for e in observed if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
         assert [e.request_id for e in finals] == ["first", "second"]
         assert [e.alternatives[0].text for e in finals] == ["a", "b" * 11]
+        ends = [e.speech_end_time for e in observed if e.type == stt.SpeechEventType.END_OF_SPEECH]
         assert [e.speech_end_time for e in finals] == ends
+        assert [
+            e.type
+            for e in observed
+            if e.type
+            in (
+                stt.SpeechEventType.START_OF_SPEECH,
+                stt.SpeechEventType.FINAL_TRANSCRIPT,
+                stt.SpeechEventType.END_OF_SPEECH,
+            )
+        ] == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ] * 2
         usage = [e.recognition_usage.audio_duration for e in observed if e.recognition_usage]
         assert usage == pytest.approx([1 / 16000, 11])
         assert all(s.closed for s in streams)
@@ -462,7 +478,10 @@ async def test_parallel_requests_cancel_on_error_or_close(setup, monkeypatch, fa
                 await asyncio.wait_for(reader, 2)
         assert all(s.closed for s in streams)
         assert detector.closed
-        assert not any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in observed)
+        assert not any(
+            e.type in (stt.SpeechEventType.FINAL_TRANSCRIPT, stt.SpeechEventType.END_OF_SPEECH)
+            for e in observed
+        )
     finally:
         await owner.aclose()
         reader.cancel()
@@ -557,3 +576,97 @@ async def test_pending_utterances_are_bounded(setup, monkeypatch):
         await owner.aclose()
         reader.cancel()
         await asyncio.gather(reader, return_exceptions=True)
+
+
+@pytest.mark.parametrize("contract", ["append_fragments", "revised_hypotheses"])
+@pytest.mark.parametrize("second_finishes_first", [False, True])
+@pytest.mark.parametrize("commit_between_events", [False, True])
+async def test_concurrent_results_reach_audio_recognition(
+    setup, monkeypatch, contract, second_finishes_first, commit_between_events
+):
+    """Exercise the real turn consumer, including both possible commit schedules."""
+    owner, detector, streams, _, _, _ = setup
+    owner._output_contract = contract
+    release = [asyncio.Event(), asyncio.Event()]
+    uploaded = [asyncio.Event(), asyncio.Event()]
+
+    async def delayed(self):
+        index = streams.index(self)
+        self.request_id = str(index)
+        text = "first" if index == 0 else "second"
+        async for chunk in self.source:
+            self.audio.append(chunk)
+            if contract == "append_fragments":
+                yield sdk.TranscriptionDelta(text=text)
+            else:
+                yield sdk.TranscriptionPartial(text=text)
+        uploaded[index].set()
+        await release[index].wait()
+        yield sdk.TranscriptionFinal(text=text, language="en")
+
+    monkeypatch.setattr(SDKStream, "updates", delayed)
+    session = AgentSession(vad=None, turn_handling={"turn_detection": "stt"})
+    hooks = MagicMock()
+    hooks.retrieve_chat_ctx.return_value = llm.ChatContext()
+    hooks.on_end_of_turn.return_value = True
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0, max_delay=0),
+        stt=owner,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+    stream = owner.stream()
+    observed = []
+
+    async def collect():
+        async for event in stream:
+            observed.append(event)
+            await recognition._on_stt_event(event)
+            # A turn task may run before the next queued event, or the consumer
+            # may drain all queued events first. Both schedules must be safe.
+            if commit_between_events and event.type == stt.SpeechEventType.END_OF_SPEECH:
+                task = recognition._end_of_turn_task
+                if task is not None:
+                    await task
+
+    reader = asyncio.create_task(collect())
+    try:
+        for index in range(2):
+            detector.send(vad.VADEventType.START_OF_SPEECH, b"aa")
+            detector.send(vad.VADEventType.END_OF_SPEECH, b"aa")
+            await asyncio.wait_for(uploaded[index].wait(), 2)
+        stream.end_input()
+        if second_finishes_first:
+            release[1].set()
+            await wait_until(lambda: streams[1].closed)
+        release[0].set()
+        if not second_finishes_first:
+            await wait_until(
+                lambda: (
+                    any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in observed)
+                    and sum(e.type == stt.SpeechEventType.START_OF_SPEECH for e in observed) == 2
+                )
+            )
+            # B is still awaiting its final. A's completion must not leave B
+            # in the ended/committed state established by an earlier boundary.
+            assert recognition._speaking
+            release[1].set()
+        await asyncio.wait_for(reader, 2)
+        if recognition._end_of_turn_task is not None:
+            await asyncio.wait_for(recognition._end_of_turn_task, 2)
+        turns = [call.args[0].new_transcript for call in hooks.on_end_of_turn.call_args_list]
+        assert " ".join(turns) == "first second"
+        assert recognition._audio_transcript == ""
+        if commit_between_events:
+            assert turns == ["first", "second"]
+        assert [
+            call.args[0].alternatives[0].text for call in hooks.on_final_transcript.call_args_list
+        ] == ["first", "second"]
+    finally:
+        await owner.aclose()
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+        await recognition._aclose()
