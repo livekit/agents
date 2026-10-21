@@ -303,6 +303,11 @@ class TranslationRoomIO:
 
         linked = self.linked_track
         if linked is not None and linked.publication.sid == track_sid:
+            # already on it, but pin it all the same: unpinned, a later search is free to
+            # settle on another of the publisher's microphones
+            self._track_sid = track_sid
+            if self._audio_input:
+                self._audio_input.set_track_sid(track_sid)
             return
 
         found: _LinkedTrack | None = None

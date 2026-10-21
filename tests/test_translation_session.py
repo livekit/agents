@@ -745,3 +745,43 @@ async def test_the_silence_timer_drains_the_resampler_into_its_own_segment() -> 
         assert {f.sample_rate for f in audio_out.frames} == {24000}
     finally:
         await session.aclose()
+
+
+async def test_a_pending_tail_goes_to_the_sink_it_was_converted_for() -> None:
+    # replacing the sink mid-translation must not replay the old sink's tail at a new rate
+    model = _FakeTranslationModel(output_segmentation=True)
+    session = TranslationSession(model=model, output_segment_timeout=10)
+    first = _RecordingAudioOutput(sample_rate=24000)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = first
+
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        # short enough that the resampler holds part of it back
+        model_session.speak(_frame(duration=0.03, sample_rate=16000))
+        await _wait_for(lambda: session._resampler is not None)
+
+        second = _RecordingAudioOutput(sample_rate=48000)
+        session.output.audio = second
+        model_session.speak(_frame(duration=0.1, sample_rate=16000))
+        await _wait_for(lambda: bool(second.frames))
+
+        # the tail went to the sink it was built for, never to the replacement
+        assert {f.sample_rate for f in first.frames} <= {24000}
+        assert {f.sample_rate for f in second.frames} == {48000}
+    finally:
+        await session.aclose()
+
+
+async def test_pinning_the_track_already_linked_still_pins_it() -> None:
+    room_io = _room_io()
+    audio_in, _ = _linked(room_io)
+    alice = _FakeParticipant("alice")
+    room_io._apply_link(_LinkedTrack(_FakePublication("TR_a"), alice))  # type: ignore[arg-type]
+
+    room_io.set_track("TR_a")
+
+    # unpinned, a later automatic search is free to settle on another microphone
+    assert room_io._track_sid == "TR_a"
+    assert audio_in.tracks[-1] == "TR_a"

@@ -362,8 +362,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         finally:
             self._cancel_segment_timer()
             async with self._output_lock:
-                if (final_output := self.output.audio) is not None:
-                    await self._drain_resampler(final_output)
+                await self._drain_resampler()
 
     @log_exceptions(logger=logger)
     async def _forward_output_transcript_task(self, event_ch: aio.Chan[OutputTranscript]) -> None:
@@ -433,12 +432,12 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._resampler_key != key or self._resampler_sink is not audio_output
         ):
             if self._resampler_sink is audio_output:
-                # same sink, new format: its tail still belongs there
-                await self._drain_resampler(audio_output)
+                # same sink, new format: its tail still belongs there, in this segment
+                await self._drain_resampler()
             else:
-                # the sink was replaced; its tail cannot be played at the new rate
-                logger.debug("audio output replaced, dropping the resampler's tail")
-                self._discard_resampler()
+                # the sink was replaced: its segment ends on the sink that received it
+                logger.debug("audio output replaced, closing the segment it was given")
+                await self._close_segment_locked()
 
         if target_rate is None or frame.sample_rate == target_rate:
             await audio_output.capture_frame(frame)
@@ -456,15 +455,19 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         for resampled in self._resampler.push(frame):
             await audio_output.capture_frame(resampled)
 
-    async def _drain_resampler(self, audio_output: io.AudioOutput) -> None:
-        """Push whatever the resampler still holds, then drop it."""
-        resampler = self._resampler
+    async def _drain_resampler(self) -> None:
+        """Push what the resampler still holds to the sink it was built for, then drop it.
+
+        Not to whatever sink is current: those frames were converted for the old one, and
+        another sink would replay them at its own rate.
+        """
+        resampler, sink = self._resampler, self._resampler_sink
         self._discard_resampler()
-        if resampler is None:
+        if resampler is None or sink is None:
             return
 
         for frame in resampler.flush():
-            await audio_output.capture_frame(frame)
+            await sink.capture_frame(frame)
 
     def _discard_resampler(self) -> None:
         self._resampler = None
@@ -472,18 +475,23 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._resampler_sink = None
 
     async def _close_output_segment(self) -> None:
-        """End the segment the model has been speaking into.
-
-        Drains the resampler first: a partial frame it is still holding belongs to the
-        segment being closed, not to whatever the model says next.
-        """
+        """End the segment the model has been speaking into."""
         self._cancel_segment_timer()
         async with self._output_lock:
-            if (audio_output := self.output.audio) is None:
-                return
+            await self._close_segment_locked()
 
-            await self._drain_resampler(audio_output)
-            audio_output.flush()
+    async def _close_segment_locked(self) -> None:
+        """End the segment on the sink that actually received its audio.
+
+        Drains the resampler first: a partial frame it is still holding belongs to the
+        segment being closed, not to whatever the model says next. The sink it was built
+        for owns the segment, so replacing ``output.audio`` mid-translation closes the old
+        sink's segment rather than flushing the replacement's.
+        """
+        sink = self._resampler_sink or self.output.audio
+        await self._drain_resampler()
+        if sink is not None:
+            sink.flush()
 
     def _arm_segment_timer(self) -> None:
         self._cancel_segment_timer()
