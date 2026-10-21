@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import time
@@ -178,6 +179,8 @@ _OutboundMessage = _CreateContextMsg | _SendTextMsg | _FlushContextMsg | _CloseC
 class _InworldConnection:
     """A WebSocket connection to Inworld TTS, multiplexing up to 5 concurrent contexts."""
 
+    HANDSHAKE_TIMEOUT = 10.0
+
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -204,16 +207,21 @@ class _InworldConnection:
         self._cleanup_task: asyncio.Task[None] | None = None
 
     async def connect(self, timeout: float) -> None:
-        """Wait for the WebSocket handshake, starting it on first call.
+        """Wait up to ``timeout`` for the WebSocket handshake, starting it on first call.
 
-        The handshake is shared by all callers and is not cancelled when one of them is.
-        On failure the connection is closed and its contexts' waiters fail.
+        The handshake is shared by all callers and has its own deadline, so a caller that
+        times out or is cancelled doesn't affect the others.
         """
         if self._connect_task is None:
-            self._connect_task = asyncio.create_task(self._connect(timeout))
-        await asyncio.shield(self._connect_task)
+            self._connect_task = asyncio.create_task(self._connect())
+        await asyncio.wait_for(asyncio.shield(self._connect_task), timeout)
 
-    async def _connect(self, timeout: float) -> None:
+    async def _connect(self) -> None:
+        """Open the WebSocket and start the send, receive and cleanup loops.
+
+        If the handshake fails or exceeds HANDSHAKE_TIMEOUT, the connection is closed and
+        every registered context's waiter fails with APIConnectionError.
+        """
         if self._closed:
             return
 
@@ -229,7 +237,7 @@ class _InworldConnection:
                         "X-Request-Id": request_id,
                     },
                 ),
-                timeout=timeout,
+                timeout=self.HANDSHAKE_TIMEOUT,
             )
         except Exception as e:
             logger.warning(
@@ -736,6 +744,7 @@ class TTS(tts.TTS):
         return "Inworld"
 
     def _get_connection(self) -> _InworldConnection:
+        """Return the shared connection, replacing it with a new one once it has closed."""
         if self._connection is None or self._connection._closed:
             self._connection = _InworldConnection(
                 session=self._ensure_session(),
@@ -838,7 +847,8 @@ class TTS(tts.TTS):
             self._prewarm_task = asyncio.create_task(self._prewarm_impl())
 
     async def _prewarm_impl(self) -> None:
-        await self._get_connection().connect(DEFAULT_API_CONNECT_OPTIONS.timeout)
+        with contextlib.suppress(asyncio.TimeoutError):
+            await self._get_connection().connect(DEFAULT_API_CONNECT_OPTIONS.timeout)
 
     def synthesize(
         self,

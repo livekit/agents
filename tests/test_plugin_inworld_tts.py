@@ -259,8 +259,9 @@ async def test_handshake_timeout_fails_waiters():
 
     tts = _tts_with_ws_connect(_hang)
     conn = tts._get_connection()
+    conn.HANDSHAKE_TIMEOUT = 0.05
     _, waiter = conn.create_context(MagicMock(), tts._opts)
-    await conn.connect(0.05)
+    await conn.connect(5.0)
 
     with pytest.raises(APIConnectionError):
         await waiter
@@ -478,3 +479,28 @@ async def test_stream_aclose_after_input_ended_cancels_context():
     await stream.aclose()
 
     assert conn.calls[-1] == ("close_context", True)
+
+
+async def test_caller_timeout_does_not_fail_shared_handshake():
+    ws = _FakeWS()
+    calls = 0
+
+    async def _slow_connect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.2)
+        return ws
+
+    tts = _tts_with_ws_connect(_slow_connect)
+    conn = tts._get_connection()
+    conn.create_context(MagicMock(), tts._opts)
+    _, long_waiter = conn.create_context(MagicMock(), tts._opts)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await conn.connect(0.05)
+    await conn.connect(5.0)
+
+    assert calls == 1
+    assert conn._ws is ws
+    assert not long_waiter.done()
+    await tts.aclose()
