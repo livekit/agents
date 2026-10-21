@@ -78,10 +78,8 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
 
     tts = assemblyai.TTS(
-        # The language is derived from the voice. English voices: alba, anna, charles,
-        # eve, george, iris, jane, jean, mary, michael, paul, reid, vera. Other languages:
-        # lola (es), juergen (de), giovanni (it), rafael (pt), estelle (fr); or pass only
-        # `language="es"` for that language's default voice.
+        # See https://www.assemblyai.com/docs/tts/voices. For another language, pass the
+        # voice's language too, e.g. voice="lola", language="es".
         voice="jane",
         # For data residency, pin a region: "wss://streaming-tts.us.assemblyai.com"
         # or "wss://streaming-tts.eu.assemblyai.com".

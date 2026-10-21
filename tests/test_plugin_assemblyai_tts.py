@@ -329,33 +329,29 @@ def _strip_padding(audio: bytes, expected_len: int) -> bytes:
 # --- configuration ---------------------------------------------------------------------
 
 
-def test_voice_and_language_resolution() -> None:
+def test_voice_and_language() -> None:
     from livekit.plugins.assemblyai import TTS
 
     # nothing given: the server's defaults (jane, English)
     tts = TTS(api_key="k")
     assert (tts.voice, tts.language) == (None, None)
 
-    # a listed voice brings its language, since a voice sent with another one fails
-    tts = TTS(api_key="k", voice="lola")
-    assert (tts.voice, tts.language) == ("lola", "spanish")
-    tts = TTS(api_key="k", voice=" Jane ")
-    assert (tts.voice, tts.language) == ("jane", "english")
+    # voices pass through; the language is never inferred from one
+    tts = TTS(api_key="k", voice=" lola ")
+    assert (tts.voice, tts.language) == ("lola", None)
 
-    # a language alone leaves the voice to the server's default for it
-    for language in ("spanish", "Spanish", "es", "es-MX"):
-        tts = TTS(api_key="k", language=language)
-        assert (tts.voice, tts.language) == (None, "spanish")
+    # any code or English name becomes the name the API takes
+    for language in ("spanish", "Spanish", "es", "es-MX", "spa"):
+        assert TTS(api_key="k", language=language).language == "spanish"
+    assert TTS(api_key="k", language="pt-BR").language == "portuguese"
+    # a language the service may add later passes through
+    assert TTS(api_key="k", language="ja").language == "japanese"
+    assert TTS(api_key="k", language="Klingon").language == "klingon"
 
-    # anything the table doesn't list is the server's call, as voices gain languages
-    tts = TTS(api_key="k", voice="jane", language="spanish")
-    assert (tts.voice, tts.language) == ("jane", "spanish")
-    tts = TTS(api_key="k", voice="newvoice", language="german")
-    assert (tts.voice, tts.language) == ("newvoice", "german")
-    tts = TTS(api_key="k", voice="newvoice")
-    assert (tts.voice, tts.language) == ("newvoice", None)
-    tts = TTS(api_key="k", language="klingon")
-    assert (tts.voice, tts.language) == (None, "klingon")
+    with pytest.raises(ValueError, match="voice"):
+        TTS(api_key="k", voice=" ")
+    with pytest.raises(ValueError, match="language"):
+        TTS(api_key="k", language="")
 
 
 def test_custom_voice_and_model() -> None:
@@ -373,7 +369,7 @@ def test_custom_voice_and_model() -> None:
 
     # model_id selects the model for a named voice too
     tts = TTS(api_key="k", voice="vera", model_id="some-model")
-    assert (tts.voice, tts.language) == ("vera", "english")
+    assert (tts.voice, tts.model_id) == ("vera", "some-model")
 
     with pytest.raises(ValueError, match="either"):
         TTS(api_key="k", voice="jane", voice_id=voice_id)
@@ -386,13 +382,11 @@ def test_custom_voice_and_model() -> None:
 def test_update_options_switches_between_voice_and_voice_id() -> None:
     from livekit.plugins.assemblyai import TTS
 
-    tts = TTS(api_key="k", voice="lola")
+    tts = TTS(api_key="k", voice="lola", language="es")
     tts.update_options(voice_id="clone")
-    assert (tts.voice, tts.voice_id, tts.language) == (None, "clone", None)
-    tts.update_options(language="german")  # the clone is kept
-    assert (tts.voice, tts.voice_id, tts.language) == (None, "clone", "german")
-    tts.update_options(voice="paul")
-    assert (tts.voice, tts.voice_id, tts.language) == ("paul", None, "english")
+    assert (tts.voice, tts.voice_id, tts.language) == (None, "clone", "spanish")
+    tts.update_options(voice="paul", language=None)
+    assert (tts.voice, tts.voice_id, tts.language) == ("paul", None, None)
     tts.update_options(voice_id="clone", language="fr", model_id="latest")
     assert (tts.voice_id, tts.language, tts.model_id) == ("clone", "french", "latest")
     tts.update_options(model_id=None)
@@ -418,19 +412,14 @@ def test_api_key_required(monkeypatch: pytest.MonkeyPatch) -> None:
     assert TTS()._opts.api_key == "from-env"
 
 
-def test_update_options_keeps_voice_and_language_paired() -> None:
+def test_update_options_sets_each_field_on_its_own() -> None:
     from livekit.plugins.assemblyai import TTS
 
     tts = TTS(api_key="k", voice="anna")
-    tts.update_options(language="en")  # anna already speaks English
-    assert (tts.voice, tts.language) == ("anna", "english")
-    tts.update_options(language="fr")  # anna doesn't: French's default voice
-    assert (tts.voice, tts.language) == (None, "french")
-    tts.update_options(voice="paul")
-    assert (tts.voice, tts.language) == ("paul", "english")
-    tts.update_options(language="german")
-    tts.update_options(voice="custom")  # says nothing about the language
-    assert (tts.voice, tts.language) == ("custom", "german")
+    tts.update_options(language="fr")  # the voice is kept: the server judges the pair
+    assert (tts.voice, tts.language) == ("anna", "french")
+    tts.update_options(voice="estelle")
+    assert (tts.voice, tts.language) == ("estelle", "french")
 
 
 def test_split_request_text() -> None:
@@ -468,7 +457,7 @@ def test_split_request_text() -> None:
 
 async def test_stream_sends_one_request_per_sentence() -> None:
     async with _FakeServer() as srv:
-        tts = _make_tts(srv, voice="anna")
+        tts = _make_tts(srv, voice="anna", language="en")
         audio, timed, segments = await _speak(
             tts, ["Hi, thanks for ", "calling. How can I ", "help you today?"]
         )
@@ -636,7 +625,7 @@ async def test_update_options_opens_a_new_session() -> None:
     async with _FakeServer() as srv:
         tts = _make_tts(srv)
         await _speak(tts, ["Hello."])
-        tts.update_options(voice="giovanni")
+        tts.update_options(voice="giovanni", language="it")
         await _speak(tts, ["Ciao."])
         await tts.aclose()
 
@@ -657,7 +646,7 @@ async def test_custom_voice_and_model_are_sent_at_connect() -> None:
     keys = ("voice", "voice_id", "language", "model_id")
     assert [tuple(s.params.get(k) for k in keys) for s in srv.sessions] == [
         (None, "clone", None, "some-model"),
-        ("jane", None, "english", None),
+        ("jane", None, None, None),
     ]
 
 

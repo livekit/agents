@@ -27,21 +27,17 @@ session = AgentSession(
 )
 ```
 
-`voice` is one of the [voices](https://www.assemblyai.com/docs/tts/voices). Each voice speaks one
-language today, and the plugin derives `language` from the voice, so you only pass one of them:
+`voice` is a voice name from the [voice library](https://www.assemblyai.com/docs/tts/voices), and
+`language` a language code (`"es"`, `"es-MX"`) or English name (`"spanish"`). Both are passed to
+the server as given, and the API doesn't infer one from the other, so pass the voice's language
+along with it:
 
-| Language   | Voices                                                                                                  |
-| ---------- | ------------------------------------------------------------------------------------------------------- |
-| English    | `alba`, `anna`, `charles`, `eve`, `george`, `iris`, `jane` (default), `jean`, `mary`, `michael`, `paul`, `reid`, `vera` |
-| Spanish    | `lola`                                                                                                  |
-| German     | `juergen`                                                                                               |
-| Italian    | `giovanni`                                                                                              |
-| Portuguese | `rafael`                                                                                                |
-| French     | `estelle`                                                                                               |
+```python
+assemblyai.TTS(voice="lola", language="es")
+```
 
-`assemblyai.TTS(language="es")` (or `"spanish"`) uses the server's default voice for that language.
-A voice or a voice/language pairing the table doesn't list is passed through for the server to
-judge, and the server's error lists the voices available.
+Leave `voice` out to get the server's default voice for the language (`jane` in English). The
+server's error for a voice it doesn't speak in that language lists the voices it does.
 
 A custom (cloned) voice is passed as `voice_id` instead of `voice`. Use the `id` that AssemblyAI
 returned when the voice was created, or your slug for it. The voice speaks the language of its

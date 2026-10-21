@@ -30,7 +30,7 @@ import re
 import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, get_args
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -52,68 +52,8 @@ from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
-TTSVoices = Literal[
-    # English
-    "alba",
-    "anna",
-    "charles",
-    "eve",
-    "george",
-    "jane",
-    "jean",
-    "mary",
-    "michael",
-    "paul",
-    "vera",
-    "iris",
-    "reid",
-    # Spanish, German, Italian, Portuguese, French
-    "lola",
-    "juergen",
-    "giovanni",
-    "rafael",
-    "estelle",
-]
-
-TTSLanguages = Literal["english", "spanish", "german", "italian", "portuguese", "french"]
-
 DEFAULT_BASE_URL = "wss://streaming-tts.assemblyai.com"
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
-
-# The voices the service offers today, each speaking one language: a voice sent with
-# another language fails ~0.5s after `Begin`, so the language is derived from the voice.
-# Voices outside this table are passed through as-is.
-VOICE_LANGUAGES: dict[str, str] = {
-    "alba": "english",
-    "anna": "english",
-    "charles": "english",
-    "eve": "english",
-    "george": "english",
-    "iris": "english",
-    "jane": "english",
-    "jean": "english",
-    "mary": "english",
-    "michael": "english",
-    "paul": "english",
-    "reid": "english",
-    "vera": "english",
-    "lola": "spanish",
-    "juergen": "german",
-    "giovanni": "italian",
-    "rafael": "portuguese",
-    "estelle": "french",
-}
-
-# `language` takes the full English name of the language, not an ISO code.
-_LANGUAGES = frozenset(get_args(TTSLanguages))
-_ISO_LANGUAGES = {
-    "en": "english",
-    "es": "spanish",
-    "de": "german",
-    "it": "italian",
-    "pt": "portuguese",
-    "fr": "french",
-}
 
 # Generate's limit, in code points. A longer sentence becomes several requests rather
 # than several Generates under one Flush: together with _MAX_IN_FLIGHT_REQUESTS that
@@ -166,9 +106,9 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         model_id: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
@@ -185,16 +125,16 @@ class TTS(tts.TTS):
 
         Args:
             voice: A voice name, see https://www.assemblyai.com/docs/tts/voices.
-                Defaults to the server's default voice for ``language``, ``"jane"`` in
-                English.
+                Defaults to the server's default voice of the language. The API does
+                not infer the language from the voice: pass the voice's ``language``
+                too.
             voice_id: A custom (cloned) voice, instead of ``voice``: the ``id`` the Voices
                 API returned when it was created, or the account's slug for it. The voice
                 must be paired with the session's model, and it belongs to the data zone
                 whose host created it, so set ``base_url`` to that host.
-            language: The language to synthesize. Accepts the API's full English name
-                (``"spanish"``) or a language code (``"es"``, ``"es-MX"``). Defaults to
-                the language of ``voice`` (see ``VOICE_LANGUAGES``), else English; with
-                ``voice_id``, to the language of the voice's reference clip.
+            language: The language to synthesize, as a code (``"es"``, ``"es-MX"``) or an
+                English name (``"spanish"``). Defaults to English; with ``voice_id``, to
+                the language of the voice's reference clip.
             model_id: The model to synthesize with, by name or alias. Defaults to the
                 default model of the language. A ``voice_id`` voice must be paired with it.
             sample_rate: Output sample rate in Hz, one of 8000, 16000, 22050, 24000,
@@ -238,22 +178,10 @@ class TTS(tts.TTS):
         if is_given(voice) and is_given(voice_id):
             raise ValueError("pass either `voice` or `voice_id`, not both")
 
-        if is_given(voice_id):
-            resolved_voice = None
-            resolved_voice_id: str | None = _require(voice_id, "voice_id")
-            # a custom voice speaks its reference clip's language unless told otherwise
-            resolved_language = _normalize_language(language) if is_given(language) else None
-        else:
-            resolved_voice_id = None
-            resolved_voice, resolved_language = _resolve_voice(
-                voice if is_given(voice) else None,
-                language if is_given(language) else None,
-            )
-
         self._opts = _TTSOptions(
-            voice=resolved_voice,
-            voice_id=resolved_voice_id,
-            language=resolved_language,
+            voice=_require(voice, "voice") if is_given(voice) else None,
+            voice_id=_require(voice_id, "voice_id") if is_given(voice_id) else None,
+            language=_language_name(language) if is_given(language) else None,
             model_id=_require(model_id, "model_id") if is_given(model_id) else None,
             sample_rate=sample_rate,
             word_timestamps=word_timestamps,
@@ -309,9 +237,9 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         model_id: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
         """Change the voice, language or model used by streams created from now on.
@@ -321,41 +249,29 @@ class TTS(tts.TTS):
         keeps its voice until it finishes.
 
         Args:
-            voice: A voice name; replaces a ``voice_id``. When ``language`` is not also
-                given, the language follows the new voice if it is in
-                ``VOICE_LANGUAGES``, else stays as is.
-            voice_id: A custom voice; replaces ``voice``. When ``language`` is not also
-                given, the voice speaks its reference clip's language.
-            language: The language to synthesize. When neither voice is also given and
-                the current ``voice`` speaks another language, the server's default
-                voice of the new language is used.
+            voice: A voice name; replaces a ``voice_id``. Pass ``language`` too when the
+                voice speaks another language.
+            voice_id: A custom voice; replaces ``voice``.
+            language: A language code or English name, or None for the server's default.
             model_id: A model name or alias, or None for the default model of the
                 language.
         """
         if is_given(voice) and is_given(voice_id):
             raise ValueError("pass either `voice` or `voice_id`, not both")
 
-        new_voice, new_voice_id = self._opts.voice, self._opts.voice_id
-        new_language, new_model_id = self._opts.language, self._opts.model_id
+        opts = self._opts
+        new_voice, new_voice_id = opts.voice, opts.voice_id
+        new_language, new_model_id = opts.language, opts.model_id
+        if is_given(voice):
+            new_voice, new_voice_id = _require(voice, "voice"), None
         if is_given(voice_id):
             new_voice, new_voice_id = None, _require(voice_id, "voice_id")
-            new_language = _normalize_language(language) if is_given(language) else None
-        elif is_given(voice):
-            new_voice_id = None
-            new_voice, resolved_language = _resolve_voice(
-                voice, language if is_given(language) else None
-            )
-            # a voice outside VOICE_LANGUAGES says nothing about the language
-            new_language = resolved_language or new_language
-        elif is_given(language):
-            new_language = _normalize_language(language)
-            if new_voice and VOICE_LANGUAGES.get(new_voice, new_language) != new_language:
-                new_voice = None
+        if is_given(language):
+            new_language = _language_name(language) if language is not None else None
         if is_given(model_id):
             new_model_id = _require(model_id, "model_id") if model_id is not None else None
 
         new = (new_voice, new_voice_id, new_language, new_model_id)
-        opts = self._opts
         if new != (opts.voice, opts.voice_id, opts.language, opts.model_id):
             opts.voice, opts.voice_id, opts.language, opts.model_id = new
             self._pool.invalidate()
@@ -1067,17 +983,6 @@ def _error_from_frame(data: dict[str, Any], *, session_id: str | None) -> APISta
     )
 
 
-def _normalize_language(language: str) -> str:
-    name = language.strip().lower()
-    if name in _LANGUAGES:
-        return name
-    try:
-        return _ISO_LANGUAGES.get(LanguageCode(name).language, name)
-    except Exception:
-        # not something LanguageCode understands; let the server decide
-        return name
-
-
 def _require(value: str, name: str) -> str:
     value = value.strip()
     if not value:
@@ -1085,21 +990,10 @@ def _require(value: str, name: str) -> str:
     return value
 
 
-def _resolve_voice(voice: str | None, language: str | None) -> tuple[str | None, str | None]:
-    """Normalize a voice and language, deriving the language from a known voice.
-
-    A pairing VOICE_LANGUAGES doesn't list is passed through for the server to judge, since
-    the service is moving to voices that speak several languages.
-    """
-    normalized = _normalize_language(language) if language else None
-    if voice is None:
-        return None, normalized
-
-    voice = voice.strip()
-    if voice.lower() in VOICE_LANGUAGES:
-        # the service is case-sensitive about names it lists lowercase
-        voice = voice.lower()
-    return voice, normalized or VOICE_LANGUAGES.get(voice)
+def _language_name(language: str) -> str:
+    """The API takes a language's English name (``"spanish"``), not a code."""
+    language = _require(language, "language")
+    return LanguageCode(language).to_language_name() or language.lower()
 
 
 def _split_request_text(text: str) -> list[str]:

@@ -19,7 +19,7 @@ See https://docs.livekit.io/agents/integrations/stt/assemblyai/ for more informa
 
 from .log import logger
 from .stt import STT, SpeechStream
-from .tts import TTS, SynthesizeStream, TTSLanguages, TTSVoices
+from .tts import TTS, SynthesizeStream
 from .version import __version__
 
 __all__ = [
@@ -27,8 +27,6 @@ __all__ = [
     "SpeechStream",
     "TTS",
     "SynthesizeStream",
-    "TTSLanguages",
-    "TTSVoices",
     "logger",
     "__version__",
 ]
