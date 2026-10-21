@@ -352,14 +352,18 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         try:
             async for ev in model_session.audio_stream:
                 audio_output = self.output.audio
-                if audio_output is None or not self.output.audio_enabled:
-                    continue
 
                 if isinstance(ev, OutputSpeechStopped):
                     # read in order behind the audio it closes, so nothing it ended is
-                    # still waiting to be captured
-                    await _drain(audio_output)
+                    # still waiting to be captured. Honoured even while the output is
+                    # muted: whatever was captured before the mute is still a segment, and
+                    # dropping the mark would merge the next translation into it
+                    if audio_output is not None:
+                        await _drain(audio_output)
                     self._end_output_segment()
+                    continue
+
+                if audio_output is None or not self.output.audio_enabled:
                     continue
 
                 await _capture(ev.frame, audio_output)

@@ -656,3 +656,25 @@ async def test_a_named_screenshare_track_can_reach_the_model() -> None:
         assert rtc.TrackSource.SOURCE_MICROPHONE in room_io._audio_input._accepted_sources
     finally:
         await room_io.aclose()
+
+
+async def test_a_speech_mark_ends_the_segment_even_while_output_is_muted() -> None:
+    # or the next translation extends the segment the mute interrupted
+    model = _FakeTranslationModel(output_segmentation=True)
+    session, _, audio_out, _ = _session(model)
+    played: list[float] = []
+    audio_out.on("playback_finished", lambda ev: played.append(ev.playback_position))
+
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        model_session.speak()
+        await _wait_for(lambda: audio_out._pushed_duration > 0)
+
+        session.output.set_audio_enabled(False)
+        model_session.end_speech()
+
+        await _wait_for(lambda: bool(played))
+        assert played[0] > 0
+    finally:
+        await session.aclose()
