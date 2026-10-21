@@ -8,6 +8,7 @@ from livekit import rtc
 
 from ...job import DEFAULT_PARTICIPANT_KINDS
 from ...log import logger
+from ...telemetry import trace_types
 from ...types import ATTRIBUTE_PUBLISH_ON_BEHALF, NOT_GIVEN, NotGivenOr
 from ...utils import aio, is_given, log_exceptions
 from ...voice.events import CloseReason
@@ -315,9 +316,9 @@ class TranslationRoomIO:
         logger.info(
             "TranslationRoomIO linked to track",
             extra={
-                "track": track_sid,
-                "participant": self._participant_identity,
-                "room": self._room.name,
+                trace_types.ATTR_TRACK_SID: track_sid,
+                trace_types.ATTR_PARTICIPANT_IDENTITY: self._participant_identity,
+                trace_types.ATTR_ROOM_NAME: self._room.name,
             },
         )
 
@@ -430,6 +431,9 @@ class TranslationRoomIO:
             logger.info(
                 "closing translation session due to participant disconnect "
                 "(disable via `TranslationRoomOptions.close_on_disconnect=False`)",
-                extra={"room": self._room.name, "participant": participant.identity},
+                extra={
+                    trace_types.ATTR_ROOM_NAME: self._room.name,
+                    trace_types.ATTR_PARTICIPANT_IDENTITY: participant.identity,
+                },
             )
             self._session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)

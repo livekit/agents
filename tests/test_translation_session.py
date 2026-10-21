@@ -59,10 +59,10 @@ class _FakeTranslationSession(TranslationModelSession):
         self.pushed: list[rtc.AudioFrame] = []
         self.retargeted: list[str] = []
         self.closed = False
-        self._audio_ch = utils.aio.Chan[TranslatedAudioFrame]()
+        self._audio_ch = utils.aio.Chan[TranslatedAudioFrame | OutputSpeechStopped]()
 
     @property
-    def audio_stream(self) -> AsyncIterable[TranslatedAudioFrame]:
+    def audio_stream(self) -> AsyncIterable[TranslatedAudioFrame | OutputSpeechStopped]:
         return self._audio_ch
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
@@ -83,17 +83,27 @@ class _FakeTranslationSession(TranslationModelSession):
     def speak(self, frame: rtc.AudioFrame | None = None) -> None:
         self._audio_ch.send_nowait(TranslatedAudioFrame(frame=frame or _frame()))
 
+    def end_speech(self) -> None:
+        self._audio_ch.send_nowait(OutputSpeechStopped())
+
 
 class _FakeTranslationModel(TranslationModel):
     """A translator whose every report is driven by the test."""
 
-    def __init__(self, *, target_language: str = "es", retargetable: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        target_language: str = "es",
+        retargetable: bool = False,
+        output_segmentation: bool = False,
+    ) -> None:
         super().__init__(
             capabilities=TranslationCapabilities(
                 input_transcription=True,
                 output_transcription=True,
                 turn_reporting=True,
                 retargetable=retargetable,
+                output_segmentation=output_segmentation,
             ),
             target_language=target_language,
         )
@@ -244,8 +254,8 @@ async def test_the_speakers_turns_drive_the_user_state() -> None:
         await session.aclose()
 
 
-async def test_the_model_reporting_its_speech_ended_ends_the_segment() -> None:
-    model = _FakeTranslationModel()
+async def test_the_model_marking_its_speech_ended_ends_the_segment() -> None:
+    model = _FakeTranslationModel(output_segmentation=True)
     session, _, audio_out, _ = _session(model)
     played: list[float] = []
     audio_out.on("playback_finished", lambda ev: played.append(ev.playback_position))
@@ -253,11 +263,49 @@ async def test_the_model_reporting_its_speech_ended_ends_the_segment() -> None:
     await session.start()
     try:
         model.sessions[0].speak()
-        await _wait_for(lambda: audio_out._pushed_duration > 0)
-
-        model.sessions[0].emit("output_speech_stopped", OutputSpeechStopped())
+        model.sessions[0].end_speech()
         await _wait_for(lambda: bool(played))
         assert played[0] > 0  # the segment played out rather than being cut
+    finally:
+        await session.aclose()
+
+
+async def test_the_mark_cannot_overtake_the_audio_it_closes() -> None:
+    # queued together, the mark is read behind the frames, so none land in the next segment
+    model = _FakeTranslationModel(output_segmentation=True)
+    session, _, audio_out, _ = _session(model)
+    played: list[float] = []
+    audio_out.on("playback_finished", lambda ev: played.append(ev.playback_position))
+
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        for _ in range(3):
+            model_session.speak()
+        model_session.end_speech()
+
+        await _wait_for(lambda: bool(played))
+        assert len(played) == 1
+        assert played[0] == pytest.approx(3 * 0.02, abs=1e-6)
+    finally:
+        await session.aclose()
+
+
+async def test_a_model_that_marks_its_own_segments_runs_no_silence_timer() -> None:
+    # a pause inside one translation must not split it
+    model = _FakeTranslationModel(output_segmentation=True)
+    session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    played: list[float] = []
+    audio_out.on("playback_finished", lambda ev: played.append(ev.playback_position))
+
+    await session.start()
+    try:
+        model.sessions[0].speak()
+        await asyncio.sleep(0.15)  # longer than the timer, which must not be armed
+        assert played == []
+
+        model.sessions[0].end_speech()
+        await _wait_for(lambda: bool(played))
     finally:
         await session.aclose()
 
@@ -431,3 +479,89 @@ async def test_a_named_track_ignores_the_participant_filter() -> None:
     room_io._on_track_published(screen, _FakeParticipant("someone-else"))  # type: ignore[arg-type]
     assert room_io.linked_track is not None
     assert room_io.linked_track.publication is screen
+
+
+# -- what the fixes above are about --
+
+
+class _RecordingAudioOutput(FakeAudioOutput):
+    """Keeps every frame it was handed, to check what rate reached the room."""
+
+    def __init__(self, *, sample_rate: int) -> None:
+        super().__init__(sample_rate=sample_rate)
+        self.frames: list[rtc.AudioFrame] = []
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        self.frames.append(frame)
+        await super().capture_frame(frame)
+
+
+async def test_model_audio_is_resampled_to_the_rate_the_room_plays_at() -> None:
+    model = _FakeTranslationModel(output_segmentation=True)
+    session = TranslationSession(model=model)
+    audio_out = _RecordingAudioOutput(sample_rate=24000)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = audio_out
+
+    await session.start()
+    try:
+        # the provider speaks at 16 kHz into a sink that plays at 24 kHz
+        model.sessions[0].speak(_frame(duration=0.1, sample_rate=16000))
+        model.sessions[0].end_speech()
+        await _wait_for(lambda: bool(audio_out.frames))
+
+        assert {frame.sample_rate for frame in audio_out.frames} == {24000}
+    finally:
+        await session.aclose()
+
+
+async def test_audio_at_the_rooms_own_rate_is_passed_through() -> None:
+    model = _FakeTranslationModel(output_segmentation=True)
+    session = TranslationSession(model=model)
+    audio_out = _RecordingAudioOutput(sample_rate=24000)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = audio_out
+
+    await session.start()
+    try:
+        sent = _frame(duration=0.1, sample_rate=24000)
+        model.sessions[0].speak(sent)
+        await _wait_for(lambda: bool(audio_out.frames))
+        assert audio_out.frames[0] is sent  # no resampler in the way
+    finally:
+        await session.aclose()
+
+
+async def test_closing_detaches_the_io_it_was_given() -> None:
+    # room io closes what it made, so a restart must not find the closed devices still set
+    session, *_ = _session()
+    await session.start()
+    await session.aclose()
+
+    assert session.input.audio is None
+    assert session.output.audio is None
+    assert session.output.transcription is None
+
+
+async def test_a_refused_retarget_leaves_the_model_language_alone() -> None:
+    class _RefusingSession(_FakeTranslationSession):
+        def update_options(self, *, target_language: str) -> None:
+            raise RuntimeError(f"{target_language} is not available on this connection")
+
+    class _RefusingModel(_FakeTranslationModel):
+        def session(self) -> _FakeTranslationSession:
+            model_session = _RefusingSession(self)
+            self.sessions.append(model_session)
+            return model_session
+
+    model = _RefusingModel(target_language="es", retargetable=True)
+    session, *_ = _session(model)
+    await session.start()
+    try:
+        with pytest.raises(RuntimeError, match="not available on this connection"):
+            session.set_target_language("fr")
+
+        # the session is still speaking Spanish, so the model must still say so
+        assert model.target_language == "es"
+    finally:
+        await session.aclose()

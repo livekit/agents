@@ -20,7 +20,17 @@ class TranslationCapabilities:
     output_transcription: bool = False
     """Whether the model transcribes the translation it speaks."""
     turn_reporting: bool = False
-    """Whether the model reports where the speaker's turns start and end."""
+    """Whether the model reports where the speaker's turns start and end.
+
+    About the speech it hears. For the speech it speaks, see ``output_segmentation``.
+    """
+    output_segmentation: bool = False
+    """Whether the model marks where each translation it speaks ends.
+
+    When it does, the session ends a playout segment on that mark alone. When it does not,
+    the session falls back to a silence timer, which cannot tell a pause inside a sentence
+    from the end of one.
+    """
     retargetable: bool = False
     """Whether the target language can be changed on a running session."""
 
@@ -65,7 +75,11 @@ class InputSpeechStopped:
 
 @dataclass
 class OutputSpeechStopped:
-    """The model finished speaking a translation; its audio up to here is one segment."""
+    """The model finished speaking a translation; its audio up to here is one segment.
+
+    Yielded by :attr:`TranslationModelSession.audio_stream` rather than emitted as an event,
+    so it cannot overtake audio the model has already queued ahead of it.
+    """
 
 
 class TranslationModelError(BaseModel):
@@ -82,7 +96,6 @@ TranslationEventTypes = Literal[
     "input_speech_stopped",
     "input_transcript",  # the model's transcript of what it heard
     "output_transcript",  # the model's transcript of what it said
-    "output_speech_stopped",
     "error",
 ]
 
@@ -179,10 +192,10 @@ class TranslationModelSession(
     """One run of a :class:`TranslationModel`: audio in, translated audio out.
 
     The speech the model hears is pushed in frame by frame with :meth:`push_audio`; the
-    translation it speaks is read out of :attr:`audio_stream`. What it heard and what it said
-    arrive as ``input_transcript`` and ``output_transcript`` events, the speaker's turns as
-    ``input_speech_started`` and ``input_speech_stopped``, and the end of each spoken
-    translation as ``output_speech_stopped``.
+    translation it speaks is read out of :attr:`audio_stream`, which also carries an
+    :class:`OutputSpeechStopped` where each spoken translation ends. What it heard and what it
+    said arrive as ``input_transcript`` and ``output_transcript`` events, and the speaker's
+    turns as ``input_speech_started`` and ``input_speech_stopped``.
     """
 
     def __init__(self, translation_model: TranslationModel) -> None:
@@ -200,8 +213,13 @@ class TranslationModelSession(
 
     @property
     @abstractmethod
-    def audio_stream(self) -> AsyncIterable[TranslatedAudioFrame]:
-        """The translation the model speaks."""
+    def audio_stream(self) -> AsyncIterable[TranslatedAudioFrame | OutputSpeechStopped]:
+        """The translation the model speaks, and where each one ends.
+
+        A model whose ``capabilities.output_segmentation`` is set yields an
+        :class:`OutputSpeechStopped` after the last frame of each translation. Because it
+        travels in the stream, it is always read after the audio it closes.
+        """
 
     @abstractmethod
     def push_audio(self, frame: rtc.AudioFrame) -> None:

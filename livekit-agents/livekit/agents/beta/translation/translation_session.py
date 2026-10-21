@@ -89,7 +89,9 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             model: The translation model this session runs.
             userdata: Arbitrary state carried on the session.
             output_segment_timeout: Seconds of silence from the model that end a segment of
-                its speech. Only used for a model that does not report the end itself.
+                its speech. Used only when the model's ``capabilities.output_segmentation``
+                is unset; a model that marks its own boundaries ends a segment on the mark,
+                so a pause inside a sentence does not split it.
             loop: Event loop to run on.
         """
         super().__init__()
@@ -169,9 +171,12 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "life; start a new session to translate into another"
             )
 
-        self._model.update_options(target_language=language)
+        # the running session first: it can refuse a language the capability allows in
+        # general, and the model setting must not claim a language being spoken
         if self._model_session is not None:
             self._model_session.update_options(target_language=language)
+
+        self._model.update_options(target_language=language)
 
     async def start(
         self,
@@ -224,7 +229,6 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._model_session.on("input_speech_stopped", self._on_input_speech_stopped)
             self._model_session.on("input_transcript", self._on_input_transcript)
             self._model_session.on("output_transcript", self._on_output_transcript)
-            self._model_session.on("output_speech_stopped", self._on_output_speech_stopped)
             self._model_session.on("error", self._on_model_error)
 
             self._output_transcript_ch = aio.Chan[OutputTranscript]()
@@ -289,6 +293,13 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._model_session.aclose()
                 self._model_session = None
 
+            # detach the inputs and outputs: room io closes the ones it made, and a
+            # restarted session must not mistake them for sinks the caller supplied
+            self.input.audio = None
+            self.input.video = None
+            self.output.audio = None
+            self.output.transcription = None
+
             self.emit("close", CloseEvent(reason=reason))
 
             if self._room_io:
@@ -311,13 +322,52 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @log_exceptions(logger=logger)
     async def _forward_output_audio_task(self, model_session: TranslationModelSession) -> None:
-        async for ev in model_session.audio_stream:
-            audio_output = self.output.audio
-            if audio_output is None or not self.output.audio_enabled:
-                continue
+        resampler: rtc.AudioResampler | None = None
+        marks_segments = self._model.capabilities.output_segmentation
 
-            await audio_output.capture_frame(ev.frame)
-            self._arm_segment_timer()
+        async def _capture(frame: rtc.AudioFrame, audio_output: io.AudioOutput) -> None:
+            nonlocal resampler
+            if (
+                audio_output.sample_rate is not None
+                and frame.sample_rate != audio_output.sample_rate
+                and resampler is None
+            ):
+                resampler = rtc.AudioResampler(
+                    input_rate=frame.sample_rate,
+                    output_rate=audio_output.sample_rate,
+                    num_channels=frame.num_channels,
+                )
+
+            if resampler is not None:
+                for resampled in resampler.push(frame):
+                    await audio_output.capture_frame(resampled)
+            else:
+                await audio_output.capture_frame(frame)
+
+        async def _drain(audio_output: io.AudioOutput) -> None:
+            if resampler is not None:
+                for resampled in resampler.flush():
+                    await audio_output.capture_frame(resampled)
+
+        try:
+            async for ev in model_session.audio_stream:
+                audio_output = self.output.audio
+                if audio_output is None or not self.output.audio_enabled:
+                    continue
+
+                if isinstance(ev, OutputSpeechStopped):
+                    # read in order behind the audio it closes, so nothing it ended is
+                    # still waiting to be captured
+                    await _drain(audio_output)
+                    self._end_output_segment()
+                    continue
+
+                await _capture(ev.frame, audio_output)
+                if not marks_segments:
+                    self._arm_segment_timer()
+        finally:
+            if (audio_output := self.output.audio) is not None:
+                await _drain(audio_output)
 
     @log_exceptions(logger=logger)
     async def _forward_output_transcript_task(self, event_ch: aio.Chan[OutputTranscript]) -> None:
@@ -359,9 +409,6 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 language=ev.language if ev.language is not None else self._model.target_language,
             ),
         )
-
-    def _on_output_speech_stopped(self, _: OutputSpeechStopped) -> None:
-        self._end_output_segment()
 
     def _on_model_error(self, ev: TranslationModelError) -> None:
         self.emit("error", ErrorEvent(error=ev, source=self._model))
