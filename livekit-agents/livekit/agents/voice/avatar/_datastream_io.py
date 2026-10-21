@@ -195,12 +195,7 @@ class DataStreamAudioOutput(AudioOutput):
 
     def flush(self) -> None:
         """Mark end of current audio segment"""
-        super().flush()
-        self._capturing = False
-        if self._finish_on_flush:
-            self._finish_on_flush = False
-            if self._pending_playback_count:  # unless a clear fallback already finished it
-                self.on_playback_finished(playback_position=self._pushed_duration, interrupted=True)
+        self._end_segment()
         if self._stream_writer is None or not self._started:
             return
 
@@ -210,6 +205,15 @@ class DataStreamAudioOutput(AudioOutput):
         task.add_done_callback(self._tasks.discard)
 
         self._stream_writer = None
+
+    def _end_segment(self) -> None:
+        """``flush()`` without closing the stream, for subclasses that close it themselves."""
+        super().flush()
+        self._capturing = False
+        if self._finish_on_flush:
+            self._finish_on_flush = False
+            if self._pending_playback_count:  # unless a clear fallback already finished it
+                self.on_playback_finished(playback_position=self._pushed_duration, interrupted=True)
 
     def clear_buffer(self) -> None:
         if not self._started or not self._pending_playback_count:
