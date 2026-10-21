@@ -47,39 +47,47 @@ class _Msg:
 
 
 class FakeWebSocket:
-    """Scripted server side: records what the plugin sends, replays `frames`.
+    """Scripted server side of one socket carrying any number of sessions.
 
-    `frames` holds JSON dicts (sent as TEXT), the string "close" (a CLOSE frame with
-    `close_code`), the string "timeout" (receive() raises asyncio.TimeoutError, as
-    aiohttp does when ws_receive elapses) or ("error", exc) (an ERROR frame, with `exc`
-    as the socket's exception). Once exhausted, every receive() reports the socket as
-    CLOSED, or blocks forever with `block_when_empty`.
+    `scripts` holds one list of frames per session, consumed in the order the plugin
+    sends `setup` messages; a script's frames are tagged with that session's
+    client_req_id unless they carry one already. Frames are JSON dicts (sent as TEXT),
+    the string "close" (a CLOSE frame with `close_code`), the string "timeout"
+    (receive() raises asyncio.TimeoutError, as aiohttp does when the receive timeout
+    elapses), ("error", exc) (an ERROR frame, with `exc` as the socket's exception) or
+    ("raise", exc) (receive() raises `exc`).
+    receive() blocks while nothing is queued, like a live socket between replies.
 
     `fail_send_on` makes send_str raise a connection error for that message type.
     """
 
     def __init__(
         self,
-        frames: list[Any],
+        scripts: list[list[Any]],
         *,
         close_code: int | None = None,
         close_reason: str = "",
-        block_when_empty: bool = False,
         fail_send_on: str | None = None,
     ) -> None:
         import aiohttp
 
         self._ws_type = aiohttp.WSMsgType
-        self._frames = list(frames)
-        self._block_when_empty = block_when_empty
+        self._scripts = [list(script) for script in scripts]
+        self._queue: asyncio.Queue[Any] = asyncio.Queue()
         self._fail_send_on = fail_send_on
         self.close_code = close_code
         self._close_reason = close_reason
+        self.closed = False
         self.sent: list[dict[str, Any]] = []
         self._exception: BaseException | None = None
 
     def exception(self) -> BaseException | None:
         return self._exception
+
+    def queue(self, *frames: Any) -> None:
+        """Queue frames the server sends on its own, e.g. for an earlier session."""
+        for frame in frames:
+            self._queue.put_nowait(frame)
 
     async def send_str(self, data: str) -> None:
         import aiohttp
@@ -88,13 +96,15 @@ class FakeWebSocket:
         if msg.get("type") == self._fail_send_on:
             raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
         self.sent.append(msg)
+        if msg["type"] == "setup":
+            script = self._scripts.pop(0) if self._scripts else []
+            for frame in script:
+                if isinstance(frame, dict) and "client_req_id" not in frame:
+                    frame = {**frame, "client_req_id": msg.get("client_req_id")}
+                self._queue.put_nowait(frame)
 
     async def receive(self, timeout: float | None = None) -> _Msg:
-        if not self._frames:
-            if self._block_when_empty:
-                await asyncio.Event().wait()
-            return _Msg(self._ws_type.CLOSED)
-        frame = self._frames.pop(0)
+        frame = await self._queue.get()
         if frame == "timeout":
             raise asyncio.TimeoutError
         if frame == "close":
@@ -102,9 +112,12 @@ class FakeWebSocket:
         if isinstance(frame, tuple) and frame[0] == "error":
             self._exception = frame[1]
             return _Msg(self._ws_type.ERROR, frame[1])
+        if isinstance(frame, tuple) and frame[0] == "raise":
+            raise frame[1]
         return _Msg(self._ws_type.TEXT, json.dumps(frame))
 
     async def close(self) -> bool:
+        self.closed = True
         return True
 
     async def __aenter__(self) -> FakeWebSocket:
@@ -142,26 +155,62 @@ class RejectingSession:
         )
 
 
-def _make_tts(frames: list[Any], *, close_code: int | None = None, **ws_kwargs: Any):
+_open_tts: list[Any] = []
+
+
+@pytest.fixture(autouse=True)
+async def _close_tts_instances():
+    """Every TTS keeps a shared socket and its reader task; close them like the agent does."""
+    yield
+    for tts in _open_tts:
+        await tts.aclose()
+    _open_tts.clear()
+
+
+def _new_tts(http_session: Any, **kwargs: Any):
     from livekit.plugins.gradium import TTS
 
-    ws = FakeWebSocket(frames, close_code=close_code, **ws_kwargs)
+    tts = TTS(api_key="test-key", http_session=http_session, **kwargs)
+    _open_tts.append(tts)
+    return tts
+
+
+def _make_tts(frames: list[Any], *, close_code: int | None = None, **ws_kwargs: Any):
+    ws = FakeWebSocket([frames], close_code=close_code, **ws_kwargs)
     session = FakeSession(ws)
-    tts = TTS(api_key="test-key", http_session=session)  # type: ignore[arg-type]
-    return tts, session, ws
+    return _new_tts(session), session, ws
 
 
-async def _drain(tts, conn_options: APIConnectOptions) -> None:
-    async for _ in tts.synthesize("hello world", conn_options=conn_options):
-        pass
+def _make_tts_scripts(scripts: list[list[Any]]):
+    """A TTS over one fake socket that will carry several sessions."""
+    ws = FakeWebSocket(scripts)
+    session = FakeSession(ws)
+    return _new_tts(session), session, ws
 
 
-async def _drain_stream(tts, conn_options: APIConnectOptions) -> None:
-    async with tts.stream(conn_options=conn_options) as stream:
-        stream.push_text("hello world")
-        stream.end_input()
-        async for _ in stream:
-            pass
+async def _drain(tts, conn_options: APIConnectOptions) -> float:
+    """Run one synthesize() and return the audio duration; bounded so a hang fails."""
+
+    async def _go() -> float:
+        duration = 0.0
+        async for ev in tts.synthesize("hello world", conn_options=conn_options):
+            duration += ev.frame.duration
+        return duration
+
+    return await asyncio.wait_for(_go(), timeout=5)
+
+
+async def _drain_stream(tts, conn_options: APIConnectOptions) -> float:
+    async def _go() -> float:
+        duration = 0.0
+        async with tts.stream(conn_options=conn_options) as stream:
+            stream.push_text("hello world")
+            stream.end_input()
+            async for ev in stream:
+                duration += ev.frame.duration
+        return duration
+
+    return await asyncio.wait_for(_go(), timeout=5)
 
 
 async def test_synthesize_emits_audio_and_sends_eos():
@@ -184,7 +233,8 @@ async def test_synthesize_raises_on_error_frame():
         await _drain(tts, CONN_OPTS)
     # the frame must escape as-is, not wrapped in an APIConnectionError
     assert type(excinfo.value) is APIStatusError
-    assert excinfo.value.body == ERROR
+    # the server tags the frame with the session id; the rest is the frame as sent
+    assert {k: v for k, v in excinfo.value.body.items() if k != "client_req_id"} == ERROR
     assert excinfo.value.status_code == 1011
     assert excinfo.value.retryable is True
 
@@ -201,16 +251,19 @@ async def test_synthesize_raises_on_close_before_eos():
 
 async def test_synthesize_is_retried_after_partial_audio():
     """A retryable failure after some audio is retried like any other: the base
-    class restarts the synthesis under a fresh request_id (livekit/agents#6346)."""
-    from livekit.plugins.gradium import TTS
+    class restarts the synthesis under a fresh request_id (livekit/agents#6346).
+    Here the socket dies with the first reply; the retry opens a new one."""
+    sockets = [
+        FakeWebSocket([[READY, AUDIO, "close"]], close_code=1011),
+        FakeWebSocket([[READY, AUDIO, EOS]]),
+    ]
+    session = FakeSession(*sockets)
+    tts = _new_tts(session)
 
-    first = FakeWebSocket([READY, AUDIO, "close"], close_code=1011)
-    second = FakeWebSocket([READY, AUDIO, EOS])
-    session = FakeSession(first, second)
-    tts = TTS(api_key="test-key", http_session=session)  # type: ignore[arg-type]
-
-    await _drain(tts, APIConnectOptions(max_retry=2, retry_interval=0, timeout=5))
+    duration = await _drain(tts, APIConnectOptions(max_retry=2, retry_interval=0.05, timeout=5))
+    assert 0.5 <= duration <= 0.6  # only the retry's audio reaches the caller
     assert len(session.connects) == 2
+    assert sockets[0].closed
 
 
 async def test_error_frame_with_client_error_code_is_not_retried():
@@ -224,16 +277,14 @@ async def test_error_frame_with_client_error_code_is_not_retried():
 
 
 async def test_error_frame_with_server_error_code_is_retried():
-    from livekit.plugins.gradium import TTS
-
-    sockets = [FakeWebSocket([READY, ERROR, "close"], close_code=1011) for _ in range(2)]
+    sockets = [FakeWebSocket([[READY, ERROR, "close"]], close_code=1011) for _ in range(2)]
     session = FakeSession(*sockets)
-    tts = TTS(api_key="test-key", http_session=session)  # type: ignore[arg-type]
+    tts = _new_tts(http_session=session)  # type: ignore[arg-type]
 
     with pytest.raises(APIStatusError, match="Unknown voice 'nope'"):
         await _drain(tts, APIConnectOptions(max_retry=1, timeout=5))
     assert len(session.connects) == 2
-    assert all(ws.sent[-1] == {"type": "end_of_stream"} for ws in sockets)
+    assert all(ws.sent[-1]["type"] == "end_of_stream" for ws in sockets)
 
 
 async def test_close_with_unsupported_data_code_is_not_retried():
@@ -248,23 +299,19 @@ async def test_close_with_unsupported_data_code_is_not_retried():
 
 async def test_concurrency_limit_error_frame_is_retried():
     """The org's concurrency cap (1008) frees up when another session ends."""
-    from livekit.plugins.gradium import TTS
-
     limit = {
         "type": "error",
         "message": "Concurrency limit exceeded: 15 active sessions",
         "code": 1008,
     }
     sockets = [
-        FakeWebSocket([READY, limit, "close"], close_code=1008),
-        FakeWebSocket([READY, AUDIO, EOS]),
+        FakeWebSocket([[READY, limit, "close"]], close_code=1008),
+        FakeWebSocket([[READY, AUDIO, EOS]]),
     ]
     session = FakeSession(*sockets)
-    tts = TTS(api_key="test-key", http_session=session)  # type: ignore[arg-type]
+    tts = _new_tts(session)
 
-    duration = 0.0
-    async for ev in tts.synthesize("hello world", conn_options=APIConnectOptions(max_retry=1)):
-        duration += ev.frame.duration
+    duration = await _drain(tts, APIConnectOptions(max_retry=1, timeout=5))
     assert 0.5 <= duration <= 0.6
     assert len(session.connects) == 2
 
@@ -300,7 +347,8 @@ async def test_stream_raises_on_error_frame():
     with pytest.raises(APIStatusError, match="Unknown voice 'nope'") as excinfo:
         await _drain_stream(tts, CONN_OPTS)
     assert type(excinfo.value) is APIStatusError
-    assert excinfo.value.body == ERROR
+    # the server tags the frame with the session id; the rest is the frame as sent
+    assert {k: v for k, v in excinfo.value.body.items() if k != "client_req_id"} == ERROR
 
 
 async def test_stream_raises_on_close_before_eos():
@@ -322,7 +370,7 @@ async def test_stream_raises_on_transport_error():
 
 async def test_close_without_code_is_retryable():
     """A socket that just dies has no close code; that is a transient failure."""
-    tts, _, _ = _make_tts([READY])
+    tts, _, _ = _make_tts([READY, "close"])
 
     with pytest.raises(APIStatusError) as excinfo:
         await _drain(tts, CONN_OPTS)
@@ -349,9 +397,7 @@ async def test_receive_timeout_raises_api_timeout(drain):
 
 @pytest.mark.parametrize("drain", [_drain, _drain_stream])
 async def test_rejected_handshake_raises_status_error(drain):
-    from livekit.plugins.gradium import TTS
-
-    tts = TTS(api_key="test-key", http_session=RejectingSession(401))  # type: ignore[arg-type]
+    tts = _new_tts(http_session=RejectingSession(401))  # type: ignore[arg-type]
 
     with pytest.raises(APIStatusError, match="Unauthorized") as excinfo:
         await drain(tts, APIConnectOptions(max_retry=2, timeout=5))
@@ -372,8 +418,11 @@ async def test_malformed_audio_frame_raises_connection_error(drain):
 
 async def test_stream_send_failure_raises_connection_error():
     """A send that fails mid-stream must surface, not hang behind the blocked receive."""
-    tts, _, _ = _make_tts([READY], block_when_empty=True, fail_send_on="text")
+    tts, _, _ = _make_tts([READY], fail_send_on="text")
 
     with pytest.raises(APIConnectionError) as excinfo:
         await asyncio.wait_for(_drain_stream(tts, CONN_OPTS), timeout=5)
     assert "closing transport" in str(excinfo.value)
+
+
+# --- multiplexing: one socket per TTS instance, sessions in parallel on it -----------
