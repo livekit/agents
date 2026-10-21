@@ -365,6 +365,9 @@ def test_supports_streaming_marks() -> None:
     assert sfy_tts._supports_streaming_marks(NOT_GIVEN)
     assert sfy_tts._supports_streaming_marks("simba-3.0")
     assert sfy_tts._supports_streaming_marks("simba-3.2")
+    assert sfy_tts._supports_streaming_marks("simba-3.5")
+    # a model released after this plugin streams without a plugin update
+    assert sfy_tts._supports_streaming_marks("simba-9.9")
     assert not sfy_tts._supports_streaming_marks("simba-english")
     assert not sfy_tts._supports_streaming_marks("simba-multilingual")
 
@@ -384,9 +387,11 @@ def test_marks_to_timed_uses_start_end_time() -> None:
 
 def test_warn_voice_model_compat(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level("WARNING", "livekit.plugins.speechify"):
-        # curated simba-3.2 voices (id suffix "_32") warn on other models
-        sfy_tts._warn_voice_model_compat("dominic_32", "simba-english")
-        assert any("dominic_32" in r.message for r in caplog.records)
+        # curated simba-3.2 voices (id suffix "_32") warn on models older than simba-3.2
+        for model in ("simba-english", "simba-multilingual", "simba-3.0"):
+            caplog.clear()
+            sfy_tts._warn_voice_model_compat("dominic_32", model)
+            assert any("dominic_32" in r.message for r in caplog.records), model
 
         caplog.clear()
         # NOT_GIVEN defaults the server to simba-3.0 -> still a mismatch
@@ -394,8 +399,10 @@ def test_warn_voice_model_compat(caplog: pytest.LogCaptureFixture) -> None:
         assert any("dominic_32" in r.message for r in caplog.records)
 
         caplog.clear()
-        # the supported pairing is silent
+        # simba-3.2 and every later model, including unreleased ones, are silent
         sfy_tts._warn_voice_model_compat("dominic_32", "simba-3.2")
+        sfy_tts._warn_voice_model_compat("dominic_32", "simba-3.5")
+        sfy_tts._warn_voice_model_compat("dominic_32", "simba-9.9")
         assert not caplog.records
 
         caplog.clear()
