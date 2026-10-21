@@ -307,6 +307,11 @@ def _is_ignorable_task(task) -> bool:
         coro_name = getattr(coro, "__qualname__", "") or type(coro).__name__
         if "async_generator_athrow" in coro_name:
             return True
+        # google-genai clients schedule aclose() from __del__, on whatever loop is
+        # running when the GC finalizes them (also for their httpx client subclass)
+        owner = getattr(getattr(coro, "cr_frame", None), "f_locals", {}).get("self")
+        if coro_name.endswith("aclose") and type(owner).__module__.startswith("google.genai"):
+            return True
         mod = getattr(coro, "__module__", "")
         if "pytest" in mod or "pytest_asyncio" in mod:
             return True
