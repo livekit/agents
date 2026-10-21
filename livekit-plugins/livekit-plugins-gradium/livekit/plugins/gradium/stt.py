@@ -133,7 +133,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return "unknown"
+        return self._model_name
 
     @property
     def provider(self) -> str:

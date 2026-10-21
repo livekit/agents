@@ -344,8 +344,11 @@ class TTS(tts.TTS):
     def _check_generation_config(self) -> None:
         if _is_sonic_3(self._opts.model):
             if self._opts.speed:
-                if not isinstance(self._opts.speed, float):
-                    raise ValueError("speed must be a float for sonic-3")
+                # an int such as 1 is a valid speed too; bool is an int subclass, so exclude it
+                if isinstance(self._opts.speed, bool) or not isinstance(
+                    self._opts.speed, (int, float)
+                ):
+                    raise ValueError("speed must be a number for sonic-3")
                 if not 0.6 <= self._opts.speed <= 2.0:
                     logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
             if self._opts.volume is not None and not 0.5 <= self._opts.volume <= 2.0:
