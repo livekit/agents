@@ -1,0 +1,21 @@
+tests/test_plugin_xai_stt.py
+  s_bcd3e70328118e::t_98bd4bc98bc215 144-147,184-187
+livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/stt.py
+  s_bcd3e70328118e::t_da2d35f7062494 559-560
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7820a644c7221d69e1bf7dc3fcafe80e00844ae6",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
