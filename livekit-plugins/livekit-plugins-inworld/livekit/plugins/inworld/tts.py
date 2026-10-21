@@ -58,7 +58,7 @@ DEFAULT_WS_URL = "wss://api.inworld.ai/"
 DEFAULT_VOICE = "Ashley"
 DEFAULT_TEMPERATURE = 1.0
 DEFAULT_SPEAKING_RATE = 1.0
-DEFAULT_BUFFER_CHAR_THRESHOLD = 120
+DEFAULT_BUFFER_CHAR_THRESHOLD = 250
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
@@ -69,6 +69,7 @@ _TextNormalizationStr = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "O
 TextNormalization = _TextNormalizationStr | bool
 TimestampTransportStrategy = Literal["TIMESTAMP_TRANSPORT_STRATEGY_UNSPECIFIED", "SYNC", "ASYNC"]
 DeliveryMode = Literal["DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREATIVE"]
+AutoModeStrategy = Literal["CLIENT_SEGMENTED", "SENTENCE_BOUNDARY"]
 
 DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY: TimestampTransportStrategy = "ASYNC"
 
@@ -77,6 +78,11 @@ def _validate_str_param(value: object, name: str, literal_type: Any) -> None:
     valid = get_args(literal_type)
     if not isinstance(value, str) or value not in valid:
         raise ValueError(f"Invalid {name}: {value!r}. Must be one of {sorted(valid)}")
+
+
+def _supports_sentence_boundary(model: str) -> bool:
+    # the SENTENCE_BOUNDARY auto-mode strategy is only served by inworld-tts-2 models
+    return model.startswith("inworld-tts-2")
 
 
 def _resolve_text_normalization(value: Any) -> _TextNormalizationStr:
@@ -100,8 +106,9 @@ class _TTSOptions:
     text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN
     delivery_mode: NotGivenOr[DeliveryMode] = NOT_GIVEN
     timestamp_transport_strategy: TimestampTransportStrategy = DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY
-    buffer_char_threshold: int = DEFAULT_BUFFER_CHAR_THRESHOLD
+    buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN
     max_buffer_delay_ms: int = DEFAULT_MAX_BUFFER_DELAY_MS
+    auto_mode_strategy: AutoModeStrategy = "CLIENT_SEGMENTED"
 
     @property
     def mime_type(self) -> str:
@@ -162,6 +169,7 @@ class _FlushContextMsg:
 @dataclass
 class _CloseContextMsg:
     context_id: str
+    cancel: bool = False
 
 
 _OutboundMessage = _CreateContextMsg | _SendTextMsg | _FlushContextMsg | _CloseContextMsg
@@ -273,14 +281,18 @@ class _InworldConnection:
     def _release_context(self, context_id: str) -> None:
         self._contexts.pop(context_id, None)
 
-    def close_context(self, context_id: str) -> None:
-        """Queue a close message for a context (removes from pool)."""
+    def close_context(self, context_id: str, *, cancel: bool = False) -> None:
+        """Queue a close message for a context.
+
+        With ``cancel``, the server stops generating and discards text it has not
+        synthesized yet instead of finishing it.
+        """
         ctx = self._contexts.get(context_id)
         if ctx:
             ctx.state = _ContextState.CLOSING
             ctx.close_started_at = time.time()
         try:
-            self._outbound_queue.put_nowait(_CloseContextMsg(context_id=context_id))
+            self._outbound_queue.put_nowait(_CloseContextMsg(context_id=context_id, cancel=cancel))
         except asyncio.QueueFull:
             logger.warning("Outbound queue full, dropping close")
 
@@ -309,7 +321,6 @@ class _InworldConnection:
                                 "speakingRate": opts.speaking_rate,
                             },
                             "temperature": opts.temperature,
-                            "bufferCharThreshold": opts.buffer_char_threshold,
                             "maxBufferDelayMs": opts.max_buffer_delay_ms,
                             "timestampTransportStrategy": opts.timestamp_transport_strategy,
                         },
@@ -323,8 +334,15 @@ class _InworldConnection:
                         pkt["create"]["applyTextNormalization"] = opts.text_normalization
                     if is_given(opts.delivery_mode):
                         pkt["create"]["deliveryMode"] = opts.delivery_mode
-                    # Always enable auto_mode since we always use SentenceTokenizer
                     pkt["create"]["autoMode"] = True
+                    if opts.auto_mode_strategy == "SENTENCE_BOUNDARY":
+                        pkt["create"]["autoModeStrategy"] = opts.auto_mode_strategy
+                    # with SENTENCE_BOUNDARY the threshold also cuts long sentences, so only a
+                    # set value is sent and the server default applies otherwise
+                    if is_given(opts.buffer_char_threshold):
+                        pkt["create"]["bufferCharThreshold"] = opts.buffer_char_threshold
+                    elif opts.auto_mode_strategy != "SENTENCE_BOUNDARY":
+                        pkt["create"]["bufferCharThreshold"] = DEFAULT_BUFFER_CHAR_THRESHOLD
                     await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _SendTextMsg):
@@ -339,7 +357,8 @@ class _InworldConnection:
                     await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _CloseContextMsg):
-                    pkt = {"close_context": {}, "contextId": msg.context_id}
+                    close_key = "cancel_context" if msg.cancel else "close_context"
+                    pkt = {close_key: {}, "contextId": msg.context_id}
                     await self._ws.send_str(json.dumps(pkt))
 
         except Exception as e:
@@ -605,7 +624,8 @@ class TTS(tts.TTS):
                 message as audio data. "ASYNC" allows timestamps to return in trailing
                 messages after the audio data. Defaults to "ASYNC".
             buffer_char_threshold (int, optional): For streaming, the minimum number of characters
-                in the buffer that automatically triggers audio generation. Defaults to 1000.
+                in the buffer that automatically triggers audio generation. Defaults to 250, or to
+                the server default when the server splits sentences.
             max_buffer_delay_ms (int, optional): For streaming, the maximum time in ms to buffer
                 before starting generation. Defaults to 3000.
             base_url (str, optional): The base URL for the Inworld TTS API.
@@ -614,7 +634,9 @@ class TTS(tts.TTS):
                 Defaults to "wss://api.inworld.ai/".
             http_session (aiohttp.ClientSession, optional): The HTTP session to use.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use for streaming.
-                Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+                Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`. When neither
+                this nor `retain_format=False` is set, inworld-tts-2 models stream text as it
+                arrives and the server splits it at sentence boundaries instead.
             retain_format (bool, optional): Whether to retain the format of the text when tokenizing.
                 Defaults to True.
             max_connections (int, optional): Deprecated, has no effect.
@@ -679,9 +701,7 @@ class TTS(tts.TTS):
             timestamp_transport_strategy=timestamp_transport_strategy
             if is_given(timestamp_transport_strategy)
             else DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY,
-            buffer_char_threshold=buffer_char_threshold
-            if is_given(buffer_char_threshold)
-            else DEFAULT_BUFFER_CHAR_THRESHOLD,
+            buffer_char_threshold=buffer_char_threshold,
             max_buffer_delay_ms=max_buffer_delay_ms
             if is_given(max_buffer_delay_ms)
             else DEFAULT_MAX_BUFFER_DELAY_MS,
@@ -690,6 +710,7 @@ class TTS(tts.TTS):
         self._connection: _InworldConnection | None = None
         self._prewarm_task: asyncio.Task[None] | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._client_segmentation = is_given(tokenizer) or retain_format is False
         self._sentence_tokenizer = (
             tokenizer
             if is_given(tokenizer)
@@ -984,6 +1005,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
+        if not tts._client_segmentation and _supports_sentence_boundary(self._opts.model):
+            self._opts.auto_mode_strategy = "SENTENCE_BOUNDARY"
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -1000,6 +1023,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         connection = self._tts._get_connection()
         context_id, waiter = connection.create_context(output_emitter, self._opts)
 
+        def _send_text(text: str) -> None:
+            # Chunk to stay within Inworld's 1000 char limit
+            for i in range(0, len(text), 1000):
+                connection.send_text(context_id, text[i : i + 1000])
+                self._mark_started()
+
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
@@ -1010,33 +1039,41 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _send_task() -> None:
             async for ev in sent_tokenizer_stream:
-                text = ev.token
-                # Chunk to stay within Inworld's 1000 char limit
-                for i in range(0, len(text), 1000):
-                    connection.send_text(context_id, text[i : i + 1000])
-                    self._mark_started()
+                _send_text(ev.token)
             connection.flush_context(context_id)
             connection.close_context(context_id)
 
-        tasks = [
-            asyncio.create_task(_input_task()),
-            asyncio.create_task(_send_task()),
-        ]
+        async def _forward_task() -> None:
+            # the server buffers partial sentences until it finds a boundary
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    connection.flush_context(context_id)
+                elif data:
+                    _send_text(data)
+            connection.close_context(context_id)
+
+        if self._opts.auto_mode_strategy == "SENTENCE_BOUNDARY":
+            tasks = [asyncio.create_task(_forward_task())]
+        else:
+            tasks = [
+                asyncio.create_task(_input_task()),
+                asyncio.create_task(_send_task()),
+            ]
 
         try:
             await connection.connect(self._conn_options.timeout)
             await asyncio.wait_for(waiter, timeout=self._conn_options.timeout + 60)
         except asyncio.TimeoutError:
-            connection.close_context(context_id)
+            connection.close_context(context_id, cancel=True)
             raise APITimeoutError() from None
         except asyncio.CancelledError:
-            connection.close_context(context_id)
+            connection.close_context(context_id, cancel=True)
             raise
         except APIError:
             raise
         except Exception as e:
             logger.error("Inworld stream error", extra={"context_id": context_id, "error": e})
-            connection.close_context(context_id)
+            connection.close_context(context_id, cancel=True)
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)

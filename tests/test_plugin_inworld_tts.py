@@ -291,3 +291,190 @@ async def test_cancelled_caller_does_not_cancel_shared_handshake():
     assert conn._ws is ws
     assert not conn._closed
     await tts.aclose()
+
+
+async def test_ws_create_packet_auto_mode_strategy():
+    from livekit.plugins.inworld.tts import _TTSOptions
+
+    opts = _TTSOptions(
+        model="inworld-tts-2",
+        encoding="PCM",
+        voice="Ashley",
+        sample_rate=24000,
+        bit_rate=64000,
+        speaking_rate=1.0,
+        temperature=1.0,
+    )
+    pkt = await _capture_first_ws_create_packet(opts)
+    assert pkt["create"]["autoMode"] is True
+    assert "autoModeStrategy" not in pkt["create"]
+    assert pkt["create"]["bufferCharThreshold"] == 250
+
+    opts.auto_mode_strategy = "SENTENCE_BOUNDARY"
+    pkt = await _capture_first_ws_create_packet(opts)
+    assert pkt["create"]["autoModeStrategy"] == "SENTENCE_BOUNDARY"
+    assert "bufferCharThreshold" not in pkt["create"]
+
+    opts.buffer_char_threshold = 400
+    pkt = await _capture_first_ws_create_packet(opts)
+    assert pkt["create"]["bufferCharThreshold"] == 400
+
+
+@pytest.mark.parametrize(
+    ("model", "options", "expected"),
+    [
+        ("inworld-tts-2", {}, "SENTENCE_BOUNDARY"),
+        ("inworld-tts-2", {"retain_format": True}, "SENTENCE_BOUNDARY"),
+        ("inworld-tts-2", {"tokenizer": "blingfire"}, "CLIENT_SEGMENTED"),
+        ("inworld-tts-2", {"retain_format": False}, "CLIENT_SEGMENTED"),
+        ("inworld-tts-1.5-max", {}, "CLIENT_SEGMENTED"),
+    ],
+)
+async def test_stream_auto_mode_strategy(model, options, expected):
+    from livekit.agents import tokenize
+    from livekit.plugins.inworld import TTS
+
+    kwargs = dict(options)
+    if kwargs.get("tokenizer") == "blingfire":
+        kwargs["tokenizer"] = tokenize.blingfire.SentenceTokenizer()
+    tts = TTS(api_key="test-key", model=model, **kwargs)
+    stream = tts.stream()
+    try:
+        assert stream._opts.auto_mode_strategy == expected
+    finally:
+        await stream.aclose()
+
+
+async def test_sentence_boundary_stream_forwards_raw_text():
+    """With SENTENCE_BOUNDARY, text reaches the connection as pushed, without
+    client-side sentence splitting, and the end of input flushes the context."""
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key", model="inworld-tts-2")
+    calls: list[tuple[str, str | None]] = []
+    waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+    conn = MagicMock()
+    conn.send_text.side_effect = lambda ctx, text: calls.append(("text", text))
+    conn.flush_context.side_effect = lambda ctx: calls.append(("flush", None))
+
+    def _close(ctx: str, *, cancel: bool = False) -> None:
+        calls.append(("close", None))
+        if not waiter.done():
+            waiter.set_result(None)
+
+    conn.close_context.side_effect = _close
+    conn.create_context.return_value = ("ctx-1", waiter)
+    conn.connect = AsyncMock()
+    tts._get_connection = MagicMock(return_value=conn)
+
+    stream = tts.stream()
+    for token in ["Hello ", "there. How", " are", " you?"]:
+        stream.push_text(token)
+    stream.end_input()
+    try:
+        await asyncio.wait_for(waiter, timeout=2.0)
+        sent = list(calls)
+    finally:
+        await stream.aclose()
+
+    assert sent == [
+        ("text", "Hello "),
+        ("text", "there. How"),
+        ("text", " are"),
+        ("text", " you?"),
+        ("flush", None),
+        ("close", None),
+    ]
+
+
+async def _sent_close_packet(cancel: bool) -> dict:
+    from livekit.plugins.inworld.tts import _InworldConnection
+
+    sent = asyncio.Event()
+    payloads: list[str] = []
+
+    def _on_send(payload: str) -> None:
+        payloads.append(payload)
+        sent.set()
+
+    conn = _InworldConnection(
+        session=MagicMock(), ws_url="wss://example.invalid/", authorization="Basic test"
+    )
+    conn._ws = MagicMock()
+    conn._ws.send_str = AsyncMock(side_effect=_on_send)
+    conn.close_context("ctx-1", cancel=cancel)
+
+    send_task = asyncio.create_task(conn._send_loop())
+    try:
+        await asyncio.wait_for(sent.wait(), timeout=2.0)
+    finally:
+        conn._closed = True
+        await aio.cancel_and_wait(send_task)
+
+    return json.loads(payloads[0])
+
+
+async def test_ws_close_and_cancel_packets():
+    assert await _sent_close_packet(cancel=False) == {"close_context": {}, "contextId": "ctx-1"}
+    assert await _sent_close_packet(cancel=True) == {"cancel_context": {}, "contextId": "ctx-1"}
+
+
+class _FakeConnection:
+    def __init__(self, waiter: asyncio.Future[None]) -> None:
+        self.waiter = waiter
+        self.calls: list[tuple[str, bool]] = []
+        self.closed = asyncio.Event()
+
+    def create_context(self, emitter, opts) -> tuple[str, asyncio.Future[None]]:
+        return "ctx-1", self.waiter
+
+    async def connect(self, timeout: float) -> None:
+        pass
+
+    def send_text(self, context_id: str, text: str) -> None:
+        self.calls.append(("send_text", False))
+
+    def flush_context(self, context_id: str) -> None:
+        self.calls.append(("flush_context", False))
+
+    def close_context(self, context_id: str, *, cancel: bool = False) -> None:
+        self.calls.append(("close_context", cancel))
+        self.closed.set()
+
+
+def _tts_with_fake_connection():
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key")
+    waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    conn = _FakeConnection(waiter)
+    tts._get_connection = MagicMock(return_value=conn)  # type: ignore[method-assign]
+    return tts, conn
+
+
+async def test_stream_aclose_cancels_context():
+    tts, conn = _tts_with_fake_connection()
+
+    stream = tts.stream()
+    stream.push_text("Hello there. How are you today?")
+    stream.flush()
+    await asyncio.sleep(0.1)
+    await stream.aclose()
+
+    assert ("close_context", False) not in conn.calls
+    assert conn.calls[-1] == ("close_context", True)
+
+
+async def test_stream_aclose_after_input_ended_cancels_context():
+    tts, conn = _tts_with_fake_connection()
+
+    stream = tts.stream()
+    stream.push_text("Hello there.")
+    stream.end_input()
+    await asyncio.wait_for(conn.closed.wait(), timeout=2.0)
+    assert conn.calls == [("send_text", False), ("flush_context", False), ("close_context", False)]
+
+    await stream.aclose()
+
+    assert conn.calls[-1] == ("close_context", True)

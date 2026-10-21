@@ -30,6 +30,7 @@ from livekit import rtc
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
+from ..telemetry.traces import _resource
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
@@ -226,6 +227,9 @@ class _JobProc:
         )
         # the framework's warm-up; a no-op under a forkserver, which imported it already
         from . import _preload  # noqa: F401
+
+        # resource detection starts and joins threads; per process, so not in the forkserver
+        _resource({})
 
         self._initialize_process_fnc(self._job_proc)
 
