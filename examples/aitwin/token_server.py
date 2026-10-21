@@ -1,5 +1,9 @@
 """
 Mint LiveKit participant tokens, dispatch the AiTwin demo agent, and issue AiTwin auth tokens.
+
+Local-dev only: binds to TOKEN_SERVER_HOST (default 127.0.0.1). When TOKEN_SERVER_SECRET
+is set, callers must send matching X-Token-Server-Secret. Room names are always
+server-generated so callers cannot join arbitrary existing sessions.
 """
 
 from __future__ import annotations
@@ -39,6 +43,8 @@ AITWIN_AUTH_TOKEN_URL = _require_env("AITWIN_AUTH_TOKEN_URL")
 AITWIN_TWIN_ID = _require_env("AITWIN_TWIN_ID")
 AITWIN_API_BASE = _require_env("AITWIN_API_BASE")
 TOKEN_SERVER_PORT = int(_require_env("TOKEN_SERVER_PORT"))
+TOKEN_SERVER_HOST = (os.getenv("TOKEN_SERVER_HOST") or "127.0.0.1").strip()
+TOKEN_SERVER_SECRET = (os.getenv("TOKEN_SERVER_SECRET") or "").strip()
 
 
 async def create_room_and_dispatch_agent(room_name: str) -> None:
@@ -78,13 +84,31 @@ def _mint_aitwin_auth_token(*, user_id: str, user_name: str) -> str:
     return data["authToken"]
 
 
+def _authorize_token_request() -> tuple[dict | None, int | None]:
+    """Return (error_json, status) if unauthorized; else (None, None)."""
+    if not TOKEN_SERVER_SECRET:
+        return None, None
+    header = (request.headers.get("X-Token-Server-Secret") or "").strip()
+    body = request.get_json(silent=True) or {}
+    body_secret = body.get("secret") if isinstance(body.get("secret"), str) else ""
+    provided = header or body_secret.strip()
+    if provided != TOKEN_SERVER_SECRET:
+        return {"error": "unauthorized"}, 401
+    return None, None
+
+
 @app.post("/token")
 def generate_token():
+    auth_err, auth_status = _authorize_token_request()
+    if auth_err is not None:
+        return jsonify(auth_err), auth_status
+
     if not LIVEKIT_URL or not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
         return jsonify({"error": "LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET missing"}), 500
 
     data = request.get_json(silent=True) or {}
-    room_name = data.get("room") or f"aitwin-demo-{uuid4().hex[:8]}"
+    # Always mint a fresh room — never honor client-supplied room names.
+    room_name = f"aitwin-demo-{uuid4().hex[:8]}"
     requested = data.get("identity")
     identity = (
         requested.strip()
@@ -149,10 +173,14 @@ def health():
             "livekit_configured": bool(LIVEKIT_URL and LIVEKIT_API_KEY and LIVEKIT_API_SECRET),
             "aitwin_configured": bool(AITWIN_CLIENT_ID and AITWIN_CLIENT_SECRET),
             "aitwin_twin_id": AITWIN_TWIN_ID,
+            "token_secret_required": bool(TOKEN_SERVER_SECRET),
+            "bind_host": TOKEN_SERVER_HOST,
         }
     )
 
 
 if __name__ == "__main__":
-    print(f"Token server http://localhost:{TOKEN_SERVER_PORT}")
-    app.run(host="0.0.0.0", port=TOKEN_SERVER_PORT, debug=True)
+    print(f"Token server http://{TOKEN_SERVER_HOST}:{TOKEN_SERVER_PORT}")
+    if not TOKEN_SERVER_SECRET:
+        print("Warning: TOKEN_SERVER_SECRET unset — /token is open on this host")
+    app.run(host=TOKEN_SERVER_HOST, port=TOKEN_SERVER_PORT, debug=True)

@@ -87,15 +87,18 @@ Open http://localhost:3000 → **Connect**.
 
 | Where | Vars |
 |-------|------|
-| `examples/aitwin/.env` | `LIVEKIT_*`, `OPENAI_API_KEY`, `LLM_MODEL`, `STT_MODEL`, `TTS_MODEL`, `TTS_VOICE`, `AITWIN_*`, `AITWIN_ALIGN_LANGUAGE`, `AITWIN_VISEME_ENGINE_ID`, `AGENT_NAME`, `TOPIC_SPEECH`, `TOPIC_SAY`, `TOKEN_SERVER_PORT`; optional `HEADTTS_URL` |
-| `examples/aitwin/frontend/.env` | `VITE_TOPIC_SPEECH`, `VITE_TOPIC_CHAT`, `VITE_TOPIC_SAY` (must match backend); optional `VITE_AITWIN_*` |
+| `examples/aitwin/.env` | `LIVEKIT_*`, `OPENAI_API_KEY`, `LLM_MODEL`, `STT_MODEL`, `TTS_MODEL`, `TTS_VOICE`, `AITWIN_*`, `AITWIN_ALIGN_LANGUAGE`, `AITWIN_VISEME_ENGINE_ID`, `AGENT_NAME`, `TOPIC_SPEECH`, `TOPIC_SAY`, `TOKEN_SERVER_PORT`, `TOKEN_SERVER_HOST`, `TOKEN_SERVER_SECRET`; optional `HEADTTS_URL` |
+| `examples/aitwin/frontend/.env` | `VITE_TOPIC_SPEECH`, `VITE_TOPIC_CHAT`, `VITE_TOPIC_SAY` (must match backend); `VITE_TOKEN_SERVER_SECRET` (must match `TOKEN_SERVER_SECRET`); optional `VITE_AITWIN_*` |
 
 Keep `AITWIN_CLIENT_SECRET` on the backend only. The browser receives a short-lived `client_*` JWT from `POST /token`. The agent mints its own token for `/avatar_alignVisemes`.
+
+**Token endpoint hardening (local demo):** `/token` binds to `127.0.0.1` by default, ignores client-supplied room names (always mints `aitwin-demo-<uuid>`), and when `TOKEN_SERVER_SECRET` is set requires header `X-Token-Server-Secret`. This is not a production auth system — do not expose the token server to the public internet.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---------|----------------|
+| Token 401 | `TOKEN_SERVER_SECRET` set but frontend missing/mismatched `VITE_TOKEN_SERVER_SECRET` |
 | Token 500 | Missing LiveKit env on token server |
 | AiTwin auth missing | `AITWIN_CLIENT_ID` / `AITWIN_CLIENT_SECRET` not set |
 | `avatar_alignVisemes` fails | Bad auth, wrong `AITWIN_API_BASE`, or API unavailable |

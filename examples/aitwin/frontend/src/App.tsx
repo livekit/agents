@@ -87,6 +87,8 @@ export default function App() {
   const speechOpenRef = useRef(false)
   const lastAgentTextRef = useRef<string | null>(null)
   const drainAllRef = useRef<() => void>(() => {})
+  /** Bumped on disconnect so in-flight drainAll cannot touch the next connection. */
+  const connectionGenRef = useRef(0)
 
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle')
   const [twinReady, setTwinReady] = useState(false)
@@ -116,9 +118,13 @@ export default function App() {
     if (!twin || !twinReadyRef.current) return
     if (!speechQueueRef.current.length) return
 
+    const gen = connectionGenRef.current
+    const stillCurrent = () => gen === connectionGenRef.current
+
     speakingRef.current = true
     try {
       while (speechQueueRef.current.length) {
+        if (!stillCurrent()) return
         const msg = speechQueueRef.current.shift()
         updateQueuedCount()
         if (!msg) break
@@ -139,12 +145,14 @@ export default function App() {
             ttsEngineId: msg.ttsEngineId as TtsEngineId | undefined,
             spokenText: text || undefined,
           })
+          if (!stillCurrent()) return
           speechOpenRef.current = true
         } else if (msg.type === 'chunk') {
           if (!speechOpenRef.current) {
             await twin.beginSpeech({
               spokenText: lastAgentTextRef.current ?? undefined,
             })
+            if (!stillCurrent()) return
             speechOpenRef.current = true
           }
           const chunk: AiTwinSpeechChunk = {
@@ -162,6 +170,7 @@ export default function App() {
             `sr=${chunk.sampleRate ?? 'default'}`,
           )
           await twin.pushSpeechChunk(chunk)
+          if (!stillCurrent()) return
         } else if (msg.type === 'end') {
           if (speechOpenRef.current) {
             twin.endSpeech()
@@ -170,6 +179,7 @@ export default function App() {
         }
       }
     } catch (err) {
+      if (!stillCurrent()) return
       console.error('[AiTwin] speech chunk pipeline failed', err)
       setError(err instanceof Error ? err.message : 'speech pipeline failed')
       if (speechOpenRef.current) {
@@ -181,6 +191,10 @@ export default function App() {
         speechOpenRef.current = false
       }
     } finally {
+      if (!stillCurrent()) {
+        // Disconnect already cleared queue / speaking; do not re-enter drain.
+        return
+      }
       speakingRef.current = false
       if (speechQueueRef.current.length) {
         void drainAllRef.current()
@@ -212,6 +226,7 @@ export default function App() {
   }, [twinReady, drainAll])
 
   const disconnect = useCallback(async () => {
+    connectionGenRef.current += 1
     speechQueueRef.current = []
     speakingRef.current = false
     twinReadyRef.current = false
@@ -291,10 +306,17 @@ export default function App() {
     try {
       await disconnect()
 
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      const tokenSecret = (import.meta.env.VITE_TOKEN_SERVER_SECRET as string | undefined)?.trim()
+      if (tokenSecret) {
+        headers['X-Token-Server-Secret'] = tokenSecret
+      }
+
+      // Room name is assigned by the token server (never client-chosen).
       const response = await fetch('/token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ room: `aitwin-demo-${Date.now()}` }),
+        headers,
+        body: JSON.stringify({}),
       })
 
       if (!response.ok) {
@@ -355,9 +377,14 @@ export default function App() {
         echoCancellation: true,
         noiseSuppression: true,
       })
-      await room.localParticipant.publishTrack(track, {
-        source: Track.Source.Microphone,
-      })
+      try {
+        await room.localParticipant.publishTrack(track, {
+          source: Track.Source.Microphone,
+        })
+      } catch (publishErr) {
+        track.stop()
+        throw publishErr
+      }
       micTrackRef.current = track
       setMicEnabled(true)
     } catch (err) {

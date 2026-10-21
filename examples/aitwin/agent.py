@@ -81,6 +81,8 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     speak_lock = asyncio.Lock()
+    # Bumped on interrupt / newer speak so stale synth results are not published.
+    speak_epoch = 0
 
     async def publish_json(payload: dict) -> None:
         if not ctx.room.isconnected():
@@ -88,15 +90,20 @@ async def entrypoint(ctx: JobContext) -> None:
         body = json.dumps(payload, separators=(",", ":"))
         await ctx.room.local_participant.send_text(body, topic=TOPIC_SPEECH)
 
-    async def publish_speech(text: str) -> None:
+    async def publish_speech(text: str, *, epoch: int) -> None:
         cleaned = (text or "").strip()
         if not cleaned:
             return
         async with speak_lock:
+            if epoch != speak_epoch:
+                return
             try:
                 bundle = await synthesize_speech(cleaned)
             except Exception:
-                logger.exception("speech synth failed for: %s", cleaned[:120])
+                logger.exception("speech synth failed (%d chars)", len(cleaned))
+                return
+
+            if epoch != speak_epoch:
                 return
 
             try:
@@ -136,18 +143,27 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @session.on("conversation_item_added")
     def _on_conversation_item(ev: ConversationItemAddedEvent) -> None:
+        nonlocal speak_epoch
         item = ev.item
         if not isinstance(item, llm.ChatMessage) or item.role != "assistant":
+            return
+        if item.interrupted:
+            # Invalidate in-flight synthesis for the interrupted turn.
+            speak_epoch += 1
+            logger.info("skipping interrupted assistant reply")
             return
         text = (item.text_content or item.raw_text_content or "").strip()
         if not text:
             return
-        asyncio.create_task(publish_speech(text))
+        speak_epoch += 1
+        epoch = speak_epoch
+        asyncio.create_task(publish_speech(text, epoch=epoch))
 
     # Speak-text UI: exact words, no LLM — same OpenAI TTS + /avatar_alignVisemes path.
     # LiveKit TextStreamHandler is Callable[[TextStreamReader, str], None] (identity str).
     def _on_say_stream(reader, participant_identity: str) -> None:
         async def _read_and_speak() -> None:
+            nonlocal speak_epoch
             try:
                 text = (await reader.read_all()).strip()
             except Exception:
@@ -157,8 +173,14 @@ async def entrypoint(ctx: JobContext) -> None:
                 return
             if participant_identity == ctx.room.local_participant.identity:
                 return
-            logger.info("say request from %s: %s", participant_identity, text[:120])
-            await publish_speech(text)
+            logger.info(
+                "say request from %s (%d chars)",
+                participant_identity,
+                len(text),
+            )
+            speak_epoch += 1
+            epoch = speak_epoch
+            await publish_speech(text, epoch=epoch)
 
         asyncio.create_task(_read_and_speak())
 

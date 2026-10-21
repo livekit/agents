@@ -12,6 +12,7 @@ Optional HEADTTS_URL skips OpenAI TTS and uses HeadTTS audio+timings
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
@@ -99,9 +100,8 @@ def align_visemes_on_aitwin(
         )
 
     if not resp.ok:
-        raise RuntimeError(
-            f"avatar_alignVisemes failed ({resp.status_code}): {resp.text[:300]}"
-        )
+        # Do not include response body — providers may echo submitted speech.
+        raise RuntimeError(f"avatar_alignVisemes failed ({resp.status_code})")
 
     data = resp.json() if resp.content else {}
     visemes = list(data.get("visemes") or [])
@@ -156,7 +156,8 @@ def synthesize_headtts(
         "audioEncoding": "pcm",
     }
     resp = requests.post(url, json=payload, timeout=60)
-    resp.raise_for_status()
+    if not resp.ok:
+        raise RuntimeError(f"HeadTTS synthesize failed ({resp.status_code})")
     data = resp.json()
     audio_b64 = data.get("audio") or ""
     if not audio_b64:
@@ -226,7 +227,8 @@ async def synthesize_speech(text: str) -> SpeechBundle:
         voice = (os.getenv("HEADTTS_VOICE") or "af_bella").strip()
         language = (os.getenv("HEADTTS_LANGUAGE") or "en-us").strip()
         logger.info("synthesizing via HeadTTS (%s)", headtts_url)
-        return synthesize_headtts(
+        return await asyncio.to_thread(
+            synthesize_headtts,
             cleaned,
             base_url=headtts_url,
             voice=voice,
@@ -239,7 +241,9 @@ async def synthesize_speech(text: str) -> SpeechBundle:
 
     logger.info("OpenAI TTS model=%s voice=%s -> AiTwin /avatar_alignVisemes", model, voice)
     pcm, sample_rate = await synthesize_openai_pcm(cleaned, model=model, voice=voice)
-    visemes, words, out_rate = align_visemes_on_aitwin(
+    # Blocking HTTP must not stall the agent event loop.
+    visemes, words, out_rate = await asyncio.to_thread(
+        align_visemes_on_aitwin,
         pcm,
         sample_rate=sample_rate,
         language=align_lang,
