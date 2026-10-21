@@ -98,6 +98,7 @@ members = [
     "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
     "livekit-plugins-spitch",
+    "livekit-plugins-stepfun",
     "livekit-plugins-synthesia",
     "livekit-plugins-tavus",
     "livekit-plugins-telnyx",
@@ -3740,6 +3741,27 @@ requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "spitch", specifier = ">=1.47.0" },
 ]
+
+[[package]]
+name = "livekit-plugins-stepfun"
+source = { editable = "livekit-plugins/livekit-plugins-stepfun" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+
+[package.optional-dependencies]
+llm = [
+    { name = "livekit-plugins-openai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10" },
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "livekit-plugins-openai", marker = "extra == 'llm'", editable = "livekit-plugins/livekit-plugins-openai" },
+]
+provides-extras = ["llm"]
 
 [[package]]
 name = "livekit-plugins-synthesia"
