@@ -364,11 +364,13 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         auto_gain_control: bool = True,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
+        track_source: rtc.TrackSource.ValueType
+        | list[rtc.TrackSource.ValueType] = rtc.TrackSource.SOURCE_MICROPHONE,
     ) -> None:
         _ParticipantInputStream.__init__(
             self,
             room=room,
-            track_source=rtc.TrackSource.SOURCE_MICROPHONE,
+            track_source=track_source,
             processor=(
                 noise_cancellation if isinstance(noise_cancellation, rtc.FrameProcessor) else None
             ),

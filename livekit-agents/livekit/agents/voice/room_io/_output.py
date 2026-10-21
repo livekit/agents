@@ -416,6 +416,24 @@ class _ParticipantLegacyTranscriptionOutput:
         self.flush()
         self._reset_state()
 
+    def set_track(self, track_sid: str | None) -> None:
+        """Stamp what follows with another track, closing the segment stamped with the last.
+
+        ``None`` restores resolving the track from the linked participant.
+        """
+        if self._pinned_track_id == track_sid:
+            return
+
+        self._pinned_track_id = track_sid
+        if track_sid is None:
+            # re-resolve from the participant
+            self.set_participant(self._participant_identity)
+            return
+
+        self.flush()
+        self._track_id = track_sid
+        self._reset_state()
+
     def _reset_state(self) -> None:
         self._current_id = utils.shortuuid("SG_")
         self._capturing = False
@@ -600,6 +618,24 @@ class _ParticipantStreamTranscriptionOutput:
                 self._track_id = None
 
         self.flush()
+        self._reset_state()
+
+    def set_track(self, track_sid: str | None) -> None:
+        """Stamp what follows with another track, closing the segment stamped with the last.
+
+        ``None`` restores resolving the track from the linked participant.
+        """
+        if self._pinned_track_id == track_sid:
+            return
+
+        self._pinned_track_id = track_sid
+        if track_sid is None:
+            # re-resolve from the participant
+            self.set_participant(self._participant_identity)
+            return
+
+        self.flush()
+        self._track_id = track_sid
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -835,6 +871,10 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
     def set_participant(self, participant: rtc.Participant | str | None) -> None:
         for source in self.__outputs:
             source.set_participant(participant)
+
+    def set_track(self, track_sid: str | None) -> None:
+        for source in self.__outputs:
+            source.set_track(track_sid)
 
     async def capture_text(self, text: str) -> None:
         await asyncio.gather(*[sink.capture_text(text) for sink in self.__outputs])

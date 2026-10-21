@@ -131,6 +131,10 @@ class TranslationRoomIO:
 
             self._audio_input = _ParticipantAudioInputStream(
                 self._room,
+                track_source=[
+                    rtc.TrackSource.SOURCE_MICROPHONE,
+                    rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO,
+                ],
                 sample_rate=audio_input_options.sample_rate,
                 num_channels=audio_input_options.num_channels,
                 frame_size_ms=audio_input_options.frame_size_ms,
@@ -287,31 +291,59 @@ class TranslationRoomIO:
     def set_track(self, track_sid: str | None) -> None:
         """Translate another track.
 
-        The publisher is read off the track, so nothing else has to be supplied.
+        The publisher is read off the track, so nothing else has to be supplied. A track that
+        has not been published yet is accepted: it is linked once it appears.
+
+        Raises:
+            ValueError: If ``track_sid`` names a publication that is not audio.
         """
         if track_sid is None:
             self.unset_track()
             return
 
         linked = self.linked_track
-        if linked is None or linked.publication.sid != track_sid:
-            if self._track_available_fut.done():
-                self._track_available_fut = asyncio.Future[_LinkedTrack]()
+        if linked is not None and linked.publication.sid == track_sid:
+            return
 
-            for participant in self._room.remote_participants.values():
-                if (publication := participant.track_publications.get(track_sid)) is not None:
-                    self._track_available_fut.set_result(_LinkedTrack(publication, participant))
-                    break
+        found: _LinkedTrack | None = None
+        for participant in self._room.remote_participants.values():
+            if (publication := participant.track_publications.get(track_sid)) is not None:
+                if publication.kind != rtc.TrackKind.KIND_AUDIO:
+                    # the model is handed audio; linking a camera would only close what is
+                    # playing and leave nothing in its place
+                    raise ValueError(
+                        f"track {track_sid} is {rtc.TrackKind.Name(publication.kind)}, not audio"
+                    )
+
+                found = _LinkedTrack(publication, participant)
+                break
+
+        if self._track_available_fut.done():
+            self._track_available_fut = asyncio.Future[_LinkedTrack]()
 
         self._track_sid = track_sid
-        if (linked := self.linked_track) is not None:
-            self._participant_identity = linked.participant.identity
+        if found is not None:
+            self._track_available_fut.set_result(found)
+            self._apply_link(found)
+        elif self._audio_input:
+            # pinned now, so whatever the publisher is currently sending is dropped until
+            # the named track appears and _on_track_published links it
+            self._audio_input.set_track_sid(track_sid)
+
+    def _apply_link(self, linked: _LinkedTrack) -> None:
+        """Point the input and the transcript at a linked track."""
+        self._participant_identity = linked.participant.identity
+        track_sid = linked.publication.sid
 
         if self._audio_input:
-            self._audio_input.set_participant(self._participant_identity)
+            # pinned before the participant, so set_participant's scan of existing
+            # publications cannot latch a different audio track of theirs first
             self._audio_input.set_track_sid(track_sid)
+            self._audio_input.set_participant(self._participant_identity)
         if self._input_tr_output:
             self._input_tr_output.set_participant(self._participant_identity)
+            # the transcript follows the track, or later speech keeps the old stamp
+            self._input_tr_output.set_track(track_sid)
 
         logger.info(
             "TranslationRoomIO linked to track",
@@ -331,6 +363,7 @@ class TranslationRoomIO:
             self._audio_input.set_participant(None)
         if self._input_tr_output:
             self._input_tr_output.set_participant(None)
+            self._input_tr_output.set_track(None)
 
     @log_exceptions(logger=logger)
     async def _init_task(self) -> None:
@@ -339,7 +372,7 @@ class TranslationRoomIO:
         for participant in self._room.remote_participants.values():
             self._on_participant_connected(participant)
 
-        publication, participant = await self._track_available_fut
+        linked = await self._track_available_fut
 
         if self._options.get_text_output_options() is not None:
             # stamped with the track itself, not whichever microphone track its publisher
@@ -347,11 +380,11 @@ class TranslationRoomIO:
             self._input_tr_output = _ParticipantTranscriptionOutput(
                 room=self._room,
                 is_delta_stream=False,
-                participant=participant.identity,
-                track=publication.sid,
+                participant=linked.participant.identity,
+                track=linked.publication.sid,
             )
 
-        self.set_track(publication.sid)
+        self._apply_link(linked)
 
         if self._output_tr_output:
             self._output_tr_output.set_participant(self._room.local_participant.identity)
@@ -416,7 +449,12 @@ class TranslationRoomIO:
             if participant.kind not in accepted_kinds:
                 return
 
-        self._track_available_fut.set_result(_LinkedTrack(publication, participant))
+        linked = _LinkedTrack(publication, participant)
+        self._track_available_fut.set_result(linked)
+
+        if self._init_atask is not None and self._init_atask.done():
+            # startup has finished, so nothing else will pick this up
+            self._apply_link(linked)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if not (linked := self.linked_participant) or participant.identity != linked.identity:

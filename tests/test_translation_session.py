@@ -28,6 +28,7 @@ from livekit.agents.beta.translation import (
     TranslationRoomOptions,
     TranslationSession,
 )
+from livekit.agents.beta.translation.room_io import _LinkedTrack
 from livekit.agents.voice.events import CloseEvent, CloseReason
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
@@ -565,3 +566,93 @@ async def test_a_refused_retarget_leaves_the_model_language_alone() -> None:
         assert model.target_language == "es"
     finally:
         await session.aclose()
+
+
+# -- switching the linked track --
+
+
+class _RecordingAudioInput:
+    def __init__(self) -> None:
+        self.participants: list[str | None] = []
+        self.tracks: list[str | None] = []
+
+    def set_participant(self, participant: str | None) -> None:
+        self.participants.append(participant)
+
+    def set_track_sid(self, track_sid: str | None) -> None:
+        self.tracks.append(track_sid)
+
+
+class _RecordingTranscriptOutput:
+    def __init__(self) -> None:
+        self.participants: list[str | None] = []
+        self.tracks: list[str | None] = []
+
+    def set_participant(self, participant: str | None) -> None:
+        self.participants.append(participant)
+
+    def set_track(self, track_sid: str | None) -> None:
+        self.tracks.append(track_sid)
+
+
+def _linked(room_io: TranslationRoomIO) -> tuple[_RecordingAudioInput, _RecordingTranscriptOutput]:
+    audio_in, transcript = _RecordingAudioInput(), _RecordingTranscriptOutput()
+    room_io._audio_input = audio_in  # type: ignore[assignment]
+    room_io._input_tr_output = transcript  # type: ignore[assignment]
+    return audio_in, transcript
+
+
+async def test_switching_tracks_moves_the_transcript_stamp_too() -> None:
+    room_io = _room_io()
+    audio_in, transcript = _linked(room_io)
+    bob = _FakeParticipant("bob")
+
+    room_io._apply_link(_LinkedTrack(_FakePublication("TR_b"), bob))  # type: ignore[arg-type]
+
+    assert transcript.participants == ["bob"]
+    # the stamp follows the track, or Bob's words keep Alice's track sid
+    assert transcript.tracks == ["TR_b"]
+    # pinned before the participant, so the scan cannot latch another of their tracks
+    assert audio_in.tracks == ["TR_b"]
+    assert audio_in.participants == ["bob"]
+
+
+async def test_a_track_named_before_it_exists_is_linked_once_published() -> None:
+    room_io = _room_io(track="TR_late")
+    audio_in, transcript = _linked(room_io)
+
+    # startup has already finished waiting, so only the publish event can apply this
+    done: asyncio.Future[None] = asyncio.Future()
+    done.set_result(None)
+    room_io._init_atask = done  # type: ignore[assignment]
+
+    bob = _FakeParticipant("bob")
+    room_io._on_track_published(_FakePublication("TR_late"), bob)  # type: ignore[arg-type]
+
+    assert room_io.linked_track is not None
+    assert audio_in.participants == ["bob"]
+    assert transcript.tracks == ["TR_late"]
+
+
+async def test_switching_to_a_video_track_is_refused() -> None:
+    room_io = _room_io()
+    _linked(room_io)
+    camera = _FakePublication("TR_camera", kind=rtc.TrackKind.KIND_VIDEO)
+    room_io.room._remote_participants["bob"] = _FakeParticipant("bob")  # type: ignore[assignment]
+    room_io.room._remote_participants["bob"].track_publications = {"TR_camera": camera}  # type: ignore[attr-defined]
+
+    with pytest.raises(ValueError, match="not audio"):
+        room_io.set_track("TR_camera")
+
+
+async def test_a_named_screenshare_track_can_reach_the_model() -> None:
+    # selecting screen-share audio is pointless if the input only ever accepts a microphone
+    session = TranslationSession(model=_FakeTranslationModel())
+    room_io = TranslationRoomIO(session, rtc.Room(), options=TranslationRoomOptions())
+    await room_io.start()
+    try:
+        assert room_io._audio_input is not None
+        assert rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO in room_io._audio_input._accepted_sources
+        assert rtc.TrackSource.SOURCE_MICROPHONE in room_io._audio_input._accepted_sources
+    finally:
+        await room_io.aclose()
