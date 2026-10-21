@@ -539,12 +539,23 @@ class _InworldConnection:
                     self._release_context(ctx.context_id)
 
     async def _handle_connection_error(self, error: Exception) -> None:
-        """Handle connection-level error by failing all active contexts."""
+        """Fail all active contexts, stop the background loops and close the WebSocket."""
         for ctx in list(self._contexts.values()):
             if ctx.waiter and not ctx.waiter.done():
                 ctx.waiter.set_exception(error)
         self._contexts.clear()
         self._closed = True
+
+        # called from inside the send or receive loop, which must not cancel itself
+        current = asyncio.current_task()
+        for task in (self._send_task, self._recv_task, self._cleanup_task):
+            if task and task is not current:
+                task.cancel()
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception as e:
+                logger.debug("Error closing Inworld TTS WebSocket", extra={"error": str(e)})
 
     async def aclose(self) -> None:
         """Close the connection and all contexts."""

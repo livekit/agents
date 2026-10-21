@@ -6,6 +6,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import pytest
 
 from livekit.agents import APIConnectionError
@@ -199,16 +200,22 @@ async def test_http_body_omits_delivery_mode_when_not_given():
 class _FakeWS:
     def __init__(self) -> None:
         self.sent: list[dict] = []
-        self._never = asyncio.Event()
+        self.close_calls = 0
+        self._dropped = asyncio.Event()
 
     async def send_str(self, payload: str) -> None:
         self.sent.append(json.loads(payload))
 
     async def receive(self, timeout: float | None = None):
-        await self._never.wait()
+        await self._dropped.wait()
+        return MagicMock(type=aiohttp.WSMsgType.CLOSED)
 
     async def close(self) -> None:
-        self._never.set()
+        self.close_calls += 1
+        self._dropped.set()
+
+    def drop(self) -> None:
+        self._dropped.set()
 
 
 def _tts_with_ws_connect(ws_connect):
@@ -503,4 +510,25 @@ async def test_caller_timeout_does_not_fail_shared_handshake():
     assert calls == 1
     assert conn._ws is ws
     assert not long_waiter.done()
+    await tts.aclose()
+
+
+async def test_dropped_connection_is_closed_and_replaced():
+    ws = _FakeWS()
+    tts = _tts_with_ws_connect(AsyncMock(return_value=ws))
+    conn = tts._get_connection()
+    _, waiter = conn.create_context(MagicMock(), tts._opts)
+    await conn.connect(5.0)
+
+    ws.drop()
+    with pytest.raises(APIConnectionError):
+        await asyncio.wait_for(waiter, timeout=2.0)
+    for _ in range(50):
+        if ws.close_calls and conn._send_task.done() and conn._cleanup_task.done():
+            break
+        await asyncio.sleep(0.01)
+
+    assert ws.close_calls >= 1
+    assert conn._send_task.done() and conn._cleanup_task.done()
+    assert tts._get_connection() is not conn
     await tts.aclose()
