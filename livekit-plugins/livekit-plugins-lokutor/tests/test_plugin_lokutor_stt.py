@@ -5,6 +5,7 @@ Async tests run by pytest-asyncio (``asyncio_mode = "auto"`` in the repo's pytes
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -17,7 +18,13 @@ import pytest
 from aiohttp import web
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, stt
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+)
 
 
 def _frame(ms: int = 100, rate: int = 16000) -> rtc.AudioFrame:
@@ -238,3 +245,96 @@ async def test_recognize_posts_a_wav_and_returns_a_final_transcript():
         "rate": 48000,
         "frames": 24000,
     }
+
+
+async def _stream_against(ws_stt, *, timeout: float = 5.0, **stt_kwargs) -> list[stt.SpeechEvent]:
+    from livekit.plugins.lokutor import STT
+
+    app = web.Application()
+    app.router.add_get("/ws/stt", ws_stt)
+    runner, base = await _serve(app)
+    try:
+        async with aiohttp.ClientSession() as session:
+            s = STT(api_key="sk-test", base_url=base, http_session=session, **stt_kwargs)
+            stream = s.stream(conn_options=APIConnectOptions(max_retry=0, timeout=timeout))
+            stream.push_frame(_frame())
+            stream.end_input()
+            try:
+                return [ev async for ev in stream]
+            finally:
+                await stream.aclose()
+    finally:
+        await runner.cleanup()
+
+
+async def test_stream_closed_before_done_is_an_error():
+    # After end_input() the server owes a last final transcript and "done"; closing without
+    # them may have lost speech, so it must not end the stream as if it had finished.
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive()
+        await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                await ws.close()
+        return ws
+
+    with pytest.raises(APIConnectionError):
+        await _stream_against(ws_stt)
+
+
+async def test_stream_that_stalls_after_end_times_out():
+    # A server that accepts "end" and then says nothing, without closing, must not hold the
+    # stream open forever.
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive()
+        await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
+        async for _ in ws:
+            pass
+        return ws
+
+    with pytest.raises(APITimeoutError):
+        await asyncio.wait_for(_stream_against(ws_stt, timeout=0.5), 10)
+
+
+async def test_stream_without_a_language_reports_the_detected_one():
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive()
+        await ws.send_str(json.dumps({"type": "status", "data": "ready", "lang": ""}))
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                await ws.send_str(
+                    json.dumps(
+                        {"type": "transcript", "data": "Bon dia.", "isFinal": True, "lang": "ca"}
+                    )
+                )
+                await ws.send_str(json.dumps({"type": "status", "data": "done"}))
+                await ws.close()
+        return ws
+
+    events = await _stream_against(ws_stt)
+    finals = [e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert finals and finals[0].alternatives[0].language == "ca"
+
+
+async def test_recognize_without_a_language_reports_the_detected_one():
+    async def transcribe(request: web.Request) -> web.Response:
+        return web.json_response({"text": "Bon dia.", "language": "ca"})
+
+    from livekit.plugins.lokutor import STT
+
+    app = web.Application()
+    app.router.add_post("/stt/transcribe", transcribe)
+    runner, base = await _serve(app)
+    try:
+        async with aiohttp.ClientSession() as session:
+            s = STT(api_key="sk-test", base_url=base, http_session=session)
+            event = await s.recognize([_frame(500)])
+    finally:
+        await runner.cleanup()
+    assert event.alternatives[0].language == "ca"

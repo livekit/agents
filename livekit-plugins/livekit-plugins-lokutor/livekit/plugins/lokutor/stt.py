@@ -192,7 +192,10 @@ class STT(stt.STT):
             request_id=utils.shortuuid("lokutor-"),
             alternatives=[
                 stt.SpeechData(
-                    language=LanguageCode(lang or "multi"),
+                    # Without a requested language, the one the API reports (detected), if it serves it.
+                    language=LanguageCode(
+                        lang or _api_language(str(data.get("language") or "")) or "multi"
+                    ),
                     text=str(data.get("text") or "").strip(),
                     start_time=0.0,
                     end_time=frame.duration,
@@ -232,6 +235,7 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
         self._request_id = ""
         self._input_done = False
+        self._done = False
         self._audio_sent = 0.0
         self._audio_reported = 0.0
 
@@ -263,6 +267,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         self._input_done = False
+        self._done = False
         ws = await self._connect_ws()
         try:
             await ws.send_str(json.dumps({"language": self._api_lang}))
@@ -271,7 +276,15 @@ class SpeechStream(stt.SpeechStream):
             send_task = asyncio.create_task(self._send_task(ws))
             recv_task = asyncio.create_task(self._recv_task(ws))
             try:
-                await asyncio.gather(send_task, recv_task)
+                await asyncio.wait({send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED)
+                if send_task.done():
+                    send_task.result()
+                    # Input has ended: the last final transcript and "done" must follow within the
+                    # timeout. A live stream waits on the caller for as long as it lasts; this
+                    # bounds only the wait for a server that stops answering after "end".
+                    await asyncio.wait_for(recv_task, self._conn_options.timeout)
+                else:
+                    recv_task.result()
             finally:
                 await utils.aio.gracefully_cancel(send_task, recv_task)
         except asyncio.TimeoutError:
@@ -300,6 +313,7 @@ class SpeechStream(stt.SpeechStream):
                     retryable=False,
                 )
             if data.get("type") == "status" and data.get("data") == "ready":
+                self._note_language(data.get("lang"))
                 return
 
     async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -321,9 +335,11 @@ class SpeechStream(stt.SpeechStream):
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSING,
             ):
-                if self._input_done:
+                # Only "done" ends a stream: a close before it, even after end_input(), may have
+                # lost the last final transcript.
+                if self._done:
                     return
-                raise APIConnectionError("Lokutor STT closed unexpectedly")
+                raise APIConnectionError("Lokutor STT closed before it finished")
             if msg.type == aiohttp.WSMsgType.ERROR:
                 raise APIConnectionError("Lokutor STT connection failed")
             if msg.type != aiohttp.WSMsgType.TEXT:
@@ -346,11 +362,19 @@ class SpeechStream(stt.SpeechStream):
                     retryable=False,
                 )
             if kind == "status" and data.get("data") == "done":
+                self._done = True
                 return
             if kind == "transcript":
+                self._note_language(data.get("lang"))
                 self._on_transcript(
                     str(data.get("data") or "").strip(), data.get("isFinal") is True
                 )
+
+    def _note_language(self, lang: object) -> None:
+        # With no language requested, label transcripts with the one the server reports, if it
+        # serves it; "multi" otherwise.
+        if not self._api_lang and isinstance(lang, str) and _api_language(lang):
+            self._language = LanguageCode(_api_language(lang))
 
     def _on_transcript(self, text: str, final: bool) -> None:
         if not text:
