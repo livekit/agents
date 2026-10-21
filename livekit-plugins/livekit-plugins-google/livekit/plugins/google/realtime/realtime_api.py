@@ -571,6 +571,11 @@ class RealtimeSession(llm.RealtimeSession):
         self._unsent_item_ids: set[str] = set()
 
         self._in_user_activity = False
+        # input transcription that arrived with no model turn. Opening a generation for it
+        # makes AgentSession wait on a reply Gemini will never send.
+        self._pending_input_transcript = ""
+        self._pending_input_id: str | None = None
+        self._pending_input_started_at: float | None = None
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
         # error recorded by the recv/send tasks so _main_task can bound retries
@@ -1212,28 +1217,9 @@ class RealtimeSession(llm.RealtimeSession):
                         self._reject_tool_calls(response.tool_call.function_calls or [])
                         continue
 
+                    content_consumed = False
                     if not self._current_generation or self._current_generation._done:
-                        if (sc := response.server_content) and sc.interrupted:
-                            # two cases an interrupted event is sent without an active generation
-                            # 1) the generation is done but playout is not finished (turn_complete -> interrupted)
-                            # 2) the generation is not started (interrupted -> turn_complete)
-                            # for both cases, we interrupt the agent if there is no pending generation from `generate_reply`
-                            # for the second case, the pending generation will be stopped by `turn_complete` event coming later
-                            if not self._pending_generation_fut:
-                                self._handle_input_speech_started()
-
-                            sc.interrupted = None
-                            sc_copy = sc.model_dump(exclude_none=True)
-                            if not sc_copy:
-                                # ignore empty server content
-                                response.server_content = None
-                                if lk_google_debug:
-                                    logger.debug("ignoring empty server content")
-
-                        if self._is_new_generation(response):
-                            self._start_new_generation()
-                            if lk_google_debug:
-                                logger.debug(f"new generation started: {self._current_generation}")
+                        content_consumed = self._open_generation(response)
 
                     if response.session_resumption_update:
                         if (
@@ -1251,7 +1237,7 @@ class RealtimeSession(llm.RealtimeSession):
                                 ]
                             )
 
-                    if response.server_content:
+                    if response.server_content and not content_consumed:
                         self._handle_server_content(response.server_content)
                     if response.tool_call:
                         self._handle_tool_calls(response.tool_call)
@@ -1336,6 +1322,104 @@ class RealtimeSession(llm.RealtimeSession):
 
         return conf
 
+    def _open_generation(self, response: types.LiveServerMessage) -> bool:
+        """Start a generation for a server message that arrived with none active.
+
+        Returns True when the message was a standalone input transcript and its server
+        content has already been consumed.
+        """
+        if (sc := response.server_content) and sc.interrupted:
+            # two cases an interrupted event is sent without an active generation
+            # 1) the generation is done but playout is not finished (turn_complete -> interrupted)
+            # 2) the generation is not started (interrupted -> turn_complete)
+            # for both cases, we interrupt the agent if there is no pending generation from
+            # `generate_reply`. for the second case, the pending generation will be stopped by
+            # the `turn_complete` event coming later
+            if not self._pending_generation_fut:
+                self._handle_input_speech_started()
+
+            sc.interrupted = None
+            sc_copy = sc.model_dump(exclude_none=True)
+            if not sc_copy:
+                # ignore empty server content
+                response.server_content = None
+                if lk_google_debug:
+                    logger.debug("ignoring empty server content")
+
+        if self._manual_activity_detection and self._is_standalone_input_transcript(response):
+            assert response.server_content is not None
+            self._handle_standalone_input_transcript(response.server_content)
+            return True
+
+        if self._is_new_generation(response):
+            self._start_new_generation()
+            if lk_google_debug:
+                logger.debug(f"new generation started: {self._current_generation}")
+        return False
+
+    def _is_standalone_input_transcript(self, resp: types.LiveServerMessage) -> bool:
+        """An input transcript with no model output.
+
+        Manual activity detection releases this when the user activity ends, without a model
+        turn or turn_complete. Opening a generation for it never finishes, so later replies wait.
+        """
+        if resp.tool_call:
+            return False
+        sc = resp.server_content
+        if sc is None or sc.model_turn or sc.interrupted or sc.generation_complete:
+            return False
+        if sc.output_transcription and sc.output_transcription.text:
+            return False
+        transcription = sc.input_transcription
+        if transcription is not None and (transcription.text or transcription.finished):
+            return True
+        return bool(sc.turn_complete and self._pending_input_id)
+
+    def _handle_standalone_input_transcript(self, server_content: types.LiveServerContent) -> None:
+        transcription = server_content.input_transcription
+        done = bool(server_content.turn_complete)
+        if transcription is not None:
+            if self._pending_input_id is None:
+                self._pending_input_id = utils.shortuuid("GI_")
+                self._pending_input_started_at = time.time()
+            text = transcription.text or ""
+            if text:
+                if not self._pending_input_transcript:
+                    text = text.lstrip()
+                self._pending_input_transcript += text
+                self.emit(
+                    "input_audio_transcription_completed",
+                    llm.InputTranscriptionCompleted(
+                        item_id=self._pending_input_id,
+                        transcript=self._pending_input_transcript,
+                        is_final=False,
+                        turn_started_at=self._pending_input_started_at,
+                    ),
+                )
+            done = done or bool(transcription.finished)
+
+        if not done or self._pending_input_id is None:
+            return
+
+        if self._pending_input_transcript:
+            self.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=self._pending_input_id,
+                    transcript=self._pending_input_transcript,
+                    is_final=True,
+                    turn_started_at=self._pending_input_started_at,
+                ),
+            )
+            self._chat_ctx.add_message(
+                role="user",
+                content=self._pending_input_transcript,
+                id=self._pending_input_id,
+            )
+        self._pending_input_transcript = ""
+        self._pending_input_id = None
+        self._pending_input_started_at = None
+
     def _start_new_generation(self) -> None:
         self._rejected_tool_calls = 0
         if self._current_generation and not self._current_generation._done:
@@ -1354,6 +1438,16 @@ class RealtimeSession(llm.RealtimeSession):
         )
         if not self._realtime_model.capabilities.audio_output:
             self._current_generation.audio_ch.close()
+
+        if self._pending_input_id:
+            # the transcript started before the model spoke; keep the same item
+            self._current_generation.input_id = self._pending_input_id
+            self._current_generation.input_transcription = self._pending_input_transcript
+            if self._pending_input_started_at is not None:
+                self._current_generation._created_timestamp = self._pending_input_started_at
+            self._pending_input_transcript = ""
+            self._pending_input_id = None
+            self._pending_input_started_at = None
 
         msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
         msg_modalities.set_result(
@@ -1380,9 +1474,12 @@ class RealtimeSession(llm.RealtimeSession):
             self._pending_generation_fut.set_result(generation_event)
             self._pending_generation_fut = None
         else:
-            # emit input_speech_started event before starting an agent initiated generation
-            # to interrupt the previous audio playout if any
-            self._handle_input_speech_started()
+            # The model started this generation. With manual activity detection that is not
+            # the user barging in: input_speech_started makes AgentSession send activity_start,
+            # and Gemini cuts the line. A real barge-in still arrives as server_content.interrupted.
+            # Automatic detection keeps the event so a server-started turn stops playout.
+            if not self._manual_activity_detection:
+                self._handle_input_speech_started()
 
         self.emit("generation_created", generation_event)
 
