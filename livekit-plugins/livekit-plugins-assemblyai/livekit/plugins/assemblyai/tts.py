@@ -143,8 +143,8 @@ class TTS(tts.TTS):
             api_key: AssemblyAI API key. Defaults to the ``ASSEMBLYAI_API_KEY``
                 environment variable.
             base_url: The Streaming TTS host. Defaults to the global endpoint, which
-                routes to the nearest region. Use ``"wss://streaming-tts.us.assemblyai.com"``
-                or ``"wss://streaming-tts.eu.assemblyai.com"`` to keep data in one zone.
+                routes to the nearest region. Use ``"wss://tts.us.assemblyai.com"``
+                or ``"wss://tts.eu.assemblyai.com"`` to keep data in one zone.
             tokenizer: Splits the LLM output into the requests sent to the server; each
                 sentence is synthesized as its own request. Defaults to
                 ``livekit.agents.tokenize.blingfire.SentenceTokenizer``.

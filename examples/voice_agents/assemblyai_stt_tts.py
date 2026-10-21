@@ -81,8 +81,8 @@ async def entrypoint(ctx: JobContext) -> None:
         # See https://www.assemblyai.com/docs/tts/voices. For another language, pass the
         # voice's language too, e.g. voice="lola", language="es".
         voice="jane",
-        # For data residency, pin a region: "wss://streaming-tts.us.assemblyai.com"
-        # or "wss://streaming-tts.eu.assemblyai.com".
+        # For data residency, pin a region: "wss://tts.us.assemblyai.com"
+        # or "wss://tts.eu.assemblyai.com".
     )
     # Open the TTS socket now, so the first reply doesn't pay for the handshake.
     tts.prewarm()

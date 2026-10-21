@@ -48,7 +48,7 @@ the data zone it was created in:
 ```python
 assemblyai.TTS(
     voice_id="01a0da61-138c-77c7-ab98-421431ed74e8",
-    base_url="wss://streaming-tts.us.assemblyai.com",
+    base_url="wss://tts.us.assemblyai.com",
 )
 ```
 
@@ -56,7 +56,7 @@ Other options:
 
 - `sample_rate`: 8000, 16000, 22050, 24000 (default, the service's native rate), 44100 or 48000.
 - `word_timestamps`: per-word timings published as an aligned transcript (default `True`).
-- `base_url`: `wss://streaming-tts.us.assemblyai.com` or `wss://streaming-tts.eu.assemblyai.com`
+- `base_url`: `wss://tts.us.assemblyai.com` or `wss://tts.eu.assemblyai.com`
   keeps text and audio in one data zone; the default global endpoint routes to the nearest region.
 
 The service has no speed, pitch or SSML controls. Numbers, currency, dates and common
