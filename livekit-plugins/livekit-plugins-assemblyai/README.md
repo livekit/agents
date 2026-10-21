@@ -13,3 +13,38 @@ pip install livekit-plugins-assemblyai
 ## Pre-requisites
 
 You'll need to specify an AssemblyAI API Key. It can be set as environment variable: `ASSEMBLYAI_API_KEY`.
+
+## Usage
+
+```python
+from livekit.agents import AgentSession, TurnHandlingOptions
+from livekit.plugins import assemblyai
+
+session = AgentSession(
+    stt=assemblyai.STT(),
+    tts=assemblyai.TTS(voice="jane"),
+    # let AssemblyAI decide when the user has finished speaking
+    turn_handling=TurnHandlingOptions(turn_detection="stt"),
+    # ... llm, vad, etc.
+)
+```
+
+### Speech-to-text
+
+`assemblyai.STT` streams Universal-3.6 Pro by default (`model`). Useful options: `mode`
+(`"min_latency"`, `"balanced"` or `"max_accuracy"`), `language_detection` or `language_code`, and
+`keyterms_prompt` to boost names and terms the model should get right.
+
+### Text-to-speech
+
+`assemblyai.TTS` streams speech over a pooled WebSocket and cancels in-flight audio when the user
+interrupts. Useful options:
+
+- `voice` and `language` (a code such as `"es"`): set independently, since every voice speaks
+  every language. See the [voices](https://www.assemblyai.com/docs/tts/voices).
+- `model`: defaults to `assemblyai-tts-1`.
+- `voice_id`: a custom (cloned) voice, instead of `voice`.
+- `base_url`: the US data zone by default; `wss://tts.eu.assemblyai.com` keeps data in the EU.
+- `word_timestamps`: per-word timings for synchronized transcripts (default `True`).
+
+Call `tts.prewarm()` to open the session before the first reply.
