@@ -193,7 +193,8 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
     ) -> None:
         """
-        Update the voice or model. Replies in progress finish with the old ones.
+        Update the voice or model. Replies that already hold a connection finish with the old
+        ones; every other reply, including one still connecting, uses the new ones.
 
         Args:
             voice (str): Voice id, from `GET /v1/voices`.
@@ -325,7 +326,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal sent, deadline
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    break
+                    if sent:
+                        break
+                    continue  # a flush before any text ends nothing
                 if data.strip():
                     self._mark_started()
                 sent = True
