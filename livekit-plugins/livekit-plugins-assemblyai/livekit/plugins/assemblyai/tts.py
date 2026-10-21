@@ -86,10 +86,8 @@ _CANCEL_FRAME = json.dumps({"type": "Cancel"})
 
 @dataclass
 class _TTSOptions:
-    # None leaves the choice to the server: the default voice of the language
+    # a catalog voice, sent as `voice_id`; None leaves it to the server (the model's default)
     voice: str | None
-    # a catalog voice (library or custom), sent instead of `voice`
-    voice_id: str | None
     language: str | None
     model: str
     sample_rate: int
@@ -103,7 +101,6 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        voice_id: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         model: str = DEFAULT_MODEL,
         sample_rate: int = 24000,
@@ -120,18 +117,16 @@ class TTS(tts.TTS):
         information on the API.
 
         Args:
-            voice: A voice name, see https://www.assemblyai.com/docs/tts/voices.
-                Defaults to the model's default voice. The language is set separately,
-                with ``language``.
-            voice_id: A catalog voice, instead of ``voice``: a voice library voice by its
-                slug (``"aai-linda-3"``), or a custom (cloned) voice by its ``id`` or the
-                account's slug for it. The voice must be paired with ``model``; a custom
-                voice can only be used on a host in the data zone that created it.
+            voice: The voice, by its catalog id: a voice library voice by its slug
+                (``"aai-jane"``, see https://www.assemblyai.com/docs/tts/voices), or a
+                custom (cloned) voice by its ``id`` or the account's slug for it. Defaults
+                to the model's default voice. The voice must be paired with ``model``; a
+                custom voice can only be used on a host in the data zone that created it.
             language: The language to synthesize, as a code (``"es"``, ``"es-MX"``) or an
-                English name (``"spanish"``). Defaults to English; with ``voice_id``, to
+                English name (``"spanish"``). Defaults to English; with a custom voice, to
                 the language of the voice's reference clip.
             model: The model to synthesize with, by name or alias. Defaults to
-                ``"assemblyai-tts-1"``. A ``voice_id`` voice must be paired with it.
+                ``"assemblyai-tts-1"``.
             sample_rate: Output sample rate in Hz, one of 8000, 16000, 22050, 24000,
                 44100 or 48000. Defaults to 24000, the service's native rate.
             word_timestamps: Request per-word timings and publish them as an aligned
@@ -169,12 +164,8 @@ class TTS(tts.TTS):
                 "or set it as the `ASSEMBLYAI_API_KEY` environment variable"
             )
 
-        if is_given(voice) and is_given(voice_id):
-            raise ValueError("pass either `voice` or `voice_id`, not both")
-
         self._opts = _TTSOptions(
             voice=_require(voice, "voice") if is_given(voice) else None,
-            voice_id=_require(voice_id, "voice_id") if is_given(voice_id) else None,
             language=_language_name(language) if is_given(language) else None,
             model=_require(model, "model"),
             sample_rate=sample_rate,
@@ -211,13 +202,8 @@ class TTS(tts.TTS):
 
     @property
     def voice(self) -> str | None:
-        """The configured voice, or None for the server's default voice of the language."""
+        """The configured voice, or None for the model's default voice."""
         return self._opts.voice
-
-    @property
-    def voice_id(self) -> str | None:
-        """The catalog voice, when one is used instead of ``voice``."""
-        return self._opts.voice_id
 
     @property
     def language(self) -> str | None:
@@ -228,7 +214,6 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str | None] = NOT_GIVEN,
-        voice_id: NotGivenOr[str | None] = NOT_GIVEN,
         language: NotGivenOr[str | None] = NOT_GIVEN,
         model: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -239,31 +224,22 @@ class TTS(tts.TTS):
         keeps its voice until it finishes.
 
         Args:
-            voice: A voice name, replacing a ``voice_id``; None for the default voice.
-            voice_id: A catalog voice, replacing ``voice``; None to stop using it.
+            voice: A catalog voice id or slug, or None for the model's default voice.
             language: A language code or English name, or None for the server's default.
             model: A model name or alias.
         """
-        if voice and voice_id:
-            raise ValueError("pass either `voice` or `voice_id`, not both")
-
         opts = self._opts
-        new_voice, new_voice_id = opts.voice, opts.voice_id
-        new_language, new_model = opts.language, opts.model
+        new_voice, new_language, new_model = opts.voice, opts.language, opts.model
         if is_given(voice):
             new_voice = _optional(voice, "voice")
-            new_voice_id = None if new_voice else new_voice_id
-        if is_given(voice_id):
-            new_voice_id = _optional(voice_id, "voice_id")
-            new_voice = None if new_voice_id else new_voice
         if is_given(language):
             new_language = _language_name(language) if language is not None else None
         if is_given(model):
             new_model = _require(model, "model")
 
-        new = (new_voice, new_voice_id, new_language, new_model)
-        if new != (opts.voice, opts.voice_id, opts.language, opts.model):
-            opts.voice, opts.voice_id, opts.language, opts.model = new
+        new = (new_voice, new_language, new_model)
+        if new != (opts.voice, opts.language, opts.model):
+            opts.voice, opts.language, opts.model = new
             self._pool.invalidate()
 
     def synthesize(
@@ -321,7 +297,7 @@ class TTS(tts.TTS):
             "word_boundaries": "true" if opts.word_timestamps else "false",
         }
         # what is left out is the server's choice
-        optional = {"voice": opts.voice, "voice_id": opts.voice_id, "language": opts.language}
+        optional = {"voice_id": opts.voice, "language": opts.language}
         params.update({k: v for k, v in optional.items() if v is not None})
         url = f"{opts.base_url}/v1/ws?{urlencode(params)}"
 

@@ -41,7 +41,7 @@ class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are a friendly voice assistant built on AssemblyAI "
+                "Your name is Ava. You are a friendly voice assistant built on AssemblyAI "
                 "speech-to-text and text-to-speech. Keep replies short and conversational: "
                 "one or two sentences, no lists, no markdown, no emojis. Spell out anything "
                 "that should be read aloud exactly, but write numbers, dates and prices "
@@ -79,10 +79,10 @@ async def entrypoint(ctx: JobContext) -> None:
 
     tts = assemblyai.TTS(
         model="assemblyai-tts-1",
-        # See https://www.assemblyai.com/docs/tts/voices. Every voice speaks every
+        # A voice library slug or a cloned voice's id, see
+        # https://www.assemblyai.com/docs/tts/voices. Every built-in voice speaks every
         # language; pick one with e.g. language="es".
-        voice="jean",
-        # voice_id=""
+        voice="aai-jane",
         # The US data zone by default; for the EU: base_url="wss://tts.eu.assemblyai.com".
     )
     # Open the TTS socket now, so the first reply doesn't pay for the handshake.

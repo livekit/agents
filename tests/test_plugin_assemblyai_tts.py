@@ -149,7 +149,7 @@ class _FakeServer:
                 "id": f"session-{len(self.sessions)}",
                 "expires_at": int(time.time() + self.session_seconds),
                 "configuration": {
-                    "voice": session.params.get("voice", "jane"),
+                    "voice": session.params.get("voice_id", "jane"),
                     "language": session.params.get("language", "english"),
                     "sample_rate": int(session.params.get("sample_rate", SAMPLE_RATE)),
                     "encoding": session.params.get("encoding"),
@@ -337,8 +337,8 @@ def test_voice_and_language() -> None:
     assert (tts.voice, tts.language) == (None, None)
 
     # voices pass through; the language is never inferred from one
-    tts = TTS(api_key="k", voice=" vera ")
-    assert (tts.voice, tts.language) == ("vera", None)
+    tts = TTS(api_key="k", voice=" aai-vera ")
+    assert (tts.voice, tts.language) == ("aai-vera", None)
 
     # any code or English name becomes the name the API takes
     for language in ("spanish", "Spanish", "es", "es-MX", "spa"):
@@ -357,45 +357,26 @@ def test_voice_and_language() -> None:
 def test_custom_voice_and_model() -> None:
     from livekit.plugins.assemblyai import TTS
 
-    voice_id = "01a142a4-66f3-7315-b15f-668b6edfb595"
-    # a custom voice speaks its clip's language: none is derived or defaulted
-    tts = TTS(api_key="k", voice_id=f" {voice_id} ")
-    assert (tts.voice, tts.voice_id, tts.language) == (None, voice_id, None)
-    assert tts.model == "assemblyai-tts-1"
+    # a custom voice is a voice like any other; it speaks its clip's language by default
+    clone = "01a142a4-66f3-7315-b15f-668b6edfb595"
+    tts = TTS(api_key="k", voice=f" {clone} ")
+    assert (tts.voice, tts.language, tts.model) == (clone, None, "assemblyai-tts-1")
 
-    tts = TTS(api_key="k", voice_id="my-voice", language="es", model="latest")
-    assert (tts.voice_id, tts.language, tts.model) == ("my-voice", "spanish", "latest")
+    tts = TTS(api_key="k", voice="my-voice", language="es", model="latest")
+    assert (tts.voice, tts.language, tts.model) == ("my-voice", "spanish", "latest")
 
-    tts = TTS(api_key="k", voice="vera", model="some-model")
-    assert (tts.voice, tts.model) == ("vera", "some-model")
-
-    with pytest.raises(ValueError, match="either"):
-        TTS(api_key="k", voice="jane", voice_id=voice_id)
-    with pytest.raises(ValueError, match="voice_id"):
-        TTS(api_key="k", voice_id="  ")
     with pytest.raises(ValueError, match="model"):
         TTS(api_key="k", model=" ")
 
 
-def test_update_options_switches_between_voice_and_voice_id() -> None:
+def test_update_options_resets_to_server_defaults_with_none() -> None:
     from livekit.plugins.assemblyai import TTS
 
-    tts = TTS(api_key="k", voice="vera", language="es")
-    tts.update_options(voice_id="clone")
-    assert (tts.voice, tts.voice_id, tts.language) == (None, "clone", "spanish")
-    tts.update_options(voice="paul", language=None)
-    assert (tts.voice, tts.voice_id, tts.language) == ("paul", None, None)
-    tts.update_options(voice_id="clone", language="fr", model="latest")
-    assert (tts.voice_id, tts.language, tts.model) == ("clone", "french", "latest")
-    with pytest.raises(ValueError, match="either"):
-        tts.update_options(voice="jane", voice_id="clone")
-
-    # None hands a field back to the server's default
-    tts.update_options(voice_id=None, language=None)
-    assert (tts.voice, tts.voice_id, tts.language) == (None, None, None)
-    tts.update_options(voice="jane")
-    tts.update_options(voice=None, voice_id=None)  # clearing both is not a conflict
-    assert (tts.voice, tts.voice_id) == (None, None)
+    tts = TTS(api_key="k", voice="aai-vera", language="es")
+    tts.update_options(voice="clone", language="fr", model="latest")
+    assert (tts.voice, tts.language, tts.model) == ("clone", "french", "latest")
+    tts.update_options(voice=None, language=None)
+    assert (tts.voice, tts.language) == (None, None)
 
 
 def test_invalid_sample_rate() -> None:
@@ -418,11 +399,11 @@ def test_api_key_required(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_update_options_sets_each_field_on_its_own() -> None:
     from livekit.plugins.assemblyai import TTS
 
-    tts = TTS(api_key="k", voice="anna")
+    tts = TTS(api_key="k", voice="aai-anna")
     tts.update_options(language="fr")  # the voice is kept: the server judges the pair
-    assert (tts.voice, tts.language) == ("anna", "french")
-    tts.update_options(voice="estelle")
-    assert (tts.voice, tts.language) == ("estelle", "french")
+    assert (tts.voice, tts.language) == ("aai-anna", "french")
+    tts.update_options(voice="aai-linda-3")
+    assert (tts.voice, tts.language) == ("aai-linda-3", "french")
 
 
 def test_split_request_text() -> None:
@@ -460,7 +441,7 @@ def test_split_request_text() -> None:
 
 async def test_stream_sends_one_request_per_sentence() -> None:
     async with _FakeServer() as srv:
-        tts = _make_tts(srv, voice="anna", language="en")
+        tts = _make_tts(srv, voice="aai-anna", language="en")
         audio, timed, segments = await _speak(
             tts, ["Hi, thanks for ", "calling. How can I ", "help you today?"]
         )
@@ -470,7 +451,7 @@ async def test_stream_sends_one_request_per_sentence() -> None:
     assert session.authorization == "test-key"  # raw key, no "Bearer"
     assert session.params == {
         "model_id": "assemblyai-tts-1",
-        "voice": "anna",
+        "voice_id": "aai-anna",
         "language": "english",
         "sample_rate": "24000",
         "encoding": "pcm_s16le",
@@ -629,28 +610,28 @@ async def test_update_options_opens_a_new_session() -> None:
     async with _FakeServer() as srv:
         tts = _make_tts(srv)
         await _speak(tts, ["Hello."])
-        tts.update_options(voice="paul", language="it")
+        tts.update_options(voice="aai-paul", language="it")
         await _speak(tts, ["Ciao."])
         await tts.aclose()
 
-    assert [(s.params.get("voice"), s.params.get("language")) for s in srv.sessions] == [
+    assert [(s.params.get("voice_id"), s.params.get("language")) for s in srv.sessions] == [
         (None, None),
-        ("paul", "italian"),
+        ("aai-paul", "italian"),
     ]
 
 
-async def test_custom_voice_and_model_are_sent_at_connect() -> None:
+async def test_voice_and_model_are_sent_at_connect() -> None:
     async with _FakeServer() as srv:
-        tts = _make_tts(srv, voice_id="clone", model="some-model")
+        tts = _make_tts(srv, voice="clone", model="some-model")
         await _speak(tts, ["Hello."])
-        tts.update_options(voice="jane", model="assemblyai-tts-1")
+        tts.update_options(voice=None, model="assemblyai-tts-1")
         await _speak(tts, ["Hello again."])
         await tts.aclose()
 
     keys = ("voice", "voice_id", "language", "model_id")
     assert [tuple(s.params.get(k) for k in keys) for s in srv.sessions] == [
         (None, "clone", None, "some-model"),
-        ("jane", None, None, "assemblyai-tts-1"),
+        (None, None, None, "assemblyai-tts-1"),
     ]
 
 

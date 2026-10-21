@@ -22,7 +22,7 @@ from livekit.plugins import assemblyai
 
 session = AgentSession(
     stt=assemblyai.STT(model="universal-3-6-pro", mode="balanced"),
-    tts=assemblyai.TTS(model="assemblyai-tts-1", voice="jane"),
+    tts=assemblyai.TTS(model="assemblyai-tts-1", voice="aai-jane"),
     # let AssemblyAI decide when the user has finished speaking
     turn_handling=TurnHandlingOptions(turn_detection="stt"),
     # use the TTS word timings for the transcript and for what an interrupted reply said
@@ -47,11 +47,10 @@ session = AgentSession(
 `assemblyai.TTS` streams speech over a pooled WebSocket and cancels in-flight audio when the user
 interrupts. Useful options:
 
-- `voice` and `language` (a code such as `"es"`): set independently, since every voice speaks
-  every language. See the [voices](https://www.assemblyai.com/docs/tts/voices).
+- `voice`: a voice library voice by its slug (`"aai-jane"`, `"aai-linda-3"`; see the
+  [voices](https://www.assemblyai.com/docs/tts/voices)) or a custom (cloned) voice by its id.
+- `language`: a code such as `"es"`, set independently of the voice.
 - `model`: defaults to `assemblyai-tts-1`.
-- `voice_id`: a voice from the voice library by its slug (e.g. `"aai-linda-3"`) or a custom
-  (cloned) voice by its id, instead of `voice`.
 - `base_url`: the US data zone by default; `wss://tts.eu.assemblyai.com` keeps data in the EU.
 - `word_timestamps`: per-word timings (default `True`). With
   `AgentSession(use_tts_aligned_transcript=True)`, LiveKit uses them to sync the transcript and to
