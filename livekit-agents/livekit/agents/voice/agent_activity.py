@@ -2815,9 +2815,11 @@ class AgentActivity(RecognitionHooks):
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
                 # only the reply is skipped: if the user audio was kept, keep the message too
+                # (realtime models add their own transcript, the STT copy would duplicate it)
                 if (
                     info.new_transcript != ""
                     and not self._session.options.interruption["discard_audio_if_uninterruptible"]
+                    and not isinstance(self.llm, llm.RealtimeModel)
                 ):
                     self._agent._chat_ctx.items.append(user_message)
                     self._session._conversation_item_added(user_message)
