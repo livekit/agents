@@ -257,6 +257,51 @@ class TestChatCompletionsMode:
             await model.aclose()
 
     @pytest.mark.asyncio
+    async def test_parallel_tool_calls_that_all_have_index_zero(self) -> None:
+        # Mistral sends parallel calls whole, and every one gets the default index 0
+        weather = types.SimpleNamespace(
+            index=0,
+            id="call_1",
+            function=types.SimpleNamespace(name="get_weather", arguments='{"city": "paris"}'),
+        )
+        time = types.SimpleNamespace(
+            index=0,
+            id="call_2",
+            function=types.SimpleNamespace(name="get_time", arguments='{"tz": "cet"}'),
+        )
+        news = types.SimpleNamespace(
+            index=0,
+            id="call_3",
+            function=types.SimpleNamespace(name="get_news", arguments="{}"),
+        )
+
+        async def _events():
+            # two calls in one chunk, the third in the next one
+            yield _completion_event(tool_calls=[weather, time])
+            yield _completion_event(tool_calls=[news], finish_reason="tool_calls")
+
+        chat = _FakeChat(lambda _: _events())
+        model = _model(chat=chat, api_mode=ApiMode.CHAT_COMPLETIONS)
+        chunks: list[llm.ChatChunk] = []
+
+        try:
+            async with model.chat(
+                chat_ctx=llm.ChatContext.empty(),
+                conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+            ) as stream:
+                async for chunk in stream:
+                    chunks.append(chunk)
+
+            calls = [tc for c in chunks if c.delta for tc in c.delta.tool_calls]
+            assert [(tc.call_id, tc.name, tc.arguments) for tc in calls] == [
+                ("call_1", "get_weather", '{"city": "paris"}'),
+                ("call_2", "get_time", '{"tz": "cet"}'),
+                ("call_3", "get_news", "{}"),
+            ]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
     async def test_usage_chunk(self) -> None:
         usage = types.SimpleNamespace(completion_tokens=10, prompt_tokens=5, total_tokens=15)
 
