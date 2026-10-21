@@ -58,6 +58,7 @@ from .audio_recognition import (
     RecognitionHooks,
     _EndOfTurnInfo,
     _PreemptiveGenerationInfo,
+    _PreflightStaleInfo,
     _STTPipeline,
 )
 from .endpointing import create_endpointing
@@ -2650,7 +2651,7 @@ class AgentActivity(RecognitionHooks):
             created_at=time.time(),
         )
 
-    def on_interim_after_preflight(self, transcript: str) -> None:
+    def on_preflight_stale(self, info: _PreflightStaleInfo) -> None:
         """Cancel the preemptive generation once the transcript has moved past the preflight.
 
         Called for each non-empty interim transcript that arrives while a preflight is pending.
@@ -2658,10 +2659,10 @@ class AgentActivity(RecognitionHooks):
         so it is stopped now instead of at the next preflight or final transcript.
 
         Args:
-            transcript: The current turn transcript, including the interim text.
+            info: Carries the current turn transcript, including the interim text.
         """
         if (preemptive := self._preemptive_generation) is not None and not _transcripts_equivalent(
-            preemptive.info.new_transcript, transcript
+            preemptive.info.new_transcript, info.new_transcript
         ):
             self._cancel_preemptive_generation()
 

@@ -2528,7 +2528,7 @@ class _TestRecognitionHooks:
     def on_preemptive_generation(self, info: object) -> None:
         pass
 
-    def on_interim_after_preflight(self, transcript: str) -> None:
+    def on_preflight_stale(self, info: object) -> None:
         pass
 
     def retrieve_chat_ctx(self) -> ChatContext:
