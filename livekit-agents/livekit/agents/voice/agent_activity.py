@@ -1932,12 +1932,20 @@ class AgentActivity(RecognitionHooks):
                 continue
             self._schedule_speech(handle, priority, force=True)
 
-    def _cancel_deferred_tool_replies(self) -> None:
+    def _cancel_deferred_tool_replies(
+        self, *, force: bool = True, source: InterruptionSource = "programmatic"
+    ) -> None:
         deferred = self._deferred_tool_replies
+        kept: list[tuple[int, SpeechHandle]] = []
         self._deferred_tool_replies = []
-        for _, handle in deferred:
-            handle._deferred_until_tool_output = False
-            handle.interrupt(force=True)
+        for priority, handle in deferred:
+            if force or handle.allow_interruptions:
+                handle._deferred_until_tool_output = False
+                handle.interrupt(force=True, source=source)
+            else:
+                # protected deferred replies survive a non-forced interrupt
+                kept.append((priority, handle))
+        self._deferred_tool_replies = kept
 
     def _cancel_preemptive_generation(self) -> None:
         if self._preemptive_generation is not None:
@@ -1978,16 +1986,19 @@ class AgentActivity(RecognitionHooks):
                 ``force`` is False.
         """
         self._cancel_preemptive_generation()
-        # replies deferred until a tool output (#7915) must not outlive an interrupt
-        self._cancel_deferred_tool_replies()
 
         future = asyncio.Future[None]()
 
         interrupted_speeches = self._interrupt_background_speeches(force=force, source=source)
 
         if self._current_speech is not None:
+            # check the active speech before dropping deferred in-tool replies:
+            # a rejected interrupt must leave those replies queued (#7915 follow-up)
             self._current_speech.interrupt(force=force, source=source)
             interrupted_speeches.append(self._current_speech)
+
+        # only cancel deferred replies once the interrupt is allowed to proceed
+        self._cancel_deferred_tool_replies(force=force, source=source)
 
         if self._rt_session is not None:
             self._rt_session.interrupt()

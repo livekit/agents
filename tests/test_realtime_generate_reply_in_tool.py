@@ -305,3 +305,47 @@ async def test_failed_tool_output_sync_cancels_deferred_generate_reply() -> None
         assert handles[0].interrupted
         assert "function_call_output" not in model.active_session.event_log
         model.active_session.update_error = None
+
+async def test_rejected_interrupt_keeps_deferred_generate_reply_in_tool() -> None:
+    """interrupt(force=False) on protected speech must not drop deferred replies."""
+    model = _deferring_model()
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+    handles: list = []
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def next_topic(self) -> str:
+            """Move on to the next topic."""
+            handles.append(self.session.generate_reply(instructions="Introduce cafes."))
+            tool_started.set()
+            await release_tool.wait()
+            return "ok"
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(ToolAgent())
+
+        speech = session.generate_reply()
+        await _wait_for_reply_fut(model, min_count=1)
+        # protect the active speech so a non-forced interrupt is rejected
+        speech.allow_interruptions = False
+        model.active_session._reply_futs[0].set_result(_tool_generation(tool_name="next_topic"))
+        await asyncio.wait_for(tool_started.wait(), timeout=5)
+
+        with pytest.raises(RuntimeError, match="does not allow interruptions"):
+            session.interrupt(force=False)
+
+        assert handles
+        assert not handles[0].interrupted
+        deferred = session._activity._deferred_tool_replies  # type: ignore[union-attr]
+        assert deferred and deferred[0][1] is handles[0]
+
+        release_tool.set()
+        await _drain(model, speech)
+
+    assert not handles[0].interrupted
+
