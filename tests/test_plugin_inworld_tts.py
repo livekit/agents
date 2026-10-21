@@ -194,3 +194,100 @@ async def test_http_body_omits_delivery_mode_when_not_given():
     body = captured.get("json")
     assert isinstance(body, dict)
     assert "deliveryMode" not in body
+
+
+class _FakeWS:
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+        self._never = asyncio.Event()
+
+    async def send_str(self, payload: str) -> None:
+        self.sent.append(json.loads(payload))
+
+    async def receive(self, timeout: float | None = None):
+        await self._never.wait()
+
+    async def close(self) -> None:
+        self._never.set()
+
+
+def _tts_with_ws_connect(ws_connect):
+    from livekit.plugins.inworld import TTS
+
+    session = MagicMock()
+    session.ws_connect = ws_connect
+    return TTS(api_key="test-key", http_session=session)
+
+
+async def test_contexts_share_one_connection_and_queue_until_connected():
+    ws = _FakeWS()
+    ws_connect = AsyncMock(return_value=ws)
+    tts = _tts_with_ws_connect(ws_connect)
+
+    conn = tts._get_connection()
+    ids = [conn.create_context(MagicMock(), tts._opts)[0] for _ in range(3)]
+    assert tts._get_connection() is conn
+
+    await asyncio.gather(*(conn.connect(5.0) for _ in range(3)))
+    for _ in range(50):
+        if len(ws.sent) == 3:
+            break
+        await asyncio.sleep(0.01)
+
+    assert ws_connect.await_count == 1
+    assert [p["contextId"] for p in ws.sent] == ids
+    await tts.aclose()
+
+
+async def test_failed_handshake_fails_all_waiters_and_reconnects():
+    tts = _tts_with_ws_connect(AsyncMock(side_effect=OSError("refused")))
+
+    conn = tts._get_connection()
+    waiters = [conn.create_context(MagicMock(), tts._opts)[1] for _ in range(2)]
+    await conn.connect(5.0)
+
+    for waiter in waiters:
+        with pytest.raises(APIConnectionError):
+            await waiter
+    assert tts._get_connection() is not conn
+    await tts.aclose()
+
+
+async def test_handshake_timeout_fails_waiters():
+    async def _hang(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    tts = _tts_with_ws_connect(_hang)
+    conn = tts._get_connection()
+    _, waiter = conn.create_context(MagicMock(), tts._opts)
+    await conn.connect(0.05)
+
+    with pytest.raises(APIConnectionError):
+        await waiter
+    await tts.aclose()
+
+
+async def test_cancelled_caller_does_not_cancel_shared_handshake():
+    ws = _FakeWS()
+    release = asyncio.Event()
+    calls = 0
+
+    async def _slow_connect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        await release.wait()
+        return ws
+
+    tts = _tts_with_ws_connect(_slow_connect)
+    conn = tts._get_connection()
+
+    first = asyncio.create_task(conn.connect(5.0))
+    await asyncio.sleep(0)
+    await aio.cancel_and_wait(first)
+
+    release.set()
+    await conn.connect(5.0)
+    assert calls == 1
+    assert conn._ws is ws
+    assert not conn._closed
+    await tts.aclose()

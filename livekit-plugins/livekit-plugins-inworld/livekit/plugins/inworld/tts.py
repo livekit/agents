@@ -188,49 +188,57 @@ class _InworldConnection:
 
         # Connection state
         self._closed = False
-        self._connect_lock = asyncio.Lock()
 
         # Background tasks
+        self._connect_task: asyncio.Task[None] | None = None
         self._send_task: asyncio.Task[None] | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
 
-    async def connect(self) -> None:
-        """Establish WebSocket connection and start background loops.
+    async def connect(self, timeout: float) -> None:
+        """Wait for the WebSocket handshake, starting it on first call.
 
+        The handshake is shared by all callers and is not cancelled when one of them is.
         On failure the connection is closed and its contexts' waiters fail.
         """
-        async with self._connect_lock:
-            if self._ws is not None or self._closed:
-                return
+        if self._connect_task is None:
+            self._connect_task = asyncio.create_task(self._connect(timeout))
+        await asyncio.shield(self._connect_task)
 
-            url = urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional")
-            request_id = str(uuid.uuid4())
-            try:
-                self._ws = await self._session.ws_connect(
+    async def _connect(self, timeout: float) -> None:
+        if self._closed:
+            return
+
+        url = urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional")
+        request_id = str(uuid.uuid4())
+        try:
+            self._ws = await asyncio.wait_for(
+                self._session.ws_connect(
                     url,
                     headers={
                         "Authorization": self._authorization,
                         "X-User-Agent": USER_AGENT,
                         "X-Request-Id": request_id,
                     },
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to connect to Inworld TTS WebSocket",
-                    extra={"request_id": request_id, "error": e},
-                )
-                await self._handle_connection_error(APIConnectionError())
-                return
-
-            logger.debug(
-                "Established Inworld TTS WebSocket connection",
-                extra={"request_id": request_id},
+                ),
+                timeout=timeout,
             )
+        except Exception as e:
+            logger.warning(
+                "Failed to connect to Inworld TTS WebSocket",
+                extra={"request_id": request_id, "error": str(e) or type(e).__name__},
+            )
+            await self._handle_connection_error(APIConnectionError())
+            return
 
-            self._send_task = asyncio.create_task(self._send_loop())
-            self._recv_task = asyncio.create_task(self._recv_loop())
-            self._cleanup_task = asyncio.create_task(self._cleanup_stale_contexts())
+        logger.debug(
+            "Established Inworld TTS WebSocket connection",
+            extra={"request_id": request_id},
+        )
+
+        self._send_task = asyncio.create_task(self._send_loop())
+        self._recv_task = asyncio.create_task(self._recv_loop())
+        self._cleanup_task = asyncio.create_task(self._cleanup_stale_contexts())
 
     def create_context(
         self, emitter: tts.AudioEmitter, opts: _TTSOptions
@@ -516,7 +524,7 @@ class _InworldConnection:
         self._closed = True
 
         # Cancel background tasks
-        for task in [self._send_task, self._recv_task, self._cleanup_task]:
+        for task in [self._connect_task, self._send_task, self._recv_task, self._cleanup_task]:
             if task:
                 task.cancel()
                 try:
@@ -809,7 +817,7 @@ class TTS(tts.TTS):
             self._prewarm_task = asyncio.create_task(self._prewarm_impl())
 
     async def _prewarm_impl(self) -> None:
-        await self._get_connection().connect()
+        await self._get_connection().connect(DEFAULT_API_CONNECT_OPTIONS.timeout)
 
     def synthesize(
         self,
@@ -1016,7 +1024,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
 
         try:
-            await asyncio.wait_for(connection.connect(), timeout=self._conn_options.timeout)
+            await connection.connect(self._conn_options.timeout)
             await asyncio.wait_for(waiter, timeout=self._conn_options.timeout + 60)
         except asyncio.TimeoutError:
             connection.close_context(context_id)
