@@ -785,3 +785,33 @@ async def test_pinning_the_track_already_linked_still_pins_it() -> None:
     # unpinned, a later automatic search is free to settle on another microphone
     assert room_io._track_sid == "TR_a"
     assert audio_in.tracks[-1] == "TR_a"
+
+
+async def test_a_segment_is_finalized_on_the_track_that_carried_it() -> None:
+    # the flush runs after set_track has moved on, so it must carry the segment's own sid
+    from livekit.agents.voice.room_io._output import _ParticipantStreamTranscriptionOutput
+
+    sink = _ParticipantStreamTranscriptionOutput(
+        rtc.Room(), is_delta_stream=True, participant="alice", track="TR_a"
+    )
+    flushed: list[tuple[str | None, str | None]] = []
+
+    async def _record_flush(
+        writer: object = None,
+        extra_attributes: dict[str, str] | None = None,
+        pending_text: str = "",
+        track_id: str | None = None,
+        sender_identity: str | None = None,
+    ) -> None:
+        flushed.append((track_id, sender_identity))
+
+    sink._flush_task = _record_flush  # type: ignore[assignment,method-assign]
+    sink._capturing = True
+
+    sink.set_track("TR_b")
+    await asyncio.sleep(0)
+
+    # the closing packet belongs to TR_a, although the sink now stamps TR_b
+    assert flushed == [("TR_a", "alice")]
+    assert sink._pinned_track_id == "TR_b"
+    await sink.aclose()

@@ -469,8 +469,17 @@ class _ParticipantLegacyTranscriptionOutput:
             return
 
         clean_text = strip_all_markup(self._pushed_text)
+        # snapshot: the flush runs later, and a track or participant switch in between
+        # would otherwise stamp this segment's last packet with the new one
         self._flush_task = asyncio.create_task(
-            self._publish_transcription(self._current_id, clean_text, final=True)
+            self._publish_transcription(
+                self._current_id,
+                clean_text,
+                final=True,
+                participant_identity=self._participant_identity,
+                track_id=self._track_id,
+                represented_by=self._represented_by,
+            )
         )
         self._reset_state()
 
@@ -496,8 +505,23 @@ class _ParticipantLegacyTranscriptionOutput:
 
         return needed
 
-    async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
-        if self._participant_identity is None or self._track_id is None:
+    async def _publish_transcription(
+        self,
+        id: str,
+        text: str,
+        final: bool,
+        *,
+        participant_identity: str | None = None,
+        track_id: str | None = None,
+        represented_by: str | None = None,
+    ) -> None:
+        """``participant_identity``/``track_id``/``represented_by`` pin the packet to the
+        segment it closes; without them the live fields are used, which a switch mid-segment
+        has already moved on."""
+        participant_identity = participant_identity or self._participant_identity
+        track_id = track_id or self._track_id
+        represented_by = represented_by or self._represented_by
+        if participant_identity is None or track_id is None:
             return
 
         # Gate here, not in capture_text: every legacy publish carries the whole accumulated
@@ -509,8 +533,8 @@ class _ParticipantLegacyTranscriptionOutput:
             return
 
         transcription = rtc.Transcription(
-            participant_identity=self._represented_by or self._participant_identity,
-            track_sid=self._track_id,
+            participant_identity=represented_by or participant_identity,
+            track_sid=track_id,
             segments=[
                 rtc.TranscriptionSegment(
                     id=id,
@@ -669,8 +693,10 @@ class _ParticipantStreamTranscriptionOutput:
         self,
         attributes: dict[str, str] | None = None,
         extra: dict[str, str] | None = None,
+        sender_identity: str | None = None,
     ) -> rtc.TextStreamWriter:
-        assert self._participant_identity is not None, "participant_identity is not set"
+        sender_identity = sender_identity or self._participant_identity
+        assert sender_identity is not None, "participant_identity is not set"
 
         if not attributes:
             attributes = {
@@ -690,7 +716,7 @@ class _ParticipantStreamTranscriptionOutput:
 
         return await self._room.local_participant.stream_text(
             topic=TOPIC_TRANSCRIPTION,
-            sender_identity=self._participant_identity,
+            sender_identity=sender_identity,
             attributes=attributes,
         )
 
@@ -743,10 +769,14 @@ class _ParticipantStreamTranscriptionOutput:
         writer: rtc.TextStreamWriter | None,
         extra_attributes: dict[str, str] | None = None,
         pending_text: str = "",
+        track_id: str | None = None,
+        sender_identity: str | None = None,
     ) -> None:
+        """``track_id``/``sender_identity`` belong to the segment being closed, taken when
+        the flush was scheduled rather than read now, which a switch has already moved on."""
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
-        if self._track_id:
-            attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
+        if track_id:
+            attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = track_id
         for key, val in (extra_attributes or {}).items():
             attributes.setdefault(key, val)
 
@@ -758,7 +788,9 @@ class _ParticipantStreamTranscriptionOutput:
                             await writer.write(pending_text)
                         await writer.aclose(attributes=attributes)
                 else:
-                    tmp_writer = await self._create_text_writer(attributes=attributes)
+                    tmp_writer = await self._create_text_writer(
+                        attributes=attributes, sender_identity=sender_identity
+                    )
                     await tmp_writer.write(self._latest_text)
                     await tmp_writer.aclose()
         except Exception as e:
@@ -783,8 +815,15 @@ class _ParticipantStreamTranscriptionOutput:
             tags = self._segment_tags
 
         pending_text = self._encode(remaining) if remaining else ""
+        # snapshot: see _ParticipantLegacyTranscriptionOutput.flush
         self._flush_atask = asyncio.create_task(
-            self._flush_task(curr_writer, expression_attribute(tags), pending_text)
+            self._flush_task(
+                curr_writer,
+                expression_attribute(tags),
+                pending_text,
+                track_id=self._track_id,
+                sender_identity=self._participant_identity,
+            )
         )
 
     async def aclose(self) -> None:
