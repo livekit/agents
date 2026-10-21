@@ -193,14 +193,13 @@ def _load_once(client: MossClient, names: list[str]) -> list[Future[None]]:
 
     A load runs on its own thread, so it outlives the session that started it and
     serves sessions on other threads and event loops, as with LiveKit's thread executor.
-    A failed load runs again on the next call.
+    A failed load leaves the cache, so the next call starts it again.
     """
     with _loads_lock:
         loads = _loads.setdefault(client, {})
         batch: dict[str, Future[None]] = {}
         for name in names:
-            load = loads.get(name)
-            if load is None or (load.done() and load.exception() is not None):
+            if name not in loads:
                 batch[name] = loads[name] = Future()
                 batch[name].set_running_or_notify_cancel()  # a waiter that gives up can't cancel it
         futures = [loads[name] for name in names]
@@ -212,17 +211,26 @@ def _load_once(client: MossClient, names: list[str]) -> list[Future[None]]:
 
 
 def _run_load(client: MossClient, batch: dict[str, Future[None]]) -> None:
+    """Load a batch of indexes and settle their futures.
+
+    A failed future leaves the cache, since the traceback of its exception
+    holds frames that reference the client, which would keep the weak key alive.
+    """
     try:
-        result = asyncio.run(client.load_indexes(list(batch), auto_refresh=True))
+        failed = asyncio.run(client.load_indexes(list(batch), auto_refresh=True)).failed
     except Exception as error:
         logger.error("failed to load the Moss indexes", exc_info=error)
-        for load in batch.values():
-            load.set_exception(error)
-        return
-    if result.failed:
-        logger.error("failed to load the Moss indexes", extra={"failed": result.failed})
+        failed = dict.fromkeys(batch, str(error))
+    else:
+        if failed:
+            logger.error("failed to load the Moss indexes", extra={"failed": failed})
+    with _loads_lock:
+        loads = _loads.get(client, {})
+        for name in failed:
+            if loads.get(name) is batch[name]:
+                del loads[name]
     for name, load in batch.items():
-        if name in result.failed:
-            load.set_exception(RuntimeError(f"Moss index {name} not loaded: {result.failed[name]}"))
+        if name in failed:
+            load.set_exception(RuntimeError(f"Moss index {name} not loaded: {failed[name]}"))
         else:
             load.set_result(None)
