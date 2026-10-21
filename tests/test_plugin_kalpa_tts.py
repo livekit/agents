@@ -153,6 +153,18 @@ async def test_barge_in_reuses_socket_after_cancel_ack(ack_cancel: bool) -> None
     assert fake.connections == (1 if ack_cancel else 2)
 
 
+async def test_flush_before_text_is_ignored() -> None:
+    fake = FakeKalpa()
+    async with serve(fake) as tts:
+        stream = tts.stream(conn_options=NO_RETRY)
+        stream.flush()
+        stream.push_text("Hello there.")
+        stream.end_input()
+        async with stream:
+            assert len([ev async for ev in stream]) > 0
+    assert fake.flushed == ["Hello there."]
+
+
 async def test_barge_in_before_flush_discards_buffered_text() -> None:
     fake = FakeKalpa()
     async with serve(fake) as tts:
