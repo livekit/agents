@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ...job import get_job_context
-from ...llm import RealtimeModel, ToolFlag, Toolset, function_tool
+from ...llm import ChatMessage, RealtimeModel, ToolFlag, Toolset, function_tool
 from ...log import logger
 from ...voice.events import CloseEvent, RunContext, SpeechCreatedEvent
 from ...voice.speech_handle import SpeechHandle
@@ -68,14 +68,21 @@ class EndCallTool(Toolset):
         activity = ctx.session.current_agent._get_activity_or_raise()
         llm_v = activity.llm
 
-        def _on_speech_done(_: SpeechHandle) -> None:
+        def _on_speech_done(speech_handle: SpeechHandle) -> None:
             # read auto_tool_reply_generation from the active realtime session so a fallback
             # adapter reports the model actually in use
             rt_session = activity.realtime_llm_session
             auto_tool_reply = (
                 rt_session is not None and rt_session.capabilities.auto_tool_reply_generation
             )
-            if not isinstance(llm_v, RealtimeModel) or not auto_tool_reply:
+            # the model already spoke in the turn that called the tool (GPT-Live does, since
+            # its voice keeps talking while the backend runs tools), so the tool reply would
+            # only repeat the goodbye, or never come
+            spoke = any(
+                isinstance(item, ChatMessage) and item.role == "assistant"
+                for item in speech_handle.chat_items
+            )
+            if not isinstance(llm_v, RealtimeModel) or not auto_tool_reply or spoke:
                 # tool reply will reuse the same speech handle, so we can shutdown the session
                 # directly after this speech handle is done
                 ctx.session.shutdown()
