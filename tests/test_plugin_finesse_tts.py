@@ -188,6 +188,15 @@ def test_task_start_language(language: str, expected: str) -> None:
     assert _task_start(tts._opts, "c1", "Hi.", finalize=False)["language"] == expected
 
 
+def test_telephony_rate_is_requested_as_is() -> None:
+    from livekit.plugins.finesse import TTS
+    from livekit.plugins.finesse.tts import _task_start
+
+    tts = TTS(api_key=API_KEY, voice=VOICE, sample_rate=8000)
+    assert tts.sample_rate == 8000
+    assert _task_start(tts._opts, "c1", "Hello.", finalize=True)["sample_rate"] == 8000
+
+
 def test_task_start_payload() -> None:
     from livekit.plugins.finesse import TTS
     from livekit.plugins.finesse.tts import _task_start
