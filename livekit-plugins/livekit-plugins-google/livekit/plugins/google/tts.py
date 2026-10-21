@@ -262,7 +262,11 @@ class TTS(tts.TTS):
                 voice.ssml_gender = _gender_from_str(str(gender))
 
             # Determine the target model
-            current_model: str = self._opts.model_name or "gemini-2.5-flash-tts"
+            current_model: str = (
+                self._opts.model_name
+                if self._opts.model_name is not None
+                else "gemini-2.5-flash-tts"
+            )
             if is_given(model_name):
                 target_model: str = str(model_name)
             elif is_given(voice_name):
@@ -287,6 +291,14 @@ class TTS(tts.TTS):
                         del voice.voice_clone
                 elif not self._voice_explicitly_set or voice.name == "Charon":
                     voice.name = "en-US-Chirp3-HD-Charon"
+            elif target_model == "":
+                self._opts.model_name = ""
+                voice.model_name = ""
+                if "voice_clone" in voice:
+                    del voice.voice_clone
+                if is_given(voice_name):
+                    voice.name = voice_name
+                    self._voice_explicitly_set = True
             else:
                 self._opts.model_name = target_model
                 voice.model_name = target_model

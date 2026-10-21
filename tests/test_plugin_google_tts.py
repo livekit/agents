@@ -304,3 +304,16 @@ def test_gemini_model_switch_clears_chirp_voice_clone() -> None:
     assert "voice_clone" not in tts._opts.voice
     assert tts._opts.voice.name == "Charon"
     assert tts._opts.voice.model_name == "gemini-2.5-flash-tts"
+
+
+def test_partial_update_preserves_explicitly_empty_model() -> None:
+    # Devin review: Distinguish None from "" and preserve explicitly empty model
+    tts = TTS(model_name="", voice_name="en-US-Standard-A")
+    assert tts._opts.model_name == ""
+    assert tts._opts.voice.name == "en-US-Standard-A"
+    assert tts._opts.voice.model_name == ""
+
+    tts.update_options(language="en-US")
+    assert tts._opts.model_name == ""
+    assert tts._opts.voice.model_name == ""
+    assert tts._opts.voice.name == "en-US-Standard-A"
