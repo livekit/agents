@@ -238,6 +238,8 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except (APIStatusError, APIError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -302,6 +304,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
             ) from None
+        except (APIStatusError, APIError):
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
