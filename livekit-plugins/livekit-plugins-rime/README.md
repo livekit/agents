@@ -83,14 +83,16 @@ Pass the active model WebSocket endpoint explicitly. The presence of `websocket_
 WebSocket v1 streaming. Public model endpoints use port 443 and the `/ws` path.
 Pass `model="coda"` for `wss://coda.api.rime.ai/ws`, which serves Coda v2.
 Pass `model="mistv3"` for `wss://mist.api.rime.ai/ws`.
-The model name is not inferred from the hostname.
+`model` is required when constructing any WebSocket v1 client. The plugin does not infer
+the model from the URL hostname or path.
 
-Dedicated deployment endpoints also require `model` when the path is `/ws`:
+Dedicated deployment endpoints also require `model`:
 
 ```python
 tts = rime.TTS(
-    websocket_url="wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws",
+    websocket_url="wss://voice.customer.example/ws",
     model="coda",
+    allow_custom_endpoint=True,
     api_key=os.environ["RIME_API_KEY"],
 )
 ```
@@ -103,8 +105,8 @@ The `websocket_protocol` option accepts `binary` or `json`. It defaults to `bina
 `rime.v1.binary` subprotocol and protobuf binary frames. Set `websocket_protocol="json"` to use the
 `rime.v1.json` subprotocol and canonical proto3 JSON text frames.
 
-The speaker defaults to `lyra` for Coda and `cove` for Mist across all transports. This also
-applies when the model is omitted and defaults to Coda. An explicit speaker is preserved.
+The speaker defaults to `lyra` for Coda and `cove` for Mist across all transports.
+For HTTP and WS3, an omitted model defaults to Coda. An explicit speaker is preserved.
 The plugin uses
 `livekit.agents.tokenize.blingfire.SentenceTokenizer` by default and configures it to emit one
 complete sentence at a time. Pass `tokenizer` to select another LiveKit sentence tokenizer. A
@@ -113,9 +115,8 @@ custom tokenizer must emit complete sentence units that are safe for Rime text n
 The plugin sends the resolved sample rate in every HTTP, WS3, and WebSocket v1 request so it
 matches the audio emitter's rate. Pass `sample_rate` to override the model default.
 
-The old `api.rime.ai/<model>` routes are scheduled for retirement. For compatibility,
-the plugin still reads the model from a path such as `/coda/ws`; omit `model` for
-those routes. Use the model hosts above for new configurations.
+If your configuration relied on a model in the URL path, add `model` to the constructor.
+Custom URL paths pass through without model detection.
 
 Select the Rime output format with `audio_format`. It defaults to `audio/pcm`. The adapter supports
 all canonical formats from the Rime interface:

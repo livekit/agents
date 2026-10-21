@@ -854,7 +854,7 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
     """LoggerProvider should be set up even when enable_logs=False."""
     with (
         _stub_cloud_tracer_deps() as stubs,
-        patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
+        patch(f"{_TRACES_MOD}._resource") as mock_resource,
     ):
         _setup_cloud_tracer_for_job(
             enable_traces=False,
@@ -864,9 +864,7 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
 
     stubs.set_logger_provider.assert_called_once()
     service_resource_calls = [
-        call.args[0]
-        for call in mock_resource_create.call_args_list
-        if "service.name" in call.args[0]
+        call.args[0] for call in mock_resource.call_args_list if "service.name" in call.args[0]
     ]
     assert service_resource_calls
     assert not any(k.startswith("lk.simulation.") for k in service_resource_calls[0])
@@ -877,21 +875,21 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
 
 def _resource_attrs_for_env(env: dict[str, str]) -> dict[str, Any]:
     """Run _setup_cloud_tracer under the given os.environ and return the dict
-    passed to Resource.create."""
+    passed to _resource."""
     with (
         patch.dict("os.environ", env, clear=True),
         _stub_cloud_tracer_deps(),
-        patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
+        patch(f"{_TRACES_MOD}._resource") as mock_resource,
     ):
         _setup_cloud_tracer_for_job(enable_traces=False, enable_logs=False)
-    # Resource.create is also called internally by LoggerProvider() with an
-    # empty dict, so select the call that built the tracing resource (the one
+    # _resource also builds the LoggerProvider's resource from an empty dict,
+    # so select the call that built the tracing resource (the one
     # carrying service.name) rather than relying on call ordering.
-    for call in mock_resource_create.call_args_list:
+    for call in mock_resource.call_args_list:
         attrs = call.args[0]
         if "service.name" in attrs:
             return attrs
-    raise AssertionError("Resource.create was not called with the service resource")
+    raise AssertionError("_resource was not called with the service resource")
 
 
 def test_setup_cloud_tracer_adds_identity_from_env() -> None:

@@ -14,7 +14,7 @@
 
 """OpenAI plugin for LiveKit Agents
 
-Support for OpenAI Realtime API, LLM, TTS, and STT APIs.
+Support for OpenAI Realtime API, Decisions API, LLM, TTS, and STT APIs.
 
 Also includes support for a large number of OpenAI-compatible APIs including Azure OpenAI, Cerebras,
 Fireworks, Perplexity, Telnyx, xAI, Ollama, DeepSeek, OpenRouter, and OVHcloud AI Endpoints.
@@ -24,9 +24,11 @@ https://docs.livekit.io/agents/integrations/llm/ for more information.
 """
 
 from . import realtime, responses, tools
+from .decision_model import DecisionModel
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
 from .models import (
+    DecisionModels,
     OpenRouterProviderPreferences,
     OpenRouterWebPlugin,
     STTModels,
@@ -42,6 +44,8 @@ __all__ = [
     "TTS",
     "LLM",
     "LLMStream",
+    "DecisionModel",
+    "DecisionModels",
     "OpenRouterProviderPreferences",
     "OpenRouterWebPlugin",
     "STTModels",
