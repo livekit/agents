@@ -78,8 +78,8 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
 
     tts = assemblyai.TTS(
-        # See https://www.assemblyai.com/docs/tts/voices. For another language, pass the
-        # voice's language too, e.g. voice="lola", language="es".
+        # See https://www.assemblyai.com/docs/tts/voices. Every voice speaks every
+        # language; pick one with e.g. language="es".
         voice="jane",
         # The US data zone by default; for the EU: base_url="wss://tts.eu.assemblyai.com".
     )

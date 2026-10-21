@@ -53,6 +53,7 @@ from livekit.agents.voice.io import TimedString
 from .log import logger
 
 DEFAULT_BASE_URL = "wss://tts.us.assemblyai.com"
+DEFAULT_MODEL = "assemblyai-tts-1"
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 # Generate's limit, in code points. A longer sentence becomes several requests rather
@@ -90,8 +91,7 @@ class _TTSOptions:
     # a custom voice, sent instead of `voice`
     voice_id: str | None
     language: str | None
-    # None: the default model of the language
-    model_id: str | None
+    model: str
     sample_rate: int
     word_timestamps: bool
     api_key: str
@@ -105,7 +105,7 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str] = NOT_GIVEN,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
-        model_id: NotGivenOr[str] = NOT_GIVEN,
+        model: str = DEFAULT_MODEL,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -121,9 +121,8 @@ class TTS(tts.TTS):
 
         Args:
             voice: A voice name, see https://www.assemblyai.com/docs/tts/voices.
-                Defaults to the server's default voice of the language. The API does
-                not infer the language from the voice: pass the voice's ``language``
-                too.
+                Defaults to the model's default voice. The language is set separately,
+                with ``language``.
             voice_id: A custom (cloned) voice, instead of ``voice``: the ``id`` the Voices
                 API returned when it was created, or the account's slug for it. The voice
                 must be paired with the session's model, and it belongs to the data zone
@@ -131,8 +130,8 @@ class TTS(tts.TTS):
             language: The language to synthesize, as a code (``"es"``, ``"es-MX"``) or an
                 English name (``"spanish"``). Defaults to English; with ``voice_id``, to
                 the language of the voice's reference clip.
-            model_id: The model to synthesize with, by name or alias. Defaults to the
-                default model of the language. A ``voice_id`` voice must be paired with it.
+            model: The model to synthesize with, by name or alias. Defaults to
+                ``"assemblyai-tts-1"``. A ``voice_id`` voice must be paired with it.
             sample_rate: Output sample rate in Hz, one of 8000, 16000, 22050, 24000,
                 44100 or 48000. Defaults to 24000, the service's native rate.
             word_timestamps: Request per-word timings and publish them as an aligned
@@ -177,7 +176,7 @@ class TTS(tts.TTS):
             voice=_require(voice, "voice") if is_given(voice) else None,
             voice_id=_require(voice_id, "voice_id") if is_given(voice_id) else None,
             language=_language_name(language) if is_given(language) else None,
-            model_id=_require(model_id, "model_id") if is_given(model_id) else None,
+            model=_require(model, "model"),
             sample_rate=sample_rate,
             word_timestamps=word_timestamps,
             api_key=assemblyai_api_key,
@@ -204,7 +203,7 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return self._opts.model_id or "streaming-tts"
+        return self._opts.model
 
     @property
     def provider(self) -> str:
@@ -225,18 +224,13 @@ class TTS(tts.TTS):
         """The language's English name as sent to the server, or None for English."""
         return self._opts.language
 
-    @property
-    def model_id(self) -> str | None:
-        """The requested model, or None for the default model of the language."""
-        return self._opts.model_id
-
     def update_options(
         self,
         *,
         voice: NotGivenOr[str | None] = NOT_GIVEN,
         voice_id: NotGivenOr[str | None] = NOT_GIVEN,
         language: NotGivenOr[str | None] = NOT_GIVEN,
-        model_id: NotGivenOr[str | None] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """Change the voice, language or model used by streams created from now on.
 
@@ -245,19 +239,17 @@ class TTS(tts.TTS):
         keeps its voice until it finishes.
 
         Args:
-            voice: A voice name, replacing a ``voice_id``; None for the server's default.
-                Pass ``language`` too when the voice speaks another language.
+            voice: A voice name, replacing a ``voice_id``; None for the default voice.
             voice_id: A custom voice, replacing ``voice``; None to stop using it.
             language: A language code or English name, or None for the server's default.
-            model_id: A model name or alias, or None for the default model of the
-                language.
+            model: A model name or alias.
         """
         if voice and voice_id:
             raise ValueError("pass either `voice` or `voice_id`, not both")
 
         opts = self._opts
         new_voice, new_voice_id = opts.voice, opts.voice_id
-        new_language, new_model_id = opts.language, opts.model_id
+        new_language, new_model = opts.language, opts.model
         if is_given(voice):
             new_voice = _optional(voice, "voice")
             new_voice_id = None if new_voice else new_voice_id
@@ -266,12 +258,12 @@ class TTS(tts.TTS):
             new_voice = None if new_voice_id else new_voice
         if is_given(language):
             new_language = _language_name(language) if language is not None else None
-        if is_given(model_id):
-            new_model_id = _optional(model_id, "model_id")
+        if is_given(model):
+            new_model = _require(model, "model")
 
-        new = (new_voice, new_voice_id, new_language, new_model_id)
-        if new != (opts.voice, opts.voice_id, opts.language, opts.model_id):
-            opts.voice, opts.voice_id, opts.language, opts.model_id = new
+        new = (new_voice, new_voice_id, new_language, new_model)
+        if new != (opts.voice, opts.voice_id, opts.language, opts.model):
+            opts.voice, opts.voice_id, opts.language, opts.model = new
             self._pool.invalidate()
 
     def synthesize(
@@ -323,17 +315,13 @@ class TTS(tts.TTS):
 
         opts = self._opts
         params: dict[str, Any] = {
+            "model_id": opts.model,
             "sample_rate": opts.sample_rate,
             "encoding": "pcm_s16le",
             "word_boundaries": "true" if opts.word_timestamps else "false",
         }
         # what is left out is the server's choice
-        optional = {
-            "voice": opts.voice,
-            "voice_id": opts.voice_id,
-            "language": opts.language,
-            "model_id": opts.model_id,
-        }
+        optional = {"voice": opts.voice, "voice_id": opts.voice_id, "language": opts.language}
         params.update({k: v for k, v in optional.items() if v is not None})
         url = f"{opts.base_url}/v1/ws?{urlencode(params)}"
 

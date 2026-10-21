@@ -28,31 +28,28 @@ session = AgentSession(
 ```
 
 `voice` is a voice name from the [voice library](https://www.assemblyai.com/docs/tts/voices), and
-`language` a language code (`"es"`, `"es-MX"`) or English name (`"spanish"`). Both are passed to
-the server as given, and the API doesn't infer one from the other, so pass the voice's language
-along with it:
+`language` a language code (`"es"`, `"es-MX"`) or English name (`"spanish"`). They are set
+independently and passed to the server as given:
 
 ```python
-assemblyai.TTS(voice="lola", language="es")
+assemblyai.TTS(voice="vera", language="es")
 ```
 
-Leave `voice` out to get the server's default voice for the language (`jane` in English). The
-server's error for a voice it doesn't speak in that language lists the voices it does.
+Leave `voice` out for the model's default voice (`jane`), and `language` out for English. The
+server's error for a voice it doesn't offer lists the voices it does.
 
 A custom (cloned) voice is passed as `voice_id` instead of `voice`. Use the `id` that AssemblyAI
 returned when the voice was created, or your slug for it. The voice speaks the language of its
-reference clip, so `language` can be left out. It must be paired with the session's model (the
-language's default, or the one you name with `model_id`), and it can only be used on a host in
-the data zone it was created in:
+reference clip, so `language` can be left out. It must be paired with the session's `model`, and it
+can only be used on a host in the data zone it was created in:
 
 ```python
-assemblyai.TTS(
-    voice_id="01a0da61-138c-77c7-ab98-421431ed74e8",
-)
+assemblyai.TTS(voice_id="01a0da61-138c-77c7-ab98-421431ed74e8")
 ```
 
 Other options:
 
+- `model`: the model, by name or alias (default `assemblyai-tts-1`).
 - `sample_rate`: 8000, 16000, 22050, 24000 (default, the service's native rate), 44100 or 48000.
 - `word_timestamps`: per-word timings published as an aligned transcript (default `True`).
 - `base_url`: the US data zone by default (`wss://tts.us.assemblyai.com`); use
