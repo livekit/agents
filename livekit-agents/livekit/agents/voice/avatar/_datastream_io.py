@@ -62,6 +62,9 @@ class DataStreamAudioOutput(AudioOutput):
         self._stream_writer: rtc.ByteStreamWriter | None = None
         self._pushed_duration: float = 0.0
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._capturing = False
+        # the avatar left mid-segment; finish it at flush(), once every wrapper counted it
+        self._finish_on_flush = False
 
         self._started = False
         self._lock = asyncio.Lock()
@@ -93,6 +96,7 @@ class DataStreamAudioOutput(AudioOutput):
         self._room_connected_fut.add_done_callback(_on_room_connected)
 
         self._room.on("connection_state_changed", self._handle_connection_state_changed)
+        self._room.on("participant_disconnected", self._handle_participant_disconnected)
         if self._room.isconnected():
             self._room_connected_fut.set_result(None)
 
@@ -161,6 +165,7 @@ class DataStreamAudioOutput(AudioOutput):
                 raise
 
         await super().capture_frame(frame)
+        self._capturing = True
 
         if not self._stream_writer:
             self._stream_writer = await self._room.local_participant.stream_bytes(
@@ -191,6 +196,11 @@ class DataStreamAudioOutput(AudioOutput):
     def flush(self) -> None:
         """Mark end of current audio segment"""
         super().flush()
+        self._capturing = False
+        if self._finish_on_flush:
+            self._finish_on_flush = False
+            if self._pending_playback_count:  # unless a clear fallback already finished it
+                self.on_playback_finished(playback_position=self._pushed_duration, interrupted=True)
         if self._stream_writer is None or not self._started:
             return
 
@@ -291,6 +301,18 @@ class DataStreamAudioOutput(AudioOutput):
     def _handle_connection_state_changed(self, state: rtc.ConnectionState) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
+
+    def _handle_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        if participant.identity != self._destination_identity or not self._pending_playback_count:
+            return
+
+        logger.warning(
+            "avatar left with audio pending, marking playout as done",
+            extra={"identity": self._destination_identity},
+        )
+        self._finish_on_flush = self._capturing
+        while self._pending_playback_count > int(self._capturing):
+            self.on_playback_finished(playback_position=self._pushed_duration, interrupted=True)
 
     @classmethod
     def _register_playback_finished_rpc(
