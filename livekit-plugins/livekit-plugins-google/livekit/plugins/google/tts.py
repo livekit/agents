@@ -18,7 +18,6 @@ import asyncio
 import weakref
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
-from typing import Any
 
 import google.auth
 import google.auth.credentials
@@ -47,6 +46,16 @@ from .models import GeminiTTSModels, Gender, SpeechLanguages
 
 NUM_CHANNELS = 1
 DEFAULT_LANGUAGE = "en-US"
+
+
+def _validate_speaking_rate(speaking_rate: float) -> None:
+    if not isinstance(speaking_rate, (int, float)) or not (0.25 <= speaking_rate <= 4.0):
+        raise ValueError(f"speaking_rate must be in the range [0.25, 4.0], got {speaking_rate}")
+
+
+def _validate_volume_gain_db(volume_gain_db: float) -> None:
+    if not isinstance(volume_gain_db, (int, float)) or not (-96.0 <= volume_gain_db <= 16.0):
+        raise ValueError(f"volume_gain_db must be in the range [-96.0, 16.0], got {volume_gain_db}")
 
 
 @dataclass
@@ -134,6 +143,9 @@ class TTS(tts.TTS):
             if use_markup:
                 raise ValueError("SSML support is not available for markup input")
 
+        _validate_speaking_rate(speaking_rate)
+        _validate_volume_gain_db(volume_gain_db)
+
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
@@ -219,7 +231,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
-        model_name: NotGivenOr[str] = NOT_GIVEN,
+        model_name: NotGivenOr[GeminiTTSModels | str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
         volume_gain_db: NotGivenOr[float] = NOT_GIVEN,
@@ -231,24 +243,38 @@ class TTS(tts.TTS):
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US").
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral").
             voice_name (str, optional): Specific voice name.
-            model_name (str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts").
+            model_name (GeminiTTSModels | str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts").
             prompt (str, optional): Style prompt for Gemini TTS models.
             speaking_rate (float, optional): Speed of speech.
             volume_gain_db (float, optional): Volume gain in decibels.
         """
-        params: dict[str, Any] = {}
-        if is_given(language):
-            params["language_code"] = LanguageCode(language)
-        if is_given(gender):
-            params["ssml_gender"] = _gender_from_str(str(gender))
-        if is_given(voice_name):
-            params["name"] = voice_name
-        if is_given(model_name):
-            params["model_name"] = model_name
-            self._opts.model_name = model_name
+        if is_given(speaking_rate):
+            _validate_speaking_rate(speaking_rate)
+        if is_given(volume_gain_db):
+            _validate_volume_gain_db(volume_gain_db)
 
-        if params:
-            self._opts.voice = texttospeech.VoiceSelectionParams(**params)
+        if is_given(language) or is_given(gender) or is_given(voice_name) or is_given(model_name):
+            voice = texttospeech.VoiceSelectionParams(self._opts.voice)
+            if is_given(language):
+                voice.language_code = LanguageCode(language)
+            if is_given(gender):
+                voice.ssml_gender = _gender_from_str(str(gender))
+            if is_given(voice_name):
+                voice.name = voice_name
+                if "voice_clone" in voice:
+                    del voice.voice_clone
+                if not is_given(model_name) and "chirp" in voice_name.lower():
+                    self._opts.model_name = "chirp_3"
+                    if "model_name" in voice:
+                        del voice.model_name
+            if is_given(model_name):
+                self._opts.model_name = model_name
+                if model_name == "chirp_3":
+                    if "model_name" in voice:
+                        del voice.model_name
+                else:
+                    voice.model_name = model_name
+            self._opts.voice = voice
 
         if is_given(speaking_rate):
             self._opts.speaking_rate = speaking_rate
