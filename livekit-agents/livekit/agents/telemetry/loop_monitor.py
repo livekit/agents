@@ -91,7 +91,7 @@ MAX_STACK_FRAMES = 20
 # a second stack sample once a block has lasted this many warn thresholds
 _LATE_SAMPLE_FACTOR = 10
 
-SPAN_NAME = "event_loop_blocked"
+SPAN_NAME = trace_types.SPAN_EVENT_LOOP_BLOCKED
 
 
 @dataclass

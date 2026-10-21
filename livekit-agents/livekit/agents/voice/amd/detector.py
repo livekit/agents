@@ -291,7 +291,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             "skipping auto reply: AMD already returned a machine verdict",
             extra={
                 "category": self._result.category.value,
-                "lk.pii.transcript": info.new_transcript,
+                trace_types.ATTR_PII_TRANSCRIPT: info.new_transcript,
             },
         )
         return True
@@ -526,7 +526,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 "reason": result.reason,
                 "speech_duration": result.speech_duration,
                 "delay": result.delay,
-                "lk.pii.transcript": result.transcript,
+                trace_types.ATTR_PII_TRANSCRIPT: result.transcript,
             },
         )
         if self._classifier:
@@ -570,7 +570,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     def _start_span(self) -> None:
         if self._span:
             return
-        self._span = tracer.start_span("amd", context=self._session._root_span_context)
+        self._span = tracer.start_span(
+            trace_types.SPAN_AMD, context=self._session._root_span_context
+        )
 
     def _end_span(self) -> None:
         if not self._span:

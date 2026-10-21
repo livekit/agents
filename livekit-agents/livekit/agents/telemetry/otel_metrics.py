@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from opentelemetry import metrics as metrics_api
 
+from .. import _semconv
 from ..metrics.base import (
     AgentMetrics,
     InterruptionMetrics,
@@ -22,70 +23,97 @@ _meter = metrics_api.get_meter("livekit-agents")
 
 # -- Per-turn latency histograms --
 _turn_e2e_latency = _meter.create_histogram(
-    "lk.agents.turn.e2e_latency",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_TURN_E2E_LATENCY,
+    unit=_semconv.METRIC_LK_AGENTS_TURN_E2E_LATENCY_UNIT,
     description="End-to-end turn latency",
 )
 _turn_llm_ttft = _meter.create_histogram(
-    "lk.agents.turn.llm_ttft",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_TURN_LLM_TTFT,
+    unit=_semconv.METRIC_LK_AGENTS_TURN_LLM_TTFT_UNIT,
     description="Pipeline-level LLM time to first token",
 )
 _turn_tts_ttfb = _meter.create_histogram(
-    "lk.agents.turn.tts_ttfb",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_TURN_TTS_TTFB,
+    unit=_semconv.METRIC_LK_AGENTS_TURN_TTS_TTFB_UNIT,
     description="Pipeline-level TTS time to first byte",
 )
 _turn_transcription_delay = _meter.create_histogram(
-    "lk.agents.turn.transcription_delay",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_TURN_TRANSCRIPTION_DELAY,
+    unit=_semconv.METRIC_LK_AGENTS_TURN_TRANSCRIPTION_DELAY_UNIT,
     description="Time from end of speech to transcript available",
 )
 _turn_end_of_turn_delay = _meter.create_histogram(
-    "lk.agents.turn.end_of_turn_delay",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_TURN_END_OF_TURN_DELAY,
+    unit=_semconv.METRIC_LK_AGENTS_TURN_END_OF_TURN_DELAY_UNIT,
     description="Time from end of speech to turn decision",
 )
 _turn_on_user_turn_completed_delay = _meter.create_histogram(
-    "lk.agents.turn.on_user_turn_completed_delay",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_TURN_ON_USER_TURN_COMPLETED_DELAY,
+    unit=_semconv.METRIC_LK_AGENTS_TURN_ON_USER_TURN_COMPLETED_DELAY_UNIT,
     description="Time to invoke the on_user_turn_completed callback",
 )
 
 # -- Usage counters --
-_llm_input_tokens = _meter.create_counter("lk.agents.usage.llm_input_tokens")
-_llm_input_cached_tokens = _meter.create_counter("lk.agents.usage.llm_input_cached_tokens")
-_llm_output_tokens = _meter.create_counter("lk.agents.usage.llm_output_tokens")
-_llm_input_audio_tokens = _meter.create_counter("lk.agents.usage.llm_input_audio_tokens")
-_llm_input_text_tokens = _meter.create_counter("lk.agents.usage.llm_input_text_tokens")
-_llm_output_audio_tokens = _meter.create_counter("lk.agents.usage.llm_output_audio_tokens")
-_llm_output_text_tokens = _meter.create_counter("lk.agents.usage.llm_output_text_tokens")
-_llm_session_duration = _meter.create_counter(
-    "lk.agents.usage.llm_session_duration",
-    unit="s",
+_llm_input_tokens = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_LLM_INPUT_TOKENS,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_LLM_INPUT_TOKENS_UNIT,
 )
-_tts_characters = _meter.create_counter("lk.agents.usage.tts_characters")
+_llm_input_cached_tokens = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_LLM_INPUT_CACHED_TOKENS,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_LLM_INPUT_CACHED_TOKENS_UNIT,
+)
+_llm_output_tokens = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_LLM_OUTPUT_TOKENS,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_LLM_OUTPUT_TOKENS_UNIT,
+)
+_llm_input_audio_tokens = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_LLM_INPUT_AUDIO_TOKENS,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_LLM_INPUT_AUDIO_TOKENS_UNIT,
+)
+_llm_input_text_tokens = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_LLM_INPUT_TEXT_TOKENS,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_LLM_INPUT_TEXT_TOKENS_UNIT,
+)
+_llm_output_audio_tokens = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_LLM_OUTPUT_AUDIO_TOKENS,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_LLM_OUTPUT_AUDIO_TOKENS_UNIT,
+)
+_llm_output_text_tokens = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_LLM_OUTPUT_TEXT_TOKENS,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_LLM_OUTPUT_TEXT_TOKENS_UNIT,
+)
+_llm_session_duration = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_LLM_SESSION_DURATION,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_LLM_SESSION_DURATION_UNIT,
+)
+_tts_characters = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_TTS_CHARACTERS,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_TTS_CHARACTERS_UNIT,
+)
 _tts_audio_duration = _meter.create_counter(
-    "lk.agents.usage.tts_audio_duration",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_USAGE_TTS_AUDIO_DURATION,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_TTS_AUDIO_DURATION_UNIT,
 )
 _stt_audio_duration = _meter.create_counter(
-    "lk.agents.usage.stt_audio_duration",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_USAGE_STT_AUDIO_DURATION,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_STT_AUDIO_DURATION_UNIT,
 )
-_interruption_num_requests = _meter.create_counter("lk.agents.usage.interruption_num_requests")
+_interruption_num_requests = _meter.create_counter(
+    _semconv.METRIC_LK_AGENTS_USAGE_INTERRUPTION_NUM_REQUESTS,
+    unit=_semconv.METRIC_LK_AGENTS_USAGE_INTERRUPTION_NUM_REQUESTS_UNIT,
+)
 
 # -- Connection metrics --
 _connection_acquire_time = _meter.create_histogram(
-    "lk.agents.connection.acquire_time",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_CONNECTION_ACQUIRE_TIME,
+    unit=_semconv.METRIC_LK_AGENTS_CONNECTION_ACQUIRE_TIME_UNIT,
     description="Time to acquire a connection (WebSocket only)",
 )
 
 # -- Process health --
 _event_loop_blocked = _meter.create_histogram(
-    "lk.agents.event_loop.blocked_duration",
-    unit="s",
+    _semconv.METRIC_LK_AGENTS_EVENT_LOOP_BLOCKED_DURATION,
+    unit=_semconv.METRIC_LK_AGENTS_EVENT_LOOP_BLOCKED_DURATION_UNIT,
     description="Duration of synchronous blocks detected on an agent event loop",
 )
 
@@ -95,27 +123,27 @@ _event_loop_blocked = _meter.create_histogram(
 # (Datadog Agent Observability, Langfuse) gets the metrics under the names it expects.
 _genai_token_usage = _meter.create_histogram(
     trace_types.METRIC_GEN_AI_CLIENT_TOKEN_USAGE,
-    unit="{token}",
+    unit=_semconv.METRIC_GEN_AI_CLIENT_TOKEN_USAGE_UNIT,
     description="Number of input and output tokens used by the GenAI operation",
 )
 _genai_operation_duration = _meter.create_histogram(
     trace_types.METRIC_GEN_AI_CLIENT_OPERATION_DURATION,
-    unit="s",
+    unit=_semconv.METRIC_GEN_AI_CLIENT_OPERATION_DURATION_UNIT,
     description="GenAI operation duration",
 )
 _genai_time_to_first_chunk = _meter.create_histogram(
     trace_types.METRIC_GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK,
-    unit="s",
+    unit=_semconv.METRIC_GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK_UNIT,
     description="Time to first chunk of a streaming GenAI response",
 )
 _genai_execute_tool_duration = _meter.create_histogram(
     trace_types.METRIC_GEN_AI_EXECUTE_TOOL_DURATION,
-    unit="s",
+    unit=_semconv.METRIC_GEN_AI_EXECUTE_TOOL_DURATION_UNIT,
     description="Tool execution duration",
 )
 _genai_invoke_agent_duration = _meter.create_histogram(
     trace_types.METRIC_GEN_AI_INVOKE_AGENT_DURATION,
-    unit="s",
+    unit=_semconv.METRIC_GEN_AI_INVOKE_AGENT_DURATION_UNIT,
     description="Agent invocation duration",
 )
 

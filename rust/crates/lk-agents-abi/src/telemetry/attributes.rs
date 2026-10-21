@@ -25,9 +25,9 @@ pub const ATTRIBUTE_SIMULATOR: &str = "lk.simulator";
 /// dispatch and read by `JobContext.simulation_context()`.
 pub const ATTRIBUTE_SIMULATOR_DISPATCH: &str = "lk.simulator.dispatch";
 /// Telemetry metadata key marking the session as a simulation.
-pub const ATTRIBUTE_SIMULATION_ENABLED: &str = "lk.simulation.enabled";
+pub const ATTRIBUTE_SIMULATION_ENABLED: &str = super::semconv::LK_SIMULATION_ENABLED;
 /// Telemetry metadata key requesting PII redaction for the session.
-pub const ATTRIBUTE_REDACTION_ENABLED: &str = "lk.redaction.enabled";
+pub const ATTRIBUTE_REDACTION_ENABLED: &str = super::semconv::LK_REDACTION_ENABLED;
 
 /// Data-channel topic for chat messages.
 pub const TOPIC_CHAT: &str = "lk.chat";

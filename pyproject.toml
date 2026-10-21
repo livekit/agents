@@ -154,7 +154,12 @@ line-length = 100
 target-version = "py310"
 # `_generated` is written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`): generator
 # output is not hand-formatted, and a lint finding there is fixed in the generator, not the file.
-exclude = [".github", "livekit-agents/livekit/agents/_generated"]
+exclude = [
+    ".github",
+    "livekit-agents/livekit/agents/_generated",
+    # the protocol submodule carries its own Python (otel/live-check), linted there
+    "protocol",
+]
 
 [tool.ruff.lint]
 select = [

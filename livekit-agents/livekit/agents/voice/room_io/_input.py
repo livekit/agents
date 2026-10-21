@@ -207,7 +207,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         if span is None or not span.is_recording():
             return
         now = time.time()
-        span.add_event("first_frame", timestamp=int(now * 1_000_000_000))
+        span.add_event(trace_types.CHECKPOINT_FIRST_FRAME, timestamp=int(now * 1_000_000_000))
         if self._track_wait_started_at is not None:
             span.set_attribute(
                 trace_types.ATTR_FIRST_FRAME_DELAY, max(now - self._track_wait_started_at, 0.0)
@@ -270,7 +270,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._publication = publication
         if (span := self._track_wait_span) is not None and span.is_recording():
             span.add_event(
-                "track_subscribed",
+                trace_types.CHECKPOINT_TRACK_SUBSCRIBED,
                 {
                     trace_types.ATTR_TRACK_SID: publication.sid,
                     trace_types.ATTR_TRACK_SOURCE: rtc.TrackSource.Name(publication.source),
@@ -351,7 +351,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             ),
         )
         AudioInput.__init__(self, label="RoomIO")
-        self._track_wait_span_name = "wait_for_audio_track"
+        self._track_wait_span_name = trace_types.SPAN_WAIT_FOR_AUDIO_TRACK
         if frame_size_ms <= 0:
             raise ValueError("frame_size_ms must be greater than 0")
 
@@ -428,7 +428,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     )
                     if (span := self._track_wait_span) is not None and span.is_recording():
                         span.add_event(
-                            "pre_connect_audio",
+                            trace_types.CHECKPOINT_PRE_CONNECT_AUDIO,
                             {trace_types.ATTR_PRE_CONNECT_AUDIO_DURATION: duration},
                         )
 

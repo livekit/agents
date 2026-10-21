@@ -5,6 +5,7 @@ from collections.abc import AsyncIterable
 from typing import Any, ClassVar
 
 from .. import tokenize, utils
+from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .stream_pacer import SentenceStreamPacer
 from .tts import (
@@ -109,7 +110,7 @@ class StreamAdapter(TTS):
 
 
 class StreamAdapterWrapper(SynthesizeStream):
-    _tts_request_span_name: ClassVar[str] = "tts_stream_adapter"
+    _tts_request_span_name: ClassVar[str] = trace_types.SPAN_TTS_STREAM_ADAPTER
     # each sentence's request span nests directly under the adapter's
     _tts_attempt_span_name: ClassVar[str | None] = None
 

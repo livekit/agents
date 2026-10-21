@@ -175,7 +175,7 @@ def _provider_attr(llm: LLM) -> dict[str, str]:
 
 
 class FallbackLLMStream(LLMStream):
-    _llm_request_span_name: ClassVar[str] = "llm_fallback_adapter"
+    _llm_request_span_name: ClassVar[str] = trace_types.SPAN_LLM_FALLBACK_ADAPTER
     # each instance's request span nests directly under the adapter's
     _llm_attempt_span_name: ClassVar[str | None] = None
     # Provider request spans own the inference operation.

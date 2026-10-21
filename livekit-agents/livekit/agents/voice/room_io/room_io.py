@@ -363,7 +363,7 @@ class RoomIO:
         await self._room_connected_fut
 
         with tracer.detached_span(
-            "wait_for_participant",
+            trace_types.SPAN_WAIT_FOR_PARTICIPANT,
             context=self._start_trace_context,
             attributes={
                 trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: self._participant_identity is not None

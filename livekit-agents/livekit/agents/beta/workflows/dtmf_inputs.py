@@ -9,6 +9,7 @@ from livekit import rtc
 from ... import function_tool
 from ...job import get_job_context
 from ...llm.tool_context import ToolError
+from ...telemetry import trace_types
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...utils.aio.debounce import Debounced, debounced
@@ -105,7 +106,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
             self._curr_dtmf_inputs.append(DtmfEvent(ev.digit))
             logger.info(
                 "DTMF inputs received",
-                extra={"lk.pii.dtmf_inputs": format_dtmf(self._curr_dtmf_inputs)},
+                extra={trace_types.ATTR_PII_DTMF_INPUTS: format_dtmf(self._curr_dtmf_inputs)},
             )
             self._generate_dtmf_reply.schedule()
 
@@ -117,7 +118,9 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                 self.session.interrupt()
 
                 dmtf_str = format_dtmf(self._curr_dtmf_inputs)
-                logger.debug("Generating DTMF reply", extra={"lk.pii.dtmf_inputs": dmtf_str})
+                logger.debug(
+                    "Generating DTMF reply", extra={trace_types.ATTR_PII_DTMF_INPUTS: dmtf_str}
+                )
 
                 # if input not fully received (i.e. timeout), return None
                 if len(self._curr_dtmf_inputs) != num_digits:

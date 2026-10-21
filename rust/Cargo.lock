@@ -1312,11 +1312,13 @@ dependencies = [
  "inventory",
  "lk-agents-host-derive",
  "log",
+ "proc-macro2",
  "pyo3",
  "pyo3-async-runtimes",
  "regex",
  "serde",
  "serde_json",
+ "syn 2.0.119",
  "thiserror 2.0.20",
  "tokio",
 ]

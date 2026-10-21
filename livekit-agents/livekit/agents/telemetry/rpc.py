@@ -90,7 +90,7 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
             attributes[trace_types.ATTR_RPC_RESPONSE_TIMEOUT] = call.response_timeout
 
         with tracer.start_as_current_span(
-            "rpc_call", kind=trace.SpanKind.CLIENT, attributes=attributes
+            trace_types.SPAN_RPC_CALL, kind=trace.SpanKind.CLIENT, attributes=attributes
         ) as span:
             try:
                 response = await next(call)
@@ -112,7 +112,7 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
             **_payload_attributes(invocation.payload),
         }
         with tracer.start_as_current_span(
-            "rpc_handler",
+            trace_types.SPAN_RPC_HANDLER,
             context=session_context.session_root_context(),
             kind=trace.SpanKind.SERVER,
             attributes=attributes,

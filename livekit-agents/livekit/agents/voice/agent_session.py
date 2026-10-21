@@ -1024,7 +1024,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._text_only:
                 logger.info("text simulation: disabling STT/TTS/VAD and audio I/O")
 
-            self._session_span = current_span = tracer.start_span("agent_session")
+            self._session_span = current_span = tracer.start_span(trace_types.SPAN_AGENT_SESSION)
             # we detach here to avoid context issues since tokens need to be detached
             # in the same context as it was created
             if self._session_ctx_token is not None:
@@ -1051,7 +1051,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             gen_ai_telemetry.set_workflow_attributes(self._session_span, name="agent_session")
 
             # startup as one bar: room connect, participant wait, model prewarm, on_enter
-            session_start_span = tracer.start_span("session_start")
+            session_start_span = tracer.start_span(trace_types.SPAN_SESSION_START)
             self._session_start_context = trace.set_span_in_context(session_start_span)
 
             self._agent = agent
@@ -1359,7 +1359,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # event's handlers, and room io. What any of it emits (a handler's spans, a stall
             # in a plugin's teardown) nests here, and agent_session ends only after all of it
             close_span = tracer.start_span(
-                "session_close",
+                trace_types.SPAN_SESSION_CLOSE,
                 attributes={
                     trace_types.ATTR_CLOSE_REASON: reason.value,
                     trace_types.ATTR_CLOSE_DRAIN: drain,
@@ -1585,7 +1585,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if transcript is not None:
             logger.debug(
                 "IVR detection started with transcript",
-                extra={"lk.pii.transcript": transcript},
+                extra={trace_types.ATTR_PII_TRANSCRIPT: transcript},
             )
             self._ivr_activity._on_user_input_transcribed(
                 UserInputTranscribedEvent(transcript=transcript, is_final=True)
@@ -1994,7 +1994,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             handoff_ctx: otel_context.Context | None = None
             if self._activity is not None and self._next_activity is not None:
                 handoff_span = tracer.start_span(
-                    "update_agent",
+                    trace_types.SPAN_UPDATE_AGENT,
                     attributes={
                         trace_types.ATTR_PREVIOUS_AGENT_LABEL: self._activity.agent.label,
                         trace_types.ATTR_AGENT_LABEL: self._next_activity.agent.label,
@@ -2207,7 +2207,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.reset_away_timer()
 
         if (span := self._session_span) is not None and span.is_recording():
-            span.add_event("participant_linked", trace_utils.participant_attributes(participant))
+            span.add_event(
+                trace_types.CHECKPOINT_PARTICIPANT_LINKED,
+                trace_utils.participant_attributes(participant),
+            )
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
                 # join keys with the telephony trace; only the end user's number is PII
                 span.set_attributes(
@@ -2292,7 +2295,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._agent_speaking_span is None:
                 self._agent_speaking_span = tracer.start_span(
-                    "agent_speaking", context=otel_context, start_time=start_time_ns
+                    trace_types.SPAN_AGENT_SPEAKING, context=otel_context, start_time=start_time_ns
                 )
 
                 if self._room_io:
@@ -2327,7 +2330,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         old_state = self._agent_state
         self._agent_state = state
         self._add_session_event(
-            "agent_state_changed",
+            trace_types.CHECKPOINT_AGENT_STATE_CHANGED,
             {trace_types.ATTR_OLD_STATE: old_state, trace_types.ATTR_NEW_STATE: state},
         )
         self.emit(
@@ -2352,7 +2355,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if state == "speaking" and self._user_speaking_span is None:
             self._user_speaking_span = tracer.start_span(
-                "user_speaking", start_time=last_speaking_time_ns
+                trace_types.SPAN_USER_SPEAKING, start_time=last_speaking_time_ns
             )
 
             if self._room_io and self._room_io.linked_participant:
@@ -2382,7 +2385,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         old_state = self._user_state
         self._user_state = state
         self._add_session_event(
-            "user_state_changed",
+            trace_types.CHECKPOINT_USER_STATE_CHANGED,
             {trace_types.ATTR_OLD_STATE: old_state, trace_types.ATTR_NEW_STATE: state},
             timestamp=last_speaking_time,
         )
@@ -2426,7 +2429,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if text := message.raw_text_content:
             logger.debug(
                 "conversation_item_added",
-                extra={"role": message.role, "lk.pii.text": text},
+                extra={"role": message.role, trace_types.ATTR_PII_TEXT: text},
             )
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 

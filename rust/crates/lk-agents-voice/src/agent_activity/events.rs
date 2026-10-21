@@ -299,7 +299,7 @@ impl Driver {
                     crate::events::DiagnosticEvent::warning(
                         crate::events::diagnostics::SCHEDULING_PAUSED,
                     )
-                    .with("lk.pii.user_input", info.new_transcript.clone()),
+                    .with(lk_agents_abi::telemetry::semconv::LK_PII_USER_INPUT, info.new_transcript.clone()),
                 ));
             }
             // Under `_closing` the dropped turn's words still reach the record, with no reply.

@@ -242,11 +242,16 @@ SAFE_KEYS = frozenset(
 )
 
 
+# Span, span-event and enum-value names re-exported from the registry are not attribute keys:
+# nothing is redacted by them, so they have no PII classification.
+_NOT_A_KEY = ("SPAN_", "CHECKPOINT_", "EOU_OUTCOME_")
+
+
 def _declared_keys() -> dict[str, str]:
     return {
         name: value
         for name, value in vars(trace_types).items()
-        if not name.startswith("_") and isinstance(value, str)
+        if not name.startswith("_") and not name.startswith(_NOT_A_KEY) and isinstance(value, str)
     }
 
 
