@@ -262,17 +262,18 @@ class TTS(tts.TTS):
                 voice.ssml_gender = _gender_from_str(str(gender))
 
             # Determine the target model
+            current_model: str = self._opts.model_name or "gemini-2.5-flash-tts"
             if is_given(model_name):
-                target_model = model_name
+                target_model: str = str(model_name)
             elif is_given(voice_name):
                 if "chirp" in voice_name.lower():
                     target_model = "chirp_3"
-                elif self._opts.model_name == "chirp_3":
+                elif current_model == "chirp_3":
                     target_model = "gemini-2.5-flash-tts"
                 else:
-                    target_model = self._opts.model_name
+                    target_model = current_model
             else:
-                target_model = self._opts.model_name
+                target_model = current_model
 
             # Synchronize model and voice parameters
             if target_model == "chirp_3":
