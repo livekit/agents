@@ -43,8 +43,10 @@ from .version import __version__
 _WS_URL = "wss://fi.production.flamapis.com/flam-voice-svc/api/v1/public/stream"
 _SUBPROTOCOL = "finesse.v1"
 
-# Finesse synthesizes at 24 kHz and only upsamples, so 24000 is the lowest rate it returns.
+# Finesse synthesizes at 24 kHz and upsamples above it. Below it, it produces only 8 kHz
+# telephony audio, so the rates it returns are 8000 and 24000 to 48000.
 NATIVE_SAMPLE_RATE = 24000
+_TELEPHONY_SAMPLE_RATE = 8000
 _MAX_SAMPLE_RATE = 48000
 
 # Finesse uses base ISO 639 codes, except where it names a macrolanguage member.
@@ -115,9 +117,14 @@ def _validate(
 ) -> None:
     if is_given(voice) and not voice.strip():
         raise ValueError("Finesse voice is required: pass the id of a ready voice")
-    if is_given(sample_rate) and not NATIVE_SAMPLE_RATE <= sample_rate <= _MAX_SAMPLE_RATE:
+    if (
+        is_given(sample_rate)
+        and sample_rate != _TELEPHONY_SAMPLE_RATE
+        and not NATIVE_SAMPLE_RATE <= sample_rate <= _MAX_SAMPLE_RATE
+    ):
         raise ValueError(
-            f"sample_rate must be between {NATIVE_SAMPLE_RATE} and {_MAX_SAMPLE_RATE} Hz"
+            f"sample_rate must be {_TELEPHONY_SAMPLE_RATE}, or between {NATIVE_SAMPLE_RATE} "
+            f"and {_MAX_SAMPLE_RATE} Hz"
         )
     if is_given(num_step) and num_step is not None and not 1 <= num_step <= 32:
         raise ValueError("num_step must be between 1 and 32")
@@ -157,8 +164,8 @@ class TTS(tts.TTS):
                 FINESSE_API_KEY environment variable.
             language (str, optional): The language to speak, as a language code or name.
                 Defaults to "en".
-            sample_rate (int, optional): The audio sample rate in Hz, from 24000 (native) up
-                to 48000. Defaults to 24000.
+            sample_rate (int, optional): The audio sample rate in Hz: 8000 for telephony, or
+                from 24000 (native) up to 48000. Defaults to 24000.
             num_step (int, optional): Quality vs latency, 1-32. Defaults to the server's 32.
             guidance_scale (float, optional): 0-10. Defaults to the server's 2.0.
             length_scale (float, optional): Speaking rate, greater than 0 up to 5; higher is
