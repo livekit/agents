@@ -394,6 +394,13 @@ def test_update_options_switches_between_voice_and_voice_id() -> None:
     with pytest.raises(ValueError, match="either"):
         tts.update_options(voice="jane", voice_id="clone")
 
+    # None hands a field back to the server's default
+    tts.update_options(voice_id=None, language=None)
+    assert (tts.voice, tts.voice_id, tts.language) == (None, None, None)
+    tts.update_options(voice="jane")
+    tts.update_options(voice=None, voice_id=None)  # clearing both is not a conflict
+    assert (tts.voice, tts.voice_id) == (None, None)
+
 
 def test_invalid_sample_rate() -> None:
     from livekit.plugins.assemblyai import TTS

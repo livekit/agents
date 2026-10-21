@@ -61,10 +61,9 @@ SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 _MAX_REQUEST_CHARS = 2000
 _MAX_IN_FLIGHT_REQUESTS = 3
 
-# The server closes the session (3006) on a run without a space or punctuation, such as a
-# hash, too long to speak in one piece: ~1900 characters today, 75 model tokens on the next
-# release, which random accented letters exceed by 60 characters. Longer runs are broken
-# up with a space.
+# The server refuses (3006) a run without a space or punctuation, such as a hash, that is
+# too long to speak in one piece; the limit depends on the model and can be as low as ~60
+# accented letters. Longer runs are broken up with a space.
 _MAX_UNBROKEN_CHARS = 40
 _UNBROKEN_RUN = re.compile(rf"\S{{{_MAX_UNBROKEN_CHARS}}}(?=\S)")
 _LAST_SPACE = re.compile(r"\s(?=\S*$)")
@@ -227,6 +226,7 @@ class TTS(tts.TTS):
 
     @property
     def language(self) -> str | None:
+        """The language's English name as sent to the server, or None for English."""
         return self._opts.language
 
     @property
@@ -237,8 +237,8 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: NotGivenOr[str] = NOT_GIVEN,
-        voice_id: NotGivenOr[str] = NOT_GIVEN,
+        voice: NotGivenOr[str | None] = NOT_GIVEN,
+        voice_id: NotGivenOr[str | None] = NOT_GIVEN,
         language: NotGivenOr[str | None] = NOT_GIVEN,
         model_id: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
@@ -249,27 +249,29 @@ class TTS(tts.TTS):
         keeps its voice until it finishes.
 
         Args:
-            voice: A voice name; replaces a ``voice_id``. Pass ``language`` too when the
-                voice speaks another language.
-            voice_id: A custom voice; replaces ``voice``.
+            voice: A voice name, replacing a ``voice_id``; None for the server's default.
+                Pass ``language`` too when the voice speaks another language.
+            voice_id: A custom voice, replacing ``voice``; None to stop using it.
             language: A language code or English name, or None for the server's default.
             model_id: A model name or alias, or None for the default model of the
                 language.
         """
-        if is_given(voice) and is_given(voice_id):
+        if voice and voice_id:
             raise ValueError("pass either `voice` or `voice_id`, not both")
 
         opts = self._opts
         new_voice, new_voice_id = opts.voice, opts.voice_id
         new_language, new_model_id = opts.language, opts.model_id
         if is_given(voice):
-            new_voice, new_voice_id = _require(voice, "voice"), None
+            new_voice = _optional(voice, "voice")
+            new_voice_id = None if new_voice else new_voice_id
         if is_given(voice_id):
-            new_voice, new_voice_id = None, _require(voice_id, "voice_id")
+            new_voice_id = _optional(voice_id, "voice_id")
+            new_voice = None if new_voice_id else new_voice
         if is_given(language):
             new_language = _language_name(language) if language is not None else None
         if is_given(model_id):
-            new_model_id = _require(model_id, "model_id") if model_id is not None else None
+            new_model_id = _optional(model_id, "model_id")
 
         new = (new_voice, new_voice_id, new_language, new_model_id)
         if new != (opts.voice, opts.voice_id, opts.language, opts.model_id):
@@ -279,8 +281,7 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        # The HTTP API (POST /v1/speech) is not served in production yet, and a pooled
-        # socket is already open: a one-shot synthesis runs over it too.
+        # a one-shot synthesis runs over the pooled socket too, skipping a handshake
         return self._synthesize_with_stream(text, conn_options=conn_options)
 
     def stream(
@@ -330,14 +331,14 @@ class TTS(tts.TTS):
             "encoding": "pcm_s16le",
             "word_boundaries": "true" if opts.word_timestamps else "false",
         }
-        if opts.voice:
-            params["voice"] = opts.voice
-        if opts.voice_id:
-            params["voice_id"] = opts.voice_id
-        if opts.language:
-            params["language"] = opts.language
-        if opts.model_id:
-            params["model_id"] = opts.model_id
+        # what is left out is the server's choice
+        optional = {
+            "voice": opts.voice,
+            "voice_id": opts.voice_id,
+            "language": opts.language,
+            "model_id": opts.model_id,
+        }
+        params.update({k: v for k, v in optional.items() if v is not None})
         url = f"{opts.base_url}/v1/ws?{urlencode(params)}"
 
         try:
@@ -990,6 +991,10 @@ def _require(value: str, name: str) -> str:
     return value
 
 
+def _optional(value: str | None, name: str) -> str | None:
+    return _require(value, name) if value is not None else None
+
+
 def _language_name(language: str) -> str:
     """The API takes a language's English name (``"spanish"``), not a code."""
     language = _require(language, "language")
@@ -998,7 +1003,7 @@ def _language_name(language: str) -> str:
 
 def _split_request_text(text: str) -> list[str]:
     """Split text into requests of at most _MAX_REQUEST_CHARS, breaking at whitespace."""
-    text = _UNBROKEN_RUN.sub(lambda m: f"{m.group(0)} ", text.strip())
+    text = _UNBROKEN_RUN.sub(r"\g<0> ", text.strip())
     pieces: list[str] = []
     while len(text) > _MAX_REQUEST_CHARS:
         # no run is longer than _MAX_UNBROKEN_CHARS, so the window holds a space

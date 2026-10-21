@@ -74,6 +74,6 @@ with `AgentSession(tts_text_transforms=["filter_markdown", "filter_emoji"])`.
   already in flight for the interrupted reply.
 - Errors are retried on a new session when the server marks them retryable (credential and
   request errors, such as an unsupported voice or a custom voice that is missing or not paired
-  with the model, are not). A new session waits out any
-  `retry_after_seconds` the server asked for; a wait longer than the connect timeout ends the
-  retries instead, so a `FallbackAdapter` can move on.
+  with the model, are not). A new session waits out any `retry_after_seconds` the server asked
+  for; a wait longer than the connect timeout ends the retries instead, so a `FallbackAdapter`
+  can move on.
