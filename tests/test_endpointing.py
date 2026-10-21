@@ -63,6 +63,21 @@ class TestExponentialMovingAverage:
         ema.reset(initial=5.0)
         assert ema.value == 5.0
 
+    @pytest.mark.parametrize("alpha", [0.0, -0.5, 1.5])
+    def test_reset_with_invalid_alpha(self, alpha: float) -> None:
+        """reset() rejects the alphas the constructor rejects, and keeps the old one."""
+        ema = ExpFilter(alpha=0.5, initial=10.0)
+        with pytest.raises(ValueError, match="alpha must be in"):
+            ema.reset(alpha=alpha)
+        assert ema.apply(1.0, 20.0) == 15.0
+
+    @pytest.mark.parametrize("alpha", [0.0, -0.5, 1.5])
+    def test_update_base_with_invalid_alpha(self, alpha: float) -> None:
+        ema = ExpFilter(alpha=0.5, initial=10.0)
+        with pytest.raises(ValueError, match="alpha must be in"):
+            ema.update_base(alpha)
+        assert ema.apply(1.0, 20.0) == 15.0
+
 
 class TestDynamicEndpointing:
     """Test cases for the DynamicEndpointing class."""
@@ -82,6 +97,14 @@ class TestDynamicEndpointing:
     def test_initialization_uses_updated_default_alpha(self) -> None:
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
         assert ep._utterance_pause._alpha == pytest.approx(0.9, rel=1e-5)
+
+    def test_update_options_with_invalid_alpha_changes_nothing(self) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
+        with pytest.raises(ValueError, match="alpha must be in"):
+            ep.update_options(min_delay=0.5, max_delay=2.0, alpha=0.0)
+        assert ep.min_delay == 0.3
+        assert ep.max_delay == 1.0
+        assert ep._utterance_pause._alpha == 0.5
 
     def test_empty_delays(self) -> None:
         """Test between_utterance_delay returns 0 when no utterances recorded."""
