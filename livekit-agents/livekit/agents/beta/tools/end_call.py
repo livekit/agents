@@ -75,7 +75,16 @@ class EndCallTool(Toolset):
             auto_tool_reply = (
                 rt_session is not None and rt_session.capabilities.auto_tool_reply_generation
             )
-            if not isinstance(llm_v, RealtimeModel) or not auto_tool_reply:
+            # a model that speaks WHILE calling end_call (GPT-Live) puts the goodbye in this
+            # same turn: an assistant message already exists here, and the tool output's
+            # "say goodbye" reply never arrives as a new generation, so waiting for it holds
+            # the call open through the full auto-reply timeout (#8010). Shutdown now; the
+            # goodbye the caller heard was this turn.
+            turn_had_speech = any(
+                item.type == "message" and item.role == "assistant"
+                for item in ctx.speech_handle._chat_items
+            )
+            if not isinstance(llm_v, RealtimeModel) or not auto_tool_reply or turn_had_speech:
                 # tool reply will reuse the same speech handle, so we can shutdown the session
                 # directly after this speech handle is done
                 ctx.session.shutdown()
