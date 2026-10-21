@@ -1,12 +1,13 @@
-"""Giggy complete-text TTS with progressive HTTP audio for LiveKit Agents."""
+"""Giggy text-to-speech and utterance speech recognition for LiveKit Agents."""
 
 from livekit.agents import Plugin
 
 from .log import logger
+from .stt import STT
 from .tts import TTS, ChunkedStream
 from .version import __version__
 
-__all__ = ["TTS", "ChunkedStream", "__version__"]
+__all__ = ["STT", "TTS", "ChunkedStream", "__version__"]
 
 
 class GiggyPlugin(Plugin):
