@@ -16,8 +16,12 @@
 //!   (outcome unknown), and a transaction open at the drop is gone: every call fails
 //!   [`WsdbError::TxnAborted`] until `rollback` acknowledges it. The statements layer maps both to
 //!   `StorageUnavailable`, retryable (plan 13.5).
+//! * An `Error` with code `retry` applied nothing: `exec`, `query_all` and `batch` send the same
+//!   request again after a short pause, twice at most. `outcome_unknown` and `unavailable` leave
+//!   the outcome unknown, like a drop, and are never resent here.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -502,9 +506,14 @@ impl Conn {
 
     /// One write statement; returns once durable (or, inside a transaction, once applied).
     pub async fn exec(&self, sql: &str, params: Vec<SqlValue>) -> Result<ExecResult, WsdbError> {
+        let stmt = wire::statement(sql, params);
+        resend(|| self.exec_once(stmt.clone())).await
+    }
+
+    async fn exec_once(&self, stmt: pb::Statement) -> Result<ExecResult, WsdbError> {
         let (id, mut rx) = self.register().await?;
         let r = async {
-            self.write(id, pb::client_message::Message::Exec(wire::statement(sql, params)))?;
+            self.write(id, pb::client_message::Message::Exec(stmt))?;
             match self.wait(&mut rx).await?.message {
                 Some(pb::server_message::Message::ExecResult(r)) => Ok(r),
                 other => Err(WsdbError::Protocol(format!("unexpected exec response {other:?}"))),
@@ -536,11 +545,19 @@ impl Conn {
 
     /// A query's rows, all of them.
     pub async fn query_all(&self, sql: &str, params: Vec<SqlValue>) -> Result<RowSet, WsdbError> {
-        self.query(sql, params).await?.collect().await
+        resend(|| {
+            let params = params.clone();
+            async move { self.query(sql, params).await?.collect().await }
+        })
+        .await
     }
 
     /// Statements applied atomically, in order, each answered in order.
     pub async fn batch(&self, statements: Vec<pb::Statement>) -> Result<BatchResult, WsdbError> {
+        resend(|| self.batch_once(statements.clone())).await
+    }
+
+    async fn batch_once(&self, statements: Vec<pb::Statement>) -> Result<BatchResult, WsdbError> {
         let n = statements.len();
         let (id, mut rx) = self.register().await?;
         let r = async {
@@ -670,6 +687,25 @@ impl Conn {
     }
 }
 
+/// The pauses before each resend of a request the server answered `retry`.
+const RETRY_PAUSES: [Duration; 2] = [Duration::from_millis(50), Duration::from_millis(200)];
+
+/// Sends again a request answered `retry`: the server applied nothing, so the same request is safe.
+async fn resend<T, F>(send: impl Fn() -> F) -> Result<T, WsdbError>
+where
+    F: Future<Output = Result<T, WsdbError>>,
+{
+    for pause in RETRY_PAUSES {
+        match send().await {
+            Err(WsdbError::Server { code, .. }) if code == "retry" => {
+                tokio::time::sleep(pause).await
+            }
+            out => return out,
+        }
+    }
+    send().await
+}
+
 /// A streaming query's rows. Drop before the end cancels the stream.
 pub struct Rows {
     conn: Conn,
@@ -782,7 +818,7 @@ async fn read_one(read: &mut WsRead) -> Result<pb::ServerMessage, WsdbError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! A fake `wsdb` server on a loopback listener: enough of the protocol to exercise the
     //! client's framing, the per-statement `Batch` shape, the credit flow and the reconnect.
 
@@ -795,7 +831,7 @@ mod tests {
 
     /// Accepts connections forever; `script` answers one request. Every client frame is kept in
     /// the returned log. A `Begin` closes the socket when `drop_on_begin` is set, once.
-    async fn serve(
+    pub(crate) async fn serve(
         script: fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>,
         drop_on_begin: bool,
     ) -> (String, Served) {
@@ -832,11 +868,11 @@ mod tests {
         (url, log)
     }
 
-    fn reply(m: pb::server_message::Message) -> pb::ServerMessage {
+    pub(crate) fn reply(m: pb::server_message::Message) -> pb::ServerMessage {
         pb::ServerMessage { request_id: 0, message: Some(m) }
     }
 
-    fn hello_ok() -> pb::ServerMessage {
+    pub(crate) fn hello_ok() -> pb::ServerMessage {
         reply(pb::server_message::Message::HelloOk(pb::HelloOk {
             tip: 7,
             ping_interval_ms: 0,
@@ -844,10 +880,19 @@ mod tests {
         }))
     }
 
+    /// Answers `retry` to the first two `flaky` execs and to every `stuck` one.
+    static FLAKY: AtomicU32 = AtomicU32::new(0);
+
     fn script(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         use pb::client_message::Message as C;
         use pb::server_message::Message as S;
+        let retry =
+            || vec![reply(S::Error(pb::Error { code: "retry".into(), message: "scratch".into() }))];
         match &m.message {
+            Some(C::Exec(s)) if s.sql == "flaky" && FLAKY.fetch_add(1, Ordering::SeqCst) < 2 => {
+                retry()
+            }
+            Some(C::Exec(s)) if s.sql == "stuck" => retry(),
             Some(C::Hello(h)) if h.token.split('.').count() == 3 && h.database_id == "DB_1" => {
                 vec![hello_ok()]
             }
@@ -918,7 +963,7 @@ mod tests {
         TokenMinter::new("devkey", "secret").unwrap()
     }
 
-    async fn dial(url: &str, db: &str) -> Result<Conn, WsdbError> {
+    pub(crate) async fn dial(url: &str, db: &str) -> Result<Conn, WsdbError> {
         let mut opts = Options::new(url, db);
         opts.reconnect.min_backoff = Duration::from_millis(10);
         opts.reconnect.budget = Duration::from_secs(5);
@@ -967,6 +1012,24 @@ mod tests {
             })
             .count();
         assert_eq!(credits, 2);
+    }
+
+    #[tokio::test]
+    async fn a_retry_is_resent_twice_then_surfaces() {
+        let (url, log) = serve(script, false).await;
+        let conn = dial(&url, "DB_1").await.unwrap();
+        let r = conn.exec("flaky", vec![]).await.unwrap();
+        assert_eq!(r.rows_affected, 1);
+        let err = conn.exec("stuck", vec![]).await.err().unwrap();
+        assert!(matches!(&err, WsdbError::Server { code, .. } if code == "retry"), "{err}");
+        let sent = |sql: &str| {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|m| matches!(&m.message, Some(pb::client_message::Message::Exec(s)) if s.sql == sql))
+                .count()
+        };
+        assert_eq!((sent("flaky"), sent("stuck")), (3, 3));
     }
 
     #[tokio::test]
