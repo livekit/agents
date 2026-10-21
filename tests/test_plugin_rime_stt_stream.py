@@ -40,7 +40,7 @@ class DetectorStream:
             raise StopAsyncIteration
         return value
 
-    def send(self, kind, data):
+    def send(self, kind, data, *, speech_duration=0.0, inference_duration=0.0):
         frame = rtc.AudioFrame(
             data=data, sample_rate=16000, num_channels=1, samples_per_channel=len(data) // 2
         )
@@ -49,7 +49,8 @@ class DetectorStream:
                 type=kind,
                 frames=[frame],
                 silence_duration=0.5,
-                inference_duration=0,
+                speech_duration=speech_duration,
+                inference_duration=inference_duration,
             )
         )
 
@@ -670,3 +671,65 @@ async def test_concurrent_results_reach_audio_recognition(
         reader.cancel()
         await asyncio.gather(reader, return_exceptions=True)
         await recognition._aclose()
+
+
+async def test_speech_onset_accounts_for_buffering_before_deferred_publication(setup, monkeypatch):
+    from livekit.plugins.rime import _stt_stream
+
+    owner, detector, streams, _, _, _ = setup
+    clock = [100.0]
+    # Patch only the adapter clock, leaving asyncio and the test runner untouched.
+    monkeypatch.setattr(_stt_stream, "time", SimpleNamespace(time=lambda: clock[0]))
+    release = asyncio.Event()
+    first_eof = asyncio.Event()
+
+    async def delayed(self):
+        async for chunk in self.source:
+            self.audio.append(chunk)
+        if self is streams[0]:
+            first_eof.set()
+            await release.wait()
+        yield sdk.TranscriptionFinal(text="hello", language="en")
+
+    monkeypatch.setattr(SDKStream, "updates", delayed)
+    stream = owner.stream()
+    observed = []
+
+    async def collect():
+        async for event in stream:
+            observed.append(event)
+
+    reader = asyncio.create_task(collect())
+    try:
+        detector.send(
+            vad.VADEventType.START_OF_SPEECH,
+            b"aa",
+            speech_duration=0.3,
+            inference_duration=0.02,
+        )
+        await wait_until(lambda: streams and streams[0].audio and observed)
+        detector.send(vad.VADEventType.END_OF_SPEECH, b"aa")
+        await asyncio.wait_for(first_eof.wait(), 2)
+        clock[0] = 200.0
+        detector.send(
+            vad.VADEventType.START_OF_SPEECH,
+            b"bb",
+            speech_duration=0.4,
+            inference_duration=0.03,
+        )
+        detector.send(vad.VADEventType.END_OF_SPEECH, b"bb")
+        await wait_until(lambda: len(streams) == 2 and streams[1].closed)
+        starts = [e for e in observed if e.type == stt.SpeechEventType.START_OF_SPEECH]
+        assert len(starts) == 1  # B's start is held behind A's final.
+        assert starts[0].speech_start_time == pytest.approx(99.68)
+        clock[0] = 300.0
+        stream.end_input()
+        release.set()
+        await asyncio.wait_for(reader, 2)
+        assert [
+            e.speech_start_time for e in observed if e.type == stt.SpeechEventType.START_OF_SPEECH
+        ] == pytest.approx([99.68, 199.57])
+    finally:
+        await owner.aclose()
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)

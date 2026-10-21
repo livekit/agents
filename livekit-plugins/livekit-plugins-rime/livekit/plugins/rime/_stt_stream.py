@@ -31,10 +31,10 @@ if TYPE_CHECKING:
 
 @dataclass(eq=False)
 class _Utterance:
+    speech_start_time: float
     audio: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     done: asyncio.Event = field(default_factory=asyncio.Event)
     audio_duration: float = 0.0
-    speech_start_time: float = field(default_factory=time.time)
     speech_end_time: float | None = None
     publishing: bool = False
     interim: stt.SpeechEvent | None = None
@@ -228,7 +228,11 @@ class SpeechStream(stt.RecognizeStream):
                         contract_type = getattr(owner._sdk, "TranscriptionOutputContract", None)
                         if contract_type is not None:
                             options["output_contract"] = contract_type(owner._output_contract)
-                        active = _Utterance()
+                        active = _Utterance(
+                            speech_start_time=(
+                                time.time() - event.speech_duration - event.inference_duration
+                            )
+                        )
                         upload(active, event.frames)
                         pending.add(active)
                         ordered.put_nowait(active)
