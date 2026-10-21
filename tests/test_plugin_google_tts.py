@@ -80,7 +80,7 @@ def test_update_options_chirp_3_omits_model_name_from_voice_params() -> None:
     assert tts._opts.model_name == "chirp_3"
     assert "model_name" not in tts._opts.voice
     assert tts._opts.voice.model_name == ""
-    assert tts._opts.voice.name == "Charon"
+    assert tts._opts.voice.name == "en-US-Chirp3-HD-Charon"
     assert tts._opts.voice.language_code == "en-US"
 
 
@@ -260,3 +260,47 @@ def test_offline_hermetic_guarantee(monkeypatch: pytest.MonkeyPatch) -> None:
             assert tts._opts.voice.name == "Charon"
             tts.update_options(language="fr-FR")
             assert tts._opts.voice.language_code == "fr-FR"
+
+
+def test_gemini_voice_change_from_chirp_updates_model_and_wire_name() -> None:
+    # Devin review point 1: Chirp voice updated to Gemini voice transitions model and wire name
+    tts = TTS(voice_name="en-US-Chirp3-HD-Charon")
+    assert tts.model == "chirp_3"
+    assert "model_name" not in tts._opts.voice
+
+    tts.update_options(voice_name="Puck")
+    assert tts.model == "gemini-2.5-flash-tts"
+    assert tts._opts.voice.name == "Puck"
+    assert tts._opts.voice.model_name == "gemini-2.5-flash-tts"
+
+
+def test_model_switch_without_explicit_voice_updates_compatible_defaults() -> None:
+    # Devin review point 2: Switching model without explicit voice updates default voice appropriately
+    tts = TTS()
+    assert tts.model == "gemini-2.5-flash-tts"
+    assert tts._opts.voice.name == "Charon"
+
+    # Switch to Chirp 3 without explicit voice_name -> switches to Chirp default voice
+    tts.update_options(model_name="chirp_3")
+    assert tts.model == "chirp_3"
+    assert tts._opts.voice.name == "en-US-Chirp3-HD-Charon"
+    assert "model_name" not in tts._opts.voice
+
+    # Switch back to Gemini without explicit voice_name -> switches back to Gemini default voice
+    tts.update_options(model_name="gemini-2.5-flash-tts")
+    assert tts.model == "gemini-2.5-flash-tts"
+    assert tts._opts.voice.name == "Charon"
+    assert tts._opts.voice.model_name == "gemini-2.5-flash-tts"
+
+
+def test_gemini_model_switch_clears_chirp_voice_clone() -> None:
+    # Devin review point 3: Switching to Gemini clears Chirp-only voice_clone
+    tts = TTS(voice_cloning_key="custom-clone-123")
+    assert tts.model == "chirp_3"
+    assert tts._opts.voice.voice_clone.voice_cloning_key == "custom-clone-123"
+
+    tts.update_options(model_name="gemini-2.5-flash-tts")
+    assert tts.model == "gemini-2.5-flash-tts"
+    assert "voice_clone" not in tts._opts.voice
+    assert tts._opts.voice.name == "Charon"
+    assert tts._opts.voice.model_name == "gemini-2.5-flash-tts"
