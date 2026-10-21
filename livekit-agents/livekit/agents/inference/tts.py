@@ -76,6 +76,7 @@ FishAudioModels = Literal[
     "fishaudio/s2.1-pro",
     "fishaudio/s2.1-pro-free",
     "fishaudio/s2-pro",
+    "fishaudio/drama-3",
 ]
 
 TTSModels = (
@@ -483,6 +484,8 @@ class TTS(tts.TTS):
                 return "inworld"
             elif provider == "inworld":
                 return ""  # older inworld models don't support markup
+            elif provider == "fishaudio" and "drama" in model:
+                return "fishaudio_drama"  # free-form direction instead of fixed emotions
             return provider
 
         # llm_instructions / normalize / convert are inherited from the base Markup,
