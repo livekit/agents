@@ -402,10 +402,16 @@ class _RealtimeSession:
                 await self._append(frame.data.tobytes())
             self._input_ended = True
         await self._end_turn()
-        try:
-            await asyncio.wait_for(self._turn_done.wait(), DONE_TIMEOUT)
-        except asyncio.TimeoutError:
-            logger.warning("vLLM realtime: no transcription.done for the last turn")
+        # held turns are committed one `done` at a time: each final commit gets its own deadline
+        while not self._turn_done.is_set():
+            remaining = self._final_sent_at + DONE_TIMEOUT - time.monotonic()
+            if remaining <= 0:
+                logger.warning("vLLM realtime: no transcription.done for the last turn")
+                return
+            try:
+                await asyncio.wait_for(self._turn_done.wait(), remaining)
+            except asyncio.TimeoutError:
+                pass
 
     async def _vad_task(self, vad_stream: vad.VADStream) -> None:
         async for ev in vad_stream:

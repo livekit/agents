@@ -306,6 +306,27 @@ async def test_input_ending_while_a_turn_finishes_keeps_the_held_audio() -> None
     assert _finals(events) == ["w1", "w2"]
 
 
+async def test_turns_queued_when_input_ends_each_get_their_own_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # three turns answered one after another take longer than one commit's timeout
+    monkeypatch.setattr(self_hosted_stt, "DONE_TIMEOUT", 0.5)
+    fake = FakeVLLM(done_delay=0.3)
+
+    async def script(stream: stt.RecognizeStream) -> None:
+        stream.push_frame(_word(1))
+        stream.flush()
+        await asyncio.sleep(0.05)
+        stream.push_frame(_word(2))
+        stream.flush()
+        stream.push_frame(_word(3))
+        stream.flush()
+
+    events = await _transcribe(fake, script)
+
+    assert _finals(events) == ["w1", "w2", "w3"]
+
+
 async def test_a_flush_with_no_audio_sends_nothing() -> None:
     fake = FakeVLLM()
 
