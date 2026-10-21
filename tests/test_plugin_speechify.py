@@ -5,7 +5,11 @@ import base64
 
 import httpx2 as httpx
 import pytest
+from speechify.core.pagination import AsyncPager
 from speechify.types.error_detail import ErrorDetail
+from speechify.types.get_voice import GetVoice
+from speechify.types.get_voices_model import GetVoicesModel
+from speechify.types.list_voices_response import ListVoicesResponse
 from speechify.types.nested_chunk import NestedChunk
 from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechChunk,
@@ -73,9 +77,39 @@ class _FakeSpeechResponse:
     speech_marks = type("Marks", (), {"chunks": []})
 
 
+def _sdk_voice(voice_id: str, gender: str, *models: str) -> GetVoice:
+    return GetVoice(
+        id=voice_id,
+        display_name=voice_id,
+        gender=gender,
+        locale="en-US",
+        models=[GetVoicesModel(name=m, languages=[]) for m in models],
+        type="shared",
+    )
+
+
 class _FakeVoices:
-    async def list(self) -> list[object]:
-        return []
+    # Two pages chained by get_next, the way the SDK pages GET /v1/voices.
+    pages = [
+        [_sdk_voice("dominic_32", "male", "simba-3.2", "simba-3.5")],
+        [_sdk_voice("sam", "not_specified", "simba-3.0")],
+    ]
+
+    async def list(self, **kwargs: object) -> AsyncPager[GetVoice, ListVoicesResponse]:
+        return self._page(0)
+
+    def _page(self, i: int) -> AsyncPager[GetVoice, ListVoicesResponse]:
+        has_next = i + 1 < len(self.pages)
+
+        async def get_next() -> AsyncPager[GetVoice, ListVoicesResponse]:
+            return self._page(i + 1)
+
+        return AsyncPager(
+            has_next=has_next,
+            items=self.pages[i],
+            get_next=get_next if has_next else None,
+            response=ListVoicesResponse(voices=self.pages[i], has_more=has_next),
+        )
 
 
 class _ErrorAudio(_FakeAudio):
@@ -316,6 +350,15 @@ def test_prewarm_is_noop_with_injected_client() -> None:
     t = _make_tts("simba-3.2", _FakeClient())
     t.prewarm()
     assert t._prewarm_task is None
+
+
+async def test_list_voices_reads_every_page() -> None:
+    voices = await _make_tts("simba-3.2", _FakeClient()).list_voices()
+
+    assert [v.id for v in voices] == ["dominic_32", "sam"]
+    assert voices[0].models == ["simba-3.2", "simba-3.5"]
+    assert voices[0].gender == "male"
+    assert voices[1].gender == "neutral"
 
 
 def test_supports_streaming_marks() -> None:

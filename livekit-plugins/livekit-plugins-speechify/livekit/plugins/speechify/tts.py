@@ -42,9 +42,11 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 from speechify.client import AsyncSpeechify
 from speechify.core.api_error import ApiError
+from speechify.core.pagination import AsyncPager
 from speechify.core.request_options import RequestOptions
 from speechify.environment import SpeechifyEnvironment
 from speechify.types.get_voice import GetVoice
+from speechify.types.list_voices_response import ListVoicesResponse
 from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechChunk,
     SpeechStreamEvent_SpeechError,
@@ -87,8 +89,8 @@ class Voice:
 
 
 def _voice_from_sdk(v: GetVoice) -> Voice:
-    # The SDK exposes "notSpecified"; the plugin's Gender literal is "neutral".
-    gender = "neutral" if v.gender == "notSpecified" else v.gender
+    # The SDK exposes "not_specified"; the plugin's Gender literal is "neutral".
+    gender = "neutral" if v.gender == "not_specified" else v.gender
     return Voice(
         id=v.id,
         type=cast(VoiceType, v.type),
@@ -241,8 +243,9 @@ class TTS(tts.TTS):
 
     async def list_voices(self) -> list[Voice]:
         """List the voices available for the configured Speechify account."""
-        sdk_voices: list[GetVoice] = await self._client.voices.list()
-        return [_voice_from_sdk(v) for v in sdk_voices]
+        # Iterate the pager, not .items: it follows next_cursor across pages.
+        pager: AsyncPager[GetVoice, ListVoicesResponse] = await self._client.voices.list()
+        return [_voice_from_sdk(v) async for v in pager]
 
     def update_options(
         self,
