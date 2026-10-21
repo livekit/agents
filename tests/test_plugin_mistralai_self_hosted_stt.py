@@ -20,8 +20,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, stt
-from livekit.plugins.mistralai import SelfHostedSTT
+from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, stt
+from livekit.plugins.mistralai import SelfHostedSTT, self_hosted_stt
 from livekit.plugins.mistralai.self_hosted_stt import _realtime_url
 
 pytestmark = pytest.mark.plugin("mistralai")
@@ -219,6 +219,69 @@ async def test_speech_right_after_a_turn_ends_is_not_dropped() -> None:
     assert _finals(events) == ["w1", "w2 w3"]
 
 
+async def test_a_turn_that_ends_while_the_previous_one_finishes_is_finalized() -> None:
+    # two flushes before the first `done`: the second turn must not wait for a third flush
+    fake = FakeVLLM(done_delay=0.3)
+    server = await _serve(fake)
+    try:
+        async with aiohttp.ClientSession() as session:
+            engine = SelfHostedSTT(base_url=str(server.make_url("")), http_session=session)
+            stream = engine.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
+            finals: list[str] = []
+            both = asyncio.Event()
+
+            async def collect() -> None:
+                async for ev in stream:
+                    if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                        finals.append(ev.alternatives[0].text)
+                        if len(finals) == 2:
+                            both.set()
+
+            collector = asyncio.create_task(collect())
+            stream.push_frame(_word(1))
+            stream.flush()
+            await asyncio.sleep(0.05)
+            stream.push_frame(_word(2))
+            stream.flush()
+            stream.push_frame(_word(3))
+
+            await asyncio.wait_for(both.wait(), 3)
+            assert finals == ["w1", "w2"]
+
+            stream.end_input()
+            await asyncio.wait_for(collector, 5)
+            assert finals == ["w1", "w2", "w3"]
+    finally:
+        await server.close()
+
+
+async def test_a_server_that_never_answers_a_final_commit_fails_the_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # audio is held while a `done` is owed; it must not pile up forever
+    monkeypatch.setattr(self_hosted_stt, "DONE_TIMEOUT", 0.3)
+    fake = FakeVLLM(done_delay=60)
+    server = await _serve(fake)
+    try:
+        async with aiohttp.ClientSession() as session:
+            engine = SelfHostedSTT(base_url=str(server.make_url("")), http_session=session)
+            stream = engine.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
+            collector = asyncio.create_task(_collect(stream))
+            stream.push_frame(_word(1))
+            stream.flush()
+            # keep talking, as a live caller does, until the stream gives up
+            for _ in range(40):
+                if collector.done():
+                    break
+                stream.push_frame(_word(2))
+                await asyncio.sleep(0.05)
+
+            with pytest.raises(APITimeoutError):
+                await asyncio.wait_for(collector, 5)
+    finally:
+        await server.close()
+
+
 async def test_input_ending_mid_turn_still_transcribes_the_turn() -> None:
     async def script(stream: stt.RecognizeStream) -> None:
         stream.push_frame(_word(4))
@@ -313,7 +376,7 @@ async def test_an_unknown_model_fails_without_retrying() -> None:
         stream.push_frame(_word(1))
         stream.flush()
 
-    with pytest.raises(APIStatusError, match="does not exist"):
+    with pytest.raises(APIStatusError, match="model_not_found"):
         await _transcribe(fake, script, model="not-served")
     assert fake.connections == 1
 

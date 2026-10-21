@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 import weakref
 from dataclasses import dataclass
 
@@ -51,8 +52,8 @@ SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
 # vLLM's Voxtral Realtime consumes audio in 80 ms steps
 CHUNK_DURATION_MS = 80
-# how long the end of the input waits for the last turn's transcript
-FINAL_DONE_TIMEOUT = 5.0
+# how long a final commit waits for its `transcription.done`
+DONE_TIMEOUT = 10.0
 # Voxtral Realtime spends one token of context per 80 ms of audio, silence included
 SECONDS_PER_TOKEN = 0.08
 # a run past this share of the context ends at the next pause, and past the second regardless
@@ -285,9 +286,11 @@ class _RealtimeSession:
         self._stream = stream
         self._ws = ws
         self._lock = asyncio.Lock()
-        # final commit sent, its `done` not in yet: new audio is held in `_held`
+        # final commit sent, its `done` not in yet: new audio and turn ends are held in
+        # `_held`, in order, and replayed into the next run
         self._awaiting_done = False
-        self._held: list[bytes] = []
+        self._final_sent_at = 0.0
+        self._held: list[bytes | None] = []
         self._uncommitted_audio = False
         self._run_audio_duration = 0.0
         self._audio_at_last_text = 0.0
@@ -335,6 +338,9 @@ class _RealtimeSession:
 
     async def _append(self, pcm: bytes) -> None:
         if self._awaiting_done:
+            if time.monotonic() - self._final_sent_at > DONE_TIMEOUT:
+                # don't hold audio forever for a server that stopped answering
+                raise APITimeoutError("vLLM realtime: no transcription.done after a final commit")
             self._held.append(pcm)
             return
         await self._send(
@@ -356,11 +362,18 @@ class _RealtimeSession:
             return
         await self._send({"type": "input_audio_buffer.commit", "final": True})
         self._awaiting_done = True
+        self._final_sent_at = time.monotonic()
         self._uncommitted_audio = False
         self._turn_done.clear()
 
     async def _end_turn(self) -> None:
         async with self._lock:
+            if self._awaiting_done:
+                # a turn that ended while the previous one finishes: mark where, so its run
+                # gets its own final commit once the held audio is replayed
+                if self._held and self._held[-1] is not None:
+                    self._held.append(None)
+                return
             await self._final_commit()
 
     async def _send_task(self, vad_stream: vad.VADStream | None) -> None:
@@ -390,7 +403,7 @@ class _RealtimeSession:
             self._input_ended = True
         await self._end_turn()
         try:
-            await asyncio.wait_for(self._turn_done.wait(), FINAL_DONE_TIMEOUT)
+            await asyncio.wait_for(self._turn_done.wait(), DONE_TIMEOUT)
         except asyncio.TimeoutError:
             logger.warning("vLLM realtime: no transcription.done for the last turn")
 
@@ -437,15 +450,23 @@ class _RealtimeSession:
         elif kind == "transcription.done":
             await self._on_done(event)
         elif kind == "error":
-            message = event.get("error") or "vLLM realtime error"
+            # the server's text stays out of log bodies and exception strings
             code = event.get("code")
+            logger.debug(
+                "vLLM realtime error event",
+                extra={"code": code, "lk.pii.error": event.get("error")},
+            )
             if code in ("model_not_found", "model_not_validated", "invalid_event"):
-                raise APIStatusError(message=message, status_code=400, body=event, retryable=False)
+                raise APIStatusError(
+                    message=f"vLLM realtime session rejected: {code}",
+                    status_code=400,
+                    retryable=False,
+                )
             if code == "processing_error":
                 # the run died without a `done` and nothing would answer the turn: reconnect
-                raise APIStatusError(message=message, status_code=500, body=event)
+                raise APIStatusError(message="vLLM realtime run failed", status_code=500)
             # a bad audio chunk is dropped by the server and the run goes on
-            logger.warning("vLLM realtime error: %s (%s)", message, code)
+            logger.warning("vLLM realtime error event", extra={"code": code})
 
     async def _on_done(self, event: dict) -> None:
         text = (event.get("text") or self._text).strip()
@@ -460,12 +481,16 @@ class _RealtimeSession:
                 self._turn_done.set()
                 return
             await self._start_run()
-            for pcm in held:
-                await self._append(pcm)
-            if not self._input_ended:
-                self._turn_done.set()
-                return
-            # the input ended while this turn was finishing: transcribe what came after it
-            await self._final_commit()
+            for item in held:
+                if item is not None:
+                    # held again behind a turn end replayed before it
+                    await self._append(item)
+                elif self._awaiting_done:
+                    self._held.append(None)
+                else:
+                    await self._final_commit()
+            if self._input_ended:
+                # the input ended while this turn was finishing: transcribe what came after it
+                await self._final_commit()
             if not self._awaiting_done:
                 self._turn_done.set()
