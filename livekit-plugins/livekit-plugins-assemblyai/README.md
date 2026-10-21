@@ -36,8 +36,8 @@ session = AgentSession(
 - `mode`: `"min_latency"`, `"balanced"` or `"max_accuracy"`.
 - `language_codes`: steer transcription toward one or more expected languages (`"es"` or
   `["en", "es"]`).
-- `prompt`: free-text instructions for how to transcribe (Universal-3 Pro models, up to 1,750
-  characters).
+- `prompt`: context about the audio, such as its domain or scenario, to help recognize likely
+  vocabulary (up to 1,750 characters).
 - `keyterms_prompt`: names and terms the model should get right.
 
 ### Text-to-speech
