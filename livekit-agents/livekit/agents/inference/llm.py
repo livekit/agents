@@ -488,6 +488,14 @@ class LLM(llm.LLM):
         return supports_prompt_cache_breakpoints(self._opts.model)
 
 
+@dataclass
+class _StreamingToolCall:
+    call_id: str
+    name: str
+    arguments: str
+    extra: dict[str, Any] | None = None
+
+
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
@@ -524,11 +532,9 @@ class LLMStream(llm.LLMStream):
         # current function call that we're waiting for full completion (args are streamed)
         # (defined inside the _run method to make sure the state is reset for each run/attempt)
         self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
-        self._tool_call_id: str | None = None
-        self._fnc_name: str | None = None
-        self._fnc_raw_arguments: str | None = None
-        self._tool_extra: dict[str, Any] | None = None
-        self._tool_index: int | None = None
+        # tool calls still being streamed, in order of appearance, keyed by (index, id)
+        self._tool_calls: dict[tuple[int | None, str], _StreamingToolCall] = {}
+        self._tool_key: tuple[int | None, str] | None = None  # call that new arguments extend
         retryable = True
 
         try:
@@ -654,50 +660,50 @@ class LLMStream(llm.LLMStream):
         # in one chunk (e.g. Ollama), so they are collected and emitted together.
         completed: list[llm.FunctionToolCall] = []
 
+        def _flush() -> None:
+            completed.extend(
+                llm.FunctionToolCall(
+                    arguments=call.arguments, name=call.name, call_id=call.call_id, extra=call.extra
+                )
+                for call in self._tool_calls.values()
+            )
+            self._tool_calls.clear()
+            self._tool_key = None
+
         if delta.tool_calls:
             for tool in delta.tool_calls:
                 if not tool.function:
                     continue
 
-                # A call with another index or another id starts a new call; some providers
-                # send no index, so then only the id can tell the calls apart.
-                if (
-                    self._tool_call_id
-                    and tool.id
-                    and (tool.index != self._tool_index or tool.id != self._tool_call_id)
-                ):
-                    completed.append(
-                        llm.FunctionToolCall(
-                            arguments=self._fnc_raw_arguments or "",
-                            name=self._fnc_name or "",
-                            call_id=self._tool_call_id or "",
-                            extra=self._tool_extra,
-                        )
-                    )
-                    self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
-                    self._tool_extra = None
+                if tool.id:
+                    key = (tool.index, tool.id)
+                    # A new index means the previous calls are done. Some providers send no index,
+                    # or the same one for every call, so then the id tells the calls apart and
+                    # they are kept until the stream finishes (their deltas may interleave).
+                    if (
+                        self._tool_key is not None
+                        and tool.index is not None
+                        and tool.index != self._tool_key[0]
+                    ):
+                        _flush()
+                    self._tool_key = key
+                elif self._tool_key is None:
+                    continue  # arguments of a call that was never started
 
+                call = self._tool_calls.get(self._tool_key)
                 if tool.function.name:
-                    self._tool_index = tool.index
-                    self._tool_call_id = tool.id
-                    self._fnc_name = tool.function.name
-                    self._fnc_raw_arguments = tool.function.arguments or ""
                     # Extract extra from tool call (e.g., Google thought signatures)
-                    self._tool_extra = getattr(tool, "extra_content", None)
-                elif tool.function.arguments:
-                    self._fnc_raw_arguments += tool.function.arguments  # type: ignore
+                    self._tool_calls[self._tool_key] = _StreamingToolCall(
+                        call_id=self._tool_key[1],
+                        name=tool.function.name,
+                        arguments=tool.function.arguments or "",
+                        extra=getattr(tool, "extra_content", None),
+                    )
+                elif tool.function.arguments and call is not None:
+                    call.arguments += tool.function.arguments
 
-        if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
-            completed.append(
-                llm.FunctionToolCall(
-                    arguments=self._fnc_raw_arguments or "",
-                    name=self._fnc_name or "",
-                    call_id=self._tool_call_id or "",
-                    extra=self._tool_extra,
-                )
-            )
-            self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
-            self._tool_extra = None
+        if choice.finish_reason in ("tool_calls", "stop"):
+            _flush()
 
         if completed:
             return llm.ChatChunk(

@@ -20,11 +20,8 @@ CITIES = ["Paris", "London", "Rome"]
 
 def _stream() -> LLMStream:
     stream = LLMStream.__new__(LLMStream)
-    stream._tool_call_id = None
-    stream._fnc_name = None
-    stream._fnc_raw_arguments = None
-    stream._tool_extra = None
-    stream._tool_index = None
+    stream._tool_calls = {}
+    stream._tool_key = None
     return stream
 
 
@@ -160,3 +157,59 @@ def test_a_different_index_still_starts_a_new_call_even_with_the_same_id() -> No
     chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
 
     assert _cities(chunks) == ["Paris", "London"]
+
+
+def _delta(id: str | None, name: str | None, args: str, index: int | None = None):
+    return ChoiceDeltaToolCall.model_construct(
+        index=index,
+        id=id,
+        type="function",
+        function=ChoiceDeltaToolCallFunction(name=name, arguments=args),
+    )
+
+
+def _run(deltas: list[ChoiceDeltaToolCall]) -> list[str]:
+    stream = _stream()
+    choices = [Choice(index=0, delta=ChoiceDelta(tool_calls=[d])) for d in deltas] + [
+        Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta())
+    ]
+    chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
+    return _cities(chunks)
+
+
+@pytest.mark.parametrize("index", [None, 0])
+def test_interleaved_calls_without_distinct_index_keep_their_own_arguments(
+    index: int | None,
+) -> None:
+    deltas = [
+        _delta("a", "get_weather", '{"city":', index),
+        _delta("b", "get_weather", '{"city":', index),
+        _delta("a", None, '"Paris"}', index),
+        _delta("b", None, '"London"}', index),
+    ]
+
+    assert _run(deltas) == ["Paris", "London"]
+
+
+def test_a_continuation_without_id_extends_the_latest_call() -> None:
+    deltas = [
+        _delta("a", "get_weather", '{"city":'),
+        _delta("b", "get_weather", '{"city":'),
+        _delta(None, None, '"London"}'),
+    ]
+
+    # call "a" never got its arguments, so it is emitted as sent
+    stream = _stream()
+    choices = [Choice(index=0, delta=ChoiceDelta(tool_calls=[d])) for d in deltas] + [
+        Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta())
+    ]
+    chunks = [stream._parse_choice("chunk", c, ThinkingTokenFilter()) for c in choices]
+    calls = [c for chunk in chunks if chunk for c in chunk.delta.tool_calls]
+    assert [(c.call_id, c.arguments) for c in calls] == [
+        ("a", '{"city":'),
+        ("b", '{"city":"London"}'),
+    ]
+
+
+def test_arguments_without_a_started_call_are_ignored() -> None:
+    assert _run([_delta(None, None, '"Paris"}')]) == []
