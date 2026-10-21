@@ -189,6 +189,7 @@ class DataStreamAudioOutput(AudioOutput):
         )
 
     async def _aclose_writer(self, writer: rtc.ByteStreamWriter) -> None:
+        """Close an avatar audio stream and log failures without propagating them."""
         try:
             await writer.aclose()
         except Exception as e:
