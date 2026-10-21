@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Generic, Literal, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -14,8 +14,6 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import aio, is_given, log_exceptions
 from ...voice import io
 from ...voice.events import (
-    AgentState,
-    AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
     ErrorEvent,
@@ -39,7 +37,6 @@ Userdata_T = TypeVar("Userdata_T")
 
 EventTypes = Literal[
     "user_state_changed",
-    "agent_state_changed",
     "user_input_transcribed",
     "translation_transcribed",
     "error",
@@ -110,10 +107,8 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._room_io: TranslationRoomIO | None = None
         self._model_session: TranslationModelSession | None = None
-        self._bound_audio_output: io.AudioOutput | None = None
 
         self._user_state: UserState = "listening"
-        self._agent_state: AgentState = "initializing"
 
         self._started = False
         self._closing_task: asyncio.Task[None] | None = None
@@ -132,11 +127,6 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._model
 
     @property
-    def target_language(self) -> str:
-        """The language the model translates into."""
-        return self._model.target_language
-
-    @property
     def input(self) -> io.AgentInput:
         return self._input
 
@@ -147,14 +137,6 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def user_state(self) -> UserState:
         return self._user_state
-
-    @property
-    def agent_state(self) -> AgentState:
-        return self._agent_state
-
-    @property
-    def started(self) -> bool:
-        return self._started
 
     @property
     def room_io(self) -> TranslationRoomIO | None:
@@ -264,9 +246,6 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 name="_forward_output_audio_task",
             )
 
-            self._bind_audio_output(self.output.audio)
-            self._update_agent_state("listening")
-
     async def aclose(self) -> None:
         """Stop translating and release the model and the room."""
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
@@ -289,7 +268,6 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = False
             self._cancel_segment_timer()
-            self._bind_audio_output(None)
 
             await aio.cancel_and_wait(
                 *[
@@ -318,7 +296,6 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = None
 
             self._user_state = "listening"
-            self._agent_state = "initializing"
 
     # -- model session --
 
@@ -379,7 +356,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             TranslationTranscribedEvent(
                 transcript=ev.text,
                 is_final=ev.is_final,
-                language=ev.language if ev.language is not None else self.target_language,
+                language=ev.language if ev.language is not None else self._model.target_language,
             ),
         )
 
@@ -425,35 +402,6 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state = state
         self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
-    def _update_agent_state(self, state: AgentState) -> None:
-        if self._agent_state == state:
-            return
-
-        old_state = self._agent_state
-        self._agent_state = state
-        self.emit(
-            "agent_state_changed", AgentStateChangedEvent(old_state=old_state, new_state=state)
-        )
-
-    def _bind_audio_output(self, audio_output: io.AudioOutput | None) -> None:
-        if audio_output is self._bound_audio_output:
-            return
-
-        if self._bound_audio_output is not None:
-            self._bound_audio_output.off("playback_started", self._on_playback_started)
-            self._bound_audio_output.off("playback_finished", self._on_playback_finished)
-
-        self._bound_audio_output = audio_output
-        if audio_output is not None:
-            audio_output.on("playback_started", self._on_playback_started)
-            audio_output.on("playback_finished", self._on_playback_finished)
-
-    def _on_playback_started(self, _: Any) -> None:
-        self._update_agent_state("speaking")
-
-    def _on_playback_finished(self, _: Any) -> None:
-        self._update_agent_state("listening")
-
     # -- io --
 
     def _on_audio_input_changed(self) -> None:
@@ -473,8 +421,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self.input.video is not None:
             logger.warning("a translation model takes no video input, ignoring..")
 
-    def _on_audio_output_changed(self) -> None:
-        self._bind_audio_output(self.output.audio)
+    def _on_audio_output_changed(self) -> None: ...
 
     def _on_video_output_changed(self) -> None: ...
 

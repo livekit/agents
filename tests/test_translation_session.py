@@ -131,13 +131,13 @@ def test_the_target_language_comes_from_the_model() -> None:
     model = _FakeTranslationModel(target_language="de")
     session = TranslationSession(model=model)
     assert session.model is model
-    assert session.target_language == "de"
+    assert session.model.target_language == "de"
 
 
 def test_retargeting_before_start_only_changes_the_next_session() -> None:
     session = TranslationSession(model=_FakeTranslationModel(target_language="es"))
     session.set_target_language("fr")
-    assert session.target_language == "fr"
+    assert session.model.target_language == "fr"
 
 
 async def test_retargeting_a_running_session_reaches_the_model() -> None:
@@ -146,7 +146,7 @@ async def test_retargeting_a_running_session_reaches_the_model() -> None:
     await session.start()
     try:
         session.set_target_language("fr")
-        assert session.target_language == "fr"
+        assert session.model.target_language == "fr"
         assert model.sessions[0].retargeted == ["fr"]
     finally:
         await session.aclose()
@@ -159,7 +159,7 @@ async def test_retargeting_a_running_fixed_model_is_refused() -> None:
     try:
         with pytest.raises(RuntimeError, match="fixed for the session's life"):
             session.set_target_language("fr")
-        assert session.target_language == "es"
+        assert session.model.target_language == "es"
         assert model.sessions[0].retargeted == []
     finally:
         await session.aclose()
@@ -242,18 +242,20 @@ async def test_the_speakers_turns_drive_the_user_state() -> None:
         await session.aclose()
 
 
-async def test_playback_drives_the_agent_state() -> None:
+async def test_the_model_reporting_its_speech_ended_ends_the_segment() -> None:
     model = _FakeTranslationModel()
     session, _, audio_out, _ = _session(model)
+    played: list[float] = []
+    audio_out.on("playback_finished", lambda ev: played.append(ev.playback_position))
+
     await session.start()
     try:
-        assert session.agent_state == "listening"
         model.sessions[0].speak()
-        await _wait_for(lambda: session.agent_state == "speaking")
+        await _wait_for(lambda: audio_out._pushed_duration > 0)
 
         model.sessions[0].emit("output_speech_stopped", OutputSpeechStopped())
-        await _wait_for(lambda: session.agent_state == "listening")
-        assert audio_out._pushed_duration == 0.0  # the segment played out
+        await _wait_for(lambda: bool(played))
+        assert played[0] > 0  # the segment played out rather than being cut
     finally:
         await session.aclose()
 
@@ -262,11 +264,13 @@ async def test_an_idle_model_still_ends_its_segment() -> None:
     # a provider that never reports where its speech ends
     model = _FakeTranslationModel()
     session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    played: list[float] = []
+    audio_out.on("playback_finished", lambda ev: played.append(ev.playback_position))
+
     await session.start()
     try:
         model.sessions[0].speak()
-        await _wait_for(lambda: session.agent_state == "speaking")
-        await _wait_for(lambda: session.agent_state == "listening")
+        await _wait_for(lambda: bool(played))
     finally:
         await session.aclose()
 
@@ -278,10 +282,8 @@ async def test_closing_reports_why_and_releases_the_model_session() -> None:
     session.on("close", closed.append)
 
     await session.start()
-    assert session.started
     await session.aclose()
 
-    assert not session.started
     assert [ev.reason for ev in closed] == [CloseReason.USER_INITIATED]
     assert model.sessions[0].closed
     # the session closes its run of the model, never the model itself
@@ -324,7 +326,6 @@ async def test_a_recoverable_model_error_is_only_reported() -> None:
             ),
         )
         await asyncio.sleep(0.05)
-        assert session.started
         assert closed == []
     finally:
         await session.aclose()

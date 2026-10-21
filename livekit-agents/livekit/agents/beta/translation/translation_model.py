@@ -199,10 +199,6 @@ class TranslationModelSession(
         return self._translation_model.capabilities
 
     @property
-    def target_language(self) -> str:
-        return self._translation_model.target_language
-
-    @property
     @abstractmethod
     def audio_stream(self) -> AsyncIterable[TranslatedAudioFrame]:
         """The translation the model speaks."""
