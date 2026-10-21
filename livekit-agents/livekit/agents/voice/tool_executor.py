@@ -533,7 +533,10 @@ class _ToolExecutor:
         chat_ctx.insert(items)
         await target.update_chat_ctx(chat_ctx)
         ctx.session.history.insert(items)
+        self._schedule_reply(ctx, items, target)
 
+    def _schedule_reply(self, ctx: RunContext, items: list[ChatItem], target: Agent) -> None:
+        """Voice ``items``, already in ``target``'s chat_ctx, in a deferred reply."""
         if not any(item.type == "function_call_output" and item.reply_required for item in items):
             return
 
