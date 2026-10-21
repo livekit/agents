@@ -466,6 +466,17 @@ async def test_instance_update_preserves_per_stream_language_override(
     await stt_impl.aclose()
 
 
+def test_manual_flush_capability_tracks_endpointing_updates() -> None:
+    stt_impl = sarvam.STTRealtime(api_key="sk_test", endpointing="vad")
+    assert not stt_impl.capabilities.manual_flush
+    stt_impl.update_options(endpointing="manual")
+    assert stt_impl.capabilities.manual_flush
+    stt_impl.update_options(prompt="LiveKit")
+    assert stt_impl.capabilities.manual_flush
+    stt_impl.update_options(endpointing="vad")
+    assert not stt_impl.capabilities.manual_flush
+
+
 def test_stream_update_options_without_arguments_is_a_no_op() -> None:
     stream = _make_stream()
     stream._pending_config_update = None
