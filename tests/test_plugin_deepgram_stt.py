@@ -255,6 +255,33 @@ def _frame(ms: int, sample_rate: int = 16000):
     )
 
 
+@pytest.mark.parametrize("text", ["last words", ""])
+async def test_finalize_result_is_exposed_after_provider_text(text: str) -> None:
+    from livekit.agents import stt
+
+    stream = _live_stream(_LiveWS())
+    try:
+        stream._process_stream_event(
+            {
+                "type": "Results",
+                "metadata": {"request_id": "request-1"},
+                "is_final": True,
+                "speech_final": False,
+                "from_finalize": True,
+                "channel": {"alternatives": [{"transcript": text, "confidence": 1.0, "words": []}]},
+            }
+        )
+        events = [stream._event_ch.recv_nowait()]
+        if text:
+            events.append(stream._event_ch.recv_nowait())
+        final = events[-1]
+        assert final.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        assert final.alternatives[0].text == text
+        assert final.alternatives[0].metadata == {"from_finalize": True}
+    finally:
+        await stream.aclose()
+
+
 async def _wait_until(predicate, *, timeout: float = 5.0) -> None:
     import time
 
