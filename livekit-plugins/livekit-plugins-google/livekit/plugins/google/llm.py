@@ -309,20 +309,8 @@ class LLM(llm.LLM):
             cached_content=cached_content,
             media_resolution=media_resolution,
         )
-        # genai reads async_client_args (its transport choice) from CLIENT-level options only,
-        # so request-level transport injection is a no-op at runtime (#7987). Forcing httpx here
-        # makes the ms timeout a per-phase read timeout instead of aiohttp's ClientTimeout(total)
-        # whole-request deadline, matching the openai/inference plugins' semantics.
-        client_http_options = http_options if is_given(http_options) else types.HttpOptions()
-        client_async_args = dict(client_http_options.async_client_args or {})
-        if "transport" not in client_async_args:
-            client_async_args["transport"] = httpx.AsyncHTTPTransport()
-            client_http_options.async_client_args = client_async_args
-            http_options = client_http_options
-        # genai reads async_client_args (its transport choice) from CLIENT-level options only,
-        # so request-level transport injection is a no-op at runtime (#7987). Forcing httpx at
-        # client construction makes the ms timeout a per-phase read timeout instead of aiohttp's
-        # ClientTimeout(total) whole-request deadline, matching the openai/inference plugins.
+        # genai only reads the transport from client-level options (#7987): force httpx so the
+        # timeout bounds chunk silence, not the whole request.
         client_http_options = (
             http_options.model_copy() if is_given(http_options) else types.HttpOptions()
         )
@@ -614,6 +602,10 @@ class LLMStream(llm.LLMStream):
             if long_decode:
                 # a reasoning turn runs for minutes; a short read timeout drops a live request
                 timeout_ms = max(timeout_ms, LONG_DECODE_HTTP_TIMEOUT_MS)
+            # plugin set the timeout unless the caller passed their own http_options.timeout
+            plugin_set_timeout = not is_given(self._llm._opts.http_options) or (
+                self._llm._opts.http_options.timeout is None
+            )
             if is_given(self._llm._opts.http_options):
                 http_options = self._llm._opts.http_options.model_copy()
                 if http_options.timeout is None:
@@ -623,11 +615,8 @@ class LLMStream(llm.LLMStream):
 
             headers = dict(http_options.headers or {})
             headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
-            if "X-Server-Timeout" not in headers:
-                # genai derives an X-Server-Timeout from the ms timeout and Vertex enforces
-                # it as a WHOLE-REQUEST deadline, killing healthy answers that stream longer
-                # than the read timeout (#7987). Presetting the header suppresses that
-                # derivation; the read timeout below still bounds per-chunk silence.
+            if plugin_set_timeout and "X-Server-Timeout" not in headers:
+                # preset to stop genai deriving a whole-request deadline from the ms timeout (#7987)
                 headers["X-Server-Timeout"] = str(int(LONG_DECODE_HTTP_TIMEOUT_MS / 1000))
             http_options.headers = headers
             config = types.GenerateContentConfig(
