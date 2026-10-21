@@ -1097,6 +1097,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection.close_context(context_id, cancel=True)
             raise APIConnectionError() from e
         finally:
+            # nothing awaits the waiter after this, so a later connection error must not land on it
+            if not waiter.done():
+                waiter.cancel()
+            elif not waiter.cancelled():
+                waiter.exception()
             await utils.aio.gracefully_cancel(*tasks)
             await sent_tokenizer_stream.aclose()
             output_emitter.end_input()

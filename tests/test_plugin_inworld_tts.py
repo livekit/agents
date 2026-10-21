@@ -532,3 +532,36 @@ async def test_dropped_connection_is_closed_and_replaced():
     assert conn._send_task.done() and conn._cleanup_task.done()
     assert tts._get_connection() is not conn
     await tts.aclose()
+
+
+async def test_timed_out_stream_waiter_is_not_failed_later():
+    from livekit.agents import APIConnectOptions, APITimeoutError
+
+    async def _hang(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    tts = _tts_with_ws_connect(_hang)
+    conn = tts._get_connection()
+    conn.HANDSHAKE_TIMEOUT = 0.2
+    waiters: list[asyncio.Future[None]] = []
+    create_context = conn.create_context
+
+    def _record(emitter, opts):
+        ctx_id, waiter = create_context(emitter, opts)
+        waiters.append(waiter)
+        return ctx_id, waiter
+
+    conn.create_context = _record  # type: ignore[method-assign]
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05))
+    stream.push_text("Hello there.")
+    stream.end_input()
+    with pytest.raises(APITimeoutError):
+        async for _ in stream:
+            pass
+    await stream.aclose()
+
+    await asyncio.sleep(0.3)
+    assert conn._closed
+    assert waiters[0].cancelled()
+    await tts.aclose()
