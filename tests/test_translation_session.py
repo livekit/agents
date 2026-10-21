@@ -1,163 +1,341 @@
 """
-Tests for the beta TranslationSession: a translator listens and speaks but holds no
-conversation, so the session supplies the inert agent itself and refuses one that carries
-instructions or tools before anything connects.
+Tests for the beta translation primitives: a translator listens and speaks but holds no
+conversation, so ``TranslationModel`` is its own model class and ``TranslationSession`` its own
+session — no agent, no chat context, no tools, nothing to hand it but audio.
 """
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterable, Callable
+
 import pytest
 
 from livekit import rtc
-from livekit.agents import llm
+from livekit.agents import utils
 from livekit.agents.beta.translation import (
-    RetargetableModel,
+    InputSpeechStarted,
+    InputSpeechStopped,
+    InputTranscript,
+    OutputSpeechStopped,
+    OutputTranscript,
+    TranslatedAudioFrame,
+    TranslationCapabilities,
     TranslationModel,
+    TranslationModelError,
+    TranslationModelSession,
     TranslationSession,
 )
-from livekit.agents.llm.tool_context import function_tool
-from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.events import CloseEvent, CloseReason
+
+from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 
 pytestmark = pytest.mark.unit
 
 
-class _FixedTranslator(llm.DuplexModel):
-    """A model whose target language is set for the session's life, like DeepL Voice."""
+def _frame(duration: float = 0.02, sample_rate: int = 16000) -> rtc.AudioFrame:
+    num_samples = int(sample_rate * duration)
+    return rtc.AudioFrame(
+        data=b"\x00\x00" * num_samples,
+        sample_rate=sample_rate,
+        num_channels=1,
+        samples_per_channel=num_samples,
+    )
 
-    def __init__(self, target_language: str = "es") -> None:
-        super().__init__(
-            capabilities=llm.DuplexCapabilities(
-                user_transcription=True, auto_tool_reply_generation=False
-            )
-        )
-        self._target_language = target_language
+
+async def _wait_for(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+    async def _poll() -> None:
+        while not pred():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout)
+
+
+class _FakeTranslationSession(TranslationModelSession):
+    def __init__(self, model: _FakeTranslationModel) -> None:
+        super().__init__(model)
+        self.pushed: list[rtc.AudioFrame] = []
+        self.retargeted: list[str] = []
+        self.closed = False
+        self._audio_ch = utils.aio.Chan[TranslatedAudioFrame]()
 
     @property
-    def target_language(self) -> str:
-        return self._target_language
+    def audio_stream(self) -> AsyncIterable[TranslatedAudioFrame]:
+        return self._audio_ch
 
-    def session(self) -> llm.DuplexSession:
-        raise NotImplementedError
-
-    async def aclose(self) -> None: ...
-
-
-class _RetargetableTranslator(_FixedTranslator):
-    """A model that can be pointed at another language mid-session."""
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        self.pushed.append(frame)
 
     def update_options(self, *, target_language: str) -> None:
-        self._target_language = target_language
+        if not self.capabilities.retargetable:
+            super().update_options(target_language=target_language)
+
+        self.retargeted.append(target_language)
+
+    async def aclose(self) -> None:
+        self.closed = True
+        self._audio_ch.close()
+
+    # -- test helpers: what the provider would report --
+
+    def speak(self, frame: rtc.AudioFrame | None = None) -> None:
+        self._audio_ch.send_nowait(TranslatedAudioFrame(frame=frame or _frame()))
 
 
-class _PlainDuplexModel(llm.DuplexModel):
-    """A duplex model that does not translate and reports no target language."""
+class _FakeTranslationModel(TranslationModel):
+    """A translator whose every report is driven by the test."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, target_language: str = "es", retargetable: bool = False) -> None:
         super().__init__(
-            capabilities=llm.DuplexCapabilities(
-                user_transcription=True, auto_tool_reply_generation=False
-            )
+            capabilities=TranslationCapabilities(
+                input_transcription=True,
+                output_transcription=True,
+                turn_reporting=True,
+                retargetable=retargetable,
+            ),
+            target_language=target_language,
         )
+        self.sessions: list[_FakeTranslationSession] = []
+        self.closed = False
 
-    def session(self) -> llm.DuplexSession:
-        raise NotImplementedError
+    def session(self) -> _FakeTranslationSession:
+        model_session = _FakeTranslationSession(self)
+        self.sessions.append(model_session)
+        return model_session
 
-    async def aclose(self) -> None: ...
-
-
-@function_tool()
-async def _lookup(query: str) -> str:
-    """Look something up.
-
-    Args:
-        query: what to look up
-    """
-    return query
+    async def aclose(self) -> None:
+        self.closed = True
 
 
-def test_the_protocols_match_a_translating_model_only() -> None:
-    assert isinstance(_FixedTranslator(), TranslationModel)
-    assert not isinstance(_FixedTranslator(), RetargetableModel)
-    assert isinstance(_RetargetableTranslator(), RetargetableModel)
-    assert not isinstance(_PlainDuplexModel(), TranslationModel)
+def _session(
+    model: _FakeTranslationModel | None = None, **kwargs: object
+) -> tuple[TranslationSession, FakeAudioInput, FakeAudioOutput, FakeTextOutput]:
+    session = TranslationSession(model=model or _FakeTranslationModel(), **kwargs)  # type: ignore[arg-type]
+    audio_in, audio_out, text_out = FakeAudioInput(), FakeAudioOutput(), FakeTextOutput()
+    session.input.audio = audio_in
+    session.output.audio = audio_out
+    session.output.transcription = text_out
+    return session, audio_in, audio_out, text_out
+
+
+def test_the_model_is_its_own_primitive() -> None:
+    model = _FakeTranslationModel(target_language="de")
+    # it answers for a language, not for instructions, a chat context or tools
+    assert model.target_language == "de"
+    assert model.source_language is None
+    assert model.capabilities.retargetable is False
+    assert not isinstance(model, TranslationModelSession)
 
 
 def test_the_target_language_comes_from_the_model() -> None:
-    model = _FixedTranslator("de")
+    model = _FakeTranslationModel(target_language="de")
     session = TranslationSession(model=model)
     assert session.model is model
     assert session.target_language == "de"
 
 
-def test_a_model_that_reports_no_target_language_leaves_it_unset() -> None:
-    assert TranslationSession(model=_PlainDuplexModel()).target_language is None
-
-
-def test_retargeting_forwards_to_the_model() -> None:
-    session = TranslationSession(model=_RetargetableTranslator("es"))
+def test_retargeting_before_start_only_changes_the_next_session() -> None:
+    session = TranslationSession(model=_FakeTranslationModel(target_language="es"))
     session.set_target_language("fr")
     assert session.target_language == "fr"
 
 
-def test_retargeting_a_fixed_model_is_refused() -> None:
-    session = TranslationSession(model=_FixedTranslator("es"))
-    with pytest.raises(RuntimeError, match="fixed for the session's life"):
+async def test_retargeting_a_running_session_reaches_the_model() -> None:
+    model = _FakeTranslationModel(target_language="es", retargetable=True)
+    session, *_ = _session(model)
+    await session.start()
+    try:
         session.set_target_language("fr")
-    assert session.target_language == "es"
+        assert session.target_language == "fr"
+        assert model.sessions[0].retargeted == ["fr"]
+    finally:
+        await session.aclose()
 
 
-def test_the_default_agent_carries_nothing_to_serve() -> None:
-    agent = TranslationSession(model=_FixedTranslator()).default_agent()
-    assert agent.instructions == ""
-    assert agent.tools == []
+async def test_retargeting_a_running_fixed_model_is_refused() -> None:
+    model = _FakeTranslationModel(target_language="es")
+    session, *_ = _session(model)
+    await session.start()
+    try:
+        with pytest.raises(RuntimeError, match="fixed for the session's life"):
+            session.set_target_language("fr")
+        assert session.target_language == "es"
+        assert model.sessions[0].retargeted == []
+    finally:
+        await session.aclose()
 
 
-def test_a_translator_runs_without_a_vad() -> None:
-    # the model reports the speaker's turns itself
-    assert TranslationSession(model=_FixedTranslator()).vad is None
+def test_a_fixed_model_session_refuses_to_be_retargeted() -> None:
+    model_session = _FakeTranslationModel().session()
+    with pytest.raises(RuntimeError, match="fixed for the session's life"):
+        model_session.update_options(target_language="fr")
 
 
-async def test_start_refuses_an_agent_carrying_instructions() -> None:
-    session = TranslationSession(model=_FixedTranslator())
-    with pytest.raises(ValueError, match="takes no instructions"):
-        await session.start(Agent(instructions="be helpful"), room=rtc.Room())
+async def test_the_speech_it_hears_reaches_the_model() -> None:
+    model = _FakeTranslationModel()
+    session, audio_in, _, _ = _session(model)
+    await session.start()
+    try:
+        audio_in.push(_frame())
+        audio_in.push(_frame())
+        await _wait_for(lambda: len(model.sessions[0].pushed) == 2)
+    finally:
+        await session.aclose()
 
 
-async def test_start_refuses_an_agent_carrying_tools() -> None:
-    session = TranslationSession(model=_FixedTranslator())
-    with pytest.raises(ValueError, match="cannot call tools"):
-        await session.start(Agent(instructions="", tools=[_lookup]), room=rtc.Room())
+async def test_the_translation_it_speaks_reaches_the_audio_output() -> None:
+    model = _FakeTranslationModel()
+    session, _, audio_out, _ = _session(model)
+    await session.start()
+    try:
+        model.sessions[0].speak()
+        await _wait_for(lambda: audio_out._pushed_duration > 0)
+    finally:
+        await session.aclose()
 
 
-async def test_blank_instructions_pass_the_instructions_check() -> None:
-    session = TranslationSession(model=_FixedTranslator())
-    # refused for the tools it cannot reach, not for its blank instructions
-    with pytest.raises(ValueError, match="cannot call tools"):
-        await session.start(Agent(instructions="  \n ", tools=[_lookup]), room=rtc.Room())
+async def test_both_transcripts_are_reported() -> None:
+    model = _FakeTranslationModel(target_language="es")
+    session, _, _, text_out = _session(model)
+    heard: list[tuple[str, bool, str | None]] = []
+    spoken: list[tuple[str, bool, str | None]] = []
+    session.on(
+        "user_input_transcribed", lambda ev: heard.append((ev.transcript, ev.is_final, ev.language))
+    )
+    session.on(
+        "translation_transcribed",
+        lambda ev: spoken.append((ev.transcript, ev.is_final, ev.language)),
+    )
+
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        model_session.emit(
+            "input_transcript", InputTranscript(text="hello", is_final=True, language="en")
+        )
+        model_session.emit("output_transcript", OutputTranscript(text="hola", is_final=True))
+
+        assert heard == [("hello", True, "en")]
+        # the language the model translates into stands in when it stamps none
+        assert spoken == [("hola", True, "es")]
+        await _wait_for(lambda: text_out._messages == ["hola"])
+    finally:
+        await session.aclose()
 
 
-async def test_start_supplies_the_default_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    started: list[Agent] = []
+async def test_the_speakers_turns_drive_the_user_state() -> None:
+    model = _FakeTranslationModel()
+    session, *_ = _session(model)
+    states: list[str] = []
+    session.on("user_state_changed", lambda ev: states.append(ev.new_state))
 
-    async def _capture(self: AgentSession, agent: Agent, **kwargs: object) -> None:
-        started.append(agent)
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        assert session.user_state == "listening"
+        model_session.emit("input_speech_started", InputSpeechStarted())
+        assert session.user_state == "speaking"
+        model_session.emit("input_speech_stopped", InputSpeechStopped())
+        assert session.user_state == "listening"
+        assert states == ["speaking", "listening"]
+    finally:
+        await session.aclose()
 
-    monkeypatch.setattr(AgentSession, "start", _capture)
-    session = TranslationSession(model=_FixedTranslator())
-    await session.start(room=rtc.Room())
-    assert len(started) == 1
-    assert started[0].instructions == ""
-    assert started[0].tools == []
+
+async def test_playback_drives_the_agent_state() -> None:
+    model = _FakeTranslationModel()
+    session, _, audio_out, _ = _session(model)
+    await session.start()
+    try:
+        assert session.agent_state == "listening"
+        model.sessions[0].speak()
+        await _wait_for(lambda: session.agent_state == "speaking")
+
+        model.sessions[0].emit("output_speech_stopped", OutputSpeechStopped())
+        await _wait_for(lambda: session.agent_state == "listening")
+        assert audio_out._pushed_duration == 0.0  # the segment played out
+    finally:
+        await session.aclose()
 
 
-async def test_start_keeps_an_agent_the_caller_supplies(monkeypatch: pytest.MonkeyPatch) -> None:
-    started: list[Agent] = []
+async def test_an_idle_model_still_ends_its_segment() -> None:
+    # a provider that never reports where its speech ends
+    model = _FakeTranslationModel()
+    session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    await session.start()
+    try:
+        model.sessions[0].speak()
+        await _wait_for(lambda: session.agent_state == "speaking")
+        await _wait_for(lambda: session.agent_state == "listening")
+    finally:
+        await session.aclose()
 
-    async def _capture(self: AgentSession, agent: Agent, **kwargs: object) -> None:
-        started.append(agent)
 
-    monkeypatch.setattr(AgentSession, "start", _capture)
-    agent = Agent(instructions="")
-    session = TranslationSession(model=_FixedTranslator())
-    await session.start(agent, room=rtc.Room())
-    assert started == [agent]
+async def test_closing_reports_why_and_releases_the_model_session() -> None:
+    model = _FakeTranslationModel()
+    session, *_ = _session(model)
+    closed: list[CloseEvent] = []
+    session.on("close", closed.append)
+
+    await session.start()
+    assert session.started
+    await session.aclose()
+
+    assert not session.started
+    assert [ev.reason for ev in closed] == [CloseReason.USER_INITIATED]
+    assert model.sessions[0].closed
+    # the session closes its run of the model, never the model itself
+    assert not model.closed
+
+
+async def test_an_unrecoverable_model_error_closes_the_session() -> None:
+    model = _FakeTranslationModel()
+    session, *_ = _session(model)
+    errors: list[object] = []
+    closed: list[CloseEvent] = []
+    session.on("error", lambda ev: errors.append(ev.error))
+    session.on("close", closed.append)
+
+    await session.start()
+    model.sessions[0].emit(
+        "error",
+        TranslationModelError(
+            timestamp=0.0, label=model.label, error=RuntimeError("gone"), recoverable=False
+        ),
+    )
+
+    await _wait_for(lambda: bool(closed))
+    assert len(errors) == 1
+    assert closed[0].reason == CloseReason.ERROR
+
+
+async def test_a_recoverable_model_error_is_only_reported() -> None:
+    model = _FakeTranslationModel()
+    session, *_ = _session(model)
+    closed: list[CloseEvent] = []
+    session.on("close", closed.append)
+
+    await session.start()
+    try:
+        model.sessions[0].emit(
+            "error",
+            TranslationModelError(
+                timestamp=0.0, label=model.label, error=RuntimeError("blip"), recoverable=True
+            ),
+        )
+        await asyncio.sleep(0.05)
+        assert session.started
+        assert closed == []
+    finally:
+        await session.aclose()
+
+
+async def test_starting_twice_is_a_no_op() -> None:
+    model = _FakeTranslationModel()
+    session, *_ = _session(model)
+    await session.start()
+    try:
+        await session.start()
+        assert len(model.sessions) == 1
+    finally:
+        await session.aclose()
