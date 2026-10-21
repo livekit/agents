@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -103,6 +104,46 @@ def _setup_msg(opts: _TTSOptions, model_name: str) -> dict[str, Any]:
     if opts.json_config is not None:
         msg["json_config"] = json.dumps(opts.json_config)
     return msg
+
+
+async def _consume_session(
+    ws: aiohttp.ClientWebSocketResponse, *, on_audio: Callable[[bytes], None]
+) -> None:
+    """Consume one session's frames until its end_of_stream.
+
+    Raises on an error frame, on a transport error and on the socket closing first.
+    """
+    while True:
+        msg = await ws.receive()
+        if msg.type == aiohttp.WSMsgType.ERROR:
+            raise APIConnectionError("Gradium websocket error") from ws.exception()
+        if msg.type in (
+            aiohttp.WSMsgType.CLOSE,
+            aiohttp.WSMsgType.CLOSED,
+            aiohttp.WSMsgType.CLOSING,
+        ):
+            raise _close_error(
+                "Gradium connection closed unexpectedly",
+                code=ws.close_code,
+                body=f"{msg.data=} {msg.extra=}",
+                reason=msg.extra,
+            )
+        if msg.type != aiohttp.WSMsgType.TEXT:
+            continue
+
+        msg_data = json.loads(msg.data)
+        type_ = msg_data.get("type")
+        if type_ == "audio":
+            on_audio(base64.b64decode(msg_data["audio"]))
+        elif type_ == "end_of_stream":
+            return
+        elif type_ == "error":
+            raise _api_error(msg_data)
+        elif type_ in ("text", "ready"):
+            # TODO(laurent): handle text timestamps?
+            pass
+        else:
+            logger.warning(f"unknown message type: {type_}")
 
 
 class TTS(tts.TTS):
@@ -257,39 +298,7 @@ class ChunkedStream(tts.ChunkedStream):
                 flush_msg = {"type": "end_of_stream"}
                 await ws.send_str(json.dumps(flush_msg))
 
-                while True:
-                    msg = await ws.receive()
-                    if msg.type == aiohttp.WSMsgType.ERROR:
-                        raise APIConnectionError("Gradium websocket error") from ws.exception()
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        raise _close_error(
-                            "Gradium connection closed unexpectedly",
-                            code=ws.close_code,
-                            body=f"{msg.data=} {msg.extra=}",
-                            reason=msg.extra,
-                        )
-
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        msg_data = json.loads(msg.data)
-                        type_ = msg_data.get("type")
-                        if type_ == "text":
-                            # TODO(laurent): handle text timestamps?
-                            pass
-                        elif type_ == "ready":
-                            pass
-                        elif type_ == "audio":
-                            audio = base64.b64decode(msg_data["audio"])
-                            output_emitter.push(audio)
-                        elif type_ == "end_of_stream":
-                            break
-                        elif type_ == "error":
-                            raise _api_error(msg_data)
-                        else:
-                            logger.warning(f"unknown message type: {type_}")
+                await _consume_session(ws, on_audio=output_emitter.push)
                 output_emitter.flush()
 
         except asyncio.TimeoutError:
@@ -380,40 +389,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps(flush_msg))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            while True:
-                msg = await ws.receive()
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError("Gradium websocket error") from ws.exception()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    raise _close_error(
-                        "Gradium connection closed unexpectedly",
-                        code=ws.close_code,
-                        body=f"{msg.data=} {msg.extra=}",
-                        reason=msg.extra,
-                    )
-
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    msg_data = json.loads(msg.data)
-                    type_ = msg_data.get("type")
-                    if type_ == "text":
-                        # TODO(laurent): handle text timestamps?
-                        pass
-                    elif type_ == "ready":
-                        pass
-                    elif type_ == "audio":
-                        audio = base64.b64decode(msg_data["audio"])
-                        output_emitter.push(audio)
-                    elif type_ == "end_of_stream":
-                        output_emitter.end_segment()
-                        break
-                    elif type_ == "error":
-                        raise _api_error(msg_data)
-                    else:
-                        logger.warning(f"unknown message type: {type_}")
+            await _consume_session(ws, on_audio=output_emitter.push)
+            output_emitter.end_segment()
 
         async with await self._tts._connect_ws(self._conn_options.timeout) as ws:
             tasks = [
