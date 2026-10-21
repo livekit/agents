@@ -13,7 +13,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError
 from livekit.agents.inference import STT
 from livekit.agents.inference.stt import SpeechStream
 from livekit.agents.stt import RecognizeStream, SpeechEventType
@@ -561,3 +561,37 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     assert exc_info.value.message == "LiveKit Inference STT returned an error"
     assert exc_info.value.body == {"code": error_code}
     assert exc_info.value.retryable is False
+
+
+async def test_half_open_socket_raises_retryable_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    heartbeats: list[float | None] = []
+    ws_connect = aiohttp.ClientSession.ws_connect
+
+    def fast_heartbeat(self: aiohttp.ClientSession, *args: Any, **kwargs: Any) -> Any:
+        heartbeats.append(kwargs.get("heartbeat"))
+        kwargs["heartbeat"] = 0.2
+        return ws_connect(self, *args, **kwargs)
+
+    monkeypatch.setattr(aiohttp.ClientSession, "ws_connect", fast_heartbeat)
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        # accepts the session, then never sends anything or answers a ping
+        ws = web.WebSocketResponse(autoping=False)
+        await ws.prepare(request)
+        async for _ in ws:
+            pass
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session).stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        try:
+            with pytest.raises(APIConnectionError) as exc_info:
+                await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert heartbeats == [30.0]
+    assert exc_info.value.retryable is True
+    assert isinstance(exc_info.value.__cause__, aiohttp.ServerTimeoutError)
