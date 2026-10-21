@@ -39,7 +39,8 @@ from .api import ws_headers
 from .log import logger
 
 SUPPORTED_SAMPLE_RATE = 48000
-DEFAULT_VOICE_ID = "4SZHfMpw-p46Ywgs"
+# Catalog voice "Everly" (en-us), used when neither `voice` nor `voice_id` is given.
+DEFAULT_VOICE_ID = "vjFyp2BcCyTlUmYb"
 
 
 @dataclass
