@@ -214,7 +214,9 @@ async def _drain_stream(tts, conn_options: APIConnectOptions) -> float:
 
 
 async def test_synthesize_emits_audio_and_sends_eos():
-    tts, _, ws = _make_tts([READY, AUDIO, AUDIO, EOS])
+    from livekit.plugins.gradium.tts import WS_HEARTBEAT_S
+
+    tts, session, ws = _make_tts([READY, AUDIO, AUDIO, EOS])
 
     duration = 0.0
     async for ev in tts.synthesize("hello world", conn_options=CONN_OPTS):
@@ -224,6 +226,8 @@ async def test_synthesize_emits_audio_and_sends_eos():
 
     assert [m["type"] for m in ws.sent] == ["setup", "text", "end_of_stream"]
     assert ws.sent[1]["text"] == "hello world"
+    # pings are how a dead socket is noticed while the server is silent waiting for text
+    assert session.connects[0][1]["heartbeat"] == WS_HEARTBEAT_S
 
 
 async def test_synthesize_raises_on_error_frame():
@@ -396,11 +400,30 @@ async def test_error_frame_without_fields_is_still_an_error():
 
 
 @pytest.mark.parametrize("drain", [_drain, _drain_stream])
-async def test_receive_timeout_raises_api_timeout(drain):
-    tts, _, _ = _make_tts([READY, "timeout"])
+async def test_waiting_for_ready_times_out(drain):
+    """The server never answers the setup: fail after conn_options.timeout."""
+    tts, _, _ = _make_tts([])
 
     with pytest.raises(APITimeoutError):
-        await drain(tts, CONN_OPTS)
+        await drain(tts, APIConnectOptions(max_retry=0, timeout=0.2))
+
+
+@pytest.mark.parametrize("drain", [_drain, _drain_stream])
+async def test_no_timeout_after_ready(drain):
+    """Once the session is ready, silence is the server waiting for text, not a fault."""
+    tts, _, ws = _make_tts([READY])
+
+    async def late_audio() -> None:
+        await asyncio.sleep(0.5)  # longer than the timeout below
+        client_req_id = ws.sent[0]["client_req_id"]
+        ws.queue({**AUDIO, "client_req_id": client_req_id}, {**EOS, "client_req_id": client_req_id})
+
+    late = asyncio.create_task(late_audio())
+    try:
+        duration = await drain(tts, APIConnectOptions(max_retry=0, timeout=0.2))
+    finally:
+        await late
+    assert 0.5 <= duration <= 0.6
 
 
 @pytest.mark.parametrize("drain", [_drain, _drain_stream])
