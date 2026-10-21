@@ -2078,8 +2078,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._opts.user_away_timeout is None:
             return
 
-        if _RunningTasks.get(self):
-            # a tool in flight will speak when it lands; the window restarts then (#6883)
+        if any(not task.awaiting_agent_task for task in _RunningTasks.get(self, {}).values()):
+            # a tool in flight will speak when it lands; the window restarts then (#6883).
+            # A tool awaiting an AgentTask doesn't count: the task is waiting on the user (#8018)
             return
 
         if (room_io := self._room_io) and (

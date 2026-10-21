@@ -977,12 +977,25 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         # imported at call time: agent_activity imports Agent at module scope, so the reverse can't
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+        from .tool_executor import _RunningTasks
 
         speech_handle = _SpeechHandleContextVar.get(None)
         old_activity = _AgentActivityContextVar.get()
         old_agent = old_activity.agent
         session = old_activity.session
         self._old_agent = old_agent
+
+        # the tool awaiting this task, if any: while the task runs, it is the task that waits
+        # on the user, so the tool stops holding the user-away timer off (#8018)
+        awaiting_tool = (
+            _RunningTasks.get(session, {}).get(task_info.function_call.call_id)
+            if task_info.function_call
+            else None
+        )
+
+        def _set_awaiting(value: bool) -> None:
+            if awaiting_tool is not None:
+                awaiting_tool.awaiting_agent_task = value
 
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():
@@ -1028,6 +1041,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
             pending_on_enter_task: asyncio.Task[None] | None = None
             try:
+                _set_awaiting(True)
+
                 # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
                 # AgentTasks that require user input, but session.run() can't return until
                 # all watched handles complete — creating a circular wait.
@@ -1071,6 +1086,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                         run_state._mark_done_if_needed(None)
             # asyncio.CancelledError derives from BaseException, not Exception
             except BaseException:
+                _set_awaiting(False)
                 self.__inactive_ev.set()
                 raise
 
@@ -1078,6 +1094,11 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 return await asyncio.shield(self.__fut)
 
             finally:
+                if awaiting_tool is not None:
+                    # the tool is back at work, and holds the window off until it lands
+                    awaiting_tool.awaiting_agent_task = False
+                    session._cancel_user_away_timer()
+
                 # run_state could have changed after self.__fut
                 run_state = session._global_run_state
 

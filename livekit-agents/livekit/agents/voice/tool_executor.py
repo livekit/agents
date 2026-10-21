@@ -248,6 +248,8 @@ class _RunningTask:
     executor: _ToolExecutor
     allow_cancellation: bool
     duplicate_key: tuple[str, str | None] | None  # None when the tool is on_duplicate="allow"
+    # set while the tool awaits an AgentTask, which talks to the user in its place (#8018)
+    awaiting_agent_task: bool = False
 
 
 @dataclass
