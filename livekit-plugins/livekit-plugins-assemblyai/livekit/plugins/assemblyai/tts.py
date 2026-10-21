@@ -88,7 +88,7 @@ _CANCEL_FRAME = json.dumps({"type": "Cancel"})
 class _TTSOptions:
     # None leaves the choice to the server: the default voice of the language
     voice: str | None
-    # a custom voice, sent instead of `voice`
+    # a catalog voice (library or custom), sent instead of `voice`
     voice_id: str | None
     language: str | None
     model: str
@@ -123,10 +123,10 @@ class TTS(tts.TTS):
             voice: A voice name, see https://www.assemblyai.com/docs/tts/voices.
                 Defaults to the model's default voice. The language is set separately,
                 with ``language``.
-            voice_id: A custom (cloned) voice, instead of ``voice``: the ``id`` the Voices
-                API returned when it was created, or the account's slug for it. The voice
-                must be paired with the session's model, and it belongs to the data zone
-                whose host created it, so set ``base_url`` to that host.
+            voice_id: A catalog voice, instead of ``voice``: a voice library voice by its
+                slug (``"aai-linda-3"``), or a custom (cloned) voice by its ``id`` or the
+                account's slug for it. The voice must be paired with ``model``; a custom
+                voice can only be used on a host in the data zone that created it.
             language: The language to synthesize, as a code (``"es"``, ``"es-MX"``) or an
                 English name (``"spanish"``). Defaults to English; with ``voice_id``, to
                 the language of the voice's reference clip.
@@ -216,7 +216,7 @@ class TTS(tts.TTS):
 
     @property
     def voice_id(self) -> str | None:
-        """The custom voice, when one is used instead of ``voice``."""
+        """The catalog voice, when one is used instead of ``voice``."""
         return self._opts.voice_id
 
     @property
@@ -240,7 +240,7 @@ class TTS(tts.TTS):
 
         Args:
             voice: A voice name, replacing a ``voice_id``; None for the default voice.
-            voice_id: A custom voice, replacing ``voice``; None to stop using it.
+            voice_id: A catalog voice, replacing ``voice``; None to stop using it.
             language: A language code or English name, or None for the server's default.
             model: A model name or alias.
         """

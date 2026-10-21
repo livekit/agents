@@ -50,7 +50,8 @@ interrupts. Useful options:
 - `voice` and `language` (a code such as `"es"`): set independently, since every voice speaks
   every language. See the [voices](https://www.assemblyai.com/docs/tts/voices).
 - `model`: defaults to `assemblyai-tts-1`.
-- `voice_id`: a custom (cloned) voice, instead of `voice`.
+- `voice_id`: a voice from the voice library by its slug (e.g. `"aai-linda-3"`) or a custom
+  (cloned) voice by its id, instead of `voice`.
 - `base_url`: the US data zone by default; `wss://tts.eu.assemblyai.com` keeps data in the EU.
 - `word_timestamps`: per-word timings (default `True`). With
   `AgentSession(use_tts_aligned_transcript=True)`, LiveKit uses them to sync the transcript and to
