@@ -266,44 +266,44 @@ ATTR_ERROR_TYPE = _semconv.ERROR_TYPE
 class GenAIOperationName:
     """Well-known ``gen_ai.operation.name`` values."""
 
-    CHAT = _semconv.GEN_AI_OPERATION_NAME_CHAT
-    GENERATE_CONTENT = _semconv.GEN_AI_OPERATION_NAME_GENERATE_CONTENT
-    TEXT_COMPLETION = _semconv.GEN_AI_OPERATION_NAME_TEXT_COMPLETION
-    EMBEDDINGS = _semconv.GEN_AI_OPERATION_NAME_EMBEDDINGS
-    RETRIEVAL = _semconv.GEN_AI_OPERATION_NAME_RETRIEVAL
-    FETCH_RESPONSE = _semconv.GEN_AI_OPERATION_NAME_FETCH_RESPONSE
-    CREATE_AGENT = _semconv.GEN_AI_OPERATION_NAME_CREATE_AGENT
-    INVOKE_AGENT = _semconv.GEN_AI_OPERATION_NAME_INVOKE_AGENT
-    EXECUTE_TOOL = _semconv.GEN_AI_OPERATION_NAME_EXECUTE_TOOL
-    INVOKE_WORKFLOW = _semconv.GEN_AI_OPERATION_NAME_INVOKE_WORKFLOW
-    PLAN = _semconv.GEN_AI_OPERATION_NAME_PLAN
-    SEARCH_MEMORY = _semconv.GEN_AI_OPERATION_NAME_SEARCH_MEMORY
-    CREATE_MEMORY = _semconv.GEN_AI_OPERATION_NAME_CREATE_MEMORY
-    UPDATE_MEMORY = _semconv.GEN_AI_OPERATION_NAME_UPDATE_MEMORY
-    UPSERT_MEMORY = _semconv.GEN_AI_OPERATION_NAME_UPSERT_MEMORY
-    DELETE_MEMORY = _semconv.GEN_AI_OPERATION_NAME_DELETE_MEMORY
-    CREATE_MEMORY_STORE = _semconv.GEN_AI_OPERATION_NAME_CREATE_MEMORY_STORE
-    DELETE_MEMORY_STORE = _semconv.GEN_AI_OPERATION_NAME_DELETE_MEMORY_STORE
+    CHAT = _semconv.GenAiOperationName.CHAT
+    GENERATE_CONTENT = _semconv.GenAiOperationName.GENERATE_CONTENT
+    TEXT_COMPLETION = _semconv.GenAiOperationName.TEXT_COMPLETION
+    EMBEDDINGS = _semconv.GenAiOperationName.EMBEDDINGS
+    RETRIEVAL = _semconv.GenAiOperationName.RETRIEVAL
+    FETCH_RESPONSE = _semconv.GenAiOperationName.FETCH_RESPONSE
+    CREATE_AGENT = _semconv.GenAiOperationName.CREATE_AGENT
+    INVOKE_AGENT = _semconv.GenAiOperationName.INVOKE_AGENT
+    EXECUTE_TOOL = _semconv.GenAiOperationName.EXECUTE_TOOL
+    INVOKE_WORKFLOW = _semconv.GenAiOperationName.INVOKE_WORKFLOW
+    PLAN = _semconv.GenAiOperationName.PLAN
+    SEARCH_MEMORY = _semconv.GenAiOperationName.SEARCH_MEMORY
+    CREATE_MEMORY = _semconv.GenAiOperationName.CREATE_MEMORY
+    UPDATE_MEMORY = _semconv.GenAiOperationName.UPDATE_MEMORY
+    UPSERT_MEMORY = _semconv.GenAiOperationName.UPSERT_MEMORY
+    DELETE_MEMORY = _semconv.GenAiOperationName.DELETE_MEMORY
+    CREATE_MEMORY_STORE = _semconv.GenAiOperationName.CREATE_MEMORY_STORE
+    DELETE_MEMORY_STORE = _semconv.GenAiOperationName.DELETE_MEMORY_STORE
 
 
 class GenAIOutputType:
     """Well-known ``gen_ai.output.type`` values."""
 
-    TEXT = _semconv.GEN_AI_OUTPUT_TYPE_TEXT
-    JSON = _semconv.GEN_AI_OUTPUT_TYPE_JSON
-    IMAGE = _semconv.GEN_AI_OUTPUT_TYPE_IMAGE
-    SPEECH = _semconv.GEN_AI_OUTPUT_TYPE_SPEECH
+    TEXT = _semconv.GenAiOutputType.TEXT
+    JSON = _semconv.GenAiOutputType.JSON
+    IMAGE = _semconv.GenAiOutputType.IMAGE
+    SPEECH = _semconv.GenAiOutputType.SPEECH
 
 
 class GenAIFinishReason:
     """Well-known ``gen_ai.response.finish_reasons`` values."""
 
-    STOP = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_STOP
-    LENGTH = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_LENGTH
-    CONTENT_FILTER = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_CONTENT_FILTER
-    TOOL_CALL = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_TOOL_CALL
-    COMPACTION = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_COMPACTION
-    ERROR = _semconv.GEN_AI_RESPONSE_FINISH_REASONS_ERROR
+    STOP = _semconv.GenAiResponseFinishReasons.STOP
+    LENGTH = _semconv.GenAiResponseFinishReasons.LENGTH
+    CONTENT_FILTER = _semconv.GenAiResponseFinishReasons.CONTENT_FILTER
+    TOOL_CALL = _semconv.GenAiResponseFinishReasons.TOOL_CALL
+    COMPACTION = _semconv.GenAiResponseFinishReasons.COMPACTION
+    ERROR = _semconv.GenAiResponseFinishReasons.ERROR
 
 
 GEN_AI_PROVIDER_NAMES: frozenset[str] = frozenset(
@@ -322,7 +322,7 @@ GEN_AI_PROVIDER_NAMES: frozenset[str] = frozenset(
         "x_ai",
         "deepseek",
         "groq",
-        _semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI,
+        _semconv.GenAiProviderName.MISTRAL_AI,
         "moonshot_ai",
     }
 )
@@ -343,7 +343,7 @@ _PROVIDER_BY_HOST: dict[str, str] = {
     "api.cohere.com": "cohere",
     "api.deepseek.com": "deepseek",
     "api.groq.com": "groq",
-    "api.mistral.ai": _semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI,
+    "api.mistral.ai": _semconv.GenAiProviderName.MISTRAL_AI,
     "api.moonshot.ai": "moonshot_ai",
     "api.moonshot.cn": "moonshot_ai",
     "api.openai.com": "openai",
@@ -374,8 +374,8 @@ _PROVIDER_BY_NAME: dict[str, str] = {
     "googlegenai": "gcp.gen_ai",
     "groq": "groq",
     "ibmwatsonxai": "ibm.watsonx.ai",
-    "mistral": _semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI,
-    "mistralai": _semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI,
+    "mistral": _semconv.GenAiProviderName.MISTRAL_AI,
+    "mistralai": _semconv.GenAiProviderName.MISTRAL_AI,
     "moonshot": "moonshot_ai",
     "moonshotai": "moonshot_ai",
     "openai": "openai",
@@ -597,9 +597,9 @@ CHECKPOINT_USER_STATE_CHANGED = _semconv.CHECKPOINT_USER_STATE_CHANGED
 CHECKPOINT_WS_OPEN = _semconv.CHECKPOINT_WS_OPEN
 
 # `lk.eou.outcome` values.
-EOU_OUTCOME_COMMITTED = _semconv.LK_EOU_OUTCOME_COMMITTED
-EOU_OUTCOME_DROPPED = _semconv.LK_EOU_OUTCOME_DROPPED
-EOU_OUTCOME_USER_RESUMED = _semconv.LK_EOU_OUTCOME_USER_RESUMED
+EOU_OUTCOME_COMMITTED = _semconv.LkEouOutcome.COMMITTED
+EOU_OUTCOME_DROPPED = _semconv.LkEouOutcome.DROPPED
+EOU_OUTCOME_USER_RESUMED = _semconv.LkEouOutcome.USER_RESUMED
 
 # PII keys the log records carry (`extra={...}`).
 ATTR_INTERIM_TRANSCRIPT = _semconv.LK_PII_INTERIM_TRANSCRIPT

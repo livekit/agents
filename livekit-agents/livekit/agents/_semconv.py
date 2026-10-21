@@ -120,39 +120,57 @@ LK_DEPLOYMENT_ID = "lk.deployment_id"
 
 #: Whether the app is in front of the user.
 LK_DEVICE_APP_STATE = "lk.device.app_state"
-#: In front of the user.
-LK_DEVICE_APP_STATE_FOREGROUND = "foreground"
-#: In the background.
-LK_DEVICE_APP_STATE_BACKGROUND = "background"
+
+
+class LkDeviceAppState:
+    """Values of LK_DEVICE_APP_STATE."""
+
+    #: In front of the user.
+    FOREGROUND = "foreground"
+    #: In the background.
+    BACKGROUND = "background"
+
 
 #: Phase of an audio session interruption.
 LK_DEVICE_AUDIO_INTERRUPTION = "lk.device.audio.interruption"
-#: Interruption began (another app or a call took the audio session).
-LK_DEVICE_AUDIO_INTERRUPTION_BEGAN = "began"
-#: Interruption ended.
-LK_DEVICE_AUDIO_INTERRUPTION_ENDED = "ended"
+
+
+class LkDeviceAudioInterruption:
+    """Values of LK_DEVICE_AUDIO_INTERRUPTION."""
+
+    #: Interruption began (another app or a call took the audio session).
+    BEGAN = "began"
+    #: Interruption ended.
+    ENDED = "ended"
+
 
 #: The active outputs, comma-separated.
 LK_DEVICE_AUDIO_ROUTE_OUTPUTS = "lk.device.audio_route.outputs"
 
 #: Why the audio route changed.
 LK_DEVICE_AUDIO_ROUTE_REASON = "lk.device.audio_route.reason"
-#: A new output became available.
-LK_DEVICE_AUDIO_ROUTE_REASON_NEW_DEVICE = "new_device"
-#: The previous output went away.
-LK_DEVICE_AUDIO_ROUTE_REASON_OLD_DEVICE_UNAVAILABLE = "old_device_unavailable"
-#: The audio session category changed.
-LK_DEVICE_AUDIO_ROUTE_REASON_CATEGORY_CHANGE = "category_change"
-#: The route was overridden.
-LK_DEVICE_AUDIO_ROUTE_REASON_OVERRIDE = "override"
-#: The device woke from sleep.
-LK_DEVICE_AUDIO_ROUTE_REASON_WAKE_FROM_SLEEP = "wake_from_sleep"
-#: No route fits the category.
-LK_DEVICE_AUDIO_ROUTE_REASON_NO_SUITABLE_ROUTE = "no_suitable_route"
-#: The route's configuration changed.
-LK_DEVICE_AUDIO_ROUTE_REASON_ROUTE_CONFIGURATION_CHANGE = "route_configuration_change"
-#: The platform gave no reason.
-LK_DEVICE_AUDIO_ROUTE_REASON_UNKNOWN = "unknown"
+
+
+class LkDeviceAudioRouteReason:
+    """Values of LK_DEVICE_AUDIO_ROUTE_REASON."""
+
+    #: A new output became available.
+    NEW_DEVICE = "new_device"
+    #: The previous output went away.
+    OLD_DEVICE_UNAVAILABLE = "old_device_unavailable"
+    #: The audio session category changed.
+    CATEGORY_CHANGE = "category_change"
+    #: The route was overridden.
+    OVERRIDE = "override"
+    #: The device woke from sleep.
+    WAKE_FROM_SLEEP = "wake_from_sleep"
+    #: No route fits the category.
+    NO_SUITABLE_ROUTE = "no_suitable_route"
+    #: The route's configuration changed.
+    ROUTE_CONFIGURATION_CHANGE = "route_configuration_change"
+    #: The platform gave no reason.
+    UNKNOWN = "unknown"
+
 
 #: The device is charging.
 LK_DEVICE_BATTERY_CHARGING = "lk.device.battery.charging"
@@ -162,37 +180,55 @@ LK_DEVICE_BATTERY_LEVEL = "lk.device.battery.level"
 
 #: Capture device that failed.
 LK_DEVICE_CAPTURE_DEVICE = "lk.device.capture.device"
-#: Camera.
-LK_DEVICE_CAPTURE_DEVICE_CAMERA = "camera"
-#: Microphone.
-LK_DEVICE_CAPTURE_DEVICE_MICROPHONE = "microphone"
-#: Screen capture.
-LK_DEVICE_CAPTURE_DEVICE_SCREEN_SHARE = "screen_share"
+
+
+class LkDeviceCaptureDevice:
+    """Values of LK_DEVICE_CAPTURE_DEVICE."""
+
+    #: Camera.
+    CAMERA = "camera"
+    #: Microphone.
+    MICROPHONE = "microphone"
+    #: Screen capture.
+    SCREEN_SHARE = "screen_share"
+
 
 #: Why capture failed, in the getUserMedia failure taxonomy.
 LK_DEVICE_CAPTURE_REASON = "lk.device.capture.reason"
-#: The user or OS denied access.
-LK_DEVICE_CAPTURE_REASON_PERMISSION_DENIED = "permission_denied"
-#: No such device.
-LK_DEVICE_CAPTURE_REASON_NOT_FOUND = "not_found"
-#: Another app holds the device.
-LK_DEVICE_CAPTURE_REASON_IN_USE = "in_use"
-#: The device went away.
-LK_DEVICE_CAPTURE_REASON_DISCONNECTED = "disconnected"
-#: Anything else.
-LK_DEVICE_CAPTURE_REASON_OTHER = "other"
+
+
+class LkDeviceCaptureReason:
+    """Values of LK_DEVICE_CAPTURE_REASON."""
+
+    #: The user or OS denied access.
+    PERMISSION_DENIED = "permission_denied"
+    #: No such device.
+    NOT_FOUND = "not_found"
+    #: Another app holds the device.
+    IN_USE = "in_use"
+    #: The device went away.
+    DISCONNECTED = "disconnected"
+    #: Anything else.
+    OTHER = "other"
+
 
 #: Low Power Mode / Battery Saver is on.
 LK_DEVICE_LOW_POWER_ENABLED = "lk.device.low_power.enabled"
 
 #: Memory pressure as the OS reports it.
 LK_DEVICE_MEMORY_PRESSURE = "lk.device.memory.pressure"
-#: No pressure.
-LK_DEVICE_MEMORY_PRESSURE_NORMAL = "normal"
-#: Low memory.
-LK_DEVICE_MEMORY_PRESSURE_WARNING = "warning"
-#: Critically low memory.
-LK_DEVICE_MEMORY_PRESSURE_CRITICAL = "critical"
+
+
+class LkDeviceMemoryPressure:
+    """Values of LK_DEVICE_MEMORY_PRESSURE."""
+
+    #: No pressure.
+    NORMAL = "normal"
+    #: Low memory.
+    WARNING = "warning"
+    #: Critically low memory.
+    CRITICAL = "critical"
+
 
 #: The user asked for less traffic (Low Data Mode, Data Saver).
 LK_DEVICE_NETWORK_CONSTRAINED = "lk.device.network.constrained"
@@ -202,53 +238,65 @@ LK_DEVICE_NETWORK_EXPENSIVE = "lk.device.network.expensive"
 
 #: Thermal pressure as the OS reports it.
 LK_DEVICE_THERMAL_STATE = "lk.device.thermal.state"
-#: Within normal limits.
-LK_DEVICE_THERMAL_STATE_NOMINAL = "nominal"
-#: Slightly elevated.
-LK_DEVICE_THERMAL_STATE_FAIR = "fair"
-#: High; the system reduces performance.
-LK_DEVICE_THERMAL_STATE_SERIOUS = "serious"
-#: Critical; the device needs to cool down.
-LK_DEVICE_THERMAL_STATE_CRITICAL = "critical"
+
+
+class LkDeviceThermalState:
+    """Values of LK_DEVICE_THERMAL_STATE."""
+
+    #: Within normal limits.
+    NOMINAL = "nominal"
+    #: Slightly elevated.
+    FAIR = "fair"
+    #: High; the system reduces performance.
+    SERIOUS = "serious"
+    #: Critical; the device needs to cool down.
+    CRITICAL = "critical"
+
 
 #: Why a participant left the room, as the protobuf `DisconnectReason` enum name.
 LK_DISCONNECT_REASON = "lk.disconnect_reason"
-#: No reason given, or a number the producer does not know.
-LK_DISCONNECT_REASON_UNKNOWN_REASON = "UNKNOWN_REASON"
-#: The participant hung up.
-LK_DISCONNECT_REASON_CLIENT_INITIATED = "CLIENT_INITIATED"
-#: Another participant joined with the same identity.
-LK_DISCONNECT_REASON_DUPLICATE_IDENTITY = "DUPLICATE_IDENTITY"
-#: The server instance shut down.
-LK_DISCONNECT_REASON_SERVER_SHUTDOWN = "SERVER_SHUTDOWN"
-#: RoomService.RemoveParticipant was called.
-LK_DISCONNECT_REASON_PARTICIPANT_REMOVED = "PARTICIPANT_REMOVED"
-#: RoomService.DeleteRoom was called.
-LK_DISCONNECT_REASON_ROOM_DELETED = "ROOM_DELETED"
-#: The server did not know the session the client tried to resume.
-LK_DISCONNECT_REASON_STATE_MISMATCH = "STATE_MISMATCH"
-#: The client could not connect fully.
-LK_DISCONNECT_REASON_JOIN_FAILURE = "JOIN_FAILURE"
-#: The server asked the participant to migrate (Cloud only).
-LK_DISCONNECT_REASON_MIGRATION = "MIGRATION"
-#: The signal WebSocket closed unexpectedly.
-LK_DISCONNECT_REASON_SIGNAL_CLOSE = "SIGNAL_CLOSE"
-#: The room closed after its participants left.
-LK_DISCONNECT_REASON_ROOM_CLOSED = "ROOM_CLOSED"
-#: The SIP callee did not answer in time.
-LK_DISCONNECT_REASON_USER_UNAVAILABLE = "USER_UNAVAILABLE"
-#: The SIP callee rejected the call.
-LK_DISCONNECT_REASON_USER_REJECTED = "USER_REJECTED"
-#: SIP protocol failure.
-LK_DISCONNECT_REASON_SIP_TRUNK_FAILURE = "SIP_TRUNK_FAILURE"
-#: The server timed out the session.
-LK_DISCONNECT_REASON_CONNECTION_TIMEOUT = "CONNECTION_TIMEOUT"
-#: Media failed or timed out.
-LK_DISCONNECT_REASON_MEDIA_FAILURE = "MEDIA_FAILURE"
-#: The agent failed.
-LK_DISCONNECT_REASON_AGENT_ERROR = "AGENT_ERROR"
-#: The client ran out of reconnect attempts (client only, not a protobuf value).
-LK_DISCONNECT_REASON_RECONNECT_FAILED = "RECONNECT_FAILED"
+
+
+class LkDisconnectReason:
+    """Values of LK_DISCONNECT_REASON."""
+
+    #: No reason given, or a number the producer does not know.
+    UNKNOWN_REASON = "UNKNOWN_REASON"
+    #: The participant hung up.
+    CLIENT_INITIATED = "CLIENT_INITIATED"
+    #: Another participant joined with the same identity.
+    DUPLICATE_IDENTITY = "DUPLICATE_IDENTITY"
+    #: The server instance shut down.
+    SERVER_SHUTDOWN = "SERVER_SHUTDOWN"
+    #: RoomService.RemoveParticipant was called.
+    PARTICIPANT_REMOVED = "PARTICIPANT_REMOVED"
+    #: RoomService.DeleteRoom was called.
+    ROOM_DELETED = "ROOM_DELETED"
+    #: The server did not know the session the client tried to resume.
+    STATE_MISMATCH = "STATE_MISMATCH"
+    #: The client could not connect fully.
+    JOIN_FAILURE = "JOIN_FAILURE"
+    #: The server asked the participant to migrate (Cloud only).
+    MIGRATION = "MIGRATION"
+    #: The signal WebSocket closed unexpectedly.
+    SIGNAL_CLOSE = "SIGNAL_CLOSE"
+    #: The room closed after its participants left.
+    ROOM_CLOSED = "ROOM_CLOSED"
+    #: The SIP callee did not answer in time.
+    USER_UNAVAILABLE = "USER_UNAVAILABLE"
+    #: The SIP callee rejected the call.
+    USER_REJECTED = "USER_REJECTED"
+    #: SIP protocol failure.
+    SIP_TRUNK_FAILURE = "SIP_TRUNK_FAILURE"
+    #: The server timed out the session.
+    CONNECTION_TIMEOUT = "CONNECTION_TIMEOUT"
+    #: Media failed or timed out.
+    MEDIA_FAILURE = "MEDIA_FAILURE"
+    #: The agent failed.
+    AGENT_ERROR = "AGENT_ERROR"
+    #: The client ran out of reconnect attempts (client only, not a protobuf value).
+    RECONNECT_FAILED = "RECONNECT_FAILED"
+
 
 #: Agent dispatch id.
 LK_DISPATCH_ID = "lk.dispatch_id"
@@ -276,12 +324,18 @@ LK_EOU_NOT_COMMITTED_COUNT = "lk.eou.not_committed_count"
 
 #: How the endpointing wait ended.
 LK_EOU_OUTCOME = "lk.eou.outcome"
-#: The turn was committed.
-LK_EOU_OUTCOME_COMMITTED = "committed"
-#: The user spoke again.
-LK_EOU_OUTCOME_USER_RESUMED = "user_resumed"
-#: The turn was dropped.
-LK_EOU_OUTCOME_DROPPED = "dropped"
+
+
+class LkEouOutcome:
+    """Values of LK_EOU_OUTCOME."""
+
+    #: The turn was committed.
+    COMMITTED = "committed"
+    #: The user spoke again.
+    USER_RESUMED = "user_resumed"
+    #: The turn was dropped.
+    DROPPED = "dropped"
+
 
 #: End-of-utterance probability.
 LK_EOU_PROBABILITY = "lk.eou.probability"
@@ -321,14 +375,20 @@ LK_FIRST_FRAME_DELAY = "lk.first_frame_delay"
 
 #: How the inbound frame of a plugin-task metric was resolved (Node binding).
 LK_FRAME_RESOLUTION = "lk.frame.resolution"
-#: The root frame.
-LK_FRAME_RESOLUTION_ROOT = "root"
-#: A live speech frame.
-LK_FRAME_RESOLUTION_LIVE = "live"
-#: A frame whose speech already ended.
-LK_FRAME_RESOLUTION_STALE = "stale"
-#: Not a frame the slab knows.
-LK_FRAME_RESOLUTION_UNKNOWN = "unknown"
+
+
+class LkFrameResolution:
+    """Values of LK_FRAME_RESOLUTION."""
+
+    #: The root frame.
+    ROOT = "root"
+    #: A live speech frame.
+    LIVE = "live"
+    #: A frame whose speech already ended.
+    STALE = "stale"
+    #: Not a frame the slab knows.
+    UNKNOWN = "unknown"
+
 
 #: Tool call id.
 LK_FUNCTION_TOOL_ID = "lk.function_tool.id"
@@ -419,12 +479,18 @@ LK_LOG_LOGGER = "lk.log.logger"
 
 #: Which layer wrote the log line.
 LK_LOG_SOURCE = "lk.log.source"
-#: The platform SDK.
-LK_LOG_SOURCE_SDK = "sdk"
-#: The Rust core, copied by the log forwarder with JWT-shaped substrings masked as `<jwt>`.
-LK_LOG_SOURCE_FFI = "ffi"
-#: WebRTC.
-LK_LOG_SOURCE_WEBRTC = "webrtc"
+
+
+class LkLogSource:
+    """Values of LK_LOG_SOURCE."""
+
+    #: The platform SDK.
+    SDK = "sdk"
+    #: The Rust core, copied by the log forwarder with JWT-shaped substrings masked as `<jwt>`.
+    FFI = "ffi"
+    #: WebRTC.
+    WEBRTC = "webrtc"
+
 
 #: Metric type noted from a plugin task (Node binding `metrics` span).
 LK_METRIC = "lk.metric"
@@ -440,12 +506,18 @@ LK_ON_USER_TURN_COMPLETED_DELAY = "lk.on_user_turn_completed_delay"
 
 #: How the attempt ended. Rollups read this, never the span status.
 LK_OUTCOME = "lk.outcome"
-#: Succeeded; span status Unset.
-LK_OUTCOME_OK = "ok"
-#: Failed; span status Error, with `error.type` when the failure has a type.
-LK_OUTCOME_ERROR = "error"
-#: Cancelled by the caller or superseded; span status Unset.
-LK_OUTCOME_CANCELLED = "cancelled"
+
+
+class LkOutcome:
+    """Values of LK_OUTCOME."""
+
+    #: Succeeded; span status Unset.
+    OK = "ok"
+    #: Failed; span status Error, with `error.type` when the failure has a type.
+    ERROR = "error"
+    #: Cancelled by the caller or superseded; span status Unset.
+    CANCELLED = "cancelled"
+
 
 #: Generation this one continues (a tool-call follow-up).
 LK_PARENT_GENERATION_ID = "lk.parent_generation_id"
@@ -566,29 +638,41 @@ LK_RECONNECT_ATTEMPTS = "lk.reconnect.attempts"
 
 #: Mode of the last reconnect attempt.
 LK_RECONNECT_MODE = "lk.reconnect.mode"
-#: Resume the session (ICE restart).
-LK_RECONNECT_MODE_QUICK = "quick"
-#: Reconnect from scratch.
-LK_RECONNECT_MODE_FULL = "full"
+
+
+class LkReconnectMode:
+    """Values of LK_RECONNECT_MODE."""
+
+    #: Resume the session (ICE restart).
+    QUICK = "quick"
+    #: Reconnect from scratch.
+    FULL = "full"
+
 
 #: What triggered the reconnect cycle.
 LK_RECONNECT_REASON = "lk.reconnect.reason"
-#: The signaling socket closed (RR_SIGNAL_DISCONNECTED).
-LK_RECONNECT_REASON_SIGNAL_DISCONNECTED = "signal_disconnected"
-#: The publisher peer connection failed (RR_PUBLISHER_FAILED).
-LK_RECONNECT_REASON_PUBLISHER_FAILED = "publisher_failed"
-#: The subscriber peer connection failed (RR_SUBSCRIBER_FAILED).
-LK_RECONNECT_REASON_SUBSCRIBER_FAILED = "subscriber_failed"
-#: A peer connection failed and the platform did not say which (client only).
-LK_RECONNECT_REASON_TRANSPORT_FAILED = "transport_failed"
-#: The server asked for a candidate switch (RR_SWITCH_CANDIDATE).
-LK_RECONNECT_REASON_SWITCH_CANDIDATE = "switch_candidate"
-#: The device moved to another network (client only).
-LK_RECONNECT_REASON_NETWORK_CHANGED = "network_changed"
-#: A test or a debug menu asked for it (client only).
-LK_RECONNECT_REASON_DEBUG = "debug"
-#: RR_UNKNOWN or a number the client does not know.
-LK_RECONNECT_REASON_UNKNOWN = "unknown"
+
+
+class LkReconnectReason:
+    """Values of LK_RECONNECT_REASON."""
+
+    #: The signaling socket closed (RR_SIGNAL_DISCONNECTED).
+    SIGNAL_DISCONNECTED = "signal_disconnected"
+    #: The publisher peer connection failed (RR_PUBLISHER_FAILED).
+    PUBLISHER_FAILED = "publisher_failed"
+    #: The subscriber peer connection failed (RR_SUBSCRIBER_FAILED).
+    SUBSCRIBER_FAILED = "subscriber_failed"
+    #: A peer connection failed and the platform did not say which (client only).
+    TRANSPORT_FAILED = "transport_failed"
+    #: The server asked for a candidate switch (RR_SWITCH_CANDIDATE).
+    SWITCH_CANDIDATE = "switch_candidate"
+    #: The device moved to another network (client only).
+    NETWORK_CHANGED = "network_changed"
+    #: A test or a debug menu asked for it (client only).
+    DEBUG = "debug"
+    #: RR_UNKNOWN or a number the client does not know.
+    UNKNOWN = "unknown"
+
 
 #: PII redaction was requested for the session.
 LK_REDACTION_ENABLED = "lk.redaction.enabled"
@@ -841,33 +925,51 @@ LK_TOOL_SETS = "lk.tool_sets"
 
 #: Whether the stats describe sent or received media.
 LK_TRACK_DIRECTION = "lk.track.direction"
-#: Received media (inbound-rtp).
-LK_TRACK_DIRECTION_INBOUND = "inbound"
-#: Sent media (outbound-rtp).
-LK_TRACK_DIRECTION_OUTBOUND = "outbound"
+
+
+class LkTrackDirection:
+    """Values of LK_TRACK_DIRECTION."""
+
+    #: Received media (inbound-rtp).
+    INBOUND = "inbound"
+    #: Sent media (outbound-rtp).
+    OUTBOUND = "outbound"
+
 
 #: Media kind of the track.
 LK_TRACK_KIND = "lk.track.kind"
-#: Audio.
-LK_TRACK_KIND_AUDIO = "audio"
-#: Video.
-LK_TRACK_KIND_VIDEO = "video"
+
+
+class LkTrackKind:
+    """Values of LK_TRACK_KIND."""
+
+    #: Audio.
+    AUDIO = "audio"
+    #: Video.
+    VIDEO = "video"
+
 
 #: Server-assigned track SID (`TR_...`).
 LK_TRACK_SID = "lk.track_sid"
 
 #: Source of the track, as the Agents RTC FFI `TrackSource` enum name.
 LK_TRACK_SOURCE = "lk.track_source"
-#: Unknown source.
-LK_TRACK_SOURCE_SOURCE_UNKNOWN = "SOURCE_UNKNOWN"
-#: Camera.
-LK_TRACK_SOURCE_SOURCE_CAMERA = "SOURCE_CAMERA"
-#: Microphone.
-LK_TRACK_SOURCE_SOURCE_MICROPHONE = "SOURCE_MICROPHONE"
-#: Screen share video.
-LK_TRACK_SOURCE_SOURCE_SCREENSHARE = "SOURCE_SCREENSHARE"
-#: Screen share audio.
-LK_TRACK_SOURCE_SOURCE_SCREENSHARE_AUDIO = "SOURCE_SCREENSHARE_AUDIO"
+
+
+class LkTrackSource:
+    """Values of LK_TRACK_SOURCE."""
+
+    #: Unknown source.
+    SOURCE_UNKNOWN = "SOURCE_UNKNOWN"
+    #: Camera.
+    SOURCE_CAMERA = "SOURCE_CAMERA"
+    #: Microphone.
+    SOURCE_MICROPHONE = "SOURCE_MICROPHONE"
+    #: Screen share video.
+    SOURCE_SCREENSHARE = "SOURCE_SCREENSHARE"
+    #: Screen share audio.
+    SOURCE_SCREENSHARE_AUDIO = "SOURCE_SCREENSHARE_AUDIO"
+
 
 #: Confidence of the final transcript.
 LK_TRANSCRIPT_CONFIDENCE = "lk.transcript_confidence"
@@ -937,8 +1039,14 @@ DEVICE_MODEL_IDENTIFIER = "device.model.identifier"
 
 #: Describes a class of error the operation ended with.
 ERROR_TYPE = "error.type"
-#: A fallback error value to be used when the instrumentation doesn't define a custom value.
-ERROR_TYPE_OTHER = "_OTHER"
+
+
+class ErrorType:
+    """Values of ERROR_TYPE."""
+
+    #: A fallback error value to be used when the instrumentation doesn't define a custom value.
+    OTHER = "_OTHER"
+
 
 #: The exception message.
 EXCEPTION_MESSAGE = "exception.message"
@@ -975,96 +1083,114 @@ GEN_AI_MEMORY_RECORDS = "gen_ai.memory.records"
 
 #: The name of the operation being performed.
 GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
-#: Chat completion operation such as [OpenAI Chat API](https://platform.openai.com/docs/api-reference/chat)
-GEN_AI_OPERATION_NAME_CHAT = "chat"
-#: Multimodal content generation operation such as [Gemini Generate Content](https://ai.google.dev/api/generate-content)
-GEN_AI_OPERATION_NAME_GENERATE_CONTENT = "generate_content"
-#: Text completions operation such as [OpenAI Completions API (Legacy)](https://platform.openai.com/docs/api-reference/completions)
-GEN_AI_OPERATION_NAME_TEXT_COMPLETION = "text_completion"
-#: Embeddings operation such as [OpenAI Create embeddings API](https://platform.openai.com/docs/api-reference/embeddings/create)
-GEN_AI_OPERATION_NAME_EMBEDDINGS = "embeddings"
-#: Retrieval operation such as [OpenAI Search Vector Store API](https://platform.openai.com/docs/api-reference/vector-stores/search)
-GEN_AI_OPERATION_NAME_RETRIEVAL = "retrieval"
-#: Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get)
-GEN_AI_OPERATION_NAME_FETCH_RESPONSE = "fetch_response"
-#: Create GenAI agent
-GEN_AI_OPERATION_NAME_CREATE_AGENT = "create_agent"
-#: Invoke GenAI agent
-GEN_AI_OPERATION_NAME_INVOKE_AGENT = "invoke_agent"
-#: Execute a tool
-GEN_AI_OPERATION_NAME_EXECUTE_TOOL = "execute_tool"
-#: Invoke GenAI workflow
-GEN_AI_OPERATION_NAME_INVOKE_WORKFLOW = "invoke_workflow"
-#: Agent planning or task decomposition phase
-GEN_AI_OPERATION_NAME_PLAN = "plan"
-#: Search/query memories from a memory store
-GEN_AI_OPERATION_NAME_SEARCH_MEMORY = "search_memory"
-#: Create new memory records
-GEN_AI_OPERATION_NAME_CREATE_MEMORY = "create_memory"
-#: Update existing memory records
-GEN_AI_OPERATION_NAME_UPDATE_MEMORY = "update_memory"
-#: Create or update memory records without the caller choosing which
-GEN_AI_OPERATION_NAME_UPSERT_MEMORY = "upsert_memory"
-#: Delete memory records
-GEN_AI_OPERATION_NAME_DELETE_MEMORY = "delete_memory"
-#: Create or initialize a memory store
-GEN_AI_OPERATION_NAME_CREATE_MEMORY_STORE = "create_memory_store"
-#: Delete or deprovision a memory store
-GEN_AI_OPERATION_NAME_DELETE_MEMORY_STORE = "delete_memory_store"
+
+
+class GenAiOperationName:
+    """Values of GEN_AI_OPERATION_NAME."""
+
+    #: Chat completion operation such as [OpenAI Chat API](https://platform.openai.com/docs/api-reference/chat)
+    CHAT = "chat"
+    #: Multimodal content generation operation such as [Gemini Generate Content](https://ai.google.dev/api/generate-content)
+    GENERATE_CONTENT = "generate_content"
+    #: Text completions operation such as [OpenAI Completions API (Legacy)](https://platform.openai.com/docs/api-reference/completions)
+    TEXT_COMPLETION = "text_completion"
+    #: Embeddings operation such as [OpenAI Create embeddings API](https://platform.openai.com/docs/api-reference/embeddings/create)
+    EMBEDDINGS = "embeddings"
+    #: Retrieval operation such as [OpenAI Search Vector Store API](https://platform.openai.com/docs/api-reference/vector-stores/search)
+    RETRIEVAL = "retrieval"
+    #: Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get)
+    FETCH_RESPONSE = "fetch_response"
+    #: Create GenAI agent
+    CREATE_AGENT = "create_agent"
+    #: Invoke GenAI agent
+    INVOKE_AGENT = "invoke_agent"
+    #: Execute a tool
+    EXECUTE_TOOL = "execute_tool"
+    #: Invoke GenAI workflow
+    INVOKE_WORKFLOW = "invoke_workflow"
+    #: Agent planning or task decomposition phase
+    PLAN = "plan"
+    #: Search/query memories from a memory store
+    SEARCH_MEMORY = "search_memory"
+    #: Create new memory records
+    CREATE_MEMORY = "create_memory"
+    #: Update existing memory records
+    UPDATE_MEMORY = "update_memory"
+    #: Create or update memory records without the caller choosing which
+    UPSERT_MEMORY = "upsert_memory"
+    #: Delete memory records
+    DELETE_MEMORY = "delete_memory"
+    #: Create or initialize a memory store
+    CREATE_MEMORY_STORE = "create_memory_store"
+    #: Delete or deprovision a memory store
+    DELETE_MEMORY_STORE = "delete_memory_store"
+
 
 #: Messages returned by the model where each message represents a specific model response (choice, candidate).
 GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
 
 #: Represents the content type requested by the client.
 GEN_AI_OUTPUT_TYPE = "gen_ai.output.type"
-#: Plain text
-GEN_AI_OUTPUT_TYPE_TEXT = "text"
-#: JSON object with known or unknown schema
-GEN_AI_OUTPUT_TYPE_JSON = "json"
-#: Image
-GEN_AI_OUTPUT_TYPE_IMAGE = "image"
-#: Speech
-GEN_AI_OUTPUT_TYPE_SPEECH = "speech"
+
+
+class GenAiOutputType:
+    """Values of GEN_AI_OUTPUT_TYPE."""
+
+    #: Plain text
+    TEXT = "text"
+    #: JSON object with known or unknown schema
+    JSON = "json"
+    #: Image
+    IMAGE = "image"
+    #: Speech
+    SPEECH = "speech"
+
 
 #: The variables supplied to the prompt template, the `<key>` being the variable name, the value being the variable value.
 GEN_AI_PROMPT_VARIABLE = "gen_ai.prompt.variable"
 
 #: The Generative AI provider as identified by the client or server instrumentation.
 GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
-#: [OpenAI](https://openai.com/)
-GEN_AI_PROVIDER_NAME_OPENAI = "openai"
-#: Any Google generative AI endpoint
-GEN_AI_PROVIDER_NAME_GCP_GEN_AI = "gcp.gen_ai"
-#: [Vertex AI](https://cloud.google.com/vertex-ai)
-GEN_AI_PROVIDER_NAME_GCP_VERTEX_AI = "gcp.vertex_ai"
-#: [Gemini](https://cloud.google.com/products/gemini)
-GEN_AI_PROVIDER_NAME_GCP_GEMINI = "gcp.gemini"
-#: [Anthropic](https://www.anthropic.com/)
-GEN_AI_PROVIDER_NAME_ANTHROPIC = "anthropic"
-#: [Cohere](https://cohere.com/)
-GEN_AI_PROVIDER_NAME_COHERE = "cohere"
-#: Azure AI Inference
-GEN_AI_PROVIDER_NAME_AZURE_AI_INFERENCE = "azure.ai.inference"
-#: [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview)
-GEN_AI_PROVIDER_NAME_AZURE_AI_OPENAI = "azure.ai.openai"
-#: [IBM Watsonx AI](https://www.ibm.com/products/watsonx-ai)
-GEN_AI_PROVIDER_NAME_IBM_WATSONX_AI = "ibm.watsonx.ai"
-#: [AWS Bedrock](https://aws.amazon.com/bedrock)
-GEN_AI_PROVIDER_NAME_AWS_BEDROCK = "aws.bedrock"
-#: [Perplexity](https://www.perplexity.ai/)
-GEN_AI_PROVIDER_NAME_PERPLEXITY = "perplexity"
-#: [xAI](https://x.ai/)
-GEN_AI_PROVIDER_NAME_X_AI = "x_ai"
-#: [DeepSeek](https://www.deepseek.com/)
-GEN_AI_PROVIDER_NAME_DEEPSEEK = "deepseek"
-#: [Groq](https://groq.com/)
-GEN_AI_PROVIDER_NAME_GROQ = "groq"
-#: [Mistral](https://mistral.ai/)
-GEN_AI_PROVIDER_NAME_MISTRAL = "mistral"
-#: [Moonshot AI](https://www.moonshot.ai/)
-GEN_AI_PROVIDER_NAME_MOONSHOT_AI = "moonshot_ai"
-#: Mistral, as Agents sends it. The upstream member is `mistral`. Sent by LiveKit, not an upstream value.
-GEN_AI_PROVIDER_NAME_MISTRAL_AI = "mistral_ai"
+
+
+class GenAiProviderName:
+    """Values of GEN_AI_PROVIDER_NAME."""
+
+    #: [OpenAI](https://openai.com/)
+    OPENAI = "openai"
+    #: Any Google generative AI endpoint
+    GCP_GEN_AI = "gcp.gen_ai"
+    #: [Vertex AI](https://cloud.google.com/vertex-ai)
+    GCP_VERTEX_AI = "gcp.vertex_ai"
+    #: [Gemini](https://cloud.google.com/products/gemini)
+    GCP_GEMINI = "gcp.gemini"
+    #: [Anthropic](https://www.anthropic.com/)
+    ANTHROPIC = "anthropic"
+    #: [Cohere](https://cohere.com/)
+    COHERE = "cohere"
+    #: Azure AI Inference
+    AZURE_AI_INFERENCE = "azure.ai.inference"
+    #: [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview)
+    AZURE_AI_OPENAI = "azure.ai.openai"
+    #: [IBM Watsonx AI](https://www.ibm.com/products/watsonx-ai)
+    IBM_WATSONX_AI = "ibm.watsonx.ai"
+    #: [AWS Bedrock](https://aws.amazon.com/bedrock)
+    AWS_BEDROCK = "aws.bedrock"
+    #: [Perplexity](https://www.perplexity.ai/)
+    PERPLEXITY = "perplexity"
+    #: [xAI](https://x.ai/)
+    X_AI = "x_ai"
+    #: [DeepSeek](https://www.deepseek.com/)
+    DEEPSEEK = "deepseek"
+    #: [Groq](https://groq.com/)
+    GROQ = "groq"
+    #: [Mistral](https://mistral.ai/)
+    MISTRAL = "mistral"
+    #: [Moonshot AI](https://www.moonshot.ai/)
+    MOONSHOT_AI = "moonshot_ai"
+    #: Mistral, as Agents sends it. The upstream member is `mistral`. Sent by LiveKit, not an upstream value.
+    MISTRAL_AI = "mistral_ai"
+
 
 #: The name of the GenAI model a request is being made to.
 GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
@@ -1074,18 +1200,24 @@ GEN_AI_REQUEST_STREAM = "gen_ai.request.stream"
 
 #: Array of reasons the model stopped generating tokens, corresponding to each generation received.
 GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
-#: Declared in Agents' `GenAIFinishReason`. No Agents code path sends it today. Sent by LiveKit, not an upstream value.
-GEN_AI_RESPONSE_FINISH_REASONS_COMPACTION = "compaction"
-#: A content filter stopped the output. Sent by LiveKit, not an upstream value.
-GEN_AI_RESPONSE_FINISH_REASONS_CONTENT_FILTER = "content_filter"
-#: The generation ended abnormally. The upstream note names this value. Sent by LiveKit, not an upstream value.
-GEN_AI_RESPONSE_FINISH_REASONS_ERROR = "error"
-#: The output reached the token limit. Sent by LiveKit, not an upstream value.
-GEN_AI_RESPONSE_FINISH_REASONS_LENGTH = "length"
-#: The generation finished normally. Sent by LiveKit, not an upstream value.
-GEN_AI_RESPONSE_FINISH_REASONS_STOP = "stop"
-#: The generation ended with a tool call. Sent by LiveKit, not an upstream value.
-GEN_AI_RESPONSE_FINISH_REASONS_TOOL_CALL = "tool_call"
+
+
+class GenAiResponseFinishReasons:
+    """Values of GEN_AI_RESPONSE_FINISH_REASONS."""
+
+    #: Declared in Agents' `GenAIFinishReason`. No Agents code path sends it today. Sent by LiveKit, not an upstream value.
+    COMPACTION = "compaction"
+    #: A content filter stopped the output. Sent by LiveKit, not an upstream value.
+    CONTENT_FILTER = "content_filter"
+    #: The generation ended abnormally. The upstream note names this value. Sent by LiveKit, not an upstream value.
+    ERROR = "error"
+    #: The output reached the token limit. Sent by LiveKit, not an upstream value.
+    LENGTH = "length"
+    #: The generation finished normally. Sent by LiveKit, not an upstream value.
+    STOP = "stop"
+    #: The generation ended with a tool call. Sent by LiveKit, not an upstream value.
+    TOOL_CALL = "tool_call"
+
 
 #: The unique identifier for the completion.
 GEN_AI_RESPONSE_ID = "gen_ai.response.id"
@@ -1170,16 +1302,22 @@ GEN_AI_WORKFLOW_NAME = "gen_ai.workflow.name"
 
 #: The internet connection type.
 NETWORK_CONNECTION_TYPE = "network.connection.type"
-#: Wi-Fi
-NETWORK_CONNECTION_TYPE_WIFI = "wifi"
-#: `wired`.
-NETWORK_CONNECTION_TYPE_WIRED = "wired"
-#: `cell`.
-NETWORK_CONNECTION_TYPE_CELL = "cell"
-#: `unavailable`.
-NETWORK_CONNECTION_TYPE_UNAVAILABLE = "unavailable"
-#: `unknown`.
-NETWORK_CONNECTION_TYPE_UNKNOWN = "unknown"
+
+
+class NetworkConnectionType:
+    """Values of NETWORK_CONNECTION_TYPE."""
+
+    #: Wi-Fi
+    WIFI = "wifi"
+    #: `wired`.
+    WIRED = "wired"
+    #: `cell`.
+    CELL = "cell"
+    #: `unavailable`.
+    UNAVAILABLE = "unavailable"
+    #: `unknown`.
+    UNKNOWN = "unknown"
+
 
 #: Human readable operating system name.
 OS_NAME = "os.name"
@@ -1204,32 +1342,38 @@ SESSION_ID = "session.id"
 
 #: The language of the telemetry SDK.
 TELEMETRY_SDK_LANGUAGE = "telemetry.sdk.language"
-#: [C++](https://opentelemetry.io/docs/languages/cpp/)
-TELEMETRY_SDK_LANGUAGE_CPP = "cpp"
-#: [.NET](https://opentelemetry.io/docs/languages/dotnet/)
-TELEMETRY_SDK_LANGUAGE_DOTNET = "dotnet"
-#: [Erlang/Elixir](https://opentelemetry.io/docs/languages/erlang/)
-TELEMETRY_SDK_LANGUAGE_ERLANG = "erlang"
-#: [Go](https://opentelemetry.io/docs/languages/go/)
-TELEMETRY_SDK_LANGUAGE_GO = "go"
-#: [Java](https://opentelemetry.io/docs/languages/java/)
-TELEMETRY_SDK_LANGUAGE_JAVA = "java"
-#: [Kotlin](https://opentelemetry.io/docs/languages/kotlin/)
-TELEMETRY_SDK_LANGUAGE_KOTLIN = "kotlin"
-#: [Node.js](https://opentelemetry.io/docs/languages/js/)
-TELEMETRY_SDK_LANGUAGE_NODEJS = "nodejs"
-#: [PHP](https://opentelemetry.io/docs/languages/php/)
-TELEMETRY_SDK_LANGUAGE_PHP = "php"
-#: [Python](https://opentelemetry.io/docs/languages/python/)
-TELEMETRY_SDK_LANGUAGE_PYTHON = "python"
-#: [Ruby](https://opentelemetry.io/docs/languages/ruby/)
-TELEMETRY_SDK_LANGUAGE_RUBY = "ruby"
-#: [Rust](https://opentelemetry.io/docs/languages/rust/)
-TELEMETRY_SDK_LANGUAGE_RUST = "rust"
-#: [Swift](https://opentelemetry.io/docs/languages/swift/)
-TELEMETRY_SDK_LANGUAGE_SWIFT = "swift"
-#: [Browser](https://opentelemetry.io/docs/languages/js/)
-TELEMETRY_SDK_LANGUAGE_WEBJS = "webjs"
+
+
+class TelemetrySdkLanguage:
+    """Values of TELEMETRY_SDK_LANGUAGE."""
+
+    #: [C++](https://opentelemetry.io/docs/languages/cpp/)
+    CPP = "cpp"
+    #: [.NET](https://opentelemetry.io/docs/languages/dotnet/)
+    DOTNET = "dotnet"
+    #: [Erlang/Elixir](https://opentelemetry.io/docs/languages/erlang/)
+    ERLANG = "erlang"
+    #: [Go](https://opentelemetry.io/docs/languages/go/)
+    GO = "go"
+    #: [Java](https://opentelemetry.io/docs/languages/java/)
+    JAVA = "java"
+    #: [Kotlin](https://opentelemetry.io/docs/languages/kotlin/)
+    KOTLIN = "kotlin"
+    #: [Node.js](https://opentelemetry.io/docs/languages/js/)
+    NODEJS = "nodejs"
+    #: [PHP](https://opentelemetry.io/docs/languages/php/)
+    PHP = "php"
+    #: [Python](https://opentelemetry.io/docs/languages/python/)
+    PYTHON = "python"
+    #: [Ruby](https://opentelemetry.io/docs/languages/ruby/)
+    RUBY = "ruby"
+    #: [Rust](https://opentelemetry.io/docs/languages/rust/)
+    RUST = "rust"
+    #: [Swift](https://opentelemetry.io/docs/languages/swift/)
+    SWIFT = "swift"
+    #: [Browser](https://opentelemetry.io/docs/languages/js/)
+    WEBJS = "webjs"
+
 
 #: The name of the telemetry SDK as defined above.
 TELEMETRY_SDK_NAME = "telemetry.sdk.name"

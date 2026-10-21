@@ -282,7 +282,7 @@ PINS: list[tuple[str, str]] = [
     ("_semconv.EVALUATION", "evaluation"),
     ("_semconv.TAG", "tag"),
     ("_semconv.OUTCOME", "outcome"),
-    ("_semconv.GEN_AI_PROVIDER_NAME_MISTRAL_AI", "mistral_ai"),
+    ("_semconv.GenAiProviderName.MISTRAL_AI", "mistral_ai"),
     # enum values the emitters pass through (`gen_ai.operation.name`, `gen_ai.output.type`,
     # `gen_ai.response.finish_reasons`, `lk.eou.outcome`), as they were before the change
     ("trace_types.GenAIOperationName.CHAT", "chat"),
@@ -479,15 +479,15 @@ def test_every_span_event_name_is_registered(event: str) -> None:
 
 # The values are the protobuf enum names `room_io` emits at runtime (`rtc.<Enum>.Name(..)`).
 @pytest.mark.parametrize(
-    ("names", "prefix"),
+    ("names", "registered"),
     [
-        (rtc.TrackSource.keys(), "LK_TRACK_SOURCE_"),
-        (rtc.DisconnectReason.keys(), "LK_DISCONNECT_REASON_"),
+        (rtc.TrackSource.keys(), _semconv.LkTrackSource),
+        (rtc.DisconnectReason.keys(), _semconv.LkDisconnectReason),
     ],
     ids=["lk.track_source", "lk.disconnect_reason"],
 )
-def test_every_runtime_enum_name_is_a_registered_value(names: list[str], prefix: str) -> None:
-    unregistered = [n for n in names if getattr(_semconv, prefix + n, None) != n]
+def test_every_runtime_enum_name_is_a_registered_value(names: list[str], registered: type) -> None:
+    unregistered = [n for n in names if getattr(registered, n, None) != n]
     assert not unregistered, f"emitted but not registered: {unregistered}"
 
 
