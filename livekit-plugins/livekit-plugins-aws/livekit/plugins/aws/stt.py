@@ -239,6 +239,12 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         while True:
+            # an attempt that ended mid-utterance never sent its final result, so close
+            # the segment here, or the next attempt's first utterance gets no START
+            if self._speaking:
+                self._speaking = False
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+
             # a restarted attempt needs its own transport: the pooled HTTP/2 connection
             # of the finished stream cannot carry a second StartStreamTranscription
             if self._http_client is not None:

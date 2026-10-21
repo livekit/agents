@@ -37,13 +37,16 @@ class _FakeAudioStream:
 
 
 class _FakeOutputStream:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(self, error: Exception | None = None, events: list[Any] | None = None) -> None:
         self._error = error
+        self._events = list(events or [])
 
     def __aiter__(self) -> _FakeOutputStream:
         return self
 
     async def __anext__(self) -> Any:
+        if self._events:
+            return SimpleNamespace(value=self._events.pop(0))
         if self._error is not None:
             error, self._error = self._error, None
             raise error
@@ -52,16 +55,23 @@ class _FakeOutputStream:
 
 
 class _FakeTranscribeStream:
-    def __init__(self, output_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        output_error: Exception | None = None,
+        output_events: list[list[Any]] | None = None,
+    ) -> None:
         self.input_stream = _FakeAudioStream()
         self.configs: list[Any] = []
         self.restarted = asyncio.Event()
         self._output_error = output_error
+        # transcript events each attempt yields, in attempt order
+        self._output_events = list(output_events or [])
 
     async def await_output(self) -> tuple[None, _FakeOutputStream]:
         # the error is one-shot, so only the first attempt fails
         error, self._output_error = self._output_error, None
-        return None, _FakeOutputStream(error)
+        events = self._output_events.pop(0) if self._output_events else None
+        return None, _FakeOutputStream(error, events)
 
 
 def _frame(duration_ms: int, sample_rate: int = 16000) -> rtc.AudioFrame:
@@ -79,8 +89,9 @@ def _make_stream(
     *,
     output_error: Exception | None = None,
     max_retry: int = 0,
+    output_events: list[list[Any]] | None = None,
 ) -> tuple[aws_stt.STT, aws_stt.SpeechStream, _FakeTranscribeStream]:
-    transcribe_stream = _FakeTranscribeStream(output_error)
+    transcribe_stream = _FakeTranscribeStream(output_error, output_events)
 
     class _FakeTranscribeClient:
         def __init__(self, *, config: Any) -> None:
@@ -340,6 +351,36 @@ async def test_aws_stream_ignores_final_without_transcript(monkeypatch: pytest.M
             stt.SpeechEventType.START_OF_SPEECH,
             stt.SpeechEventType.FINAL_TRANSCRIPT,
             stt.SpeechEventType.END_OF_SPEECH,
+        ]
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+async def test_aws_stream_closes_open_segment_when_attempt_restarts(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # the first attempt times out after a partial result, before its final result
+    provider, stream, _ = _make_stream(
+        monkeypatch,
+        output_error=aws_stt.BadRequestException(
+            "Your request timed out because no new audio was received for 15 seconds."
+        ),
+        output_events=[
+            [_transcript_event("hel", 0.0, 0.4, partial=True)],
+            [_transcript_event("bye", 0.0, 0.3, partial=True)],
+        ],
+    )
+
+    try:
+        events = [await asyncio.wait_for(anext(stream), timeout=1.0) for _ in range(5)]
+
+        assert [e.type for e in events] == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
         ]
     finally:
         await stream.aclose()
