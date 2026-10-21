@@ -199,15 +199,18 @@ async def test_synthesize_raises_on_close_before_eos():
     assert excinfo.value.retryable is True
 
 
-async def test_synthesize_is_not_retried_after_audio():
-    # a retry would replay the start of the text, after its audio already went out
-    tts, session, _ = _make_tts([READY, AUDIO, "close"], close_code=1011)
+async def test_synthesize_is_retried_after_partial_audio():
+    """A retryable failure after some audio is retried like any other: the base
+    class restarts the synthesis under a fresh request_id (livekit/agents#6346)."""
+    from livekit.plugins.gradium import TTS
 
-    with pytest.raises(APIStatusError) as excinfo:
-        await _drain(tts, APIConnectOptions(max_retry=2, timeout=5))
-    assert excinfo.value.status_code == 1011
-    assert excinfo.value.retryable is False
-    assert len(session.connects) == 1
+    first = FakeWebSocket([READY, AUDIO, "close"], close_code=1011)
+    second = FakeWebSocket([READY, AUDIO, EOS])
+    session = FakeSession(first, second)
+    tts = TTS(api_key="test-key", http_session=session)  # type: ignore[arg-type]
+
+    await _drain(tts, APIConnectOptions(max_retry=2, retry_interval=0, timeout=5))
+    assert len(session.connects) == 2
 
 
 async def test_error_frame_with_client_error_code_is_not_retried():

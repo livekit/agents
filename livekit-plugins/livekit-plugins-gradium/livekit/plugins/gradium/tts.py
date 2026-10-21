@@ -248,20 +248,8 @@ class ChunkedStream(tts.ChunkedStream):
         self._model_endpoint = model_endpoint
         self._model_name = model_name
         self._opts = replace(tts._opts)
-        self._pushed_audio = False
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        self._pushed_audio = False
-        try:
-            await self._synthesize(output_emitter)
-        except APIError as e:
-            if self._pushed_audio:
-                # The base class retries a one-shot synthesis even after audio went out,
-                # so a retry would replay the start of the text: fail instead.
-                e.retryable = False
-            raise
-
-    async def _synthesize(self, output_emitter: tts.AudioEmitter) -> None:
         # TODO(laurent): once we support the POST requests, we should use it here rather than the websocket API.
         try:
             async with await self._tts._connect_ws(self._conn_options.timeout) as ws:
@@ -318,7 +306,6 @@ class ChunkedStream(tts.ChunkedStream):
                         elif type_ == "audio":
                             audio = base64.b64decode(msg_data["audio"])
                             output_emitter.push(audio)
-                            self._pushed_audio = True
                         elif type_ == "end_of_stream":
                             break
                         elif type_ == "error":
