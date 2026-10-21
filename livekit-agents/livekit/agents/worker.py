@@ -175,6 +175,31 @@ def _validate_and_normalize_log_level(
     return log_level.upper()
 
 
+def _clean_stale_prometheus_files(path: str) -> None:
+    """Remove multiprocess metric files left behind by earlier runs.
+
+    Files belonging to this process are kept. ``prometheus_client`` caches one
+    open mmap per file prefix (``values.MultiProcessValue``), so unlinking a file
+    this process already holds open does not close it -- the process keeps
+    writing to the unlinked inode, while ``MultiProcessCollector`` globs the
+    directory and never sees those samples again. Any metric created before
+    ``run()`` is in that state, including the module-level gauges in
+    ``telemetry.metrics``: ``lk_agents_worker_load`` is a default-mode ``Gauge``,
+    so it shares ``gauge_all_<pid>.db`` with any application gauge.
+    """
+    own_suffix = f"_{os.getpid()}.db"
+    for filename in os.listdir(path):
+        if filename.endswith(own_suffix):
+            continue
+
+        file_path = os.path.join(path, filename)
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            logger.warning(f"failed to remove {file_path}", exc_info=e)
+
+
 # NOTE: this object must be pickle-able
 @dataclass
 class ServerOptions:
@@ -714,13 +739,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "cleaning prometheus multiprocess directory",
                     extra={"path": self._prometheus_multiproc_dir},
                 )
-                for filename in os.listdir(self._prometheus_multiproc_dir):
-                    file_path = os.path.join(self._prometheus_multiproc_dir, filename)
-                    try:
-                        if os.path.isfile(file_path):
-                            os.unlink(file_path)
-                    except Exception as e:
-                        logger.warning(f"failed to remove {file_path}", exc_info=e)
+                _clean_stale_prometheus_files(self._prometheus_multiproc_dir)
 
             if self._ws_url:
                 os.environ["LIVEKIT_URL"] = self._ws_url
