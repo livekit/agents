@@ -34,6 +34,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .log import logger
 from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL
 
@@ -44,6 +45,14 @@ _NO_PREFILL_PATTERNS = ("claude-sonnet-4-6", "claude-opus-4-6")
 def _model_disables_prefill(model: str) -> bool:
     """Return True if the model does not support assistant message prefilling."""
     return any(model.startswith(p) for p in _NO_PREFILL_PATTERNS)
+
+
+_NO_FORCED_TOOL_CHOICE_PATTERNS = (
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-fable-5-1",
+    "claude-mythos-5-1",
+)
 
 
 @dataclass
@@ -106,6 +115,7 @@ class LLM(llm.LLM):
 
         super().__init__()
 
+        self._forced_tool_choice_warned = False
         self._opts = _LLMOptions(
             model=model,
             user=user,
@@ -214,6 +224,16 @@ class LLM(llm.LLM):
                         extra["tools"] = []
                         anthropic_tool_choice = None
                 if anthropic_tool_choice is not None:
+                    forced = anthropic_tool_choice["type"] in ("any", "tool")
+                    if forced and self._opts.model.startswith(_NO_FORCED_TOOL_CHOICE_PATTERNS):
+                        if not self._forced_tool_choice_warned:
+                            logger.warning(
+                                "anthropic llm: this model does not support a forced "
+                                "tool_choice; sending 'auto' instead",
+                                extra={"lk.pii.model": self._opts.model},
+                            )
+                            self._forced_tool_choice_warned = True
+                        anthropic_tool_choice = {"type": "auto"}
                     parallel_tool_calls = (
                         parallel_tool_calls
                         if is_given(parallel_tool_calls)
