@@ -33,6 +33,12 @@ incurred a charge. No `Idempotency-Key` is sent. Cancellation closes the HTTP
 response. An injected `aiohttp.ClientSession` remains owned by the caller;
 otherwise the plugin uses LiveKit's shared HTTP session.
 
+`await provider.aclose()` closes all of the provider's synthesis streams and
+rejects new synthesis, while leaving caller-owned and shared HTTP sessions open.
+`APIConnectOptions.timeout` controls connection acquisition, socket connection,
+and the idle timeout between audio reads; it is not a total utterance deadline.
+Choose a value that allows for the service's first-audio wait.
+
 Offline tests do not require Giggy credentials or call the production service:
 
 ```sh

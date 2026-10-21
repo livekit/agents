@@ -135,7 +135,7 @@ async def test_pcm_and_request() -> None:
     assert kwargs["allow_redirects"] is False
     assert kwargs["timeout"].total is None
     assert kwargs["timeout"].sock_connect == 7
-    assert kwargs["timeout"].sock_read == 90
+    assert kwargs["timeout"].sock_read == 7
     assert response.closed
     await provider.aclose()
     session.close.assert_not_called()
@@ -216,23 +216,33 @@ async def test_transport_error_no_retry_or_secret(
     session.post.assert_called_once()
 
 
-async def test_cancel_closes_response() -> None:
-    response = Response([PCM], hold=True)
+@pytest.mark.parametrize("close_provider", [False, True])
+@pytest.mark.parametrize("stream_count", [1, 2])
+async def test_cancel_closes_response(close_provider: bool, stream_count: int) -> None:
+    responses = [Response([PCM], hold=True) for _ in range(stream_count)]
     session = MagicMock(spec=aiohttp.ClientSession)
-    session.post.return_value = response
+    session.post.side_effect = responses
     provider = giggy.TTS(api_key=KEY, voice=VOICE, http_session=session)
-    stream = provider.synthesize("Hi")
+    streams = [provider.synthesize("Hi") for _ in responses]
     try:
-        await asyncio.wait_for(response.started.wait(), 2)
-        event = await asyncio.wait_for(anext(stream), 2)
-        assert event.frame.samples_per_channel > 0  # emitted before response EOF
+        for response, stream in zip(responses, streams, strict=True):
+            await asyncio.wait_for(response.started.wait(), 2)
+            event = await asyncio.wait_for(anext(stream), 2)
+            assert event.frame.samples_per_channel > 0  # emitted before response EOF
+        if close_provider:
+            await provider.aclose()
+        else:
+            await asyncio.gather(*(stream.aclose() for stream in streams))
+        assert all(response.closed for response in responses)
+        assert all(stream._synthesize_task.cancelled() for stream in streams)
+        assert session.post.call_count == stream_count
+        await provider.aclose()
+        await provider.aclose()  # shutdown is idempotent
+        with pytest.raises(RuntimeError, match="closed"):
+            provider.synthesize("After shutdown")
+        session.close.assert_not_called()
     finally:
-        await stream.aclose()
-    assert response.closed
-    assert stream._synthesize_task.cancelled()
-    session.post.assert_called_once()
-    await provider.aclose()
-    session.close.assert_not_called()
+        await asyncio.gather(*(stream.aclose() for stream in streams))
 
 
 async def test_shared_session_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -245,12 +255,20 @@ async def test_shared_session_ownership(monkeypatch: pytest.MonkeyPatch) -> None
     session.close.assert_not_called()
 
 
-async def test_real_http_error_is_single_post(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("read_timeout", [False, True])
+async def test_real_http_error_is_single_post(
+    monkeypatch: pytest.MonkeyPatch, read_timeout: bool
+) -> None:
     """Exercise actual aiohttp transport against an offline loopback server."""
     requests: list[dict[str, object]] = []
 
-    async def handler(request: web.Request) -> web.Response:
+    async def handler(request: web.Request) -> web.StreamResponse:
         requests.append({"headers": dict(request.headers), "body": await request.json()})
+        if read_timeout:
+            response = web.StreamResponse(headers={"Content-Type": "application/octet-stream"})
+            await response.prepare(request)
+            await asyncio.sleep(0.3)
+            return response
         return web.Response(status=503, text=KEY)
 
     app = web.Application()
@@ -264,12 +282,15 @@ async def test_real_http_error_is_single_post(monkeypatch: pytest.MonkeyPatch) -
         monkeypatch.setattr(giggy_tts, "GIGGY_URL", f"http://127.0.0.1:{port}/v1/audio/speech")
         async with aiohttp.ClientSession() as session:
             provider = giggy.TTS(api_key=KEY, voice=VOICE, http_session=session)
-            with pytest.raises(APIStatusError) as caught:
+            expected = APITimeoutError if read_timeout else APIStatusError
+            with pytest.raises(expected) as caught:
                 async with provider.synthesize(
-                    "Hi", conn_options=APIConnectOptions(max_retry=5, retry_interval=0)
+                    "Hi",
+                    conn_options=APIConnectOptions(max_retry=5, retry_interval=0, timeout=0.05),
                 ) as stream:
-                    await stream.collect()
+                    await asyncio.wait_for(stream.collect(), 2)
             assert KEY not in str(caught.value)
+            assert caught.value.retryable is False
             await provider.aclose()
             assert not session.closed
         assert len(requests) == 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import replace
+from weakref import WeakSet
 
 import aiohttp
 
@@ -59,6 +60,8 @@ class TTS(tts.TTS):
         self._voice = resolved_voice
         self._speed = speed
         self._http_session = http_session
+        self._streams: WeakSet[ChunkedStream] = WeakSet()
+        self._closed = False
 
     @property
     def provider(self) -> str:
@@ -82,17 +85,23 @@ class TTS(tts.TTS):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         """Submit complete text once; paid synthesis is never automatically retried."""
+        if self._closed:
+            raise RuntimeError("Giggy TTS provider is closed.")
         if not text.strip():
             raise ValueError("Giggy synthesis text must not be empty.")
-        return ChunkedStream(
+        stream = ChunkedStream(
             tts_instance=self,
             input_text=text,
             conn_options=replace(conn_options, max_retry=0),
         )
+        self._streams.add(stream)
+        return stream
 
     async def aclose(self) -> None:
-        """Leave caller-owned and LiveKit-owned HTTP sessions open."""
-        return None
+        """Close synthesis streams without closing caller-owned or shared HTTP sessions."""
+        self._closed = True
+        await asyncio.gather(*(stream.aclose() for stream in list(self._streams)))
+        self._streams.clear()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -128,7 +137,10 @@ class ChunkedStream(tts.ChunkedStream):
             "Accept": "application/octet-stream",
         }
         timeout = aiohttp.ClientTimeout(
-            total=None, sock_connect=self._conn_options.timeout, sock_read=90
+            total=None,
+            connect=self._conn_options.timeout,
+            sock_connect=self._conn_options.timeout,
+            sock_read=self._conn_options.timeout,
         )
         try:
             async with self._giggy._ensure_session().post(
