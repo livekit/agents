@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from livekit import rtc
 
@@ -28,6 +28,11 @@ if TYPE_CHECKING:
     from .translation_session import TranslationSession
 
 
+class _LinkedTrack(NamedTuple):
+    publication: rtc.RemoteTrackPublication
+    participant: rtc.RemoteParticipant
+
+
 @dataclass
 class TranslationRoomOptions:
     """How a :class:`~livekit.agents.beta.translation.TranslationSession` reaches a room.
@@ -42,12 +47,17 @@ class TranslationRoomOptions:
     """The track the translation is spoken on. Pass ``False`` to take the audio yourself."""
     text_output: TextOutputOptions | bool = True
     """Transcripts published to the room: what was heard, and what was spoken back."""
+    track: NotGivenOr[str] = NOT_GIVEN
+    """The sid of the audio track to translate. If not given, the first eligible one
+    published. A track is the unit here rather than a participant: a participant can publish
+    more than one, and only a track can be transcribed and attributed on the wire."""
     participant_identity: NotGivenOr[str] = NOT_GIVEN
-    """The participant to listen to. If not given, the first eligible one to connect."""
+    """Narrows the automatic search to one participant's tracks. Ignored when ``track`` names
+    a publication outright."""
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
-    """Participant kinds accepted when linking automatically."""
+    """Participant kinds accepted when searching automatically."""
     close_on_disconnect: bool = True
-    """Close the session when the linked participant leaves of their own accord."""
+    """Close the session when the linked track's publisher leaves of their own accord."""
 
     def get_audio_input_options(self) -> AudioInputOptions | None:
         if isinstance(self.audio_input, AudioInputOptions):
@@ -70,8 +80,12 @@ class TranslationRoomIO:
 
     Its own wiring rather than ``RoomIO``: that one serves an ``AgentSession``, reaching for
     turn timers, chat input and an away timer a translator has none of. What is left is the
-    part a translator does use — link a participant, take their microphone, publish the
-    translated track, and publish both transcripts.
+    part a translator does use — link a track, take its audio, publish the translated track,
+    and publish both transcripts.
+
+    What it links is a *track*, not a participant: the transcript a translator publishes is
+    attributed to a track on the wire, a participant may publish more than one, and the
+    publisher's identity is read off the track rather than the other way round.
     """
 
     def __init__(
@@ -83,6 +97,7 @@ class TranslationRoomIO:
     ) -> None:
         self._session, self._room = session, room
         self._options = options if is_given(options) else TranslationRoomOptions()
+        self._track_sid = self._options.track if is_given(self._options.track) else None
         self._participant_identity = (
             self._options.participant_identity
             if is_given(self._options.participant_identity)
@@ -96,7 +111,7 @@ class TranslationRoomIO:
         self._tr_synchronizer: TranscriptSynchronizer | None = None
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
 
-        self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._track_available_fut = asyncio.Future[_LinkedTrack]()
         self._room_connected_fut = asyncio.Future[None]()
         self._ready_fut = asyncio.Future[None]()
         self._init_atask: asyncio.Task[None] | None = None
@@ -146,10 +161,7 @@ class TranslationRoomIO:
 
         text_output_options = self._options.get_text_output_options()
         if text_output_options:
-            # what was heard is attributed to the speaker, what was spoken back to the agent
-            self._input_tr_output = _ParticipantTranscriptionOutput(
-                room=self._room, is_delta_stream=False, participant=self._participant_identity
-            )
+            # _input_tr_output is built in _init_task, once there is a track to stamp it with
             self._input_transcript_ch = aio.Chan[tuple[str, bool]]()
             self._input_transcript_atask = asyncio.create_task(
                 self._forward_input_transcript(self._input_transcript_ch)
@@ -172,6 +184,7 @@ class TranslationRoomIO:
                     speed=text_output_options.transcription_speed_factor,
                 )
 
+        self._room.on("track_published", self._on_track_published)
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
         self._room.on("connection_state_changed", self._on_connection_state_changed)
@@ -190,6 +203,7 @@ class TranslationRoomIO:
         self._session.on("user_input_transcribed", self._on_input_transcribed)
 
     async def aclose(self) -> None:
+        self._room.off("track_published", self._on_track_published)
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("participant_disconnected", self._on_participant_disconnected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
@@ -246,11 +260,18 @@ class TranslationRoomIO:
         return self._output_tr_output
 
     @property
-    def linked_participant(self) -> rtc.RemoteParticipant | None:
-        if not self._participant_available_fut.done():
+    def linked_track(self) -> _LinkedTrack | None:
+        """The track being translated, with the participant publishing it."""
+        if not self._track_available_fut.done():
             return None
 
-        return self._participant_available_fut.result()
+        return self._track_available_fut.result()
+
+    @property
+    def linked_participant(self) -> rtc.RemoteParticipant | None:
+        """The participant publishing the linked track."""
+        linked = self.linked_track
+        return linked.participant if linked else None
 
     @property
     def subscribed_fut(self) -> asyncio.Future[None] | None:
@@ -259,40 +280,53 @@ class TranslationRoomIO:
         return None
 
     async def wait_for_ready(self) -> None:
-        """Wait until the participant is linked and the translated track is published."""
+        """Wait until the source track is linked and the translated track is published."""
         await self._ready_fut
 
-    def set_participant(self, participant_identity: str | None) -> None:
-        """Listen to another participant."""
-        if participant_identity is None:
-            self.unset_participant()
+    def set_track(self, track_sid: str | None) -> None:
+        """Translate another track.
+
+        The publisher is read off the track, so nothing else has to be supplied.
+        """
+        if track_sid is None:
+            self.unset_track()
             return
 
-        linked = self.linked_participant
-        if linked is None or linked.identity != participant_identity:
-            if self._participant_available_fut.done():
-                self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        linked = self.linked_track
+        if linked is None or linked.publication.sid != track_sid:
+            if self._track_available_fut.done():
+                self._track_available_fut = asyncio.Future[_LinkedTrack]()
 
             for participant in self._room.remote_participants.values():
-                if participant.identity == participant_identity:
-                    self._participant_available_fut.set_result(participant)
+                if (publication := participant.track_publications.get(track_sid)) is not None:
+                    self._track_available_fut.set_result(_LinkedTrack(publication, participant))
                     break
 
-        self._participant_identity = participant_identity
+        self._track_sid = track_sid
+        if (linked := self.linked_track) is not None:
+            self._participant_identity = linked.participant.identity
+
         if self._audio_input:
-            self._audio_input.set_participant(participant_identity)
+            self._audio_input.set_participant(self._participant_identity)
+            self._audio_input.set_track_sid(track_sid)
         if self._input_tr_output:
-            self._input_tr_output.set_participant(participant_identity)
+            self._input_tr_output.set_participant(self._participant_identity)
 
         logger.info(
-            "TranslationRoomIO linked to participant",
-            extra={"participant": participant_identity, "room": self._room.name},
+            "TranslationRoomIO linked to track",
+            extra={
+                "track": track_sid,
+                "participant": self._participant_identity,
+                "room": self._room.name,
+            },
         )
 
-    def unset_participant(self) -> None:
+    def unset_track(self) -> None:
+        self._track_sid = None
         self._participant_identity = None
-        self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._track_available_fut = asyncio.Future[_LinkedTrack]()
         if self._audio_input:
+            self._audio_input.set_track_sid(None)
             self._audio_input.set_participant(None)
         if self._input_tr_output:
             self._input_tr_output.set_participant(None)
@@ -304,8 +338,19 @@ class TranslationRoomIO:
         for participant in self._room.remote_participants.values():
             self._on_participant_connected(participant)
 
-        participant = await self._participant_available_fut
-        self.set_participant(participant.identity)
+        publication, participant = await self._track_available_fut
+
+        if self._options.get_text_output_options() is not None:
+            # stamped with the track itself, not whichever microphone track its publisher
+            # happens to own, and attributed to that publisher on the wire
+            self._input_tr_output = _ParticipantTranscriptionOutput(
+                room=self._room,
+                is_delta_stream=False,
+                participant=participant.identity,
+                track=publication.sid,
+            )
+
+        self.set_track(publication.sid)
 
         if self._output_tr_output:
             self._output_tr_output.set_participant(self._room.local_participant.identity)
@@ -335,33 +380,48 @@ class TranslationRoomIO:
             self._room_connected_fut.set_result(None)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
-        if self._participant_available_fut.done():
+        for publication in participant.track_publications.values():
+            self._on_track_published(publication, participant)
+
+    def _on_track_published(
+        self, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ) -> None:
+        if self._track_available_fut.done() or publication.kind != rtc.TrackKind.KIND_AUDIO:
             return
 
-        if self._participant_identity is not None:
-            if participant.identity != self._participant_identity:
+        # a named track is taken whoever published it; otherwise the search is narrowed the
+        # way RoomIO narrows its participant search
+        if self._track_sid is not None:
+            if publication.sid != self._track_sid:
                 return
-        elif (
-            participant.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF)
-            == self._room.local_participant.identity
-        ):
-            return
+        else:
+            if publication.source != rtc.TrackSource.SOURCE_MICROPHONE:
+                return
 
-        accepted_kinds = (
-            self._options.participant_kinds
-            if is_given(self._options.participant_kinds)
-            else DEFAULT_PARTICIPANT_KINDS
-        )
-        if participant.kind not in accepted_kinds:
-            return
+            if self._participant_identity is not None:
+                if participant.identity != self._participant_identity:
+                    return
+            elif (
+                participant.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF)
+                == self._room.local_participant.identity
+            ):
+                return
 
-        self._participant_available_fut.set_result(participant)
+            accepted_kinds = (
+                self._options.participant_kinds
+                if is_given(self._options.participant_kinds)
+                else DEFAULT_PARTICIPANT_KINDS
+            )
+            if participant.kind not in accepted_kinds:
+                return
+
+        self._track_available_fut.set_result(_LinkedTrack(publication, participant))
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
 
-        self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._track_available_fut = asyncio.Future[_LinkedTrack]()
 
         if (
             self._options.close_on_disconnect

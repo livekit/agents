@@ -24,6 +24,8 @@ from livekit.agents.beta.translation import (
     TranslationModel,
     TranslationModelError,
     TranslationModelSession,
+    TranslationRoomIO,
+    TranslationRoomOptions,
     TranslationSession,
 )
 from livekit.agents.voice.events import CloseEvent, CloseReason
@@ -340,3 +342,92 @@ async def test_starting_twice_is_a_no_op() -> None:
         assert len(model.sessions) == 1
     finally:
         await session.aclose()
+
+
+# -- room wiring: what the session links is a track, not a participant --
+
+
+class _FakePublication:
+    def __init__(
+        self,
+        sid: str,
+        *,
+        kind: rtc.TrackKind.ValueType = rtc.TrackKind.KIND_AUDIO,
+        source: rtc.TrackSource.ValueType = rtc.TrackSource.SOURCE_MICROPHONE,
+    ) -> None:
+        self.sid = sid
+        self.kind = kind
+        self.source = source
+
+
+class _FakeParticipant:
+    def __init__(self, identity: str, *, attributes: dict[str, str] | None = None) -> None:
+        self.identity = identity
+        self.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+        self.attributes = attributes or {}
+
+
+def _room_io(**options: object) -> TranslationRoomIO:
+    session = TranslationSession(model=_FakeTranslationModel())
+    return TranslationRoomIO(
+        session,
+        rtc.Room(),
+        options=TranslationRoomOptions(**options),  # type: ignore[arg-type]
+    )
+
+
+async def test_a_named_track_is_taken_whoever_published_it() -> None:
+    room_io = _room_io(track="TR_wanted")
+    other, wanted = _FakePublication("TR_other"), _FakePublication("TR_wanted")
+    participant = _FakeParticipant("speaker-1")
+
+    room_io._on_track_published(other, participant)  # type: ignore[arg-type]
+    assert room_io.linked_track is None
+
+    room_io._on_track_published(wanted, participant)  # type: ignore[arg-type]
+    assert room_io.linked_track is not None
+    assert room_io.linked_track.publication is wanted
+    # the publisher is read off the track rather than supplied
+    assert room_io.linked_participant is participant  # type: ignore[comparison-overlap]
+
+
+async def test_a_video_track_is_never_linked() -> None:
+    room_io = _room_io(participant_identity="speaker-1")
+    video = _FakePublication("TR_video", kind=rtc.TrackKind.KIND_VIDEO)
+
+    room_io._on_track_published(video, _FakeParticipant("speaker-1"))  # type: ignore[arg-type]
+    assert room_io.linked_track is None
+
+
+async def test_auto_selection_takes_a_microphone_track_only() -> None:
+    room_io = _room_io(participant_identity="speaker-1")
+    participant = _FakeParticipant("speaker-1")
+    screen = _FakePublication("TR_screen", source=rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO)
+    mic = _FakePublication("TR_mic")
+
+    room_io._on_track_published(screen, participant)  # type: ignore[arg-type]
+    assert room_io.linked_track is None
+
+    room_io._on_track_published(mic, participant)  # type: ignore[arg-type]
+    assert room_io.linked_track is not None
+    assert room_io.linked_track.publication is mic
+
+
+async def test_auto_selection_is_narrowed_to_the_named_participant() -> None:
+    room_io = _room_io(participant_identity="speaker-1")
+
+    room_io._on_track_published(_FakePublication("TR_a"), _FakeParticipant("someone-else"))  # type: ignore[arg-type]
+    assert room_io.linked_track is None
+
+    room_io._on_track_published(_FakePublication("TR_b"), _FakeParticipant("speaker-1"))  # type: ignore[arg-type]
+    assert room_io.linked_track is not None
+
+
+async def test_a_named_track_ignores_the_participant_filter() -> None:
+    # the sid identifies a publication outright, so the search needs no narrowing
+    room_io = _room_io(track="TR_wanted", participant_identity="speaker-1")
+    screen = _FakePublication("TR_wanted", source=rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO)
+
+    room_io._on_track_published(screen, _FakeParticipant("someone-else"))  # type: ignore[arg-type]
+    assert room_io.linked_track is not None
+    assert room_io.linked_track.publication is screen

@@ -359,12 +359,16 @@ class _ParticipantLegacyTranscriptionOutput:
         *,
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
+        track: str | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
         # the last status written to the log, so only transitions are logged. This never
         # takes part in the decision itself.
         self._legacy_status_logged: bool | None = None
-        self._track_id: str | None = None
+        # when set, the transcript is stamped with this track rather than whichever
+        # microphone track the linked participant happens to publish
+        self._pinned_track_id: str | None = track
+        self._track_id: str | None = track
         self._participant_identity: str | None = None
 
         # identity of the participant that on behalf of the current participant
@@ -387,6 +391,11 @@ class _ParticipantLegacyTranscriptionOutput:
         )
         self._represented_by = self._participant_identity
         if self._participant_identity is None:
+            return
+
+        if self._pinned_track_id is not None:
+            self.flush()
+            self._reset_state()
             return
 
         # find track id from existing participants
@@ -511,6 +520,9 @@ class _ParticipantLegacyTranscriptionOutput:
         ):
             return
 
+        if self._pinned_track_id is not None:
+            return
+
         self._track_id = track.sid
         self._represented_by = participant.identity
 
@@ -522,6 +534,9 @@ class _ParticipantLegacyTranscriptionOutput:
             or self._participant_identity != self._room.local_participant.identity
             or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
+            return
+
+        if self._pinned_track_id is not None:
             return
 
         self._track_id = track.sid
@@ -548,9 +563,12 @@ class _ParticipantStreamTranscriptionOutput:
         participant: rtc.Participant | str | None = None,
         attributes: dict[str, str] | None = None,
         json_format: bool = False,
+        track: str | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
-        self._track_id: str | None = None
+        # see _ParticipantLegacyTranscriptionOutput
+        self._pinned_track_id: str | None = track
+        self._track_id: str | None = track
         self._participant_identity: str | None = None
         self._additional_attributes = attributes or {}
         self._writer: rtc.TextStreamWriter | None = None
@@ -574,11 +592,12 @@ class _ParticipantStreamTranscriptionOutput:
         if self._participant_identity is None:
             return
 
-        try:
-            self._track_id = find_micro_track_id(self._room, self._participant_identity)
-        except ValueError:
-            # track id is optional for TextStream when audio is not published
-            self._track_id = None
+        if self._pinned_track_id is None:
+            try:
+                self._track_id = find_micro_track_id(self._room, self._participant_identity)
+            except ValueError:
+                # track id is optional for TextStream when audio is not published
+                self._track_id = None
 
         self.flush()
         self._reset_state()
@@ -758,6 +777,9 @@ class _ParticipantStreamTranscriptionOutput:
         ):
             return
 
+        if self._pinned_track_id is not None:
+            return
+
         self._track_id = track.sid
 
     def _on_local_track_published(self, track: rtc.LocalTrackPublication, _: rtc.Track) -> None:
@@ -766,6 +788,9 @@ class _ParticipantStreamTranscriptionOutput:
             or self._participant_identity != self._room.local_participant.identity
             or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
+            return
+
+        if self._pinned_track_id is not None:
             return
 
         self._track_id = track.sid
@@ -781,7 +806,11 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         participant: rtc.Participant | str | None = None,
         next_in_chain: io.TextOutput | None = None,
         json_format: bool = False,
+        track: str | None = None,
     ) -> None:
+        """``track`` stamps the transcript with that publication instead of resolving the
+        linked participant's microphone track, so a transcript can be attributed to a track
+        the participant is not publishing as their microphone."""
         super().__init__(label="RoomIO", next_in_chain=next_in_chain)
 
         self.__outputs: list[
@@ -791,12 +820,14 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
                 room=room,
                 is_delta_stream=is_delta_stream,
                 participant=participant,
+                track=track,
             ),
             _ParticipantStreamTranscriptionOutput(
                 room=room,
                 is_delta_stream=is_delta_stream,
                 participant=participant,
                 json_format=json_format,
+                track=track,
             ),
         ]
         self.__closed = False
