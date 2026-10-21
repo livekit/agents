@@ -355,6 +355,8 @@ class RealtimeModel(llm.RealtimeModel):
                 mutable_instructions=True,
                 mutable_tools=False,
                 per_response_tool_choice=False,
+                # Gemini Live cancels response.create before function_call_output (#7915)
+                generate_reply_during_tool_call=False,
             )
         )
 
