@@ -456,4 +456,292 @@ async def test_stream_send_failure_raises_connection_error():
     assert "closing transport" in str(excinfo.value)
 
 
+@pytest.mark.parametrize("drain", [_drain, _drain_stream])
+async def test_send_failure_retries_on_a_new_socket(drain):
+    """A failed send means the transport is gone even if the reader has not seen it yet:
+    the retry must open a new socket, not reuse the broken one."""
+    sockets = [
+        FakeWebSocket([[READY]], fail_send_on="text"),
+        FakeWebSocket([[READY, AUDIO, EOS]]),
+    ]
+    session = FakeSession(*sockets)
+    tts = _new_tts(session)
+
+    duration = await drain(tts, APIConnectOptions(max_retry=1, retry_interval=0, timeout=5))
+    assert 0.5 <= duration <= 0.6
+    assert len(session.connects) == 2
+    assert sockets[0].closed
+
+
 # --- multiplexing: one socket per TTS instance, sessions in parallel on it -----------
+
+
+async def test_replies_share_one_socket():
+    tts, session, ws = _make_tts_scripts([[READY, AUDIO, EOS], [READY, AUDIO, EOS]])
+
+    await _drain(tts, CONN_OPTS)
+    await _drain_stream(tts, CONN_OPTS)
+
+    assert len(session.connects) == 1
+    setups = [m for m in ws.sent if m["type"] == "setup"]
+    assert len(setups) == 2
+    assert all(m["close_ws_on_eos"] is False for m in setups)
+    assert len({m["client_req_id"] for m in setups}) == 2
+    # every message of a session carries its id, including the end_of_stream
+    assert all("client_req_id" in m for m in ws.sent)
+    assert not ws.closed
+
+
+async def test_parallel_replies_share_one_socket():
+    """Three requests at once: three sessions on the same socket, each gets its audio."""
+    tts, session, ws = _make_tts_scripts([[READY, AUDIO, EOS]] * 3)
+
+    durations = await asyncio.gather(
+        _drain(tts, CONN_OPTS), _drain_stream(tts, CONN_OPTS), _drain(tts, CONN_OPTS)
+    )
+    assert all(0.5 <= d <= 0.6 for d in durations)
+    assert len(session.connects) == 1
+    assert len({m["client_req_id"] for m in ws.sent if m["type"] == "setup"}) == 3
+
+
+async def test_frames_of_an_unknown_session_are_dropped():
+    tts, _, ws = _make_tts_scripts([[READY, AUDIO, EOS]])
+    stale = {**AUDIO, "client_req_id": "interrupted-reply"}
+    ws.queue(stale, stale, {"type": "end_of_stream", "client_req_id": "interrupted-reply"})
+
+    duration = await _drain(tts, CONN_OPTS)
+    # only this session's single chunk, not the stale ones
+    assert 0.5 <= duration <= 0.6
+
+
+async def test_error_frame_of_an_unknown_session_is_logged(caplog):
+    earlier_error = {
+        "type": "error",
+        "message": "worker failed",
+        "code": 1011,
+        "client_req_id": "earlier",
+    }
+    tts, _, _ = _make_tts_scripts([[READY, earlier_error, AUDIO, EOS]])
+
+    with caplog.at_level("WARNING", logger="livekit.plugins.gradium"):
+        duration = await _drain(tts, CONN_OPTS)
+    assert 0.5 <= duration <= 0.6
+    assert "earlier session" in caplog.text
+
+
+async def test_interrupted_reply_keeps_the_socket():
+    """The interrupted session's sibling and the socket carry on, and whatever still
+    arrives for it is dropped without a warning."""
+    tts, session, ws = _make_tts_scripts([[READY], [READY]])
+
+    interrupted = tts.stream(conn_options=CONN_OPTS)
+    interrupted.push_text("hello world ")
+    sibling_task = asyncio.create_task(
+        _drain_stream(tts, APIConnectOptions(max_retry=0, timeout=5))
+    )
+    await asyncio.sleep(0.05)  # both sessions are set up
+    await interrupted.aclose()  # the agent interrupts the first reply
+
+    first_id = ws.sent[0]["client_req_id"]
+    assert ws.sent[0]["type"] == "setup"
+    assert not ws.closed
+
+    # a frame of the cancelled session still in flight, then the sibling's audio
+    sibling_id = next(
+        m["client_req_id"]
+        for m in ws.sent
+        if m["type"] == "setup" and m["client_req_id"] != first_id
+    )
+    ws.queue({**AUDIO, "client_req_id": first_id})
+    ws.queue({**AUDIO, "client_req_id": sibling_id}, {**EOS, "client_req_id": sibling_id})
+    duration = await sibling_task
+    assert 0.5 <= duration <= 0.6
+    assert len(session.connects) == 1
+    assert ws._queue.empty()
+
+
+async def test_interrupted_oneshot_keeps_the_socket():
+    tts, session, ws = _make_tts_scripts([[READY], [READY, AUDIO, EOS]])
+    stream = tts.synthesize("hello world", conn_options=CONN_OPTS)
+
+    async def consume() -> None:
+        async for _ in stream:
+            pass
+
+    consumer = asyncio.create_task(consume())
+    await asyncio.sleep(0.05)  # setup, text and end_of_stream reach the socket
+    await stream.aclose()  # the agent interrupts the one-shot reply
+    await consumer
+
+    duration = await _drain(tts, APIConnectOptions(max_retry=0, timeout=5))
+    assert 0.5 <= duration <= 0.6
+    assert len(session.connects) == 1
+
+
+async def test_failed_session_then_server_close_reconnects():
+    """A session error raises for that session; the server then closes the socket
+    (once idle) and the next reply opens a new one."""
+    sockets = [
+        FakeWebSocket([[READY, ERROR, "close"]], close_code=1011),
+        FakeWebSocket([[READY, AUDIO, EOS]]),
+    ]
+    session = FakeSession(*sockets)
+    tts = _new_tts(session)
+
+    with pytest.raises(APIStatusError, match="Unknown voice"):
+        await _drain(tts, CONN_OPTS)
+    await asyncio.sleep(0.05)  # the reader sees the close
+
+    await _drain(tts, APIConnectOptions(max_retry=0, timeout=5))
+    assert len(session.connects) == 2
+    assert sockets[0].closed
+    assert not sockets[1].closed
+
+
+async def test_connection_loss_reaches_every_open_session():
+    tts, _, ws = _make_tts_scripts([[READY], [READY]])
+
+    async def one() -> None:
+        async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5)) as stream:
+            stream.push_text("hello world")
+            async for _ in stream:
+                pass
+
+    tasks = [asyncio.create_task(one()), asyncio.create_task(one())]
+    await asyncio.sleep(0.05)  # both sessions are set up and waiting
+    ws.queue("close")
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    assert all(isinstance(r, APIStatusError) for r in results), results
+
+
+async def test_prewarm_opens_the_socket_before_the_first_reply():
+    tts, session, _ = _make_tts_scripts([[READY, AUDIO, EOS]])
+
+    tts.prewarm()
+    await asyncio.sleep(0.05)
+    assert len(session.connects) == 1
+
+    await _drain(tts, CONN_OPTS)
+    assert len(session.connects) == 1
+
+
+async def test_server_close_while_idle_reconnects_silently():
+    sockets = [FakeWebSocket([[READY, AUDIO, EOS]]), FakeWebSocket([[READY, AUDIO, EOS]])]
+    session = FakeSession(*sockets)
+    tts = _new_tts(session)
+
+    await _drain(tts, CONN_OPTS)
+    sockets[0].queue("close")  # the server drops the idle socket
+    await asyncio.sleep(0.05)
+
+    # no retry, no error: the next reply simply opens a new socket
+    await _drain(tts, APIConnectOptions(max_retry=0, timeout=5))
+    assert len(session.connects) == 2
+    assert sockets[0].closed
+
+
+async def test_reader_failure_while_idle_reconnects_silently():
+    sockets = [FakeWebSocket([[READY, AUDIO, EOS]]), FakeWebSocket([[READY, AUDIO, EOS]])]
+    session = FakeSession(*sockets)
+    tts = _new_tts(session)
+
+    await _drain(tts, CONN_OPTS)
+    sockets[0].queue(("raise", RuntimeError("reader died")))
+    await asyncio.sleep(0.05)
+
+    await _drain(tts, APIConnectOptions(max_retry=0, timeout=5))
+    assert len(session.connects) == 2
+
+
+async def test_aclose_closes_the_socket():
+    tts, _, ws = _make_tts_scripts([[READY, AUDIO, EOS]])
+    await _drain(tts, CONN_OPTS)
+    assert not ws.closed
+
+    await tts.aclose()
+    assert ws.closed
+
+
+async def test_aclose_closes_a_socket_still_connecting():
+    """A connect in flight when aclose() runs must not leave its socket open after it."""
+    ws = FakeWebSocket([])
+    release = asyncio.Event()
+
+    class SlowSession(FakeSession):
+        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+            await release.wait()
+            return await super().ws_connect(url, **kwargs)
+
+    tts = _new_tts(SlowSession(ws))
+    connecting = asyncio.create_task(tts._connection(5))
+    await asyncio.sleep(0.05)  # the connect holds the lock, waiting for the handshake
+    closing = asyncio.create_task(tts.aclose())
+    await asyncio.sleep(0.05)
+    release.set()
+
+    await asyncio.wait_for(asyncio.gather(connecting, closing), timeout=2)
+    assert ws.closed
+    assert tts._conn is None
+
+
+async def test_aclose_fails_an_in_flight_oneshot_instead_of_hanging():
+    tts, _, _ = _make_tts_scripts([[READY]])  # the server never finishes this one
+    stream = tts.synthesize("hello world", conn_options=CONN_OPTS)
+
+    async def consume() -> list[Any]:
+        return [ev async for ev in stream]
+
+    consumer = asyncio.create_task(consume())
+    await asyncio.sleep(0.05)
+    await tts.aclose()
+    await asyncio.wait_for(consumer, timeout=2)  # ends, with no audio
+
+
+async def test_a_malformed_frame_does_not_take_the_session_down():
+    tts, _, ws = _make_tts_scripts([[READY, AUDIO, EOS]])
+    ws.queue("not json at all", ["not", "an", "object"])
+
+    duration = await _drain(tts, CONN_OPTS)
+    assert 0.5 <= duration <= 0.6
+    assert not ws.closed
+
+
+async def test_close_code_survives_a_racing_aclose():
+    """aiohttp marks the socket closed before the reader sees the CLOSE frame; a
+    connection closed in that window still reports the server's close code."""
+    sockets = [FakeWebSocket([[READY]], close_code=1003), FakeWebSocket([[READY, AUDIO, EOS]])]
+    session = FakeSession(*sockets)
+    tts = _new_tts(session)
+
+    task = asyncio.create_task(_drain(tts, APIConnectOptions(max_retry=0, timeout=5)))
+    await asyncio.sleep(0.05)  # the session is up and waiting for audio
+    sockets[0].closed = True
+    sockets[0].queue("close")
+    await tts._conn.aclose()  # what a sibling's _connection() does on a closed socket
+
+    with pytest.raises(APIStatusError) as excinfo:
+        await task
+    assert excinfo.value.status_code == 1003
+    assert excinfo.value.retryable is False
+
+
+async def test_connection_level_error_fails_every_session_and_reconnects():
+    """An error frame without a client_req_id is the server rejecting the socket: every
+    open session gets it and the next reply opens a new socket."""
+    untagged = {"type": "error", "message": "boom", "code": 1011, "client_req_id": None}
+    sockets = [
+        FakeWebSocket([[READY], [READY, untagged]]),
+        FakeWebSocket([[READY, AUDIO, EOS]]),
+    ]
+    session = FakeSession(*sockets)
+    tts = _new_tts(session)
+
+    results = await asyncio.gather(
+        _drain(tts, CONN_OPTS), _drain_stream(tts, CONN_OPTS), return_exceptions=True
+    )
+    assert all(isinstance(r, APIStatusError) and "boom" in str(r) for r in results)
+    assert len(session.connects) == 1
+
+    await _drain(tts, CONN_OPTS)
+    assert len(session.connects) == 2
