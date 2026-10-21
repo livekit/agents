@@ -44,6 +44,29 @@ class CollectingAgent(Agent):
         return f"saved {email}"
 
 
+class AskName(AgentTask[str]):
+    def __init__(self) -> None:
+        super().__init__(instructions="Ask for the user's name.")
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="ask_name")
+
+
+class TwoDialogsAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+
+    @function_tool
+    async def collect_name(self, ctx: RunContext) -> str:
+        """Collects the user's name."""
+        return await AskName()
+
+    @function_tool
+    async def collect_email(self, ctx: RunContext) -> str:
+        """Collects the user's e-mail address."""
+        return await AskEmail()
+
+
 def _fake_llm() -> FakeLLM:
     return FakeLLM(
         fake_responses=[
@@ -56,6 +79,17 @@ def _fake_llm() -> FakeLLM:
                     FunctionToolCall(name="collect_email", arguments="{}", call_id="call_1")
                 ],
             ),
+            FakeLLMResponse(
+                input="both",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="collect_name", arguments="{}", call_id="call_3"),
+                    FunctionToolCall(name="collect_email", arguments="{}", call_id="call_4"),
+                ],
+            ),
+            FakeLLMResponse(input="ask_name", content="What is your name?", ttft=0, duration=0),
             FakeLLMResponse(
                 input="ask_email",
                 content="What is your e-mail address?",
@@ -80,6 +114,22 @@ async def test_user_goes_away_while_a_task_awaited_from_a_tool_waits_on_them() -
         # the task has asked its question, and the user stays silent
         await asyncio.sleep(USER_AWAY_TIMEOUT * 3)
         assert isinstance(session.current_agent, AskEmail)
+        assert len(away) == 1
+
+
+async def test_a_dialog_queued_behind_another_does_not_hold_the_away_timer() -> None:
+    """Two tools open a dialog each in one turn: the second waits for the first to finish,
+    and waits on the user as much as the first does."""
+    async with AgentSession(llm=_fake_llm(), user_away_timeout=USER_AWAY_TIMEOUT) as session:
+        away: list[UserStateChangedEvent] = []
+        session.on("user_state_changed", lambda ev: ev.new_state == "away" and away.append(ev))
+
+        await session.start(TwoDialogsAgent())
+        await asyncio.wait_for(session.run(user_input="both"), timeout=5.0)
+
+        # the first dialog has asked its question, and the user stays silent
+        await asyncio.sleep(USER_AWAY_TIMEOUT * 3)
+        assert isinstance(session.current_agent, (AskName, AskEmail))
         assert len(away) == 1
 
 

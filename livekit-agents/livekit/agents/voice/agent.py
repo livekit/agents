@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
@@ -993,10 +994,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             else None
         )
 
-        def _set_awaiting(value: bool) -> None:
-            if awaiting_tool is not None:
-                awaiting_tool.awaiting_agent_task = value
-
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():
                 return
@@ -1021,9 +1018,22 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         ):
             blocked_tasks.append(old_activity._on_enter_task)
 
-        async with old_activity._inline_task_slot(
-            speech_handle=speech_handle, blocked_tasks=blocked_tasks
-        ):
+        @contextlib.asynccontextmanager
+        async def _awaiting_task_slot() -> AsyncGenerator[None, None]:
+            # flagged before queueing for the slot: a tool waiting behind another dialog waits
+            # on the user as well
+            if awaiting_tool is not None:
+                awaiting_tool.awaiting_agent_task = True
+            try:
+                async with old_activity._inline_task_slot(
+                    speech_handle=speech_handle, blocked_tasks=blocked_tasks
+                ):
+                    yield
+            finally:
+                if awaiting_tool is not None:
+                    awaiting_tool.awaiting_agent_task = False
+
+        async with _awaiting_task_slot():
             current_task.add_done_callback(_handle_task_done)
 
             if (
@@ -1041,8 +1051,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
             pending_on_enter_task: asyncio.Task[None] | None = None
             try:
-                _set_awaiting(True)
-
                 # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
                 # AgentTasks that require user input, but session.run() can't return until
                 # all watched handles complete — creating a circular wait.
@@ -1086,7 +1094,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                         run_state._mark_done_if_needed(None)
             # asyncio.CancelledError derives from BaseException, not Exception
             except BaseException:
-                _set_awaiting(False)
                 self.__inactive_ev.set()
                 raise
 
