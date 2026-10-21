@@ -92,6 +92,19 @@ class _TTSOptions:
     json_config: dict[str, Any] | None = None
 
 
+def _setup_msg(opts: _TTSOptions, model_name: str) -> dict[str, Any]:
+    msg: dict[str, Any] = {"type": "setup", "model_name": model_name, "output_format": "pcm"}
+    if opts.voice is not None:
+        msg["voice"] = opts.voice
+    if opts.voice_id is not None:
+        msg["voice_id"] = opts.voice_id
+    if opts.pronunciation_id is not None:
+        msg["pronunciation_id"] = opts.pronunciation_id
+    if opts.json_config is not None:
+        msg["json_config"] = json.dumps(opts.json_config)
+    return msg
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -217,37 +230,14 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            api_key=self._api_key,
-            input_text=text,
-            model_endpoint=self._model_endpoint,
-            model_name=self._model_name,
-            conn_options=conn_options,
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        api_key: str,
-        model_endpoint: str,
-        model_name: str,
-        input_text: str,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(
-            tts=tts,
-            input_text=input_text,
-            conn_options=conn_options,
-        )
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
 
         self._tts: TTS = tts
-        self._api_key = api_key
-        self._model_endpoint = model_endpoint
-        self._model_name = model_name
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -261,20 +251,7 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/pcm",
                 )
 
-                setup_msg: dict[str, Any] = {
-                    "type": "setup",
-                    "model_name": self._model_name,
-                    "output_format": "pcm",
-                }
-                if self._opts.voice is not None:
-                    setup_msg["voice"] = self._opts.voice
-                if self._opts.voice_id is not None:
-                    setup_msg["voice_id"] = self._opts.voice_id
-                if self._opts.pronunciation_id is not None:
-                    setup_msg["pronunciation_id"] = self._opts.pronunciation_id
-                if self._opts.json_config is not None:
-                    setup_msg["json_config"] = json.dumps(self._opts.json_config)
-                await ws.send_str(json.dumps(setup_msg))
+                await ws.send_str(json.dumps(_setup_msg(self._opts, self._tts._model_name)))
                 text_msg = {"type": "text", "text": self._input_text}
                 await ws.send_str(json.dumps(text_msg))
                 flush_msg = {"type": "end_of_stream"}
@@ -392,21 +369,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=segment_id)
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            setup_msg: dict[str, Any] = {
-                "type": "setup",
-                "model_name": self._tts._model_name,
-                "output_format": "pcm",
-            }
-            if self._opts.voice is not None:
-                setup_msg["voice"] = self._opts.voice
-            if self._opts.voice_id is not None:
-                setup_msg["voice_id"] = self._opts.voice_id
-            if self._opts.pronunciation_id is not None:
-                setup_msg["pronunciation_id"] = self._opts.pronunciation_id
-            if self._opts.json_config is not None:
-                setup_msg["json_config"] = json.dumps(self._opts.json_config)
-
-            await ws.send_str(json.dumps(setup_msg))
+            await ws.send_str(json.dumps(_setup_msg(self._opts, self._tts._model_name)))
 
             async for word in word_stream:
                 text_msg = {"type": "text", "text": f"{word.token} "}
