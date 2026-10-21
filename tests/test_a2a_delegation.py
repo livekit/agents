@@ -273,6 +273,48 @@ async def test_a2a_delegate_speaks_plain_a2a_to_a_stock_server() -> None:
         assert "a2a-extensions" not in headers and "x-livekit-session-id" not in headers
 
 
+async def test_a_minted_project_token_is_fresh_on_every_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A delegate on the project's host mints its token per request, so a worker that outlives
+    one token's TTL still reaches the expert."""
+    from livekit.agents.a2a.auth import Credentials
+
+    monkeypatch.setenv("LIVEKIT_URL", "http://reasoner.test")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "APItest")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "secret-secret-secret-secret-secret")
+    minted: list[str] = []
+
+    def project_token(self: Credentials, *, identity: str = "worker", **_: Any) -> str:
+        minted.append(f"token-{len(minted)}")
+        return minted[-1]
+
+    monkeypatch.setattr(Credentials, "project_token", project_token)
+    bearers: list[str] = []
+
+    async with stock_server(_Reasoner()) as app:
+
+        async def recording(scope: Any, receive: Any, send: Any) -> None:
+            if scope["type"] == "http":
+                headers = {k.decode(): v.decode() for k, v in scope["headers"]}
+                bearers.append(headers.get("authorization", ""))
+            await app(scope, receive, send)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=recording),
+            base_url="http://reasoner.test",
+            timeout=30.0,
+        ) as http:
+            delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
+            await delegate.run("balance please", context_id="AT_caller")
+            await delegate.run("balance again", context_id="AT_caller")
+            await delegate.aclose()
+
+    # the card, then one send per run, each with a token of its own
+    assert len(minted) == 3
+    assert bearers == [f"Bearer {token}" for token in minted]
+
+
 async def test_a_delegate_is_a_toolset_named_from_the_card(
     agentdb_storage: AgentDBStorage,
 ) -> None:

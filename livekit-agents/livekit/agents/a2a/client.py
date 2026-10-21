@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 
 import httpx
 from a2a.client import Client, ClientCallContext, ClientConfig, ClientFactory
@@ -66,7 +66,7 @@ class AgentClient:
     def __init__(
         self,
         endpoint_url: str,
-        token: str | None = None,
+        token: str | Callable[[], str | None] | None = None,
         *,
         httpx_client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -117,8 +117,13 @@ class AgentClient:
             )
             return self._client
 
+    def _bearer(self) -> str | None:
+        """The token for the next request; a callable is asked each time, so it can mint."""
+        return self._token() if callable(self._token) else self._token
+
     async def _resolve_card(self) -> pb.AgentCard:
-        headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        token = self._bearer()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
         resolver = A2ACardResolver(self._http, self._url)
         return await resolver.get_agent_card(http_kwargs={"headers": headers} if headers else None)
 
@@ -240,8 +245,8 @@ class AgentClient:
         headers: dict[str, str] = {"A2A-Version": "1.0"}
         if self.offers_extension:
             headers[EXTENSIONS_HEADER] = EXTENSION_URI
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        if token := self._bearer():
+            headers["Authorization"] = f"Bearer {token}"
         return ClientCallContext(service_parameters=headers)
 
     async def _on_response(self, response: httpx.Response) -> None:

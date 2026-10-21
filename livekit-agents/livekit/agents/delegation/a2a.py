@@ -77,8 +77,8 @@ class A2ADelegate(Delegate, Toolset):
     name, it gets the conversation as a ``chat_ctx`` part and keeps a session of its own. Any
     other A2A server gets the request as text and nothing else, and keeps a context of its own
     (docs/multi-agent.md). ``token`` omitted, an expert on the project's
-    own host (``LIVEKIT_URL``) gets a project token minted from ``LIVEKIT_API_KEY`` and
-    ``LIVEKIT_API_SECRET``; an expert anywhere else gets none.
+    own host (``LIVEKIT_URL``) gets a project token minted per request from ``LIVEKIT_API_KEY``
+    and ``LIVEKIT_API_SECRET``; an expert anywhere else gets none.
     """
 
     def __init__(
@@ -271,9 +271,9 @@ class A2ADelegate(Delegate, Toolset):
         if self._client is None:
             from ..a2a.client import AgentClient
 
-            if self._token is None:
-                self._token = self._project_token()
-            self._client = AgentClient(self._url, self._token, httpx_client=self._httpx_client)
+            # a minted token expires, so the client mints one per request rather than keeping it
+            token = self._token if self._token is not None else self._project_token
+            self._client = AgentClient(self._url, token, httpx_client=self._httpx_client)
 
         await self._client.connect()
         return self._client
