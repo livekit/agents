@@ -18,6 +18,7 @@ from livekit.agents import Plugin
 
 from .knowledge_base import KnowledgeBase
 from .log import logger
+from .recent import ENGLISH_FILLERS
 from .version import __version__
 
 
@@ -28,4 +29,4 @@ class MossPlugin(Plugin):
 
 Plugin.register_plugin(MossPlugin())
 
-__all__ = ["KnowledgeBase", "__version__"]
+__all__ = ["ENGLISH_FILLERS", "KnowledgeBase", "__version__"]
