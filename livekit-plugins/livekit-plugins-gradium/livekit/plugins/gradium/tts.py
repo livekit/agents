@@ -93,8 +93,13 @@ class _TTSOptions:
     json_config: dict[str, Any] | None = None
 
 
-def _setup_msg(opts: _TTSOptions, model_name: str) -> dict[str, Any]:
-    msg: dict[str, Any] = {"type": "setup", "model_name": model_name, "output_format": "pcm"}
+def _setup_msg(opts: _TTSOptions, model_name: str, client_req_id: str) -> dict[str, Any]:
+    msg: dict[str, Any] = {
+        "type": "setup",
+        "model_name": model_name,
+        "output_format": "pcm",
+        "client_req_id": client_req_id,
+    }
     if opts.voice is not None:
         msg["voice"] = opts.voice
     if opts.voice_id is not None:
@@ -283,19 +288,26 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # TODO(laurent): once we support the POST requests, we should use it here rather than the websocket API.
+        client_req_id = utils.shortuuid()
         try:
             async with await self._tts._connect_ws(self._conn_options.timeout) as ws:
                 output_emitter.initialize(
-                    request_id=utils.shortuuid(),
+                    request_id=client_req_id,
                     sample_rate=SUPPORTED_SAMPLE_RATE,
                     num_channels=1,
                     mime_type="audio/pcm",
                 )
 
-                await ws.send_str(json.dumps(_setup_msg(self._opts, self._tts._model_name)))
-                text_msg = {"type": "text", "text": self._input_text}
+                await ws.send_str(
+                    json.dumps(_setup_msg(self._opts, self._tts._model_name, client_req_id))
+                )
+                text_msg = {
+                    "type": "text",
+                    "text": self._input_text,
+                    "client_req_id": client_req_id,
+                }
                 await ws.send_str(json.dumps(text_msg))
-                flush_msg = {"type": "end_of_stream"}
+                flush_msg = {"type": "end_of_stream", "client_req_id": client_req_id}
                 await ws.send_str(json.dumps(flush_msg))
 
                 await _consume_session(ws, on_audio=output_emitter.push)
@@ -350,7 +362,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _run_segments() -> None:
             async for word_stream in segments_ch:
-                await self._run_ws(word_stream, output_emitter)
+                await self._run_session(word_stream, output_emitter)
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -371,21 +383,27 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
-    async def _run_ws(
+    async def _run_session(
         self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
     ) -> None:
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
+        client_req_id = utils.shortuuid()
+        output_emitter.start_segment(segment_id=client_req_id)
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            await ws.send_str(json.dumps(_setup_msg(self._opts, self._tts._model_name)))
+            await ws.send_str(
+                json.dumps(_setup_msg(self._opts, self._tts._model_name, client_req_id))
+            )
 
             async for word in word_stream:
-                text_msg = {"type": "text", "text": f"{word.token} "}
+                text_msg = {
+                    "type": "text",
+                    "text": f"{word.token} ",
+                    "client_req_id": client_req_id,
+                }
                 self._mark_started()
                 await ws.send_str(json.dumps(text_msg))
 
-            flush_msg = {"type": "end_of_stream"}
+            flush_msg = {"type": "end_of_stream", "client_req_id": client_req_id}
             await ws.send_str(json.dumps(flush_msg))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

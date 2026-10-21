@@ -341,6 +341,14 @@ async def test_stream_emits_audio_and_sends_words_then_eos():
     assert [m["text"] for m in ws.sent[1:3]] == ["hello ", "world "]
 
 
+async def test_every_message_carries_the_session_id():
+    tts, _, ws = _make_tts([READY, AUDIO, EOS])
+    await _drain_stream(tts, CONN_OPTS)
+    ids = {m.get("client_req_id") for m in ws.sent}
+    assert len(ids) == 1
+    assert None not in ids
+
+
 async def test_stream_raises_on_error_frame():
     tts, _, _ = _make_tts([READY, ERROR, "close"], close_code=1011)
 
