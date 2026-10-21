@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -440,3 +441,34 @@ async def test_ctx_update_resets_pending_filler_dwell() -> None:
         fires_late = len(session.say_calls)
     assert fires_mid == 0
     assert fires_late == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduler_reports_a_say_that_raises(caplog: pytest.LogCaptureFixture) -> None:
+    """A failing say() is reported: the wait inside _run collects exceptions instead of
+    raising them, so nothing else would tell the caller the filler is dead."""
+    session = _FakeSession()
+
+    def _failing_say(text: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("no TTS model and the RealtimeSession does not support say()")
+
+    session.say = _failing_say  # type: ignore[assignment]
+    handle = _FakeSpeechHandle()
+
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        scheduler = _FillerScheduler(
+            session=session,  # type: ignore[arg-type]
+            speech_handle=handle,  # type: ignore[arg-type]
+            source="let me check",
+            delay=0.05,
+            interval=10,
+            max_steps=3,
+        )
+        await asyncio.sleep(0.15)
+        await scheduler.aclose()
+
+    assert scheduler._main_task.done()
+    assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == [
+        "filler stopped on an error, no further filler will play for this tool call"
+    ]
+    assert any("does not support say()" in str(r.exc_info[1]) for r in caplog.records if r.exc_info)

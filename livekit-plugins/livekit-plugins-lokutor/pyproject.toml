@@ -5,24 +5,23 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-lokutor"
 dynamic = ["version"]
-description = "LiveKit Agents Plugin for Lokutor TTS"
+description = "Lokutor speech-to-text and text-to-speech plugin for LiveKit agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["voice", "ai", "realtime", "audio", "livekit", "lokutor"]
+keywords = ["webrtc", "realtime", "audio", "livekit", "lokutor", "STT", "TTS", "voice"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Topic :: Multimedia :: Sound/Audio",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = [
-    "livekit-agents>=1.8.1",
-]
+dependencies = ["livekit-agents>=1.8.8"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

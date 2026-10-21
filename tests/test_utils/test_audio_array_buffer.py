@@ -221,6 +221,29 @@ class TestSampleRates:
         assert len(buf) == 0
         assert buf.push_frame(_frame([2, 3, 4, 5], sr=8000)) > 0
 
+    @pytest.mark.parametrize("old_samples", [[30000], [30000] * 400])
+    def test_reset_discards_resampler_history(self, old_samples: list[int]) -> None:
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+        buf.push_frame(_frame(old_samples, sr=8000))
+        buf.reset()
+        silence = _frame([0] * 400, sr=8000)
+        fresh = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+
+        assert buf.push_frame(silence) == fresh.push_frame(silence)
+        # Independent native resamplers can differ by a few PCM units due to dithering.
+        np.testing.assert_allclose(buf.read(), fresh.read(), atol=2)
+
+    @pytest.mark.parametrize("next_sr", [16000, 24000])
+    def test_reset_allows_new_input_sample_rate(self, next_sr: int) -> None:
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+        buf.push_frame(_frame([1] * 400, sr=8000))
+        buf.reset()
+        frame = _frame([2] * 400, sr=next_sr)
+        fresh = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+
+        assert buf.push_frame(frame) == fresh.push_frame(frame)
+        np.testing.assert_allclose(buf.read(), fresh.read(), atol=2)
+
 
 class TestPerformance:
     @pytest.mark.parametrize("sr", [16000, 48000], ids=["16k", "48k"])

@@ -70,3 +70,48 @@ def test_live_streaming_synthesis_returns_audio():
 def test_live_chunked_synthesis_returns_audio():
     total_bytes = asyncio.run(_chunked_synthesis())
     assert total_bytes > 0, "chunked synthesis produced no audio"
+
+
+async def _synthesize_then_transcribe() -> tuple[str, str]:
+    """Lokutor speaks a sentence and Lokutor recognises it, both ways: one-shot and streamed."""
+    import aiohttp
+
+    from livekit import rtc
+    from livekit.agents import stt as agents_stt
+    from livekit.plugins import lokutor
+
+    sentence = "Please book a table for four people on Friday evening."
+    async with aiohttp.ClientSession() as session:
+        tts = lokutor.TTS(voice="F1", language="en", http_session=session)
+        async with tts:
+            frames = [audio.frame async for audio in tts.synthesize(sentence)]
+        speech = rtc.combine_audio_frames(frames)
+        # Trailing silence so the stream sees the utterance end.
+        silence = rtc.AudioFrame(
+            b"\x00\x00" * speech.sample_rate,
+            sample_rate=speech.sample_rate,
+            num_channels=1,
+            samples_per_channel=speech.sample_rate,
+        )
+
+        stt = lokutor.STT(language="en", http_session=session)
+        one_shot = await stt.recognize([speech])
+
+        stream = stt.stream()
+        stream.push_frame(speech)
+        stream.push_frame(silence)
+        stream.end_input()
+        finals = [
+            ev.alternatives[0].text
+            async for ev in stream
+            if ev.type == agents_stt.SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        await stream.aclose()
+    return one_shot.alternatives[0].text, " ".join(finals)
+
+
+def test_live_speech_to_text_recognises_lokutor_speech():
+    one_shot, streamed = asyncio.run(_synthesize_then_transcribe())
+    for text in (one_shot, streamed):
+        words = text.lower()
+        assert "table" in words and "friday" in words, f"unexpected transcript: {text!r}"

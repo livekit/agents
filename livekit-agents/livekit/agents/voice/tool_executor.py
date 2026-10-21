@@ -21,6 +21,7 @@ from ..llm.tool_context import (
     Tool,
     ToolError,
     ToolFlag,
+    ToolResult,
     Toolset,
     function_tool,
 )
@@ -372,27 +373,17 @@ class _ToolExecutor:
                     first_update_fut.set_result(output)
                 return output
 
-            if output is None or isinstance(output, StopResponse):
-                return output
-
-            # the first update has already been returned to dispatch, so an Agent
-            # return now has no surface to carry an agent_task back
-            from .agent import Agent
-
-            if isinstance(output, Agent):
-                logger.error(
-                    f"tool `{fnc_name}` returned an Agent after ctx.update(); "
-                    "agent handoff after a progress update is not supported",
-                    extra={"call_id": call_id, "function": fnc_name},
-                )
-                raise RuntimeError("agent handoff after a progress update is not supported")
-
-            if isinstance(output, BaseException):
+            if isinstance(output, BaseException) and not isinstance(output, StopResponse):
                 if isinstance(output, ToolError):
+                    # Keep detail out of the message body so redaction can
+                    # drop it (a log body cannot be redacted).
                     logger.warning(
-                        "ToolError while executing tool: %s",
-                        output.message,
-                        extra={"function": fnc_name, "call_id": call_id},
+                        "ToolError while executing tool",
+                        extra={
+                            "function": fnc_name,
+                            "call_id": call_id,
+                            "lk.pii.error": output.message,
+                        },
                     )
                 else:
                     logger.error(
@@ -401,8 +392,20 @@ class _ToolExecutor:
                         exc_info=output,
                     )
 
-            # final return goes through the coalescer as a synthetic output
-            pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
+            # every final return, None included, goes through the coalescer as a synthetic
+            # output, so the model never waits on a result that won't come
+            final = run_ctx._make_update_output(output, call_id_suffix="_final")
+            if final.agent_task is not None:
+                # the first update already answered dispatch, so a returned handoff cannot apply
+                logger.error(
+                    f"tool `{fnc_name}` returned an Agent after ctx.update(); "
+                    "agent handoff after a progress update is not supported",
+                    extra={"call_id": call_id, "function": fnc_name},
+                )
+                output = ToolError("the agent handoff did not happen")
+                final = run_ctx._make_update_output(output, call_id_suffix="_final")
+
+            pair = (final.fnc_call, final.fnc_call_out)
             run_ctx._updates.append(pair)
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
             return output
@@ -446,6 +449,9 @@ class _ToolExecutor:
 
             # one terminal entry per call; deferred entries use the _final id
             from .agent import Agent
+
+            if isinstance(output, ToolResult):
+                output = output.output
 
             status: Literal["done", "error", "cancelled"]
             message: str | None
@@ -527,6 +533,9 @@ class _ToolExecutor:
         chat_ctx.insert(items)
         await target.update_chat_ctx(chat_ctx)
         ctx.session.history.insert(items)
+
+        if not any(item.type == "function_call_output" and item.reply_required for item in items):
+            return
 
         self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
 

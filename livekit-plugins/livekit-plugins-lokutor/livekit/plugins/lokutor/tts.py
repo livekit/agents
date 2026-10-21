@@ -21,7 +21,14 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .log import logger
-from .models import DEFAULT_SAMPLE_RATE, DEFAULT_VOICE_ID, VoiceID
+from .models import (
+    DEFAULT_BASE_URL,
+    DEFAULT_SAMPLE_RATE,
+    DEFAULT_VOICE_ID,
+    TTS_MODEL,
+    TTSLanguage,
+    VoiceID,
+)
 
 
 @dataclass
@@ -29,8 +36,8 @@ class _TTSOptions:
     api_key: str
     voice: str
     language: str | None
-    speed: float
-    steps: int
+    speed: float | None
+    steps: int | None
     visemes: bool
     base_url: str
     sample_rate: int
@@ -48,15 +55,17 @@ class TTS(tts.TTS):
     Args:
         api_key: Lokutor API key. If not provided, reads from ``LOKUTOR_API_KEY``
             environment variable.
-        voice: Voice ID to use. See ``VoiceID`` for available options.
-            Defaults to ``"F1"``.
-        language: Language code (e.g. ``"en"``, ``"es"``, ``"fr"``).
-            Defaults to ``"en"``.
-        speed: Speed multiplier between 0.5 and 2.0. Defaults to ``1.05``.
-        steps: Diffusion steps — the latency/quality dial. Higher values
-            improve quality but increase latency (8 ultra-fast, 16 fast,
-            32 balanced, 64 highest quality). Defaults to ``5`` for the
-            lowest possible latency in a conversational agent.
+        voice: Voice slot to use, ``"F1"``-``"F5"`` or ``"M1"``-``"M5"``. Each
+            language has its own native speaker in each slot. Defaults to ``"F1"``.
+        language: Language code: ``"en"``, ``"es"``, ``"ca"``, ``"gl"``,
+            ``"eu"``, ``"pt"``, ``"fr"``, ``"it"`` or ``"de"``. Any other value
+            uses the English speakers. Defaults to ``"en"``.
+        speed: Accepted for compatibility (0.5-2.0); the ``versa-2.0`` model
+            sets its own pace and this does not change the audio. Sent only
+            when given.
+        steps: Accepted for compatibility; ``versa-2.0`` runs a fixed schedule
+            of denoising steps and this does not change the audio. Sent only
+            when given.
         visemes: Whether to enable viseme (lip-sync) data. Defaults to
             ``False``.
         base_url: Base URL for the Lokutor API. Defaults to
@@ -75,11 +84,11 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         voice: VoiceID | str = DEFAULT_VOICE_ID,
-        language: str | None = "en",
-        speed: float = 1.05,
-        steps: int = 5,
+        language: TTSLanguage | str | None = "en",
+        speed: float | None = None,
+        steps: int | None = None,
         visemes: bool = False,
-        base_url: str = "wss://api.lokutor.com",
+        base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         lokutor_api_key = api_key or os.environ.get("LOKUTOR_API_KEY")
@@ -120,8 +129,8 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        """Returns the model name ``"versa-1.0"``."""
-        return "versa-1.0"
+        """Returns the model name ``"versa-2.0"``."""
+        return TTS_MODEL
 
     @property
     def provider(self) -> str:
@@ -359,10 +368,12 @@ def _build_request(opts: _TTSOptions, text: str) -> dict[str, Any]:
     request: dict[str, Any] = {
         "text": text,
         "voice": opts.voice,
-        "speed": opts.speed,
-        "steps": opts.steps,
         "visemes": opts.visemes,
     }
+    if opts.speed is not None:
+        request["speed"] = opts.speed
+    if opts.steps is not None:
+        request["steps"] = opts.steps
     if opts.language:
         request["language"] = opts.language
     return request

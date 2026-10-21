@@ -1,25 +1,35 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+from array import array
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
 from openai.types.realtime import (
     ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
     RealtimeErrorEvent,
+    SessionUpdateEvent,
 )
 from openai.types.realtime.audio_transcription import AudioTranscription
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
-from livekit.agents import llm
+from livekit import rtc
+from livekit.agents import AgentSession, llm, utils
 from livekit.agents._exceptions import APIError
+from livekit.agents.llm._realtime.openai_types import RealtimeModels as CoreRealtimeModels
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
+from livekit.agents.metrics import STTMetrics
 from livekit.agents.utils import is_given
+from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.report import SessionReport
+from livekit.plugins.openai.models import RealtimeModels as PluginRealtimeModels
 from livekit.plugins.openai.realtime.realtime_model import (
     RealtimeModel,
     RealtimeSession,
@@ -27,6 +37,23 @@ from livekit.plugins.openai.realtime.realtime_model import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_direct_model_preserves_public_label_and_model_types() -> None:
+    from livekit.agents import inference
+    from livekit.agents.llm._realtime import openai as core
+
+    model = RealtimeModel(api_key="fake")
+    azure = RealtimeModel.with_azure(
+        azure_deployment="dep", api_key="fake", base_url="https://example.com/openai"
+    )
+
+    assert model.label == "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
+    assert type(azure) is RealtimeModel
+    assert azure.label == model.label
+    assert RealtimeSession is core.RealtimeSession
+    assert not issubclass(inference.RealtimeModel, RealtimeModel)
+    assert PluginRealtimeModels is CoreRealtimeModels
 
 
 def test_update_options_only_propagates_given_turn_detection() -> None:
@@ -226,10 +253,23 @@ def test_update_chat_ctx_deletes_empty_remote_items() -> None:
 
 def test_is_fatal_error_matches_known_codes() -> None:
     assert _is_fatal_error(SimpleNamespace(code="insufficient_quota"))
+    assert _is_fatal_error(
+        SimpleNamespace(code="credit_balance_exhausted", type="insufficient_quota")
+    )
     assert _is_fatal_error(SimpleNamespace(code=None, type="invalid_api_key"))
     assert not _is_fatal_error(SimpleNamespace(code="server_error"))
     assert not _is_fatal_error(SimpleNamespace())
     assert not _is_fatal_error(None)
+
+
+def test_is_fatal_error_matches_either_code_or_type() -> None:
+    # a fatal type is fatal even when the code is one we don't list (#7805)
+    assert _is_fatal_error(SimpleNamespace(code="some_new_code", type="insufficient_quota"))
+    assert _is_fatal_error(SimpleNamespace(code="insufficient_quota", type="some_new_type"))
+    assert _is_fatal_error(SimpleNamespace(code="", type="insufficient_quota"))
+    assert not _is_fatal_error(SimpleNamespace(code="server_error", type="server_error"))
+    assert not _is_fatal_error(SimpleNamespace(code="", type=""))
+    assert not _is_fatal_error(SimpleNamespace(code=None, type=None))
 
 
 def _handle_error_session(
@@ -517,3 +557,384 @@ def test_error_with_unknown_event_id_leaves_generate_reply_futures_untouched() -
     assert session._response_created_futures == {"response_create_1": fut}
     # still reported down the ordinary path
     assert captured["recoverable"] is True
+
+
+def _transcription_metrics_session() -> tuple[RealtimeSession, list[STTMetrics]]:
+    model = RealtimeModel(
+        api_key="fake", input_audio_transcription=AudioTranscription(model="whisper-1")
+    )
+    session = RealtimeSession.__new__(RealtimeSession)
+    llm.RealtimeSession.__init__(session, model)
+    session._opts = replace(model._opts)
+    session._capabilities = replace(model.capabilities)
+    session._remote_chat_ctx = RemoteChatContext()
+    session._input_transcript_accumulators = {}
+    session._input_speech_started_at = {}
+    collected: list[STTMetrics] = []
+    session.on("metrics_collected", collected.append)
+    return session, collected
+
+
+def _completed_event_with_raw_usage(
+    usage: dict[str, object] | None,
+) -> ConversationItemInputAudioTranscriptionCompletedEvent:
+    event = ConversationItemInputAudioTranscriptionCompletedEvent.construct(
+        type="conversation.item.input_audio_transcription.completed",
+        event_id="evt",
+        item_id="item_1",
+        content_index=0,
+        transcript="hello",
+        usage=None,
+    )
+    event.usage = usage  # type: ignore[assignment]
+    return event
+
+
+def test_raw_duration_usage_emits_stt_metrics() -> None:
+    session, collected = _transcription_metrics_session()
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage({"type": "duration", "seconds": 2.5})
+    )
+
+    assert len(collected) == 1
+    assert collected[0].audio_duration == 2.5
+    assert collected[0].streamed is True
+    assert collected[0].metadata is not None
+    assert collected[0].metadata.model_name == "whisper-1"
+
+
+def test_raw_token_usage_emits_stt_metrics() -> None:
+    session, collected = _transcription_metrics_session()
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "input_token_details": {"audio_tokens": 8},
+            }
+        )
+    )
+
+    assert len(collected) == 1
+    assert collected[0].input_tokens == 10
+    assert collected[0].output_tokens == 2
+    assert collected[0].total_tokens == 12
+    assert collected[0].input_audio_tokens == 8
+    assert collected[0].streamed is True
+
+
+@pytest.mark.parametrize("usage", [None, {"type": "unknown"}, {"type": "tokens"}])
+def test_missing_or_invalid_transcription_usage_preserves_transcript(
+    usage: dict[str, object] | None,
+) -> None:
+    session, collected = _transcription_metrics_session()
+    transcripts: list[llm.InputTranscriptionCompleted] = []
+    session.on("input_audio_transcription_completed", transcripts.append)
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage(usage)
+    )
+    assert collected == []
+    assert len(transcripts) == 1
+    assert transcripts[0].transcript == "hello"
+    assert transcripts[0].is_final is True
+
+
+def test_transcription_metrics_use_session_model_after_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, collected = _transcription_metrics_session()
+    updates: list[SessionUpdateEvent] = []
+    monkeypatch.setattr(session, "send_event", updates.append)
+
+    session.update_options(input_audio_transcription=AudioTranscription(model="gpt-4o-transcribe"))
+    assert updates[0].session.audio.input.transcription.model == "gpt-4o-transcribe"
+    assert session._realtime_model._opts.input_audio_transcription.model == "whisper-1"
+
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage({"type": "duration", "seconds": 2.5})
+    )
+
+    assert collected[0].metadata is not None
+    assert collected[0].metadata.model_name == "gpt-4o-transcribe"
+
+
+def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
+    realtime_session, _ = _transcription_metrics_session()
+    agent_session = AgentSession()
+    activity = AgentActivity.__new__(AgentActivity)
+    activity._session = agent_session
+    realtime_session.on("metrics_collected", activity._on_metrics_collected)
+
+    realtime_session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "input_token_details": {"audio_tokens": 8, "text_tokens": 2},
+            }
+        )
+    )
+
+    report = SessionReport(
+        job_id="job",
+        room_id="room",
+        room="test",
+        options=agent_session.options,
+        events=[],
+        chat_history=llm.ChatContext(),
+        model_usage=agent_session.usage.model_usage,
+    )
+    assert report.to_dict()["usage"] == [
+        {
+            "provider": "api.openai.com",
+            "model": "whisper-1",
+            "input_tokens": 10,
+            "input_audio_tokens": 8,
+            "output_tokens": 2,
+        }
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# a reconnection replays the conversation the server held, tool calls included
+# --------------------------------------------------------------------------- #
+
+
+async def _start_function_call_server(
+    arguments: str, *, drop_on_output: bool = False, refuse_first: bool = False
+) -> tuple[Any, list[tuple[Any, list[dict]]]]:
+    """A realtime server whose response calls `weather`, recording each connection's creates.
+
+    With `drop_on_output`, the first connection closes on the function call output before it
+    confirms it. With `refuse_first`, the first handshake gets a 503.
+    """
+    from aiohttp import WSMsgType, web
+    from aiohttp.test_utils import TestServer
+
+    connections: list[tuple[web.WebSocketResponse, list[dict]]] = []
+    handshakes = 0
+
+    async def realtime(request: web.Request) -> web.StreamResponse:
+        nonlocal handshakes
+        handshakes += 1
+        if refuse_first and handshakes == 1:
+            return web.Response(status=503)
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        created: list[dict] = []
+        connections.append((ws, created))
+        await ws.send_json({"type": "session.created", "event_id": "ev_session", "session": {}})
+        previous_item_id = None
+        async for msg in ws:
+            if msg.type is not WSMsgType.TEXT:
+                continue
+            event = msg.json()
+            if event["type"] == "conversation.item.create":
+                item = event["item"]
+                created.append(item)
+                if (
+                    drop_on_output
+                    and len(connections) == 1
+                    and item["type"] == "function_call_output"
+                ):
+                    await ws.close()
+                    break
+                await ws.send_json(
+                    {
+                        "type": "conversation.item.added",
+                        "event_id": f"ev_{item['id']}",
+                        "previous_item_id": previous_item_id,
+                        "item": item,
+                    }
+                )
+                previous_item_id = item["id"]
+            elif event["type"] == "response.create":
+                # like the real API, the call is added with empty arguments and only
+                # completed by response.output_item.done
+                response = {
+                    "id": "resp_1",
+                    "object": "realtime.response",
+                    "status": "in_progress",
+                    "output": [],
+                    "metadata": event["response"].get("metadata"),
+                }
+                call = {
+                    "id": "item_call",
+                    "object": "realtime.item",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "call_id": "call_1",
+                    "name": "weather",
+                    "arguments": "",
+                }
+                done_call = {**call, "status": "completed", "arguments": arguments}
+                for server_event in (
+                    {"type": "response.created", "response": response},
+                    {
+                        "type": "response.output_item.added",
+                        "response_id": "resp_1",
+                        "output_index": 0,
+                        "item": call,
+                    },
+                    {
+                        "type": "conversation.item.added",
+                        "previous_item_id": previous_item_id,
+                        "item": call,
+                    },
+                    {
+                        "type": "response.output_item.done",
+                        "response_id": "resp_1",
+                        "output_index": 0,
+                        "item": done_call,
+                    },
+                    {
+                        "type": "response.done",
+                        "response": {**response, "status": "completed", "output": [done_call]},
+                    },
+                ):
+                    await ws.send_json({"event_id": f"ev_{server_event['type']}", **server_event})
+                previous_item_id = call["id"]
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/realtime", realtime)
+    server = TestServer(app)
+    await server.start_server()
+    return server, connections
+
+
+async def _call_weather(session: RealtimeSession, arguments: str) -> llm.ChatContext:
+    """Run one response that calls `weather`, returning the context with its output added."""
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="what's the weather in Tokyo?", id="item_user")
+    await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+    generation = await asyncio.wait_for(session.generate_reply(), 5)
+    calls = [call async for call in generation.function_stream]
+    assert [call.arguments for call in calls] == [arguments]
+
+    chat_ctx = session.chat_ctx.copy()
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(
+            id="item_output", call_id="call_1", name="weather", output="sunny", is_error=False
+        )
+    )
+    return chat_ctx
+
+
+_REPLAYED_CALL = [
+    ("message", None),
+    ("function_call", "call_1"),
+    ("function_call_output", "call_1"),
+]
+
+
+async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
+    # a tool still running across the reconnection sends its output for a call id the
+    # new conversation must know, or the server rejects it with invalid_tool_call_id
+    arguments = '{"city": "Tokyo"}'
+    server, connections = await _start_function_call_server(arguments)
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    try:
+        chat_ctx = await _call_weather(session, arguments)
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+        await connections[0][0].close()
+        for _ in range(100):
+            if len(connections) == 2 and len(connections[1][1]) == 3:
+                break
+            await asyncio.sleep(0.05)
+
+        replayed = connections[1][1]
+        assert [(item["type"], item.get("call_id")) for item in replayed] == _REPLAYED_CALL
+        assert replayed[1]["arguments"] == arguments
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+async def test_reconnect_creates_an_item_the_lost_connection_never_confirmed() -> None:
+    # the connection drops after the output is sent and before the server confirms it, so
+    # the replay of the confirmed items does not carry it
+    arguments = '{"city": "Tokyo"}'
+    server, connections = await _start_function_call_server(arguments, drop_on_output=True)
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    try:
+        chat_ctx = await _call_weather(session, arguments)
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 10)
+
+        assert len(connections) == 2
+        recreated = connections[1][1]
+        assert [(item["type"], item.get("call_id")) for item in recreated] == _REPLAYED_CALL
+        assert session.chat_ctx.get_by_id("item_output") is not None
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+async def test_a_refused_first_handshake_retries_as_a_fresh_connection() -> None:
+    # nothing reached the server, so the queued startup events are all it needs; replaying
+    # as a reconnection would discard the reply requested during startup
+    server, connections = await _start_function_call_server("{}", refuse_first=True)
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    reconnected: list[Any] = []
+    session.on("session_reconnected", reconnected.append)
+    try:
+        generation = await asyncio.wait_for(session.generate_reply(), 5)
+        assert [call.name async for call in generation.function_stream] == ["weather"]
+        assert len(connections) == 1
+        assert reconnected == []
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+def _audio_session() -> tuple[RealtimeSession, list[Any]]:
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._input_resampler = None
+    session._bstream = utils.audio.AudioByteStream(24000, 1, samples_per_channel=2400)
+    session._pushed_duration_s = 0
+    sent: list[Any] = []
+    session.send_event = sent.append  # type: ignore[method-assign,assignment]
+    return session, sent
+
+
+def _push(session: RealtimeSession, value: int, ms: int) -> None:
+    for _ in range(ms // 10):
+        session.push_audio(rtc.AudioFrame(array("h", [value] * 240).tobytes(), 24000, 1, 240))
+
+
+def _appended(events: list[Any]) -> list[int]:
+    data = b"".join(
+        base64.b64decode(e.audio) for e in events if e.type == "input_audio_buffer.append"
+    )
+    return array("h", data).tolist()
+
+
+def test_commit_sends_the_partial_frame_with_its_turn() -> None:
+    session, sent = _audio_session()
+    _push(session, 1, 250)
+    session.commit_audio()
+
+    commit = next(i for i, e in enumerate(sent) if e.type == "input_audio_buffer.commit")
+    assert len(_appended(sent[:commit])) == 6000
+
+
+def test_clear_drops_buffered_audio() -> None:
+    session, sent = _audio_session()
+    _push(session, 1, 250)
+    session.clear_audio()
+    cleared = len(sent)
+    _push(session, 2, 200)
+
+    assert set(_appended(sent[cleared:])) == {2}

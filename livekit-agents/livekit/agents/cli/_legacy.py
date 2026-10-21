@@ -55,7 +55,12 @@ from ..voice.run_result import RunEvent
 from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, ServerEnvOption, WorkerOptions
 from . import cli as _cli, proto
-from .log import JsonFormatter, _merge_record_extra, _silence_noisy_loggers
+from .log import (
+    JsonFormatter,
+    _configure_stdout_for_logging,
+    _merge_record_extra,
+    _silence_noisy_loggers,
+)
 
 # from .discover import get_import_data
 from .readchar import key, readkey
@@ -1002,6 +1007,7 @@ class RichLoggingHandler(logging.Handler):
 
 
 def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
+    ensure_ascii = _configure_stdout_for_logging()
     logging.addLevelName(TRACE_LOG_LEVEL, "TRACE")
 
     root = logging.getLogger()
@@ -1012,7 +1018,7 @@ def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
         handler = logging.StreamHandler(sys.stdout)
         _add_global_log_fields(handler)
         root.addHandler(handler)
-        handler.setFormatter(JsonFormatter())
+        handler.setFormatter(JsonFormatter(ensure_ascii=ensure_ascii))
 
     root.setLevel(log_level)
 
@@ -1881,6 +1887,16 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     ) -> None:
         if participant_identity is None:
             participant_identity = shortuuid("agent-")
+
+        kwargs: dict = {}
+        if url:
+            kwargs["ws_url"] = url
+        if api_key:
+            kwargs["api_key"] = api_key
+        if api_secret:
+            kwargs["api_secret"] = api_secret
+        if kwargs:
+            server.update_options(**kwargs)
 
         c = AgentsConsole.get_instance()
         _configure_logger(c, log_level.value)

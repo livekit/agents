@@ -1,8 +1,8 @@
 # LiveKit Plugins Lokutor
 
-**Lokutor** TTS integration for [LiveKit Agents](https://docs.livekit.io/agents/).
+**Lokutor** speech-to-text and text-to-speech for [LiveKit Agents](https://docs.livekit.io/agents/).
 
-Lokutor is a cost-effective Text-to-Speech API that runs on CPU infrastructure, supporting 10 voices (F1-F5, M1-M5) and 30+ languages. See [lokutor.com](https://lokutor.com) for more details.
+Lokutor builds its own small speech models: Conv 2.0 for recognition and Versa 2.0 for synthesis, each one model for nine languages (English, Spanish, Catalan, Galician, Basque, Portuguese, French, Italian and German). See [lokutor.com](https://lokutor.com) and the [API docs](https://docs.lokutor.com).
 
 ## Installation
 
@@ -10,70 +10,62 @@ Lokutor is a cost-effective Text-to-Speech API that runs on CPU infrastructure, 
 pip install livekit-plugins-lokutor
 ```
 
+Set `LOKUTOR_API_KEY`, or pass `api_key=` to `STT` and `TTS`.
+
 ## Usage
 
-### In an Agent pipeline
+### In an agent
 
 ```python
-from livekit.agents import Agent, AgentSession
-from livekit.plugins import lokutor, openai, deepgram, silero
+from livekit.agents import AgentSession
+from livekit.plugins import lokutor, openai, silero
 
 session = AgentSession(
-    stt=deepgram.STT(),
+    stt=lokutor.STT(language="es"),
     llm=openai.LLM(),
-    tts=lokutor.TTS(
-        api_key="your-api-key",
-        voice="F1",
-        language="en",
-    ),
+    tts=lokutor.TTS(voice="F1", language="es"),
     vad=silero.VAD.load(),
 )
 ```
 
-### Standalone TTS
+### Speech-to-text
+
+`STT` streams over `WS /ws/stt`: interim transcripts while the user speaks, then a final transcript when the server sees the utterance end (a pause of about 0.7 s). `recognize()` transcribes one clip with `POST /stt/transcribe`. The text comes back written out, with punctuation, casing, digits and e-mail addresses.
 
 ```python
-import asyncio
-from livekit import rtc
-from livekit.plugins import lokutor
-
-
-async def main():
-    tts = lokutor.TTS(api_key="...", voice="F1")
-    async with tts:
-        stream = tts.stream()
-        stream.push_text("Hello, world!")
-        stream.end_input()
-        async for audio in stream:
-            print(f"Got audio: {audio.frame.duration:.2f}s")
-
-
-asyncio.run(main())
+stt = lokutor.STT(language="en")
+event = await stt.recognize(frames)  # a list of rtc.AudioFrame, any sample rate
+print(event.alternatives[0].text)
 ```
-
-## Configuration
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `api_key` | `str` | env `LOKUTOR_API_KEY` | Lokutor API key |
-| `voice` | `str` | `"F1"` | Voice ID (`F1`-`F5`, `M1`-`M5`) |
-| `language` | `str \| None` | `"en"` | Language code (`en`, `es`, `fr`, `pt`, `ko`, etc.) |
-| `speed` | `float` | `1.05` | Speed multiplier (0.5–2.0) |
-| `steps` | `int` | `5` | Diffusion steps — the latency/quality dial: lower = faster, higher = quality (8 ultra-fast, 16 fast, 32 balanced, 64 highest). Defaults to `5` for the lowest latency in a live agent. |
-| `visemes` | `bool` | `False` | Enable lip-sync viseme data |
-| `sample_rate` | `int` | `44100` | Audio sample rate in Hz |
+| `language` | `str` | detected | One of the nine languages; regional codes such as `es-ES` are accepted. Set it whenever you know it: it keeps one-word replies reliable and sets how the text is written. Any other value is left to detection |
 | `base_url` | `str` | `"wss://api.lokutor.com"` | API base URL |
 
-## Voices
+### Text-to-speech
 
-| ID | Gender |
-|----|--------|
-| F1–F5 | Female |
-| M1–M5 | Male |
+```python
+tts = lokutor.TTS(voice="F1", language="en")
+async with tts:
+    stream = tts.stream()
+    stream.push_text("Hello, world!")
+    stream.end_input()
+    async for audio in stream:
+        print(f"Got audio: {audio.frame.duration:.2f}s")
+```
 
-## Languages
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_key` | `str` | env `LOKUTOR_API_KEY` | Lokutor API key |
+| `voice` | `str` | `"F1"` | Voice slot, `F1`-`F5` (female) or `M1`-`M5` (male). Each language has its own native speaker in each slot |
+| `language` | `str \| None` | `"en"` | One of the nine languages; any other value uses the English speakers |
+| `visemes` | `bool` | `False` | Lip-sync viseme data |
+| `speed`, `steps` | | not sent | Accepted for compatibility; `versa-2.0` sets its own pace and step schedule, so they do not change the audio |
+| `base_url` | `str` | `"wss://api.lokutor.com"` | API base URL |
 
-32 languages: `en`, `es`, `fr`, `de`, `it`, `pt`, `ja`, `ko`, `zh`, `ar`, `bg`, `hr`, `cs`, `da`, `nl`, `et`, `fi`, `el`, `hi`, `hu`, `id`, `lv`, `lt`, `pl`, `ro`, `ru`, `sk`, `sl`, `sv`, `tr`, `uk`, `vi`. Full list at [docs.lokutor.com](https://docs.lokutor.com/voices-languages-models).
+Audio comes out at 44.1 kHz mono; the pipeline resamples if it needs another rate.
 
 ## License
 

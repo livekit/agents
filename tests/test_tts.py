@@ -539,6 +539,17 @@ STREAM_TTS = [
         },
         id="inference-rime",
     ),
+    pytest.param(
+        lambda: {
+            "tts": rime.TTS(
+                websocket_url="wss://coda.api.rime.ai/ws",
+                model="coda",
+                speaker="astra",
+            ),
+            "proxy-upstream": "coda.api.rime.ai:443",
+        },
+        id="rime-v1",
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()

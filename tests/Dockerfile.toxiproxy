@@ -4,7 +4,7 @@ RUN apk add --no-cache git make
 
 WORKDIR /build
 
-RUN git clone https://github.com/Shopify/toxiproxy.git .
+RUN git clone --depth 1 --branch v2.12.0 https://github.com/Shopify/toxiproxy.git .
 
 RUN make build
 

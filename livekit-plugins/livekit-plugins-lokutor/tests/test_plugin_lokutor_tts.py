@@ -72,18 +72,14 @@ def test_tts_none_language():
     assert tts._opts.language is None
 
 
-def test_tts_default_speed():
+def test_tts_speed_and_steps_unset_by_default():
+    # versa-2.0 sets its own pace and runs a fixed step schedule: both are
+    # accepted for compatibility, and sent only when given.
     from livekit.plugins.lokutor import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.speed == 1.05
-
-
-def test_tts_default_steps():
-    from livekit.plugins.lokutor import TTS
-
-    tts = TTS(api_key="test-key")
-    assert tts._opts.steps == 5
+    assert tts._opts.speed is None
+    assert tts._opts.steps is None
 
 
 def test_tts_default_visemes():
@@ -120,7 +116,7 @@ def test_tts_model_property():
     from livekit.plugins.lokutor import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts.model == "versa-1.0"
+    assert tts.model == "versa-2.0"
 
 
 def test_tts_provider_property():
@@ -159,7 +155,7 @@ def test_tts_ws_url():
     assert tts._opts.get_ws_url() == "wss://api.lokutor.com/ws/tts"
 
 
-def test_synthesize_returns_chunked_stream():
+async def test_synthesize_returns_chunked_stream():
     from unittest.mock import MagicMock, patch
 
     from livekit.plugins.lokutor import TTS, ChunkedStream
@@ -174,7 +170,7 @@ def test_synthesize_returns_chunked_stream():
     assert isinstance(stream, ChunkedStream)
 
 
-def test_stream_returns_synthesize_stream():
+async def test_stream_returns_synthesize_stream():
     from unittest.mock import MagicMock, patch
 
     from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -230,3 +226,22 @@ def test_build_request_without_language():
     assert request["text"] == "hello"
     assert request["voice"] == "M1"
     assert "language" not in request
+
+
+def test_build_request_leaves_out_unset_speed_and_steps():
+    from livekit.plugins.lokutor.tts import _build_request, _TTSOptions
+
+    opts = _TTSOptions(
+        api_key="key",
+        voice="F2",
+        language="ca",
+        speed=None,
+        steps=None,
+        visemes=False,
+        base_url="wss://api.lokutor.com",
+        sample_rate=44100,
+    )
+    request = _build_request(opts, "bon dia")
+    assert "speed" not in request
+    assert "steps" not in request
+    assert request["language"] == "ca"
