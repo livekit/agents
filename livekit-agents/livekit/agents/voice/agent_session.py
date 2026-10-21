@@ -1374,6 +1374,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         activity = self._activity
         cancelled = False
         while activity and isinstance(agent_task := activity.agent, AgentTask):
+            parent_interrupted: asyncio.Future[None] | None = None
             if drain:
                 # cancel() interrupts with force: let the task play out what it has queued
                 # first, such as the goodbye of the tool that called shutdown()
@@ -1383,10 +1384,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 cancelled = cancelled or not agent_task.done()
                 old_agent = agent_task._old_agent
                 if cancelled and old_agent and old_agent._activity:
-                    old_agent._activity.interrupt(force=True)
+                    parent_interrupted = old_agent._activity.interrupt(force=True)
             # notify AgentTask to complete and wait it to resume the parent agent
             agent_task.cancel()
             await agent_task._wait_for_inactive()
+            if parent_interrupted is not None:
+                # the parent's speech is waiting on this task, it can only end after cancel()
+                await parent_interrupted
 
             if old_agent := agent_task._old_agent:
                 activity = old_agent._activity
