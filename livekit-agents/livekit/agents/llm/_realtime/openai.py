@@ -90,7 +90,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 from livekit.agents.voice.generation import remove_instructions
 
 from .openai_types import RealtimeModels
@@ -127,7 +127,7 @@ NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VOICE = "marin"
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 # Azure OpenAI Realtime API uses old-style (beta) event names.
 # This mapping normalizes them to the current OpenAI GA event names
@@ -292,6 +292,7 @@ class _DiscardedGeneration:
 _FATAL_ERROR_CODES = frozenset(
     {
         "insufficient_quota",
+        "credit_balance_exhausted",
         "invalid_api_key",
         "account_deactivated",
         "billing_hard_limit_reached",
@@ -300,8 +301,12 @@ _FATAL_ERROR_CODES = frozenset(
 
 
 def _is_fatal_error(error: object | None) -> bool:
-    code = getattr(error, "code", None) or getattr(error, "type", None)
-    return isinstance(code, str) and code in _FATAL_ERROR_CODES
+    # match either field: OpenAI has changed the code while keeping the type (#7805)
+    code = getattr(error, "code", None)
+    type_ = getattr(error, "type", None)
+    return (isinstance(code, str) and code in _FATAL_ERROR_CODES) or (
+        isinstance(type_, str) and type_ in _FATAL_ERROR_CODES
+    )
 
 
 _TranscriptionUsage = UsageTranscriptTextUsageTokens | UsageTranscriptTextUsageDuration
