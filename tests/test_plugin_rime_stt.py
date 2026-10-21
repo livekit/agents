@@ -353,3 +353,11 @@ async def test_livekit_stream_adapter_transcribes_each_utterance(
         with wave.open(io.BytesIO(call.args[0]), "rb") as wav:
             lengths.append(wav.getnframes())
     assert lengths == [3200, 1600]
+
+
+def test_append_requires_vad_and_compatible_sdk(client, monkeypatch):
+    with pytest.raises(ValueError, match="requires a vad"):
+        rime.STT(output_contract="append_fragments")
+    monkeypatch.delattr(sdk, "TranscriptionOutputContract", raising=False)
+    with pytest.raises(ImportError, match="TranscriptionOutputContract"):
+        rime.STT(vad=_SegmentVAD(), output_contract="append_fragments")

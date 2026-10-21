@@ -45,7 +45,7 @@ session = AgentSession(
 Install `livekit-plugins-silero` to use the VAD in this example. LiveKit automatically wraps
 this non-streaming recognizer with `stt.StreamAdapter`: VAD detects each completed speech
 segment, then the adapter submits that segment for transcription. Results arrive after the
-segment ends; this integration does not expose native Rime streaming or interim transcripts.
+segment ends. To receive interim transcripts during speech, enable native streaming below.
 
 For an existing recording, call `await recognizer.recognize(buffer=audio_frame)` with a
 `rtc.AudioFrame` or a list of frames in the same format. The plugin mixes channels to mono,
@@ -59,6 +59,57 @@ language, and request ID. Word timestamps, speaker labels, and confidence scores
 are merged with `context_terms`. LiveKit's STT connection options control the request timeout
 and retries; only SDK timeouts and service-unavailable errors are retried. Close standalone
 recognizers with `await recognizer.aclose()` or use `async with rime.STT(...) as recognizer`.
+
+## Native streaming speech recognition
+
+Pass a VAD directly to `rime.STT` to upload audio while the user speaks. One SDK
+stream handles each VAD utterance. Select `revised_hypotheses` (the default) for
+replacement partials or `append_fragments` for permanent fragments:
+
+```python
+from livekit.agents import APIConnectOptions, AgentSession
+from livekit.agents.voice.agent_session import SessionConnectOptions
+from livekit.plugins import rime, silero
+
+detector = silero.VAD.load()
+session = AgentSession(
+    vad=detector,
+    stt=rime.STT(vad=detector, output_contract="append_fragments"),
+    conn_options=SessionConnectOptions(
+        stt_conn_options=APIConnectOptions(timeout=120, max_retry=0),
+    ),
+    # Configure your LLM and TTS as usual.
+)
+```
+
+**SDK availability:** append fragments require an SDK build exposing
+`TranscriptionOutputContract`, merged into SDK `main` in
+[PR #88](https://github.com/rimelabs/rime-sdk/pull/88) (commit `369f04d`).
+The plugin's existing dependency floor guarantees unary and revised streaming,
+not append support; merging SDK source does not establish a published release minimum. Selecting append mode with an older
+SDK raises an actionable import error. No local SDK source override is added to
+this workspace or its lockfile.
+
+The plugin concatenates deltas exactly, preserving spaces and newlines, and sends
+cumulative `INTERIM_TRANSCRIPT` snapshots to LiveKit. Revised hypotheses replace
+the previous snapshot. Only SDK-confirmed completion emits `FINAL_TRANSCRIPT`;
+individual fragments do not end the user turn. Append mode currently uses
+five-second windows, so short utterances may have no update before speech ends.
+Revised mode generally provides earlier provisional text for voice agents.
+
+Use mono input; LiveKit resamples streaming audio to 16 kHz. The VAD must provide
+initial speech frames in `START_OF_SPEECH` and subsequent new frames in
+`INFERENCE_DONE` (as Silero does). The complete `END_OF_SPEECH` buffer is not sent
+again. `flush()` drains the segment and resets the detector; `end_input()` also
+finishes an active utterance. `aclose()` cancels it without creating a final.
+
+Options and merged session keyterms are captured at each utterance start.
+Streaming timeouts include speaking and upload time: use a sufficiently long
+`stt_conn_options.timeout` (the example uses 120 seconds). Live audio is never
+replayed automatically, regardless of `max_retry`. SDK errors retain the request
+ID without including provider messages. Pending upload audio is bounded to ten
+seconds; overflow fails explicitly. SDK/service duration and size limits still
+apply. The caller retains ownership of the supplied VAD.
 
 ## Streaming WebSocket v1 API
 
