@@ -306,6 +306,7 @@ async def test_failed_tool_output_sync_cancels_deferred_generate_reply() -> None
         assert "function_call_output" not in model.active_session.event_log
         model.active_session.update_error = None
 
+
 async def test_rejected_interrupt_keeps_deferred_generate_reply_in_tool() -> None:
     """interrupt(force=False) on protected speech must not drop deferred replies."""
     model = _deferring_model()
@@ -348,4 +349,3 @@ async def test_rejected_interrupt_keeps_deferred_generate_reply_in_tool() -> Non
         await _drain(model, speech)
 
     assert not handles[0].interrupted
-
