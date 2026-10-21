@@ -1234,3 +1234,44 @@ async def test_manual_transcript_only_turn_does_not_open_a_generation(
         fut = session.generate_reply()
         assert session._pending_generation_fut is fut
         fut.cancel()
+
+
+async def test_dropped_socket_does_not_keep_a_partial_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial transcript finalized on disconnect must not prefix the next connection's turn."""
+    async with _make_configured_session(
+        monkeypatch, realtime_input_config=_manual_activity_config()
+    ) as session:
+        transcripts: list[llm.InputTranscriptionCompleted] = []
+        session.on("input_audio_transcription_completed", transcripts.append)
+
+        session._open_generation(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    input_transcription=types.Transcription(text="Hello")
+                )
+            )
+        )
+        assert session._pending_input_transcript == "Hello"
+
+        # the receive task calls this when the socket drops, and again if already settled
+        session._mark_current_generation_done()
+        session._mark_current_generation_done()
+
+        session._open_generation(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    input_transcription=types.Transcription(text="Goodbye", finished=True)
+                )
+            )
+        )
+
+        finals = [event.transcript for event in transcripts if event.is_final]
+        assert finals == ["Hello", "Goodbye"]
+        assert len({event.item_id for event in transcripts if event.is_final}) == 2
+        assert [message.text_content for message in session.chat_ctx.messages()] == [
+            "Hello",
+            "Goodbye",
+        ]
+        assert session._pending_input_id is None

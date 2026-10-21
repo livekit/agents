@@ -1376,6 +1376,17 @@ class RealtimeSession(llm.RealtimeSession):
         return bool(sc.turn_complete and self._pending_input_id)
 
     def _handle_standalone_input_transcript(self, server_content: types.LiveServerContent) -> None:
+        """Accumulate a manual-activity input transcript that has no model turn.
+
+        Each non-empty chunk is emitted as an interim transcript under one item id. The
+        transcript becomes a final user message when Gemini marks it finished or completes
+        the turn. Until then it stays pending, and ``_mark_current_generation_done``
+        finalizes it if the socket drops first.
+
+        Args:
+            server_content: Gemini server content carrying the input transcription and
+                turn-completion flags. It has no model turn.
+        """
         transcription = server_content.input_transcription
         done = bool(server_content.turn_complete)
         if transcription is not None:
@@ -1398,7 +1409,17 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             done = done or bool(transcription.finished)
 
-        if not done or self._pending_input_id is None:
+        if done:
+            self._finalize_pending_input_transcript()
+
+    def _finalize_pending_input_transcript(self) -> None:
+        """Commit a pending standalone transcript and clear it.
+
+        Matches ``_mark_current_generation_done`` for an in-flight generation: the words
+        already received become one final user message, and a later connection cannot
+        append to them. A second call emits nothing.
+        """
+        if self._pending_input_id is None:
             return
 
         if self._pending_input_transcript:
@@ -1574,6 +1595,9 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_current_generation_done()
 
     def _mark_current_generation_done(self) -> None:
+        # the receive task and aclose both land here. a standalone transcript has no
+        # generation, so settle it at the same boundary or the next socket appends to it.
+        self._finalize_pending_input_transcript()
         if not self._current_generation or self._current_generation._done:
             return
 
