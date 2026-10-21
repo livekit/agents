@@ -215,12 +215,14 @@ def _run_load(client: MossClient, batch: dict[str, Future[None]]) -> None:
 
     A failed future leaves the cache, since the traceback of its exception
     holds frames that reference the client, which would keep the weak key alive.
+    Callers get the exception load_indexes raised, or one per index that it reports.
     """
+    error: Exception | None = None
     try:
         failed = asyncio.run(client.load_indexes(list(batch), auto_refresh=True)).failed
-    except Exception as error:
-        logger.error("failed to load the Moss indexes", exc_info=error)
-        failed = dict.fromkeys(batch, str(error))
+    except Exception as raised:
+        logger.error("failed to load the Moss indexes", exc_info=raised)
+        failed, error = dict.fromkeys(batch, str(raised)), raised
     else:
         if failed:
             logger.error("failed to load the Moss indexes", extra={"failed": failed})
@@ -231,6 +233,8 @@ def _run_load(client: MossClient, batch: dict[str, Future[None]]) -> None:
                 del loads[name]
     for name, load in batch.items():
         if name in failed:
-            load.set_exception(RuntimeError(f"Moss index {name} not loaded: {failed[name]}"))
+            load.set_exception(
+                error or RuntimeError(f"Moss index {name} not loaded: {failed[name]}")
+            )
         else:
             load.set_result(None)

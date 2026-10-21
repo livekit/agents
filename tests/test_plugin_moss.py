@@ -164,20 +164,23 @@ async def test_a_failed_load_runs_again_on_the_next_search(
     assert loads == [["faq"], ["faq"]]
 
 
-async def test_a_failed_load_does_not_keep_the_client_alive(
+async def test_a_failed_load_keeps_its_error_and_not_the_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def load_indexes(self: FakeMossClient, names: list[str], **options: Any) -> Any:
-        raise RuntimeError("network down")
+        raise ConnectionError("network down")
 
     monkeypatch.setattr(FakeMossClient, "load_indexes", load_indexes)
     # pytest keeps log records, and the logged load error's traceback holds the client
     monkeypatch.setattr(knowledge_base.logger, "disabled", True)
     kb = KnowledgeBase("faq", project_id="id", project_key="key")
-    with pytest.raises(RuntimeError, match="network down"):
+    with pytest.raises(ConnectionError, match="network down"):
         await kb.search_knowledge_base("hours?")
     client = weakref.ref(kb._open())
     await kb.aclose()
+    for thread in threading.enumerate():
+        if thread.name == "moss_load":
+            thread.join()
     await asyncio.sleep(0)  # let the loop drop its callbacks for the failed search
     gc.collect()
     assert client() is None
