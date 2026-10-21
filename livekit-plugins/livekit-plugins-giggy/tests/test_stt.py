@@ -21,7 +21,7 @@ from livekit.plugins import giggy
 pytestmark = pytest.mark.unit
 KEY = "offline-stt-key"
 GENERATION = "00000000-0000-4000-8000-000000000001"
-RESULT_URL = "https://artifacts.example.com/transcript.json?signature=offline"
+RESULT_URL = "https://00000000000000000000000000000000.r2.cloudflarestorage.com/transcript.json?signature=offline"
 
 
 class Response:
@@ -232,7 +232,18 @@ async def test_stt_invalid_artifact(session, body):
 
 
 @pytest.mark.parametrize(
-    "url", ["http://evil.example/a", "https://user:pass@example.com/a", "//example.com/a"]
+    "url",
+    [
+        "http://evil.example/a",
+        "https://user:pass@example.com/a",
+        "//example.com/a",
+        "https://127.0.0.1/a",
+        "https://169.254.169.254/a",
+        "https://localhost/a",
+        "https://internal.example/a",
+        "https://00000000000000000000000000000000.r2.cloudflarestorage.com.evil.example/a",
+        "https://00000000000000000000000000000000.r2.cloudflarestorage.com:8443/a",
+    ],
 )
 async def test_stt_unsafe_artifact_url(session, url):
     session.post.return_value = Response(transcript_events(url=url))
@@ -442,4 +453,14 @@ async def test_stt_cookie_session_rejected(session):
     session.cookie_jar = ["private-cookie"]
     with pytest.raises(ValueError, match="credential"):
         await giggy.STT(api_key=KEY, http_session=session).recognize(audio())
+    session.post.assert_not_called()
+
+
+async def test_stt_utterance_bound_before_merging(session, monkeypatch):
+    frames = [audio()] * 61  # 30.5 seconds without allocating a long recording.
+    merger = MagicMock()
+    monkeypatch.setattr(rtc, "combine_audio_frames", merger)
+    with pytest.raises(ValueError, match="30 seconds"):
+        await giggy.STT(api_key=KEY, http_session=session).recognize(frames)
+    merger.assert_not_called()
     session.post.assert_not_called()

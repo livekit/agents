@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import os
+import re
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from urllib.parse import urlsplit
@@ -101,10 +102,12 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
+        """The provider name reported in LiveKit metrics."""
         return "Giggy"
 
     @property
     def model(self) -> str:
+        """The canonical Giggy speech recognition model identifier."""
         return "giggyspeech-stt"
 
     def _resolve_language(self, language: str | None) -> str | None:
@@ -243,12 +246,17 @@ class STT(stt.STT):
         selected_language = (
             self._resolve_language(language) if is_given(language) else self._language
         )
-        frame = rtc.combine_audio_frames(buffer)
-        if frame.num_channels != 1:
+        frames = [buffer] if isinstance(buffer, rtc.AudioFrame) else buffer
+        if not frames or any(frame.num_channels != 1 for frame in frames):
             raise ValueError("Giggy STT requires mono audio.")
-        duration = frame.samples_per_channel / frame.sample_rate
-        if not 0.5 <= duration <= 43200:
-            raise ValueError("Giggy STT requires 0.5 seconds to 12 hours of audio.")
+        rate = frames[0].sample_rate
+        if rate <= 0 or any(frame.sample_rate != rate for frame in frames):
+            raise ValueError("Giggy STT requires consistent positive input sample rates.")
+        duration = sum(frame.samples_per_channel for frame in frames) / rate
+        if not 0.5 <= duration <= 30:
+            raise ValueError("Giggy STT accepts utterances from 0.5 to 30 seconds.")
+        # Bound the utterance before allocating a merged frame, resampled PCM or WAV.
+        frame = rtc.combine_audio_frames(frames)
         if frame.sample_rate != SAMPLE_RATE:
             resampler = rtc.AudioResampler(frame.sample_rate, SAMPLE_RATE, num_channels=1)
             frame = rtc.combine_audio_frames(resampler.push(frame) + resampler.flush())
@@ -370,7 +378,10 @@ class STT(stt.STT):
             origin = urlsplit(result_url)
             if (
                 origin.scheme != "https"
-                or not origin.hostname
+                or re.fullmatch(r"[a-f0-9]{32}\.r2\.cloudflarestorage\.com", origin.hostname or "")
+                is None
+                or origin.port not in (None, 443)
+                or origin.fragment
                 or origin.username is not None
                 or origin.password is not None
             ):

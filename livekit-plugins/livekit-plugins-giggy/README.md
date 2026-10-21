@@ -63,7 +63,8 @@ Direct callers can also use `await recognizer.recognize(audio_frame)`.
 
 Recognition accepts mono LiveKit audio frames, resamples to native 16 kHz PCM16
 when necessary, and uploads a complete WAV without padding. Audio must be at
-least 0.5 seconds and at most 12 hours, as required by the recording API.
+least 0.5 seconds and at most 30 seconds for this utterance provider. The duration
+bound is checked before merging or encoding frames, keeping allocations bounded.
 Configure VAD to capture valid utterances. The default overall recognition
 deadline is 90 seconds; `recognition_timeout` can be set explicitly.
 `APIConnectOptions.timeout` controls connection acquisition, socket connection,
@@ -86,7 +87,10 @@ rail. Completion or GPU cancellation timing is not benchmarked by offline tests.
 `await recognizer.aclose()` cancels active recognition and rejects new requests.
 Borrowed sessions remain open. Use a session without default authentication,
 credential headers, or cookies: signed transcript artifacts are fetched without
-the API key. The SDK exposes no alternate recognition provider or transport.
+the API key. Artifact destinations are restricted to HTTPS on port 443 using
+Cloudflare R2's canonical `<32-hex-account-id>.r2.cloudflarestorage.com` hosts,
+as used by Giggy's result signer. Redirects and URL credentials are rejected.
+The SDK exposes no alternate recognition provider or transport.
 
 STT uses Streaming pricing, currently 8,000 credits per input audio hour,
 rounded up per request. Paid production recognition and live-room testing are
