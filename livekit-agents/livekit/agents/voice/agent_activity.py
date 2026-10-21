@@ -2396,8 +2396,10 @@ class AgentActivity(RecognitionHooks):
                 )
 
             if self._pause_enabled():
-                assert (timeout := interruption_options["false_interruption_timeout"]) is not None
-                assert (audio_output := self._session.output.audio) is not None
+                timeout = interruption_options["false_interruption_timeout"]
+                assert timeout is not None
+                audio_output = self._session.output.audio
+                assert audio_output is not None
 
                 # EOS arms false-interruption resume. A final transcript or a
                 # replying turn commit interrupts the paused handle.
@@ -2446,7 +2448,8 @@ class AgentActivity(RecognitionHooks):
         ):
             # EOS arms false-interruption resume. A final transcript or a
             # replying turn commit interrupts the paused handle.
-            assert (audio_output := self._session.output.audio) is not None
+            audio_output = self._session.output.audio
+            assert audio_output is not None
 
             self._update_paused_speech(current_speech, timeout=0)
             audio_output.pause()

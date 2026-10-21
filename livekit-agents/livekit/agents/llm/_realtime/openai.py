@@ -1959,8 +1959,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "message":
             item_generation = _MessageGeneration(
@@ -1987,8 +1989,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item_id) is not None, "item_id is None"
-        assert (item_type := event.part.type) is not None, "part.type is None"
+        item_id = event.item_id
+        assert item_id is not None, "item_id is None"
+        item_type = event.part.type
+        assert item_type is not None, "part.type is None"
 
         if item_type == "text" and self._realtime_model.capabilities.audio_output:
             logger.warning(
@@ -2248,8 +2252,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "function_call" and isinstance(
             event.item, RealtimeConversationItemFunctionCall
