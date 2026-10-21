@@ -200,6 +200,7 @@ class TTS(tts.TTS):
 
         pronunciations = None if not is_given(custom_pronunciations) else custom_pronunciations
 
+        self._voice_explicitly_set = is_given(voice_name) or is_given(voice_cloning_key)
         self._opts = _TTSOptions(
             voice=voice_params,
             encoding=audio_encoding,
@@ -259,21 +260,47 @@ class TTS(tts.TTS):
                 voice.language_code = LanguageCode(language)
             if is_given(gender):
                 voice.ssml_gender = _gender_from_str(str(gender))
-            if is_given(voice_name):
-                voice.name = voice_name
+
+            # Determine the target model
+            if is_given(model_name):
+                target_model = model_name
+            elif is_given(voice_name):
+                if "chirp" in voice_name.lower():
+                    target_model = "chirp_3"
+                elif self._opts.model_name == "chirp_3":
+                    target_model = "gemini-2.5-flash-tts"
+                else:
+                    target_model = self._opts.model_name
+            else:
+                target_model = self._opts.model_name
+
+            # Synchronize model and voice parameters
+            if target_model == "chirp_3":
+                self._opts.model_name = "chirp_3"
+                if "model_name" in voice:
+                    del voice.model_name
+                if is_given(voice_name):
+                    voice.name = voice_name
+                    self._voice_explicitly_set = True
+                    if "voice_clone" in voice:
+                        del voice.voice_clone
+                elif not self._voice_explicitly_set or voice.name == "Charon":
+                    voice.name = "en-US-Chirp3-HD-Charon"
+            else:
+                self._opts.model_name = target_model
+                voice.model_name = target_model
                 if "voice_clone" in voice:
                     del voice.voice_clone
-                if not is_given(model_name) and "chirp" in voice_name.lower():
-                    self._opts.model_name = "chirp_3"
-                    if "model_name" in voice:
-                        del voice.model_name
-            if is_given(model_name):
-                self._opts.model_name = model_name
-                if model_name == "chirp_3":
-                    if "model_name" in voice:
-                        del voice.model_name
-                else:
-                    voice.model_name = model_name
+                if is_given(voice_name):
+                    voice.name = voice_name
+                    self._voice_explicitly_set = True
+                elif (
+                    not self._voice_explicitly_set
+                    or voice.name == "en-US-Chirp3-HD-Charon"
+                    or not voice.name
+                ):
+                    voice.name = "Charon"
+
             self._opts.voice = voice
 
         if is_given(speaking_rate):
