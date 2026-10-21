@@ -243,3 +243,78 @@ async def test_aws_stream_gives_each_attempt_its_own_crt_transport(
         await provider.aclose()
 
     assert closed == [first.transport, second.transport]
+
+
+def _transcript_event(text: str, start: float, end: float, *, partial: bool) -> Any:
+    from aws_sdk_transcribe_streaming.models import (
+        Alternative,
+        Item,
+        Result,
+        Transcript,
+        TranscriptEvent,
+    )
+
+    item = Item(content=text, start_time=start, end_time=end, confidence=0.9)
+    result = Result(
+        result_id=f"result-{start}",
+        start_time=start,
+        end_time=end,
+        is_partial=partial,
+        alternatives=[Alternative(transcript=text, items=[item])],
+    )
+    return TranscriptEvent(transcript=Transcript(results=[result]))
+
+
+async def test_aws_stream_opens_one_speech_segment_per_utterance(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    provider, stream, _ = _make_stream(monkeypatch)
+
+    try:
+        # result times are offsets from the start of the stream, which stays open across
+        # utterances, so only the first utterance starts at 0.0
+        for event in (
+            _transcript_event("hel", 0.0, 0.4, partial=True),
+            _transcript_event("hello", 0.0, 0.7, partial=True),
+            _transcript_event("hello.", 0.0, 0.8, partial=False),
+            _transcript_event("how", 3.2, 3.5, partial=True),
+            _transcript_event("How are you?", 3.2, 4.2, partial=False),
+        ):
+            stream._process_transcript_event(event)
+
+        events = [await asyncio.wait_for(anext(stream), timeout=1.0) for _ in range(9)]
+
+        assert [e.type for e in events] == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ]
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+async def test_aws_stream_ignores_final_without_transcript(monkeypatch: pytest.MonkeyPatch):
+    provider, stream, _ = _make_stream(monkeypatch)
+
+    try:
+        stream._process_transcript_event(_transcript_event("", 0.0, 0.0, partial=False))
+        stream._process_transcript_event(_transcript_event("hi.", 1.0, 1.3, partial=False))
+
+        events = [await asyncio.wait_for(anext(stream), timeout=1.0) for _ in range(3)]
+
+        # no END_OF_SPEECH for the empty result, since no segment was open
+        assert [e.type for e in events] == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ]
+    finally:
+        await stream.aclose()
+        await provider.aclose()
