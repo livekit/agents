@@ -57,6 +57,15 @@ async def _final_transcripts(stream: RecognizeStream) -> list[str]:
     ]
 
 
+async def _wait_until_stream_is_live(stream: RecognizeStream, *, timeout: float = 5.0) -> None:
+    """Block until the stream's session is connected."""
+    for _ in range(int(timeout / 0.02)):
+        if stream._ws is not None and not stream._ws.closed:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("stream did not connect in time")
+
+
 async def test_input_end_preserves_delayed_final_after_session_finalized() -> None:
     message_types: list[str] = []
     request_model = ""
@@ -319,6 +328,91 @@ async def test_a_stream_language_keeps_the_hint_the_parent_would_drop() -> None:
             await stream.aclose()
 
     assert extra["language_hint"] == ["en", "es"]
+
+
+async def test_a_live_update_drops_a_hint_outside_multi_mode(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    updates: list[dict[str, Any]] = []
+    updated = asyncio.Event()
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+                updated.set()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/nova-3",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+            )
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                await _wait_until_stream_is_live(stream)
+                stt.update_options(extra={"language_hint": ["en", "es"]})
+                await asyncio.wait_for(updated.wait(), timeout=1.0)
+                updated.clear()
+                # a hint arriving again is dropped silently: the stream already reported it
+                stt.update_options(extra={"language_hint": ["en", "es"]})
+                await asyncio.wait_for(updated.wait(), timeout=1.0)
+            finally:
+                await stream.aclose()
+
+    # the update path builds its own extra, so it needs the guard as much as session.create
+    assert len(updates) == 2
+    assert all("language_hint" not in frame["settings"]["extra"] for frame in updates)
+    assert caplog.text.count("removed `language_hint`") == 1
+
+
+async def test_a_live_update_into_multi_mode_keeps_the_hint(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    updates: list[dict[str, Any]] = []
+    updated = asyncio.Event()
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+                updated.set()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/nova-3",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+            )
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                await _wait_until_stream_is_live(stream)
+                # switching into multi mode and adding hints in one call is legitimate
+                stt.update_options(language="multi", extra={"language_hint": ["en", "es"]})
+                await asyncio.wait_for(updated.wait(), timeout=1.0)
+            finally:
+                await stream.aclose()
+
+    assert len(updates) == 1
+    assert updates[0]["settings"]["language"] == "multi"
+    assert updates[0]["settings"]["extra"]["language_hint"] == ["en", "es"]
+    assert "removed `language_hint`" not in caplog.text
 
 
 async def test_linden_session_keyterms_reach_session_create() -> None:

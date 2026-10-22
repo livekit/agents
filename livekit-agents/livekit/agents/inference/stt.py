@@ -288,32 +288,37 @@ def _drop_ineffective_language_hint(
     model: NotGivenOr[STTModels | str],
     language: NotGivenOr[LanguageCode],
     extra_kwargs: dict[str, Any],
-) -> None:
+    *,
+    warn: bool = True,
+) -> bool:
     """Remove a `language_hint` the gateway would drop, in place, with a warning.
 
     The nova path forwards a hint only in "multi" language mode, so a hint sent with any
     other language never reaches Deepgram. Flux is exempt: its hint is gated on the model
     (flux-general-multi), not on the session language.
 
-    Deleting the key makes the removal stick for the stream, so a reconnect neither warns
-    again nor puts the hint back on the wire.
+    Deleting the key is what makes the removal stick where the caller keeps its own copy —
+    a reconnect sends that copy again. Returns whether a hint was removed, so a stream that
+    has already said this can report it only once.
     """
     if "language_hint" not in extra_kwargs:
-        return
+        return False
     if not (is_given(model) and isinstance(model, str)):
-        return
+        return False
     if _provider_for_model(model) != "deepgram" or model.startswith("deepgram/flux-"):
-        return
+        return False
     if is_given(language) and str(language).lower() == "multi":
-        return
+        return False
 
     del extra_kwargs["language_hint"]
-    logger.warning(
-        "removed `language_hint` for model '%s': the gateway applies a hint only in "
-        "'multi' language mode, and this session's language is '%s'",
-        model,
-        language if is_given(language) else "unset",
-    )
+    if warn:
+        logger.warning(
+            "removed `language_hint` for model '%s': the gateway applies a hint only in "
+            "'multi' language mode, and this session's language is '%s'",
+            model,
+            language if is_given(language) else "unset",
+        )
+    return True
 
 
 _ASSEMBLYAI_CARRYOVER_MODELS = (
@@ -987,6 +992,8 @@ class SpeechStream(stt.SpeechStream):
         # keyterm extra set while the user is speaking; applied at END_OF_SPEECH (latest wins).
         # inference applies live, but the gateway may reconnect upstream, so defer to a calm moment.
         self._pending_extra: dict[str, Any] | None = None
+        # a dropped `language_hint` is reported once per stream, not once per seam that finds it
+        self._language_hint_reported = False
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._vad: vad.VAD | None = vad_instance
@@ -1042,6 +1049,9 @@ class SpeechStream(stt.SpeechStream):
             # provider's model is for that model, not for the one this session is running.
             self._opts.extra_kwargs.update(extra)
             forward_extra = self._forward_extra(extra)
+            # against the language this update just applied, so a call that switches into
+            # "multi" mode and adds hints at once keeps them
+            self._guard_language_hint(forward_extra)
 
         if not (is_given(model) or is_given(language) or is_given(forward_extra)):
             return
@@ -1075,6 +1085,18 @@ class SpeechStream(stt.SpeechStream):
             self._pending_extra = None
             return {**extra, **self._keyterm_payload()}
         return dict(extra)
+
+    def _guard_language_hint(self, extra: dict[str, Any]) -> None:
+        """Drop a hint this stream's model and language cannot use, from the extra about to
+        go on the wire. The stream's own report is once-only: an earlier drop, at connect
+        time or on an earlier update, already said it."""
+        if _drop_ineffective_language_hint(
+            self._opts.model,
+            self._opts.language,
+            extra,
+            warn=not self._language_hint_reported,
+        ):
+            self._language_hint_reported = True
 
     def _keyterm_payload(self) -> dict[str, Any]:
         """This stream's keyterms under its own running model's key, formatted fresh."""
@@ -1327,9 +1349,7 @@ class SpeechStream(stt.SpeechStream):
         self, http_session: aiohttp.ClientSession
     ) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Inference STT WebSocket."""
-        _drop_ineffective_language_hint(
-            self._opts.model, self._opts.language, self._opts.extra_kwargs
-        )
+        self._guard_language_hint(self._opts.extra_kwargs)
         params: dict[str, Any] = {
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
