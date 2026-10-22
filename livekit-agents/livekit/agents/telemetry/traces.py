@@ -1275,15 +1275,26 @@ def _recording_upload_retry_delay(attempt: int) -> float:
     return random.uniform(0.0, min(2.0**attempt, 8.0))
 
 
+# Maps an ErrorEvent's error type to its key in the session summary's error counts.
+_SUMMARY_ERROR_KEYS = {
+    "llm_error": "llm",
+    "stt_error": "stt",
+    "tts_error": "tts",
+    "realtime_model_error": "realtime",
+    "interruption_detection_error": "interruption",
+}
+
+
 def _session_summary(*, agent_name: str, report: SessionReport, tagger: Tagger) -> dict[str, Any]:
     """Build the session summary sent in the recording header.
 
     Agent evals read it to pick sessions to score. An absent key means "not sent", so
-    ``duration_ms`` and ``usage`` are omitted when the report has no value for them.
+    ``duration_ms``, ``usage``, ``models`` and ``close_reason`` are omitted when the report has
+    no value for them.
     """
     summary: dict[str, Any] = {
-        "version": 1,
         "agent_name": agent_name,
+        "sdk_version": report.sdk_version,
         "tags": sorted(tagger.tags),
     }
     if report.duration is not None:
@@ -1305,6 +1316,26 @@ def _session_summary(*, agent_name: str, report: SessionReport, tagger: Tagger) 
             elif model_usage.type == "tts_usage":
                 usage["tts_characters"] += model_usage.characters_count
         summary["usage"] = usage
+
+        models = {
+            (model_usage.type.removesuffix("_usage"), model_usage.provider, model_usage.model)
+            for model_usage in report.model_usage
+        }
+        summary["models"] = [
+            {"type": type_, "provider": provider, "model": model}
+            for type_, provider, model in sorted(models)
+        ]
+
+    # Events are not uploaded, so the header is the only way evals can see them.
+    errors = dict.fromkeys(_SUMMARY_ERROR_KEYS.values(), 0)
+    for event in report.events:
+        if event.type == "error":
+            key = _SUMMARY_ERROR_KEYS.get(getattr(event.error, "type", ""))
+            if key is not None:
+                errors[key] += 1
+        elif event.type == "close":
+            summary["close_reason"] = event.reason.value
+    summary["errors"] = errors
 
     return summary
 

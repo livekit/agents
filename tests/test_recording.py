@@ -17,14 +17,16 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
-from livekit.agents.llm import ChatMessage
+from livekit.agents.llm import ChatMessage, LLMError
 from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
 from livekit.agents.telemetry.traces import _upload_session_report
+from livekit.agents.tts import TTSError
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
+from livekit.agents.voice.events import CloseEvent, CloseReason, ErrorEvent
 from livekit.protocol import metrics as proto_metrics
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
@@ -111,6 +113,7 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.audio_recording_path = None
     report.audio_recording_started_at = None
     report.duration = 10.0
+    report.sdk_version = "1.0.0"
     report.started_at = 1000.0
     report.timestamp = 1010.0
     report.options = MagicMock()
@@ -749,6 +752,14 @@ async def _upload_and_read_header(
     return proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
 
 
+def _llm_error() -> LLMError:
+    return LLMError(timestamp=0.0, label="llm", error=RuntimeError("x"), recoverable=True)
+
+
+def _tts_error() -> TTSError:
+    return TTSError(timestamp=0.0, label="tts", error=RuntimeError("x"), recoverable=True)
+
+
 async def test_upload_header_carries_session_summary() -> None:
     report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
     report.duration = 12.5
@@ -763,18 +774,30 @@ async def test_upload_header_carries_session_summary() -> None:
         ),
         TTSModelUsage(provider="p", model="m", characters_count=40),
     ]
+    report.events = [
+        ErrorEvent(error=_llm_error(), source=MagicMock()),
+        ErrorEvent(error=_llm_error(), source=MagicMock()),
+        ErrorEvent(error=_tts_error(), source=MagicMock()),
+        CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED),
+    ]
     tagger = _make_mock_tagger()
     tagger.tags = {"vip"}
 
     header = await _upload_and_read_header(report, tagger)
 
     assert json.loads(header.session_summary) == {
-        "version": 1,
         "agent_name": "support",
+        "sdk_version": "1.0.0",
         "tags": ["vip"],
         "duration_ms": 12500,
         "user_turns": 2,
         "usage": {"input_tokens": 10, "output_tokens": 5, "cached_tokens": 2, "tts_characters": 40},
+        "models": [
+            {"type": "llm", "provider": "p", "model": "m"},
+            {"type": "tts", "provider": "p", "model": "m"},
+        ],
+        "errors": {"llm": 2, "stt": 0, "tts": 1, "realtime": 0, "interruption": 0},
+        "close_reason": "participant_disconnected",
     }
     assert header.duration == 12500
 
@@ -787,11 +810,12 @@ async def test_session_summary_empty_session() -> None:
     header = await _upload_and_read_header(report, _make_mock_tagger())
 
     assert json.loads(header.session_summary) == {
-        "version": 1,
         "agent_name": "support",
+        "sdk_version": "1.0.0",
         "tags": [],
         "duration_ms": 12500,
         "user_turns": 0,
+        "errors": {"llm": 0, "stt": 0, "tts": 0, "realtime": 0, "interruption": 0},
     }
 
 
