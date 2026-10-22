@@ -54,7 +54,7 @@ from .log import logger
 
 DEFAULT_BASE_URL = "wss://tts.us.assemblyai.com"
 DEFAULT_MODEL = "assemblyai-tts-1"
-DEFAULT_VOICE = "aai-jane"
+DEFAULT_VOICE = "987db62e-a2c2-569a-9c4d-82460cdea1bd"  # Keegan
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 # Generate's limit, in code points. A longer sentence becomes several requests rather
@@ -118,11 +118,12 @@ class TTS(tts.TTS):
         information on the API.
 
         Args:
-            voice: The voice, by its catalog id: a voice library voice by its slug
-                (``"aai-jane"``, see https://www.assemblyai.com/docs/tts/voices), or a
-                custom (cloned) voice by its ``id`` or the account's slug for it. Defaults
-                to ``"aai-jane"``. The voice must be paired with ``model``; a custom voice
-                can only be used on a host in the data zone that created it.
+            voice: The voice, by its catalog ``id`` (a UUID): a voice from the library
+                (see https://www.assemblyai.com/docs/tts/voices) or a custom (cloned)
+                voice. A slug such as ``"aai-linda-3"`` also works, but slugs can change
+                and ids do not. Defaults to Keegan. The voice must be paired with
+                ``model``; a custom voice can only be used on a host in the data zone
+                that created it.
             language: The language to synthesize, as a code (``"es"``, ``"es-MX"``) or an
                 English name (``"spanish"``). Defaults to English; with a custom voice, to
                 the language of the voice's reference clip.

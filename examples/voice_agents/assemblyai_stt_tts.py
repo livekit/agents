@@ -79,10 +79,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     tts = assemblyai.TTS(
         model="assemblyai-tts-1",
-        # A voice library slug or a cloned voice's id, see
-        # https://www.assemblyai.com/docs/tts/voices. Every built-in voice speaks every
-        # language; pick one with e.g. language="es".
-        voice="aai-jane",
+        # A voice's id, from the voice library or a cloned voice, see
+        # https://www.assemblyai.com/docs/tts/voices. Pick the language with e.g. language="es".
+        voice="987db62e-a2c2-569a-9c4d-82460cdea1bd",  # Keegan
         # The US data zone by default; for the EU: base_url="wss://tts.eu.assemblyai.com".
     )
     # Open the TTS socket now, so the first reply doesn't pay for the handshake.
