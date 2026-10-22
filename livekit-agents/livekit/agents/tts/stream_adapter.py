@@ -48,6 +48,7 @@ class StreamAdapter(TTS):
             self._stream_pacer = text_pacing
 
         self._wrapped_tts.on("metrics_collected", self._on_metrics_collected)
+        self._wrapped_tts.on("fallback_activated", self._on_fallback_activated)
 
     class Markup(TTS.Markup):
         # a pass-through speaks whatever dialect it wraps
@@ -104,8 +105,12 @@ class StreamAdapter(TTS):
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
 
+    def _on_fallback_activated(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("fallback_activated", *args, **kwargs)
+
     async def aclose(self) -> None:
         self._wrapped_tts.off("metrics_collected", self._on_metrics_collected)
+        self._wrapped_tts.off("fallback_activated", self._on_fallback_activated)
 
 
 class StreamAdapterWrapper(SynthesizeStream):

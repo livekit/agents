@@ -15,6 +15,7 @@ from livekit.agents.tts import (
     AvailabilityChangedEvent,
     ChunkedStream,
     FallbackAdapter,
+    StreamAdapter,
     TTSCapabilities,
     TTSError,
 )
@@ -109,6 +110,40 @@ async def test_forwards_fallback_activated_only_for_served_requests() -> None:
     source.emit("fallback_activated", "after-close")
 
     assert events == ["served"]
+
+
+async def test_stream_adapter_forwards_fallback_activated() -> None:
+    source = _NotifyingTTS(fake_audio_duration=1.0)
+    adapter = StreamAdapter(tts=source)
+    events: list[object] = []
+    adapter.on("fallback_activated", events.append)
+
+    async with adapter.stream() as stream:
+        stream.push_text("hello test")
+        stream.end_input()
+        assert [frame async for frame in stream]
+    await adapter.aclose()
+    source.emit("fallback_activated", "after-close")
+
+    assert len(events) == 1
+    assert "after-close" not in events
+
+
+async def test_streamed_fallback_through_temporary_adapter_notifies_once() -> None:
+    source = _set_non_streaming(_NotifyingTTS(fake_audio_duration=1.0))
+    fallback_adapter = FallbackAdapter([source])
+    events: list[object] = []
+    fallback_adapter.on("fallback_activated", events.append)
+
+    try:
+        async with fallback_adapter.stream() as stream:
+            stream.push_text("hello test")
+            stream.end_input()
+            assert [frame async for frame in stream]
+    finally:
+        await fallback_adapter.aclose()
+
+    assert len(events) == 1
 
 
 async def test_stream_closes_temporary_adapter_after_each_request() -> None:
