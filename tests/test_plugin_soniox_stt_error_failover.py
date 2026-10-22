@@ -45,8 +45,10 @@ async def test_heartbeat_error_raises_instead_of_silent_reconnect() -> None:
 
     stream._ws = _ErrorSocket()  # type: ignore[assignment]
 
-    with pytest.raises(APIConnectionError, match="soniox connection lost"):
+    with pytest.raises(APIConnectionError, match="soniox connection lost") as exc_info:
         await stream._recv_messages_task()
+
+    assert exc_info.value.reset_retry_budget is False
 
     # Must not arm the plugin-local reconnect loop (#8031).
     assert not stream._reconnect_event.is_set()

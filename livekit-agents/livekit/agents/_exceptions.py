@@ -109,8 +109,21 @@ class APIStatusError(APIError):
 class APIConnectionError(APIError):
     """Raised when an API request failed due to a connection error."""
 
-    def __init__(self, message: str = "Connection error.", *, retryable: bool = True) -> None:
+    reset_retry_budget: bool = True
+    """Whether `_main_task` may reset `_num_retries` when this error arrives after
+    the connect timeout. Heartbeat / half-open failures set this to False so a
+    dead peer still exhausts the retry budget and `FallbackAdapter` can fail over.
+    """
+
+    def __init__(
+        self,
+        message: str = "Connection error.",
+        *,
+        retryable: bool = True,
+        reset_retry_budget: bool = True,
+    ) -> None:
         super().__init__(message, body=None, retryable=retryable)
+        self.reset_retry_budget = reset_retry_budget
 
     def __str__(self) -> str:
         # `raise ... from e` sets __cause__ after __init__, so the chain is unreachable at

@@ -476,8 +476,14 @@ class RecognizeStream(ABC):
                 return await self._run()
             except APIError as e:
                 # an attempt that outlived the connect timeout had connected, so this failure
-                # is not consecutive with the previous one and the budget starts over
-                if time.time() - last_start_time > self._conn_options.timeout:
+                # is not consecutive with the previous one and the budget starts over —
+                # unless the error opts out (heartbeat / half-open connection loss).
+                # Those must still consume retries so FallbackAdapter can fail over.
+                may_reset = getattr(e, "reset_retry_budget", True)
+                if (
+                    may_reset
+                    and time.time() - last_start_time > self._conn_options.timeout
+                ):
                     self._num_retries = 0
 
                 if not e.retryable or max_retries == 0:

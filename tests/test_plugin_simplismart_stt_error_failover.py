@@ -68,8 +68,9 @@ async def test_heartbeat_error_raises_instead_of_silent_reconnect(
 
     import contextlib
 
-    with pytest.raises(APIConnectionError, match="simplismart connection lost"):
+    with pytest.raises(APIConnectionError, match="simplismart connection lost") as exc_info:
         await run_and_close()
 
+    assert exc_info.value.reset_retry_budget is False
     assert not stream._reconnect_event.is_set()
     await stt.aclose()

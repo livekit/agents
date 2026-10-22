@@ -541,7 +541,10 @@ class SpeechStream(stt.SpeechStream):
                     session = self._stt._http_session
                     if session is not None and session.closed:
                         return
-                    raise APIConnectionError("soniox connection lost") from self._ws.exception()
+                    raise APIConnectionError(
+                        "soniox connection lost",
+                        reset_retry_budget=False,
+                    ) from self._ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning(

@@ -393,7 +393,10 @@ class SpeechStream(stt.SpeechStream):
                     # SpeechStream retry budget / FallbackAdapter can fail over —
                     # silently reconnecting here loops forever into the same dead peer
                     # (#8031). Matches deepgram/telnyx/smallestai.
-                    raise APIConnectionError("simplismart connection lost") from ws.exception()
+                    raise APIConnectionError(
+                        "simplismart connection lost",
+                        reset_retry_budget=False,
+                    ) from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
                     logger.warning("unexpected simplismart message type %s", msg.type)
