@@ -711,6 +711,90 @@ async def test_v1_multi_language_sends_the_hint_as_repeated_params(caplog):
         await stt.aclose()
 
 
+async def test_v1_nova3_general_multi_language_sends_the_hint(caplog):
+    # the second member of the set the gateway accepts
+    caplog.set_level(logging.WARNING)
+    stt, stream, session = _v1_stt_and_stream(
+        model="nova-3-general", language="multi", language_hint=["en"]
+    )
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert session.last_params()["language_hint"] == ["en"]
+        assert stream._opts.language_hint == ["en"]
+        assert "removed `language_hint`" not in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+@pytest.mark.parametrize("model", ["NOVA-3", "  nova-3-general  "])
+async def test_v1_hint_model_match_ignores_case_and_whitespace(caplog, model):
+    # the accepted set is matched the way the gateway matches it
+    caplog.set_level(logging.WARNING)
+    stt, stream, session = _v1_stt_and_stream(model=model, language="multi", language_hint=["en"])
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert session.last_params()["language_hint"] == ["en"]
+        assert "removed `language_hint`" not in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_v1_nova2_multi_language_drops_the_hint(caplog):
+    # a hint is not a nova-2 feature, even though the language alone looks right
+    stt, stream, session = _v1_stt_and_stream(
+        model="nova-2-general", language="multi", language_hint=["en"]
+    )
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _wait_until(lambda: len(session.urls) == 1)
+
+        assert "language_hint" not in session.last_params()
+        assert stream._opts.language_hint == []
+        assert "removed `language_hint`" in caplog.text
+        assert "model 'nova-2-general'" in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_v1_nova3_medical_multi_language_drops_the_hint(caplog):
+    # nova-3-medical is a nova-3 model but not one of the two ids the gateway's gate names,
+    # so it takes no hint until someone widens that set deliberately
+    stt, stream, session = _v1_stt_and_stream(
+        model="nova-3-medical", language="multi", language_hint=["en"]
+    )
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _wait_until(lambda: len(session.urls) == 1)
+
+        assert "language_hint" not in session.last_params()
+        assert stream._opts.language_hint == []
+        assert "removed `language_hint`" in caplog.text
+        assert "model 'nova-3-medical'" in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+@pytest.mark.parametrize("model", ["nova-3-multilingual", "flux-general-en", "nova-9-future"])
+async def test_v1_multi_language_drops_the_hint_outside_the_nova3_set(caplog, model):
+    # neither another nova-3 alias nor an unknown model is in the accepted set
+    stt, stream, session = _v1_stt_and_stream(model=model, language="multi", language_hint=["en"])
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _wait_until(lambda: len(session.urls) == 1)
+
+        assert "language_hint" not in session.last_params()
+        assert stream._opts.language_hint == []
+        assert "removed `language_hint`" in caplog.text
+        assert f"model '{model}'" in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
 async def test_v1_language_hint_is_dropped_outside_multi_mode(caplog):
     stt, stream, session = _v1_stt_and_stream(
         model="nova-3", language="en-US", language_hint=["en"]

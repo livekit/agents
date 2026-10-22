@@ -135,9 +135,9 @@ class STT(stt.STT):
                      `keyterm` is only supported by Nova-3 models.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
             language_hint: List of str of language hints to bias Nova-3 toward particular
-                     languages. Sent only with `language="multi"`, Deepgram's multilingual
-                     mode; Deepgram rejects a hint sent with any other language. Defaults to
-                     NOT_GIVEN.
+                     languages. Applies only to "nova-3" and "nova-3-general" in
+                     `language="multi"`, Deepgram's multilingual mode; Deepgram rejects a hint
+                     sent for any other model or language. Defaults to NOT_GIVEN.
             profanity_filter: Whether to filter profanity from the transcription. Defaults to False.
             redact: Redact sensitive information from the transcription. Accepts a single value or
                 list of values. Supported values: "pci", "numbers", "ssn", "true" (redact all).
@@ -1059,25 +1059,36 @@ def _validate_tags(tags: list[str]) -> list[str]:
     return tags
 
 
+# Mirrors the gateway's gate (livekit/agent-gateway#1741): a hint applies only to Nova-3's
+# multilingual mode, and only to these provider model ids, so a model added to the catalog
+# for billing does not silently start taking hints.
+_NOVA3_LANGUAGE_HINT_MODELS = frozenset({"nova-3", "nova-3-general"})
+
+
 def _drop_ineffective_language_hint(opts: STTOptions) -> None:
     """Remove a `language_hint` Deepgram would reject, in place, with one warning.
 
-    Deepgram applies the hint only in Nova-3's multilingual mode (`language=multi`) and
-    fails the session with any other language, so dropping it degrades the session
-    instead of failing it.
+    A hint applies only to Nova-3 in its multilingual mode (`language=multi`), the same gate
+    the gateway applies. Deepgram fails the session with anything else, so dropping the hint
+    degrades the session instead of failing it.
 
     Clearing the stored hint makes the removal stick for the stream, so a reconnect
     neither warns again nor puts the hint back on the wire.
     """
     if not opts.language_hint:
         return
-    if opts.language is not None and str(opts.language).lower() == "multi":
+    if (
+        opts.language is not None
+        and str(opts.language).lower() == "multi"
+        and str(opts.model).strip().lower() in _NOVA3_LANGUAGE_HINT_MODELS
+    ):
         return
 
     opts.language_hint = []
     logger.warning(
-        "removed `language_hint` for model '%s': Deepgram applies a hint only in 'multi' "
-        "language mode, and this session's language is '%s'",
+        "removed `language_hint` for model '%s': Deepgram applies a hint only to Nova-3 "
+        "(nova-3, nova-3-general) in 'multi' language mode, and this session's language "
+        "is '%s'",
         opts.model,
         opts.language if opts.language else "unset",
     )
