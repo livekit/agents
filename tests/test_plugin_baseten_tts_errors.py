@@ -74,9 +74,7 @@ async def test_baseten_chunked_stream_preserves_generic_api_error_retryable_fals
 @pytest.mark.asyncio
 async def test_baseten_synthesize_stream_preserves_generic_api_error_retryable_false():
     tts = baseten.TTS(api_key="fake-key", model_endpoint="https://fake.baseten.co")
-    stream = baseten.tts.SynthesizeStream(
-        tts=tts, conn_options=DEFAULT_API_CONNECT_OPTIONS
-    )
+    stream = baseten.tts.SynthesizeStream(tts=tts, conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
     mock_session = MagicMock()
     mock_session.ws_connect.side_effect = APIError("quota exhausted", retryable=False)
@@ -94,4 +92,3 @@ async def test_baseten_synthesize_stream_preserves_generic_api_error_retryable_f
             assert "quota exhausted" in str(exc_info.value)
     finally:
         await stream.aclose()
-
