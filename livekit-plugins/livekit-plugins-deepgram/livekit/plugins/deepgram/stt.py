@@ -77,6 +77,7 @@ class STTOptions:
     dictation: bool = False
     replace: dict[str, str] | None = None
     search: list[str] | None = None
+    language_hint: list[str] = dataclasses.field(default_factory=list)
 
 
 class STT(stt.STT):
@@ -98,6 +99,7 @@ class STT(stt.STT):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: bool = False,
         redact: NotGivenOr[str | list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -132,6 +134,10 @@ class STT(stt.STT):
             keyterm: str or list of str of key terms to improve recognition accuracy. Defaults to None.
                      `keyterm` is only supported by Nova-3 models.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
+            language_hint: List of str of language hints to bias Nova-3 toward particular
+                     languages. Sent only with `language="multi"`, Deepgram's multilingual
+                     mode; Deepgram rejects a hint sent with any other language. Defaults to
+                     NOT_GIVEN.
             profanity_filter: Whether to filter profanity from the transcription. Defaults to False.
             redact: Redact sensitive information from the transcription. Accepts a single value or
                 list of values. Supported values: "pci", "numbers", "ssn", "true" (redact all).
@@ -213,6 +219,7 @@ class STT(stt.STT):
             mip_opt_out=mip_opt_out,
             vad_events=vad_events,
             tags=_validate_tags(tags) if is_given(tags) else [],
+            language_hint=language_hint if is_given(language_hint) else [],
             endpoint_url=base_url,
             utterance_end_ms=utterance_end_ms,
             dictation=dictation,
@@ -339,6 +346,7 @@ class STT(stt.STT):
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
         dictation: NotGivenOr[bool] = NOT_GIVEN,
@@ -392,6 +400,8 @@ class STT(stt.STT):
             self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(utterance_end_ms):
@@ -421,6 +431,7 @@ class STT(stt.STT):
                 numerals=numerals,
                 mip_opt_out=mip_opt_out,
                 vad_events=vad_events,
+                language_hint=language_hint,
                 endpoint_url=endpoint_url,
                 utterance_end_ms=utterance_end_ms,
                 dictation=dictation,
@@ -518,6 +529,7 @@ class SpeechStream(stt.SpeechStream):
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
         dictation: NotGivenOr[bool] = NOT_GIVEN,
@@ -570,6 +582,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(utterance_end_ms):
@@ -745,6 +759,8 @@ class SpeechStream(stt.SpeechStream):
                         self._reported_duration = 0.0
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        _drop_ineffective_language_hint(self._opts)
+
         live_config: dict[str, Any] = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
@@ -783,6 +799,8 @@ class SpeechStream(stt.SpeechStream):
             live_config["redact"] = self._opts.redact
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
+        if self._opts.language_hint:
+            live_config["language_hint"] = self._opts.language_hint
 
         t0 = time.perf_counter()
         try:
@@ -1039,6 +1057,30 @@ def _validate_tags(tags: list[str]) -> list[str]:
         if len(tag) > 128:
             raise ValueError("tag must be no more than 128 characters")
     return tags
+
+
+def _drop_ineffective_language_hint(opts: STTOptions) -> None:
+    """Remove a `language_hint` Deepgram would reject, in place, with one warning.
+
+    Deepgram applies the hint only in Nova-3's multilingual mode (`language=multi`) and
+    fails the session with any other language, so dropping it degrades the session
+    instead of failing it.
+
+    Clearing the stored hint makes the removal stick for the stream, so a reconnect
+    neither warns again nor puts the hint back on the wire.
+    """
+    if not opts.language_hint:
+        return
+    if opts.language is not None and str(opts.language).lower() == "multi":
+        return
+
+    opts.language_hint = []
+    logger.warning(
+        "removed `language_hint` for model '%s': Deepgram applies a hint only in 'multi' "
+        "language mode, and this session's language is '%s'",
+        opts.model,
+        opts.language if opts.language else "unset",
+    )
 
 
 def _validate_keyterm(

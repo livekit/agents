@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -233,9 +235,16 @@ class _LiveWS:
     def __init__(self) -> None:
         # a single ordered log, so "Finalize came after the audio" is assertable
         self.wire: list[str] = []
+        # the raw sends, for the tests that assert a payload
+        self.frames: list[str] = []
+        # the connect path reads the response headers for its debug log, and the
+        # v2 Configure path checks `closed` before writing
+        self._response = SimpleNamespace(headers={})
+        self.closed = False
         self._closed = asyncio.Event()
 
     async def send_str(self, data: str) -> None:
+        self.frames.append(data)
         self.wire.append(json.loads(data)["type"])
 
     async def send_bytes(self, data: bytes) -> None:
@@ -246,6 +255,7 @@ class _LiveWS:
         raise AssertionError("the test should never let recv_task resume")
 
     async def close(self) -> None:
+        self.closed = True
         self._closed.set()
 
     def sent(self) -> list[str]:
@@ -562,3 +572,179 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         assert sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+class _ConnectRecordingSession:
+    """Records every connect URL and hands out a fresh socket per connection.
+
+    The connect URL is where both Deepgram plugins carry their options, and a settings
+    change reconnects, so tests read the URLs in order.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.urls: list[str] = []
+        self.sockets: list[_LiveWS] = []
+
+    async def ws_connect(self, url: str, **kwargs):
+        self.urls.append(url)
+        ws = _LiveWS()
+        self.sockets.append(ws)
+        return ws
+
+    def last_params(self) -> dict[str, list[str]]:
+        return parse_qs(urlsplit(self.urls[-1]).query)
+
+
+def _v1_stt_and_stream(**kwargs):
+    """A real STT and the stream it hands out, on a socket that never dials out."""
+    from typing import Any, cast
+
+    from livekit.plugins.deepgram import STT
+
+    session = _ConnectRecordingSession()
+    stt = STT(api_key="test-key", http_session=cast(Any, session), **kwargs)
+    return stt, stt.stream(), session
+
+
+def _v2_stt_and_stream(*, model: str, **kwargs):
+    """A real STTv2 and the stream it hands out, on a socket that never dials out."""
+    from typing import Any, cast
+
+    from livekit.plugins.deepgram import STTv2
+
+    session = _ConnectRecordingSession()
+    stt = STTv2(api_key="test-key", model=model, http_session=cast(Any, session), **kwargs)
+    return stt, stt.stream(), session
+
+
+async def test_flux_removes_the_language_hint_its_model_cannot_take(caplog):
+    # Deepgram answers a hint on any model but flux-general-multi with a 400, so the
+    # "will be ignored" warning was false: the session failed instead of degrading.
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    with caplog.at_level(logging.WARNING):
+        stt, stream, session = _v2_stt_and_stream(model="flux-general-en", language_hint=["en"])
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert stt._opts.language_hint == []
+        assert "language_hint" not in SpeechStreamv2._live_config(stream)
+        assert "language_hint" not in session.last_params()
+        assert "removed `language_hint`" in caplog.text
+        assert "will be ignored" not in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_flux_dropped_language_hint_never_reaches_a_configure_frame(caplog):
+    stt, stream, session = _v2_stt_and_stream(model="flux-general-en")
+    await _wait_until(lambda: stream._ws is not None)
+    try:
+        with caplog.at_level(logging.WARNING):
+            stt.update_options(language_hint=["en"])
+        await asyncio.sleep(0)
+
+        # a hint the model cannot take is not worth a Configure either
+        assert stream._reconfigure_atask is None
+        assert session.sockets[-1].frames == []
+        assert stt._opts.language_hint == []
+        assert "removed `language_hint`" in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_flux_multilingual_model_still_sends_the_language_hint(caplog):
+    caplog.set_level(logging.WARNING)
+    stt, stream, session = _v2_stt_and_stream(model="flux-general-multi", language_hint=["en"])
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert session.last_params()["language_hint"] == ["en"]
+
+        stt.update_options(language_hint=["en", "es"])
+        await stream._reconfigure_atask
+
+        assert json.loads(session.sockets[-1].frames[0]) == {
+            "type": "Configure",
+            "language_hints": ["en", "es"],
+        }
+        assert "removed `language_hint`" not in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_flux_model_switch_drops_a_stranded_language_hint(caplog):
+    # the multilingual model takes a hint that the model it switches to does not, and the
+    # switch reconnects: the hint must not ride along to the new connection
+    stt, stream, session = _v2_stt_and_stream(model="flux-general-multi", language_hint=["en"])
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert session.last_params()["language_hint"] == ["en"]
+
+        with caplog.at_level(logging.WARNING):
+            stt.update_options(model="flux-general-en")
+        await _wait_until(lambda: len(session.urls) == 2)
+
+        assert "language_hint" not in session.last_params()
+        assert stt._opts.language_hint == []
+        assert "removed `language_hint`" in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_v1_multi_language_sends_the_hint_as_repeated_params(caplog):
+    # nova-3's multilingual mode is the only place Deepgram takes the hint
+    caplog.set_level(logging.WARNING)
+    stt, stream, session = _v1_stt_and_stream(
+        model="nova-3", language="multi", language_hint=["en", "es"]
+    )
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert session.last_params()["language_hint"] == ["en", "es"]
+        assert stream._opts.language_hint == ["en", "es"]
+        assert "removed `language_hint`" not in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_v1_language_hint_is_dropped_outside_multi_mode(caplog):
+    stt, stream, session = _v1_stt_and_stream(
+        model="nova-3", language="en-US", language_hint=["en"]
+    )
+    try:
+        with caplog.at_level(logging.WARNING):
+            await _wait_until(lambda: len(session.urls) == 1)
+
+        assert "language_hint" not in session.last_params()
+        assert "removed `language_hint`" in caplog.text
+        assert "model 'nova-3'" in caplog.text
+        assert "language is 'en-US'" in caplog.text
+        # the removal belongs to this stream; the parent keeps the caller's baseline
+        assert stream._opts.language_hint == []
+        assert stt._opts.language_hint == ["en"]
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_v1_language_change_out_of_multi_stops_sending_the_hint(caplog):
+    stt, stream, session = _v1_stt_and_stream(
+        model="nova-3", language="multi", language_hint=["en"]
+    )
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert session.last_params()["language_hint"] == ["en"]
+
+        with caplog.at_level(logging.WARNING):
+            stt.update_options(language="en-US")
+            await _wait_until(lambda: len(session.urls) == 2)
+
+        assert "language_hint" not in session.last_params()
+        assert "removed `language_hint`" in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()

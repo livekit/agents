@@ -160,11 +160,7 @@ class STTv2(stt.STT):
                     f"eager_eot_threshold ({eager_eot_threshold}) must be less than or equal to eot_threshold "
                     f"({effective_eot}); increase eot_threshold (max 0.9) to use a higher eager value"
                 )
-        if language_hint and model != "flux-general-multi":
-            logger.warning(
-                "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
-                model,
-            )
+        language_hint = _drop_unsupported_language_hint(language_hint, model)
 
         self._opts = STTOptions(
             model=model,
@@ -291,12 +287,12 @@ class STTv2(stt.STT):
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
-            self._opts.language_hint = language_hint
-            if language_hint and self._opts.model != "flux-general-multi":
-                logger.warning(
-                    "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
-                    self._opts.model,
-                )
+            language_hint = _drop_unsupported_language_hint(language_hint, self._opts.model)
+            self._opts.language_hint = language_hint if is_given(language_hint) else []
+        elif is_given(model) and self._opts.language_hint:
+            # a model switch can strand a hint the new model rejects
+            kept = _drop_unsupported_language_hint(self._opts.language_hint, self._opts.model)
+            self._opts.language_hint = kept if is_given(kept) else []
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
@@ -784,6 +780,26 @@ def _parse_transcription(
         ],
     )
     return [sd]
+
+
+def _drop_unsupported_language_hint(
+    language_hint: NotGivenOr[list[str]], model: V2Models | str
+) -> NotGivenOr[list[str]]:
+    """Remove a `language_hint` the model cannot take, with one warning.
+
+    Deepgram applies a hint only on `flux-general-multi`, its multilingual model, and
+    answers any other model with a 400. Dropping the hint here degrades the session
+    instead of failing it.
+    """
+    if not is_given(language_hint) or not language_hint or model == "flux-general-multi":
+        return language_hint
+
+    logger.warning(
+        "removed `language_hint` for model '%s': Deepgram applies a hint only on "
+        "`flux-general-multi`",
+        model,
+    )
+    return NOT_GIVEN
 
 
 def _validate_tags(tags: list[str]) -> list[str]:
