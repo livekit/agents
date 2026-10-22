@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -207,3 +209,26 @@ def test_avatar_session_arguments_override_environment() -> None:
     assert avatar._avatar == "avat_arg"
     assert avatar._api_key == "arg-key"
     assert avatar.avatar_identity == "my-avatar"
+
+
+def _state_packet(payload: dict[str, Any]) -> Any:
+    return SimpleNamespace(
+        topic="session.state", participant=None, data=json.dumps(payload).encode()
+    )
+
+
+def test_session_state_logs_known_reasons_and_redacts_others(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with patch.dict(os.environ, {"AGENTHUMAN_API_KEY": "ah-key"}, clear=True):
+        avatar = AvatarSession()
+
+    with caplog.at_level(logging.DEBUG, logger="livekit.plugins.agenthuman"):
+        avatar._on_data_received(_state_packet({"state": "ended", "reason": "expiry"}))
+        avatar._on_data_received(_state_packet({"state": "ended", "reason": "free text"}))
+        avatar._on_data_received(_state_packet({"state": "ready"}))
+
+    known, other, ready = caplog.records
+    assert known.__dict__["reason"] == "expiry" and known.__dict__["state"] == "ended"
+    assert other.__dict__["lk.pii.reason"] == "free text" and "reason" not in other.__dict__
+    assert "reason" not in ready.__dict__ and "lk.pii.reason" not in ready.__dict__

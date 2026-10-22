@@ -27,6 +27,8 @@ DEFAULT_AVATAR_ID = "avat_01KMZJ3YN6BR83KR1FHP8VTHNX"
 _AVATAR_AGENT_IDENTITY = "agenthuman-avatar-agent"
 _AVATAR_AGENT_NAME = "agenthuman-avatar-agent"
 _SESSION_STATE_TOPIC = "session.state"
+# reasons the AgentHuman server sends when a session ends; anything else is logged as PII
+_SESSION_END_REASONS = frozenset({"server", "user", "expiry"})
 
 
 class AvatarSession(BaseAvatarSession):
@@ -187,7 +189,7 @@ class AvatarSession(BaseAvatarSession):
         state = payload.get("state")
         extra = {"state": state}
         if reason := payload.get("reason"):
-            extra["reason"] = reason
+            extra["reason" if reason in _SESSION_END_REASONS else "lk.pii.reason"] = reason
         if state in ("expired", "ended"):
             logger.warning("avatar session ended", extra=extra)
         else:
