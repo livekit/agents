@@ -68,13 +68,14 @@ class TwoDialogsAgent(Agent):
 
 
 class LookupAndCollectAgent(Agent):
-    def __init__(self) -> None:
+    def __init__(self, *, lookup_duration: float = USER_AWAY_TIMEOUT * 10) -> None:
         super().__init__(instructions="root agent")
+        self._lookup_duration = lookup_duration
 
     @function_tool
     async def lookup_order(self, ctx: RunContext) -> str:
         """Looks up the user's order."""
-        await asyncio.sleep(USER_AWAY_TIMEOUT * 10)
+        await asyncio.sleep(self._lookup_duration)
         return "order 42"
 
     @function_tool
@@ -171,6 +172,24 @@ async def test_a_paused_agents_backend_tool_does_not_hold_the_away_timer() -> No
 
         # the task has asked its question while lookup_order still runs; the user stays silent
         await asyncio.sleep(USER_AWAY_TIMEOUT * 3)
+        assert isinstance(session.current_agent, AskEmail)
+        assert len(away) == 1
+
+
+async def test_a_paused_agents_tool_landing_does_not_restart_the_away_timer() -> None:
+    """A tool of the paused agent that lands mid-task can't speak yet, so the away window
+    the task started keeps its deadline."""
+    agent = LookupAndCollectAgent(lookup_duration=USER_AWAY_TIMEOUT * 0.75)
+
+    async with AgentSession(llm=_fake_llm(), user_away_timeout=USER_AWAY_TIMEOUT) as session:
+        away: list[UserStateChangedEvent] = []
+        session.on("user_state_changed", lambda ev: ev.new_state == "away" and away.append(ev))
+
+        await session.start(agent)
+        await asyncio.wait_for(session.run(user_input="lookup"), timeout=5.0)
+
+        # lookup_order lands before the window ends; a restart would push away past this point
+        await asyncio.sleep(USER_AWAY_TIMEOUT * 1.25)
         assert isinstance(session.current_agent, AskEmail)
         assert len(away) == 1
 
