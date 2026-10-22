@@ -342,17 +342,28 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
+        # `_send_task` waits on `_input_ch`, so without this gate `_recv_task` would
+        # start its read deadline before the provider had been asked for anything and a
+        # slow first token would expire a healthy stream. Same shape as cartesia and murf.
+        input_sent_event = asyncio.Event()
+
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
                     continue
                 self._mark_started()
                 await ws.send_str(data)
+                input_sent_event.set()
             await ws.send_str(_END_SENTINEL)
+            input_sent_event.set()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             output_emitter.start_segment(segment_id=request_id)
-            async for msg in ws:
+            await input_sent_event.wait()
+            while True:
+                # bound the wait for audio, read per receive. The deadline starts only
+                # once text has gone out, so a slow first token cannot expire it.
+                msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     output_emitter.push(msg.data)
                 elif msg.type in (
