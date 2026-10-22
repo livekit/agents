@@ -19,6 +19,9 @@ from .errors import AgentHumanException
 from .log import logger
 
 DEFAULT_API_URL = "https://api.agenthuman.com/v1"
+# Whole-request limit, so a stalled response can't hang start(). Above the connect timeout:
+# creating a session from an image URL first converts the image (~10 s on first use).
+_REQUEST_TIMEOUT = 60.0
 
 
 class AgentHumanAPI:
@@ -100,7 +103,10 @@ class AgentHumanAPI:
                         url,
                         headers=headers,
                         json=payload,
-                        timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                        timeout=aiohttp.ClientTimeout(
+                            total=max(_REQUEST_TIMEOUT, self._conn_options.timeout),
+                            sock_connect=self._conn_options.timeout,
+                        ),
                     ) as response:
                         if not response.ok:
                             text = await response.text()

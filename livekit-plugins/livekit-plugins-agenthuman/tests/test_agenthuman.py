@@ -104,6 +104,16 @@ async def test_create_session_sends_avatar_and_room() -> None:
     }
 
 
+async def test_create_session_limits_the_whole_request() -> None:
+    session = _Session(_Response(200, {"session": {"session_id": "sess_1"}}))
+
+    await _api(session).create_session(avatar="avat_1", livekit_url="wss://lk", livekit_token="t")
+
+    timeout = session.requests[0]["timeout"]
+    assert timeout.sock_connect == _NO_RETRY_DELAY.timeout
+    assert timeout.total is not None and timeout.total >= 60  # a stalled response can't hang
+
+
 async def test_create_session_omits_unset_aspect_ratio() -> None:
     session = _Session(_Response(200, {"session": {"session_id": "sess_1"}}))
 
