@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12.0, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -110,7 +110,6 @@ members = [
     "livekit-plugins-vakyam",
     "livekit-plugins-xai",
 ]
-default-groups = ["dev", "typing"]
 constraints = [{ name = "onnxruntime", marker = "python_full_version < '3.11'", specifier = "<1.24" }]
 
 [manifest.dependency-groups]
@@ -3510,7 +3509,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "phonic", specifier = ">=0.32.34" },
+    { name = "phonic", specifier = ">=0.32.36" },
     { name = "websockets", specifier = ">=11.0" },
 ]
 
@@ -4920,7 +4919,7 @@ wheels = [
 
 [[package]]
 name = "phonic"
-version = "0.32.34"
+version = "0.32.36"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -4929,9 +4928,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/96/9a/a60f80b3ecefe91d87498f5683b99268e13a6109de40809b13afad7f3375/phonic-0.32.34.tar.gz", hash = "sha256:e678cd74228cbbe5c3e4915b51873ec060abf8e99f5e4cf829f3d1297b304ae7", size = 213403, upload-time = "2026-09-22T03:52:08.824Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/72/a5b02c676f01c807c4ea7b6cb185345d5705faa8ee77b3e890fad14efe70/phonic-0.32.36.tar.gz", hash = "sha256:2e1af35a22162f8f19314350a1119e5dbde59325df8274d9babb9dca4a06dc6a", size = 217201, upload-time = "2026-09-23T02:05:26.759Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/54/ed/57c4dc7cdb0476561d995d0e6c7bdef1b62f1a18f94fcae30fa964dcc7d2/phonic-0.32.34-py3-none-any.whl", hash = "sha256:0e9187dc3bb5c0617c3bed209f0529f79a9a39c340cf9e2236a3a205c57c6659", size = 460677, upload-time = "2026-09-22T03:52:07.519Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/64/c073822a115cb1a7f378dc7509cf2c836294a3008c4cf33172180a4ad6c7/phonic-0.32.36-py3-none-any.whl", hash = "sha256:04774b9a0d72a08566a0448168e96266513dacbd4a9c35fecdfd5e535d589fc0", size = 466547, upload-time = "2026-09-23T02:05:25.036Z" },
 ]
 
 [[package]]
