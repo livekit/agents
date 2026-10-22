@@ -261,13 +261,26 @@ class RunResult(Generic[Run_T]):
         if all(handle.done() for handle in self._handles):
             self._mark_done()
 
+    def _failed_watched_handle(self) -> SpeechHandle | None:
+        """Return a still-watched speech handle that completed with a failure."""
+        if self.__last_speech_handle_with_error is not None:
+            return self.__last_speech_handle_with_error
+
+        # its done callback may still be queued on the loop when the run completes
+        for handle in self._handles:
+            if isinstance(handle, SpeechHandle) and handle.done() and handle._error is not None:
+                return handle
+        return None
+
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
-            # prefer the output-bearing handle over an error-only one, and fall
-            # back to the last handle for the no-output retry path
+            # an error outranks the task output: a watched speech failing after the
+            # output-bearing handle completed must still fail the run, so fall back
+            # to the last handle only when nothing failed and nothing produced output
+            # (the last handle keeps the no-output retry path)
             speech_handle = (
-                self.__last_speech_handle_with_output
-                or self.__last_speech_handle_with_error
+                self._failed_watched_handle()
+                or self.__last_speech_handle_with_output
                 or self.__last_speech_handle
             )
             if speech_handle is None:
