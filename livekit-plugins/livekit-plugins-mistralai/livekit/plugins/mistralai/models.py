@@ -25,7 +25,13 @@ STTModels = Literal[
     "voxtral-mini-2507",
 ]
 
-TTSModels = Literal["voxtral-mini-tts-latest", "voxtral-mini-tts-2603"]
+TTSModels = Literal[
+    "voxtral-mini-tts-latest",
+    "voxtral-mini-tts-2603",
+    "voxtral-mini-tts-realtime-latest",
+    "voxtral-mini-tts-realtime-3",
+    "voxtral-mini-tts-realtime-3-0",
+]
 
 TTSVoices = Literal[
     "gb_jane_confident",

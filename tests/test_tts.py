@@ -550,6 +550,13 @@ STREAM_TTS = [
         },
         id="rime-v1",
     ),
+    pytest.param(
+        lambda: {
+            "tts": mistralai.TTS(model="voxtral-mini-tts-realtime-3"),
+            "proxy-upstream": "api.mistral.ai:443",
+        },
+        id="mistralai-realtime",
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
