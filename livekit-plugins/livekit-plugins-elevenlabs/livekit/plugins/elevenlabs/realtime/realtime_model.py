@@ -33,6 +33,8 @@ from openai.types.realtime import (
     RealtimeConversationItemUserMessage,
 )
 from openai.types.realtime.realtime_audio_input_turn_detection import SemanticVad
+from openai.types.realtime.response_done_event import ResponseDoneEvent
+from openai.types.realtime.response_output_item_done_event import ResponseOutputItemDoneEvent
 from openai.types.realtime.response_text_delta_event import ResponseTextDeltaEvent
 
 from livekit import rtc
@@ -182,22 +184,16 @@ class RealtimeSession(_openai.RealtimeSession):
         self._el_call_ids: dict[str, str] = {}
         self._el_tool_calls: dict[str, float] = {}
         self._el_tool_continuation_pending = False
+        self._el_tag_tails: dict[str, str] = {}
         self._el_warned: set[str] = set()
         super().__init__(realtime_model)
         self.on("openai_server_event_received", self._el_on_server_event)
+        self.on("openai_client_event_queued", self._el_on_client_event)
 
     def send_event(self, event: Any) -> None:
-        if isinstance(event, dict):
-            event_type = event.get("type")
-            item = event.get("item")
-            item_type = item.get("type") if isinstance(item, dict) else None
-        else:
-            event_type = getattr(event, "type", None)
-            item_type = getattr(getattr(event, "item", None), "type", None)
+        event_type = event.get("type") if isinstance(event, dict) else getattr(event, "type", None)
         if event_type != "session.update":
             self._el_started = True
-        if event_type == "conversation.item.create" and item_type == "function_call_output":
-            self._el_tool_continuation_pending = True
         self._el_last_sent = time.monotonic()
         super().send_event(event)
 
@@ -282,8 +278,11 @@ class RealtimeSession(_openai.RealtimeSession):
         self, chat_ctx: llm.ChatContext
     ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
         remote_ids = {item.id for item in self._remote_chat_ctx.to_chat_ctx().items}
+        # the server appends every item, so an anchor to a filtered-out item would be wrong
         return [
-            ev
+            ConversationItemCreateEvent(
+                type="conversation.item.create", item=ev.item, event_id=ev.event_id
+            )
             for ev in super()._create_update_chat_ctx_events(chat_ctx)
             if isinstance(ev, ConversationItemCreateEvent)
             and ev.item.id not in remote_ids
@@ -295,7 +294,10 @@ class RealtimeSession(_openai.RealtimeSession):
         if isinstance(item, RealtimeConversationItemFunctionCallOutput):
             call_id = self._el_call_ids.get(item.call_id, item.call_id)
             emitted_at = self._el_tool_calls.pop(call_id, None)
-            if emitted_at is None or time.monotonic() - emitted_at > TOOL_OUTPUT_DEADLINE:
+            if emitted_at is None:
+                logger.debug("dropping a tool result for a call on an earlier connection")
+                return False
+            if time.monotonic() - emitted_at > TOOL_OUTPUT_DEADLINE:
                 logger.warning(
                     "dropping a tool result the ElevenLabs Realtime server no longer waits for",
                     extra={"call_id": call_id},
@@ -321,6 +323,15 @@ class RealtimeSession(_openai.RealtimeSession):
                     self._el_call_ids[_shorten_call_id(call_id)] = call_id
                     self._el_tool_calls[call_id] = time.monotonic()
 
+    def _el_on_client_event(self, event: dict[str, Any]) -> None:
+        item = event.get("item")
+        if (
+            event.get("type") == "conversation.item.create"
+            and isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+        ):
+            self._el_tool_continuation_pending = True
+
     def _el_claim_response(self, event: dict[str, Any]) -> None:
         response = event.get("response")
         if not isinstance(response, dict):
@@ -340,15 +351,39 @@ class RealtimeSession(_openai.RealtimeSession):
         }
 
     def _handle_response_audio_transcript_delta(self, event: dict[str, Any]) -> None:
-        event["delta"] = _strip_audio_tags(event.get("delta") or "")
+        event["delta"] = self._el_strip_streamed_tags(event["item_id"], event.get("delta") or "")
         super()._handle_response_audio_transcript_delta(event)
 
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
-        event.delta = _strip_audio_tags(event.delta)
+        event.delta = self._el_strip_streamed_tags(event.item_id, event.delta)
         super()._handle_response_text_delta(event)
+
+    def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
+        if event.item.id and (tail := self._el_tag_tails.pop(event.item.id, None)):
+            super()._handle_response_audio_transcript_delta(
+                {"item_id": event.item.id, "delta": tail}
+            )
+        super()._handle_response_output_item_done(event)
+
+    def _handle_response_done(self, event: ResponseDoneEvent) -> None:
+        self._el_tag_tails.clear()
+        super()._handle_response_done(event)
+
+    def _el_strip_streamed_tags(self, item_id: str, delta: str) -> str:
+        """Strip audio tags, holding back an unclosed ``[`` until the next delta completes it."""
+        text = self._el_tag_tails.pop(item_id, "") + delta
+        start = text.rfind("[")
+        if start != -1 and "]" not in text[start:]:
+            text, self._el_tag_tails[item_id] = text[:start], text[start:]
+        return _strip_audio_tags(text)
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         self._el_close = None
+        # a new connection is a new server conversation: earlier tool calls no longer wait
+        self._el_tool_calls.clear()
+        self._el_call_ids.clear()
+        self._el_tool_continuation_pending = False
+        self._el_tag_tails.clear()
         ws = await super()._create_ws_conn()
         return cast(aiohttp.ClientWebSocketResponse, _CloseRecordingSocket(ws, self))
 

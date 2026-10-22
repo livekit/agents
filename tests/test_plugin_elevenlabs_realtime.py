@@ -280,6 +280,131 @@ async def test_audio_tags_are_stripped_from_the_transcript(
         await session.aclose()
 
 
+async def _start_message(fake: FakeServer, session: realtime.RealtimeSession) -> Any:
+    fut = session.generate_reply()
+    await fake.next("response.create")
+    await fake.send(_response_created("resp_1"))
+    generation = await asyncio.wait_for(fut, 2)
+    await fake.send(
+        {
+            "type": "response.output_item.added",
+            "event_id": "ev_item",
+            "response_id": "resp_1",
+            "output_index": 0,
+            "item": {"id": "item_1", "type": "message", "role": "assistant", "content": []},
+        }
+    )
+    return await asyncio.wait_for(generation.message_stream.__anext__(), 2)
+
+
+def _transcript_delta(delta: str, n: int) -> dict[str, Any]:
+    return {
+        "type": "response.output_audio_transcript.delta",
+        "event_id": f"ev_delta_{n}",
+        "response_id": "resp_1",
+        "item_id": "item_1",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": delta,
+    }
+
+
+async def _read_text(message: Any) -> str:
+    text = ""
+    async for delta in message.text_stream:
+        text += delta
+    return text
+
+
+async def test_audio_tags_split_across_deltas_are_stripped(
+    server: tuple[FakeServer, str],
+) -> None:
+    fake, url = server
+    _, session, _ = await _connect(url, fake)
+    try:
+        message = await _start_message(fake, session)
+        for n, delta in enumerate(["Sure [chee", "rful] thing", " [laughs] ok"]):
+            await fake.send(_transcript_delta(delta, n))
+        await fake.send(
+            {
+                "type": "response.output_item.done",
+                "event_id": "ev_item_done",
+                "response_id": "resp_1",
+                "output_index": 0,
+                "item": {"id": "item_1", "type": "message", "role": "assistant", "content": []},
+            }
+        )
+        assert await asyncio.wait_for(_read_text(message), 2) == "Sure  thing ok"
+    finally:
+        await session.aclose()
+
+
+async def test_unclosed_bracket_is_flushed_when_the_message_ends(
+    server: tuple[FakeServer, str],
+) -> None:
+    fake, url = server
+    _, session, _ = await _connect(url, fake)
+    try:
+        message = await _start_message(fake, session)
+        await fake.send(_transcript_delta("Option [a", 0))
+        await fake.send(
+            {
+                "type": "response.output_item.done",
+                "event_id": "ev_item_done",
+                "response_id": "resp_1",
+                "output_index": 0,
+                "item": {"id": "item_1", "type": "message", "role": "assistant", "content": []},
+            }
+        )
+        assert await asyncio.wait_for(_read_text(message), 2) == "Option [a"
+    finally:
+        await session.aclose()
+
+
+async def test_reconnect_forgets_a_pending_tool_continuation(
+    server: tuple[FakeServer, str],
+) -> None:
+    fake, url = server
+    _, session, _ = await _connect(
+        url, fake, conn_options=APIConnectOptions(max_retry=2, retry_interval=0.01)
+    )
+    try:
+        session.send_event(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+            }
+        )
+        await fake.next("conversation.item.create")
+        await fake.close(4300, "Agent concurrency limit reached")
+        await fake.reconnected()
+        await fake.next("session.update")
+
+        fut = session.generate_reply()
+        await fake.next("response.create")
+        await fake.send(_response_created("resp_after_reconnect"))
+        generation = await asyncio.wait_for(fut, 2)
+        assert generation.response_id == "resp_after_reconnect"
+    finally:
+        await session.aclose()
+
+
+async def test_seeded_items_carry_no_anchor(server: tuple[FakeServer, str]) -> None:
+    fake, url = server
+    _, session, _ = await _connect(url, fake)
+    try:
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(role="system", content="be brief")
+        chat_ctx.add_message(role="user", content="hi")
+
+        events = session._create_update_chat_ctx_events(chat_ctx)
+
+        assert len(events) == 1
+        assert "previous_item_id" not in events[0].model_dump(exclude_unset=True)
+    finally:
+        await session.aclose()
+
+
 async def test_chat_ctx_sync_sends_only_items_the_server_confirms(
     server: tuple[FakeServer, str],
 ) -> None:
