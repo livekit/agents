@@ -102,6 +102,38 @@ async def test_cartesia_inference_preserves_word_separators() -> None:
     ]
 
 
+async def test_model_switch_mid_stream_keeps_the_stream_dialect() -> None:
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "session-1"},
+            {
+                "type": "output_audio",
+                "audio": base64.b64encode(b"\0\0" * 2400).decode(),
+            },
+            {"type": "done"},
+        ]
+    )
+    tts = TTS(
+        model="fishaudio/s2.1-pro",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+    )
+    tts._pool = _FakePool(websocket, session_id="inference_connection")  # type: ignore[assignment]
+    tts._set_expressive(True)
+
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        # drama-3 lowers differently; this stream still sends s2.1-pro
+        tts.update_options(model="fishaudio/drama-3")
+        stream.push_text('<expr type="expression" label="sad"/> Sorry about that.')
+        stream.end_input()
+        _ = [event async for event in stream]
+
+    packets = [packet for packet in websocket.sent if packet["type"] == "input_transcript"]
+    assert [packet["transcript"] for packet in packets] == ["[very sad] Sorry about that. "]
+    assert packets[0]["generation_config"]["model"] == "fishaudio/s2.1-pro"
+
+
 async def test_connection_retains_header_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
     websocket = _FakeWebSocket([])
 
