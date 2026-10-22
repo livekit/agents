@@ -2734,6 +2734,10 @@ class AgentActivity(RecognitionHooks):
             < self._session.options.interruption["min_words"]
         ):
             self._cancel_preemptive_generation()
+            # A late FINAL can still extend this same utterance into a valid interruption.
+            # Once a new utterance starts, however, rejected overlapping words must not
+            # accumulate toward min_words or prefix the next accepted user turn.
+            info.discard_on_next_speech = info.overlapping_agent_speech
             return False
 
         # avoid interruption if backchannel is detected with realtime model. an unjudged overlap

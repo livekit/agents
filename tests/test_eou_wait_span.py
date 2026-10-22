@@ -85,6 +85,7 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ar._turn_detector_late_prediction_warned = False
     ar._vad_base_turn_detection = False
     ar._agent_speaking = False
+    ar._discard_on_next_speech = False
     ar._interruption_enabled = False
     ar._interruption_ch = None
     ar._turn_backchannel_over_agent = False

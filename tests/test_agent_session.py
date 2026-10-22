@@ -665,7 +665,8 @@ async def test_interruption_options() -> None:
     actions.add_llm("Here is a long story for you ... the end.")
     actions.add_tts(5.0)  # playout starts at 3.5s
     actions.add_user_speech(5.0, 6.0, "Stop!")
-    actions.add_user_speech(6.5, 7.5, "ok, stop!", stt_delay=0.0)
+    # The earlier rejected utterance must not count toward this utterance's minimum.
+    actions.add_user_speech(6.5, 7.5, "Okay, please stop!", stt_delay=0.0)
     # it should interrupt at 7.5s after stt, playback position is 4.0s
 
     # test min_interruption_words

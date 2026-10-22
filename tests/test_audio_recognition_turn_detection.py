@@ -33,6 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import LanguageCode, stt, vad
 from livekit.agents.utils import aio
 from livekit.agents.voice.audio_recognition import AudioRecognition
@@ -65,6 +66,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._turn_backchannel_over_agent = False
     ar._transcription_timeout_handle = None
     ar._audio_transcript = ""
+    ar._discard_on_next_speech = False
     ar._turn_detection_mode = "vad"
 
     # turn_detector must be an _StreamingTurnDetector for the speaking-guard
@@ -92,6 +94,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._turn_detector_flushed = False
     ar._turn_detector_late_prediction_warned = False
     ar._agent_speaking = False
+    ar._agent_speech_started_at = None
     ar._interruption_enabled = False
     ar._interruption_ch = None
     ar._vad_base_turn_detection = False
@@ -246,6 +249,41 @@ def _end_of_speech() -> vad.VADEvent:
         speech_duration=0.0,
         silence_duration=0.3,
     )
+
+
+@pytest.mark.parametrize("explicit_clear", [False, True])
+async def test_new_onset_audio_survives_deferred_discard_but_not_explicit_clear(
+    explicit_clear: bool,
+) -> None:
+    ar = _make_full_recognition_for_eou()
+    ar._session.amd = None
+    ar._vad_ch = None
+    ar._audio_transcript = "okay"
+    ar._update_stt = MagicMock()
+    buffered: list[rtc.AudioFrame] = []
+    ar._turn_detector_stream.push_audio.side_effect = buffered.append
+    ar._turn_detector_stream.flush.side_effect = lambda reason=None: buffered.clear()
+
+    # Audio reaches the detector synchronously before VAD's asynchronous START callback.
+    frame = rtc.AudioFrame(
+        data=b"\x00\x20" * 320,
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=320,
+    )
+    ar._push_audio(frame)
+    assert buffered == [frame]
+
+    if explicit_clear:
+        ar._clear_user_turn()
+        assert buffered == []
+        assert ar._update_stt.call_count == 2
+    else:
+        ar._discard_on_next_speech = True
+        await ar._on_vad_event(_start_of_speech())
+        assert buffered == [frame]
+        ar._update_stt.assert_not_called()
+    assert ar._audio_transcript == ""
 
 
 class TestSubThresholdSpeakingSpike:

@@ -174,6 +174,9 @@ class FakeRecognizeStream(RecognizeStream):
             )
         )
 
+    def send_fake_event(self, event: SpeechEvent) -> None:
+        self._event_ch.send_nowait(event)
+
     async def _run(self) -> None:
         self._attempt += 1
         assert isinstance(self._stt, FakeSTT)
