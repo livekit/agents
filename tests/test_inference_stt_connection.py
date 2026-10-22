@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 from unittest.mock import AsyncMock
@@ -148,6 +149,49 @@ async def test_flux_language_hint_reaches_session_create() -> None:
     assert extra["language_hint"] == ["en", "es"]
 
 
+async def test_flux_language_hint_is_not_language_gated(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Flux takes a hint in any language: the gateway gates a hint on the model
+    (flux-general-multi), not on the session language."""
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/flux-general-multi",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+                extra_kwargs={"language_hint": ["en", "es"]},
+            )
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                stream.end_input()
+                await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+            finally:
+                await stream.aclose()
+
+    assert extra["language_hint"] == ["en", "es"]
+    assert "removed `language_hint`" not in caplog.text
+
+
 async def test_nova3_language_hint_reaches_session_create() -> None:
     extra: dict[str, Any] = {}
     session_language = ""
@@ -187,6 +231,94 @@ async def test_nova3_language_hint_reaches_session_create() -> None:
 
     assert extra["language_hint"] == ["en", "es"]
     assert session_language == "multi"
+
+
+async def test_nova3_language_hint_is_dropped_outside_multi_mode(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/nova-3",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+                extra_kwargs={"language_hint": ["en", "es"]},
+            )
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                stream.end_input()
+                await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+            finally:
+                await stream.aclose()
+
+    # the gateway forwards a hint only in multi mode, so sending it would be dead weight
+    assert "language_hint" not in extra
+    assert "removed `language_hint`" in caplog.text
+    assert "model 'deepgram/nova-3'" in caplog.text
+    assert "language is 'en'" in caplog.text
+    # the removal belongs to this stream; the parent keeps the caller's baseline
+    assert "language_hint" not in stream._opts.extra_kwargs
+    assert stt._opts.extra_kwargs["language_hint"] == ["en", "es"]
+
+
+async def test_a_stream_language_keeps_the_hint_the_parent_would_drop() -> None:
+    """The guard reads the stream's effective language: `stream(language=...)` can put a
+    session in multi mode that the STT was not built in."""
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = STT(
+            model="deepgram/nova-3",
+            language="en",
+            api_key="test-key",
+            api_secret="test-secret",
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"language_hint": ["en", "es"]},
+        )
+        stream = stt.stream(
+            language="multi", conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        try:
+            stream.end_input()
+            await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert extra["language_hint"] == ["en", "es"]
 
 
 async def test_linden_session_keyterms_reach_session_create() -> None:

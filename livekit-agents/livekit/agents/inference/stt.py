@@ -284,6 +284,38 @@ def _keyterms_extra_for_model(
     return {key: list(dict.fromkeys([*existing, *session_keyterms]))}
 
 
+def _drop_ineffective_language_hint(
+    model: NotGivenOr[STTModels | str],
+    language: NotGivenOr[LanguageCode],
+    extra_kwargs: dict[str, Any],
+) -> None:
+    """Remove a `language_hint` the gateway would drop, in place, with a warning.
+
+    The nova path forwards a hint only in "multi" language mode, so a hint sent with any
+    other language never reaches Deepgram. Flux is exempt: its hint is gated on the model
+    (flux-general-multi), not on the session language.
+
+    Deleting the key makes the removal stick for the stream, so a reconnect neither warns
+    again nor puts the hint back on the wire.
+    """
+    if "language_hint" not in extra_kwargs:
+        return
+    if not (is_given(model) and isinstance(model, str)):
+        return
+    if _provider_for_model(model) != "deepgram" or model.startswith("deepgram/flux-"):
+        return
+    if is_given(language) and str(language).lower() == "multi":
+        return
+
+    del extra_kwargs["language_hint"]
+    logger.warning(
+        "removed `language_hint` for model '%s': the gateway applies a hint only in "
+        "'multi' language mode, and this session's language is '%s'",
+        model,
+        language if is_given(language) else "unset",
+    )
+
+
 _ASSEMBLYAI_CARRYOVER_MODELS = (
     "assemblyai/u3-rt-pro",
     "assemblyai/universal-3-5-pro",
@@ -1295,6 +1327,9 @@ class SpeechStream(stt.SpeechStream):
         self, http_session: aiohttp.ClientSession
     ) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Inference STT WebSocket."""
+        _drop_ineffective_language_hint(
+            self._opts.model, self._opts.language, self._opts.extra_kwargs
+        )
         params: dict[str, Any] = {
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
