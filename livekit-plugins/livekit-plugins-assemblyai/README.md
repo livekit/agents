@@ -47,7 +47,7 @@ session = AgentSession(
 `assemblyai.TTS` streams speech over a pooled WebSocket and cancels in-flight audio when the user
 interrupts. Useful options:
 
-- `voice`: a voice library voice by its slug (`"aai-jane"`, `"aai-linda-3"`; see the
+- `voice`: a voice library voice by its slug (default `"aai-jane"`; see the
   [voices](https://www.assemblyai.com/docs/tts/voices)) or a custom (cloned) voice by its id.
 - `language`: a code such as `"es"`, set independently of the voice.
 - `model`: defaults to `assemblyai-tts-1`.

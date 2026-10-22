@@ -54,6 +54,7 @@ from .log import logger
 
 DEFAULT_BASE_URL = "wss://tts.us.assemblyai.com"
 DEFAULT_MODEL = "assemblyai-tts-1"
+DEFAULT_VOICE = "aai-jane"
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 # Generate's limit, in code points. A longer sentence becomes several requests rather
@@ -86,8 +87,8 @@ _CANCEL_FRAME = json.dumps({"type": "Cancel"})
 
 @dataclass
 class _TTSOptions:
-    # a catalog voice, sent as `voice_id`; None leaves it to the server (the model's default)
-    voice: str | None
+    # a catalog voice id or slug, sent as `voice_id`
+    voice: str
     language: str | None
     model: str
     sample_rate: int
@@ -100,7 +101,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: NotGivenOr[str] = NOT_GIVEN,
+        voice: str = DEFAULT_VOICE,
         language: NotGivenOr[str] = NOT_GIVEN,
         model: str = DEFAULT_MODEL,
         sample_rate: int = 24000,
@@ -120,8 +121,8 @@ class TTS(tts.TTS):
             voice: The voice, by its catalog id: a voice library voice by its slug
                 (``"aai-jane"``, see https://www.assemblyai.com/docs/tts/voices), or a
                 custom (cloned) voice by its ``id`` or the account's slug for it. Defaults
-                to the model's default voice. The voice must be paired with ``model``; a
-                custom voice can only be used on a host in the data zone that created it.
+                to ``"aai-jane"``. The voice must be paired with ``model``; a custom voice
+                can only be used on a host in the data zone that created it.
             language: The language to synthesize, as a code (``"es"``, ``"es-MX"``) or an
                 English name (``"spanish"``). Defaults to English; with a custom voice, to
                 the language of the voice's reference clip.
@@ -165,7 +166,7 @@ class TTS(tts.TTS):
             )
 
         self._opts = _TTSOptions(
-            voice=_require(voice, "voice") if is_given(voice) else None,
+            voice=_require(voice, "voice"),
             language=_language_name(language) if is_given(language) else None,
             model=_require(model, "model"),
             sample_rate=sample_rate,
@@ -201,8 +202,7 @@ class TTS(tts.TTS):
         return "AssemblyAI"
 
     @property
-    def voice(self) -> str | None:
-        """The configured voice, or None for the model's default voice."""
+    def voice(self) -> str:
         return self._opts.voice
 
     @property
@@ -213,7 +213,7 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: NotGivenOr[str | None] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str | None] = NOT_GIVEN,
         model: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -225,14 +225,14 @@ class TTS(tts.TTS):
         it finishes.
 
         Args:
-            voice: A catalog voice id or slug, or None for the model's default voice.
+            voice: A catalog voice id or slug.
             language: A language code or English name, or None for the server's default.
             model: A model name or alias.
         """
         opts = self._opts
         new_voice, new_language, new_model = opts.voice, opts.language, opts.model
         if is_given(voice):
-            new_voice = _optional(voice, "voice")
+            new_voice = _require(voice, "voice")
         if is_given(language):
             new_language = _language_name(language) if language is not None else None
         if is_given(model):
@@ -293,13 +293,14 @@ class TTS(tts.TTS):
         opts = self._opts
         params: dict[str, Any] = {
             "model_id": opts.model,
+            "voice_id": opts.voice,
             "sample_rate": opts.sample_rate,
             "encoding": "pcm_s16le",
             "word_boundaries": "true" if opts.word_timestamps else "false",
         }
-        # what is left out is the server's choice
-        optional = {"voice_id": opts.voice, "language": opts.language}
-        params.update({k: v for k, v in optional.items() if v is not None})
+        if opts.language is not None:
+            # left out, the server speaks the voice's own language
+            params["language"] = opts.language
         url = f"{opts.base_url}/v1/ws?{urlencode(params)}"
 
         try:
@@ -922,10 +923,6 @@ def _require(value: str, name: str) -> str:
     if not value:
         raise ValueError(f"`{name}` must not be empty")
     return value
-
-
-def _optional(value: str | None, name: str) -> str | None:
-    return _require(value, name) if value is not None else None
 
 
 def _language_name(language: str) -> str:

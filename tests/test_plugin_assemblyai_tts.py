@@ -332,9 +332,9 @@ def _strip_padding(audio: bytes, expected_len: int) -> bytes:
 def test_voice_and_language() -> None:
     from livekit.plugins.assemblyai import TTS
 
-    # nothing given: the server's defaults (jane, English)
+    # nothing given: aai-jane, and the server's default language (English)
     tts = TTS(api_key="k")
-    assert (tts.voice, tts.language) == (None, None)
+    assert (tts.voice, tts.language, tts.model) == ("aai-jane", None, "assemblyai-tts-1")
 
     # voices pass through; the language is never inferred from one
     tts = TTS(api_key="k", voice=" aai-vera ")
@@ -369,14 +369,16 @@ def test_custom_voice_and_model() -> None:
         TTS(api_key="k", model=" ")
 
 
-def test_update_options_resets_to_server_defaults_with_none() -> None:
+def test_update_options() -> None:
     from livekit.plugins.assemblyai import TTS
 
     tts = TTS(api_key="k", voice="aai-vera", language="es")
     tts.update_options(voice="clone", language="fr", model="latest")
     assert (tts.voice, tts.language, tts.model) == ("clone", "french", "latest")
-    tts.update_options(voice=None, language=None)
-    assert (tts.voice, tts.language) == (None, None)
+    tts.update_options(language=None)  # back to the server's default
+    assert (tts.voice, tts.language) == ("clone", None)
+    with pytest.raises(ValueError, match="voice"):
+        tts.update_options(voice=" ")
 
 
 def test_invalid_sample_rate() -> None:
@@ -615,7 +617,7 @@ async def test_update_options_opens_a_new_session() -> None:
         await tts.aclose()
 
     assert [(s.params.get("voice_id"), s.params.get("language")) for s in srv.sessions] == [
-        (None, None),
+        ("aai-jane", None),
         ("aai-paul", "italian"),
     ]
 
@@ -624,14 +626,14 @@ async def test_voice_and_model_are_sent_at_connect() -> None:
     async with _FakeServer() as srv:
         tts = _make_tts(srv, voice="clone", model="some-model")
         await _speak(tts, ["Hello."])
-        tts.update_options(voice=None, model="assemblyai-tts-1")
+        tts.update_options(voice="aai-jane", model="assemblyai-tts-1")
         await _speak(tts, ["Hello again."])
         await tts.aclose()
 
     keys = ("voice", "voice_id", "language", "model_id")
     assert [tuple(s.params.get(k) for k in keys) for s in srv.sessions] == [
         (None, "clone", None, "some-model"),
-        (None, None, None, "assemblyai-tts-1"),
+        (None, "aai-jane", None, "assemblyai-tts-1"),
     ]
 
 
