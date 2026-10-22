@@ -8,7 +8,7 @@ Support for Mistral AI STT, TTS, and LLM services.
 pip install livekit-plugins-mistralai
 ```
 
-For streaming STT (Voxtral Realtime), also install `silero` plugin.
+For streaming STT (Voxtral Realtime) without server-side turn detection, also install `silero` plugin.
 
 ```bash
 pip install livekit-plugins-silero
@@ -42,10 +42,9 @@ stt = mistralai.STT(
 
 #### Realtime streaming transcription
 
-Voxtral Realtime streams interim transcripts over a WebSocket connection. Since this
-model has no server-side endpointing, the plugin runs an internal Silero VAD to detect
-when the user stops speaking and flush the audio — producing final transcripts and
-driving the end-of-turn pipeline.
+Voxtral Realtime streams interim transcripts over a WebSocket connection. By default, the
+plugin runs an internal Silero VAD to detect when the user stops speaking and flush the
+audio — producing final transcripts and driving the end-of-turn pipeline.
 
 ```python
 from livekit.plugins import mistralai
@@ -58,6 +57,25 @@ stt = mistralai.STT(model="voxtral-mini-transcribe-realtime-2602")
 stt = mistralai.STT(
     model="voxtral-mini-transcribe-realtime-2602",
     vad=VAD.load(min_silence_duration=0.3),
+)
+```
+
+#### Server-side turn detection
+
+Voxtral 3 realtime models can detect turns on the server instead. Set `turn_detection` (an
+empty dict uses the server defaults) and let the STT drive the end of turn. No VAD is loaded.
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import mistralai
+
+session = AgentSession(
+    stt=mistralai.STT(
+        model="voxtral-mini-transcribe-realtime-3",
+        turn_detection={"min_silence_ms": 300},
+    ),
+    turn_handling={"turn_detection": "stt"},
+    ...
 )
 ```
 
