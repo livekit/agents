@@ -27,6 +27,7 @@ from ..utils import aio, hw, log_exceptions
 from . import proto
 from .channel import Message
 from .proc_client import _dump_stack_traces_impl, _ProcClient
+from .stdio_capture import ChildStdio, redirect_stdio
 
 
 @dataclass
@@ -34,10 +35,14 @@ class ProcStartArgs:
     log_cch: socket.socket
     mp_cch: socket.socket
     runners: _RunnersDict
+    stdio: ChildStdio | None = None
 
 
 def proc_main(args: ProcStartArgs) -> None:
     from .proc_client import _ProcClient
+
+    if args.stdio is not None:
+        redirect_stdio(args.stdio)
 
     inf_proc = _InferenceProc(args.runners)
 
