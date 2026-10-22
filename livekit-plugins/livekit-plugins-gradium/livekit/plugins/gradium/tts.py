@@ -132,8 +132,8 @@ class _Connection:
     """The websocket of a TTS instance, shared by all of its sessions.
 
     A reader task routes every frame to the session it is tagged with, so sessions
-    run in parallel on the socket. Whatever still arrives for an interrupted reply is
-    dropped. When the socket dies, every open session
+    run in parallel on the socket. An interrupted reply is cancelled server-side and
+    whatever still arrives for it is dropped. When the socket dies, every open session
     is handed the error and the connection reports itself closed, so the next session
     opens a new one.
     """
@@ -155,16 +155,42 @@ class _Connection:
         """Run one session on the socket: send its setup, yield the queue its frames
         arrive on, and stop listening on exit; whatever the server still sends for it
         is dropped.
+
+        A session left before its last frame arrived (the agent interrupted it, it
+        timed out waiting for the server, or it failed) is cancelled server-side, so a
+        retry on the same socket does not run next to an orphan holding a worker and a
+        concurrency slot. Only a session whose setup went out is cancelled: a message
+        for an id the server has never seen is a protocol error that closes the socket
+        under every other session. A cancel landing after the session ended on its own
+        changes nothing on the server.
         """
         if self._error is not None:
             raise self._error
         queue: asyncio.Queue[_Frame | APIError] = asyncio.Queue()
         self._sessions[client_req_id] = queue  # before the setup: its `ready` follows at once
+        setup_sent = False
         try:
             await self.send(setup, client_req_id)
+            setup_sent = True
             yield queue
+        except BaseException:
+            if setup_sent:
+                await self._cancel(client_req_id)
+            raise
         finally:
             self._sessions.pop(client_req_id, None)
+
+    async def _cancel(self, client_req_id: str) -> None:
+        """Cancel a session: the server stops synthesizing it, releases the worker and
+        answers with `cancelled` as the session's last frame; the socket and the other
+        sessions on it are unaffected."""
+        self._sessions.pop(client_req_id, None)
+        if self.closed:
+            return
+        try:
+            await asyncio.wait_for(self.send({"type": "cancel"}, client_req_id), 1.0)
+        except Exception:
+            pass  # the socket is going down; the reader reports it to the live sessions
 
     async def send(self, msg: _Frame, client_req_id: str) -> None:
         msg["client_req_id"] = client_req_id
@@ -287,6 +313,12 @@ async def _consume_session(
             raise _api_error(item)
         elif type_ == "ready":
             ready = True
+        elif type_ == "cancelled":
+            # only sent in answer to a client cancel, after which nobody listens here;
+            # if the server ever cancels a session on its own, it ended without audio
+            raise APIStatusError(
+                "Gradium cancelled the session", status_code=1000, body=item, retryable=True
+            )
         elif type_ in ("text", "need_more_text", "flushed"):
             # TODO(laurent): handle text timestamps?
             pass

@@ -58,7 +58,8 @@ class FakeWebSocket:
     ("raise", exc) (receive() raises `exc`).
     receive() blocks while nothing is queued, like a live socket between replies.
 
-    `fail_send_on` makes send_str raise a connection error for that message type.
+    `fail_send_on` makes send_str raise a connection error for that message type;
+    `stall_send_on` makes it block on that type until `release` is set.
     """
 
     def __init__(
@@ -68,6 +69,7 @@ class FakeWebSocket:
         close_code: int | None = None,
         close_reason: str = "",
         fail_send_on: str | None = None,
+        stall_send_on: str | None = None,
     ) -> None:
         import aiohttp
 
@@ -75,6 +77,8 @@ class FakeWebSocket:
         self._scripts = [list(script) for script in scripts]
         self._queue: asyncio.Queue[Any] = asyncio.Queue()
         self._fail_send_on = fail_send_on
+        self._stall_send_on = stall_send_on
+        self.release = asyncio.Event()
         self.close_code = close_code
         self._close_reason = close_reason
         self.closed = False
@@ -95,7 +99,11 @@ class FakeWebSocket:
         msg = json.loads(data)
         if msg.get("type") == self._fail_send_on:
             raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        if msg.get("type") == self._stall_send_on:
+            await self.release.wait()
         self.sent.append(msg)
+        if msg["type"] == "cancel":
+            self._queue.put_nowait({"type": "cancelled", "client_req_id": msg.get("client_req_id")})
         if msg["type"] == "setup":
             script = self._scripts.pop(0) if self._scripts else []
             for frame in script:
@@ -181,9 +189,9 @@ def _make_tts(frames: list[Any], *, close_code: int | None = None, **ws_kwargs: 
     return _new_tts(session), session, ws
 
 
-def _make_tts_scripts(scripts: list[list[Any]]):
+def _make_tts_scripts(scripts: list[list[Any]], **ws_kwargs: Any):
     """A TTS over one fake socket that will carry several sessions."""
-    ws = FakeWebSocket(scripts)
+    ws = FakeWebSocket(scripts, **ws_kwargs)
     session = FakeSession(ws)
     return _new_tts(session), session, ws
 
@@ -529,9 +537,9 @@ async def test_error_frame_of_an_unknown_session_is_logged(caplog):
     assert "earlier session" in caplog.text
 
 
-async def test_interrupted_reply_keeps_the_socket():
-    """The interrupted session's sibling and the socket carry on, and whatever still
-    arrives for it is dropped without a warning."""
+async def test_interrupted_reply_is_cancelled_and_the_socket_is_kept():
+    """The interrupted session is cancelled server-side; its sibling and the socket
+    carry on, and whatever still arrives for it is dropped without a warning."""
     tts, session, ws = _make_tts_scripts([[READY], [READY]])
 
     interrupted = tts.stream(conn_options=CONN_OPTS)
@@ -544,6 +552,7 @@ async def test_interrupted_reply_keeps_the_socket():
 
     first_id = ws.sent[0]["client_req_id"]
     assert ws.sent[0]["type"] == "setup"
+    assert ws.sent[-1] == {"type": "cancel", "client_req_id": first_id}
     assert not ws.closed
 
     # a frame of the cancelled session still in flight, then the sibling's audio
@@ -560,7 +569,7 @@ async def test_interrupted_reply_keeps_the_socket():
     assert ws._queue.empty()
 
 
-async def test_interrupted_oneshot_keeps_the_socket():
+async def test_interrupted_oneshot_is_cancelled():
     tts, session, ws = _make_tts_scripts([[READY], [READY, AUDIO, EOS]])
     stream = tts.synthesize("hello world", conn_options=CONN_OPTS)
 
@@ -572,6 +581,9 @@ async def test_interrupted_oneshot_keeps_the_socket():
     await asyncio.sleep(0.05)  # setup, text and end_of_stream reach the socket
     await stream.aclose()  # the agent interrupts the one-shot reply
     await consumer
+
+    first_id = ws.sent[0]["client_req_id"]
+    assert ws.sent[-1] == {"type": "cancel", "client_req_id": first_id}
 
     duration = await _drain(tts, APIConnectOptions(max_retry=0, timeout=5))
     assert 0.5 <= duration <= 0.6
@@ -705,6 +717,78 @@ async def test_a_malformed_frame_does_not_take_the_session_down():
     duration = await _drain(tts, CONN_OPTS)
     assert 0.5 <= duration <= 0.6
     assert not ws.closed
+
+
+async def test_a_failed_session_is_cancelled_server_side():
+    """A reply that times out waiting for ready must not leave its session running on
+    the socket while the base class retries."""
+    tts, _, ws = _make_tts_scripts([[], [READY, AUDIO, EOS]])
+
+    duration = await _drain(tts, APIConnectOptions(max_retry=1, timeout=0.2))
+    assert 0.5 <= duration <= 0.6
+    first_id = ws.sent[0]["client_req_id"]
+    assert {"type": "cancel", "client_req_id": first_id} in ws.sent
+    assert not ws.closed
+
+
+async def test_a_completed_session_is_not_cancelled():
+    tts, _, ws = _make_tts_scripts([[READY, AUDIO, EOS]])
+    await _drain_stream(tts, CONN_OPTS)
+    assert all(m["type"] != "cancel" for m in ws.sent)
+
+
+async def test_a_session_that_ended_with_an_error_leaves_nothing_behind():
+    """An error frame ends the session; the cancel sent for it changes nothing on the
+    server, and the socket carries the next reply."""
+    tts, _, ws = _make_tts_scripts([[READY, ERROR], [READY, AUDIO, EOS]])
+
+    with pytest.raises(APIStatusError, match="Unknown voice"):
+        await _drain(tts, CONN_OPTS)
+    assert tts._conn._sessions == {}
+
+    await _drain(tts, CONN_OPTS)  # the socket is still usable
+    assert tts._conn._sessions == {}
+    assert not ws.closed
+
+
+@pytest.mark.parametrize(
+    "make_stream", [lambda tts: tts.synthesize("hi"), lambda tts: tts.stream()]
+)
+async def test_a_session_whose_setup_never_went_out_is_not_cancelled(make_stream):
+    """The server answers a message for an id it has never seen with a protocol error
+    that closes the socket under every session, so a reply interrupted while its setup
+    is still on its way out sends no cancel."""
+    tts, _, ws = _make_tts_scripts([[READY, AUDIO, EOS]], stall_send_on="setup")
+    stream = make_stream(tts)
+    if hasattr(stream, "push_text"):
+        stream.push_text("hello world")
+        stream.end_input()
+
+    async def consume() -> None:
+        async for _ in stream:
+            pass
+
+    consumer = asyncio.create_task(consume())
+    await asyncio.sleep(0.05)  # the setup is stuck in send_str
+    await stream.aclose()
+    await asyncio.wait_for(consumer, timeout=2)
+
+    assert ws.sent == []
+    assert tts._conn._sessions == {}
+    assert not ws.closed
+
+    ws.release.set()  # the socket is unharmed: the next reply runs on it
+    duration = await _drain(tts, CONN_OPTS)
+    assert 0.5 <= duration <= 0.6
+
+
+async def test_server_cancelled_frame_ends_a_live_session():
+    """A `cancelled` the plugin did not ask for ends the session instead of hanging it."""
+    tts, _, _ = _make_tts_scripts([[READY, {"type": "cancelled"}]])
+
+    with pytest.raises(APIStatusError, match="cancelled the session") as excinfo:
+        await _drain(tts, CONN_OPTS)
+    assert excinfo.value.retryable is True
 
 
 async def test_close_code_survives_a_racing_aclose():
