@@ -1,6 +1,8 @@
+import asyncio
 import enum
 import json
 from typing import Annotated, Any, Literal
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PositiveInt, ValidationError
@@ -24,6 +26,8 @@ from livekit.agents.llm.utils import (
     function_arguments_to_pydantic_model,
     prepare_function_arguments,
 )
+
+from .fake_realtime import run_realtime_tool_turn
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -335,6 +339,49 @@ def test_end_call_tool_ignore_on_enter_flag():
 
     (tool,) = EndCallTool(ignore_on_enter=True).tools
     assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
+
+
+@pytest.mark.parametrize(
+    "end_instructions, output",
+    [
+        (None, None),
+        ("say goodbye to the user", "say goodbye to the user"),
+        ("say goodbye to the user", None),  # cleared by on_tool_completed
+    ],
+)
+async def test_end_call_tool_waits_for_a_reply_only_if_it_asks_for_one(
+    monkeypatch, end_instructions, output
+):
+    # a None result asks for no reply; GPT-Live answers it anyway, and when the answer
+    # was silent the call stayed open for the 5 s tool reply timeout
+    from livekit.agents.beta import EndCallTool
+    from livekit.agents.beta.tools import end_call
+
+    monkeypatch.setattr(end_call, "get_job_context", MagicMock)
+    called = asyncio.Event()
+
+    async def on_tool_called(_: Toolset.ToolCalledEvent) -> None:
+        called.set()
+
+    async def on_tool_completed(ev: Toolset.ToolCompletedEvent) -> None:
+        ev.output = output
+
+    tool = EndCallTool(
+        end_instructions=end_instructions,
+        on_tool_called=on_tool_called,
+        on_tool_completed=on_tool_completed,
+    )
+    agent = Agent(instructions="test", tools=tool.tools)
+    events: list[str] = []
+
+    def on_session(session: Any) -> None:
+        shutdown = session.shutdown
+        session.shutdown = lambda **kw: (events.append("shutdown"), shutdown(**kw))
+        session.on("close", lambda _: events.append("close"))
+
+    await run_realtime_tool_turn(agent, tool_executed=called, on_session=on_session)
+    # a tool that asked for a reply is still waiting for it when the session closes
+    assert events[0] == ("shutdown" if output is None else "close")
 
 
 class TestToolExecution:
