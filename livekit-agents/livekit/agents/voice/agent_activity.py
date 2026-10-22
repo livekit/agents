@@ -43,6 +43,7 @@ from ..telemetry import (
     utils as trace_utils,
 )
 from ..tokenize.basic import split_words
+from ..tokenize.tokenizer import is_punctuation
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
@@ -150,15 +151,22 @@ def _transcripts_equivalent(first: str, second: str | None) -> bool:
     if second is None:
         return False
 
-    first_words = [
-        word.casefold()
-        for word, _, _ in split_words(first, ignore_punctuation=True, split_character=True)
-    ]
-    second_words = [
-        word.casefold()
-        for word, _, _ in split_words(second, ignore_punctuation=True, split_character=True)
-    ]
-    return bool(first_words) and first_words == second_words
+    first_words = _formatting_free_words(first)
+    return bool(first_words) and first_words == _formatting_free_words(second)
+
+
+def _formatting_free_words(text: str) -> list[str]:
+    # punctuation inside a word carries meaning, e.g. "1.5" is not "15"
+    words = []
+    for word, _, _ in split_words(text, ignore_punctuation=False, split_character=True):
+        start, end = 0, len(word)
+        while start < end and is_punctuation(word[start]):
+            start += 1
+        while end > start and is_punctuation(word[end - 1]):
+            end -= 1
+        if start < end:
+            words.append(word[start:end].casefold())
+    return words
 
 
 class ActivityClosedError(Exception):

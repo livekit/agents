@@ -2221,6 +2221,7 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
         ("你好 我很好", "你好，我很好。", True),
         # different words must still invalidate the preemptive generation
         ("مرحبا كيف حالك", "مرحبا كيف حالكم؟", False),
+        ("Transfer 1.5 dollars", "Transfer 15 dollars", False),
     ],
 )
 def test_preemptive_transcripts_equivalent(preflight: str, final: str, expected: bool) -> None:
