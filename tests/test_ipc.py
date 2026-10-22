@@ -920,6 +920,69 @@ async def test_thread_initialize_timeout_midframe():
     assert proc.status == ipc.job_executor.JobStatus.SUCCESS
 
 
+@pytest.mark.no_concurrent
+async def test_thread_warmup_failure_keeps_its_traceback(caplog: pytest.LogCaptureFixture):
+    """Regression test: thread_main caught every initialize() failure as a closed
+    channel and dropped it at debug level. A warm-up (initialize_process_fnc) that
+    raises is a real initialization error, and its traceback is the only diagnostic
+    for it: the runner used to surface it as an unhandled thread exception, so it
+    must be logged with the traceback instead of being reported as a channel that
+    closed while nothing had run.
+
+    Runs sequentially: the runner logs from its own thread, and the per-test capture
+    of the concurrent harness is keyed on a contextvar a plain thread doesn't inherit.
+    """
+    caplog.set_level(logging.DEBUG, logger="livekit.agents")
+
+    proc, _ = _create_thread_proc(
+        close_timeout=10.0, initialize_process_fnc=_failing_initialize_proc
+    )
+    await proc.start()
+    # the failed warm-up now also fails initialize() (the worker refuses the dead
+    # runner, see the test below); the traceback must still reach the log
+    with pytest.raises(RuntimeError, match="runner initialization failed"):
+        await asyncio.wait_for(proc.initialize(), timeout=10.0)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert "simulated init failure" in caplog.text, "the warm-up failure was not logged"
+    assert "Traceback (most recent call last)" in caplog.text, "the failure lost its traceback"
+    assert "channel closed during initialization" not in caplog.text, (
+        "a failed warm-up was reported as a closed channel"
+    )
+
+
+@pytest.mark.no_concurrent
+async def test_thread_initialize_refuses_a_runner_that_failed_its_warmup():
+    """Regression test: ThreadJobExecutor.initialize() asserted that the first
+    message was an InitializeResponse but ignored its error field. The runner's
+    warm-up raised, so it reported the failure and exited, yet the executor
+    resolved initialization successfully and the pool queued the dead runner as
+    warmed. A job dispatched to it was written into a dead channel, its entrypoint
+    never ran, and the executor still reported SUCCESS. An error in the response
+    must fail initialize() and leave the initialize future failed, which is what
+    the pool and _main_task() read as "this runner is not usable".
+
+    Runs sequentially: like its warm-up-failure peer it drives the runner thread
+    through shared in-process primitives.
+    """
+    proc, _ = _create_thread_proc(
+        close_timeout=2.0, initialize_process_fnc=_failing_initialize_proc
+    )
+    await proc.start()
+    try:
+        with pytest.raises(
+            RuntimeError, match="runner initialization failed: simulated init failure"
+        ):
+            await asyncio.wait_for(proc.initialize(), timeout=10.0)
+
+        assert proc._initialize_fut.done(), "initialize() left the runner half-initialized"
+        assert isinstance(proc._initialize_fut.exception(), RuntimeError), (
+            "a runner whose warm-up failed was still reported as initialized"
+        )
+    finally:
+        await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+
 async def test_thread_aclose_without_initialize():
     """Regression test: start() then aclose() with no initialize(). The
     ShutdownRequest is the runner's very first message; it used to die on its

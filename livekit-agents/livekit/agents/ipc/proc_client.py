@@ -33,6 +33,11 @@ class _ProcClient:
         self._initialize_fnc = initialize_fnc
         self._main_task_fnc = main_task_fnc
         self._initialized = False
+        # set when initialize() failed because the warm-up (initialize_process_fnc)
+        # itself raised, rather than because the channel closed under it: that
+        # traceback is the only diagnostic for the failure, so the caller must not
+        # report it as a closed channel
+        self.warmup_failed = False
 
     def initialize(self) -> bool:
         """Read the InitializeRequest handshake. Returns False when the first
@@ -54,11 +59,21 @@ class _ProcClient:
             )
 
             self._init_req = first_req
+            warmup_completed = False
             try:
                 self._initialize_fnc(self._init_req, self)
+                warmup_completed = True
                 send_message(cch, InitializeResponse())
             except Exception as e:
-                send_message(cch, InitializeResponse(error=str(e)))
+                # the error goes to the worker in the response below either way, but
+                # only a failure of the warm-up itself is worth a traceback in the
+                # runner's log: a channel that closed while it ran is not
+                self.warmup_failed = not warmup_completed
+                # str(e) is empty for bare exceptions like AssertionError(); the worker
+                # only checks whether error is non-empty, so it would read that as a
+                # success and warm a runner that already exited
+                error = str(e) or repr(e) or type(e).__name__
+                send_message(cch, InitializeResponse(error=error))
                 raise
 
             self._initialized = True

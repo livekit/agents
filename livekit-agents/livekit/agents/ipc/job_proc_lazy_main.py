@@ -625,11 +625,17 @@ def thread_main(
         try:
             initialized = client.initialize()
         except Exception:
-            # the worker closed the channel during the warm-up (e.g. a close
-            # that could not wait for the initialize response frame): nothing
-            # ran, exit cleanly like proc_main instead of letting the channel
-            # error surface as an unhandled thread exception
-            logger.debug("thread runner: channel closed during initialization")
+            if client.warmup_failed:
+                # the warm-up itself raised: initialize() already reported the error
+                # to the worker, but the traceback only exists here, so keep it
+                # instead of reporting the failure as a channel that closed
+                logger.exception("thread runner: initialization failed")
+            else:
+                # the worker closed the channel during the warm-up (e.g. a close
+                # that could not wait for the initialize response frame): nothing
+                # ran, exit cleanly like proc_main instead of letting the channel
+                # error surface as an unhandled thread exception
+                logger.debug("thread runner: channel closed during initialization")
             return
         if not initialized:
             # the worker closed the runner before it was initialized: nothing

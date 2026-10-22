@@ -213,6 +213,12 @@ class ThreadJobExecutor:
             assert isinstance(init_res, proto.InitializeResponse), (
                 "first message must be InitializeResponse"
             )
+            if init_res.error:
+                # the warm-up raised: the runner reports the failure and exits, so
+                # this executor must not be marked ready (the pool would queue the
+                # dead runner and dispatch a job whose entrypoint never runs)
+                raise RuntimeError(f"runner initialization failed: {init_res.error}")
+
             logger.info(
                 "job runner initialized",
                 extra={
