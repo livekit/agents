@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -22,7 +22,7 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
-class StreamAdapter(TTS):
+class StreamAdapter(TTS[Literal["fallback_activated"]]):
     def __init__(
         self,
         *,
