@@ -139,10 +139,15 @@ class _Harness:
         # Complete the configured endpointing delay, using the suite's virtual clock.
         await asyncio.sleep(0.2)
 
-    async def say(self, *, allow_interruptions: bool = True, gated: bool = False) -> SpeechHandle:
+    async def say(
+        self,
+        *,
+        allow_interruptions: bool = True,
+        playout_gate: asyncio.Event | None = None,
+    ) -> SpeechHandle:
         async def audio() -> AsyncIterator[rtc.AudioFrame]:
-            if gated:
-                await self.stop_audio.wait()
+            if playout_gate is not None:
+                await playout_gate.wait()
             # Finite audio avoids hanging teardown or relying on a naturally completed reply.
             for _ in range(1500):
                 if self.stop_audio.is_set():
@@ -158,7 +163,7 @@ class _Harness:
         speech = self.session.say(
             "original reply", audio=audio(), allow_interruptions=allow_interruptions
         )
-        if gated:
+        if playout_gate is not None:
             await asyncio.sleep(0.1)
             assert self.output.frames == 0
         else:
@@ -168,7 +173,9 @@ class _Harness:
 
 
 @asynccontextmanager
-async def _session(mode: Literal["vad", "stt"] = "vad") -> AsyncIterator[_Harness]:
+async def _session(
+    mode: Literal["vad", "stt"] = "vad", *, min_words: int = 2
+) -> AsyncIterator[_Harness]:
     recognizer = FakeSTT()
     detector = _ManualVAD()
     session = AgentSession(
@@ -180,7 +187,7 @@ async def _session(mode: Literal["vad", "stt"] = "vad") -> AsyncIterator[_Harnes
         turn_handling={
             "turn_detection": mode,
             "endpointing": {"min_delay": 0.1, "max_delay": 0.1},
-            "interruption": {"min_words": 2, "min_duration": 0.5},
+            "interruption": {"min_words": min_words, "min_duration": 0.5},
             "preemptive_generation": {"enabled": False},
         },
     )
@@ -304,8 +311,9 @@ async def test_one_word_while_listening_is_accepted(word: str) -> None:
 @pytest.mark.parametrize("queued", [False, True])
 async def test_short_turn_during_generation_is_retained(queued: bool) -> None:
     async with _session() as h:
-        original = await h.say(gated=True)
-        pending = await h.say(gated=True) if queued else None
+        playout_gate = asyncio.Event()
+        original = await h.say(playout_gate=playout_gate)
+        pending = await h.say(playout_gate=playout_gate) if queued else None
         await h.utterance("please")
         assert not original.interrupted
         if pending is not None:
@@ -349,6 +357,38 @@ async def test_user_speech_beginning_before_playout_is_retained() -> None:
         await h.utterance("stop")
         assert h.agent.turns == ["please stop"]
         assert original.interrupted
+
+
+@pytest.mark.parametrize(
+    ("min_words", "playout_after_first"),
+    [(2, True), (3, True), (3, False)],
+    ids=["two-word-hybrid", "three-word-hybrid", "three-word-generating"],
+)
+async def test_preplayout_words_survive_later_rejected_overlaps(
+    min_words: int, playout_after_first: bool
+) -> None:
+    async with _session(min_words=min_words) as h:
+        playout_gate = asyncio.Event()
+        original = await h.say(playout_gate=playout_gate)
+        await h.utterance("please")
+        assert not original.interrupted
+        assert h.agent.turns == []
+        if playout_after_first:
+            playout_gate.set()
+            await _wait_for(lambda: h.output.frames > 0)
+
+        words = ["please", "stop", "now"][:min_words]
+        for index, word in enumerate(words[1:], start=2):
+            await h.utterance(word)
+            if index < min_words:
+                assert not original.interrupted
+                assert h.agent.turns == []
+
+        await _wait_for(lambda: h.agent.turns == [" ".join(words)])
+        assert original.interrupted
+        assert h.finals == words
+        if not playout_after_first:
+            assert h.output.frames == 0
 
 
 async def test_rejected_turns_are_dropped_not_traced_as_committed(

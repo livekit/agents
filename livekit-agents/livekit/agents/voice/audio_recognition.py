@@ -82,7 +82,7 @@ class _EndOfTurnInfo:
     ownership and ends it after ``on_user_turn_completed``; otherwise recognition ends it."""
     user_turn_span_adopted: bool = False
     overlapping_agent_speech: bool = False
-    """Speech began within the agent's still-active audio playout interval."""
+    """The logical user turn began within the agent's still-active audio playout interval."""
     discard_on_next_speech: bool = False
     """Discard this rejected turn at the next speech onset, allowing late final segments first."""
 
@@ -1868,8 +1868,8 @@ class AudioRecognition:
                 overlapping_agent_speech=(
                     self._agent_speaking
                     and self._agent_speech_started_at is not None
-                    and self._speech_start_time is not None
-                    and self._speech_start_time >= self._agent_speech_started_at
+                    and self._user_turn_start is not None
+                    and self._user_turn_start >= self._agent_speech_started_at
                 ),
             )
             committed = self._hooks.on_end_of_turn(end_of_turn)
