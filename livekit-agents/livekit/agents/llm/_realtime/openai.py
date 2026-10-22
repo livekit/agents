@@ -1179,9 +1179,18 @@ class RealtimeSession(
                     if closing:  # closing is expected, see _send_task
                         return
 
+                    # CLOSE carries (code, reason); CLOSED/CLOSING only expose close_code
+                    code = ws_conn.close_code
+                    reason = ""
+                    if msg.type == aiohttp.WSMsgType.CLOSE:
+                        if isinstance(msg.data, int):
+                            code = msg.data
+                        if isinstance(msg.extra, str):
+                            reason = msg.extra
+
                     # this will trigger a reconnection unless a subclass marks
                     # the close as fatal via _on_ws_closed (e.g. auth / policy codes)
-                    raise self._on_ws_closed(ws_conn.close_code, ws_conn.close_reason or "")
+                    raise self._on_ws_closed(code, reason)
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -2430,7 +2439,12 @@ class RealtimeSession(
         existing reconnect loop is unchanged.
         """
         label = self._realtime_model._provider_label
-        detail = f" (code={code}" + (f", reason={reason!r}" if reason else "") + ")" if code is not None else ""
+        if code is None:
+            detail = ""
+        elif reason:
+            detail = f" (code={code}, reason={reason!r})"
+        else:
+            detail = f" (code={code})"
         err: APIError = APIConnectionError(
             message=f"{label} connection closed unexpectedly{detail}",
             retryable=True,
