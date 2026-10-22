@@ -375,6 +375,8 @@ class AudioRecognition:
 
         self._user_turn_span: trace.Span | None = None
         self._user_turn_start: float | None = None
+        # Playout may stop and restart while the earliest logical onset is retained.
+        self._user_turn_started_over_agent = False
         # eou_wait: one span per user turn, from the last speech anchor to the turn decision
         self._eou_wait_span: trace.Span | None = None
         self._eou_wait_started_at_ns: int | None = None
@@ -1866,10 +1868,7 @@ class AudioRecognition:
                 backchannel_over_agent=self._turn_backchannel_over_agent,
                 user_turn_span=user_turn_span,
                 overlapping_agent_speech=(
-                    self._agent_speaking
-                    and self._agent_speech_started_at is not None
-                    and self._user_turn_start is not None
-                    and self._user_turn_start >= self._agent_speech_started_at
+                    self._user_turn_start is not None and self._user_turn_started_over_agent
                 ),
             )
             committed = self._hooks.on_end_of_turn(end_of_turn)
@@ -1906,6 +1905,7 @@ class AudioRecognition:
                     user_turn_span.end()
                 self._user_turn_span = None
                 self._user_turn_start = None
+                self._user_turn_started_over_agent = False
                 self._stt_request_ids = []
                 self._reset_transcription_timeout()
 
@@ -2116,6 +2116,11 @@ class AudioRecognition:
 
         if self._user_turn_start is None:
             self._user_turn_start = start_time
+            self._user_turn_started_over_agent = (
+                self._agent_speaking
+                and self._agent_speech_started_at is not None
+                and start_time >= self._agent_speech_started_at
+            )
 
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
@@ -2144,6 +2149,7 @@ class AudioRecognition:
             self._user_turn_span.end()
         self._user_turn_span = None
         self._user_turn_start = None
+        self._user_turn_started_over_agent = False
 
     def _stamp_stt_events(self, user_turn_span: trace.Span) -> None:
         events, self._stt_events = self._stt_events, []

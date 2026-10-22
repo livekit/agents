@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
@@ -15,15 +16,25 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, StopResponse, llm, utils, vad
+from livekit.agents import (
+    NOT_GIVEN,
+    Agent,
+    AgentSession,
+    StopResponse,
+    function_tool,
+    llm,
+    utils,
+    vad,
+)
 from livekit.agents.stt import SpeechEvent, SpeechEventType
 from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_io import FakeAudioInput, FakeAudioOutput
-from .fake_llm import FakeLLM
+from .fake_llm import FakeLLM, FakeLLMResponse
 from .fake_stt import FakeRecognizeStream, FakeSTT
+from .fake_tts import FakeTTS, FakeTTSResponse
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -70,8 +81,8 @@ class _ManualVADStream(vad.VADStream):
 
 
 class _CapturingAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions="test")
+    def __init__(self, *, model: FakeLLM | None = None, tts_model: FakeTTS | None = None) -> None:
+        super().__init__(instructions="test", llm=model or NOT_GIVEN, tts=tts_model or NOT_GIVEN)
         self.turns: list[str] = []
 
     async def on_user_turn_completed(
@@ -174,7 +185,11 @@ class _Harness:
 
 @asynccontextmanager
 async def _session(
-    mode: Literal["vad", "stt"] = "vad", *, min_words: int = 2
+    mode: Literal["vad", "stt"] = "vad",
+    *,
+    min_words: int = 2,
+    agent: _CapturingAgent | None = None,
+    endpointing_delay: float = 0.1,
 ) -> AsyncIterator[_Harness]:
     recognizer = FakeSTT()
     detector = _ManualVAD()
@@ -186,7 +201,7 @@ async def _session(
         session_close_transcript_timeout=0,
         turn_handling={
             "turn_detection": mode,
-            "endpointing": {"min_delay": 0.1, "max_delay": 0.1},
+            "endpointing": {"min_delay": endpointing_delay, "max_delay": endpointing_delay},
             "interruption": {"min_words": min_words, "min_duration": 0.5},
             "preemptive_generation": {"enabled": False},
         },
@@ -200,7 +215,7 @@ async def _session(
         "user_input_transcribed",
         lambda event: finals.append(event.transcript) if event.is_final else None,
     )
-    agent = _CapturingAgent()
+    agent = agent or _CapturingAgent()
     stop_audio = asyncio.Event()
     try:
         await session.start(agent)
@@ -417,12 +432,16 @@ async def test_stt_onset_request_id_belongs_to_the_new_turn(spans: InMemorySpanE
         await h.end_speech()
         await _wait_for(lambda: h.agent.turns == ["please stop"])
 
-    [turn] = [
-        span
-        for span in spans.get_finished_spans()
-        if span.name == "user_turn"
-        and (span.attributes or {}).get(trace_types.ATTR_USER_TRANSCRIPT) == "please stop"
-    ]
+    turns = [span for span in spans.get_finished_spans() if span.name == "user_turn"]
+    assert len(turns) == 2
+    dropped, turn = turns
+    assert trace_types.ATTR_PROVIDER_REQUEST_IDS not in (dropped.attributes or {})
+    assert (turn.attributes or {}).get(trace_types.ATTR_USER_TRANSCRIPT) == "please stop"
+    for span, length in [(dropped, 4), (turn, 11)]:
+        events = json.loads((span.attributes or {})[trace_types.ATTR_STT_EVENTS])
+        assert [(event["type"], event["transcript_length"]) for event in events] == [
+            ("final_transcript", length)
+        ]
     assert list((turn.attributes or {}).get(trace_types.ATTR_PROVIDER_REQUEST_IDS, ())) == [
         "new-utterance-request"
     ]
@@ -440,4 +459,90 @@ async def test_provider_onset_before_vad_keeps_the_new_turn_clean() -> None:
         await h.end_speech()
         await asyncio.sleep(0.2)
         assert h.agent.turns == ["please stop"]
+        assert original.interrupted
+
+
+class _ContinuingAgent(_CapturingAgent):
+    def __init__(self, *, continuation_ttfb: float) -> None:
+        model = FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="start",
+                    content="first reply",
+                    ttft=0,
+                    duration=0.01,
+                    tool_calls=[
+                        llm.FunctionToolCall(name="continue_reply", arguments="{}", call_id="1")
+                    ],
+                ),
+                FakeLLMResponse(input="continue", content="continued reply", ttft=0, duration=0.01),
+            ]
+        )
+        tts_model = FakeTTS(
+            fake_responses=[
+                FakeTTSResponse(input="first reply", audio_duration=0.2, ttfb=0, duration=0.01),
+                FakeTTSResponse(
+                    input="continued reply",
+                    audio_duration=30,
+                    ttfb=continuation_ttfb,
+                    duration=0.01,
+                ),
+            ]
+        )
+
+        super().__init__(model=model, tts_model=tts_model)
+
+    @function_tool
+    async def continue_reply(self) -> str:
+        return "continue"
+
+
+@pytest.mark.parametrize("resume_before_eou", [True, False], ids=["restart", "tool-gap"])
+@pytest.mark.parametrize(
+    ("ack", "short_word", "interrupt"),
+    [("okay", "stop", "please stop"), ("ألو", "توقف", "توقف الآن")],
+    ids=["en", "ar"],
+)
+async def test_short_overlap_does_not_carry_across_playout_restart(
+    resume_before_eou: bool,
+    ack: str,
+    short_word: str,
+    interrupt: str,
+) -> None:
+    agent = _ContinuingAgent(continuation_ttfb=0 if resume_before_eou else 0.7)
+    async with _session(agent=agent, endpointing_delay=0.5) as h:
+        states: list[str] = []
+        h.session.on("agent_state_changed", lambda event: states.append(event.new_state))
+        original = h.session.generate_reply(instructions="start")
+        await _wait_for(lambda: h.output.frames > 0)
+        assert h.session.agent_state == "speaking"
+        assert h.session.current_speech is original
+        await h.start_speech()
+        await h.final(ack)
+        await h.end_speech()
+        if not resume_before_eou:
+            # The genuine tool has returned and the same handle is generating its next
+            # audio segment. A slow TTS first frame keeps EOU inside this playout gap.
+            await _wait_for(
+                lambda: h.session.agent_state == "thinking" and h.session.current_speech is original
+            )
+            await asyncio.sleep(0.6)
+            assert h.session.current_speech is original
+            assert h.session.agent_state == "thinking"
+            assert h.agent.turns == []
+        await _wait_for(lambda: states.count("speaking") == 2)
+        assert states.index("thinking", states.index("speaking")) > 0
+        assert h.session.current_speech is original
+        assert not original.interrupted
+        assert not original.done()
+        await asyncio.sleep(0.6)
+        assert h.agent.turns == []
+        await h.utterance(short_word)
+        await asyncio.sleep(0.5)
+        assert not original.interrupted, (
+            f"distinct short overlaps accumulated after playout restart: {h.agent.turns!r}"
+        )
+        assert h.agent.turns == []
+        await h.utterance(interrupt)
+        await _wait_for(lambda: h.agent.turns == [interrupt])
         assert original.interrupted
