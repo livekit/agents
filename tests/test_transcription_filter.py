@@ -390,6 +390,25 @@ async def test_replace_case_sensitive(chunk_size: int):
     assert result == "Lyve Kit is great. livekit should stay."
 
 
+@pytest.mark.parametrize("chunk_size", [1, 3, 100])
+@pytest.mark.parametrize(
+    "replacements, text, expected",
+    [
+        # the regex's IGNORECASE matches letters whose str.lower() is not the key's spelling
+        ({"iphone": "Apple phone"}, "İPHONE geldi", "Apple phone geldi"),
+        ({"iphone": "Apple phone"}, "İphone geldi", "Apple phone geldi"),
+        ({"is": "IS"}, "ıs ok", "IS ok"),
+        ({"stop": "halt"}, "ſtop now", "halt now"),
+    ],
+)
+async def test_replace_case_insensitive_match_with_unicode_case_folding(
+    replacements: dict[str, str], text: str, expected: str, chunk_size: int
+):
+    """A case-insensitive match must map to its replacement, not raise KeyError."""
+    result = await _collect(replace(replacements)(_stream_text(text, chunk_size)))
+    assert result == expected
+
+
 async def test_replace_edge_cases():
     """Test empty replacements, empty input, no matches, and regex special chars."""
     # empty replacements = passthrough
