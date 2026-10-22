@@ -135,10 +135,17 @@ class AgentHumanAPI:
                             retryable=False,
                         ) from e
 
-                    if isinstance(e, APIConnectionError):
-                        logger.warning("Failed to call AgentHuman API", extra={"error": str(e)})
-                    else:
-                        logger.exception("Failed to call AgentHuman API")
+                    if isinstance(e, APIStatusError):
+                        # status only: the error's text includes the response body
+                        logger.warning(
+                            "AgentHuman API returned an error, retrying",
+                            extra={"status_code": e.status_code},
+                        )
+                    else:  # couldn't connect, so there is no response to leak
+                        logger.warning(
+                            "failed to connect to the AgentHuman API, retrying",
+                            extra={"error": str(e)},
+                        )
 
                     if i < self._conn_options.max_retry:
                         await asyncio.sleep(self._conn_options._interval_for_retry(i))

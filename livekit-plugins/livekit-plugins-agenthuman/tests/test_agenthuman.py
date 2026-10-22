@@ -139,6 +139,25 @@ async def test_create_session_retries_errors_before_a_session_exists() -> None:
     assert len(session.requests) == 3  # 1 attempt + max_retry (2) retries
 
 
+async def test_retry_logs_do_not_include_the_response_body(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session = _Session(
+        _Response(503, {"error": "secret-in-body"}),
+        _Response(200, {"session": {"session_id": "sess_1"}}),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="livekit.plugins.agenthuman"):
+        await _api(session).create_session(
+            avatar="avat_1", livekit_url="wss://lk", livekit_token="t"
+        )
+
+    [record] = caplog.records
+    assert record.__dict__["status_code"] == 503
+    assert record.exc_info is None
+    assert "secret-in-body" not in caplog.text
+
+
 @pytest.mark.parametrize(
     "error",
     [TimeoutError(), aiohttp.SocketTimeoutError(), aiohttp.ServerDisconnectedError()],
