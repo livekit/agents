@@ -41,7 +41,7 @@ class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "Your name is Ava. You are a friendly voice assistant built on AssemblyAI "
+                "You are a friendly voice assistant built on AssemblyAI "
                 "speech-to-text and text-to-speech. Keep replies short and conversational: "
                 "one or two sentences, no lists, no markdown, no emojis. Spell out anything "
                 "that should be read aloud exactly, but write numbers, dates and prices "
