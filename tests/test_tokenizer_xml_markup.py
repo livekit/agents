@@ -525,11 +525,14 @@ class TestFishAudioDialect:
         # an empty string drops the filler guideline entirely
         assert pf.steering_instructions("xai", {"disfluencies": ""}) == ""
 
-        # fish's English filler few-shots and register guidance only ride with True
-        fish = pf.llm_instructions("fishaudio", {"disfluencies": ja})
-        assert fish is not None
-        assert "Um, uh" not in fish and ", um," not in fish
-        assert "Save fillers" not in fish
+        # fish's English filler few-shots and register guidance only ride with True,
+        # on both s2 and drama-3; a custom string matches False there
+        for provider in ("fishaudio", "fishaudio_drama"):
+            fish = pf.llm_instructions(provider, {"disfluencies": ja})
+            assert fish is not None
+            assert "Um, uh" not in fish and ", um," not in fish
+            assert "Save fillers" not in fish
+            assert fish == pf.llm_instructions(provider, {"disfluencies": False})
 
         # bool behaviour is unchanged
         assert "fillers (um, uh) and openers" in pf.steering_instructions(
@@ -547,7 +550,10 @@ class TestFishAudioDialect:
             "{0} {x!r:>3}",
         ],
     )
-    def test_custom_disfluency_text_keeps_braces_literal(self, custom: str) -> None:
+    @pytest.mark.parametrize("provider_key", ["xai", "fishaudio_drama"])
+    def test_custom_disfluency_text_keeps_braces_literal(
+        self, custom: str, provider_key: str
+    ) -> None:
         from livekit.agents.voice.agent_session import (
             DEFAULT_EXPRESSIVE_OPTIONS,
             resolve_expressive_options,
@@ -557,7 +563,7 @@ class TestFishAudioDialect:
         # data, so braces must survive verbatim instead of being dropped or raising
         tmpl = resolve_expressive_options(
             {"speech_steering": {"disfluencies": custom}},
-            provider_key="xai",
+            provider_key=provider_key,
             default=DEFAULT_EXPRESSIVE_OPTIONS,
         )["tts_instructions_template"]
         assert not isinstance(tmpl, str)
