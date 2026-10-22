@@ -791,6 +791,29 @@ async def test_cancel_after_some_requests_completed(flush_id_model: str) -> None
     assert "".join(timed) == "A fresh reply. "
 
 
+async def test_word_timings_arrive_while_waiting_for_more_text() -> None:
+    """A sentence's trailing WordBoundaries are read during the pause before the next one."""
+    async with _FakeServer() as srv:
+        tts = _make_tts(srv)
+        timed: list[Any] = []
+        async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5)) as s:
+            s.push_text("The first sentence. ")
+            s.flush()  # the LLM pauses here; no more text yet
+
+            async def until_the_sentence_is_timed() -> None:
+                async for ev in s:
+                    timed.extend(ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []))
+                    if "".join(timed) == "The first sentence. ":
+                        return
+
+            await asyncio.wait_for(until_the_sentence_is_timed(), 2)
+            s.end_input()
+        await tts.aclose()
+
+    assert all(isinstance(t.start_time, float) for t in timed)
+    assert len(timed) == 3  # one per word: the WordBoundaries, not the untimed fallback
+
+
 async def test_word_boundaries_from_the_previous_stream_are_ignored(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

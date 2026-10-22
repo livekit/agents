@@ -217,11 +217,12 @@ class TTS(tts.TTS):
         language: NotGivenOr[str | None] = NOT_GIVEN,
         model: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        """Change the voice, language or model used by streams created from now on.
+        """Change the voice, language or model of the sessions opened from now on.
 
-        The session configuration is fixed at connect time, so pooled sockets are
-        retired and the next stream opens a new session. A stream already speaking
-        keeps its voice until it finishes.
+        The configuration is fixed when a session opens, so pooled sockets are retired:
+        every stream that has not connected yet, including one already created, opens a
+        new session with these options. A stream already speaking keeps its voice until
+        it finishes.
 
         Args:
             voice: A catalog voice id or slug, or None for the model's default voice.
@@ -527,19 +528,22 @@ class _StreamRun:
                 if self._num_done == len(self._requests):
                     if input_done:
                         break
-                    # nothing outstanding: wait for the next sentence, without a timeout,
-                    # since the LLM may still be thinking
+                    # Nothing outstanding: wait for the next sentence without a timeout,
+                    # since the LLM may still be thinking, but keep reading meanwhile, so
+                    # the finished sentences' trailing WordBoundaries reach the transcript
+                    # while they play.
                     progress.clear()
-                    await progress.wait()
-                    continue
-
-                try:
-                    item = await asyncio.wait_for(self.listener.recv(), self._timeout)
-                except asyncio.TimeoutError:
-                    raise APITimeoutError(
-                        f"AssemblyAI TTS sent nothing for {self._timeout}s "
-                        f"(session {self.conn.session_id})"
-                    ) from None
+                    item = await self._recv_until(progress)
+                    if item is None:
+                        continue
+                else:
+                    try:
+                        item = await asyncio.wait_for(self.listener.recv(), self._timeout)
+                    except asyncio.TimeoutError:
+                        raise APITimeoutError(
+                            f"AssemblyAI TTS sent nothing for {self._timeout}s "
+                            f"(session {self.conn.session_id})"
+                        ) from None
                 if isinstance(item, APIError):
                     raise item
 
@@ -576,6 +580,19 @@ class _StreamRun:
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+
+    async def _recv_until(self, event: asyncio.Event) -> dict[str, Any] | APIError | None:
+        """The next frame, or None if `event` is set first."""
+        recv = asyncio.ensure_future(self.listener.recv())
+        wait = asyncio.ensure_future(event.wait())
+        try:
+            await asyncio.wait((recv, wait), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            # a cancelled recv leaves its frame in the channel
+            wait.cancel()
+            if not recv.done():
+                recv.cancel()
+        return recv.result() if recv.done() and not recv.cancelled() else None
 
     def _request_for(self, item: dict[str, Any]) -> _Request | None:
         flush_id = item.get("flush_id")
