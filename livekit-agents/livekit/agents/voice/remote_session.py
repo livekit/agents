@@ -343,7 +343,19 @@ def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
     }
 
 
+NO_ACTIVE_SESSION_ERROR = "no active session"
+
+
 class SessionHost:
+    """Serves a ``RemoteSession`` client for the whole job.
+
+    The host outlives any one ``AgentSession``: at most one session is attached at a
+    time, and none once it has closed. A session's close is sent as a ``session_closed``
+    event, after which none of its events follow. Session requests go to the attached
+    session and fail with ``NO_ACTIVE_SESSION_ERROR`` while none is;
+    ``finalize_simulation`` needs only the job, so it is answered either way.
+    """
+
     def __init__(
         self,
         transport: SessionTransport,
@@ -364,6 +376,7 @@ class SessionHost:
         # attach() and start() queue up instead of being dropped.
         self._event_ch = utils.aio.Chan[agent_pb.AgentSessionMessage]()
         self._write_task: asyncio.Task[None] | None = None
+        self._simulation_finalized = asyncio.Event()
 
     @property
     def session(self) -> AgentSession | None:
@@ -457,13 +470,12 @@ class SessionHost:
         try:
             async for msg in self._transport:
                 if msg.HasField("request"):
-                    if self._session is not None:
-                        # the task name is the request type verbatim, which is what
-                        # aclose reports when it gives up on one
-                        self._tasks.create_task(
-                            self._handle_request_safe(msg.request),
-                            name=msg.request.WhichOneof("request") or "unknown",
-                        )
+                    # the task name is the request type verbatim, which is what
+                    # aclose reports when it gives up on one
+                    self._tasks.create_task(
+                        self._handle_request_safe(msg.request),
+                        name=msg.request.WhichOneof("request") or "unknown",
+                    )
                 else:
                     msg_type = msg.WhichOneof("message")
                     if msg_type:
@@ -743,9 +755,21 @@ class SessionHost:
                 pass
 
     async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
+        if req.HasField("finalize_simulation"):
+            await self._finalize_simulation(req)
+            return
+
         # a detach while this request is in flight must not swap its session out
         session = self._session
-        assert session is not None
+        if session is None:
+            await self._transport.send_message(
+                agent_pb.AgentSessionMessage(
+                    response=agent_pb.SessionResponse(
+                        request_id=req.request_id, error=NO_ACTIVE_SESSION_ERROR
+                    )
+                )
+            )
+            return
 
         if req.HasField("ping"):
             resp = agent_pb.AgentSessionMessage(
@@ -941,8 +965,8 @@ class SessionHost:
             )
             await self._transport.send_message(resp)
 
-        elif req.HasField("finalize_simulation"):
-            await self._finalize_simulation(req)
+    async def wait_for_simulation_finalized(self) -> None:
+        await self._simulation_finalized.wait()
 
     async def _finalize_simulation(self, req: agent_pb.SessionRequest) -> None:
         # The simulator's verdict is passed in so on_simulation_end can read it
@@ -993,6 +1017,7 @@ class SessionHost:
             )
         )
         await self._transport.send_message(resp)
+        self._simulation_finalized.set()
 
 
 RemoteSessionEventTypes = Literal[
