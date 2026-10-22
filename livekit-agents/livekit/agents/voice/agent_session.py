@@ -1359,7 +1359,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._session_span = None
                 self._root_span_context = None
 
-        logger.debug("session closed", extra={"reason": reason.value, "error": error})
+        close_fields: dict[str, Any] = {"reason": reason.value, "error": error, "drain": drain}
+        if error is not None:
+            close_fields["error_type"] = error.type
+            close_fields["error_source"] = error.label
+        logger.info("session closed", extra=close_fields)
 
     async def _teardown_activity(self, *, reason: CloseReason, drain: bool) -> None:
         """Stop the activity and the models; the first step of closing."""
@@ -2021,24 +2025,38 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
+        max_errors = self.conn_options.max_unrecoverable_errors
+        # realtime errors are not counted and close the session on the first one
+        count: int | None = None
         if error.type == "stt_error":
             self._stt_error_counts += 1
-            if self._stt_error_counts <= self.conn_options.max_unrecoverable_errors:
-                return
+            count = self._stt_error_counts
         elif error.type == "llm_error":
             self._llm_error_counts += 1
-            if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
-                return
+            count = self._llm_error_counts
         elif error.type == "tts_error":
             self._tts_error_counts += 1
-            if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
-                return
+            count = self._tts_error_counts
+
+        error_fields: dict[str, Any] = {
+            "error_type": error.type,
+            "source": error.label,
+            "count": count,
+            "max_unrecoverable_errors": max_errors,
+        }
+        if count is not None and count <= max_errors:
+            logger.warning("unrecoverable model error", extra=error_fields)
+            return
 
         if isinstance(error.error, APIError):
-            logger.error(f"AgentSession is closing due to unrecoverable error: {error.error}")
+            logger.error(
+                f"AgentSession is closing due to unrecoverable error: {error.error}",
+                extra=error_fields,
+            )
         else:
             logger.error(
                 "AgentSession is closing due to unrecoverable error",
+                extra=error_fields,
                 exc_info=error.error,
             )
 
