@@ -164,6 +164,20 @@ class _FakeWriter:
         self.closed_attributes = attributes
 
 
+class _FlakyFirstWriteWriter(_FakeWriter):
+    """Fails its first `write`, then behaves normally: a transient room I/O error."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.write_calls = 0
+
+    async def write(self, text: str) -> None:
+        self.write_calls += 1
+        if self.write_calls == 1:
+            raise OSError("simulated room I/O failure")
+        await super().write(text)
+
+
 def _fake_remote(
     identity: str,
     *,
@@ -483,6 +497,113 @@ async def test_participant_switch_while_the_first_writer_opens_keeps_the_segment
     assert (
         a_header[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] != b_header[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID]
     )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_capture_does_not_abort_the_transcript_shutdown() -> None:
+    """Cancelling a capture must not cancel the segment's writer task, nor `aclose()`.
+
+    An interruption (a barge-in) cancels the task forwarding text while the segment's writer
+    is still being opened, and a switch in the meantime hands that opening task to the flush
+    task. Awaiting it directly made the cancellation reach the writer task, whose
+    `CancelledError` escaped the flush task's `except Exception` (it is a `BaseException`) and
+    aborted `aclose()` before the segment was finalized.
+    """
+    room = _FakeRoom()
+    room.remote_participants = {
+        "user-a": _remote_with_mic("user-a", "TR_a"),
+        "user-b": _remote_with_mic("user-b", "TR_b"),
+    }
+
+    # (sender_identity, opening header, writer) for every writer the room opened
+    opened: list[tuple[str, dict[str, str], _FakeWriter]] = []
+    opening = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _stream_text(
+        *, topic: str, sender_identity: str, attributes: dict[str, str]
+    ) -> _FakeWriter:
+        writer = _FakeWriter()
+        opened.append((sender_identity, dict(attributes), writer))
+        opening.set()
+        # hold the creator open so the cancellation lands before the writer exists
+        await release.wait()
+        return writer
+
+    room.local_participant.stream_text = _stream_text
+
+    output = _ParticipantStreamTranscriptionOutput(
+        room=room, is_delta_stream=True, participant="user-a"
+    )
+    capture = asyncio.create_task(output.capture_text("hello from A"))
+    await opening.wait()
+
+    # warm transfer: the switch hands A's in-flight writer task to the flush task
+    output.set_participant("user-b")
+    # then A's capture is interrupted before the room returns a writer
+    capture.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await capture
+    release.set()
+
+    close_task = asyncio.create_task(output.aclose())
+    await asyncio.wait({close_task})
+    assert not close_task.cancelled(), "aclose() was cancelled instead of finishing the shutdown"
+    assert close_task.exception() is None
+
+    assert len(opened) == 1
+    sender, header, writer = opened[0]
+    assert sender == "user-a"
+    # the segment A had already produced is finalized instead of being dropped
+    assert writer.chunks == ["hello from A"]
+    assert writer.close_calls == 1
+    assert writer.closed_attributes is not None
+    assert writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_FINAL] == "true"
+    assert writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] == "TR_a"
+    # the same stream carries the segment's opening header and its final one
+    assert header[ATTRIBUTE_TRANSCRIPTION_FINAL] == "false"
+
+
+@pytest.mark.asyncio
+async def test_failed_first_write_still_closes_the_segment_stream() -> None:
+    """A transient failure on the first write must not strand the opened stream.
+
+    The room has already opened the segment's stream when its first write raises, so dropping
+    the writer there loses the only handle to it: the segment never gets its final header and
+    the stream stays open even after the room recovers.
+    """
+    room = _FakeRoom()
+    room.remote_participants = {"user-a": _remote_with_mic("user-a", "TR_a")}
+
+    writers: list[_FlakyFirstWriteWriter] = []
+
+    async def _stream_text(
+        *, topic: str, sender_identity: str, attributes: dict[str, str]
+    ) -> _FlakyFirstWriteWriter:
+        writer = _FlakyFirstWriteWriter()
+        writers.append(writer)
+        return writer
+
+    room.local_participant.stream_text = _stream_text
+
+    output = _ParticipantStreamTranscriptionOutput(
+        room=room, is_delta_stream=True, participant="user-a"
+    )
+    await output.capture_text("hello")
+    output.flush()
+    assert output._flush_atask is not None
+    await output._flush_atask
+    await output.aclose()
+
+    # the failed stream was closed rather than reopened behind a second one
+    assert len(writers) == 1
+    writer = writers[0]
+    assert writer.write_calls == 1
+    assert writer.chunks == []
+    assert writer.close_calls == 1
+    assert writer.closed_attributes is not None
+    assert writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_FINAL] == "true"
+    assert writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] == "TR_a"
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from typing import TypeVar
 
 from google.protobuf.json_format import MessageToDict
 from opentelemetry import context as otel_context
@@ -607,6 +608,28 @@ class _ParticipantLegacyTranscriptionOutput:
         return False
 
 
+_T = TypeVar("_T")
+
+
+async def _await_shared(task: asyncio.Task[_T]) -> _T | None:
+    """Await a task shared between capture, flush and close without adopting its lifetime.
+
+    The writer and flush tasks belong to the segment, not to whichever coroutine happens to
+    wait on them, so a cancellation of that coroutine must not cancel the task itself
+    (`shield`). A shared task that was cancelled elsewhere must not abort the shutdown of
+    the others either: `CancelledError` is a `BaseException`, so on its own it escapes the
+    `except Exception` of the finalization and out of `aclose()`, leaving the output half
+    closed. Only a cancellation of the awaiting coroutine itself, with the shared task still
+    running, is propagated.
+    """
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if not task.cancelled():
+            raise
+        return None
+
+
 class _ParticipantStreamTranscriptionOutput:
     def __init__(
         self,
@@ -759,6 +782,7 @@ class _ParticipantStreamTranscriptionOutput:
         if track_id:
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = track_id
 
+        writer: rtc.TextStreamWriter | None = None
         try:
             writer = await self._create_text_writer(
                 attributes,
@@ -769,7 +793,12 @@ class _ParticipantStreamTranscriptionOutput:
             await writer.write(payload)
         except Exception as e:
             logger.warning("failed to publish agent transcription to room: %s", e)
-            return None
+            if writer is None:
+                # the room never opened the stream, so there is nothing to close
+                return None
+            # the stream did open, so dropping it here would leave it open forever and the
+            # segment without its final header. Keep it instead: the writer (or the flush
+            # task awaiting this one) closes it with the segment's final attributes.
 
         if self._capturing and self._current_id == segment_id:
             self._writer = writer
@@ -782,7 +811,8 @@ class _ParticipantStreamTranscriptionOutput:
             return
 
         if self._flush_atask and not self._flush_atask.done():
-            await self._flush_atask
+            # the previous segment's finalization is not this capture's to cancel
+            await asyncio.shield(self._flush_atask)
 
         if not self._capturing:
             self._reset_state()
@@ -821,7 +851,12 @@ class _ParticipantStreamTranscriptionOutput:
                                 extra=expression_attribute(self._stripper.tags),
                             )
                         )
-                        await self._writer_atask
+                        # the opening task outlives this capture: shield it so a cancelled
+                        # capture (an interruption, a barge-in) leaves flush() and aclose()
+                        # a live task to take the writer from instead of a cancelled one
+                        # whose CancelledError would abort the shutdown. The cancellation
+                        # still propagates out of this method.
+                        await asyncio.shield(self._writer_atask)
                     else:
                         await self._writer.write(payload)
                 else:  # always create a new writer
@@ -855,7 +890,7 @@ class _ParticipantStreamTranscriptionOutput:
             if writer is None and writer_atask is not None:
                 # the switch landed while this segment's writer was still being opened: take
                 # the writer that segment actually opened instead of leaving it unclosed
-                writer = await writer_atask
+                writer = await _await_shared(writer_atask)
 
             if self._room.isconnected():
                 if self._is_delta_stream:
@@ -918,12 +953,14 @@ class _ParticipantStreamTranscriptionOutput:
         self._room.off("track_published", self._on_track_published)
         self._room.off("local_track_published", self._on_local_track_published)
 
+        # both tasks below are the segment's, and a cancellation of either one must not stop
+        # this shutdown: it still has to close whatever writer is left
         if self._flush_atask:
-            await self._flush_atask
+            await _await_shared(self._flush_atask)
 
         if self._writer_atask:
             # a writer still being opened can only be closed once it exists
-            await self._writer_atask
+            await _await_shared(self._writer_atask)
 
         if self._writer:
             writer = self._writer
