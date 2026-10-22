@@ -6,11 +6,21 @@ from typing import Any
 import pytest
 
 from livekit.agents import LanguageCode
+from livekit.agents.inference_runner import _InferenceRunner
+from livekit.agents.plugin import Plugin
 
 pytestmark = pytest.mark.unit
 
+# importing the plugin registers its local inference runners and plugins process-wide;
+# undo that so tests that start an AgentServer don't spawn an inference process for
+# models that aren't downloaded
+_runners = dict(_InferenceRunner.registered_runners)
+_plugins = list(Plugin.registered_plugins)
 with pytest.warns(DeprecationWarning):
     from livekit.plugins.turn_detector import base, multilingual
+_InferenceRunner.registered_runners.clear()
+_InferenceRunner.registered_runners.update(_runners)
+Plugin.registered_plugins[:] = _plugins
 
 
 class _FakeResponse:
