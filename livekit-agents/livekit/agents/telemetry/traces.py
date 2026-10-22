@@ -1275,6 +1275,40 @@ def _recording_upload_retry_delay(attempt: int) -> float:
     return random.uniform(0.0, min(2.0**attempt, 8.0))
 
 
+def _session_summary(*, agent_name: str, report: SessionReport, tagger: Tagger) -> dict[str, Any]:
+    """Build the session summary sent in the recording header.
+
+    Agent evals read it to pick sessions to score. An absent key means "not sent", so
+    ``duration_ms`` and ``usage`` are omitted when the report has no value for them.
+    """
+    summary: dict[str, Any] = {
+        "version": 1,
+        "agent_name": agent_name,
+        "tags": sorted(tagger.tags),
+    }
+    if report.duration is not None:
+        summary["duration_ms"] = int(report.duration * 1000)
+
+    user_turns = 0
+    for item in report.chat_history.items:
+        if item.type == "message" and item.role == "user":
+            user_turns += 1
+    summary["user_turns"] = user_turns
+
+    if report.model_usage:
+        usage = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tts_characters": 0}
+        for model_usage in report.model_usage:
+            if model_usage.type == "llm_usage":
+                usage["input_tokens"] += model_usage.input_tokens
+                usage["output_tokens"] += model_usage.output_tokens
+                usage["cached_tokens"] += model_usage.input_cached_tokens
+            elif model_usage.type == "tts_usage":
+                usage["tts_characters"] += model_usage.characters_count
+        summary["usage"] = usage
+
+    return summary
+
+
 async def _upload_session_report(
     *,
     agent_name: str,
@@ -1424,6 +1458,11 @@ async def _upload_session_report(
         job_id=report.job_id,
         simulated=bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
         redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
+        duration=int((report.duration or 0) * 1000),
+        session_summary=json.dumps(
+            _session_summary(agent_name=agent_name, report=report, tagger=tagger),
+            separators=(",", ":"),
+        ),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()

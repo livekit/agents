@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import json
 import logging
 import ssl
 from collections.abc import Iterator
@@ -16,6 +17,8 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
+from livekit.agents.llm import ChatMessage
+from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
@@ -267,10 +270,11 @@ async def _call_upload(
     tagger: MagicMock | None = None,
     http_session: MagicMock | None = None,
     metadata: dict[str, Any] | None = None,
+    agent_name: str = "test-agent",
 ) -> None:
     """Call _upload_session_report with sensible defaults."""
     await _upload_session_report(
-        agent_name="test-agent",
+        agent_name=agent_name,
         **_observability_endpoint_arg(_upload_session_report),
         report=report,
         tagger=tagger or _make_mock_tagger(),
@@ -731,6 +735,75 @@ async def test_upload_multipart_header_carries_simulation_redaction() -> None:
     header = proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
     assert header.simulated is True
     assert header.redaction_enabled is True
+
+
+async def _upload_and_read_header(
+    report: MagicMock, tagger: MagicMock
+) -> proto_metrics.MetricsRecordingHeader:
+    mock_http = _make_mock_http()
+    with _patch_upload_deps():
+        await _call_upload(report, tagger=tagger, http_session=mock_http, agent_name="support")
+
+    mp_writer = mock_http.post.call_args.kwargs.get("data") or mock_http.post.call_args[1]["data"]
+    parts = _get_multipart_parts(mp_writer)
+    return proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
+
+
+async def test_upload_header_carries_session_summary() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    report.duration = 12.5
+    report.chat_history.items = [
+        ChatMessage(role="user", content=["hi"]),
+        ChatMessage(role="assistant", content=["hello"]),
+        ChatMessage(role="user", content=["bye"]),
+    ]
+    report.model_usage = [
+        LLMModelUsage(
+            provider="p", model="m", input_tokens=10, output_tokens=5, input_cached_tokens=2
+        ),
+        TTSModelUsage(provider="p", model="m", characters_count=40),
+    ]
+    tagger = _make_mock_tagger()
+    tagger.tags = {"vip"}
+
+    header = await _upload_and_read_header(report, tagger)
+
+    assert json.loads(header.session_summary) == {
+        "version": 1,
+        "agent_name": "support",
+        "tags": ["vip"],
+        "duration_ms": 12500,
+        "user_turns": 2,
+        "usage": {"input_tokens": 10, "output_tokens": 5, "cached_tokens": 2, "tts_characters": 40},
+    }
+    assert header.duration == 12500
+
+
+async def test_session_summary_empty_session() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    report.duration = 12.5
+    report.model_usage = None
+
+    header = await _upload_and_read_header(report, _make_mock_tagger())
+
+    assert json.loads(header.session_summary) == {
+        "version": 1,
+        "agent_name": "support",
+        "tags": [],
+        "duration_ms": 12500,
+        "user_turns": 0,
+    }
+
+
+async def test_session_summary_omits_duration_when_unknown() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    report.duration = None
+    report.model_usage = []
+
+    header = await _upload_and_read_header(report, _make_mock_tagger())
+
+    assert "duration_ms" not in json.loads(header.session_summary)
+    assert header.duration == 0
 
 
 def test_job_context_otel_metadata_includes_redaction_option() -> None:
