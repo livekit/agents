@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from livekit.agents import tokenize
@@ -118,6 +120,47 @@ async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, ex
     for i in range(len(expected)):
         ev = await stream.__anext__()
         assert ev.token == expected[i]
+
+
+MULTILINGUAL_SENT_CASES = [
+    # Arabic question mark
+    (
+        "هل تريد حجز موعد غداً؟ لدينا مواعيد متاحة في الصباح.",
+        ["هل تريد حجز موعد غداً؟", "لدينا مواعيد متاحة في الصباح."],
+    ),
+    # Urdu full stop
+    ("آپ کیسے ہیں۔ میں ٹھیک ہوں۔", ["آپ کیسے ہیں۔", "میں ٹھیک ہوں۔"]),
+    # Devanagari danda (Hindi)
+    ("आप कैसे हैं। मैं ठीक हूँ। धन्यवाद", ["आप कैसे हैं।", "मैं ठीक हूँ।", "धन्यवाद"]),
+    # Devanagari double danda
+    ("श्लोक एक॥ श्लोक दो॥", ["श्लोक एक॥", "श्लोक दो॥"]),
+    # Bengali also uses the danda
+    ("আপনি কেমন আছেন। আমি ভালো আছি।", ["আপনি কেমন আছেন।", "আমি ভালো আছি।"]),
+    # the closing quote stays with the sentence it ends
+    ("वह बोली “मैं ठीक हूँ।” अगला वाक्य।", ["वह बोली “मैं ठीक हूँ।”", "अगला वाक्य।"]),
+]
+
+
+@pytest.mark.parametrize(
+    "tokenizer",
+    [basic.SentenceTokenizer(min_sentence_len=1), blingfire.SentenceTokenizer(min_sentence_len=1)],
+)
+@pytest.mark.parametrize("text, expected", MULTILINGUAL_SENT_CASES)
+def test_sent_tokenizer_non_latin_terminators(
+    tokenizer: tokenize.SentenceTokenizer, text: str, expected: list[str]
+):
+    assert tokenizer.tokenize(text=text) == expected
+
+
+async def test_streamed_sent_tokenizer_emits_hindi_before_end_of_input():
+    # the first sentence must reach TTS while the LLM is still generating
+    stream = blingfire.SentenceTokenizer().stream()
+    for word in "आप कैसे हैं, आज का दिन कैसा रहा। मैं ठीक हूँ, धन्यवाद आपका".split(" "):
+        stream.push_text(word + " ")
+
+    ev = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+    assert ev.token == "आप कैसे हैं, आज का दिन कैसा रहा।"
+    await stream.aclose()
 
 
 WORDS_TEXT = "This is a test. Blabla another test! multiple consecutive spaces:     done"
@@ -248,6 +291,61 @@ async def test_streamed_punct_word_tokenizer(tokenizer: tokenize.WordTokenizer):
         assert ev.token == WORDS_PUNCT_EXPECTED[i]
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("مرحبا، كيف حالك؟", ["مرحبا", "كيف", "حالك"]),  # Arabic comma and question mark
+        ("تم الحجز؛ شكراً", ["تم", "الحجز", "شكراً"]),  # Arabic semicolon
+        ("آپ کیسے ہیں۔", ["آپ", "کیسے", "ہیں"]),  # Urdu full stop
+        ("आप कैसे हैं।", ["आप", "कैसे", "हैं"]),  # Devanagari danda
+        ("你好，我很好。", ["你", "好", "我", "很", "好"]),  # fullwidth CJK punctuation
+    ],
+)
+def test_word_tokenizer_ignores_non_ascii_punctuation(text: str, expected: list[str]):
+    tokenizer = basic.WordTokenizer(ignore_punctuation=True, split_character=True)
+    assert tokenizer.tokenize(text=text) == expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("好的，我可以帮您。需要提醒吗？", ["好的，", "我可以帮您。", "需要提醒吗？"]),
+        ("はい、できます。", ["はい、", "できます。"]),
+        ("「はい」。わかりました。", ["「はい」。", "わかりました。"]),
+        # spaces still split, and a mark followed by a space adds no empty word
+        (
+            "LiveKit是一个平台， 用于 voice agents",
+            ["LiveKit是一个平台，", "用于", "voice", "agents"],
+        ),
+        # a full-width number keeps its separators, and a sentence ending in one still ends
+        (
+            "お会計は１，０００。会議は１０：３０から。",
+            ["お会計は１，０００。", "会議は１０：３０から。"],
+        ),
+        # a mark that doesn't follow CJK text, e.g. in an SSML attribute, doesn't end a
+        # word, since ElevenLabs rejoins the words of a tag with spaces
+        (
+            'Say <phoneme alphabet="ipa" ph="ni，hao">hello</phoneme>',
+            ["Say", "<phoneme", 'alphabet="ipa"', 'ph="ni，hao">hello</phoneme>'],
+        ),
+    ],
+)
+def test_word_tokenizer_splits_cjk_at_clause_punctuation(text: str, expected: list[str]):
+    tokenizer = basic.WordTokenizer(ignore_punctuation=False)
+    assert tokenizer.tokenize(text=text) == expected
+
+
+async def test_streamed_word_tokenizer_releases_cjk_before_end_of_input():
+    # TTS plugins such as Deepgram send the LLM text through this stream. A CJK reply has
+    # no spaces, so it used to come out only once the whole reply had arrived
+    stream = basic.WordTokenizer(ignore_punctuation=False).stream()
+    stream.push_text("好的，我可以")
+    first = await asyncio.wait_for(anext(stream), timeout=1)
+    assert first.token == "好的，"
+    stream.end_input()
+    assert [ev.token async for ev in stream] == ["我可以"]
+
+
 HYPHENATOR_TEXT = [
     "Segment",
     "expected",
@@ -296,6 +394,23 @@ def test_replace_words():
     assert replaced == REPLACE_EXPECTED
 
 
+@pytest.mark.parametrize(
+    "text, replacements, expected",
+    [
+        ("مرحبا، كيف حالك؟", {"مرحبا": "أهلاً", "حالك": "أحوالك"}, "أهلاً، كيف أحوالك؟"),
+        ("नमस्ते। आप कैसे हैं", {"नमस्ते": "नमस्कार"}, "नमस्कार। आप कैसे हैं"),
+        # a key that ends in punctuation still matches as a whole word
+        ("ג׳ שלום", {"ג׳": "ד׳"}, "ד׳ שלום"),
+        # ...and keeps any punctuation that follows it
+        ("ג׳, שלום", {"ג׳": "ד׳"}, "ד׳, שלום"),
+    ],
+)
+def test_replace_words_non_ascii_punctuation(
+    text: str, replacements: dict[str, str], expected: str
+):
+    assert tokenize.utils.replace_words(text=text, replacements=replacements) == expected
+
+
 async def test_replace_words_async():
     pattern = [1, 2, 4]
     text = REPLACE_TEXT
@@ -321,6 +436,23 @@ async def test_replace_words_async():
 
     replaced = "".join(replaced_chunks)
     assert replaced == REPLACE_EXPECTED
+
+
+async def test_replace_words_matches_keys_across_full_width_punctuation():
+    # replace_words keeps whitespace-only words, so a key spanning a full-width mark
+    # still matches the CJK text it covers
+    replacements = {"你好，世界": "hello"}
+    assert tokenize.utils.replace_words(text="你好，世界", replacements=replacements) == "hello"
+
+    async def _chunks():
+        for chunk in ("你好", "，世", "界"):
+            yield chunk
+
+    replaced = [
+        chunk
+        async for chunk in tokenize.utils.replace_words(text=_chunks(), replacements=replacements)
+    ]
+    assert "".join(replaced) == "hello"
 
 
 PARAGRAPH_TEST_CASES = [

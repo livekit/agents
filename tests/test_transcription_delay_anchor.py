@@ -65,6 +65,7 @@ def _make_recognition(
     ar._turn_transcript_received = False
     ar._transcription_timeout_handle = None
     ar._stt_request_ids = []
+    ar._stt_events = []
     ar._end_of_turn_task = None
     ar._audio_transcript = ""
     ar._audio_interim_transcript = ""

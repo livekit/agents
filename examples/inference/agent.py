@@ -21,7 +21,7 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
-DEFAULT_STT = "deepgram/nova-3"
+DEFAULT_STT = "assemblyai/universal-3-6-pro"
 DEFAULT_LLM = "google/gemma-4-31b-it"
 DEFAULT_TTS = "inworld/inworld-tts-2"
 

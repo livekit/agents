@@ -11,9 +11,8 @@ from typing import Any, Literal
 from opentelemetry import trace
 from opentelemetry.util.types import AttributeValue
 
+from livekit.agents.log import logger
 from livekit.agents.telemetry import gen_ai, tracer
-
-from ..log import logger
 
 _TRANSCRIPT_DELTAS = ("session.input_transcript.delta", "session.output_transcript.delta")
 

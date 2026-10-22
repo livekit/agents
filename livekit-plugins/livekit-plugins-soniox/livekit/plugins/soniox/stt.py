@@ -247,6 +247,8 @@ class SpeechStream(stt.SpeechStream):
         self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
 
         self._reported_duration_ms = 0
+        self._num_output_tokens = 0
+        self._reported_output_tokens = 0
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp ClientSession for WebSocket connections."""
@@ -267,7 +269,6 @@ class SpeechStream(stt.SpeechStream):
 
         # Create initial config object.
         config: dict[str, Any] = {
-            "api_key": self._stt._api_key,
             "model": self._stt._params.model,
             "audio_format": "pcm_s16le",
             "num_channels": self._stt._params.num_channels or 1,
@@ -300,6 +301,7 @@ class SpeechStream(stt.SpeechStream):
         ws = await asyncio.wait_for(
             self._ensure_session().ws_connect(
                 self._stt._base_url,
+                headers={"Authorization": f"Bearer {self._stt._api_key}"},
                 # Without a heartbeat a silently dropped socket (half-open TCP, no
                 # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
                 # forever and the reconnect in `_run` is only ever triggered by that
@@ -314,24 +316,29 @@ class SpeechStream(stt.SpeechStream):
         logger.debug("Soniox Speech-to-Text API connection established!")
 
         self._reported_duration_ms = 0
+        self._num_output_tokens = 0
+        self._reported_output_tokens = 0
         self.audio_queue = asyncio.Queue()
         return ws
 
     def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
-        """Report the total audio duration processed by the STT engine."""
+        """Report the audio duration and output tokens processed by the STT engine."""
         to_report_ms = total_audio_proc_ms - self._reported_duration_ms
-        if to_report_ms <= 0:
+        to_report_output_tokens = self._num_output_tokens - self._reported_output_tokens
+        if to_report_ms <= 0 and to_report_output_tokens <= 0:
             return
 
         usage_event = stt.SpeechEvent(
             type=stt.SpeechEventType.RECOGNITION_USAGE,
             alternatives=[],
             recognition_usage=stt.RecognitionUsage(
-                audio_duration=to_report_ms / 1000,
+                audio_duration=max(to_report_ms, 0) / 1000,
+                output_tokens=max(to_report_output_tokens, 0),
             ),
         )
         self._event_ch.send_nowait(usage_event)
-        self._reported_duration_ms = int(total_audio_proc_ms)
+        self._reported_duration_ms = max(int(total_audio_proc_ms), self._reported_duration_ms)
+        self._reported_output_tokens = self._num_output_tokens
 
     async def _run(self) -> None:
         """Manage connection lifecycle, spawning tasks and handling reconnection."""
@@ -519,6 +526,18 @@ class SpeechStream(stt.SpeechStream):
                 is_speaking = False
             else:
                 final_original.reset()
+                if is_speaking:
+                    # All tokens of the segment were retracted (non-final
+                    # tokens are not retained across messages): the endpoint
+                    # must still close the utterance, otherwise the session
+                    # stays stuck in speaking and the next utterance never
+                    # gets its own START_OF_SPEECH.
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=SpeechEventType.END_OF_SPEECH,
+                        )
+                    )
+                    is_speaking = False
 
         if not self._ws:
             return
@@ -558,6 +577,11 @@ class SpeechStream(stt.SpeechStream):
                     # 1) process tokens: accumulate final/non-final,
                     #    flush immediately on endpoint tokens.
                     for token in tokens:
+                        # Non-final tokens are re-sent as final later, so only
+                        # final tokens count toward output usage. <end>/<fin>
+                        # markers are control tokens, not transcription output.
+                        if token["is_final"] and not is_end_token(token):
+                            self._num_output_tokens += 1
                         is_translated = token.get("translation_status") == "translation"
                         if is_translation_mode and not is_end_token(token) and not is_translated:
                             # Original-language token: capture text for source_text only.
@@ -711,8 +735,10 @@ class _LangStats(NamedTuple):
 class _TokenAccumulator:
     """Accumulates token metadata (text, language, speaker, timing, confidence).
 
-    Tokens are assumed to arrive in chronological order, so start_time is taken
-    from the first token and end_time is continuously overwritten by the latest.
+    Tokens are assumed to arrive in chronological order, but individual tokens
+    may omit timing keys. start_time is the earliest ``start_ms`` seen and
+    end_time the latest ``end_ms`` seen, so a token that carries timing late
+    (or regresses) cannot collapse the span onto itself.
     """
 
     def __init__(self) -> None:
@@ -749,11 +775,13 @@ class _TokenAccumulator:
             self.language = self._get_language()
         if "speaker" in token and self.speaker_id is None:
             self.speaker_id = str(token["speaker"])
-        if "start_ms" in token and not self._has_start_time:
-            self._has_start_time = True
-            self.start_time = float(token["start_ms"])
+        if "start_ms" in token:
+            start_ms = float(token["start_ms"])
+            if not self._has_start_time or start_ms < self.start_time:
+                self._has_start_time = True
+                self.start_time = start_ms
         if "end_ms" in token:
-            self.end_time = float(token["end_ms"])
+            self.end_time = max(self.end_time, float(token["end_ms"]))
         if "confidence" in token:
             self._confidence_sum += token["confidence"]
             self._confidence_count += 1

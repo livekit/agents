@@ -494,7 +494,8 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
 
         if data["type"] == "turn.resume":
             # turn.resume has no transcript; re-emit the most recent cumulative
-            # transcript as an interim so the pipeline cancels the preflight.
+            # transcript as an interim. it matches the preflight, so the pipeline keeps the
+            # preemptive generation until a turn.update moves the transcript past it.
             if not self._speaking or not self._current_transcript:
                 return
             self._send_transcript_event(

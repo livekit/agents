@@ -5,7 +5,7 @@ import os
 import weakref
 from dataclasses import dataclass
 
-import httpx
+import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
 
 from livekit import rtc
 from livekit.agents import (
