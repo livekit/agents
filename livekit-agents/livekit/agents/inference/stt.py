@@ -101,6 +101,9 @@ class DeepgramOptions(TypedDict, total=False):
     smart_format: bool
     keywords: list[tuple[str, float]]
     keyterm: str | list[str]
+    # nova-3 only, in "multi" language mode: biases detection toward these languages without
+    # restricting it. The gateway forwards it only with `deepgram_stt_language_hint` open.
+    language_hint: str | list[str]
     profanity_filter: bool
     numerals: bool
     mip_opt_out: bool  # always True for LiveKit Inference; the passed value is ignored

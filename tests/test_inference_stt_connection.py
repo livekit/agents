@@ -148,6 +148,47 @@ async def test_flux_language_hint_reaches_session_create() -> None:
     assert extra["language_hint"] == ["en", "es"]
 
 
+async def test_nova3_language_hint_reaches_session_create() -> None:
+    extra: dict[str, Any] = {}
+    session_language = ""
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal session_language
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+                session_language = event["settings"]["language"]
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = STT(
+            model="deepgram/nova-3",
+            language="multi",
+            api_key="test-key",
+            api_secret="test-secret",
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"language_hint": ["en", "es"]},
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            stream.end_input()
+            await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert extra["language_hint"] == ["en", "es"]
+    assert session_language == "multi"
+
+
 async def test_linden_session_keyterms_reach_session_create() -> None:
     extra: dict[str, Any] = {}
 
