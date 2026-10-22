@@ -13,6 +13,7 @@ import livekit.agents.inference._utils as inference_utils
 import livekit.agents.job as job_module
 from livekit.agents import inference
 from livekit.agents.inference._utils import (
+    HEADER_ROOM_ID,
     HEADER_SESSION_ID,
     create_inference_request_id,
     extract_quota_usage,
@@ -51,6 +52,7 @@ def test_inference_session_id_is_fresh_and_sdk_owned(
         job=SimpleNamespace(id="job_test", room=room),
         room=room,
         inference_headers={HEADER_SESSION_ID: "caller_value"},
+        is_fake_job=lambda: False,
     )
     suffixes = iter(("first", "second"))
 
@@ -66,6 +68,22 @@ def test_inference_session_id_is_fresh_and_sdk_owned(
 
     assert first[HEADER_SESSION_ID] == "inference_first"
     assert second[HEADER_SESSION_ID] == "inference_second"
+
+
+@pytest.mark.parametrize(("fake_job", "expected"), [(False, "RM_test"), (True, None)])
+def test_inference_room_id_is_omitted_for_fake_jobs(
+    monkeypatch: pytest.MonkeyPatch, fake_job: bool, expected: str | None
+) -> None:
+    room = SimpleNamespace(sid="RM_test", isconnected=lambda: False)
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(id="job_test", room=room),
+        room=room,
+        inference_headers={},
+        is_fake_job=lambda: fake_job,
+    )
+    monkeypatch.setattr(job_module, "get_job_context", lambda: ctx)
+
+    assert get_inference_headers().get(HEADER_ROOM_ID) == expected
 
 
 def test_inference_request_id_links_to_session(monkeypatch: pytest.MonkeyPatch) -> None:

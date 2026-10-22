@@ -121,7 +121,8 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
         from ..job import get_job_context
 
         ctx = get_job_context()
-        if isinstance(room_sid := ctx.job.room.sid, str) and room_sid:
+        # console jobs carry a placeholder room sid (SRM_...) that names no real room
+        if not ctx.is_fake_job() and isinstance(room_sid := ctx.job.room.sid, str) and room_sid:
             headers[HEADER_ROOM_ID] = room_sid
         if isinstance(job_id := ctx.job.id, str) and job_id:
             headers[HEADER_JOB_ID] = job_id
