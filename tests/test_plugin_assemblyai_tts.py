@@ -336,19 +336,19 @@ def test_voice_and_language() -> None:
 
     # nothing given: Keegan, and the server's default language (English)
     tts = TTS(api_key="k")
-    assert (tts.voice, tts.language, tts.model) == (KEEGAN, None, "assemblyai-tts-1")
+    assert (tts._opts.voice, tts._opts.language, tts.model) == (KEEGAN, None, "assemblyai-tts-1")
 
     # voices pass through; the language is never inferred from one
     tts = TTS(api_key="k", voice=" aai-vera ")
-    assert (tts.voice, tts.language) == ("aai-vera", None)
+    assert (tts._opts.voice, tts._opts.language) == ("aai-vera", None)
 
     # any code or English name becomes the name the API takes
     for language in ("spanish", "Spanish", "es", "es-MX", "spa"):
-        assert TTS(api_key="k", language=language).language == "spanish"
-    assert TTS(api_key="k", language="pt-BR").language == "portuguese"
+        assert TTS(api_key="k", language=language)._opts.language == "spanish"
+    assert TTS(api_key="k", language="pt-BR")._opts.language == "portuguese"
     # a language the service may add later passes through
-    assert TTS(api_key="k", language="ja").language == "japanese"
-    assert TTS(api_key="k", language="Klingon").language == "klingon"
+    assert TTS(api_key="k", language="ja")._opts.language == "japanese"
+    assert TTS(api_key="k", language="Klingon")._opts.language == "klingon"
 
     with pytest.raises(ValueError, match="voice"):
         TTS(api_key="k", voice=" ")
@@ -362,10 +362,10 @@ def test_custom_voice_and_model() -> None:
     # a custom voice is a voice like any other; it speaks its clip's language by default
     clone = "01a142a4-66f3-7315-b15f-668b6edfb595"
     tts = TTS(api_key="k", voice=f" {clone} ")
-    assert (tts.voice, tts.language, tts.model) == (clone, None, "assemblyai-tts-1")
+    assert (tts._opts.voice, tts._opts.language, tts.model) == (clone, None, "assemblyai-tts-1")
 
     tts = TTS(api_key="k", voice="my-voice", language="es", model="latest")
-    assert (tts.voice, tts.language, tts.model) == ("my-voice", "spanish", "latest")
+    assert (tts._opts.voice, tts._opts.language, tts.model) == ("my-voice", "spanish", "latest")
 
     with pytest.raises(ValueError, match="model"):
         TTS(api_key="k", model=" ")
@@ -376,9 +376,9 @@ def test_update_options() -> None:
 
     tts = TTS(api_key="k", voice="aai-vera", language="es")
     tts.update_options(voice="clone", language="fr", model="latest")
-    assert (tts.voice, tts.language, tts.model) == ("clone", "french", "latest")
+    assert (tts._opts.voice, tts._opts.language, tts.model) == ("clone", "french", "latest")
     tts.update_options(language=None)  # back to the server's default
-    assert (tts.voice, tts.language) == ("clone", None)
+    assert (tts._opts.voice, tts._opts.language) == ("clone", None)
     with pytest.raises(ValueError, match="voice"):
         tts.update_options(voice=" ")
 
@@ -405,9 +405,9 @@ def test_update_options_sets_each_field_on_its_own() -> None:
 
     tts = TTS(api_key="k", voice="aai-anna")
     tts.update_options(language="fr")  # the voice is kept: the server judges the pair
-    assert (tts.voice, tts.language) == ("aai-anna", "french")
+    assert (tts._opts.voice, tts._opts.language) == ("aai-anna", "french")
     tts.update_options(voice="aai-linda-3")
-    assert (tts.voice, tts.language) == ("aai-linda-3", "french")
+    assert (tts._opts.voice, tts._opts.language) == ("aai-linda-3", "french")
 
 
 def test_split_request_text() -> None:

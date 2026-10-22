@@ -202,15 +202,6 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "AssemblyAI"
 
-    @property
-    def voice(self) -> str:
-        return self._opts.voice
-
-    @property
-    def language(self) -> str | None:
-        """The language's English name as sent to the server, or None for English."""
-        return self._opts.language
-
     def update_options(
         self,
         *,
