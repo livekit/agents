@@ -4,7 +4,11 @@ from .dob import GetDOBResult, GetDOBTask
 from .dtmf_inputs import GetDtmfResult, GetDtmfTask
 from .email_address import GetEmailResult, GetEmailTask
 from .name import GetNameResult, GetNameTask
-from .phone_number import GetPhoneNumberResult, GetPhoneNumberTask
+from .phone_number import (
+    GetPhoneNumberResult,
+    GetPhoneNumberTask,
+    PhoneNumberCaptureDeclinedError,
+)
 from .task_group import TaskCompletedEvent, TaskGroup, TaskGroupResult
 from .utils import WorkflowInstructions
 from .warm_transfer import TwilioConnectorWarmTransferTask, WarmTransferResult, WarmTransferTask
@@ -25,6 +29,7 @@ __all__ = [
     "GetNameResult",
     "GetPhoneNumberTask",
     "GetPhoneNumberResult",
+    "PhoneNumberCaptureDeclinedError",
     "TaskCompletedEvent",
     "TaskGroup",
     "TaskGroupResult",
