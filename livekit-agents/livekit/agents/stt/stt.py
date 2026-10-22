@@ -480,10 +480,7 @@ class RecognizeStream(ABC):
                 # unless the error opts out (heartbeat / half-open connection loss).
                 # Those must still consume retries so FallbackAdapter can fail over.
                 may_reset = getattr(e, "reset_retry_budget", True)
-                if (
-                    may_reset
-                    and time.time() - last_start_time > self._conn_options.timeout
-                ):
+                if may_reset and time.time() - last_start_time > self._conn_options.timeout:
                     self._num_retries = 0
 
                 if not e.retryable or max_retries == 0:
