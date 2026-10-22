@@ -1179,8 +1179,9 @@ class RealtimeSession(
                     if closing:  # closing is expected, see _send_task
                         return
 
-                    # CLOSE carries (code, reason); CLOSED/CLOSING only expose close_code
-                    code = ws_conn.close_code
+                    # CLOSE carries (code, reason); CLOSED/CLOSING only expose close_code.
+                    # Test doubles (and some wrappers) may omit close_code — use getattr.
+                    code = getattr(ws_conn, "close_code", None)
                     reason = ""
                     if msg.type == aiohttp.WSMsgType.CLOSE:
                         if isinstance(msg.data, int):
