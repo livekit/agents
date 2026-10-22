@@ -194,3 +194,91 @@ async def test_http_body_omits_delivery_mode_when_not_given():
     body = captured.get("json")
     assert isinstance(body, dict)
     assert "deliveryMode" not in body
+
+
+async def _sent_close_packet(cancel: bool) -> dict:
+    from livekit.plugins.inworld.tts import _InworldConnection
+
+    sent = asyncio.Event()
+    payloads: list[str] = []
+
+    def _on_send(payload: str) -> None:
+        payloads.append(payload)
+        sent.set()
+
+    conn = _InworldConnection(
+        session=MagicMock(), ws_url="wss://example.invalid/", authorization="Basic test"
+    )
+    conn._ws = MagicMock()
+    conn._ws.send_str = AsyncMock(side_effect=_on_send)
+    conn.close_context("ctx-1", cancel=cancel)
+
+    send_task = asyncio.create_task(conn._send_loop())
+    try:
+        await asyncio.wait_for(sent.wait(), timeout=2.0)
+    finally:
+        conn._closed = True
+        await aio.cancel_and_wait(send_task)
+
+    return json.loads(payloads[0])
+
+
+async def test_ws_close_and_cancel_packets():
+    assert await _sent_close_packet(cancel=False) == {"close_context": {}, "contextId": "ctx-1"}
+    assert await _sent_close_packet(cancel=True) == {"cancel_context": {}, "contextId": "ctx-1"}
+
+
+class _FakeConnection:
+    def __init__(self, waiter: asyncio.Future[None]) -> None:
+        self.waiter = waiter
+        self.calls: list[tuple[str, bool]] = []
+        self.closed = asyncio.Event()
+
+    def send_text(self, context_id: str, text: str) -> None:
+        self.calls.append(("send_text", False))
+
+    def flush_context(self, context_id: str) -> None:
+        self.calls.append(("flush_context", False))
+
+    def close_context(self, context_id: str, *, cancel: bool = False) -> None:
+        self.calls.append(("close_context", cancel))
+        self.closed.set()
+
+
+def _tts_with_fake_connection():
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key")
+    waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    conn = _FakeConnection(waiter)
+    pool = MagicMock()
+    pool.acquire_context = AsyncMock(return_value=("ctx-1", waiter, conn))
+    tts._get_pool = AsyncMock(return_value=pool)  # type: ignore[method-assign]
+    return tts, conn
+
+
+async def test_stream_aclose_cancels_context():
+    tts, conn = _tts_with_fake_connection()
+
+    stream = tts.stream()
+    stream.push_text("Hello there. How are you today?")
+    stream.flush()
+    await asyncio.sleep(0.1)
+    await stream.aclose()
+
+    assert ("close_context", False) not in conn.calls
+    assert conn.calls[-1] == ("close_context", True)
+
+
+async def test_stream_aclose_after_input_ended_cancels_context():
+    tts, conn = _tts_with_fake_connection()
+
+    stream = tts.stream()
+    stream.push_text("Hello there.")
+    stream.end_input()
+    await asyncio.wait_for(conn.closed.wait(), timeout=2.0)
+    assert conn.calls == [("send_text", False), ("flush_context", False), ("close_context", False)]
+
+    await stream.aclose()
+
+    assert conn.calls[-1] == ("close_context", True)

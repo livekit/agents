@@ -460,6 +460,73 @@ async def test_proc_pool_launch_job_raises_when_all_spawns_fail():
         await pool.aclose()
 
 
+@pytest.mark.no_concurrent  # SIGKILLs real children; keep it off the shared concurrent loop
+@pytest.mark.parametrize("num_idle_processes", [1, 3])
+async def test_proc_pool_replaces_dead_idle_process(num_idle_processes: int):
+    """An idle warmed process that exits (OOM killer, memory limit, crash) must be dropped
+    from the warmed queue: the pool should spawn a replacement and never hand the dead
+    process to a job."""
+    mp_ctx = mp.get_context("spawn")
+    loop = asyncio.get_running_loop()
+    pool = ipc.proc_pool.ProcPool(
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        num_idle_processes=num_idle_processes,
+        job_executor_type=job.JobExecutorType.PROCESS,
+        initialize_timeout=20.0,
+        close_timeout=20.0,
+        session_end_timeout=300.0,
+        inference_executor=None,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        http_proxy=None,
+        mp_ctx=mp_ctx,
+        loop=loop,
+    )
+
+    start_args = _new_start_args(mp_ctx)
+    ready_q: asyncio.Queue[None] = asyncio.Queue()
+    launched: list[ipc.job_executor.JobExecutor] = []
+
+    @pool.on("process_created")
+    def _process_created(proc: ipc.job_proc_executor.ProcJobExecutor):
+        proc.user_arguments = start_args
+
+    @pool.on("process_ready")
+    def _process_ready(proc: ipc.job_proc_executor.ProcJobExecutor):
+        ready_q.put_nowait(None)
+
+    @pool.on("process_job_launched")
+    def _process_job_launched(proc: ipc.job_executor.JobExecutor):
+        launched.append(proc)
+
+    await pool.start()
+    try:
+        await _wait_for_elements(ready_q, num_idle_processes)
+        dead = list(pool.processes)
+        assert len(dead) == num_idle_processes
+        for proc in dead:
+            assert proc.pid is not None
+            psutil.Process(proc.pid).kill()
+
+        def _replenished() -> bool:
+            idle = list(pool._warmed_proc_queue._queue)
+            return len(idle) == num_idle_processes and all(
+                p not in dead and p.exitcode is None for p in idle
+            )
+
+        await _poll_until(_replenished, timeout=20.0)
+        replacements = list(pool._warmed_proc_queue._queue)
+
+        await pool.launch_job(_generate_fake_job())
+        assert len(launched) == 1
+        assert launched[0] in replacements
+    finally:
+        await pool.aclose()
+
+
 def _create_proc(
     *,
     close_timeout: float,

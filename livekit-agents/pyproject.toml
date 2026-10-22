@@ -27,7 +27,7 @@ classifiers = [
 ]
 dependencies = [
     "certifi>=2025.6.15",
-    "livekit==1.1.20",
+    "livekit==1.1.21",
     "livekit-api>=1.2.0,<2",
     "livekit-local-inference>=0.2.7",
     "livekit-protocol>=1.1.21,<2",
@@ -132,6 +132,7 @@ spatius = ["livekit-plugins-spatius>=1.8.8"]
 spitch = ["livekit-plugins-spitch>=1.8.8"]
 synthesia = ["livekit-plugins-synthesia>=1.8.8"]
 tavus = ["livekit-plugins-tavus>=1.8.8"]
+thunderphone = ["livekit-plugins-thunderphone>=1.8.8"]
 trugen = ["livekit-plugins-trugen>=1.8.8"]
 turn-detector = ["livekit-plugins-turn-detector>=1.8.8"]
 typesafe = ["livekit-plugins-typesafe>=1.8.8"]

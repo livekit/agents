@@ -163,6 +163,7 @@ class _FlushContextMsg:
 @dataclass
 class _CloseContextMsg:
     context_id: str
+    cancel: bool = False
 
 
 _OutboundMessage = _CreateContextMsg | _SendTextMsg | _FlushContextMsg | _CloseContextMsg
@@ -362,14 +363,18 @@ class _InworldConnection:
         if self._on_capacity_available:
             self._on_capacity_available()
 
-    def close_context(self, context_id: str) -> None:
-        """Queue a close message for a context (removes from pool)."""
+    def close_context(self, context_id: str, *, cancel: bool = False) -> None:
+        """Queue a close message for a context (removes from pool).
+
+        With ``cancel``, the server stops generating and discards text it has not
+        synthesized yet instead of finishing it.
+        """
         ctx = self._contexts.get(context_id)
         if ctx:
             ctx.state = _ContextState.CLOSING
             ctx.close_started_at = time.time()
         try:
-            self._outbound_queue.put_nowait(_CloseContextMsg(context_id=context_id))
+            self._outbound_queue.put_nowait(_CloseContextMsg(context_id=context_id, cancel=cancel))
         except asyncio.QueueFull:
             logger.warning("Outbound queue full, dropping close")
 
@@ -428,7 +433,8 @@ class _InworldConnection:
                     await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _CloseContextMsg):
-                    pkt = {"close_context": {}, "contextId": msg.context_id}
+                    close_key = "cancel_context" if msg.cancel else "close_context"
+                    pkt = {close_key: {}, "contextId": msg.context_id}
                     await self._ws.send_str(json.dumps(pkt))
 
         except Exception as e:
@@ -1312,16 +1318,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             await asyncio.wait_for(waiter, timeout=self._conn_options.timeout + 60)
         except asyncio.TimeoutError:
-            connection.close_context(context_id)
+            connection.close_context(context_id, cancel=True)
             raise APITimeoutError() from None
         except asyncio.CancelledError:
-            connection.close_context(context_id)
+            connection.close_context(context_id, cancel=True)
             raise
         except APIError:
             raise
         except Exception as e:
             logger.error("Inworld stream error", extra={"context_id": context_id, "error": e})
-            connection.close_context(context_id)
+            connection.close_context(context_id, cancel=True)
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
