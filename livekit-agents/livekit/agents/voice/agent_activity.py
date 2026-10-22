@@ -145,6 +145,14 @@ async def _aligned_transcript_or_text(
             yield chunk
 
 
+def _is_mcp_toolset(toolset: llm.Toolset) -> bool:
+    try:
+        from ..llm.mcp import MCPToolset
+    except ImportError:
+        return False  # without the optional mcp package, no MCPToolset can exist
+    return isinstance(toolset, MCPToolset)
+
+
 def _transcripts_equivalent(first: str, second: str | None) -> bool:
     if first == second:
         return True
@@ -1202,9 +1210,14 @@ class AgentActivity(RecognitionHooks):
             if isinstance(ts, AsyncToolset):
                 ts._attach_activity(activity=self, session=self._session)
 
-        @utils.log_exceptions(logger=logger)
         async def _do_setup(toolset: llm.Toolset) -> None:
-            await toolset.setup()
+            try:
+                await toolset.setup()
+            except Exception:
+                # MCPToolset.setup logs its own failure with the server identity
+                if not _is_mcp_toolset(toolset):
+                    logger.exception("Error in _do_setup")
+                raise
 
         await asyncio.gather(
             *(_do_setup(ts) for ts in all_toolsets),
