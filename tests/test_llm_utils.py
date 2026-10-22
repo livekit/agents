@@ -182,11 +182,8 @@ def test_object_parts_with_text_attribute_are_flattened() -> None:
 
 def test_strips_reasoning_from_text_alongside_tool_call() -> None:
     stream = LLMStream.__new__(LLMStream)
-    stream._tool_call_id = None
-    stream._fnc_name = None
-    stream._fnc_raw_arguments = None
-    stream._tool_extra = None
-    stream._tool_index = None
+    stream._tool_calls = {}
+    stream._tool_key = None
     choice = Choice(
         index=0,
         finish_reason="tool_calls",
