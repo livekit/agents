@@ -65,10 +65,12 @@ if __name__ == "__main__":
     cli.run_app(server)
 ```
 
-Pick the avatar with exactly one of:
+Pick the avatar with at most one of:
 
-- `avatar_id`: an avatar from your AgentHuman account (`avat_...`), or `AGENTHUMAN_AVATAR_ID`.
+- `avatar_id`: an AgentHuman avatar (`avat_...`), or `AGENTHUMAN_AVATAR_ID`.
 - `avatar_image_url`: a publicly accessible image to animate, or `AGENTHUMAN_IMAGE_URL`.
+
+With neither, a public stock avatar is used.
 
 ## Interruptions
 

@@ -25,6 +25,7 @@ from typing_extensions import Self
 from livekit.agents import APIConnectionError, APIConnectOptions
 from livekit.plugins.agenthuman import AgentHumanException, AvatarSession
 from livekit.plugins.agenthuman.api import AgentHumanAPI
+from livekit.plugins.agenthuman.avatar import DEFAULT_AVATAR_ID
 
 pytestmark = pytest.mark.unit
 
@@ -159,12 +160,18 @@ async def test_create_session_rejects_unexpected_response_without_leaking_it() -
     assert len(session.requests) == 1
 
 
-def test_avatar_session_requires_exactly_one_avatar() -> None:
+def test_avatar_session_defaults_to_stock_avatar() -> None:
     with patch.dict(os.environ, {"AGENTHUMAN_API_KEY": "ah-key"}, clear=True):
-        with pytest.raises(AgentHumanException, match="exactly one"):
-            AvatarSession()
-        with pytest.raises(AgentHumanException, match="exactly one"):
+        assert AvatarSession()._avatar == DEFAULT_AVATAR_ID
+
+
+def test_avatar_session_rejects_both_avatar_kinds() -> None:
+    with patch.dict(os.environ, {"AGENTHUMAN_API_KEY": "ah-key"}, clear=True):
+        with pytest.raises(AgentHumanException, match="only one"):
             AvatarSession(avatar_id="avat_1", avatar_image_url="https://img.test/a.png")
+    env = {"AGENTHUMAN_API_KEY": "ah-key", "AGENTHUMAN_AVATAR_ID": "avat_env"}
+    with patch.dict(os.environ, env, clear=True), pytest.raises(AgentHumanException):
+        AvatarSession(avatar_image_url="https://img.test/a.png")
 
 
 def test_avatar_session_requires_api_key() -> None:

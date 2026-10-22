@@ -22,6 +22,8 @@ from .errors import AgentHumanException
 from .log import logger
 
 SAMPLE_RATE = 16000
+# public stock avatar, used when neither avatar_id nor avatar_image_url is given
+DEFAULT_AVATAR_ID = "avat_01KMZJ3YN6BR83KR1FHP8VTHNX"
 _AVATAR_AGENT_IDENTITY = "agenthuman-avatar-agent"
 _AVATAR_AGENT_NAME = "agenthuman-avatar-agent"
 _SESSION_STATE_TOPIC = "session.state"
@@ -46,9 +48,9 @@ class AvatarSession(BaseAvatarSession):
         """
         Args:
             avatar_id: ID of an AgentHuman avatar (``avat_...``). Falls back to
-                ``AGENTHUMAN_AVATAR_ID``.
+                ``AGENTHUMAN_AVATAR_ID``, then to a public stock avatar when no image is given.
             avatar_image_url: Publicly accessible image to animate instead of a saved avatar.
-                Falls back to ``AGENTHUMAN_IMAGE_URL``. Provide exactly one of ``avatar_id``
+                Falls back to ``AGENTHUMAN_IMAGE_URL``. Provide at most one of ``avatar_id``
                 and ``avatar_image_url``.
             aspect_ratio: Aspect ratio of the avatar video: ``"4:3"`` (default), ``"3:4"``
                 or ``"1:1"``.
@@ -69,13 +71,13 @@ class AvatarSession(BaseAvatarSession):
             if utils.is_given(avatar_image_url)
             else os.getenv("AGENTHUMAN_IMAGE_URL", "")
         )
-        if bool(avatar_id) == bool(avatar_image_url):
+        if avatar_id and avatar_image_url:
             raise AgentHumanException(
-                "provide exactly one of avatar_id or avatar_image_url (or set "
+                "provide only one of avatar_id or avatar_image_url (or set "
                 "AGENTHUMAN_AVATAR_ID or AGENTHUMAN_IMAGE_URL)"
             )
         # the API takes either in the same field
-        self._avatar = avatar_id or avatar_image_url
+        self._avatar = avatar_id or avatar_image_url or DEFAULT_AVATAR_ID
 
         api_key_val = api_key if utils.is_given(api_key) else os.getenv("AGENTHUMAN_API_KEY")
         if not api_key_val:
