@@ -367,6 +367,7 @@ class STT(stt.STT):
             self._opts.endpointing_ms = endpointing_ms
         if is_given(enable_diarization):
             self._opts.enable_diarization = enable_diarization
+            self._capabilities.diarization = enable_diarization
         if is_given(filler_words):
             self._opts.filler_words = filler_words
         if is_given(keywords):
@@ -413,6 +414,7 @@ class STT(stt.STT):
                 sample_rate=sample_rate,
                 no_delay=no_delay,
                 endpointing_ms=endpointing_ms,
+                enable_diarization=enable_diarization,
                 filler_words=filler_words,
                 keywords=keywords,
                 keyterm=keyterm,
@@ -421,6 +423,7 @@ class STT(stt.STT):
                 numerals=numerals,
                 mip_opt_out=mip_opt_out,
                 vad_events=vad_events,
+                tags=tags,
                 endpoint_url=endpoint_url,
                 utterance_end_ms=utterance_end_ms,
                 dictation=dictation,

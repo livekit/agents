@@ -616,40 +616,39 @@ class STT(stt.STT):
         language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
+        opts = self._opts
         if is_given(language):
             languages = _as_languages(language)
-            _validate_context(self._opts.model, languages, self._opts.keywords)
-            self._opts.languages = languages
+            _validate_context(opts.model, languages, opts.keywords)
+            opts = dataclasses.replace(opts, languages=languages)
 
         try:
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
             format = "json"
-            if self._opts.model == "whisper-1":
+            if opts.model == "whisper-1":
                 # verbose_json returns language and other details, only supported for whisper-1
                 format = "verbose_json"
 
-            transcription = _transcription(self._opts)
+            transcription = _transcription(opts)
             resp = await self._client.audio.transcriptions.create(
                 file=(
                     "file.wav",
                     data,
                     "audio/wav",
                 ),
-                model=self._opts.model,  # type: ignore
+                model=opts.model,  # type: ignore
                 language=transcription.language or openai.omit,
                 languages=transcription.languages or openai.omit,
                 keywords=transcription.keywords or openai.omit,
                 prompt=transcription.prompt or openai.omit,
                 response_format=format,
-                temperature=self._opts.temperature
-                if is_given(self._opts.temperature)
-                else openai.omit,
+                temperature=opts.temperature if is_given(opts.temperature) else openai.omit,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
             # the detected language beats the hint, dominant code first; an empty list keeps it
-            sd = stt.SpeechData(text=resp.text, language=_transcript_language(self._opts.languages))
+            sd = stt.SpeechData(text=resp.text, language=_transcript_language(opts.languages))
             if isinstance(resp, TranscriptionVerbose) and resp.language:
                 sd.language = LanguageCode(resp.language)
             elif isinstance(resp, Transcription) and resp.languages:
