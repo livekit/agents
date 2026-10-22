@@ -20,6 +20,79 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
+class _PendingSpeechEnd:
+    """Own the opt-in end boundary and its deadline on the stream's event loop.
+
+    Pending clips are counted before recognition starts. Only silence can release
+    an end; the deadline may release it before recognition settles. Cancellation
+    only closes the timer, whereas a terminal recognition error settles silence.
+    """
+
+    def __init__(self, events: utils.aio.Chan[SpeechEvent], max_wait: float) -> None:
+        self._events = events
+        self._max_wait = max_wait
+        self._pending = 0
+        self._speaking = False
+        self._speech_end_time: float | None = None
+        self._deadline = 0.0
+        self._timer: asyncio.TimerHandle | None = None
+
+    def speech_started(self) -> None:
+        """Suspend end delivery while speech is active."""
+        self._speaking = True
+        self.close()
+
+    def clip_closed(self, speech_end_time: float) -> None:
+        """Count a closed clip and restart the boundary deadline."""
+        self._speaking = False
+        self._pending += 1
+        self._speech_end_time = speech_end_time
+        self._deadline = asyncio.get_running_loop().time() + self._max_wait
+        self._schedule()
+
+    def recognition_finished(self) -> None:
+        """Release a silent boundary after all queued recognition settles."""
+        self._pending -= 1
+        if self._pending == 0:
+            self._emit()
+
+    def speech_reset(self) -> None:
+        """Apply an ordered VAD reset and restore the remaining deadline."""
+        self._speaking = False
+        self._schedule()
+
+    def recognition_failed(self) -> None:
+        """Settle silent speech before abandoning queued clips."""
+        # Queued clips will be abandoned. Preserve the boundary for text already
+        # delivered, but do not invent an end for speech that is still active.
+        self._emit()
+
+    def close(self) -> None:
+        """Cancel the timer without emitting an end event."""
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+
+    def _schedule(self) -> None:
+        self.close()
+        if self._speaking or self._speech_end_time is None:
+            return
+        if self._pending == 0:
+            self._emit()
+        else:
+            loop = asyncio.get_running_loop()
+            self._timer = loop.call_later(max(0.0, self._deadline - loop.time()), self._emit)
+
+    def _emit(self) -> None:
+        if self._speaking or self._speech_end_time is None:
+            return
+        self._events.send_nowait(
+            SpeechEvent(SpeechEventType.END_OF_SPEECH, speech_end_time=self._speech_end_time)
+        )
+        self._speech_end_time = None
+        self.close()
+
+
 class StreamAdapter(STT):
     def __init__(
         self,
@@ -36,13 +109,27 @@ class StreamAdapter(STT):
             vad: Voice activity detector used to split audio into clips.
             end_of_speech_after_transcript: Hold END_OF_SPEECH until all closed clips
                 have been recognized, while continuing to read VAD events. Resumed
-                speech holds the event until the next speech end. Empty recognition
-                results also release the event, without emitting a FINAL_TRANSCRIPT.
-                Defaults to False, preserving immediate VAD end events.
-            max_transcript_wait: Maximum seconds to hold END_OF_SPEECH after the latest
-                VAD end event, when enabled. Must be finite and non-negative. The cap
-                does not cancel recognition; transcripts may still arrive afterward.
-                Session endpointing delays are applied separately by AgentSession.
+                speech holds the event until the next speech end or VAD reset. Empty
+                results release it without a FINAL_TRANSCRIPT. Defaults to False,
+                preserving immediate VAD end events.
+            max_transcript_wait: Maximum seconds to hold END_OF_SPEECH from the latest
+                processed VAD END event, when enabled. Must be finite and non-negative.
+                Resumed speech cancels the deadline; the next closed clip starts a new
+                deadline, so the total hold may exceed this value. A reset without a
+                new clip restores the remaining time on the previous deadline.
+
+        Notes:
+            The cap does not change recognition timeouts or retries, cancel recognition,
+            or bound graceful shutdown. Cap expiry, or speech resumed after an END was
+            emitted, can still lead to late text and split turns. Session endpointing
+            delays remain in AudioRecognition.
+
+            In this mode, flush ends and drains the current VAD stream before opening
+            a fresh one for subsequent audio. This orders the speaking-state reset
+            after queued VAD events. Graceful end_input drains clips already closed
+            by VAD; open audio may be discarded by the VAD's reset. A terminal
+            recognition failure releases a held end only when silent, then propagates
+            the error. aclose cancels without releasing a held end.
         """
         if not math.isfinite(max_transcript_wait) or max_transcript_wait < 0:
             raise ValueError("max_transcript_wait must be finite and non-negative")
@@ -143,6 +230,10 @@ class StreamAdapterWrapper(RecognizeStream):
             pass
 
     async def _run(self) -> None:
+        if self._end_of_speech_after_transcript:
+            await self._run_after_transcript()
+            return
+
         vad_stream = self._vad.stream()
 
         async def _forward_input() -> None:
@@ -157,10 +248,6 @@ class StreamAdapterWrapper(RecognizeStream):
 
         async def _recognize() -> None:
             """recognize speech from vad"""
-            if self._end_of_speech_after_transcript:
-                await self._recognize_after_transcript(vad_stream)
-                return
-
             async for event in vad_stream:
                 if event.type == VADEventType.START_OF_SPEECH:
                     self._event_ch.send_nowait(SpeechEvent(SpeechEventType.START_OF_SPEECH))
@@ -209,55 +296,64 @@ class StreamAdapterWrapper(RecognizeStream):
             await utils.aio.cancel_and_wait(*tasks)
             await vad_stream.aclose()
 
-    async def _recognize_after_transcript(self, vad_stream: VADStream) -> None:
+    async def _run_after_transcript(self) -> None:
         """Read VAD independently of ordered recognition and bounded end events."""
         clips = utils.aio.Chan[tuple[VADEvent, float]]()
-        pending = 0
-        speaking = False
-        held_end: float | None = None
-        timer: asyncio.TimerHandle | None = None
+        pending_end = _PendingSpeechEnd(self._event_ch, self._max_transcript_wait)
+        vad_stream: VADStream | None = None
 
-        def _emit_end() -> None:
-            nonlocal held_end, timer
-            if speaking or held_end is None:
-                return
-            self._event_ch.send_nowait(
-                SpeechEvent(SpeechEventType.END_OF_SPEECH, speech_end_time=held_end)
-            )
-            held_end = None
-            if timer is not None:
-                timer.cancel()
-                timer = None
-
-        async def _read_vad() -> None:
-            nonlocal pending, speaking, held_end, timer
+        async def _read_vad(vad_stream: VADStream) -> None:
             async for event in vad_stream:
                 if event.type == VADEventType.START_OF_SPEECH:
-                    speaking = True
-                    if timer is not None:
-                        timer.cancel()
-                        timer = None
+                    pending_end.speech_started()
                     self._event_ch.send_nowait(SpeechEvent(SpeechEventType.START_OF_SPEECH))
                 elif event.type == VADEventType.END_OF_SPEECH:
-                    speaking = False
-                    held_end = time.time() - event.silence_duration - event.inference_duration
-                    pending += 1
-                    clips.send_nowait((event, held_end))
-                    if timer is not None:
-                        timer.cancel()
-                    timer = asyncio.get_running_loop().call_later(
-                        self._max_transcript_wait, _emit_end
+                    speech_end_time = (
+                        time.time() - event.silence_duration - event.inference_duration
                     )
+                    pending_end.clip_closed(speech_end_time)
+                    clips.send_nowait((event, speech_end_time))
+            pending_end.speech_reset()
+
+        async def _forward_segment(vad_stream: VADStream) -> None:
+            async for item in self._input_ch:
+                if isinstance(item, self._FlushSentinel):
+                    break
+                vad_stream.push_frame(item)
+            vad_stream.end_input()
+
+        async def _read_segments() -> None:
+            nonlocal vad_stream
+            while True:
+                vad_stream = self._vad.stream()
+                segment_tasks = [
+                    asyncio.create_task(_forward_segment(vad_stream), name="forward_segment"),
+                    asyncio.create_task(_read_vad(vad_stream), name="read_vad"),
+                ]
+                try:
+                    # A flush may reset VAD without END. End and drain this stream
+                    # before resetting our speaking state or forwarding later audio.
+                    # This is an ordered reset using only the public VAD interface.
+                    await asyncio.gather(*segment_tasks)
+                finally:
+                    await utils.aio.cancel_and_wait(*segment_tasks)
+                    await vad_stream.aclose()
+                    vad_stream = None
+                if self._input_ch.closed and self._input_ch.qsize() == 0:
+                    break
             clips.close()
 
         async def _transcribe() -> None:
-            nonlocal pending
             async for event, speech_end_time in clips:
-                result = await self._wrapped_stt.recognize(
-                    buffer=utils.merge_frames(event.frames),
-                    language=self._language,
-                    conn_options=self._wrapped_stt_conn_options,
-                )
+                try:
+                    result = await self._wrapped_stt.recognize(
+                        buffer=utils.merge_frames(event.frames),
+                        language=self._language,
+                        conn_options=self._wrapped_stt_conn_options,
+                    )
+                except Exception:
+                    pending_end.recognition_failed()
+                    raise
                 if result.alternatives and result.alternatives[0].text:
                     self._event_ch.send_nowait(
                         SpeechEvent(
@@ -270,21 +366,22 @@ class StreamAdapterWrapper(RecognizeStream):
                             ),
                         )
                     )
-                pending -= 1
-                if pending == 0:
-                    _emit_end()
+                pending_end.recognition_finished()
 
         tasks = [
-            asyncio.create_task(_read_vad(), name="read_vad"),
+            asyncio.create_task(_read_segments(), name="read_segments"),
             asyncio.create_task(_transcribe(), name="transcribe"),
         ]
+        group = asyncio.gather(*tasks)
         try:
-            await asyncio.gather(*tasks)
-            # Graceful input completion drains recognition before releasing a held end.
-            speaking = False
-            _emit_end()
+            # Cancel each worker once, so cancellation cannot interrupt the VAD
+            # reader's own asynchronous cleanup with a second cancellation.
+            await asyncio.shield(group)
         finally:
-            if timer is not None:
-                timer.cancel()
+            pending_end.close()
             await utils.aio.cancel_and_wait(*tasks)
+            await asyncio.gather(group, return_exceptions=True)
+            # Cancellation may have arrived during a normal segment's cleanup.
+            if vad_stream is not None:
+                await vad_stream.aclose()
             clips.close()
