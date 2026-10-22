@@ -22,6 +22,10 @@ DEFAULT_API_URL = "https://api.agenthuman.com/v1"
 # Whole-request limit, so a stalled response can't hang start(). Above the connect timeout:
 # creating a session from an image URL first converts the image (~10 s on first use).
 _REQUEST_TIMEOUT = 60.0
+# Failures that prove the request never reached the API, so retrying can't create a second
+# session. After the request is sent (read timeout, dropped connection, ...) the session may
+# already exist: creating a session also starts the avatar, and there is no idempotency key.
+_NOT_SENT_ERRORS = (aiohttp.ClientConnectorError, aiohttp.ConnectionTimeoutError)
 
 
 class AgentHumanAPI:
@@ -117,9 +121,17 @@ class AgentHumanAPI:
                             )
                         return await response.json()
                 except Exception as e:
-                    if isinstance(e, APIStatusError) and not e.retryable:
+                    if isinstance(e, APIStatusError):
+                        # the API answered, so no session was handed out
+                        if not e.retryable:
+                            raise APIConnectionError(
+                                f"Failed to call AgentHuman API at {url} with non-retryable error",
+                                retryable=False,
+                            ) from e
+                    elif not isinstance(e, _NOT_SENT_ERRORS):
                         raise APIConnectionError(
-                            f"Failed to call AgentHuman API at {url} with non-retryable error",
+                            f"Failed to call AgentHuman API at {url}; not retried, as the session "
+                            "may have been created",
                             retryable=False,
                         ) from e
 

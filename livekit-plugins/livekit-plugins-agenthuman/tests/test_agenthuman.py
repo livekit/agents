@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import aiohttp
 import pytest
 from typing_extensions import Self
 
@@ -122,10 +123,10 @@ async def test_create_session_omits_unset_aspect_ratio() -> None:
     assert "aspect_ratio" not in session.requests[0]["json"]
 
 
-async def test_create_session_retries_server_errors() -> None:
+async def test_create_session_retries_errors_before_a_session_exists() -> None:
     session = _Session(
-        _Response(503, {"error": "busy"}),
-        APIConnectionError("connection reset"),
+        _Response(503, {"error": "busy"}),  # the API answered: no session was created
+        aiohttp.ConnectionTimeoutError(),  # never connected: the request wasn't sent
         _Response(200, {"session": {"session_id": "sess_1"}}),
     )
 
@@ -136,6 +137,24 @@ async def test_create_session_retries_server_errors() -> None:
         == "sess_1"
     )
     assert len(session.requests) == 3  # 1 attempt + max_retry (2) retries
+
+
+@pytest.mark.parametrize(
+    "error",
+    [TimeoutError(), aiohttp.SocketTimeoutError(), aiohttp.ServerDisconnectedError()],
+    ids=["total-timeout", "read-timeout", "disconnected"],
+)
+async def test_create_session_does_not_retry_once_the_request_was_sent(error: Exception) -> None:
+    # the API may have created the session already: a retry would start a second avatar
+    session = _Session(error, _Response(200, {"session": {"session_id": "sess_2"}}))
+
+    with pytest.raises(APIConnectionError, match="not retried") as exc_info:
+        await _api(session).create_session(
+            avatar="avat_1", livekit_url="wss://lk", livekit_token="t"
+        )
+
+    assert not exc_info.value.retryable
+    assert len(session.requests) == 1
 
 
 async def test_create_session_does_not_retry_client_errors() -> None:
