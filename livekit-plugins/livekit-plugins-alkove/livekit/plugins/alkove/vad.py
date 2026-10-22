@@ -203,7 +203,8 @@ class VADStream(agents.vad.VADStream):
                 )
             recent.push(pcm)
             if onset is not None:
-                speech.append(pcm[: max(0, room)])
+                if room > 0:
+                    speech.append(pcm[:room])
                 room -= len(pcm)
                 if room < 0:
                     capped()
