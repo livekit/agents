@@ -2625,8 +2625,12 @@ class AgentActivity(RecognitionHooks):
             return
 
         # end of turn reuses an attempt whose transcript differs only in formatting
-        if self._preemptive_generation is not None and _transcripts_equivalent(
-            self._preemptive_generation.info.new_transcript, info.new_transcript
+        if (
+            self._preemptive_generation is not None
+            and self._preemptive_generation.speech_handle._error is None
+            and _transcripts_equivalent(
+                self._preemptive_generation.info.new_transcript, info.new_transcript
+            )
         ):
             return
 
@@ -2915,7 +2919,8 @@ class AgentActivity(RecognitionHooks):
             # make sure the on_user_turn_completed didn't change some request parameters
             # otherwise invalidate the preemptive generation
             if (
-                _transcripts_equivalent(
+                preemptive.speech_handle._error is None
+                and _transcripts_equivalent(
                     preemptive.info.new_transcript, user_message.raw_text_content
                 )
                 and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
@@ -2938,7 +2943,7 @@ class AgentActivity(RecognitionHooks):
             else:
                 logger.warning(
                     "preemptive generation invalidated after `on_user_turn_completed` because "
-                    "the transcript, chat context, tools, or tool choice changed",
+                    "it failed, or the transcript, chat context, tools, or tool choice changed",
                 )
                 discarded_preemptive = preemptive.speech_handle
                 preemptive.speech_handle._cancel()

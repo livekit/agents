@@ -2229,15 +2229,16 @@ def test_preemptive_transcripts_equivalent(preflight: str, final: str, expected:
 
 
 @pytest.mark.parametrize(
-    "revision, restarted",
+    "revision, failed, restarted",
     [
-        ("Could you tell me the opening hours?", False),
-        ("could you tell me the opening hours.", False),
-        ("Could you tell me the opening hours today?", True),
+        ("Could you tell me the opening hours?", False, False),
+        ("could you tell me the opening hours.", False, False),
+        ("Could you tell me the opening hours today?", False, True),
+        ("Could you tell me the opening hours?", True, True),
     ],
 )
-async def test_preemptive_generation_restarts_only_on_new_words(
-    revision: str, restarted: bool
+async def test_preemptive_generation_restarts_only_on_new_words_or_failure(
+    revision: str, failed: bool, restarted: bool
 ) -> None:
     session = AgentSession(llm=FakeLLM())
     await session.start(agent=Agent(instructions="answer the caller"))
@@ -2254,6 +2255,8 @@ async def test_preemptive_generation_restarts_only_on_new_words(
         )
         first = activity._preemptive_generation
         assert first is not None
+        if failed:
+            first.speech_handle._error = RuntimeError("llm failed")
 
         activity.on_preemptive_generation(
             _PreemptiveGenerationInfo(
