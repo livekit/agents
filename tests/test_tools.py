@@ -572,6 +572,62 @@ class TestToolExecution:
         assert metadata.is_required()
         assert metadata.description is None
 
+    def test_field_as_parameter_default(self):
+        limit_field = Field(10, description="max rows")
+        tags_field = Field(default_factory=list)
+        offset_field = Field(0)
+
+        @function_tool
+        async def search(
+            query: str = Field(..., description="search text"),
+            limit: int = limit_field,
+            tags: list[str] = tags_field,
+            offset: Annotated[int, Field(ge=0)] = offset_field,
+        ) -> str:
+            """Search.
+
+            Args:
+                tags: Tags to match.
+            """
+            return query
+
+        for _ in range(2):
+            model = function_arguments_to_pydantic_model(search)
+            parsed = model(query="mug")
+            assert parsed.limit == 10
+            assert parsed.tags == []
+            with pytest.raises(ValidationError):
+                model()
+            props = model.model_json_schema()["properties"]
+            assert props["query"]["description"] == "search text"
+            assert props["limit"]["description"] == "max rows"
+            assert props["limit"]["default"] == 10
+            assert props["tags"]["description"] == "Tags to match."
+            assert props["offset"]["minimum"] == 0
+            assert parsed.offset == 0
+        assert limit_field.default == 10
+        assert limit_field.annotation is None
+        assert limit_field.metadata == []
+        assert offset_field.metadata == []
+
+    async def test_field_as_parameter_default_execution(self):
+        @function_tool
+        async def search(
+            query: str, max_price: int | None = Field(None, description="max price")
+        ) -> str:
+            """Search products."""
+            return query
+
+        args, kwargs = prepare_function_arguments(fnc=search, json_arguments='{"query": "mug"}')
+        assert args == ("mug", None)
+        args, kwargs = prepare_function_arguments(
+            fnc=search, json_arguments='{"query": "mug", "max_price": null}'
+        )
+        assert args == ("mug", None)
+
+        schema = build_strict_openai_schema(search)["function"]["parameters"]
+        assert schema["properties"]["max_price"]["description"] == "max price"
+
     async def test_tool_execution(self):
         args, kwargs = prepare_function_arguments(
             fnc=mock_tool_1, json_arguments='{"arg1": "test", "opt_arg2": "test2"}'
