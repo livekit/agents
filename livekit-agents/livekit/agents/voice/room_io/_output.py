@@ -382,10 +382,16 @@ class _ParticipantLegacyTranscriptionOutput:
         self,
         participant: rtc.Participant | str | None,
     ) -> None:
+        # finalize the open segment for the participant it was captured for before the
+        # identity and track are replaced; flush() snapshots them for its publish task
+        self.flush()
+
         self._participant_identity = (
             participant.identity if isinstance(participant, rtc.Participant) else participant
         )
         self._represented_by = self._participant_identity
+        # the track belongs to the previous participant and cannot carry over
+        self._track_id = None
         if self._participant_identity is None:
             return
 
@@ -404,7 +410,6 @@ class _ParticipantLegacyTranscriptionOutput:
                     if self._track_id is not None:
                         break
 
-        self.flush()
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -434,7 +439,13 @@ class _ParticipantLegacyTranscriptionOutput:
         # expression is dropped here — the deprecated rtc Transcription API has no
         # attribute channel (the stream-based output carries lk.expression instead).
         clean_text = strip_all_markup(self._pushed_text)
-        await self._publish_transcription(self._current_id, clean_text, final=False)
+        await self._publish_transcription(
+            self._current_id,
+            clean_text,
+            final=False,
+            participant_identity=self._represented_by or self._participant_identity,
+            track_id=self._track_id,
+        )
 
     @utils.log_exceptions(logger=logger)
     def flush(self) -> None:
@@ -442,8 +453,16 @@ class _ParticipantLegacyTranscriptionOutput:
             return
 
         clean_text = strip_all_markup(self._pushed_text)
+        # snapshot the identity and track now: the task runs later, after set_participant
+        # may have replaced them
         self._flush_task = asyncio.create_task(
-            self._publish_transcription(self._current_id, clean_text, final=True)
+            self._publish_transcription(
+                self._current_id,
+                clean_text,
+                final=True,
+                participant_identity=self._represented_by or self._participant_identity,
+                track_id=self._track_id,
+            )
         )
         self._reset_state()
 
@@ -469,8 +488,16 @@ class _ParticipantLegacyTranscriptionOutput:
 
         return needed
 
-    async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
-        if self._participant_identity is None or self._track_id is None:
+    async def _publish_transcription(
+        self,
+        id: str,
+        text: str,
+        final: bool,
+        *,
+        participant_identity: str | None,
+        track_id: str | None,
+    ) -> None:
+        if participant_identity is None or track_id is None:
             return
 
         # Gate here, not in capture_text: every legacy publish carries the whole accumulated
@@ -482,8 +509,8 @@ class _ParticipantLegacyTranscriptionOutput:
             return
 
         transcription = rtc.Transcription(
-            participant_identity=self._represented_by or self._participant_identity,
-            track_sid=self._track_id,
+            participant_identity=participant_identity,
+            track_sid=track_id,
             segments=[
                 rtc.TranscriptionSegment(
                     id=id,
@@ -559,6 +586,9 @@ class _ParticipantStreamTranscriptionOutput:
         self._room.on("track_published", self._on_track_published)
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_atask: asyncio.Task[None] | None = None
+        # the segment's writer while `_create_text_writer` is still awaiting the room; the
+        # writer does not exist yet, so flush() hands this task over instead of a writer
+        self._writer_atask: asyncio.Task[rtc.TextStreamWriter | None] | None = None
         self._closed = False
 
         self._reset_state()
@@ -568,6 +598,10 @@ class _ParticipantStreamTranscriptionOutput:
         self,
         participant: rtc.Participant | str | None,
     ) -> None:
+        # finalize the open segment for the participant it was captured for before the
+        # identity and track are replaced; flush() snapshots them for its publish task
+        self.flush()
+
         self._participant_identity = (
             participant.identity if isinstance(participant, rtc.Participant) else participant
         )
@@ -580,7 +614,6 @@ class _ParticipantStreamTranscriptionOutput:
             # track id is optional for TextStream when audio is not published
             self._track_id = None
 
-        self.flush()
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -614,8 +647,12 @@ class _ParticipantStreamTranscriptionOutput:
         self,
         attributes: dict[str, str] | None = None,
         extra: dict[str, str] | None = None,
+        *,
+        sender_identity: str | None = None,
+        segment_id: str | None = None,
     ) -> rtc.TextStreamWriter:
-        assert self._participant_identity is not None, "participant_identity is not set"
+        identity = sender_identity or self._participant_identity
+        assert identity is not None, "participant_identity is not set"
 
         if not attributes:
             attributes = {
@@ -623,7 +660,7 @@ class _ParticipantStreamTranscriptionOutput:
             }
             if self._track_id:
                 attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
-        attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] = self._current_id
+        attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] = segment_id or self._current_id
         # overlaid rather than replacing, so the caller can add a key without
         # dropping the transcription attributes the protocol requires
         if extra:
@@ -635,9 +672,46 @@ class _ParticipantStreamTranscriptionOutput:
 
         return await self._room.local_participant.stream_text(
             topic=TOPIC_TRANSCRIPTION,
-            sender_identity=self._participant_identity,
+            sender_identity=identity,
             attributes=attributes,
         )
+
+    async def _open_text_writer(
+        self,
+        payload: str,
+        *,
+        sender_identity: str | None,
+        segment_id: str,
+        track_id: str | None,
+        extra: dict[str, str] | None,
+    ) -> rtc.TextStreamWriter | None:
+        """Open this segment's writer and write its first chunk, as one awaitable unit.
+
+        Creating the writer awaits the room, so `set_participant()` can replace the identity,
+        track and segment state before the writer exists. The caller snapshots them, and the
+        writer is only adopted while this is still the segment that opened it: otherwise the
+        flush task (which awaits this task) closes it as that segment's final.
+        """
+        attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "false"}
+        if track_id:
+            attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = track_id
+
+        try:
+            writer = await self._create_text_writer(
+                attributes,
+                extra,
+                sender_identity=sender_identity,
+                segment_id=segment_id,
+            )
+            await writer.write(payload)
+        except Exception as e:
+            logger.warning("failed to publish agent transcription to room: %s", e)
+            return None
+
+        if self._capturing and self._current_id == segment_id:
+            self._writer = writer
+
+        return writer
 
     @utils.log_exceptions(logger=logger)
     async def capture_text(self, text: str) -> None:
@@ -671,11 +745,22 @@ class _ParticipantStreamTranscriptionOutput:
                         # the leading expression is stripped before any visible text, so it is
                         # already known here. Put it on the opening header as well as the closing
                         # one, or a frontend can't colour the turn until the agent stops talking.
-                        self._writer = await self._create_text_writer(
-                            extra=expression_attribute(self._stripper.tags)
+                        # Opening the writer awaits the room, so set_participant() can replace the
+                        # identity, track and segment state while it does not exist yet. Open it
+                        # in one task that flush() hands over to, so a switch mid-open closes this
+                        # segment's writer instead of leaking it into the next segment.
+                        self._writer_atask = asyncio.create_task(
+                            self._open_text_writer(
+                                payload,
+                                sender_identity=self._participant_identity,
+                                segment_id=self._current_id,
+                                track_id=self._track_id,
+                                extra=expression_attribute(self._stripper.tags),
+                            )
                         )
-
-                    await self._writer.write(payload)
+                        await self._writer_atask
+                    else:
+                        await self._writer.write(payload)
                 else:  # always create a new writer
                     tmp_writer = await self._create_text_writer()
                     await tmp_writer.write(payload)
@@ -688,14 +773,25 @@ class _ParticipantStreamTranscriptionOutput:
         writer: rtc.TextStreamWriter | None,
         extra_attributes: dict[str, str] | None = None,
         pending_text: str = "",
+        *,
+        sender_identity: str,
+        segment_id: str,
+        track_id: str | None,
+        latest_text: str,
+        writer_atask: asyncio.Task[rtc.TextStreamWriter | None] | None = None,
     ) -> None:
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
-        if self._track_id:
-            attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
+        if track_id:
+            attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = track_id
         for key, val in (extra_attributes or {}).items():
             attributes.setdefault(key, val)
 
         try:
+            if writer is None and writer_atask is not None:
+                # the switch landed while this segment's writer was still being opened: take
+                # the writer that segment actually opened instead of leaving it unclosed
+                writer = await writer_atask
+
             if self._room.isconnected():
                 if self._is_delta_stream:
                     if writer:
@@ -703,8 +799,12 @@ class _ParticipantStreamTranscriptionOutput:
                             await writer.write(pending_text)
                         await writer.aclose(attributes=attributes)
                 else:
-                    tmp_writer = await self._create_text_writer(attributes=attributes)
-                    await tmp_writer.write(self._latest_text)
+                    tmp_writer = await self._create_text_writer(
+                        attributes=attributes,
+                        sender_identity=sender_identity,
+                        segment_id=segment_id,
+                    )
+                    await tmp_writer.write(latest_text)
                     await tmp_writer.aclose()
         except Exception as e:
             logger.warning("failed to publish agent transcription to room: %s", e)
@@ -719,6 +819,8 @@ class _ParticipantStreamTranscriptionOutput:
         self._capturing = False
         curr_writer = self._writer
         self._writer = None
+        # a writer still being opened belongs to this segment as well
+        curr_writer_atask, self._writer_atask = self._writer_atask, None
 
         if self._is_delta_stream:
             remaining = self._stripper.flush()
@@ -728,8 +830,19 @@ class _ParticipantStreamTranscriptionOutput:
             tags = self._segment_tags
 
         pending_text = self._encode(remaining) if remaining else ""
+        # snapshot the segment state: the task runs later, after set_participant may have
+        # replaced the participant and reset this state
         self._flush_atask = asyncio.create_task(
-            self._flush_task(curr_writer, expression_attribute(tags), pending_text)
+            self._flush_task(
+                curr_writer,
+                expression_attribute(tags),
+                pending_text,
+                sender_identity=self._participant_identity,
+                segment_id=self._current_id,
+                track_id=self._track_id,
+                latest_text=self._latest_text,
+                writer_atask=curr_writer_atask,
+            )
         )
 
     async def aclose(self) -> None:
@@ -742,6 +855,10 @@ class _ParticipantStreamTranscriptionOutput:
 
         if self._flush_atask:
             await self._flush_atask
+
+        if self._writer_atask:
+            # a writer still being opened can only be closed once it exists
+            await self._writer_atask
 
         if self._writer:
             writer = self._writer
