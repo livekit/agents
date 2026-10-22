@@ -21,7 +21,7 @@ import socket
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry import context as otel_context, trace
 
@@ -46,6 +46,9 @@ from .proto import (
     ShuttingDown,
     StartJobRequest,
 )
+
+if TYPE_CHECKING:
+    from ..voice.remote_session import SessionHost
 
 # Defensive timeout for AgentSession.aclose() during job shutdown. Hardcoded for now
 # as a guardrail against close paths that hang indefinitely. If aclose() does not
@@ -472,6 +475,11 @@ class _JobProc:
                 trace_utils.record_exception(span, e)
                 logger.exception("error in job_ctx._on_session_end")
 
+        if (session_host := self._job_ctx._session_host) is not None:
+            if self._job_ctx.simulation_context() is not None:
+                await self._wait_for_simulation_finalize(session_host)
+            await session_host.aclose()
+
         await self._client.send(ShuttingDown())
 
         logger.debug(
@@ -508,6 +516,36 @@ class _JobProc:
             await asyncio.gather(*shutdown_tasks)
         except Exception:
             logger.exception("error while shutting down the job")
+
+    async def _wait_for_simulation_finalize(self, session_host: SessionHost) -> None:
+        # the simulator asks for the on_simulation_end verdict only once it has judged
+        # the run, which can be well after the agent ended the call; it can no longer
+        # ask once it has left the room
+        room = self._room
+        simulator_left = asyncio.Event()
+
+        def _check_simulator_left(*_: Any) -> None:
+            if not room.isconnected() or not room.remote_participants:
+                simulator_left.set()
+
+        room.on("participant_disconnected", _check_simulator_left)
+        room.on("disconnected", _check_simulator_left)
+        _check_simulator_left()
+
+        finalized = asyncio.create_task(session_host.wait_for_simulation_finalized())
+        left = asyncio.create_task(simulator_left.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {finalized, left},
+                timeout=self._session_end_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                logger.warning("simulator did not finalize within %.1fs", self._session_end_timeout)
+        finally:
+            room.off("participant_disconnected", _check_simulator_left)
+            room.off("disconnected", _check_simulator_left)
+            await aio.cancel_and_wait(finalized, left)
 
 
 def _is_framework_callback(fnc: Any) -> bool:
