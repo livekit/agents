@@ -341,7 +341,7 @@ class TestSessionHostEvents:
         session.off = MagicMock()
         return session
 
-    def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
+    def test_attach(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
         subscribed = {call.args[0] for call in mock_session.on.call_args_list}
@@ -736,7 +736,7 @@ class TestSessionHostRequests:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_aclose_unregisters_events(self, transport: InMemoryTransport) -> None:
+    async def test_aclose_detaches(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
         host.register_session(session)
