@@ -93,6 +93,28 @@ class RealtimeModel(_openai.RealtimeModel):
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        """Create an Eleven Realtime model.
+
+        Args:
+            model: Realtime model, ``"eleven_realtime_v1_mini"`` or ``"eleven_realtime_v1_max"``.
+                Defaults to ``"eleven_realtime_v1_mini"``.
+            voice: A default voice name such as ``"brian"``, or an ElevenLabs voice ID.
+                Defaults to ``"brian"``.
+            language: Conversation language for transcription, speech and replies, e.g. ``"en"``.
+                Defaults to the server's default (``"en"``).
+            turn_detection: Semantic VAD settings. Defaults to medium eagerness.
+            modalities: ``["audio"]`` or ``["text"]``. Defaults to audio.
+            tool_choice: Tool selection policy.
+            max_duration_seconds: Seconds before the server ends the session, 60 to 7200.
+                Defaults to the server's default (600).
+            api_key: ElevenLabs API key. Defaults to the ``ELEVEN_API_KEY`` environment variable.
+            base_url: WebSocket endpoint, e.g. for data residency. Defaults to
+                ``wss://api.elevenlabs.io/v1/convai/realtime``.
+            http_session: Optional aiohttp session to reuse.
+            conn_options: Connection timeout and retry options.
+
+        Model, voice, language and turn detection lock once the conversation starts.
+        """
         resolved_api_key = api_key or os.environ.get(API_KEY_ENV)
         if not resolved_api_key:
             raise ValueError(
@@ -150,6 +172,8 @@ class RealtimeModel(_openai.RealtimeModel):
 
 
 class RealtimeSession(_openai.RealtimeSession):
+    """One conversation on the Eleven Realtime API, created by ``RealtimeModel.session()``."""
+
     def __init__(self, realtime_model: RealtimeModel) -> None:
         self._el_model = realtime_model
         self._el_started = False
