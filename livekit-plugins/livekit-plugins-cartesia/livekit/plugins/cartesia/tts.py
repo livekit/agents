@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import weakref
@@ -32,6 +33,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    create_api_error_from_response,
     tokenize,
     tts,
     utils,
@@ -237,8 +239,11 @@ class TTS(tts.TTS):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             # authentication headers can appear in RequestInfo.
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+            raise create_api_error_from_response(
+                e.message,
+                status=e.status,
+                headers=e.headers,
+                request_id_header=REQUEST_ID_HEADER,
             ) from None
         except Exception as e:
             # transport errors can contain credentials in URLs.
@@ -389,6 +394,7 @@ class ChunkedStream(tts.ChunkedStream):
         json = _to_cartesia_options(self._opts, streaming=False)
         json["transcript"] = self._input_text
 
+        error_body: str | None = None
         try:
             async with self._tts._ensure_session().post(
                 self._opts.get_http_url("/tts/bytes"),
@@ -400,6 +406,10 @@ class ChunkedStream(tts.ChunkedStream):
                 json=json,
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
+                if not resp.ok:
+                    # best effort: a failed read must not change the error raised below
+                    with contextlib.suppress(Exception):
+                        error_body = await resp.text(errors="replace")
                 resp.raise_for_status()
 
                 output_emitter.initialize(
@@ -416,8 +426,13 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+            raise create_api_error_from_response(
+                e.message,
+                status=e.status,
+                headers=e.headers,
+                request_id_header=REQUEST_ID_HEADER,
+                body=error_body,
+                secret=self._opts.api_key,
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
@@ -585,8 +600,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+            # a failed handshake; RequestInfo carries the API key, so only response fields are kept.
+            raise create_api_error_from_response(
+                e.message,
+                status=e.status,
+                headers=e.headers,
+                request_id_header=REQUEST_ID_HEADER,
             ) from None
         except APIError:
             raise

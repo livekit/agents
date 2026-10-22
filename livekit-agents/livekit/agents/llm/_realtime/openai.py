@@ -1112,6 +1112,13 @@ class RealtimeSession(
             )
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
+        except aiohttp.WSServerHandshakeError as e:
+            # RequestInfo carries the API key, so the message keeps only response fields
+            request_id = e.headers.get("x-request-id") if e.headers else None
+            raise APIConnectionError(
+                f"{self._realtime_model._provider_label} client connection error"
+                f" (status_code={e.status}, request_id={request_id})"
+            ) from e
         except aiohttp.ClientError as e:
             raise APIConnectionError(
                 f"{self._realtime_model._provider_label} client connection error"
@@ -1185,8 +1192,12 @@ class RealtimeSession(
                         return
 
                     # this will trigger a reconnection
+                    detail = f"close_code={ws_conn.close_code}"
+                    # only a CLOSE frame carries the server's close reason
+                    if msg.type == aiohttp.WSMsgType.CLOSE and msg.extra:
+                        detail += f", reason={msg.extra!r}"
                     raise APIConnectionError(
-                        message=f"{self._realtime_model._provider_label} connection closed unexpectedly"
+                        message=f"{self._realtime_model._provider_label} connection closed unexpectedly ({detail})"
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
