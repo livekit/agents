@@ -389,12 +389,13 @@ class SpeechStream(stt.SpeechStream):
                     if self._session.closed:
                         return
                     # The heartbeat closes the socket when a ping goes unanswered, and
-                    # that arrives here rather than as a close frame. Treating it as an
-                    # unexpected message type stepped over it and discarded the reason,
-                    # which only survives on ws.exception().
-                    logger.warning("simplismart connection lost: %r", ws.exception())
-                    self._reconnect_event.set()
-                    return
+                    # that arrives here rather than as a close frame. Raise so the base
+                    # SpeechStream retry budget / FallbackAdapter can fail over —
+                    # silently reconnecting here loops forever into the same dead peer
+                    # (#8031). Matches deepgram/telnyx/smallestai.
+                    raise APIConnectionError(
+                        "simplismart connection lost"
+                    ) from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
                     logger.warning("unexpected simplismart message type %s", msg.type)
