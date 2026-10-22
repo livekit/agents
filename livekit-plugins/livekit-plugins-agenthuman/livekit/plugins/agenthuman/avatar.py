@@ -50,7 +50,8 @@ class AvatarSession(BaseAvatarSession):
             avatar_image_url: Publicly accessible image to animate instead of a saved avatar.
                 Falls back to ``AGENTHUMAN_IMAGE_URL``. Provide exactly one of ``avatar_id``
                 and ``avatar_image_url``.
-            aspect_ratio: Aspect ratio of the avatar video, e.g. ``"3:4"`` or ``"16:9"``.
+            aspect_ratio: Aspect ratio of the avatar video: ``"4:3"`` (default), ``"3:4"``
+                or ``"1:1"``.
             api_url: AgentHuman API URL. Falls back to ``AGENTHUMAN_API_URL``.
             api_key: AgentHuman API key. Falls back to ``AGENTHUMAN_API_KEY``.
             avatar_participant_identity: Identity of the avatar participant in the room.
