@@ -80,3 +80,36 @@ async def test_forced_tool_choice_warning_logged_once(caplog: pytest.LogCaptureF
     warnings = [r for r in caplog.records if "forced tool_choice" in r.getMessage()]
     assert len(warnings) == 1
     assert [r["tool_choice"] for r in requests] == [{"type": "auto"}] * 3
+
+
+async def _request(llm_kwargs: dict[str, Any], **chat_kwargs: Any) -> dict[str, Any]:
+    requests: list[dict[str, Any]] = []
+    instance = _make_llm("claude-sonnet-4-6", requests, **llm_kwargs)
+    await instance.chat(chat_ctx=ChatContext(), **chat_kwargs).collect()
+    return requests[0]
+
+
+async def test_parallel_tool_calls_sent_without_tool_choice() -> None:
+    expected = {"type": "auto", "disable_parallel_tool_use": True}
+
+    # passed to chat()
+    request = await _request({}, tools=[get_weather], parallel_tool_calls=False)
+    assert request.get("tool_choice") == expected
+
+    # set on the LLM
+    request = await _request({"parallel_tool_calls": False}, tools=[get_weather])
+    assert request.get("tool_choice") == expected
+
+
+async def test_tool_choice_omitted_when_not_needed() -> None:
+    # neither tool_choice nor parallel_tool_calls given
+    assert "tool_choice" not in await _request({}, tools=[get_weather])
+
+    # no tools for parallel_tool_calls to apply to
+    assert "tool_choice" not in await _request({"parallel_tool_calls": False})
+
+    # "none" drops the tools, and its tool_choice has no disable_parallel_tool_use field
+    request = await _request(
+        {"parallel_tool_calls": False}, tools=[get_weather], tool_choice="none"
+    )
+    assert "tool_choice" not in request
