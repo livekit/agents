@@ -341,9 +341,9 @@ class TestSessionHostEvents:
         session.off = MagicMock()
         return session
 
-    def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
+    def test_attach(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
-        host.register_session(mock_session)
+        host.attach(mock_session)
         subscribed = {call.args[0] for call in mock_session.on.call_args_list}
         assert subscribed == FORWARDED_EVENTS
 
@@ -612,7 +612,7 @@ class TestSessionHostRequests:
     async def test_ping_pong(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -632,7 +632,7 @@ class TestSessionHostRequests:
     async def test_get_chat_history(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -653,7 +653,7 @@ class TestSessionHostRequests:
     async def test_get_agent_info(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -675,7 +675,7 @@ class TestSessionHostRequests:
     async def test_get_session_state(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -698,7 +698,7 @@ class TestSessionHostRequests:
     async def test_get_session_usage(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -719,7 +719,7 @@ class TestSessionHostRequests:
         host = SessionHost(transport)
         session = self._make_mock_session()
         session.history = property(lambda s: (_ for _ in ()).throw(RuntimeError("broken")))
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -736,10 +736,10 @@ class TestSessionHostRequests:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_aclose_unregisters_events(self, transport: InMemoryTransport) -> None:
+    async def test_aclose_detaches(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
         await host.aclose()
         unsubscribed = {call.args[0] for call in session.off.call_args_list}

@@ -1036,7 +1036,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         audio_input=c._tcp_audio_input,
                         audio_output=c._tcp_audio_output,
                     )
-                    self._session_host.register_session(self)
+                    self._session_host.attach(self)
             elif is_given(room) and not self._room_io:
                 room_options = room_io.RoomOptions._ensure_options(
                     room_options,
@@ -1078,7 +1078,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     # only the primary session can have a session host
                     transport = RoomSessionTransport(room)
                     self._session_host = SessionHost(transport)
-                    self._session_host.register_session(self)
+                    self._session_host.attach(self)
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:

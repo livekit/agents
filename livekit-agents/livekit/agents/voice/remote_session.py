@@ -361,11 +361,17 @@ class SessionHost:
         # events are emitted from sync callbacks and nobody awaits them, so they
         # queue here and one long-lived writer drains them in emission order.
         # Built here rather than in start() so events emitted between
-        # register_session() and start() queue up instead of being dropped.
+        # attach() and start() queue up instead of being dropped.
         self._event_ch = utils.aio.Chan[agent_pb.AgentSessionMessage]()
         self._write_task: asyncio.Task[None] | None = None
 
-    def register_session(self, session: AgentSession) -> None:
+    @property
+    def session(self) -> AgentSession | None:
+        """The session this host currently serves, if any."""
+        return self._session
+
+    def attach(self, session: AgentSession) -> None:
+        """Serve ``session``: forward its events and route session requests to it."""
         self._session = session
         if not self._events_registered:
             self._events_registered = True
@@ -382,6 +388,24 @@ class SessionHost:
             session.on("debug_message", self._on_debug_message)
             session.on("close", self._on_close)
 
+    def detach(self) -> None:
+        """Stop serving the attached session; the host itself stays up."""
+        if self._session and self._events_registered:
+            self._events_registered = False
+            self._session.off("agent_state_changed", self._on_agent_state_changed)
+            self._session.off("user_state_changed", self._on_user_state_changed)
+            self._session.off("conversation_item_added", self._on_conversation_item_added)
+            self._session.off("user_input_transcribed", self._on_user_input_transcribed)
+            self._session.off("function_tools_executed", self._on_function_tools_executed)
+            self._session.off("tool_execution_updated", self._on_tool_execution_updated)
+            self._session.off("session_usage_updated", self._on_session_usage_updated)
+            self._session.off("overlapping_speech", self._on_overlapping_speech)
+            self._session.off("agent_false_interruption", self._on_agent_false_interruption)
+            self._session.off("error", self._on_error)
+            self._session.off("debug_message", self._on_debug_message)
+            self._session.off("close", self._on_close)
+        self._session = None
+
     async def start(self) -> None:
         if self._started:
             return
@@ -397,20 +421,7 @@ class SessionHost:
             return
         self._started = False
 
-        if self._session and self._events_registered:
-            self._events_registered = False
-            self._session.off("agent_state_changed", self._on_agent_state_changed)
-            self._session.off("user_state_changed", self._on_user_state_changed)
-            self._session.off("conversation_item_added", self._on_conversation_item_added)
-            self._session.off("user_input_transcribed", self._on_user_input_transcribed)
-            self._session.off("function_tools_executed", self._on_function_tools_executed)
-            self._session.off("tool_execution_updated", self._on_tool_execution_updated)
-            self._session.off("session_usage_updated", self._on_session_usage_updated)
-            self._session.off("overlapping_speech", self._on_overlapping_speech)
-            self._session.off("agent_false_interruption", self._on_agent_false_interruption)
-            self._session.off("error", self._on_error)
-            self._session.off("debug_message", self._on_debug_message)
-            self._session.off("close", self._on_close)
+        self.detach()
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
@@ -732,7 +743,9 @@ class SessionHost:
                 pass
 
     async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
-        assert self._session is not None
+        # a detach while this request is in flight must not swap its session out
+        session = self._session
+        assert session is not None
 
         if req.HasField("ping"):
             resp = agent_pb.AgentSessionMessage(
@@ -744,7 +757,7 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("get_chat_history"):
-            items = [encode_chat_item(item) for item in self._session.history.items]
+            items = [encode_chat_item(item) for item in session.history.items]
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
@@ -756,7 +769,7 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("get_agent_info"):
-            agent = self._session.current_agent
+            agent = session.current_agent
             items = [encode_chat_item(item) for item in agent.chat_ctx.items]
             # collapse modality variants for the report; audio-first matches the
             # update_instructions default for voice sessions
@@ -786,12 +799,12 @@ class SessionHost:
                 error = "empty run_input text"
             else:
                 try:
-                    await self._session.interrupt(force=True)
+                    await session.interrupt(force=True)
                 except RuntimeError:
                     pass
 
                 try:
-                    result: RunResult[None] = self._session.run(user_input=text)
+                    result: RunResult[None] = session.run(user_input=text)
                     await result
                     # an empty list is a turn the agent chose to stay silent on, not a
                     # failure: a tool may have told it to say nothing (a close-the-call
@@ -813,9 +826,9 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("get_session_state"):
-            agent = self._session.current_agent
+            agent = session.current_agent
             created_at = Timestamp()
-            started_at = self._session._started_at or time.time()
+            started_at = session._started_at or time.time()
             created_at.FromNanoseconds(int(started_at * 1e9))
 
             resp = agent_pb.AgentSessionMessage(
@@ -823,15 +836,15 @@ class SessionHost:
                     request_id=req.request_id,
                     get_session_state=agent_pb.SessionResponse.GetSessionStateResponse(
                         agent_state=_AGENT_STATE_MAP.get(
-                            self._session.agent_state,
+                            session.agent_state,
                             agent_pb.AS_IDLE,
                         ),
                         user_state=_USER_STATE_MAP.get(
-                            self._session.user_state,
+                            session.user_state,
                             agent_pb.US_LISTENING,
                         ),
                         agent_id=agent.id,
-                        options=_serialize_options(self._session.options),
+                        options=_serialize_options(session.options),
                         created_at=created_at,
                     ),
                 )
@@ -842,8 +855,8 @@ class SessionHost:
             from google.protobuf.struct_pb2 import Struct
 
             rtc_stats = (
-                await self._session._room_io.room.get_rtc_stats()
-                if self._session._room_io is not None
+                await session._room_io.room.get_rtc_stats()
+                if session._room_io is not None
                 else None
             )
             publisher_stats: list[Struct] = []
@@ -881,7 +894,7 @@ class SessionHost:
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     get_session_usage=agent_pb.SessionResponse.GetSessionUsageResponse(
-                        usage=encode_session_usage(self._session.usage),
+                        usage=encode_session_usage(session.usage),
                         created_at=created_at,
                     ),
                 )
@@ -906,8 +919,8 @@ class SessionHost:
             # are applied (presence-tracked booleans), so the client can
             # send a partial update without clobbering the other channels.
             io = req.update_io
-            input_io = self._session.input
-            output_io = self._session.output
+            input_io = session.input
+            output_io = session.output
             if io.HasField("input"):
                 if io.input.HasField("audio_enabled"):
                     input_io.set_audio_enabled(io.input.audio_enabled)
@@ -929,54 +942,57 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("finalize_simulation"):
-            # The simulator's verdict is passed in so on_simulation_end can read it
-            # (ctx.simulator_verdict); the agent records its OWN verdict via
-            # ctx.success()/fail(). Both are reported; this is not an override.
-            user_verdict: (
-                agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None
-            ) = None  # noqa: E501
-            sim_error: str | None = None
-            try:
-                from livekit.protocol import agent_simulation as sim_pb
+            await self._finalize_simulation(req)
 
-                from ..job import get_job_context
-                from ..simulation import SimulationVerdict
+    async def _finalize_simulation(self, req: agent_pb.SessionRequest) -> None:
+        # The simulator's verdict is passed in so on_simulation_end can read it
+        # (ctx.simulator_verdict); the agent records its OWN verdict via
+        # ctx.success()/fail(). Both are reported; this is not an override.
+        user_verdict: (
+            agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None
+        ) = None  # noqa: E501
+        sim_error: str | None = None
+        try:
+            from livekit.protocol import agent_simulation as sim_pb
 
-                jc = get_job_context(required=False)
-                sim_ctx = jc.simulation_context() if jc is not None else None
-                if sim_ctx is not None:
-                    sim_ctx._begin_finalize(
-                        simulator_verdict=SimulationVerdict(
-                            success=req.finalize_simulation.provisional_success,
-                            reason=req.finalize_simulation.provisional_reason,
-                        ),
-                        run=sim_pb.SimulationRun(id=sim_ctx._dispatch.simulation_run_id),
-                    )
-                    fnc = jc._simulation_end_fnc if jc is not None else None
-                    if fnc is not None:
-                        cb_res = fnc(sim_ctx)
-                        if asyncio.iscoroutine(cb_res):
-                            await cb_res
-                    if (uv := sim_ctx.user_verdict) is not None:
-                        user_verdict = (
-                            agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict(
-                                success=uv.success, reason=uv.reason
-                            )
-                        )
-            except Exception as e:
-                sim_error = str(e)
-                logger.exception("error while executing the on_simulation_end callback")
+            from ..job import get_job_context
+            from ..simulation import SimulationVerdict
 
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    error=sim_error,
-                    finalize_simulation=agent_pb.SessionResponse.FinalizeSimulationResponse(
-                        user_verdict=user_verdict,
+            jc = get_job_context(required=False)
+            sim_ctx = jc.simulation_context() if jc is not None else None
+            if sim_ctx is not None:
+                sim_ctx._begin_finalize(
+                    simulator_verdict=SimulationVerdict(
+                        success=req.finalize_simulation.provisional_success,
+                        reason=req.finalize_simulation.provisional_reason,
                     ),
+                    run=sim_pb.SimulationRun(id=sim_ctx._dispatch.simulation_run_id),
                 )
+                fnc = jc._simulation_end_fnc if jc is not None else None
+                if fnc is not None:
+                    cb_res = fnc(sim_ctx)
+                    if asyncio.iscoroutine(cb_res):
+                        await cb_res
+                if (uv := sim_ctx.user_verdict) is not None:
+                    user_verdict = (
+                        agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict(
+                            success=uv.success, reason=uv.reason
+                        )
+                    )
+        except Exception as e:
+            sim_error = str(e)
+            logger.exception("error while executing the on_simulation_end callback")
+
+        resp = agent_pb.AgentSessionMessage(
+            response=agent_pb.SessionResponse(
+                request_id=req.request_id,
+                error=sim_error,
+                finalize_simulation=agent_pb.SessionResponse.FinalizeSimulationResponse(
+                    user_verdict=user_verdict,
+                ),
             )
-            await self._transport.send_message(resp)
+        )
+        await self._transport.send_message(resp)
 
 
 RemoteSessionEventTypes = Literal[
