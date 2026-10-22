@@ -2736,18 +2736,28 @@ class AgentActivity(RecognitionHooks):
             return True
 
         # avoid interruption if the new_transcript is too short
+        min_words = self._session.options.interruption["min_words"]
         if (
             self.stt is not None
             and self._turn_detection != "manual"
             and self._current_speech is not None
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
-            and self._session.options.interruption["min_words"] > 0
-            and len(split_words(info.new_transcript, split_character=True))
-            < self._session.options.interruption["min_words"]
+            and min_words > 0
         ):
-            self._cancel_preemptive_generation()
-            return False
+            word_count = len(split_words(info.new_transcript, split_character=True))
+            if word_count < min_words:
+                # runs once per end of turn, so INFO is not noisy
+                logger.info(
+                    "skipping user input, word count below minimum interruption threshold",
+                    extra={
+                        "word_count": word_count,
+                        "min_words": min_words,
+                        "speech_id": self._current_speech.id,
+                    },
+                )
+                self._cancel_preemptive_generation()
+                return False
 
         # avoid interruption if backchannel is detected with realtime model. an unjudged overlap
         # commits: interrupting the agent is recoverable, discarding a real user turn is not

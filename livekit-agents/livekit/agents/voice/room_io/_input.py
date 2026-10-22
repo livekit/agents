@@ -22,6 +22,9 @@ from .types import NoiseCancellationParams, NoiseCancellationSelector
 
 T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
 
+# how long a linked participant has to give us an accepted track before we warn
+_NO_TRACK_WARNING_DELAY = 10.0
+
 
 class _ParticipantInputStream(Generic[T], ABC):
     """
@@ -67,6 +70,10 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._track_wait_span: trace.Span | None = None
         self._track_wait_started_at: float | None = None
         self._trace_context: otel_context.Context | None = None
+
+        # only audio enables this: a user with no camera is normal, a user with no mic is not
+        self._no_track_warning_enabled = False
+        self._no_track_timer: asyncio.TimerHandle | None = None
 
     def set_trace_context(self, context: otel_context.Context | None) -> None:
         """Parent for the next track-wait span (the session's startup bar), never current."""
@@ -121,11 +128,13 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._participant_identity = participant_identity
         self._close_stream()
         self._end_track_wait()
+        self._cancel_no_track_timer()
 
         if participant_identity is None:
             return
 
         self._begin_track_wait(participant_identity)
+        self._start_no_track_timer(participant_identity)
         participant = (
             participant
             if isinstance(participant, rtc.RemoteParticipant)
@@ -147,6 +156,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._track = None
         self._publication = None
         self._end_track_wait()
+        self._cancel_no_track_timer()
         if stream:
             await stream.aclose()
         if self._processor:
@@ -188,6 +198,41 @@ class _ParticipantInputStream(Generic[T], ABC):
             await self._data_ch.send(frame)
 
         logger.debug("stream closed", extra=extra)
+
+    def _on_no_track(self, participant_identity: str) -> None:
+        self._no_track_timer = None
+        participant = self._room.remote_participants.get(participant_identity)
+        if participant is None:
+            # the participant has not joined, which is a different problem than a missing mic
+            return
+        # INFO, not WARN: a chat-only client with audio input left on never publishes a mic
+        logger.info(
+            "linked participant has no audio track after 10s",
+            extra={
+                trace_types.ATTR_PARTICIPANT_IDENTITY: participant_identity,
+                "published_sources": [
+                    rtc.TrackSource.Name(publication.source)
+                    for publication in participant.track_publications.values()
+                ],
+            },
+        )
+
+    def _start_no_track_timer(self, participant_identity: str) -> None:
+        if not self._no_track_warning_enabled:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # set_participant can run outside the event loop; skip the warning there
+            return
+        self._no_track_timer = loop.call_later(
+            _NO_TRACK_WARNING_DELAY, self._on_no_track, participant_identity
+        )
+
+    def _cancel_no_track_timer(self) -> None:
+        if self._no_track_timer is not None:
+            self._no_track_timer.cancel()
+            self._no_track_timer = None
 
     def _process_frame(self, frame: T) -> None:
         """Hook for subclasses to process frames in-place before forwarding."""
@@ -265,6 +310,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         ):
             return False
 
+        self._cancel_no_track_timer()
         self._close_stream()
         self._stream = self._create_stream(track, participant)
         self._track = track
@@ -353,6 +399,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         )
         AudioInput.__init__(self, label="RoomIO")
         self._track_wait_span_name = "wait_for_audio_track"
+        self._no_track_warning_enabled = True
         if frame_size_ms <= 0:
             raise ValueError("frame_size_ms must be greater than 0")
 
