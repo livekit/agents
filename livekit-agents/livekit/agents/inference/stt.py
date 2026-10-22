@@ -975,6 +975,9 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
+    # a dropped `language_hint` is reported once per stream, not once per seam that finds it
+    _language_hint_reported: bool = False
+
     def __init__(
         self,
         *,
@@ -992,8 +995,6 @@ class SpeechStream(stt.SpeechStream):
         # keyterm extra set while the user is speaking; applied at END_OF_SPEECH (latest wins).
         # inference applies live, but the gateway may reconnect upstream, so defer to a calm moment.
         self._pending_extra: dict[str, Any] | None = None
-        # a dropped `language_hint` is reported once per stream, not once per seam that finds it
-        self._language_hint_reported = False
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._vad: vad.VAD | None = vad_instance
@@ -1074,7 +1075,7 @@ class SpeechStream(stt.SpeechStream):
             return True
         return False
 
-    def _forward_extra(self, extra: dict[str, Any]) -> NotGivenOr[dict[str, Any]]:
+    def _forward_extra(self, extra: dict[str, Any]) -> dict[str, Any]:
         """The user's extra delta, with the running model's framework keyterms folded in when
         the delta sets that model's own keyterm key, so the merge cannot shorten them. Any
         payload deferred to end of speech is left alone so the change is not applied mid-turn."""
