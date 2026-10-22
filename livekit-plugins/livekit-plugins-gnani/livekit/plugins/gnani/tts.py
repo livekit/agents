@@ -55,12 +55,13 @@ from .models import (
     GnaniTTSModels,
     GnaniTTSVoices,
 )
+from .request_id import _generate_request_id
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
 GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
-SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
+SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 
 _DEPRECATED_TTS_KWARGS = frozenset(("http_session",))
@@ -239,11 +240,15 @@ def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
     return payload
 
 
-def _build_headers(opts: GnaniTTSOptions) -> dict[str, str]:
-    return {
+def _build_headers(opts: GnaniTTSOptions, request_id: str | None = None) -> dict[str, str]:
+    headers = {
         "X-API-Key-ID": opts.api_key,
         "Content-Type": "application/json",
+        "X-Source": "livekit",
     }
+    if request_id:
+        headers["X-API-Request-ID"] = request_id
+    return headers
 
 
 def _mime_type(opts: GnaniTTSOptions) -> str:
@@ -266,11 +271,12 @@ class RESTChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        api_request_id = _generate_request_id()
         try:
             async with self._tts._ensure_session().post(
                 url=f"{self._opts.base_url}/api/v1/tts/inference",
                 json=_build_payload(self._opts, self._input_text),
-                headers=_build_headers(self._opts),
+                headers=_build_headers(self._opts, request_id=api_request_id),
                 timeout=aiohttp.ClientTimeout(
                     total=self._conn_options.timeout,
                     sock_connect=self._conn_options.timeout,
@@ -326,11 +332,12 @@ class SSEChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
+        api_request_id = _generate_request_id()
         try:
             async with self._tts._ensure_session().post(
                 url=f"{self._opts.base_url}/api/v1/tts/sse",
                 json=_build_payload(self._opts, self._input_text),
-                headers=_build_headers(self._opts),
+                headers=_build_headers(self._opts, request_id=api_request_id),
                 timeout=aiohttp.ClientTimeout(
                     total=self._conn_options.timeout,
                     sock_connect=self._conn_options.timeout,
@@ -436,11 +443,12 @@ class WebSocketChunkedStream(tts.ChunkedStream):
         import websockets
 
         request_id = utils.shortuuid()
+        api_request_id = _generate_request_id()
         try:
             ws_url = self._build_ws_url()
             async with websockets.connect(
                 ws_url,
-                additional_headers=_build_headers(self._opts),
+                additional_headers=_build_headers(self._opts, request_id=api_request_id),
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
@@ -547,11 +555,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
+        api_request_id = _generate_request_id()
         try:
             ws_url = self._build_ws_url()
             async with websockets.connect(
                 ws_url,
-                additional_headers=_build_headers(self._opts),
+                additional_headers=_build_headers(self._opts, request_id=api_request_id),
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
