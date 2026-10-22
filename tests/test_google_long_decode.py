@@ -31,8 +31,22 @@ pytestmark = pytest.mark.unit
 ARGON = "gemini-4-argon"
 
 
+_open_llms: list[LLM] = []
+
+
+@pytest.fixture(autouse=True)
+async def _close_llms() -> AsyncIterator[None]:
+    # an unclosed genai client schedules its aclose() from __del__, on whichever test's loop
+    # the garbage collector happens to run, and that test then fails its leaked-task check
+    yield
+    while _open_llms:
+        await _open_llms.pop().aclose()
+
+
 def _llm(model: str = ARGON, **kwargs: Any) -> LLM:
-    return LLM(model=model, api_key="test-key", **kwargs)
+    llm = LLM(model=model, api_key="test-key", **kwargs)
+    _open_llms.append(llm)
+    return llm
 
 
 def _response(
