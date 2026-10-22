@@ -424,8 +424,13 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super()._handle_conversion_item_added(event)
 
     def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
-        if event.item_id == "" and self._item_delete_future:
-            event.item_id = list(self._item_delete_future.keys())[0]
+        if event.item_id == "":
+            # xAI omits the id, so the ack answers the oldest delete still waiting; one the
+            # server already rejected by event id is settled and cannot be the one acked
+            for item_id, fut in self._item_delete_future.items():
+                if not fut.done():
+                    event.item_id = item_id
+                    break
         super()._handle_conversion_item_deleted(event)
 
     def _handle_conversion_item_input_audio_transcription_completed(
