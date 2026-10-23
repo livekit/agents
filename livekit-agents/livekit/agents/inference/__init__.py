@@ -19,7 +19,7 @@ from .interruption import (
 )
 from .llm import LLM, LLMModels, LLMStream, llm_from_model_string
 from .stt import STT, STTModels
-from .tts import TTS, TTSModels
+from .tts import TTS, FallbackActivatedEvent, TTSModels
 from .vad import VAD, VADModels
 
 if TYPE_CHECKING:
@@ -56,6 +56,7 @@ __all__ = [
     "LLMStream",
     "STTModels",
     "TTSModels",
+    "FallbackActivatedEvent",
     "LLMModels",
     "InferenceClass",
     "VADModels",
