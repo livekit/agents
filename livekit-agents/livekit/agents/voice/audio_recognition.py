@@ -1276,6 +1276,14 @@ class AudioRecognition:
 
             self._final_transcript_received.set()
             if not transcript:
+                # Diarization adapters replace a suppressed segment's final with
+                # an empty one: MultiSpeakerAdapter uses it to clear the interim
+                # results of a background speaker (see its _forward_output).
+                # The transport cannot carry a wire-level clear, so drop the
+                # buffered text here: it must not stay in _current_transcript
+                # (min_words) or be appended by commit_user_turn.
+                self._audio_interim_transcript = ""
+                self._audio_preflight_transcript = ""
                 return
 
             self._hooks.on_final_transcript(
