@@ -44,6 +44,7 @@ from .connection import (
     STTConnectionConfig,
     bridge_endpoint,
     bridge_model,
+    resolve_base_url,
 )
 from .gateway_adapter import (
     build_external_tracking_headers,
@@ -52,6 +53,7 @@ from .gateway_adapter import (
     extract_error_status,
     is_non_retryable_client_error,
     is_payload_too_large,
+    merge_init_payload,
     normalize_region_override,
     normalize_world_part_override,
 )
@@ -72,6 +74,23 @@ _KEEPALIVE_INTERVAL_S = 5.0
 # tolerated before the connection is treated as failed. Prevents an
 # unbounded silent reconnect loop against a misbehaving endpoint.
 _MAX_SILENT_RECONNECTS = 3
+# The init fields each option of update_options is sent as. A connection's own
+# init takes these once they have been changed, and only these: every option
+# has a default, so laying all of them over it would replace what the init
+# says with defaults nobody chose.
+_INIT_FIELDS: dict[str, tuple[str, ...]] = {
+    "language": ("language",),
+    "enable_partial_transcripts": ("enable_partials", "enable_partial_transcripts"),
+    "enable_diarization": ("enable_diarization",),
+    "vad_threshold": ("vad_threshold",),
+    "vad_min_silence_duration_ms": ("vad_min_silence_duration_ms",),
+    "vad_speech_pad_ms": ("vad_speech_pad_ms",),
+}
+
+
+def _given_init_options(**options: NotGivenOr[Any]) -> set[str]:
+    """Names of the options passed to update_options that feed the init."""
+    return {name for name, value in options.items() if name in _INIT_FIELDS and is_given(value)}
 
 
 def _safe_error_code(exc: BaseException) -> int | None:
@@ -146,7 +165,7 @@ class STT(stt.STT):
         model_endpoint: str | None = None,
         model_endpoints: Sequence[str] | None = None,
         provider_api_key: str | None = None,
-        slng_base_url: str = "api.slng.ai",
+        slng_base_url: str | None = None,
         region_override: str | list[str] | None = None,
         world_part_override: str | None = None,
         external_agent_id: str | None = None,
@@ -179,7 +198,9 @@ class STT(stt.STT):
             connections: Ordered model, endpoint, or typed connection candidates.
             provider_api_key: Optional BYOK provider credential, sent as the
                 ``X-Slng-Provider-Key`` header (external providers only).
-            slng_base_url: Gateway host. Defaults to "api.slng.ai".
+            slng_base_url: Host of your SLNG region, for example
+                "us-east.api.slng.ai". Falls back to the ``SLNG_BASE_URL`` env
+                var. Required unless every connection is a full endpoint URL.
             region_override: Optional gateway region override, sent as the
                 ``X-Region-Override`` header. Accepts a single region or a list
                 of preferred regions in priority order.
@@ -221,6 +242,7 @@ class STT(stt.STT):
         resolved_key = api_key or api_token or os.environ.get("SLNG_API_KEY")
         if not resolved_key:
             raise ValueError("api_key is required, or set the SLNG_API_KEY environment variable")
+        slng_base_url = resolve_base_url(slng_base_url)
 
         if model is not None and connections:
             raise ValueError("use model or connections, not both")
@@ -329,6 +351,9 @@ class STT(stt.STT):
                 raise ValueError("provider_api_key must not be empty")
             self._extra_headers["X-Slng-Provider-Key"] = byok_key
         self._streams = weakref.WeakSet[SpeechStream]()
+        # Options changed with update_options, which a connection's own init
+        # takes; see _INIT_FIELDS.
+        self._updated_init_options: set[str] = set()
 
     def _emit_plugin_event(
         self,
@@ -375,8 +400,10 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = dataclasses.replace(self._opts)
+        updated_init_options = set(self._updated_init_options)
         if is_given(language):
             config.language = language
+            updated_init_options.add("language")
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -389,6 +416,7 @@ class STT(stt.STT):
             http_session=self.session,
             extra_headers=self._extra_headers,
             final_timeout_s=self._final_timeout_s,
+            updated_init_options=updated_init_options,
         )
         self._streams.add(stream)
         return stream
@@ -418,6 +446,14 @@ class STT(stt.STT):
             self._opts.language = language
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
+        self._updated_init_options |= _given_init_options(
+            enable_partial_transcripts=enable_partial_transcripts,
+            enable_diarization=enable_diarization,
+            vad_threshold=vad_threshold,
+            vad_min_silence_duration_ms=vad_min_silence_duration_ms,
+            vad_speech_pad_ms=vad_speech_pad_ms,
+            language=language,
+        )
 
         for stream in self._streams:
             stream.update_options(
@@ -478,6 +514,7 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         extra_headers: dict[str, str],
         final_timeout_s: float | None,
+        updated_init_options: set[str] | None = None,
     ) -> None:
         self._candidate_max_retry = conn_options.max_retry
         super().__init__(
@@ -496,6 +533,7 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._extra_headers = dict(extra_headers)
         self._speech_duration: float = 0
+        self._updated_init_options = set(updated_init_options or ())
 
         self._reconnect_event = asyncio.Event()
         self._final_timeout_s = final_timeout_s
@@ -530,6 +568,14 @@ class SpeechStream(stt.SpeechStream):
             self._opts.language = language
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
+        self._updated_init_options |= _given_init_options(
+            enable_partial_transcripts=enable_partial_transcripts,
+            enable_diarization=enable_diarization,
+            vad_threshold=vad_threshold,
+            vad_min_silence_duration_ms=vad_min_silence_duration_ms,
+            vad_speech_pad_ms=vad_speech_pad_ms,
+            language=language,
+        )
 
         self._reconnect_event.set()
 
@@ -1237,15 +1283,6 @@ class SpeechStream(stt.SpeechStream):
                         # not trigger a spurious failover on the new connection.
                         awaiting_final = False
                         cancel_final_timeout()
-                        pending_non_empty_transcript = False
-                        # Close the speech bracket for the abandoned utterance
-                        # so clients never see a dangling START_OF_SPEECH and
-                        # the next utterance opens a fresh one.
-                        if speech_started:
-                            speech_started = False
-                            self._event_ch.send_nowait(
-                                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                            )
                         await utils.aio.gracefully_cancel(
                             *[
                                 task
@@ -1261,6 +1298,35 @@ class SpeechStream(stt.SpeechStream):
                                 if task is not None
                             ]
                         )
+                        # The utterance in flight is abandoned with the
+                        # connection, and so is everything kept to replay it: a
+                        # later drop on the new connection must not replay
+                        # audio recognised under the old options. Cleared
+                        # only now that the send task, which fills the
+                        # buffer, has stopped. The new connection also starts
+                        # with fresh retry budgets.
+                        buffered_audio.clear()
+                        pending_replay = None
+                        finalize_requested_for_buffer = False
+                        sent_audio_since_finalize = False
+                        pending_user_state_finalize = False
+                        pending_non_empty_transcript = False
+                        recover_primary_after_final = False
+                        same_endpoint_replays = 0
+                        candidate_attempts = 0
+                        silent_reconnects = 0
+                        self._has_spoken_since_last_response = False
+                        # Close the speech bracket for the abandoned utterance
+                        # so clients never see a dangling START_OF_SPEECH and
+                        # the next utterance opens a fresh one.
+                        if speech_started:
+                            speech_started = False
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                            )
+                        # Bill the abandoned audio now, before the counter
+                        # starts on the new connection.
+                        emit_recognition_usage()
                         retry_connection = True
                         break
 
@@ -1436,23 +1502,42 @@ class SpeechStream(stt.SpeechStream):
         except (TimeoutError, asyncio.TimeoutError, aiohttp.ClientConnectorError) as e:
             raise APIConnectionError("failed to connect to SLNG STT") from e
 
+        init_message = build_stt_init_payload(
+            model=model,
+            language=self._opts.language,
+            sample_rate=self._opts.sample_rate,
+            encoding=self._opts.encoding,
+            vad_threshold=self._opts.vad_threshold,
+            vad_min_silence_duration_ms=self._opts.vad_min_silence_duration_ms,
+            vad_speech_pad_ms=self._opts.vad_speech_pad_ms,
+            enable_diarization=self._opts.enable_diarization,
+            enable_partial_transcripts=self._opts.enable_partial_transcripts,
+            min_speakers=self._opts.min_speakers,
+            max_speakers=self._opts.max_speakers,
+            model_options=self._model_options,
+        )
         if connection.init is not None:
-            init_message = dict(connection.init)
-        else:
-            init_message = build_stt_init_payload(
-                model=model,
-                language=self._opts.language,
-                sample_rate=self._opts.sample_rate,
-                encoding=self._opts.encoding,
-                vad_threshold=self._opts.vad_threshold,
-                vad_min_silence_duration_ms=self._opts.vad_min_silence_duration_ms,
-                vad_speech_pad_ms=self._opts.vad_speech_pad_ms,
-                enable_diarization=self._opts.enable_diarization,
-                enable_partial_transcripts=self._opts.enable_partial_transcripts,
-                min_speakers=self._opts.min_speakers,
-                max_speakers=self._opts.max_speakers,
-                model_options=self._model_options,
-            )
+            # The connection's own init, plus whatever update_options (or the
+            # stream's language) has changed since it was written. Changed
+            # fields go into its config, and into a top-level copy where the
+            # init has one, so the two cannot disagree. With nothing changed,
+            # it is sent exactly as written.
+            updated = {
+                field for option in self._updated_init_options for field in _INIT_FIELDS[option]
+            }
+            changes = {
+                key: value for key, value in init_message["config"].items() if key in updated
+            }
+            if changes:
+                init_message = merge_init_payload(
+                    connection.init,
+                    {
+                        "config": changes,
+                        **{key: value for key, value in changes.items() if key in connection.init},
+                    },
+                )
+            else:
+                init_message = dict(connection.init)
 
         try:
             await ws.send_str(json.dumps(init_message))
