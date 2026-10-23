@@ -131,9 +131,13 @@ def test_v4_parameter_bounds() -> None:
     with pytest.raises(ValueError, match="temperature"):
         _make_tts(model="bulbul:v4-flash", temperature=1.5)
 
-    # v3 keeps the wider ranges
-    v3 = _make_tts(model="bulbul:v3", pace=0.3, temperature=1.5)
-    assert (v3._opts.pace, v3._opts.temperature) == (0.3, 1.5)
+    # v3 uses its documented pace range; v2 keeps the wider pace range.
+    v3 = _make_tts(model="bulbul:v3", pace=0.5, temperature=1.5)
+    assert (v3._opts.pace, v3._opts.temperature) == (0.5, 1.5)
+    with pytest.raises(ValueError, match="pace"):
+        _make_tts(model="bulbul:v3", pace=0.3)
+    v2 = _make_tts(model="bulbul:v2", pace=0.3)
+    assert v2._opts.pace == 0.3
 
 
 def test_v4_streaming_sample_rate_limits() -> None:
@@ -187,12 +191,16 @@ def test_rejected_update_options_leaves_live_options_untouched() -> None:
 
 
 def test_update_options_revalidates_stored_params_against_the_new_model() -> None:
-    # pace 0.3 and temperature 1.5 are valid on v3 but out of range on v4-flash
-    tts = _make_tts(model="bulbul:v3", pace=0.3, temperature=1.5)
+    # v2 accepts a wider pace and temperature range than v4-flash.
+    tts = _make_tts(model="bulbul:v2", pace=3.0, temperature=1.5)
 
     with pytest.raises(ValueError, match="pace"):
         tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
-    assert tts._opts.model == "bulbul:v3"
+    assert tts._opts.model == "bulbul:v2"
+
+    with pytest.raises(ValueError, match="temperature"):
+        tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical", pace=1.0)
+    assert tts._opts.model == "bulbul:v2"
 
     tts.update_options(pace=1.0, temperature=0.6)
     tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
@@ -304,15 +312,10 @@ async def _speak(stream: sarvam_tts.SynthesizeStream) -> None:
     await stream._run_ws(sentences(), MagicMock(spec=AudioEmitter))  # type: ignore[arg-type]
 
 
-async def test_stream_created_before_a_model_switch_speaks_with_the_new_options(
+async def test_stream_created_before_a_model_switch_keeps_its_options(
     socket_tts: _SocketTTS,
 ) -> None:
-    """A stream adopts the model-coupled options its socket was opened with, all together.
-
-    update_options validates model, speaker and language as one set, so taking only some
-    of them could pair a model with a speaker or language it rejects. Sample rate and
-    codec stay the stream's own: its output emitter is already initialized from them.
-    """
+    """A pending stream keeps one immutable snapshot across later TTS updates."""
     tts, session = socket_tts(
         model="bulbul:v4-flash",
         target_language_code="as-IN",
@@ -329,13 +332,13 @@ async def test_stream_created_before_a_model_switch_speaks_with_the_new_options(
 
     (ws,) = session.sockets
     assert ws.url == (
-        "wss://api.sarvam.ai/text-to-speech/ws?model=bulbul:v3&send_completion_event=True"
+        "wss://api.sarvam.ai/text-to-speech/ws/v2?model=bulbul:v4-flash&send_completion_event=True"
     )
     (config,) = ws.configs()
     assert (config["model"], config["speaker"], config["target_language_code"]) == (
-        "bulbul:v3",
-        "shubh",
-        "hi-IN",
+        "bulbul:v4-flash",
+        "kangkana_as_conversational",
+        "as-IN",
     )
     assert (config["output_audio_codec"], config["speech_sample_rate"]) == ("opus", 24000)
 
@@ -357,27 +360,96 @@ async def test_model_switch_during_the_pool_handshake_keeps_config_and_socket_in
     session.ws_connect = connect_then_switch  # type: ignore[method-assign]
     await _speak(stream)
 
-    # the pool drops the socket opened with the old options and connects again
+    # The stream snapshot remains authoritative even though the TTS was updated
+    # during its first handshake.
     (used,) = [ws for ws in session.sockets if ws.frames]
-    assert "?model=bulbul:v4-flash&" in used.url
+    assert "?model=bulbul:v3&" in used.url
     assert [(config["model"], config["speaker"]) for config in used.configs()] == [
-        ("bulbul:v4-flash", "ritu_hi_medical")
+        ("bulbul:v3", "shubh")
     ]
 
 
-async def test_config_only_update_applies_to_a_pending_stream_on_the_same_socket(
+async def _wait_for_prewarm(tts: sarvam_tts.TTS) -> None:
+    task_ref = tts._pool._prewarm_task
+    assert task_ref is not None
+    task = task_ref()
+    assert task is not None
+    await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+
+
+@pytest.mark.parametrize("switch_back", [False, True], ids=["updated", "updated-twice"])
+async def test_prewarm_retries_with_current_options_after_handshake_update(
+    socket_tts: _SocketTTS,
+    monkeypatch: pytest.MonkeyPatch,
+    switch_back: bool,
+) -> None:
+    tts, session = socket_tts()
+    connect = session.ws_connect
+
+    async def connect_then_update(url: str, **kwargs: Any) -> _FakeSocket:
+        ws = await connect(url, **kwargs)
+        if len(session.sockets) == 1:
+            tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+        elif len(session.sockets) == 2 and switch_back:
+            tts.update_options(model="bulbul:v3", speaker="shubh", send_completion_event=False)
+        return ws
+
+    monkeypatch.setattr(session, "ws_connect", connect_then_update)
+    tts.prewarm()
+    await _wait_for_prewarm(tts)
+    warmed = session.sockets[-1]
+    assert warmed.url == sarvam_tts._websocket_url(tts._opts)
+    assert all(ws.closed for ws in session.sockets[:-1])
+
+    await _speak(_ws_stream(tts))
+    assert len(session.sockets) == (3 if switch_back else 2)
+    assert not warmed.closed
+    assert warmed.configs()[0]["model"] == tts._opts.model
+
+
+async def test_prewarm_waiting_for_pool_lock_uses_current_options(
     socket_tts: _SocketTTS,
 ) -> None:
-    """Speaker and tuning ride in the config frame, so changing them keeps the socket."""
+    tts, session = socket_tts()
+    async with tts._pool._connect_lock:
+        tts.prewarm()
+        await asyncio.sleep(0)
+        assert not session.sockets
+        tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+    await _wait_for_prewarm(tts)
+    await _speak(_ws_stream(tts))
+
+    (warmed,) = session.sockets
+    assert warmed.url == sarvam_tts._websocket_url(tts._opts)
+    assert warmed.configs()[0]["speaker"] == "ritu_hi_medical"
+
+
+async def test_rest_only_tts_does_not_prewarm_after_options_update(
+    socket_tts: _SocketTTS,
+) -> None:
+    tts, session = socket_tts(speech_sample_rate=48000)
+    tts.prewarm()
+    tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+    tts.prewarm()
+    assert tts._pool._prewarm_task is None
+    assert not session.sockets
+
+
+async def test_config_only_update_keeps_pending_stream_snapshot_on_the_same_socket(
+    socket_tts: _SocketTTS,
+) -> None:
+    """Config-only updates affect new streams while pending streams keep their snapshot."""
     tts, session = socket_tts()
 
     await _speak(_ws_stream(tts))
     pending = _ws_stream(tts)
     tts.update_options(speaker="ritu", pace=1.2)
     await _speak(pending)
+    await _speak(_ws_stream(tts))
 
     (ws,) = session.sockets
     assert [(config["speaker"], config["pace"]) for config in ws.configs()] == [
+        ("shubh", 1.0),
         ("shubh", 1.0),
         ("ritu", 1.2),
     ]
