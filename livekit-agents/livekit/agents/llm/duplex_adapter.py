@@ -325,6 +325,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._audio_timeout = audio_timeout
         # the adapter's clock: output audio heard so far, which arrives at playback pace
         self._audio_ms = 0
+        # whether the provider stamps its audio, which puts this clock on the spans' clock
+        self._stamped = False
         # the model's words waiting for the sound that carries them, and since when
         self._fragments: deque[DuplexOutputTranscriptDelta] = deque()
         self._waiting_since_ms = 0
@@ -388,6 +390,7 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._close_burst()
 
     def _on_audio_frame(self, f: DuplexAudioFrame) -> None:
+        self._stamped = f.start_ms is not None
         if f.start_ms is not None:
             self._audio_ms = f.start_ms
         # the gate is the one boundary: a burst is open exactly while the model is audibly
@@ -470,6 +473,17 @@ class _DuplexRealtimeSession(RealtimeSession):
             fragment = self._fragments[0]
             if fragment.start_ms is not None:
                 if burst.anchor_ms is None:
+                    if self._stamped and fragment.start_ms + _ATTACH_LEAD_MS < burst.audio_start_ms:
+                        # stamped audio puts both clocks on the model's, so words due before this
+                        # burst's first sound are for audio never sent (the model was cut): nobody
+                        # heard them, so they are dropped, never this burst's anchor. The start
+                        # decides, since a cut span can run past the moment the model speaks again
+                        self._fragments.popleft()
+                        logger.debug(
+                            "dropping duplex transcript for audio never sent",
+                            extra={"lk.pii.transcript": fragment.text},
+                        )
+                        continue
                     burst.anchor_ms = fragment.start_ms - burst.audio_start_ms
                     self._last_burst = burst
                 if fragment.start_ms - burst.anchor_ms > burst.heard_ms + _ATTACH_LEAD_MS:
