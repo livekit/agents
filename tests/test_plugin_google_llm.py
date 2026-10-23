@@ -2,15 +2,35 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from google.genai import types
 
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, function_tool
 from livekit.agents.types import APIConnectOptions
-from livekit.plugins.google.llm import LLM, LLMStream
+from livekit.plugins.google.llm import LLM, LONG_DECODE_HTTP_TIMEOUT_MS, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 from livekit.plugins.google.tools import GoogleSearch
+
+_llms: list[LLM] = []
+
+
+@pytest.fixture(autouse=True)
+async def _close_llms(monkeypatch: pytest.MonkeyPatch):
+    # PR #7994: forced httpx transport makes genai's httpx client close nondeterministically at GC; close here.
+    orig = LLM.__init__
+
+    def _tracking_init(self: LLM, *args: object, **kwargs: object) -> None:
+        orig(self, *args, **kwargs)
+        _llms.append(self)
+
+    monkeypatch.setattr(LLM, "__init__", _tracking_init)
+    yield
+    for model in _llms:
+        await model.aclose()
+    _llms.clear()
+
 
 pytestmark = pytest.mark.plugin("google")
 
@@ -318,6 +338,65 @@ class TestCachedContentRequestSuppression:
         assert "livekit-agents/" in config.http_options.headers["x-goog-api-client"]
         assert caller_http_options.timeout is None
         assert caller_http_options.headers == {"X-Vertex-Test": "1"}
+
+    @pytest.mark.asyncio
+    async def test_timeout_is_read_timeout_not_whole_request_deadline(self) -> None:
+        """#7987: genai turns the ms timeout into aiohttp ClientTimeout(total=...) and an
+        X-Server-Timeout header, both of which Vertex enforces as a WHOLE-REQUEST deadline:
+        a healthy Gemini answer streaming for longer than the read timeout is killed
+        mid-sentence with a 504 or a CancelledError. The other plugins pass
+        conn_options.timeout to httpx, where it bounds the silence between chunks. The
+        client must (a) force the httpx transport at CLIENT level (genai reads
+        async_client_args from client options only, see google.genai._api_client._use_aiohttp)
+        so the timeout keeps read-timeout semantics, and (b) preset X-Server-Timeout with
+        the long-decode ceiling so the header does not re-introduce a server-side deadline
+        derived from the read timeout."""
+        llm = LLM(model="gemini-2.5-flash", api_key="test")
+
+        # client-level: the transport genai will actually consult at request time
+        client_opts = llm._client._api_client._http_options
+        assert client_opts.async_client_args is not None
+        assert isinstance(client_opts.async_client_args["transport"], httpx.AsyncHTTPTransport)
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(
+                chat_ctx=ChatContext.empty(),
+                conn_options=APIConnectOptions(timeout=5.5),
+            )
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        http_options = captured["config"].http_options
+        # timeout stays the read timeout in ms
+        assert http_options.timeout == 5500
+        # server deadline no longer derived from the read timeout
+        assert http_options.headers["X-Server-Timeout"] == str(LONG_DECODE_HTTP_TIMEOUT_MS // 1000)
+
+    @pytest.mark.asyncio
+    async def test_user_http_options_timeout_keeps_the_server_deadline_untouched(self) -> None:
+        """A user-set http_options.timeout is their whole-request choice; no header preset."""
+        llm = LLM(
+            model="gemini-2.5-flash",
+            api_key="test",
+            http_options=types.HttpOptions(timeout=30000),
+        )
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(chat_ctx=ChatContext.empty())
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        http_options = captured["config"].http_options
+        assert http_options.timeout == 30000
+        assert "X-Server-Timeout" not in http_options.headers
 
 
 class TestMediaResolution:
