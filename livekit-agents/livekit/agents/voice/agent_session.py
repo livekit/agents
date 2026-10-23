@@ -957,9 +957,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             c = cli.AgentsConsole.get_instance()
             bit_rate = self._opts.recording_options.get("bit_rate")
-            recorder_may_start = self._opts.recording_options["audio"] or (
-                c.enabled and c.record
-            )
+            recorder_may_start = self._opts.recording_options["audio"] or (c.enabled and c.record)
             invalid_bit_rate = not isinstance(bit_rate, int) or (
                 bit_rate < MIN_BIT_RATE or bit_rate > MAX_BIT_RATE
             )
@@ -972,10 +970,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             is_primary = True
             if job_ctx:
                 # set the primary session
-                if (
-                    job_ctx._primary_agent_session is None
-                    or job_ctx._primary_agent_session is self
-                ):
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
                     job_ctx._primary_agent_session = self
                 else:
                     is_primary = False

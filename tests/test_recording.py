@@ -1706,9 +1706,7 @@ async def test_invalid_recorder_bit_rate_rejected() -> None:
 
     with _patch_job_ctx(mock_ctx):
         with pytest.raises(ValueError, match="bit_rate"):
-            await session.start(
-                SimpleAgent(), record={"audio": True, "bit_rate": 1_000_000}
-            )
+            await session.start(SimpleAgent(), record={"audio": True, "bit_rate": 1_000_000})
 
     assert mock_ctx._primary_agent_session is None
     assert session._room_io is None
@@ -1722,8 +1720,6 @@ async def test_invalid_bit_rate_ignored_without_audio() -> None:
 
     with _patch_job_ctx(mock_ctx, patch_recorder=True) as mock_cls:
         assert mock_cls is not None
-        await session.start(
-            SimpleAgent(), record={"audio": False, "bit_rate": 1_000_000}
-        )
+        await session.start(SimpleAgent(), record={"audio": False, "bit_rate": 1_000_000})
         mock_cls.assert_not_called()
         await _cleanup(session)
