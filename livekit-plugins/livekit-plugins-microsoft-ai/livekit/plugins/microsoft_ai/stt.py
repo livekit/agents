@@ -52,18 +52,8 @@ _TRANSCRIPTION = "conversation.item.input_audio_transcription."
 _MAX_TEXT_LENGTH = 65536
 
 
-class _WSMessage(Protocol):
-    @property
-    def type(self) -> aiohttp.WSMsgType: ...
-
-    @property
-    def data(self) -> object: ...
-
-
 class _WebSocket(Protocol):
     async def send_json(self, data: dict[str, object]) -> None: ...
-
-    async def receive(self) -> _WSMessage: ...
 
     async def close(self) -> bool: ...
 
@@ -327,10 +317,10 @@ class SpeechStream(stt.RecognizeStream):
     async def _attempt(self) -> None:
         tasks: list[asyncio.Task[None]] = []
         try:
-            await asyncio.wait_for(self._handshake(), self._conn_options.timeout)
+            monitor = await asyncio.wait_for(self._handshake(), self._conn_options.timeout)
             assert self._ws is not None
             sender = asyncio.create_task(self._send(self._ws))
-            receiver = asyncio.create_task(self._receive(self._ws))
+            receiver = asyncio.create_task(self._receive(monitor))
             tasks = [sender, receiver]
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if sender in done:
@@ -356,24 +346,28 @@ class SpeechStream(stt.RecognizeStream):
                     logger.warning("Microsoft AI STT socket cleanup failed")
                 self._ws = None
 
-    async def _handshake(self) -> None:
+    async def _handshake(self) -> utils.aio.WebSocketMonitor:
         ws = await self._stt._client.session().ws_connect(
             self._stt._client.url,
             headers=self._stt._client.headers,
-            heartbeat=10.0,
+            autoping=False,
             max_msg_size=1024 * 1024,
         )
         self._ws = ws
-        created = await self._receive_event(ws)
+        monitor = utils.aio.WebSocketMonitor(
+            ws, liveness_timeout=self._conn_options.liveness_timeout
+        )
+        created = await self._receive_event(monitor)
         if created.get("type") != "session.created":
             raise APIError("Microsoft AI STT expected session.created", retryable=False)
         await ws.send_json(_session_update(self._stt.model, self._language_hint))
-        updated = await self._receive_event(ws)
+        updated = await self._receive_event(monitor)
         if updated.get("type") != "session.updated":
             raise APIError("Microsoft AI STT expected session.updated", retryable=False)
+        return monitor
 
-    async def _receive_event(self, ws: _WebSocket) -> dict[str, object]:
-        message = await ws.receive()
+    async def _receive_event(self, monitor: utils.aio.WebSocketMonitor) -> dict[str, object]:
+        message = await monitor.receive()
         if message.type in (
             aiohttp.WSMsgType.CLOSE,
             aiohttp.WSMsgType.CLOSED,
@@ -590,9 +584,9 @@ class SpeechStream(stt.RecognizeStream):
             )
         )
 
-    async def _receive(self, ws: _WebSocket) -> None:
+    async def _receive(self, monitor: utils.aio.WebSocketMonitor) -> None:
         while True:
-            event = await self._receive_event(ws)
+            event = await self._receive_event(monitor)
             if "event_id" in event:
                 event_id = _string(event, "event_id", nonempty=True)
                 if event_id in self._event_ids:
@@ -634,6 +628,7 @@ class SpeechStream(stt.RecognizeStream):
                 raise APIError(
                     "Microsoft AI STT sent an unsupported transcription event", retryable=False
                 )
+            self._mark_provider_progress()
 
     def _interim(self, item: _Item) -> None:
         text = item.finalized + item.hypothesis

@@ -198,16 +198,16 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
-            if is_given(language):
-                self._opts.language = LanguageCode(language)
+            # a per-call language applies to this request only
+            language_code = LanguageCode(language) if is_given(language) else self._opts.language
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
             resp = await self._client.audio.transcriptions.complete_async(
                 model=self._opts.model,
                 file={"content": data, "file_name": "audio.wav"},
-                language=self._opts.language if self._opts.language else None,
+                language=language_code if language_code else None,
                 context_bias=self._opts.context_bias if self._opts.context_bias else None,
-                timestamp_granularities=["segment"] if not self._opts.language else None,
+                timestamp_granularities=["segment"] if not language_code else None,
             )
 
             return stt.SpeechEvent(
@@ -217,7 +217,7 @@ class STT(stt.STT):
                         text=resp.text,
                         language=LanguageCode(resp.language)
                         if resp.language
-                        else self._opts.language or LanguageCode(""),
+                        else language_code or LanguageCode(""),
                         start_time=resp.segments[0].start if resp.segments else 0,
                         end_time=resp.segments[-1].end if resp.segments else 0,
                         words=[
@@ -352,8 +352,10 @@ class SpeechStream(stt.RecognizeStream):
             elif isinstance(event, TranscriptionStreamLanguage):
                 if event.audio_language:
                     self._detected_language = LanguageCode(event.audio_language)
+                self._mark_provider_progress()
 
             elif isinstance(event, TranscriptionStreamTextDelta):
+                self._mark_provider_progress()
                 current_text += event.text
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
@@ -369,6 +371,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
             elif isinstance(event, TranscriptionStreamDone):
+                self._mark_provider_progress()
                 current_text = ""
                 words = (
                     [

@@ -60,7 +60,7 @@ async def test_speech_stream_sends_language_in_json_config():
             sent_messages.append(message)
 
     class FakeSession:
-        async def ws_connect(self, url, headers):
+        async def ws_connect(self, url, headers, **kwargs):
             return FakeWebSocket()
 
     stt = STT(api_key="test-key")
