@@ -34,6 +34,8 @@ from .events import (
     AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
+    CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     EotPredictionEvent,
     ErrorEvent,
@@ -308,6 +310,14 @@ _AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
     AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,
 }
 
+_CLOSE_REASON_MAP: dict[CloseReason, agent_pb.CloseReason] = {
+    CloseReason.ERROR: agent_pb.CloseReason.CR_ERROR,
+    CloseReason.JOB_SHUTDOWN: agent_pb.CloseReason.CR_JOB_SHUTDOWN,
+    CloseReason.PARTICIPANT_DISCONNECTED: agent_pb.CloseReason.CR_PARTICIPANT_DISCONNECTED,
+    CloseReason.USER_INITIATED: agent_pb.CloseReason.CR_USER_INITIATED,
+    CloseReason.TASK_COMPLETED: agent_pb.CloseReason.CR_COMPLETED,
+}
+
 
 def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
     result: list[str] = []
@@ -370,6 +380,7 @@ class SessionHost:
             session.on("agent_false_interruption", self._on_agent_false_interruption)
             session.on("error", self._on_error)
             session.on("debug_message", self._on_debug_message)
+            session.on("close", self._on_close)
 
     async def start(self) -> None:
         if self._started:
@@ -399,6 +410,7 @@ class SessionHost:
             self._session.off("agent_false_interruption", self._on_agent_false_interruption)
             self._session.off("error", self._on_error)
             self._session.off("debug_message", self._on_debug_message)
+            self._session.off("close", self._on_close)
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
@@ -691,6 +703,14 @@ class SessionHost:
     def _on_debug_message(self, event: agent_pb.DebugMessage) -> None:
         self._send_event(agent_pb.AgentSessionEvent(debug_message=event))
 
+    def _on_close(self, event: CloseEvent) -> None:
+        closed = agent_pb.AgentSessionEvent.SessionClosed(reason=_CLOSE_REASON_MAP[event.reason])
+        if event.error is not None:
+            closed.error = str(event.error)
+        self._send_event(
+            agent_pb.AgentSessionEvent(session_closed=closed), created_at=event.created_at
+        )
+
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:
             await self._handle_request(req)
@@ -969,6 +989,7 @@ RemoteSessionEventTypes = Literal[
     "session_usage_updated",
     "agent_false_interruption",
     "error",
+    "session_closed",
 ]
 
 
