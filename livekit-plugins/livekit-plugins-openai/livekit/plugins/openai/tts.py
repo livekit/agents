@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -217,6 +218,38 @@ class TTS(tts.TTS):
         )
         tts._owns_client = True
         return tts
+
+    @staticmethod
+    def with_urun(
+        *,
+        model: str = "qwen3-tts-customvoice:bf16",
+        voice: str = "Ryan",
+        api_key: str | None = None,
+        base_url: str = "https://inference.urun.sh/v1",
+        client: openai.AsyncClient | None = None,
+        response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
+    ) -> TTS:
+        """
+        Create a new instance of uRun TTS.
+
+        ``api_key`` must be set to your uRun API key, either using the argument or by setting
+        the ``URUN_API_KEY`` environment variable.
+        """
+        urun_api_key = api_key or os.environ.get("URUN_API_KEY")
+        if urun_api_key is None:
+            raise ValueError(
+                "uRun API key is required, either as argument or set"
+                " URUN_API_KEY environment variable"
+            )
+
+        return TTS(
+            model=model,
+            voice=voice,
+            api_key=urun_api_key,
+            base_url=base_url,
+            client=client,
+            response_format=response_format,
+        )
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
