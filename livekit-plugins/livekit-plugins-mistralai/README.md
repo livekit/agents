@@ -75,6 +75,17 @@ ref_audio_b64 = base64.b64encode(open("sample.mp3", "rb").read()).decode()
 tts = mistralai.TTS(ref_audio=ref_audio_b64)
 ```
 
+#### Realtime streaming synthesis
+
+Voxtral Realtime TTS models take text as the LLM produces it and stream audio back over
+a WebSocket, so speech starts before the full sentence is written.
+
+```python
+from livekit.plugins import mistralai
+
+tts = mistralai.TTS(model="voxtral-mini-tts-realtime-3", voice="en_paul_neutral")
+```
+
 ### LLM
 
 ```python
