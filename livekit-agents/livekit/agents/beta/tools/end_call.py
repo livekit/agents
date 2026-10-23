@@ -79,9 +79,11 @@ class EndCallTool(Toolset):
             auto_tool_reply = (
                 rt_session is not None and rt_session.capabilities.auto_tool_reply_generation
             )
-            # a result of None asks for no reply. When the model already spoke in this same
-            # turn (goodbye while calling the tool), waiting for a tool reply only adds a
-            # second goodbye or a 5s timeout (livekit/agents#8010).
+            # a result of None asks for no reply, so there is nothing to wait for. GPT-Live
+            # answers it anyway (see its warning), and the answer can be silent.
+            # When the model already spoke in this same turn (goodbye while calling the
+            # tool), waiting for a tool reply only adds a second goodbye or a 5s timeout
+            # (livekit/agents#8010, also Gemini realtime #5096).
             already_spoke = any(
                 isinstance(item, ChatMessage)
                 and item.role == "assistant"
