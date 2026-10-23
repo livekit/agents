@@ -1183,8 +1183,21 @@ class SpeechStream(stt.SpeechStream):
                     "LiveKit Inference STT connection closed unexpectedly"
                 ) from e
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            try:
+                await _recv_loop(ws)
+            except Exception as e:
+                # SpeechStream's retry loop reports the APIErrors it retries (WARNING)
+                # and the session recreates the stream once retries are exhausted, so a
+                # blanket ERROR here double-logs gateway-level rejects that are already
+                # being handled. Terminal errors keep logging as errors.
+                if isinstance(e, APIError) and e.retryable:
+                    logger.debug("retryable error in recv_task: %s", e, exc_info=e)
+                else:
+                    logger.exception("Error in recv_task")
+                raise
+
+        async def _recv_loop(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal session_closed
             while True:
                 msg = await ws.receive()
@@ -1238,15 +1251,20 @@ class SpeechStream(stt.SpeechStream):
                         )
                     return
                 elif msg_type == "error":
-                    logger.error(
+                    code = data.get("code", -1)
+                    # a reject before input end is retried by SpeechStream, which
+                    # already reports it; only log it as an error once the
+                    # session can no longer be retried
+                    retryable = not input_ended.is_set()
+                    log = logger.debug if retryable else logger.error
+                    log(
                         "received error from LiveKit Inference STT",
                         extra={"lk.pii.event": data},
                     )
-                    code = data.get("code", -1)
                     raise APIError(
                         "LiveKit Inference STT returned an error",
                         body={"code": code},
-                        retryable=not input_ended.is_set(),
+                        retryable=retryable,
                     )
 
         ws: aiohttp.ClientWebSocketResponse | None = None

@@ -492,9 +492,25 @@ class RecognizeStream(ABC):
 
                 if not e.retryable or max_retries == 0:
                     self._emit_error(e, recoverable=False)
+                    logger.error(
+                        f"failed to recognize speech: {e}",
+                        extra={
+                            "stt": self._stt._label,
+                            "attempt": self._num_retries,
+                            "streamed": True,
+                        },
+                    )
                     raise
                 elif self._num_retries == max_retries:
                     self._emit_error(e, recoverable=False)
+                    logger.error(
+                        f"failed to recognize speech: {e}",
+                        extra={
+                            "stt": self._stt._label,
+                            "attempt": self._num_retries,
+                            "streamed": True,
+                        },
+                    )
                     raise APIConnectionError(
                         f"failed to recognize speech after {self._num_retries} attempts",
                     ) from e
