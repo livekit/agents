@@ -966,6 +966,8 @@ async def test_dialogue_send_loop_sends_close_context_without_waiting() -> None:
         await asyncio.wait_for(connection._send_loop(), timeout=1.0)
 
         assert ws.sent == [
+            {"context_id": "lk-warmup", "voices": ["voice-1"]},
+            {"context_id": "lk-warmup", "close_context": True},
             {"context_id": "ctx-1", "voices": ["voice-1"]},
             {
                 "context_id": "ctx-1",
@@ -1031,6 +1033,115 @@ async def test_dialogue_send_loop_keeps_idle_context_alive_during_other_traffic(
 
         connection._input_queue.close()
         await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_warms_up_socket_without_streams() -> None:
+    # the server times out a socket that has not seen a context yet, so one empty
+    # context is opened and closed as soon as the socket connects
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        send_task = asyncio.create_task(connection._send_loop())
+
+        await asyncio.sleep(0.05)
+        assert ws.sent == [
+            {"context_id": "lk-warmup", "voices": ["voice-1"]},
+            {"context_id": "lk-warmup", "close_context": True},
+        ]
+        assert not connection._active_contexts
+
+        connection._input_queue.close()
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+
+def _dialogue_connection_with_ws(
+    session: aiohttp.ClientSession,
+) -> tuple[elevenlabs_tts._DialogueConnection, _RecordingWs]:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, session
+    )
+    ws = _RecordingWs()
+    connection._ws = ws  # type: ignore[assignment]
+    return connection, ws
+
+
+def _register_unsent_stream(
+    connection: elevenlabs_tts._DialogueConnection,
+) -> asyncio.Future[None]:
+    waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    stream = SimpleNamespace(_context_id="ctx-1")
+    connection.register_stream(stream, _FakeEmitter(), waiter)  # type: ignore[arg-type]
+    return waiter
+
+
+@pytest.mark.asyncio
+async def test_dialogue_replaced_connection_without_streams_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a warmed-up socket never idles out on the server, so a replaced unused one closes itself
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_KEEP_ALIVE_INTERVAL", 0.05)
+    async with aiohttp.ClientSession() as session:
+        connection, ws = _dialogue_connection_with_ws(session)
+        send_task = asyncio.create_task(connection._send_loop())
+
+        connection.mark_non_current()
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+        assert connection._closed
+        assert ws.closed
+
+
+@pytest.mark.asyncio
+async def test_dialogue_replaced_connection_keeps_stream_that_registers_late(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # update_options can run between a stream acquiring the socket and registering on it
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_KEEP_ALIVE_INTERVAL", 0.05)
+    async with aiohttp.ClientSession() as session:
+        connection, _ = _dialogue_connection_with_ws(session)
+        send_task = asyncio.create_task(connection._send_loop())
+
+        connection.mark_non_current()
+        waiter = _register_unsent_stream(connection)
+        await asyncio.sleep(0.2)
+
+        assert not connection._closed
+        assert not waiter.done()
+
+        connection._input_queue.close()
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_dialogue_replaced_connection_closes_after_unsent_stream_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_KEEP_ALIVE_INTERVAL", 0.05)
+    async with aiohttp.ClientSession() as session:
+        connection, ws = _dialogue_connection_with_ws(session)
+        _register_unsent_stream(connection)
+        send_task = asyncio.create_task(connection._send_loop())
+        connection.mark_non_current()
+        await asyncio.sleep(0.2)
+        assert not connection._closed
+
+        # the stream is canceled before sending text: no context exists to finish
+        connection.unregister_stream("ctx-1")
+        connection.close_context("ctx-1")
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+        assert connection._closed
+        assert ws.closed
 
 
 @pytest.mark.asyncio
