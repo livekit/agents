@@ -542,3 +542,112 @@ async def test_clear_fallback_releases_waiter_and_preserves_next_reply(
     _finish(output)
     event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
     assert not event.interrupted
+
+
+def _leave(room: MagicMock, identity: str) -> None:
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.identity = identity
+    for call in room.on.call_args_list:
+        if call.args[0] == "participant_disconnected":
+            call.args[1](participant)
+
+
+async def test_avatar_leave_finishes_flushed_segments_and_rejoin_recovers(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+) -> None:
+    leaf, room = sink
+    output = _PassthroughWrapper(next_in_chain=leaf)
+    for _ in range(2):
+        await output.capture_frame(_frame())
+        output.flush()
+
+    _leave(room, "user")
+    assert output._pending_playback_count == 2
+    _leave(room, "avatar")
+    event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+    assert event.interrupted
+    assert event.playback_position == pytest.approx(0.01)
+    assert leaf._pending_playback_count == output._pending_playback_count == 0
+
+    # the avatar rejoins with the same identity and the next reply finishes normally
+    await output.capture_frame(_frame())
+    output.flush()
+    await asyncio.sleep(3.0)
+    assert output._pending_playback_count == 1
+    _finish(leaf)
+    event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+    assert not event.interrupted
+
+
+async def test_avatar_leave_mid_segment_finishes_it_at_flush(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+) -> None:
+    leaf, room = sink
+    output = _PassthroughWrapper(next_in_chain=leaf)
+    await output.capture_frame(_frame())
+
+    _leave(room, "avatar")
+    assert output._pending_playback_count == 1
+    # the rest of the reply stays on the same stream, no second playback_started
+    await output.capture_frame(_frame())
+    assert room.local_participant.stream_bytes.await_count == 1
+    output.flush()
+    event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+    assert event.interrupted
+    assert event.playback_position == pytest.approx(0.02)
+
+
+async def test_avatar_leave_during_first_capture_releases_synchronizer(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+) -> None:
+    leaf, room = sink
+    sync = TranscriptSynchronizer(next_in_chain_audio=leaf, next_in_chain_text=FakeTextOutput())
+    output = sync.audio_output
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+    writer = room.local_participant.stream_bytes.return_value
+
+    async def stream_bytes(**_kwargs: object) -> MagicMock:
+        entered.set()
+        await gate.wait()
+        return writer
+
+    room.local_participant.stream_bytes.side_effect = stream_bytes
+    # the leaf counted the segment, the synchronizer hasn't yet
+    capture_task = asyncio.create_task(output.capture_frame(_frame()))
+    try:
+        await entered.wait()
+        _leave(room, "avatar")
+        gate.set()
+        await capture_task
+        output.flush()
+        event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+        assert event.interrupted
+        assert leaf._pending_playback_count == output._pending_playback_count == 0
+    finally:
+        gate.set()
+        await asyncio.gather(capture_task, *leaf._tasks, return_exceptions=True)
+        await sync.aclose()
+
+
+async def test_clear_fallback_before_flush_finishes_open_segment_once(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    output, room = sink
+    room.local_participant.perform_rpc.side_effect = RuntimeError("avatar gone")
+    await output.capture_frame(_frame())
+    _leave(room, "avatar")
+    output.clear_buffer()
+    await asyncio.gather(*output._tasks)
+    assert output._pending_playback_count == 0
+
+    output.flush()
+    await output.capture_frame(_frame())
+    output.flush()
+    await asyncio.sleep(3.0)
+    assert output._pending_playback_count == 1
+    assert "called more times" not in caplog.text
+    _finish(output)
+    event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+    assert not event.interrupted
