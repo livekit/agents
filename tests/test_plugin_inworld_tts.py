@@ -22,6 +22,25 @@ async def test_delivery_mode_default_not_given():
     assert tts._opts.delivery_mode is NOT_GIVEN
 
 
+async def test_default_model_is_not_a_sunset_model():
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key")
+    assert tts._opts.model == "inworld-tts-2"
+    assert tts._opts.model not in ("inworld-tts-1.5-max", "inworld-tts-1.5-mini")
+
+
+async def test_tts_2_flash_uses_sentence_boundary():
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key", model="inworld-tts-2-flash")
+    stream = tts.stream()
+    try:
+        assert stream._opts.auto_mode_strategy == "SENTENCE_BOUNDARY"
+    finally:
+        await stream.aclose()
+
+
 async def test_delivery_mode_set_on_init():
     from livekit.plugins.inworld import TTS
 

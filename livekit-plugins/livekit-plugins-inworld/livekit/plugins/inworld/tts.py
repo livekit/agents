@@ -52,7 +52,7 @@ USER_AGENT = f"livekit-agents-py/{__version__}"
 
 DEFAULT_BIT_RATE = 64000
 DEFAULT_ENCODING: Encoding = "PCM"
-DEFAULT_MODEL = "inworld-tts-1.5-max"
+DEFAULT_MODEL = "inworld-tts-2"
 DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_URL = "https://api.inworld.ai/"
 DEFAULT_WS_URL = "wss://api.inworld.ai/"
@@ -63,7 +63,7 @@ DEFAULT_BUFFER_CHAR_THRESHOLD = 250
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
-TTSModels = Literal["inworld-tts-2", "inworld-tts-1.5-max"]
+TTSModels = Literal["inworld-tts-2", "inworld-tts-2-flash", "inworld-tts-1.5-max"]
 Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"]
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
 _TextNormalizationStr = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
@@ -873,7 +873,7 @@ class TTS(tts.TTS):
             api_key (str, optional): The Inworld API key.
                 If not provided, it will be read from the INWORLD_API_KEY environment variable.
             voice (str, optional): The voice to use. Defaults to "Ashley".
-            model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1.5-max".
+            model (str, optional): The Inworld model to use. Defaults to "inworld-tts-2".
             encoding (str, optional): The encoding to use. Defaults to "PCM".
             bit_rate (int, optional): Bits per second of the audio. Defaults to 64000.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
