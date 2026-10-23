@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "LiveKit Agents Plugin for Rime"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10.0"
+requires-python = ">=3.11.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "rime"]
 classifiers = [
@@ -21,6 +21,9 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = ["livekit-agents[codecs]>=1.8.8", "protobuf>=6.33.5", "rime-api>=0.0.1"]
+
+[project.optional-dependencies]
+stt = ["rimelabs-sdk>=0.1.0a18"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
@@ -38,4 +41,4 @@ include = ["/livekit"]
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { livekit-agents = "0 days" }
+exclude-newer-package = { livekit-agents = "0 days", rimelabs-sdk = "0 days" }
