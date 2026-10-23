@@ -87,6 +87,7 @@ if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .simulation import SimulationContext
     from .voice.agent_session import AgentSession, RecordingOptions
+    from .voice.remote_session import SessionHost
     from .voice.report import SessionReport
 
 
@@ -239,6 +240,9 @@ class JobContext:
         self._handlers_with_filter: list[logging.Handler] = []
 
         self._primary_agent_session: AgentSession | None = None
+        # owned by the job rather than the session, so on_simulation_end can still be
+        # asked for after the agent ends the call
+        self._session_host: SessionHost | None = None
 
         # Lazily built from the job's simulation attributes; None when not under a
         # simulation. _simulation_resolved guards the one-time parse.

@@ -34,6 +34,7 @@ from livekit.agents.voice.events import (
     UserStateChangedEvent,
 )
 from livekit.agents.voice.remote_session import (
+    NO_ACTIVE_SESSION_ERROR,
     RoomSessionTransport,
     SessionHost,
     SessionTransport,
@@ -341,9 +342,9 @@ class TestSessionHostEvents:
         session.off = MagicMock()
         return session
 
-    def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
+    def test_attach(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
-        host.register_session(mock_session)
+        host.attach(mock_session)
         subscribed = {call.args[0] for call in mock_session.on.call_args_list}
         assert subscribed == FORWARDED_EVENTS
 
@@ -612,7 +613,7 @@ class TestSessionHostRequests:
     async def test_ping_pong(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -632,7 +633,7 @@ class TestSessionHostRequests:
     async def test_get_chat_history(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -653,7 +654,7 @@ class TestSessionHostRequests:
     async def test_get_agent_info(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -675,7 +676,7 @@ class TestSessionHostRequests:
     async def test_get_session_state(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -698,7 +699,7 @@ class TestSessionHostRequests:
     async def test_get_session_usage(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -719,7 +720,7 @@ class TestSessionHostRequests:
         host = SessionHost(transport)
         session = self._make_mock_session()
         session.history = property(lambda s: (_ for _ in ()).throw(RuntimeError("broken")))
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -736,11 +737,89 @@ class TestSessionHostRequests:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_aclose_unregisters_events(self, transport: InMemoryTransport) -> None:
+    async def test_aclose_detaches(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
         await host.aclose()
+        unsubscribed = {call.args[0] for call in session.off.call_args_list}
+        assert unsubscribed == FORWARDED_EVENTS
+
+
+class TestSessionHostWithoutSession:
+    """The host outlives its session: it answers between sessions instead of going quiet."""
+
+    @pytest.fixture
+    def transport(self) -> InMemoryTransport:
+        return InMemoryTransport()
+
+    @pytest.fixture
+    def simulated_job(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        sim_ctx = MagicMock()
+        sim_ctx.user_verdict = None
+        sim_ctx._dispatch.simulation_run_id = "run-1"
+        job_ctx = MagicMock()
+        job_ctx.simulation_context = MagicMock(return_value=sim_ctx)
+
+        def _on_simulation_end(ctx: MagicMock) -> None:
+            ctx.user_verdict = MagicMock(success=False, reason="vetoed")
+
+        job_ctx._simulation_end_fnc = _on_simulation_end
+        monkeypatch.setattr("livekit.agents.job.get_job_context", lambda required=True: job_ctx)
+        return job_ctx
+
+    @pytest.mark.asyncio
+    async def test_session_request_without_session_is_refused(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-run", run_input=agent_pb.SessionRequest.RunInput(text="hello?")
+            )
+        )
+
+        assert transport.sent[-1].response.request_id == "req-run"
+        assert transport.sent[-1].response.error == NO_ACTIVE_SESSION_ERROR
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_finalize_is_answered_after_detach(
+        self, transport: InMemoryTransport, simulated_job: MagicMock
+    ) -> None:
+        host = SessionHost(transport)
+        host.attach(TestSessionHostRequests()._make_mock_session())
+        await host.start()
+        host.detach()
+        assert host.session is None
+
+        finalized = asyncio.ensure_future(host.wait_for_simulation_finalized())
+        await asyncio.sleep(0)
+        assert not finalized.done()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-fin",
+                finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
+                    provisional_success=True
+                ),
+            )
+        )
+
+        resp = transport.sent[-1].response
+        assert resp.request_id == "req-fin"
+        assert resp.finalize_simulation.user_verdict.reason == "vetoed"
+        await asyncio.wait_for(finalized, timeout=0.1)
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_detach_stops_forwarding_events(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        session = TestSessionHostRequests()._make_mock_session()
+        host.attach(session)
+        host.detach()
         unsubscribed = {call.args[0] for call in session.off.call_args_list}
         assert unsubscribed == FORWARDED_EVENTS

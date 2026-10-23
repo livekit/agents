@@ -706,6 +706,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._session_transport_audio_input: TcpAudioInput | None = None
         self._session_transport_audio_output: TcpAudioOutput | None = None
         self._session_host: SessionHost | None = None
+        self._owns_session_host = False
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
@@ -999,6 +1000,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._room_io = None
             self._recorder_io = None
             self._session_host = None
+            self._owns_session_host = False
 
             self._closing = False
             self._root_span_context = otel_context.get_current()
@@ -1030,13 +1032,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 c.acquire_io(loop=self._loop, session=self)
 
-                if c._tcp_transport is not None:
-                    self._session_host = SessionHost(
-                        c._tcp_transport,
-                        audio_input=c._tcp_audio_input,
-                        audio_output=c._tcp_audio_output,
+                if (tcp_transport := c._tcp_transport) is not None:
+                    self._attach_session_host(
+                        lambda: SessionHost(
+                            tcp_transport,
+                            audio_input=c._tcp_audio_input,
+                            audio_output=c._tcp_audio_output,
+                        )
                     )
-                    self._session_host.register_session(self)
             elif is_given(room) and not self._room_io:
                 room_options = room_io.RoomOptions._ensure_options(
                     room_options,
@@ -1076,9 +1079,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if hosting:
                     # only the primary session can have a session host
-                    transport = RoomSessionTransport(room)
-                    self._session_host = SessionHost(transport)
-                    self._session_host.register_session(self)
+                    self._attach_session_host(lambda: SessionHost(RoomSessionTransport(room)))
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
@@ -1230,6 +1231,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             return run_state
 
+    def _attach_session_host(self, make_host: Callable[[], SessionHost]) -> None:
+        # under a job, the job owns the host so it outlives this session; without one,
+        # the session is the only owner there is
+        job_ctx = get_job_context(required=False)
+        if job_ctx is None:
+            self._session_host = make_host()
+            self._owns_session_host = True
+        else:
+            if job_ctx._session_host is None:
+                job_ctx._session_host = make_host()
+            self._session_host = job_ctx._session_host
+            self._owns_session_host = False
+        self._session_host.attach(self)
+
     async def drain(self) -> None:
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
@@ -1330,7 +1345,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self.emit("close", CloseEvent(error=error, reason=reason))
 
                 if self._session_host:
-                    await self._session_host.aclose()
+                    self._session_host.detach()
+                    if self._owns_session_host:
+                        await self._session_host.aclose()
                     self._session_host = None
 
                 # close room io after close event is emitted
