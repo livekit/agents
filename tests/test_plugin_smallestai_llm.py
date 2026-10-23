@@ -123,3 +123,19 @@ def test_api_key_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SMALLEST_API_KEY", "from-env")
     llm_model = LLM()
     assert llm_model.model == "electron"
+
+
+def test_preconfigured_client_does_not_require_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A client carrying its own credentials shouldn't need SMALLEST_API_KEY too."""
+    monkeypatch.delenv("SMALLEST_API_KEY", raising=False)
+
+    client = openai.AsyncClient(
+        api_key="configured-on-client",
+        base_url=SMALLEST_LLM_BASE_URL,
+        max_retries=0,
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200))
+        ),
+    )
+    llm_model = LLM(client=client)
+    assert llm_model.model == "electron"

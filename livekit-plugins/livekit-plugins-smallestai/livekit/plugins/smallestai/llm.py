@@ -62,7 +62,8 @@ class LLM(OpenAILLM):
         Create a new instance of Smallest AI (Electron) LLM.
 
         ``api_key`` must be set to your Smallest AI API key, either using the argument
-        or by setting the ``SMALLEST_API_KEY`` environment variable.
+        or by setting the ``SMALLEST_API_KEY`` environment variable. This is not required
+        when a pre-configured ``client`` carrying its own credentials is passed.
 
         ``model`` selects between ``"electron"`` (default) and ``"electron-2.0"``; both
         are served from the same ``base_url`` and accept the same request shape.
@@ -72,12 +73,13 @@ class LLM(OpenAILLM):
             returns a 502 ``upstream model unavailable`` error. The model id is accepted
             here in anticipation of its rollout; use ``"electron"`` until it's available.
         """
-        api_key = api_key if is_given(api_key) else os.environ.get("SMALLEST_API_KEY", "")
-        if not api_key:
-            raise ValueError(
-                "Smallest AI API key is required, either as argument or set "
-                "SMALLEST_API_KEY environment variable"
-            )
+        if client is None:
+            api_key = api_key if is_given(api_key) else os.environ.get("SMALLEST_API_KEY", "")
+            if not api_key:
+                raise ValueError(
+                    "Smallest AI API key is required, either as argument or set "
+                    "SMALLEST_API_KEY environment variable"
+                )
 
         super().__init__(
             model=model,
