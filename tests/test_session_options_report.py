@@ -23,8 +23,7 @@ from livekit.agents.telemetry.traces import (
 from livekit.agents.tts import TTSError
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice.events import CloseEvent, CloseReason, ErrorEvent
-from livekit.agents.voice.report import _CLOSE_REASON_NAMES, SessionReport
-from livekit.protocol.agent_pb import agent_session as proto_agent_session
+from livekit.agents.voice.report import SessionReport, _close_reason_name
 
 pytestmark = pytest.mark.unit
 
@@ -318,8 +317,7 @@ def test_report_to_dict_computed_keys_empty_session() -> None:
 
 
 def test_report_close_reasons_match_proto_enum() -> None:
-    # a new SDK close reason without a mapping, or a name the proto lacks, fails here
-    proto_names = proto_agent_session.CloseReason.keys()
+    # a new SDK close reason the proto enum lacks would fall back to CR_UNKNOWN; fail here instead
     for reason in CloseReason:
-        assert _CLOSE_REASON_NAMES[reason] in proto_names
-    assert "CR_UNKNOWN" in proto_names
+        assert _close_reason_name(reason) != "CR_UNKNOWN", reason
+    assert _close_reason_name(CloseReason.TASK_COMPLETED) == "CR_COMPLETED"

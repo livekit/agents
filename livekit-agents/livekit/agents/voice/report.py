@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from livekit.protocol.agent_pb import agent_session as agent_pb
+
 from ..llm import ChatContext
 from ..metrics import ModelUsage
 from ..version import __version__
@@ -19,14 +21,13 @@ _ERROR_KEYS = {
     "interruption_detection_error": "interruption",
 }
 
-# Maps a CloseReason to the name of its livekit.agent.CloseReason proto enum value.
-_CLOSE_REASON_NAMES = {
-    CloseReason.ERROR: "CR_ERROR",
-    CloseReason.JOB_SHUTDOWN: "CR_JOB_SHUTDOWN",
-    CloseReason.PARTICIPANT_DISCONNECTED: "CR_PARTICIPANT_DISCONNECTED",
-    CloseReason.USER_INITIATED: "CR_USER_INITIATED",
-    CloseReason.TASK_COMPLETED: "CR_COMPLETED",
-}
+
+def _close_reason_name(reason: CloseReason) -> str:
+    """Name of the livekit.agent.CloseReason proto value for an SDK close reason."""
+    # The proto calls task completion CR_COMPLETED; every other reason is CR_<member name>.
+    member = "COMPLETED" if reason is CloseReason.TASK_COMPLETED else reason.name
+    name = f"CR_{member}"
+    return name if name in agent_pb.CloseReason.keys() else "CR_UNKNOWN"
 
 
 @dataclass
@@ -100,7 +101,7 @@ class SessionReport:
         report["duration_ms"] = int(self.duration * 1000) if self.duration is not None else None
         report["user_turns"] = self._user_turns()
         report["errors"] = self._error_counts()
-        report["close_reason"] = self._close_reason_name()
+        report["close_reason"] = self._last_close_reason_name()
         return report
 
     def _user_turns(self) -> int:
@@ -120,12 +121,12 @@ class SessionReport:
                     errors[key] += 1
         return errors
 
-    def _close_reason_name(self) -> str | None:
+    def _last_close_reason_name(self) -> str | None:
         """Proto enum name of the last close event's reason, or None without a close event."""
         name: str | None = None
         for event in self.events:
             if event.type == "close":
-                name = _CLOSE_REASON_NAMES.get(event.reason, "CR_UNKNOWN")
+                name = _close_reason_name(event.reason)
         return name
 
     def _usage_to_dict(self) -> list[dict] | None:
