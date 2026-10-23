@@ -3232,7 +3232,7 @@ class AgentActivity(RecognitionHooks):
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
-        if speech_handle.allow_interruptions:
+        if self._waits_for_user_silence(speech_handle):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
@@ -3768,7 +3768,7 @@ class AgentActivity(RecognitionHooks):
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
-        if speech_handle.allow_interruptions:
+        if self._waits_for_user_silence(speech_handle):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
@@ -4201,7 +4201,7 @@ class AgentActivity(RecognitionHooks):
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
-        if speech_handle.allow_interruptions and not self._rt_overlapping_speech_enabled:
+        if self._waits_for_user_silence(speech_handle) and not self._rt_overlapping_speech_enabled:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         # the queue wait is recorded by _realtime_generation_task, which owns the agent_turn span
@@ -4432,7 +4432,7 @@ class AgentActivity(RecognitionHooks):
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
-        if speech_handle.allow_interruptions and not self._rt_overlapping_speech_enabled:
+        if self._waits_for_user_silence(speech_handle) and not self._rt_overlapping_speech_enabled:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
@@ -5002,6 +5002,32 @@ class AgentActivity(RecognitionHooks):
                 timeout=timeout,
             )
 
+    def _waits_for_user_silence(self, speech_handle: SpeechHandle) -> bool:
+        """Should this speech wait for the caller to stop before it is authorized?
+
+        Authorization gathers *all* of its futures, so a pending
+        `_user_silence_event` holds the reply before it ever reaches audio
+        forwarding. With `hold_reply_while_user_speaking` off, releasing the
+        playout pause downstream would therefore never get a turn: the caller's
+        noise has to stop blocking here too, or the option does nothing in the
+        case it exists for.
+        """
+        if not speech_handle.allow_interruptions:
+            return False
+
+        return bool(self._session.options.interruption["hold_reply_while_user_speaking"])
+
+    def _holds_reply_while_thinking(self) -> bool:
+        """Should a pause taken while the agent was thinking keep the reply waiting?
+
+        Only pauses recorded with the agent *thinking* are released early: an
+        interruption during playback is a different thing and keeps its behaviour.
+        """
+        if self._session.options.interruption["hold_reply_while_user_speaking"]:
+            return True
+
+        return self._paused_speech is None or self._paused_speech.agent_state != "thinking"
+
     def _pause_enabled(self) -> bool:
         if self._rt_overlapping_speech_enabled:
             # the framework never interrupts on the caller here, so no interruption can be false
@@ -5029,6 +5055,24 @@ class AgentActivity(RecognitionHooks):
             and self._paused_speech.handle is speech_handle
             and pause_is_allowed
         )
+        if pause_is_valid and not self._holds_reply_while_thinking():
+            # The pause was taken while this reply was still being generated and the
+            # caller is only making noise -- a breath, line noise, a short "mm".
+            # Holding the audio means waiting for end of speech, plus
+            # false_interruption_timeout when the sound was long enough to count as an
+            # interruption, so a 0.6s noise near the start of a reply costs seconds of
+            # dead air. Release it here instead, which is what 1.6.x did.
+            #
+            # This returns rather than falling through: the block below would see the
+            # agent still not "speaking" and the caller still not silent, and pause
+            # again. The agent state is left alone, since playout starting moves it to
+            # "speaking" on its own.
+            self._paused_speech = None
+            self._cancel_false_interruption_timer()
+            if audio_output is not None and audio_output.can_pause:
+                audio_output.resume()
+            return
+
         if pause_is_valid:
             # a paused playout stay paused regardless of forwarding status
             return
@@ -5042,6 +5086,10 @@ class AgentActivity(RecognitionHooks):
             pause_is_allowed
             and self._session.agent_state != "speaking"
             and not self._user_silence_event.is_set()
+            # With the hold opted out there is nothing to create either: start-of-speech
+            # arriving before this handle became current means no pause was recorded, so
+            # the release above never fires and this block would pause the reply anyway.
+            and self._session.options.interruption["hold_reply_while_user_speaking"]
         ):
             assert audio_output is not None
             # SOS arrived before this handle became current so we pause here
