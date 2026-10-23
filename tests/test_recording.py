@@ -777,9 +777,7 @@ async def _upload_and_read_header(
 
 
 def _expected_summary(report: SessionReport) -> dict[str, Any]:
-    summary = report.to_dict(include_chat_history=False, include_events=False)
-    del summary["audio_recording_path"]
-    return summary
+    return report.to_dict(include_chat_history=False, include_events=False)
 
 
 async def test_upload_header_carries_session_summary() -> None:
@@ -795,7 +793,6 @@ async def test_upload_header_carries_session_summary() -> None:
 
     summary = json.loads(header.session_summary)
     assert summary == _expected_summary(report)
-    assert "audio_recording_path" not in summary
     assert "chat_history" not in summary
     assert "events" not in summary
     assert header.duration == 12500

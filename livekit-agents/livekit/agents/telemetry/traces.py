@@ -1275,17 +1275,6 @@ def _recording_upload_retry_delay(attempt: int) -> float:
     return random.uniform(0.0, min(2.0**attempt, 8.0))
 
 
-def _session_summary(report: SessionReport) -> dict[str, Any]:
-    """Build the session summary sent in the recording header for agent evals.
-
-    It is the report's ``to_dict`` without chat history, events and the local recording path.
-    Schema: ``evalschema/session-summary.schema.json`` in livekit/cloud-protocol.
-    """
-    summary = report.to_dict(include_chat_history=False, include_events=False)
-    del summary["audio_recording_path"]
-    return summary
-
-
 async def _upload_session_report(
     *,
     agent_name: str,
@@ -1436,8 +1425,10 @@ async def _upload_session_report(
         simulated=bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
         redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
         duration=int((report.duration or 0) * 1000),
+        # Agent evals read this to pick sessions. Schema: evalschema/session-summary.schema.json
+        # in livekit/cloud-protocol.
         session_summary=json.dumps(
-            _session_summary(report),
+            report.to_dict(include_chat_history=False, include_events=False),
             separators=(",", ":"),
         ),
     )
