@@ -101,6 +101,34 @@ async def test_cancelled_update_waits_for_acknowledged_settings():
         assert peer.settings["tools"][0]["function"]["name"] == "lookup"
 
 
+@pytest.mark.parametrize("setting", ["instructions", "tools"])
+async def test_cancelled_fallback_update_survives_restart(setting):
+    async with peer_model() as (peer, model, _):
+        fallback = llm.RealtimeModelFallbackAdapter([model])
+        session = fallback.session()
+        try:
+            await session.initialize(instructions="Original")
+            peer.update_started.clear()
+            peer.update_release.clear()
+            change = asyncio.create_task(
+                session.update_instructions("Accepted")
+                if setting == "instructions"
+                else session.update_tools([lookup])
+            )
+            await asyncio.wait_for(peer.update_started.wait(), 3)
+            change.cancel()
+            peer.update_release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await change
+            await fallback.restart_session()
+            if setting == "instructions":
+                assert peer.settings["instructions"] == "Accepted"
+            else:
+                assert peer.settings["tools"][0]["function"]["name"] == "lookup"
+        finally:
+            await session.aclose()
+
+
 async def test_agent_handoff_reuses_conversation_and_updates_tools():
     async with peer_model() as (peer, model, _):
         async with AgentSession(llm=model) as session:

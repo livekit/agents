@@ -4283,6 +4283,7 @@ class AgentActivity(RecognitionHooks):
 
         ori_tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
         ori_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
+        reply_error: llm.RealtimeError | None = None
         try:
             if not (
                 per_response_tool_choice
@@ -4339,7 +4340,7 @@ class AgentActivity(RecognitionHooks):
                     " after tool execution" if tool_reply else "",
                     str(e),
                 )
-                speech_handle._mark_done(error=e)
+                reply_error = e
                 self._session._update_agent_state("listening")
                 return
 
@@ -4352,21 +4353,42 @@ class AgentActivity(RecognitionHooks):
             )
         except llm.RealtimeError as error:
             logger.error("failed to configure realtime reply: %s", error)
-            speech_handle._mark_done(error=error)
+            reply_error = error
             self._session._update_agent_state("listening")
         finally:
             # reset tool_choice and tools
+            restore_error: Exception | None = None
             if is_given(ori_tool_choice):
                 try:
                     self._rt_session.update_options(tool_choice=ori_tool_choice)
-                except Exception:
+                except Exception as error:
                     logger.exception("failed to reset tool_choice")
+                    restore_error = error
 
             if is_given(ori_tools):
                 try:
                     await self._rt_session.update_tools(ori_tools)
-                except Exception:
+                except Exception as error:
                     logger.exception("failed to reset tools")
+                    restore_error = restore_error or error
+
+            if restore_error is not None:
+                # The provider may have partially applied a temporary setting.
+                # Do not let later replies use that uncertain configuration.
+                error_event = llm.RealtimeModelError(
+                    timestamp=time.time(),
+                    label=self._rt_session.realtime_model.label,
+                    error=restore_error,
+                    recoverable=False,
+                )
+                if isinstance(self._rt_session, _FallbackRealtimeSession):
+                    self._rt_session._on_child_error(error_event)
+                else:
+                    self._rt_session.emit("error", error_event)
+            if reply_error is not None:
+                # Keep the speech scheduled until its temporary settings have
+                # been restored or the uncertain provider has been rejected.
+                speech_handle._mark_done(error=reply_error)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
