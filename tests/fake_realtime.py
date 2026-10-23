@@ -253,6 +253,7 @@ async def run_realtime_tool_turn(
             )
             text_ch.send_nowait("let me check")
             text_ch.close()
+            # a full second of audio, so the turn is still playing when the tool returns
             audio_ch.send_nowait(_audio_frame(1.0))
             audio_ch.close()
         message_ch.close()
