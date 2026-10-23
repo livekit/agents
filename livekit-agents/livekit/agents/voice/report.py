@@ -32,44 +32,48 @@ class SessionReport:
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
 
-    def to_dict(self) -> dict:
-        events_dict: list[dict] = []
-
-        for event in self.events:
-            if event.type == "metrics_collected":
-                continue  # metrics are too noisy, Cloud is using the chat_history as the source of thruth
-
-            events_dict.append(event.model_dump())
-
-        return {
+    def to_dict(self, *, include_chat_history: bool = True, include_events: bool = True) -> dict:
+        """Serialize the report. A ``False`` flag omits that key from the result."""
+        report: dict = {
             "job_id": self.job_id,
             "room_id": self.room_id,
             "room": self.room,
-            "events": events_dict,
-            "audio_recording_path": (
-                str(self.audio_recording_path.absolute()) if self.audio_recording_path else None
-            ),
-            "audio_recording_started_at": self.audio_recording_started_at,
-            "options": {
-                "allow_interruptions": self.options.interruption["enabled"],
-                "discard_audio_if_uninterruptible": self.options.interruption[
-                    "discard_audio_if_uninterruptible"
-                ],
-                "min_interruption_duration": self.options.interruption["min_duration"],
-                "min_interruption_words": self.options.interruption["min_words"],
-                "min_endpointing_delay": self.options.endpointing["min_delay"],
-                "max_endpointing_delay": self.options.endpointing["max_delay"],
-                "max_tool_steps": self.options.max_tool_steps,
-                "user_away_timeout": self.options.user_away_timeout,
-                "min_consecutive_speech_delay": self.options.min_consecutive_speech_delay,
-                "preemptive_generation": dict(self.options.preemptive_generation),
-                "recording_options": dict(self.options.recording_options),
-            },
-            "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
-            "timestamp": self.timestamp,
-            "usage": self._usage_to_dict() if self.model_usage else None,
-            "sdk_version": self.sdk_version,
         }
+        if include_events:
+            events_dict: list[dict] = []
+            for event in self.events:
+                if event.type == "metrics_collected":
+                    # metrics are too noisy, Cloud is using the chat_history as the source of thruth
+                    continue
+
+                events_dict.append(event.model_dump())
+            report["events"] = events_dict
+
+        report["audio_recording_path"] = (
+            str(self.audio_recording_path.absolute()) if self.audio_recording_path else None
+        )
+        report["audio_recording_started_at"] = self.audio_recording_started_at
+        report["options"] = {
+            "allow_interruptions": self.options.interruption["enabled"],
+            "discard_audio_if_uninterruptible": self.options.interruption[
+                "discard_audio_if_uninterruptible"
+            ],
+            "min_interruption_duration": self.options.interruption["min_duration"],
+            "min_interruption_words": self.options.interruption["min_words"],
+            "min_endpointing_delay": self.options.endpointing["min_delay"],
+            "max_endpointing_delay": self.options.endpointing["max_delay"],
+            "max_tool_steps": self.options.max_tool_steps,
+            "user_away_timeout": self.options.user_away_timeout,
+            "min_consecutive_speech_delay": self.options.min_consecutive_speech_delay,
+            "preemptive_generation": dict(self.options.preemptive_generation),
+            "recording_options": dict(self.options.recording_options),
+        }
+        if include_chat_history:
+            report["chat_history"] = self.chat_history.to_dict(exclude_timestamp=False)
+        report["timestamp"] = self.timestamp
+        report["usage"] = self._usage_to_dict() if self.model_usage else None
+        report["sdk_version"] = self.sdk_version
+        return report
 
     def _usage_to_dict(self) -> list[dict] | None:
         if self.model_usage is None:

@@ -1285,18 +1285,37 @@ _SUMMARY_ERROR_KEYS = {
 }
 
 
-def _session_summary(*, agent_name: str, report: SessionReport, tagger: Tagger) -> dict[str, Any]:
-    """Build the session summary sent in the recording header.
+# Maps a CloseReason value (voice.events, not imported here: circular import) to the name of the
+# livekit.agent.CloseReason proto enum value.
+_SUMMARY_CLOSE_REASONS = {
+    "error": "CR_ERROR",
+    "job_shutdown": "CR_JOB_SHUTDOWN",
+    "participant_disconnected": "CR_PARTICIPANT_DISCONNECTED",
+    "user_initiated": "CR_USER_INITIATED",
+    "task_completed": "CR_TASK_COMPLETED",
+}
 
-    Agent evals read it to pick sessions to score. An absent key means "not sent", so
-    ``duration_ms``, ``usage``, ``models`` and ``close_reason`` are omitted when the report has
-    no value for them.
+
+def _session_summary(*, agent_name: str, report: SessionReport, tagger: Tagger) -> dict[str, Any]:
+    """Build the session summary sent in the recording header for agent evals.
+
+    It is the report's ``to_dict`` without chat history, events and the local recording path,
+    plus computed keys. An absent key means "not sent". Schema:
+    ``evalschema/session-summary.schema.json`` in livekit/cloud-protocol.
     """
-    summary: dict[str, Any] = {
-        "agent_name": agent_name,
-        "sdk_version": report.sdk_version,
-        "tags": sorted(tagger.tags),
-    }
+    summary = report.to_dict(include_chat_history=False, include_events=False)
+    del summary["audio_recording_path"]
+
+    # to_dict drops each usage's ``type`` because it is a default value; evals need it.
+    usage = summary.pop("usage")
+    if usage:
+        summary["usage"] = [
+            {"type": model_usage.type, **usage_dict}
+            for model_usage, usage_dict in zip(report.model_usage or [], usage, strict=True)
+        ]
+
+    summary["agent_name"] = agent_name
+    summary["tags"] = sorted(tagger.tags)
     if report.duration is not None:
         summary["duration_ms"] = int(report.duration * 1000)
 
@@ -1306,36 +1325,19 @@ def _session_summary(*, agent_name: str, report: SessionReport, tagger: Tagger) 
             user_turns += 1
     summary["user_turns"] = user_turns
 
-    if report.model_usage:
-        usage = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tts_characters": 0}
-        for model_usage in report.model_usage:
-            if model_usage.type == "llm_usage":
-                usage["input_tokens"] += model_usage.input_tokens
-                usage["output_tokens"] += model_usage.output_tokens
-                usage["cached_tokens"] += model_usage.input_cached_tokens
-            elif model_usage.type == "tts_usage":
-                usage["tts_characters"] += model_usage.characters_count
-        summary["usage"] = usage
-
-        models = {
-            (model_usage.type.removesuffix("_usage"), model_usage.provider, model_usage.model)
-            for model_usage in report.model_usage
-        }
-        summary["models"] = [
-            {"type": type_, "provider": provider, "model": model}
-            for type_, provider, model in sorted(models)
-        ]
-
     # Events are not uploaded, so the header is the only way evals can see them.
     errors = dict.fromkeys(_SUMMARY_ERROR_KEYS.values(), 0)
+    close_reason: str | None = None
     for event in report.events:
         if event.type == "error":
             key = _SUMMARY_ERROR_KEYS.get(getattr(event.error, "type", ""))
             if key is not None:
                 errors[key] += 1
         elif event.type == "close":
-            summary["close_reason"] = event.reason.value
+            close_reason = _SUMMARY_CLOSE_REASONS.get(event.reason.value, "CR_UNKNOWN")
     summary["errors"] = errors
+    if close_reason is not None:
+        summary["close_reason"] = close_reason
 
     return summary
 

@@ -17,17 +17,19 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
-from livekit.agents.llm import ChatMessage, LLMError
+from livekit.agents.llm import ChatContext, ChatMessage, LLMError
 from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
-from livekit.agents.telemetry.traces import _upload_session_report
+from livekit.agents.telemetry.traces import _SUMMARY_CLOSE_REASONS, _upload_session_report
 from livekit.agents.tts import TTSError
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
-from livekit.agents.voice.events import CloseEvent, CloseReason, ErrorEvent
+from livekit.agents.voice.events import AgentEvent, CloseEvent, CloseReason, ErrorEvent
+from livekit.agents.voice.report import SessionReport
 from livekit.protocol import metrics as proto_metrics
+from livekit.protocol.agent_pb import agent_session as proto_agent_session
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 from .fake_llm import FakeLLM
@@ -118,6 +120,12 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.timestamp = 1010.0
     report.options = MagicMock()
     report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
+    # a fresh dict per call: the session summary edits the one it gets
+    report.to_dict.side_effect = lambda **_: {
+        "job_id": "job-1",
+        "audio_recording_path": None,
+        "usage": None,
+    }
     return report
 
 
@@ -740,8 +748,33 @@ async def test_upload_multipart_header_carries_simulation_redaction() -> None:
     assert header.redaction_enabled is True
 
 
+def _make_report(
+    *,
+    duration: float | None = 12.5,
+    chat_items: list[ChatMessage] | None = None,
+    model_usage: list[Any] | None = None,
+    events: list[AgentEvent] | None = None,
+) -> SessionReport:
+    """Create a real SessionReport so the summary sees real ``to_dict`` output."""
+    options = AgentSession().options
+    options.recording_options = {"audio": False, "traces": False, "logs": False, "transcript": True}
+    return SessionReport(
+        job_id="job-1",
+        room_id="room-1",
+        room="test-room",
+        options=options,
+        events=events or [],
+        chat_history=ChatContext(chat_items or []),
+        duration=duration,
+        started_at=1000.0,
+        timestamp=1010.0,
+        model_usage=model_usage,
+        sdk_version="1.0.0",
+    )
+
+
 async def _upload_and_read_header(
-    report: MagicMock, tagger: MagicMock
+    report: SessionReport | MagicMock, tagger: MagicMock
 ) -> proto_metrics.MetricsRecordingHeader:
     mock_http = _make_mock_http()
     with _patch_upload_deps():
@@ -750,6 +783,19 @@ async def _upload_and_read_header(
     mp_writer = mock_http.post.call_args.kwargs.get("data") or mock_http.post.call_args[1]["data"]
     parts = _get_multipart_parts(mp_writer)
     return proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
+
+
+def _report_keys(report: SessionReport) -> dict[str, Any]:
+    """The report keys the summary keeps unchanged."""
+    return {
+        "job_id": "job-1",
+        "room_id": "room-1",
+        "room": "test-room",
+        "audio_recording_started_at": None,
+        "options": report.to_dict()["options"],
+        "timestamp": 1010.0,
+        "sdk_version": "1.0.0",
+    }
 
 
 def _llm_error() -> LLMError:
@@ -761,57 +807,70 @@ def _tts_error() -> TTSError:
 
 
 async def test_upload_header_carries_session_summary() -> None:
-    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
-    report.duration = 12.5
-    report.chat_history.items = [
-        ChatMessage(role="user", content=["hi"]),
-        ChatMessage(role="assistant", content=["hello"]),
-        ChatMessage(role="user", content=["bye"]),
-    ]
-    report.model_usage = [
-        LLMModelUsage(
-            provider="p", model="m", input_tokens=10, output_tokens=5, input_cached_tokens=2
-        ),
-        TTSModelUsage(provider="p", model="m", characters_count=40),
-    ]
-    report.events = [
-        ErrorEvent(error=_llm_error(), source=MagicMock()),
-        ErrorEvent(error=_llm_error(), source=MagicMock()),
-        ErrorEvent(error=_tts_error(), source=MagicMock()),
-        CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED),
-    ]
+    report = _make_report(
+        chat_items=[
+            ChatMessage(role="user", content=["hi"]),
+            ChatMessage(role="assistant", content=["hello"]),
+            ChatMessage(role="user", content=["bye"]),
+        ],
+        model_usage=[
+            LLMModelUsage(
+                provider="openai",
+                model="gpt-4o",
+                input_tokens=10,
+                output_tokens=5,
+                input_cached_tokens=2,
+            ),
+            TTSModelUsage(provider="cartesia", model="sonic", characters_count=40),
+        ],
+        events=[
+            ErrorEvent(error=_llm_error(), source=MagicMock()),
+            ErrorEvent(error=_llm_error(), source=MagicMock()),
+            ErrorEvent(error=_tts_error(), source=MagicMock()),
+            CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED),
+        ],
+    )
     tagger = _make_mock_tagger()
     tagger.tags = {"vip"}
 
     header = await _upload_and_read_header(report, tagger)
 
     assert json.loads(header.session_summary) == {
+        **_report_keys(report),
+        "usage": [
+            {
+                "type": "llm_usage",
+                "provider": "openai",
+                "model": "gpt-4o",
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "input_cached_tokens": 2,
+            },
+            {
+                "type": "tts_usage",
+                "provider": "cartesia",
+                "model": "sonic",
+                "characters_count": 40,
+            },
+        ],
         "agent_name": "support",
-        "sdk_version": "1.0.0",
         "tags": ["vip"],
         "duration_ms": 12500,
         "user_turns": 2,
-        "usage": {"input_tokens": 10, "output_tokens": 5, "cached_tokens": 2, "tts_characters": 40},
-        "models": [
-            {"type": "llm", "provider": "p", "model": "m"},
-            {"type": "tts", "provider": "p", "model": "m"},
-        ],
         "errors": {"llm": 2, "stt": 0, "tts": 1, "realtime": 0, "interruption": 0},
-        "close_reason": "participant_disconnected",
+        "close_reason": "CR_PARTICIPANT_DISCONNECTED",
     }
     assert header.duration == 12500
 
 
 async def test_session_summary_empty_session() -> None:
-    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
-    report.duration = 12.5
-    report.model_usage = None
+    report = _make_report()
 
     header = await _upload_and_read_header(report, _make_mock_tagger())
 
     assert json.loads(header.session_summary) == {
+        **_report_keys(report),
         "agent_name": "support",
-        "sdk_version": "1.0.0",
         "tags": [],
         "duration_ms": 12500,
         "user_turns": 0,
@@ -820,14 +879,22 @@ async def test_session_summary_empty_session() -> None:
 
 
 async def test_session_summary_omits_duration_when_unknown() -> None:
-    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
-    report.duration = None
-    report.model_usage = []
+    report = _make_report(duration=None, model_usage=[])
 
     header = await _upload_and_read_header(report, _make_mock_tagger())
 
-    assert "duration_ms" not in json.loads(header.session_summary)
+    summary = json.loads(header.session_summary)
+    assert "duration_ms" not in summary
+    assert "usage" not in summary
     assert header.duration == 0
+
+
+def test_session_summary_close_reasons_match_proto_enum() -> None:
+    # A new SDK close reason without a mapping, or a name the proto lacks, fails here.
+    proto_names = proto_agent_session.CloseReason.keys()
+    for reason in CloseReason:
+        assert _SUMMARY_CLOSE_REASONS[reason.value] in proto_names
+    assert "CR_UNKNOWN" in proto_names
 
 
 def test_job_context_otel_metadata_includes_redaction_option() -> None:

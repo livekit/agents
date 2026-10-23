@@ -12,12 +12,14 @@ from typing import Any
 import pytest
 
 from livekit.agents import AgentSession, inference
+from livekit.agents.llm import ChatContext
 from livekit.agents.telemetry.traces import (
     _describe_option_object,
     _serialize_option_value,
     _serialize_session_options,
 )
 from livekit.agents.types import NOT_GIVEN
+from livekit.agents.voice.report import SessionReport
 
 pytestmark = pytest.mark.unit
 
@@ -192,3 +194,40 @@ def test_nested_containers_and_key_aliases() -> None:
         "nested": {"detector": f"{__name__}.Det(model=m)", "flags": [True, 1, 2.5, None]},
     }
     _assert_report_safe(out)
+
+
+def _report() -> SessionReport:
+    return SessionReport(
+        job_id="job-1",
+        room_id="room-1",
+        room="test-room",
+        options=AgentSession().options,
+        events=[],
+        chat_history=ChatContext(),
+    )
+
+
+def test_report_to_dict_default_keys_unchanged() -> None:
+    assert list(_report().to_dict()) == [
+        "job_id",
+        "room_id",
+        "room",
+        "events",
+        "audio_recording_path",
+        "audio_recording_started_at",
+        "options",
+        "chat_history",
+        "timestamp",
+        "usage",
+        "sdk_version",
+    ]
+
+
+def test_report_to_dict_flags_omit_keys() -> None:
+    report = _report()
+    full = report.to_dict()
+
+    assert report.to_dict(include_chat_history=False) == {
+        k: v for k, v in full.items() if k != "chat_history"
+    }
+    assert report.to_dict(include_events=False) == {k: v for k, v in full.items() if k != "events"}
