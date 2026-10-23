@@ -32,6 +32,7 @@ from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..telemetry.traces import _resource
 from ..utils import aio, http_context, log_exceptions, shortuuid
+from ..voice.events import CloseReason
 from .channel import Message
 from .inference_executor import InferenceExecutor
 from .proc_client import _dump_stack_traces_impl, _ProcClient
@@ -440,7 +441,10 @@ class _JobProc:
 
         if session := self._job_ctx._primary_agent_session:
             try:
-                await asyncio.wait_for(session.aclose(), timeout=_SESSION_ACLOSE_TIMEOUT)
+                await asyncio.wait_for(
+                    session._aclose_impl(reason=CloseReason.JOB_SHUTDOWN),
+                    timeout=_SESSION_ACLOSE_TIMEOUT,
+                )
             except asyncio.TimeoutError:
                 logger.error(
                     "AgentSession.aclose() timed out after %.1fs; "
