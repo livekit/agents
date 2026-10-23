@@ -854,6 +854,7 @@ class SpeechStream(stt.SpeechStream):
             request_id = metadata["request_id"]
             is_final_transcript = data["is_final"]
             is_endpoint = data["speech_final"]
+            from_finalize = data.get("from_finalize") is True
             self._request_id = request_id
 
             alts = live_transcription_to_speech_data(
@@ -863,6 +864,13 @@ class SpeechStream(stt.SpeechStream):
                 start_time_offset=self.start_time_offset,
                 use_punctuated_word=self._opts.punctuate or self._opts.smart_format,
             )
+            if from_finalize and is_final_transcript:
+                # Keep the provider's completion signal in the event queue after
+                # all preceding results, including when it carries no new text.
+                if not alts:
+                    alts = [stt.SpeechData(language=self._opts.language, text="")]
+                for alt in alts:
+                    alt.metadata = {**(alt.metadata or {}), "from_finalize": True}
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
             # been observed.
@@ -886,6 +894,15 @@ class SpeechStream(stt.SpeechStream):
                         alternatives=alts,
                     )
                     self._event_ch.send_nowait(interim_event)
+
+            elif from_finalize and is_final_transcript:
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        request_id=request_id,
+                        alternatives=alts,
+                    )
+                )
 
             # if we receive an endpoint, only end the speech if
             # we either had a SpeechStarted event or we have a seen
