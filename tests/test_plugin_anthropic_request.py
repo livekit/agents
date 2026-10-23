@@ -80,3 +80,11 @@ async def test_forced_tool_choice_warning_logged_once(caplog: pytest.LogCaptureF
     warnings = [r for r in caplog.records if "forced tool_choice" in r.getMessage()]
     assert len(warnings) == 1
     assert [r["tool_choice"] for r in requests] == [{"type": "auto"}] * 3
+
+
+async def test_user_sent_as_metadata_user_id() -> None:
+    requests: list[dict[str, Any]] = []
+    instance = _make_llm("claude-sonnet-4-6", requests, user="user-123")
+    await instance.chat(chat_ctx=ChatContext()).collect()
+
+    assert requests[0]["metadata"] == {"user_id": "user-123"}
