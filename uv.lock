@@ -3661,14 +3661,18 @@ requires-dist = [
 name = "livekit-plugins-smallestai"
 source = { editable = "livekit-plugins/livekit-plugins-smallestai" }
 dependencies = [
-    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "httpx2" },
+    { name = "livekit-agents", extra = ["codecs", "openai"] },
     { name = "numpy" },
+    { name = "openai" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "httpx2", specifier = ">=2.12,<3" },
+    { name = "livekit-agents", extras = ["codecs", "openai"], editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "openai", specifier = ">=3.19,<4" },
 ]
 
 [[package]]

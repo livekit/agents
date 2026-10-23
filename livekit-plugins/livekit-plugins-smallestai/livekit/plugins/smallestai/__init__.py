@@ -17,11 +17,12 @@
 See https://docs.livekit.io/agents/integrations/smallestai/ for more information.
 """
 
+from .llm import LLM as LLM
 from .stt import STT as STT, SpeechStream as SpeechStream
 from .tts import TTS as TTS, ChunkedStream as ChunkedStream
 from .version import __version__ as __version__
 
-__all__ = ["STT", "SpeechStream", "TTS", "ChunkedStream", "__version__"]
+__all__ = ["STT", "SpeechStream", "TTS", "ChunkedStream", "LLM", "__version__"]
 
 from livekit.agents import Plugin
 
