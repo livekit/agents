@@ -62,32 +62,82 @@ from .version import __version__
 
 BASE_URL = "https://api.zoom.us/v2/aiservices/scribe"
 USER_AGENT = f"livekit-plugins-zoom-ai/{__version__}"
-TRACKING_ID_PREFIX = "zoom_ai_community_integration_livekit_"
 SAMPLE_RATE = 16000  # Scribe Live accepts 16 kHz mono PCM16 only
 KEEPALIVE_INTERVAL_S = 10.0  # Scribe closes a session after 30 s without audio
 # When input stops mid-turn (e.g. the user muted), Scribe's VAD hears no silence and
 # the turn stays open. After this long without input, send enough silence to end it.
 INPUT_GAP_S = 1.0
+# An options change waits for the turn in progress to end (Scribe's final), at most this
+# long, before the stream reconnects with the new session config.
+RECONNECT_HOLD_S = 10.0
 # Silence that ends a Scribe Live turn, tuned for voice agents.
 DEFAULT_SILENCE_DURATION_MS = 350
 
-SUPPORTED_LANGUAGES_URL = "https://developers.zoom.us/docs/ai-services/scribe/#supported-languages"
-# Scribe's supported locales, as in its docs (SUPPORTED_LANGUAGES_URL), and the locale
-# each base code maps to.
-_LOCALES = (
-    "en-US", "zh-CN", "ja-JP", "es-ES", "it-IT", "fr-FR",
-    "de-DE", "ar-SA", "ar-AE", "pt-BR", "pt-PT",
-)  # fmt: skip
-_BASE_TO_LOCALE = {
-    "en": "en-US", "zh": "zh-CN", "ja": "ja-JP", "es": "es-ES", "it": "it-IT",
-    "fr": "fr-FR", "de": "de-DE", "ar": "ar-SA", "pt": "pt-BR",
+# The Scribe locale for each language code. For the supported languages of each model, see
+# https://developers.zoom.us/docs/ai-services/scribe/speech-understanding/
+_LANGUAGE_MAP = {
+    # zoom-scribe-multilingual (and whisper)
+    "ar": "ar-SA", "ar-AE": "ar-AE", "ar-SA": "ar-SA",
+    "de": "de-DE", "de-DE": "de-DE",
+    "en": "en-US", "en-US": "en-US",
+    "es": "es-ES", "es-ES": "es-ES",
+    "fr": "fr-FR", "fr-FR": "fr-FR",
+    "it": "it-IT", "it-IT": "it-IT",
+    "ja": "ja-JP", "ja-JP": "ja-JP",
+    "ko": "ko-KR", "ko-KR": "ko-KR",
+    "pt": "pt-BR", "pt-BR": "pt-BR", "pt-PT": "pt-PT",
+    "zh": "zh-CN", "zh-CN": "zh-CN",
+    # whisper only
+    "bn": "bn-IN", "bn-IN": "bn-IN",
+    "ca": "ca-ES", "ca-ES": "ca-ES",
+    "cs": "cs-CZ", "cs-CZ": "cs-CZ",
+    "da": "da-DK", "da-DK": "da-DK",
+    "el": "el-GR", "el-GR": "el-GR",
+    "et": "et-EE", "et-EE": "et-EE",
+    "fa": "fa-IR", "fa-IR": "fa-IR",
+    "fi": "fi-FI", "fi-FI": "fi-FI",
+    "fil": "tl-PH", "fil-PH": "tl-PH",
+    "he": "he-IL", "he-IL": "he-IL",
+    "hi": "hi-IN", "hi-IN": "hi-IN",
+    "hu": "hu-HU", "hu-HU": "hu-HU",
+    "id": "id-ID", "id-ID": "id-ID",
+    "ms": "ms-MY", "ms-MY": "ms-MY",
+    "nl": "nl-NL", "nl-NL": "nl-NL",
+    "pl": "pl-PL", "pl-PL": "pl-PL",
+    "ro": "ro-RO", "ro-RO": "ro-RO",
+    "ru": "ru-RU", "ru-RU": "ru-RU",
+    "sv": "sv-SE", "sv-SE": "sv-SE",
+    "ta": "ta-IN", "ta-IN": "ta-IN",
+    "te": "te-IN", "te-IN": "te-IN",
+    "th": "th-TH", "th-TH": "th-TH",
+    "tl": "tl-PH", "tl-PH": "tl-PH",
+    "tr": "tr-TR", "tr-TR": "tr-TR",
+    "uk": "uk-UA", "uk-UA": "uk-UA",
+    "vi": "vi-VN", "vi-VN": "vi-VN",
+    "yue": "zh-HK", "zh-HK": "zh-HK",
 }  # fmt: skip
-_TAG = re.compile(r"\[(?:speaker[ _]?\d+|spk_\d+|channel\d+)\]\s*", re.IGNORECASE)
+# Speaker and channel tags Scribe adds to the text: [Speaker 1], and [Speaker 1L] /
+# [Speaker 1R] with channel-separated diarization.
+_TAG = re.compile(r"\[(?:speaker[ _]?\d+[LR]?|spk_\d+|channel\d+)\]\s*", re.IGNORECASE)
 
 
 def _clean(text: str | None) -> str:
     """Remove the [Speaker N] / [channelN] tags Scribe adds when diarization is on."""
     return _TAG.sub("", text or "").strip()
+
+
+def _tracking_id() -> str:
+    """A new ``x-zm-trackingid``, which Zoom support uses to find a session or request."""
+    return f"zoom_ai_community_livekit_{uuid.uuid4()}"
+
+
+def _zoom_reason(body: str) -> str | None:
+    """The reason Zoom gives for refusing a request (``message`` in its JSON body), if any."""
+    try:
+        reason = json.loads(body).get("message")
+    except (TypeError, ValueError, AttributeError):  # no body, or not a JSON object
+        return None
+    return reason if isinstance(reason, str) and reason else None
 
 
 _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
@@ -129,25 +179,19 @@ def _reported_language(scribe_language: object, detecting: bool, configured: str
     return LanguageCode("" if detecting else configured)
 
 
-def _is_config_error(code: object) -> bool:
-    """A fatal Scribe error the same request would hit again, e.g. UNSUPPORTED_LANGUAGE."""
-    code = str(code or "").upper()
-    return "INVALID" in code or "UNSUPPORTED" in code
-
-
 def _to_locale(language: str) -> str:
-    """'en' -> 'en-US', 'en_us' -> 'en-US'. Raises ValueError for an unsupported language."""
-    lang = language.replace("_", "-")
-    if "-" in lang:
-        base, region = lang.split("-", 1)
-        locale = f"{base.lower()}-{region.upper()}"
-    else:
-        locale = _BASE_TO_LOCALE.get(lang.lower(), lang)
-    if locale not in _LOCALES:
-        raise ValueError(
-            f"Language {language!r} isn't supported by this version of the Zoom AI plugin. "
-            f"See Scribe's supported languages: {SUPPORTED_LANGUAGES_URL}"
-        )
+    """The Scribe locale for ``language``: ``"en"`` and ``"en_us"`` -> ``"en-US"``.
+
+    A regional variant Scribe doesn't list resolves to the locale of its base language
+    (``"en-GB"`` -> ``"en-US"``, ``"fr-CA"`` -> ``"fr-FR"``). Anything else is sent as
+    given, normalized, for Scribe to validate.
+    """
+    code = LanguageCode(language)
+    locale = _LANGUAGE_MAP.get(code) or _LANGUAGE_MAP.get(code.iso)
+    if locale:
+        return locale
+    locale = _LANGUAGE_MAP.get(code.language) or str(code)
+    logger.warning("language %r isn't in the Zoom AI plugin's list; using %r", language, locale)
     return locale
 
 
@@ -261,18 +305,21 @@ class STT(stt.STT):
 
         Args:
             mode: ``"live"`` (streaming, default) or ``"fast"`` (one request per utterance).
-            api_key: Zoom AI Services API key or JWT (Platform Studio → Credentials). Defaults to
-                ``$ZOOM_SCRIBE_API_KEY``. It is sent on every request and reconnect, so it
+            api_key: Zoom AI Services API key (Platform Studio → Credentials). Defaults to
+                ``$ZOOM_AI_API_KEY``. It is sent on every request and reconnect, so it
                 must stay valid for as long as the agent runs.
             language: A Scribe locale, e.g. ``"en-US"``; base codes such as ``"en"`` map to
-                their locale. Raises ``ValueError`` for a language this version of the plugin
-                doesn't support: https://developers.zoom.us/docs/ai-services/scribe/#supported-languages
+                their locale. A regional variant Scribe doesn't list resolves to the locale
+                of its base language (``"en-GB"`` to ``"en-US"``); anything else is sent as
+                given, for Scribe to validate. For the supported languages of each model, see
+                https://developers.zoom.us/docs/ai-services/scribe/speech-understanding/
             model: Scribe speech recognition model (``config.model``). ``None`` uses
                 Scribe's default model.
             language_detection: Scribe language detection mode
-                (``config.language_detection.mode``). ``None`` turns it off. A detected
-                language Scribe reports is in ``SpeechData.language``; when Scribe reports
-                none, it is empty.
+                (``config.language_detection.mode``; Live supports ``"continuous"``). ``None``
+                turns it off. A detected language Scribe reports is in
+                ``SpeechData.language``; when Scribe reports none, it is empty. With
+                ``zoom-scribe-multilingual`` in Live, set it to get each final's language.
             silence_duration_ms: Live only: milliseconds of silence that end a turn in
                 Scribe's voice activity detection. Defaults to 350, tuned for voice agents;
                 lower is faster, higher keeps sentences with longer pauses together. For
@@ -294,10 +341,11 @@ class STT(stt.STT):
             text_polishing: Scribe's text polishing (``outputs.text_polishing``). The
                 polished text is the transcript, and the recognized text is in
                 ``metadata["transcript"]``; if polishing fails, the recognized text is
-                used. Word timings aren't returned with polished text. Off by default.
+                used. Word timings aren't returned with polished text. ``en-US`` only, and not
+                with language detection. Off by default.
             extra_kwargs: Scribe request fields to add or override, shaped like the
-                request, e.g. ``{"config": {"profanity_filter": True}}`` or
-                ``{"outputs": {...}}``. Merged into the Live ``session.update`` and the Fast
+                request, e.g. ``{"config": {"language_detection": {"candidate_languages":
+                ["en-US", "fr-FR"]}}}`` to restrict language detection. Merged into the Live ``session.update`` and the Fast
                 request, over the options above, so Scribe fields this plugin has no option
                 for can be used. ``audio.format`` stays ``pcm16``.
             base_url: Scribe API base URL; Live uses ``<base>/live`` (as ``wss``) and Fast
@@ -321,11 +369,9 @@ class STT(stt.STT):
                 offline_recognize=True,
             )
         )
-        api_key = api_key if is_given(api_key) else os.environ.get("ZOOM_SCRIBE_API_KEY", "")
+        api_key = api_key if is_given(api_key) else os.environ.get("ZOOM_AI_API_KEY", "")
         if not api_key:
-            raise ValueError(
-                "Zoom Scribe API key is required: pass api_key or set ZOOM_SCRIBE_API_KEY"
-            )
+            raise ValueError("Zoom AI API key is required: pass api_key or set ZOOM_AI_API_KEY")
         self._api_key = api_key
         self._mode = mode
         base = base_url.rstrip("/")
@@ -371,11 +417,11 @@ class STT(stt.STT):
             self._session = utils.http_context.http_session()
         return self._session
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, tracking_id: str) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self._api_key}",
             "User-Agent": USER_AGENT,
-            "x-zm-trackingid": f"{TRACKING_ID_PREFIX}{uuid.uuid4()}",
+            "x-zm-trackingid": tracking_id,
         }
 
     def _fast_request(self, locale: str) -> dict[str, Any]:
@@ -414,20 +460,25 @@ class STT(stt.STT):
         )
         for field, value in request.items():
             form.add_field(field, json.dumps(value))
+        # Each request has its own tracking ID; it is the request_id of an error, so a
+        # failure can be matched in Zoom's logs.
+        tracking_id = _tracking_id()
         try:
             async with self._http.post(
                 self._fast_url,
                 data=form,
-                headers=self._headers(),
+                headers=self._headers(tracking_id),
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=conn_options.timeout),
             ) as resp:
                 body = await resp.text()
-                request_id = resp.headers.get("x-zm-trackingid")
                 if resp.status != 200:
+                    # Zoom explains a refusal (a bad API key, say) in the JSON body.
+                    reason = _zoom_reason(body)
                     raise APIStatusError(
-                        "Zoom Scribe Fast request failed",
+                        f"Zoom Scribe Fast error (HTTP {resp.status})"
+                        + (f": {reason}" if reason else ""),
                         status_code=resp.status,
-                        request_id=request_id,
+                        request_id=tracking_id,
                         body=body,
                     )
                 try:
@@ -436,7 +487,7 @@ class STT(stt.STT):
                     raise APIStatusError(
                         "Zoom Scribe Fast returned a non-JSON response",
                         status_code=resp.status,
-                        request_id=request_id,
+                        request_id=tracking_id,
                     ) from None
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -445,8 +496,10 @@ class STT(stt.STT):
 
         text = _clean((result.get("result") or {}).get("text_display"))
         segments = (result.get("result") or {}).get("segments") or []
-        # The detected language: the result's (one-time detection) or the first segment's
-        # (continuous detection), when Scribe reports one.
+        # The detected language, when Scribe reports one. Scribe Fast reports it as
+        # result.language with one-time detection; with continuous detection, production
+        # omits it from the result and the segments (as the docs say), so the language is
+        # then empty. A segment's language is used if Scribe ever sends one.
         detected = (result.get("result") or {}).get("language") or next(
             (s["language"] for s in segments if s.get("language")), None
         )
@@ -552,8 +605,8 @@ class STT(stt.STT):
             silence_duration_ms: Silence (ms) that ends a turn; ``None`` uses Scribe's
                 default.
 
-        An utterance in progress when the stream reconnects gets no final transcript; its
-        turn is closed with ``END_OF_SPEECH``.
+        A turn in progress keeps its session until Scribe's final transcript ends it (at
+        most 10 s), so the reconnect doesn't lose it.
         """
         if not is_given(language) and not is_given(silence_duration_ms):
             return
@@ -577,6 +630,8 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._audio_duration = 0.0
         self._speech_started = False
+        self._tracking_id: str | None = None  # the current session's x-zm-trackingid
+        self._session_updated = False  # Scribe accepted the current session's settings
         # Time between the start of this _run attempt and the current Scribe session.
         # The base class adds whole attempts to start_time_offset when it retries.
         self._session_offset = 0.0
@@ -594,8 +649,8 @@ class SpeechStream(stt.SpeechStream):
             silence_duration_ms: Silence (ms) that ends a turn; ``None`` uses Scribe's
                 default.
 
-        An utterance in progress when the stream reconnects gets no final transcript; its
-        turn is closed with ``END_OF_SPEECH``.
+        A turn in progress keeps its session until Scribe's final transcript ends it (at
+        most 10 s), so the reconnect doesn't lose it.
         """
         if not is_given(language) and not is_given(silence_duration_ms):
             return
@@ -632,20 +687,28 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         started_at = time.perf_counter()
+        # Each session has its own tracking ID. It is logged on connect and is the
+        # request_id of the session's errors, so a failure can be matched in Zoom's logs.
+        tracking_id = self._tracking_id = _tracking_id()
+        self._session_updated = False
         try:
             ws = await asyncio.wait_for(
                 self._zoom._http.ws_connect(
                     self._zoom._live_url,
                     protocols=("live-asr",),
-                    headers=self._zoom._headers(),
+                    headers=self._zoom._headers(tracking_id),
                     heartbeat=30.0,  # notice a dead connection; audio keeps Scribe's session alive
                 ),
                 self._conn_options.timeout,
             )
         except aiohttp.WSServerHandshakeError as e:
-            # `from None`: the handshake error's repr keeps the request headers (the API key).
+            # aiohttp discards the response body, where Zoom gives its reason (e.g. "Invalid
+            # Access token"), so only the status is reported. `from None`: the handshake
+            # error's repr keeps the request headers (the API key).
             raise APIStatusError(
-                f"Zoom Scribe Live handshake failed: {e.message}", status_code=e.status
+                f"Zoom refused the connection (HTTP {e.status})",
+                status_code=e.status,
+                request_id=tracking_id,
             ) from None
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to Zoom Scribe Live") from e
@@ -656,8 +719,15 @@ class SpeechStream(stt.SpeechStream):
         except (aiohttp.ClientError, ConnectionError) as e:
             await ws.close()
             raise APIConnectionError("failed to configure the Zoom Scribe Live session") from e
+        logger.debug("connected to Zoom Scribe Live (tracking_id=%s)", tracking_id)
         self._report_connection_acquired(time.perf_counter() - started_at, False)
         return ws
+
+    async def _wait_for_turn_end(self) -> None:
+        """Return once no turn is open, or after ``RECONNECT_HOLD_S``."""
+        deadline = time.monotonic() + RECONNECT_HOLD_S
+        while self._speech_started and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
 
     def _end_open_utterance(self) -> None:
         """Close an utterance cut off by a reconnect so turn detection doesn't wait forever."""
@@ -675,33 +745,27 @@ class SpeechStream(stt.SpeechStream):
         session_audio_s = 0.0  # audio sent on the current Scribe session, keepalive included
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing, last_audio_at, last_input_at, gap_filled
-            # ~50 ms chunks (Scribe recommends ~100 ms; smaller keeps end-of-speech latency low)
-            bstream = utils.audio.AudioByteStream(
-                sample_rate=SAMPLE_RATE, num_channels=1, samples_per_channel=SAMPLE_RATE // 20
-            )
-            nonlocal session_audio_s
+            nonlocal closing, last_audio_at, last_input_at, gap_filled, session_audio_s
             anchored = False
             try:
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
-                        frames = bstream.flush()
-                    else:
-                        frames = bstream.write(data.data.tobytes())
-                    for frame in frames:
-                        self._audio_duration += frame.duration
-                        await ws.send_bytes(frame.data.tobytes())
-                        last_audio_at = last_input_at = time.monotonic()
-                        gap_filled = False
-                        # Scribe's audio_*_ms count from the session's first audio. Audio queued
-                        # while connecting goes out in a burst, so anchor that 0 ms at the
-                        # earliest "now minus audio sent", which is when that audio was captured.
-                        session_audio_s += frame.duration
-                        captured_at = time.time() - session_audio_s
-                        if not anchored or captured_at < self.start_time:
-                            self.start_time = captured_at
-                            anchored = True
-                    # On flush we only send the buffered audio: Scribe's own VAD ends the turn.
+                async for frame in self._input_ch:
+                    # Scribe's own VAD ends the turn, so a flush needs nothing sent.
+                    if isinstance(frame, self._FlushSentinel) or not frame.samples_per_channel:
+                        continue
+                    # Each frame is sent as it arrives (10-20 ms in an agent). The docs suggest
+                    # about 100 ms per message, but smaller messages end turns slightly sooner.
+                    self._audio_duration += frame.duration
+                    await ws.send_bytes(frame.data.tobytes())
+                    last_audio_at = last_input_at = time.monotonic()
+                    gap_filled = False
+                    # Scribe's audio_*_ms count from the session's first audio. Audio queued
+                    # while connecting goes out in a burst, so anchor that 0 ms at the
+                    # earliest "now minus audio sent", which is when that audio was captured.
+                    session_audio_s += frame.duration
+                    captured_at = time.time() - session_audio_s
+                    if not anchored or captured_at < self.start_time:
+                        self.start_time = captured_at
+                        anchored = True
                 closing = True
                 await ws.send_str(json.dumps({"type": "session.close"}))
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -763,6 +827,7 @@ class SpeechStream(stt.SpeechStream):
                     raise APIStatusError(
                         "Zoom Scribe Live connection closed unexpectedly",
                         status_code=ws.close_code or -1,
+                        request_id=self._tracking_id,
                         body=f"{msg.data=} {msg.extra=}",
                     )
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -778,6 +843,7 @@ class SpeechStream(stt.SpeechStream):
                     raise APIStatusError(
                         f"Zoom Scribe Live {ev['type']} ({ev.get('reason')})",
                         status_code=-1,
+                        request_id=self._tracking_id,
                         body=ev,
                         retryable=True,
                     )
@@ -803,13 +869,14 @@ class SpeechStream(stt.SpeechStream):
             ]
             io_done: asyncio.Future[list[None]] = asyncio.gather(*tasks[:2])
             wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
+            hold: asyncio.Task[None] | None = None  # waits for the turn in progress to end
             reconnect = False
             try:
                 waiters: set[asyncio.Future[Any]] = {io_done, wait_reconnect, tasks[2]}
                 while True:
                     done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
-                        if task is wait_reconnect:
+                        if task is wait_reconnect or task is hold:
                             continue
                         if isinstance(task.exception(), APIConnectionError):
                             # A failed send usually means Scribe closed the socket; prefer the
@@ -820,12 +887,22 @@ class SpeechStream(stt.SpeechStream):
                         task.result()  # surface errors from I/O and keepalive
                     if io_done in done:
                         break  # input ended and the session closed cleanly
-                    if wait_reconnect in done:
-                        reconnect = True  # options changed: reconnect with the new config
+                    if hold is not None and hold in done:
+                        reconnect = True  # the turn ended: reconnect with the new config
                         break
+                    if wait_reconnect in done:
+                        # Options changed: reconnect with the new config, once the turn in
+                        # progress (if any) has its final transcript.
+                        waiters.discard(wait_reconnect)
+                        if not self._speech_started:
+                            reconnect = True
+                            break
+                        hold = asyncio.create_task(self._wait_for_turn_end())
+                        waiters.add(hold)
+                        continue
                     waiters.discard(tasks[2])  # keepalive stopped while closing; keep waiting
             finally:
-                await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
+                await utils.aio.gracefully_cancel(*tasks, wait_reconnect, *([hold] if hold else []))
                 io_done.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     io_done.exception()  # retrieve it so asyncio doesn't log it at shutdown
@@ -933,24 +1010,33 @@ class SpeechStream(stt.SpeechStream):
                 )
             self._report_usage()
         elif kind == "session.updated":
+            self._session_updated = True
             # Scribe never rejects diarization; it reports whether labels will come.
             if self._view.diarization and ev.get("diarization_enabled") is False:
                 logger.warning("Zoom Scribe Live can't label speakers for this session")
         elif kind == "error":
             err = ev.get("error") or {}
-            # invalid_config means Scribe didn't apply our session.update (e.g. text polishing
-            # for an unsupported locale), so the session can't work: fail without retrying.
-            if err.get("fatal") or str(err.get("code")).lower() == "invalid_config":
+            code = err.get("code")
+            if err.get("fatal"):
+                # Scribe rejects a session's settings (e.g. an unsupported language) with a
+                # fatal error in place of session.updated, then closes. A new session would be
+                # rejected the same way, so that isn't retried, and a FallbackAdapter can take
+                # over. A fatal error after session.updated is retried with a new session.
                 raise APIStatusError(
-                    f"Zoom Scribe Live error: {err.get('message')}",
+                    f"Zoom Scribe Live error {code}: {err.get('message')}",
                     status_code=-1,
+                    request_id=self._tracking_id,
                     body=err,
-                    retryable=not _is_config_error(err.get("code")),
+                    retryable=self._session_updated,
                 )
-            # Scribe's message is kept out of the log text in case it quotes user content.
+            # A non-fatal error leaves the session running. (A non-fatal invalid_config, e.g.
+            # text polishing for an unsupported locale, is followed by Scribe's own fatal
+            # error.) Scribe's message is kept out of the log text in case it quotes user
+            # content.
             logger.warning(
-                "Zoom Scribe Live warning (%s)",
-                err.get("code"),
+                "Zoom Scribe Live error %s (non-fatal, tracking_id=%s)",
+                code,
+                self._tracking_id,
                 extra={"lk.pii.message": err.get("message")},
             )
         elif kind == "session.closed":
