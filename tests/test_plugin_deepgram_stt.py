@@ -48,6 +48,7 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
     )
     stream._send_configure = SpeechStreamv2._send_configure.__get__(stream)
     stream._sends_language_hint = SpeechStreamv2._sends_language_hint.__get__(stream)
+    stream._configure_language_hint = SpeechStreamv2._configure_language_hint.__get__(stream)
     return stream
 
 
@@ -734,6 +735,55 @@ async def test_flux_multilingual_model_still_sends_the_language_hint(caplog):
             "language_hints": ["en", "es"],
         }
         assert "not sending `language_hint`" not in caplog.text
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_flux_clears_the_language_hint_with_an_explicit_empty_list(caplog):
+    # Flux keeps omitted fields, so a clear has to reach the connection as an empty
+    # array — the one value Deepgram reads as "clear all" — or the language bias from
+    # the connect-time hint survives until the socket is rebuilt.
+    caplog.set_level(logging.WARNING)
+    stt, stream, session = _v2_stt_and_stream(model="flux-general-multi", language_hint=["en"])
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert session.last_params()["language_hint"] == ["en"]
+
+        stt.update_options(language_hint=[])
+        assert stream._reconfigure_atask is not None
+        await stream._reconfigure_atask
+
+        assert len(session.sockets[-1].frames) == 1
+        assert json.loads(session.sockets[-1].frames[0]) == {
+            "type": "Configure",
+            "language_hints": [],
+        }
+        # the caller asked for exactly this, so there is nothing to warn about
+        assert "not sending `language_hint`" not in caplog.text
+        assert stt._opts.language_hint == []
+        assert stream._opts.language_hint == []
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_flux_clear_stays_off_a_model_that_takes_no_hint(caplog):
+    # hints never reach the wire here, so a clear has nothing to clear
+    caplog.set_level(logging.WARNING)
+    stt, stream, session = _v2_stt_and_stream(model="flux-general-en", language_hint=["en"])
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        with caplog.at_level(logging.WARNING):
+            stt.update_options(language_hint=[])
+            await asyncio.sleep(0)
+
+        assert stream._reconfigure_atask is None
+        assert session.sockets[-1].frames == []
+        assert stt._opts.language_hint == []
+        assert stream._opts.language_hint == []
+        # only the connect-time warning, none from the clear
+        assert caplog.text.count("not sending `language_hint`") == 1
     finally:
         await stream.aclose()
         await stt.aclose()

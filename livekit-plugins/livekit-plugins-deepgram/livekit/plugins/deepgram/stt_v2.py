@@ -439,7 +439,7 @@ class SpeechStreamv2(stt.SpeechStream):
         if is_given(keyterm):
             # keyterms replaces the whole list, so send the full effective set
             changed_options["keyterms"] = self._opts.keyterm
-        if is_given(language_hint) and self._sends_language_hint():
+        if is_given(language_hint) and self._configure_language_hint():
             changed_options["language_hints"] = self._opts.language_hint
 
         if changed_options:
@@ -604,6 +604,18 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._opts.model,
             )
         return False
+
+    def _configure_language_hint(self) -> bool:
+        """Whether the hint belongs on a Configure frame.
+
+        Flux keeps omitted fields, so an explicit clear has to be sent as an empty
+        array — which Deepgram reads as "clear all" — or the connection's previous
+        language bias survives until it reconnects. A non-empty hint follows the
+        connect-time rule, warning once per stream when the model cannot take it.
+        """
+        if not self._opts.language_hint:
+            return _language_hint_applies(self._opts.model)
+        return self._sends_language_hint()
 
     def _live_config(self) -> dict[str, Any]:
         live_config: dict[str, Any] = {
