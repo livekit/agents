@@ -189,5 +189,6 @@ fn two_collections() -> Case {
             Input::Advance { ms: Millis(100) },
         ],
         schedule: 0,
+        random: vec![],
     }
 }

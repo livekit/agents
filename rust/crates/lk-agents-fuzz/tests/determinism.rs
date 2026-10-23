@@ -100,8 +100,8 @@ fn a_saved_case_replays_identically() {
 fn the_same_seed_explores_the_same_case() {
     let setup = |seed| search::sample_setup(&mut fastrand::Rng::with_seed(seed));
     assert_eq!(setup(7), setup(7), "one seed sampled two different setups");
-    let first = search::explore(setup(7), 7, 80);
-    let second = search::explore(setup(7), 7, 80);
+    let first = search::explore(setup(7), 7, 300);
+    let second = search::explore(setup(7), 7, 300);
     assert_eq!(first.case.inputs, second.case.inputs, "one seed sampled two different cases");
     assert_eq!(
         first.failures.iter().map(|f| (&f.contract, &f.subject)).collect::<Vec<_>>(),

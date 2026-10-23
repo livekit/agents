@@ -522,6 +522,12 @@ macro_rules! inputs {
                 match self { $(Input::$name { .. } => stringify!($name),)* }
             }
 
+            /// A call the host program makes: the row becomes a production command (`leaf`).
+            /// Everything else is a person, a model, an output, the room or the clock.
+            pub fn is_command(&self) -> bool {
+                match self { $(Input::$name { .. } => false $(|| stringify!($leaf) != "")?,)* }
+            }
+
             /// What tends to come of sending this input.
             ///
             /// Asserted in the table, so it can be wrong; contrast [`Input::needs`], which is

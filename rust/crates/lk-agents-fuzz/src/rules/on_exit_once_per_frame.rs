@@ -110,5 +110,6 @@ fn drain_then_close() -> Case {
             Input::Close { drain: false },
         ],
         schedule: 0,
+        random: vec![],
     }
 }

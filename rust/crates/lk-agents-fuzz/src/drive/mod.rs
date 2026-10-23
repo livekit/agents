@@ -102,8 +102,7 @@ mod finish;
 mod start;
 
 pub use apply::BUDGET_MS;
-pub(crate) use finish::RELEASE_CAP_MS;
-pub use finish::{Outcome, finish, guard, run};
+pub use finish::{Outcome, PHASES, finish, guard, run};
 
 use self::apply::{Feeding, Pending};
 // ==============================================================================================
@@ -239,6 +238,10 @@ pub struct Case {
     /// before this was a dimension.
     #[serde(default)]
     pub schedule: u64,
+    /// Indices into `inputs` of the uniform moves: rows no actor had a reason to send. A failure
+    /// in a case with none is one a real call produces with correct providers.
+    #[serde(default)]
+    pub random: Vec<usize>,
 }
 
 impl Default for Setup {

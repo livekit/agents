@@ -272,6 +272,11 @@ impl Authored {
         self
     }
 
+    pub fn driver_panicked(mut self, panic: &str) -> Self {
+        self.recording.set_driver_panic(panic.to_owned());
+        self.driver_finished()
+    }
+
     /// Virtual time passes with nothing else observed.
     pub fn later(mut self, ms: u64) -> Self {
         self.later_ms += ms;

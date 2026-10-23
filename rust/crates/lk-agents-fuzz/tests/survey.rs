@@ -3,20 +3,21 @@
 //! Ignored by default: this is the search, not part of `cargo test`.
 //! `cargo test --release -p lk-agents-fuzz --test survey -- --ignored --nocapture`
 //!
-//! Release, because a conversation is two thousand clock advances each carrying ten frames of
-//! audio through the driver, and that path is sixteen times slower unoptimised: 256 seeds take
-//! 50 s in a debug build and about 4 s in release. The numbers are identical either way.
+//! Release, because a conversation is thousands of clock advances each carrying ten frames of
+//! audio through the driver, and that path is sixteen times slower unoptimised. The numbers are
+//! identical either way.
 //!
-//! Every seed is run twice, once per mode. `conversation` is the search: a person on a phone,
-//! drawn once per run, talking turn by turn to the agent while the providers answer and fail as
-//! the case says. `chaos` is the uniform sampler over the whole table: shallow everywhere, and
-//! kept as the check that every row applies and every declared open is real, not as a second
-//! search. Each mode gets its own block; the `=== both modes ===` block is the union, and its
-//! three numbers -- variants reached, distinct edges, distinct findings -- are the yardstick every
-//! change to the search is measured by, at 64 seeds on three windows and at 256.
+//! One search, `search::explore`: a person on a phone, the developer's program, and models,
+//! outputs and a room that behave and fail as real ones do, at a randomness drawn per seed from a
+//! pure conversation to a pure uniform sampler. Its three numbers -- variants reached, distinct
+//! edges, distinct findings -- are the yardstick every change to the search is measured by, at 64
+//! seeds on three windows and at 256. Everything is also broken down by decade of randomness: what
+//! each decade reaches, what only it reaches, and what it costs, so the distribution is
+//! measured rather than chosen.
 //!
-//! - `VOICE_SEEDS` (32) and `VOICE_BUDGET` (150) size a campaign; a budget unit is one chaos row
-//!   or one conversation beat, so `conversation` runs three rows per unit.
+//! - `VOICE_SEEDS` (32) and `VOICE_BUDGET` (1500 inputs) size a campaign. A beat of conversation
+//!   is three inputs and a reply takes seconds of beats; at 450 most runs ended before the agent
+//!   finished speaking, and 1500 took findings from 37 to 101 for thirteen seconds (2026-10-22).
 //! - `VOICE_FIRST_SEED` moves the seed window, which is how the noise floor is measured.
 //! - `VOICE_UNIFORM_SETUPS=1` draws every setup uniformly instead of from the arms that learn from
 //!   seed to seed; the baseline a search change is measured against.
@@ -28,29 +29,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[allow(unused_imports)]
 use lk_agents_fuzz::{
-    drive::{Outcome, Setup},
+    drive::{Outcome, Setup, PHASES},
     input::Input,
     record::Kind,
     replay,
     rules::RULES,
     search,
 };
-
-/// One way of exploring from a seed.
-struct Mode {
-    name: &'static str,
-    explore: fn(Setup, u64, usize) -> Outcome,
-    /// How many rows one unit of budget buys in this mode. A budget counts things that happen,
-    /// not rows: a beat of conversation is three rows -- the frames, the detector's tick, the
-    /// clock -- where a chaos step is one, and a budget in rows would give the conversation a
-    /// third of the depth for the same number.
-    cost: usize,
-}
-
-const MODES: [Mode; 2] = [
-    Mode { name: "chaos", explore: search::explore, cost: 1 },
-    Mode { name: "conversation", explore: search::explore_conversation, cost: 3 },
-];
 
 #[test]
 #[ignore]
@@ -60,30 +45,26 @@ fn survey() {
     // `VOICE_FIRST_SEED` moves the window: the same campaign over another set of seeds is how the
     // noise floor is measured, and a change is only a change if it beats that floor.
     let first = env("VOICE_FIRST_SEED").unwrap_or(0);
-    let budget = env("VOICE_BUDGET").unwrap_or(150) as usize;
+    let budget = env("VOICE_BUDGET").unwrap_or(1500) as usize;
     // The setup arms learn from seed to seed unless `VOICE_UNIFORM_SETUPS=1`, under which every
     // seed's setup is a uniform draw: the baseline every search change is measured against.
     let learn = std::env::var_os("VOICE_UNIFORM_SETUPS").is_none();
     let window = Window { first, seeds, budget, learn };
-    let mut union = Campaign::default();
-    for mode in &MODES {
-        union.absorb(&campaign(mode, &window));
-    }
-    // What the suite reaches is the union: the two modes are two ways in, and a variant one of
-    // them reaches is covered. The three numbers a search change is judged by, in one place.
-    let names = lk_agents_voice::trace::step_names();
-    println!("\n=== both modes ===");
-    println!(
-        "reached {} of {} journal variants, {} distinct edges, {} distinct findings",
-        union.reached.len(),
-        names.len(),
-        union.edges.len(),
-        union.findings.len()
-    );
-    println!("missing:");
-    for name in names.iter().filter(|n| !union.reached.contains(*n)) {
-        println!("  {name}");
-    }
+    campaign(&window);
+}
+
+/// Decades of randomness the report breaks down by, from 1e-4 to 1e3.
+const BANDS: usize = 7;
+
+/// What the seeds of one decade of randomness reached, and what they cost.
+#[derive(Default)]
+struct Band {
+    seeds: usize,
+    failing: usize,
+    time: std::time::Duration,
+    reached: BTreeSet<String>,
+    edges: BTreeSet<(String, String)>,
+    cells: BTreeSet<(&'static str, &'static str)>,
 }
 
 /// One campaign's seeds, budget and search settings.
@@ -94,34 +75,18 @@ struct Window {
     learn: bool,
 }
 
-/// What a campaign reached: the yardstick every search change is measured by.
-#[derive(Default)]
-struct Campaign {
-    reached: BTreeSet<String>,
-    edges: BTreeSet<(String, String)>,
-    /// Distinct `(contract, subject)` pairs: two seeds failing the same rule on the same kind of
-    /// thing are one finding, not two.
-    findings: BTreeSet<(String, String)>,
-}
-
-impl Campaign {
-    fn absorb(&mut self, other: &Campaign) {
-        self.reached.extend(other.reached.iter().cloned());
-        self.edges.extend(other.edges.iter().cloned());
-        self.findings.extend(other.findings.iter().cloned());
-    }
-}
-
-fn campaign(mode: &Mode, window: &Window) -> Campaign {
-    let (seeds, budget) = (window.seeds, window.budget * mode.cost);
+fn campaign(window: &Window) {
+    let (seeds, budget) = (window.seeds, window.budget);
     let mut reached: BTreeSet<String> = BTreeSet::new();
     let mut edges: BTreeSet<(String, String)> = BTreeSet::new();
     let mut findings: BTreeSet<(String, String)> = BTreeSet::new();
-    let mut found: BTreeMap<String, usize> = BTreeMap::new();
+    let mut cells: BTreeMap<(&'static str, &'static str), u32> = BTreeMap::new();
+    // Failures per contract, per decade of randomness.
+    let mut found: BTreeMap<String, [usize; BANDS]> = BTreeMap::new();
     // One example per contract, so a finding can be read without saving the corpus.
     let mut example: BTreeMap<String, (u64, String)> = BTreeMap::new();
     let mut exercised: BTreeMap<&'static str, u32> = BTreeMap::new();
-    let mut failing = 0;
+    let mut bands: [Band; BANDS] = Default::default();
     // Runs in which both observers closed a speech: the precondition of a decided turn.
     let mut both_closed = 0;
     let save = std::env::var_os("VOICE_SAVE").is_some();
@@ -141,13 +106,25 @@ fn campaign(mode: &Mode, window: &Window) -> Campaign {
         // findings at every scale -- a near-copy of a run is a run's worth of novelty forgone,
         // and the generator, not a mutator, is where this search's novelty comes from.
         let (setup, drawn) = arms.sample(&mut fastrand::Rng::with_seed(seed));
-        let outcome = (mode.explore)(setup, seed, budget);
+        let began = std::time::Instant::now();
+        let outcome = search::explore(setup, seed, budget);
+        let band_of = ((search::randomness(seed).log10() + 4.0) as usize).min(BANDS - 1);
+        let band = &mut bands[band_of];
+        band.seeds += 1;
+        band.time += began.elapsed();
+        band.reached.extend(outcome.reached.iter().cloned());
+        band.edges.extend(outcome.edges.iter().cloned());
+        band.cells.extend(outcome.cells.iter().copied());
+        band.failing += usize::from(!outcome.ok());
         let known = reached.len();
         reached.extend(outcome.reached.iter().cloned());
         if window.learn {
             arms.learn(&drawn, reached.len() > known);
         }
         edges.extend(outcome.edges.iter().cloned());
+        for cell in &outcome.cells {
+            *cells.entry(*cell).or_default() += 1;
+        }
         for (id, made) in &outcome.expectations {
             *exercised.entry(id).or_default() += made;
         }
@@ -160,28 +137,23 @@ fn campaign(mode: &Mode, window: &Window) -> Campaign {
         let sent = |name: &str| outcome.case.inputs.iter().any(|i| i.name() == name);
         both_closed += usize::from(sent("VadEnd") && sent("SttFinal"));
         if !outcome.ok() {
-            failing += 1;
             for failure in &outcome.failures {
                 findings.insert((failure.contract.clone(), format!("{:?}", failure.subject)));
-                *found.entry(failure.contract.clone()).or_default() += 1;
+                found.entry(failure.contract.clone()).or_default()[band_of] += 1;
                 example
                     .entry(failure.contract.clone())
                     .or_insert_with(|| (seed, failure.detail.clone()));
             }
             if save {
                 let contract = &outcome.failures[0].contract;
-                // The chaos corpus keeps its names; a conversation's case says which mode made it.
-                let path = match mode.name {
-                    "chaos" => corpus.join(format!("{contract}-{seed}.json")),
-                    name => corpus.join(format!("{contract}-{name}-{seed}.json")),
-                };
+                let path = corpus.join(format!("{contract}-{seed}.json"));
                 replay::save(&path, &outcome.case, &outcome).expect("the corpus is writable");
             }
         }
     }
 
     let names = lk_agents_voice::trace::step_names();
-    println!("\n=== mode: {} ===", mode.name);
+    println!();
     println!(
         "{seeds} seeds from {} x {budget} inputs in {:.1?}{}",
         window.first,
@@ -195,7 +167,26 @@ fn campaign(mode: &Mode, window: &Window) -> Campaign {
         edges.len(),
         findings.len()
     );
-    println!("{failing} of {seeds} seeds failing");
+    println!("\nby randomness (uniform moves per conversation move):");
+    println!("  band          seeds failing    time variants  edges  cells  only here");
+    for (i, band) in bands.iter().enumerate() {
+        let elsewhere: BTreeSet<&String> =
+            bands.iter().enumerate().filter(|(j, _)| *j != i).flat_map(|(_, b)| &b.reached).collect();
+        let only: Vec<&String> = band.reached.iter().filter(|v| !elsewhere.contains(v)).collect();
+        println!(
+            "  1e{:<+2}..1e{:<+2} {:>6} {:>7} {:>6.1}s {:>8} {:>6} {:>6}  {}",
+            i as i32 - 4,
+            i as i32 - 3,
+            band.seeds,
+            band.failing,
+            band.time.as_secs_f64(),
+            band.reached.len(),
+            band.edges.len(),
+            band.cells.len(),
+            only.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    println!();
     let leanings: Vec<String> = arms
         .leanings()
         .into_iter()
@@ -221,7 +212,11 @@ fn campaign(mode: &Mode, window: &Window) -> Campaign {
     for (family, (seen, of)) in &families {
         println!("  {family:<12} {seen:>3} / {of}");
     }
-    // `VOICE_FAMILY=Decided` opens one family up: which of its variants this mode reached.
+    println!("missing:");
+    for name in names.iter().filter(|n| !reached.contains(*n)) {
+        println!("  {name}");
+    }
+    // `VOICE_FAMILY=Decided` opens one family up: which of its variants the search reached.
     if let Some(family) = std::env::var("VOICE_FAMILY").ok().filter(|f| !f.is_empty()) {
         println!("\n{family}, variant by variant:");
         for name in names.iter().filter(|n| n.split("::").next() == Some(family.as_str())) {
@@ -230,14 +225,15 @@ fn campaign(mode: &Mode, window: &Window) -> Campaign {
         }
     }
     println!();
-    println!("findings:");
+    println!("failures, by decade of randomness:");
     if found.is_empty() {
         println!("  none");
     }
     // `VOICE_DETAIL=1` adds the first seed and detail behind each finding.
     let detail = std::env::var_os("VOICE_DETAIL").is_some();
-    for (contract, n) in &found {
-        println!("  {n:>3}  {contract}");
+    for (contract, by_band) in &found {
+        let counts: Vec<String> = by_band.iter().map(|n| format!("{n:>6}")).collect();
+        println!("  {}  {contract}", counts.join(""));
         if detail && let Some((seed, what)) = example.get(contract) {
             println!("       seed {seed}: {what}");
         }
@@ -270,5 +266,17 @@ fn campaign(mode: &Mode, window: &Window) -> Campaign {
     if wrong == 0 {
         println!("  none");
     }
-    Campaign { reached, edges, findings }
+    // `VOICE_CELLS=1`: seeds in which each input landed in each phase.
+    if std::env::var_os("VOICE_CELLS").is_some() {
+        println!("\n=== input x phase, seeds ===");
+        println!("input\t{}", PHASES.join("\t"));
+        let inputs: BTreeSet<&str> = cells.keys().map(|(input, _)| *input).collect();
+        for input in inputs {
+            let row: Vec<String> = PHASES
+                .iter()
+                .map(|p| cells.get(&(input, *p)).copied().unwrap_or(0).to_string())
+                .collect();
+            println!("{input}\t{}", row.join("\t"));
+        }
+    }
 }
