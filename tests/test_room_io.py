@@ -10,7 +10,12 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
-from livekit.agents.types import TOPIC_CHAT
+from livekit.agents.types import (
+    ATTRIBUTE_TRANSCRIPTION_FINAL,
+    ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
+    ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+    TOPIC_CHAT,
+)
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -149,12 +154,28 @@ class _FakeWriter:
     def __init__(self) -> None:
         self.close_calls = 0
         self.chunks: list[str] = []
+        self.closed_attributes: dict[str, str] | None = None
 
     async def write(self, text: str) -> None:
         self.chunks.append(text)
 
     async def aclose(self, attributes: dict[str, str] | None = None) -> None:
         self.close_calls += 1
+        self.closed_attributes = attributes
+
+
+class _FlakyFirstWriteWriter(_FakeWriter):
+    """Fails its first `write`, then behaves normally: a transient room I/O error."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.write_calls = 0
+
+    async def write(self, text: str) -> None:
+        self.write_calls += 1
+        if self.write_calls == 1:
+            raise OSError("simulated room I/O failure")
+        await super().write(text)
 
 
 def _fake_remote(
@@ -320,6 +341,269 @@ async def test_transcription_output_strips_markup_but_keeps_links() -> None:
     # markup is removed; a markdown link is prose and must reach the user intact
     assert "<expr" not in published
     assert "[the docs](https://docs.livekit.io)" in published
+
+
+def _remote_with_mic(
+    identity: str,
+    track_sid: str,
+    *,
+    client_protocol: int = 0,
+) -> SimpleNamespace:
+    """A remote participant that can publish a mic track and receives legacy transcriptions."""
+    publication = SimpleNamespace(source=rtc.TrackSource.SOURCE_MICROPHONE, sid=track_sid)
+    return SimpleNamespace(
+        identity=identity,
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+        attributes={},
+        _info=SimpleNamespace(client_protocol=client_protocol),
+        track_publications={track_sid: publication},
+    )
+
+
+@pytest.mark.asyncio
+async def test_participant_switch_mid_utterance_keeps_the_final_transcript() -> None:
+    """A switch while an STT interim is open must finalize A's segment as A.
+
+    `set_participant` schedules the flush task and synchronously replaces the identity,
+    track and segment state. Left to read that state when it runs, the task publishes an
+    empty final under the new participant and A's segment is never closed.
+    """
+    room = _FakeRoom()
+    room.remote_participants = {
+        "user-a": _remote_with_mic("user-a", "TR_a"),
+        "user-b": _remote_with_mic("user-b", "TR_b"),
+    }
+    room.local_participant.publish_transcription = AsyncMock()
+
+    writers: list[_FakeWriter] = []
+
+    async def _stream_text(
+        *, topic: str, sender_identity: str, attributes: dict[str, str]
+    ) -> _FakeWriter:
+        writer = _FakeWriter()
+        writer.sender_identity = sender_identity  # type: ignore[attr-defined]
+        writer.attributes = dict(attributes)  # type: ignore[attr-defined]
+        writers.append(writer)
+        return writer
+
+    room.local_participant.stream_text = _stream_text
+
+    # the user transcription sink is the non-delta one RoomIO creates
+    output = _ParticipantTranscriptionOutput(room=room, is_delta_stream=False, participant="user-a")
+    await output.capture_text("hello from A")
+
+    interims = [w for w in writers if w.attributes[ATTRIBUTE_TRANSCRIPTION_FINAL] == "false"]
+    assert len(interims) == 1
+    segment_id = interims[0].attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID]
+
+    # the two sinks mint their own segment ids
+    legacy_interims = [
+        call.args[0]
+        for call in room.local_participant.publish_transcription.call_args_list
+        if not call.args[0].segments[0].final
+    ]
+    assert len(legacy_interims) == 1
+    legacy_segment_id = legacy_interims[0].segments[0].id
+
+    # warm transfer: B becomes the linked participant before A's final arrives
+    output.set_participant("user-b")
+    await output.aclose()
+
+    finals = [w for w in writers if w.attributes[ATTRIBUTE_TRANSCRIPTION_FINAL] == "true"]
+    assert len(finals) == 1
+    assert finals[0].sender_identity == "user-a"
+    assert "".join(finals[0].chunks) == "hello from A"
+    assert finals[0].attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] == segment_id
+    assert finals[0].attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] == "TR_a"
+
+    legacy_finals = [
+        call.args[0]
+        for call in room.local_participant.publish_transcription.call_args_list
+        if call.args[0].segments[0].final
+    ]
+    assert len(legacy_finals) == 1
+    assert legacy_finals[0].participant_identity == "user-a"
+    assert legacy_finals[0].track_sid == "TR_a"
+    assert legacy_finals[0].segments[0].text == "hello from A"
+    assert legacy_finals[0].segments[0].id == legacy_segment_id
+
+
+@pytest.mark.asyncio
+async def test_participant_switch_while_the_first_writer_opens_keeps_the_segments_apart() -> None:
+    """A switch inside the opening `stream_text` must not hand A's writer to B's segment.
+
+    Opening the segment's writer awaits the room, so `set_participant` can flush the segment
+    while `_writer` is still unset. That flush then has no writer to close, and the writer
+    created for A is adopted afterwards by B's segment: B's text is published under A's
+    sender and segment, and A's transcript is never finalized.
+    """
+    room = _FakeRoom()
+    room.remote_participants = {
+        "user-a": _remote_with_mic("user-a", "TR_a"),
+        "user-b": _remote_with_mic("user-b", "TR_b"),
+    }
+
+    # (sender_identity, opening header, writer) for every writer the room opened
+    opened: list[tuple[str, dict[str, str], _FakeWriter]] = []
+    opening = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _stream_text(
+        *, topic: str, sender_identity: str, attributes: dict[str, str]
+    ) -> _FakeWriter:
+        writer = _FakeWriter()
+        opened.append((sender_identity, dict(attributes), writer))
+        opening.set()
+        # hold the creator open so the switch lands before the writer exists
+        await release.wait()
+        return writer
+
+    room.local_participant.stream_text = _stream_text
+
+    output = _ParticipantStreamTranscriptionOutput(
+        room=room, is_delta_stream=True, participant="user-a"
+    )
+    first_capture = asyncio.create_task(output.capture_text("hello from A"))
+    await opening.wait()
+
+    # warm transfer: B is linked while A's writer is still being opened
+    output.set_participant("user-b")
+    release.set()
+    await first_capture
+
+    await output.capture_text("hello from B")
+    output.flush()
+    assert output._flush_atask is not None
+    await output._flush_atask
+    await output.aclose()
+
+    assert opened, "the room never opened a writer for the segment"
+    a_sender, a_header, a_writer = opened[0]
+    # A's first chunk stayed in A's stream: B's text must not be appended to it
+    assert a_sender == "user-a"
+    assert a_writer.chunks == ["hello from A"]
+
+    # B opened a writer of its own, under its own identity
+    assert len(opened) == 2
+    b_sender, b_header, b_writer = opened[1]
+    assert b_sender == "user-b"
+    assert b_writer.chunks == ["hello from B"]
+    # A's segment is closed as A's final instead of staying open forever
+    assert a_writer.close_calls == 1
+    assert a_writer.closed_attributes is not None
+    assert a_writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_FINAL] == "true"
+    assert a_writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] == "TR_a"
+    assert b_writer.close_calls == 1
+    assert (
+        a_header[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] != b_header[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID]
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_capture_does_not_abort_the_transcript_shutdown() -> None:
+    """Cancelling a capture must not cancel the segment's writer task, nor `aclose()`.
+
+    An interruption (a barge-in) cancels the task forwarding text while the segment's writer
+    is still being opened, and a switch in the meantime hands that opening task to the flush
+    task. Awaiting it directly made the cancellation reach the writer task, whose
+    `CancelledError` escaped the flush task's `except Exception` (it is a `BaseException`) and
+    aborted `aclose()` before the segment was finalized.
+    """
+    room = _FakeRoom()
+    room.remote_participants = {
+        "user-a": _remote_with_mic("user-a", "TR_a"),
+        "user-b": _remote_with_mic("user-b", "TR_b"),
+    }
+
+    # (sender_identity, opening header, writer) for every writer the room opened
+    opened: list[tuple[str, dict[str, str], _FakeWriter]] = []
+    opening = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _stream_text(
+        *, topic: str, sender_identity: str, attributes: dict[str, str]
+    ) -> _FakeWriter:
+        writer = _FakeWriter()
+        opened.append((sender_identity, dict(attributes), writer))
+        opening.set()
+        # hold the creator open so the cancellation lands before the writer exists
+        await release.wait()
+        return writer
+
+    room.local_participant.stream_text = _stream_text
+
+    output = _ParticipantStreamTranscriptionOutput(
+        room=room, is_delta_stream=True, participant="user-a"
+    )
+    capture = asyncio.create_task(output.capture_text("hello from A"))
+    await opening.wait()
+
+    # warm transfer: the switch hands A's in-flight writer task to the flush task
+    output.set_participant("user-b")
+    # then A's capture is interrupted before the room returns a writer
+    capture.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await capture
+    release.set()
+
+    close_task = asyncio.create_task(output.aclose())
+    await asyncio.wait({close_task})
+    assert not close_task.cancelled(), "aclose() was cancelled instead of finishing the shutdown"
+    assert close_task.exception() is None
+
+    assert len(opened) == 1
+    sender, header, writer = opened[0]
+    assert sender == "user-a"
+    # the segment A had already produced is finalized instead of being dropped
+    assert writer.chunks == ["hello from A"]
+    assert writer.close_calls == 1
+    assert writer.closed_attributes is not None
+    assert writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_FINAL] == "true"
+    assert writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] == "TR_a"
+    # the same stream carries the segment's opening header and its final one
+    assert header[ATTRIBUTE_TRANSCRIPTION_FINAL] == "false"
+
+
+@pytest.mark.asyncio
+async def test_failed_first_write_still_closes_the_segment_stream() -> None:
+    """A transient failure on the first write must not strand the opened stream.
+
+    The room has already opened the segment's stream when its first write raises, so dropping
+    the writer there loses the only handle to it: the segment never gets its final header and
+    the stream stays open even after the room recovers.
+    """
+    room = _FakeRoom()
+    room.remote_participants = {"user-a": _remote_with_mic("user-a", "TR_a")}
+
+    writers: list[_FlakyFirstWriteWriter] = []
+
+    async def _stream_text(
+        *, topic: str, sender_identity: str, attributes: dict[str, str]
+    ) -> _FlakyFirstWriteWriter:
+        writer = _FlakyFirstWriteWriter()
+        writers.append(writer)
+        return writer
+
+    room.local_participant.stream_text = _stream_text
+
+    output = _ParticipantStreamTranscriptionOutput(
+        room=room, is_delta_stream=True, participant="user-a"
+    )
+    await output.capture_text("hello")
+    output.flush()
+    assert output._flush_atask is not None
+    await output._flush_atask
+    await output.aclose()
+
+    # the failed stream was closed rather than reopened behind a second one
+    assert len(writers) == 1
+    writer = writers[0]
+    assert writer.write_calls == 1
+    assert writer.chunks == []
+    assert writer.close_calls == 1
+    assert writer.closed_attributes is not None
+    assert writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_FINAL] == "true"
+    assert writer.closed_attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] == "TR_a"
 
 
 @pytest.mark.asyncio
