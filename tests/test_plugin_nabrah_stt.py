@@ -178,3 +178,21 @@ def test_flush_reports_usage_without_transcript(stream: SpeechStream) -> None:
     assert len(usage_events) == 1
     assert usage_events[0].recognition_usage is not None
     assert usage_events[0].recognition_usage.audio_duration == pytest.approx(1.25)
+
+
+async def test_socket_is_opened_with_a_heartbeat(stream: SpeechStream) -> None:
+    """aiohttp defaults `heartbeat` to None, so a socket that died without a
+    FIN/RST leaves the receive side parked forever: nothing reports a failure, so
+    the stream neither reconnects nor lets a FallbackAdapter move on."""
+    captured: dict[str, Any] = {}
+
+    class _FakeSession:
+        async def ws_connect(self, url: str, **kwargs: Any) -> object:
+            captured.update(kwargs)
+            return MagicMock()
+
+    stream._session = _FakeSession()
+
+    await stream._connect_ws()
+
+    assert captured.get("heartbeat") == 30.0

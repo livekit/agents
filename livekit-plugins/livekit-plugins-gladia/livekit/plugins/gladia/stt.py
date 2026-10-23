@@ -876,7 +876,15 @@ class SpeechStream(stt.SpeechStream):
                 backoff_time = 1.0
 
                 # Connect to the WebSocket
-                async with self._session.ws_connect(session_url) as ws:
+                async with self._session.ws_connect(
+                    # Without a heartbeat aiohttp never notices a socket that died
+                    # without a FIN/RST: the receive side parks forever and nothing
+                    # reports a failure, so the stream neither reconnects nor lets a
+                    # FallbackAdapter move on. An unanswered ping closes the socket,
+                    # which arrives in the receive loop as an ERROR frame.
+                    session_url,
+                    heartbeat=30.0,
+                ) as ws:
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
@@ -1017,6 +1025,16 @@ class SpeechStream(stt.SpeechStream):
                 aiohttp.WSMsgType.CLOSING,
             ):
                 break
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                # A heartbeat timeout arrives here as an ERROR frame rather than as a
+                # close frame, and the warning below would step over it: this task
+                # would end normally, `_run` would break instead of reconnecting, and
+                # the base stream only reports a failure when `_run` raises -- so a
+                # FallbackAdapter would have nothing to react to. The reason only
+                # survives on `ws.exception()`.
+                raise APIConnectionError(
+                    message="Gladia STT websocket failed"
+                ) from self._ws.exception()
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
 

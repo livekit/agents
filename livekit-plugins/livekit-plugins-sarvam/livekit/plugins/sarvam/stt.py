@@ -1229,6 +1229,12 @@ class SpeechStream(stt.SpeechStream):
             self._session.ws_connect(
                 ws_url,
                 headers=headers,
+                # Without a heartbeat aiohttp never notices a socket that died
+                # without a FIN/RST: the receive side parks forever and nothing
+                # reports a failure, so the stream neither reconnects nor lets a
+                # FallbackAdapter move on. An unanswered ping closes the socket,
+                # which arrives in the receive loop as an ERROR frame.
+                heartbeat=30.0,
             ),
             self._conn_options.timeout,
         )
