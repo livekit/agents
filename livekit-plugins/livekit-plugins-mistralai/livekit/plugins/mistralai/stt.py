@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import weakref
 from dataclasses import dataclass
+from typing import TypedDict
 
 import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
 
@@ -34,7 +36,11 @@ from mistralai.client.models import (
     TranscriptionStreamLanguage,
     TranscriptionStreamTextDelta,
 )
-from mistralai.extra.realtime import RealtimeConnection, RealtimeTranscription
+from mistralai.extra.realtime import (
+    RealtimeConnection,
+    RealtimeTranscription,
+    UnknownRealtimeEvent,
+)
 
 from .log import logger
 from .models import STTModels
@@ -49,6 +55,51 @@ DEFAULT_MODEL: STTModels = "voxtral-mini-latest"
 SAMPLE_RATE: int = 16000
 NUM_CHANNELS: int = 1
 
+_NO_TURN_DETECTION_MODELS = (
+    "voxtral-mini-transcribe-realtime-2602",
+    "voxtral-mini-realtime-2602",
+    "voxtral-mini-realtime-latest",
+)
+
+
+class TurnDetectionOptions(TypedDict, total=False):
+    """Server-side turn detection for Voxtral realtime models. Unset fields use the server defaults.
+
+    See https://docs.mistral.ai/studio/audio/speech-to-text/turn-detection
+    """
+
+    start_threshold: float
+    """Threshold for deciding that the user has started or resumed speaking. Defaults to 0.5."""
+    eager_end_threshold: float
+    """Threshold for deciding that the user may have stopped speaking, which sends a preflight
+    transcript. Must not exceed start_threshold. Defaults to 0.5."""
+    end_threshold: float
+    """Threshold for deciding that the user has stopped speaking, which ends the turn.
+    Must be lower than eager_end_threshold. Defaults to 0.33."""
+    min_silence_ms: int
+    """Minimum pause before the turn can end. Defaults to 500."""
+    end_timeout_ms: int
+    """Maximum pause before the turn ends anyway. Must not be lower than min_silence_ms.
+    Defaults to 3000."""
+
+
+def _validate_turn_detection(opts: TurnDetectionOptions) -> None:
+    start = opts.get("start_threshold", 0.5)
+    eager = opts.get("eager_end_threshold", 0.5)
+    end = opts.get("end_threshold", 0.33)
+    if not start >= eager > end:
+        raise ValueError(
+            f"turn_detection thresholds must satisfy start_threshold ({start}) >= "
+            f"eager_end_threshold ({eager}) > end_threshold ({end})"
+        )
+    min_silence = opts.get("min_silence_ms", 500)
+    end_timeout = opts.get("end_timeout_ms", 3000)
+    if end_timeout < min_silence:
+        raise ValueError(
+            f"turn_detection end_timeout_ms ({end_timeout}) must be greater than or equal to "
+            f"min_silence_ms ({min_silence})"
+        )
+
 
 @dataclass
 class _STTOptions:
@@ -56,6 +107,7 @@ class _STTOptions:
     language: LanguageCode | None
     context_bias: list[str] | None
     target_streaming_delay_ms: int | None
+    turn_detection: TurnDetectionOptions | None
 
 
 class STT(stt.STT):
@@ -67,6 +119,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         context_bias: NotGivenOr[list[str]] = NOT_GIVEN,
         target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionOptions] = NOT_GIVEN,
         vad: vad.VAD | None = None,
     ):
         """
@@ -81,11 +134,25 @@ class STT(stt.STT):
             context_bias: Up to 100 words or phrases to guide the model toward good spelling or names or domain-specific vocabulary.
                 Only used with batch models.
             target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
-            vad: Voice Activity Detector used to trigger audio flush for realtime models (which lack server-side endpointing).
-                When not provided, Silero VAD is auto-loaded with default settings. Only used with realtime models.
+            turn_detection: Enables server-side turn detection, so the model emits start of speech, preflight and
+                end of speech events. Pass an empty dict to use the server defaults. Pair it with
+                `turn_handling={"turn_detection": "stt"}` on the `AgentSession`. Only used with Voxtral 3 realtime models.
+            vad: Voice Activity Detector used to trigger audio flush for realtime models without turn_detection.
+                When neither is provided, Silero VAD is auto-loaded with default settings. Only used with realtime models.
         """
         resolved_model = model if is_given(model) else DEFAULT_MODEL
         is_realtime = _is_realtime(resolved_model)
+        if is_given(turn_detection):
+            _validate_turn_detection(turn_detection)
+            if not is_realtime or resolved_model in _NO_TURN_DETECTION_MODELS:
+                logger.warning(
+                    "turn_detection is not supported by model '%s' and will be ignored",
+                    resolved_model,
+                )
+                turn_detection = NOT_GIVEN
+            elif vad is not None:
+                logger.warning("turn_detection is ignored because a vad was provided")
+                turn_detection = NOT_GIVEN
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=is_realtime,
@@ -101,9 +168,10 @@ class STT(stt.STT):
             target_streaming_delay_ms=target_streaming_delay_ms
             if is_given(target_streaming_delay_ms)
             else None,
+            turn_detection=turn_detection if is_given(turn_detection) else None,
         )
 
-        if is_realtime and vad is None:
+        if is_realtime and vad is None and self._opts.turn_detection is None:
             try:
                 from livekit.plugins.silero import VAD as SileroVAD
 
@@ -133,7 +201,7 @@ class STT(stt.STT):
         )
         if client_headers:
             http_headers = dict(client_headers)
-        return await asyncio.wait_for(
+        connection = await asyncio.wait_for(
             rt.connect(
                 model=self._opts.model,
                 target_streaming_delay_ms=self._opts.target_streaming_delay_ms,
@@ -141,6 +209,20 @@ class STT(stt.STT):
             ),
             timeout=timeout,
         )
+        if self._opts.turn_detection is not None:
+            try:
+                await connection._websocket.send(
+                    json.dumps(
+                        {
+                            "type": "session.update",
+                            "session": {"turn_detection": self._opts.turn_detection},
+                        }
+                    )
+                )
+            except Exception:
+                await self._close_ws(connection)
+                raise
+        return connection
 
     async def _close_ws(self, conn: RealtimeConnection) -> None:
         await conn.close()
@@ -169,6 +251,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         context_bias: NotGivenOr[list[str]] = NOT_GIVEN,
         target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionOptions] = NOT_GIVEN,
     ) -> None:
         """
         Update the STT options.
@@ -179,13 +262,25 @@ class STT(stt.STT):
             context_bias: Up to 100 words or phrases to guide the model toward good spelling or names or domain-specific vocabulary.
                 Only used with batch models.
             target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
+            turn_detection: New server-side turn detection settings. Only applied when turn_detection was
+                enabled when the STT was created.
         """
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(context_bias):
             self._opts.context_bias = context_bias
+        reconnect = False
+        if is_given(turn_detection):
+            _validate_turn_detection(turn_detection)
+            if self._opts.turn_detection is None:
+                logger.warning("turn_detection was not enabled when the STT was created, ignoring")
+            else:
+                self._opts.turn_detection = turn_detection
+                reconnect = True
         if is_given(target_streaming_delay_ms):
             self._opts.target_streaming_delay_ms = target_streaming_delay_ms
+            reconnect = True
+        if reconnect:
             self._pool.invalidate()
             for stream in self._streams:
                 stream._reconnect_event.set()
@@ -343,6 +438,8 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
         current_text = ""
+        end_pending = False
+        next_turn_started = False
 
         async for event in connection.events():
             if isinstance(event, RealtimeTranscriptionSessionCreated):
@@ -367,6 +464,34 @@ class SpeechStream(stt.RecognizeStream):
                         ],
                     )
                 )
+
+            elif isinstance(event, UnknownRealtimeEvent):
+                if event.type == "turn.start":
+                    if end_pending:
+                        next_turn_started = True
+                    elif not self._speaking:
+                        self._speaking = True
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                        )
+                elif event.type in ("turn.eager_end", "turn.resume") and current_text:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT
+                            if event.type == "turn.eager_end"
+                            else stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                            request_id=self._request_id,
+                            alternatives=[
+                                stt.SpeechData(
+                                    text=current_text,
+                                    language=self._detected_language,
+                                )
+                            ],
+                        )
+                    )
+                elif event.type == "turn.end":
+                    end_pending = True
+                    await connection.flush_audio()
 
             elif isinstance(event, TranscriptionStreamDone):
                 current_text = ""
@@ -410,6 +535,20 @@ class SpeechStream(stt.RecognizeStream):
                         ),
                     )
                 )
+
+                if end_pending:
+                    end_pending = False
+                    if self._speaking:
+                        self._speaking = False
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                        )
+                    if next_turn_started:
+                        next_turn_started = False
+                        self._speaking = True
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                        )
 
             elif isinstance(event, RealtimeTranscriptionError):
                 raise APIStatusError(

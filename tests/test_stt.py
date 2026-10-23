@@ -100,6 +100,10 @@ STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
         id="livekit.agents.inference.assemblyai",
     ),
     pytest.param(lambda: inference.STT(model="xai/stt-1"), id="livekit.agents.inference.xai"),
+    pytest.param(
+        lambda: mistralai.STT(model="voxtral-mini-transcribe-realtime-3", turn_detection={}),
+        id="livekit.plugins.mistralai.turn_detection",
+    ),
 ]
 
 
@@ -262,7 +266,7 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                             text += event.alternatives[0].text
                             # ensure STT is tagging languages correctly
                             language = event.alternatives[0].language
-                            if stt.provider not in {"FireworksAI", "RTZR", "livekit"}:
+                            if stt.provider not in {"FireworksAI", "RTZR", "livekit", "MistralAI"}:
                                 assert language is not None
                                 assert language.lower().startswith("en")
                             got_final_transcript = True
