@@ -47,7 +47,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             label="RoomIO",
             next_in_chain=None,
             sample_rate=sample_rate,
-            capabilities=io.AudioOutputCapabilities(pause=True),
+            capabilities=io.AudioOutputCapabilities(pause=True, gain=True),
         )
         self._room = room
         self._track_name = track_name
@@ -313,7 +313,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
                     self._report_run(offset=self._source_pushed_duration, ended_at=self._dry_at)
 
                 self._source_pushed_duration += frame.duration
-                await self._audio_source.capture_frame(frame)
+                await self._audio_source.capture_frame(self._apply_gain(frame))
                 self._dry_at = time.time() + self._audio_source.queued_duration
             finally:
                 self._forwarding_idle.set()

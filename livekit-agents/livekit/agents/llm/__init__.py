@@ -54,6 +54,7 @@ from .llm import (
 )
 from .realtime import (
     GenerationCreatedEvent,
+    InputSpeechHintEvent,
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
     InputTranscriptionCompleted,
@@ -163,6 +164,7 @@ __all__ = [
     "RealtimeSession",
     "InputTranscriptionCompleted",
     "InputSpeechStartedEvent",
+    "InputSpeechHintEvent",
     "InputSpeechStoppedEvent",
     "GenerationCreatedEvent",
     "MessageGeneration",
