@@ -88,7 +88,7 @@ from .keyterm_detection import (
     _resolve_stt_context_options,
     _stt_context_from_keyterms_options,
 )
-from .recorder_io import RecorderIO
+from .recorder_io.recorder_io import MAX_BIT_RATE, MIN_BIT_RATE, RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
@@ -152,6 +152,13 @@ class RecordingOptions(TypedDict, total=False):
     ``gen_ai.system_instructions`` is left out while unchanged. Such spans carry
     ``lk.input.*`` attributes pointing at the span that holds the rest.
     """
+    bit_rate: int | None
+    """Target bit rate of the session-audio Opus encoder, in bits per second. ``None``
+    (the default) keeps the encoder's own default. Only affects ``audio`` recording."""
+    constant_bit_rate: bool
+    """Encode session audio at a constant bit rate instead of a variable one. Defaults to
+    ``False``. Players that estimate an Ogg Opus duration from the file size (e.g. macOS
+    Finder and QuickLook) only get it right on a constant bit rate."""
 
 
 _RECORDING_ALL_ON: RecordingOptions = {
@@ -951,6 +958,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._text_only:
                 self._opts.recording_options["audio"] = False
 
+            c = cli.AgentsConsole.get_instance()
+            bit_rate = self._opts.recording_options.get("bit_rate")
+            recorder_may_start = self._opts.recording_options["audio"] or (c.enabled and c.record)
+            invalid_bit_rate = not isinstance(bit_rate, int) or (
+                bit_rate < MIN_BIT_RATE or bit_rate > MAX_BIT_RATE
+            )
+            if recorder_may_start and bit_rate is not None and invalid_bit_rate:
+                # Validate before claiming the primary session or starting RoomIO.
+                raise ValueError(
+                    f"bit_rate must be between {MIN_BIT_RATE} and {MAX_BIT_RATE}; got {bit_rate!r}"
+                )
+
             is_primary = True
             if job_ctx:
                 # set the primary session
@@ -1020,7 +1039,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             tasks: list[asyncio.Task[None]] = []
 
-            c = cli.AgentsConsole.get_instance()
             if c.enabled and not c.io_acquired:
                 if self.input.audio is not None or self.output.audio is not None:
                     logger.warning(
@@ -1088,7 +1106,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
                     if self._opts.recording_options["audio"] or (c.enabled and c.record):
-                        self._recorder_io = RecorderIO(agent_session=self)
+                        self._recorder_io = RecorderIO(
+                            agent_session=self,
+                            bit_rate=self._opts.recording_options.get("bit_rate"),
+                            constant_bit_rate=self._opts.recording_options.get(
+                                "constant_bit_rate", False
+                            ),
+                        )
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)
 
