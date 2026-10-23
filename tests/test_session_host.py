@@ -25,6 +25,8 @@ from livekit.agents.metrics import (
 )
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
+    CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
     SessionUsageUpdatedEvent,
@@ -49,6 +51,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 FORWARDED_EVENTS = {
     "agent_false_interruption",
     "agent_state_changed",
+    "close",
     "conversation_item_added",
     "debug_message",
     "error",
@@ -516,6 +519,21 @@ class TestSessionHostEvents:
         assert len(transport.sent) == 1
         msg = transport.sent[0]
         assert msg.event.error.message == "something went wrong"
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_close(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        host._on_close(CloseEvent(reason=CloseReason.TASK_COMPLETED, created_at=1000.0))
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 1
+        closed = transport.sent[0].event.session_closed
+        assert closed.reason == agent_pb.CloseReason.CR_COMPLETED
+        assert not closed.HasField("error")
 
         await host.aclose()
 
