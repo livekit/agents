@@ -1448,6 +1448,20 @@ class AgentActivity(RecognitionHooks):
             # we still wait for the entire execution (e.g function_tools)
             await asyncio.shield(self._scheduling_atask)
 
+    def _is_draining_task(self, task: asyncio.Task[Any]) -> bool:
+        """Whether ``task`` is awaited by this activity's drain/close path.
+
+        Waiting for this activity's own handoff from such a task would deadlock:
+        the drain is waiting for the caller.
+        """
+        if task is self._scheduling_atask or task in self._speech_tasks:
+            return True
+
+        executor = self._tool_executor
+        if task is executor._reply_task:
+            return True
+        return any(task is running.exe_task for running in executor._running_tasks.values())
+
     @contextlib.asynccontextmanager
     async def _inline_task_slot(
         self,

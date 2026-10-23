@@ -1798,7 +1798,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         from .agent_activity import ActivityClosedError
 
         while True:
-            if self._closing_task is not None:
+            if self._closing_task is not None or self._closing:
                 raise ActivityClosedError("session is closing")
 
             activity = self._activity
@@ -1809,9 +1809,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await activity.wait_for_idle()
                 return activity
             except ActivityClosedError:
-                # handoff in flight — re-target to whatever's current now
-                if self._activity is activity:
+                if self._activity is not activity:
+                    # handoff already landed — re-target to whatever's current now
+                    continue
+
+                current_task = asyncio.current_task()
+                if current_task is not None and activity._is_draining_task(current_task):
+                    # a caller awaited by the outgoing activity's own drain (a function
+                    # tool or foreground task inside it) must not wait for the handoff
+                    # that is waiting for it — keep the fast failure instead
                     raise
+
+                handoff = self._update_activity_atask
+                if handoff is None or handoff.done() or handoff is asyncio.current_task():
+                    raise
+
+                # the outgoing activity marks itself closed before _update_activity
+                # swaps in the incoming one; wait for the swap rather than surfacing
+                # a close that only belongs to the previous activity
+                await asyncio.shield(handoff)
                 continue
 
     @asynccontextmanager
