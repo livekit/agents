@@ -1162,10 +1162,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
 
-                await self._run_ws(ws)
+                try:
+                    await self._run_ws(ws)
+                finally:
+                    # WS ended: not ready for jobs until we re-register. Set before any
+                    # retry backoff so / returns 503 while the socket is down.
+                    self._connecting = True
             except Exception as e:
                 if self._closed:
                     break
+
+                # Ensure health is 503 during backoff even if we never reached _run_ws
+                # (e.g. register failed after _connecting was cleared only post-register).
+                self._connecting = True
 
                 if retry_count >= self._max_retry:
                     self._connection_failed = True
