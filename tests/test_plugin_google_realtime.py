@@ -1154,3 +1154,12 @@ async def test_reply_instructions_turns_follow_the_model(
         assert len(sent) == 1
         assert sent[0].turn_complete
         assert [(t.role, t.parts[0].text) for t in sent[0].turns or [] if t.parts] == expected
+
+
+async def test_generate_reply_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert RealtimeModel(api_key="test")._opts.generate_reply_timeout == 5.0
+    async with _make_configured_session(monkeypatch, generate_reply_timeout=0.01) as session:
+        monkeypatch.setattr(session, "_send_client_event", lambda event: None)
+        fut = session.generate_reply()
+        with pytest.raises(llm.RealtimeError, match="timed out"):
+            await asyncio.wait_for(fut, 1.0)
