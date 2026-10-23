@@ -1184,10 +1184,19 @@ class RealtimeSession(
                     if closing:  # closing is expected, see _send_task
                         return
 
-                    # this will trigger a reconnection
-                    raise APIConnectionError(
-                        message=f"{self._realtime_model._provider_label} connection closed unexpectedly"
-                    )
+                    # CLOSE carries (code, reason); CLOSED/CLOSING only expose close_code.
+                    # Test doubles (and some wrappers) may omit close_code — use getattr.
+                    code = getattr(ws_conn, "close_code", None)
+                    reason = ""
+                    if msg.type == aiohttp.WSMsgType.CLOSE:
+                        if isinstance(msg.data, int):
+                            code = msg.data
+                        if isinstance(msg.extra, str):
+                            reason = msg.extra
+
+                    # this will trigger a reconnection unless a subclass marks
+                    # the close as fatal via _on_ws_closed (e.g. auth / policy codes)
+                    raise self._on_ws_closed(code, reason)
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -2432,6 +2441,28 @@ class RealtimeSession(
 
     def _is_fatal_error(self, error: object | None) -> bool:
         return _is_fatal_error(error)
+
+    def _on_ws_closed(self, code: int | None, reason: str) -> APIError:
+        """Map an unexpected WebSocket close frame to an APIError.
+
+        Subclasses (OpenAI-compatible realtime providers) can override this to
+        treat provider-specific close codes as non-retryable, e.g. bad
+        credentials or policy violations. The default stays retryable so the
+        existing reconnect loop is unchanged.
+        """
+        label = self._realtime_model._provider_label
+        if code is None:
+            detail = ""
+        elif reason:
+            detail = f" (code={code}, reason={reason!r})"
+        else:
+            detail = f" (code={code})"
+        err: APIError = APIConnectionError(
+            message=f"{label} connection closed unexpectedly{detail}",
+            retryable=True,
+        )
+        err.body = {"code": code, "reason": reason}
+        return err
 
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
         if event_id := event.error.event_id:
