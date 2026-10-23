@@ -4104,7 +4104,9 @@ class AgentActivity(RecognitionHooks):
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
                             else _reply_tool_choice(
-                                out.reply_tool_choice for out in tool_output.output
+                                out.reply_tool_choice
+                                for out in tool_output.output
+                                if out.fnc_call_out.reply_required
                             )
                             or "auto",
                         ),
@@ -4893,7 +4895,9 @@ class AgentActivity(RecognitionHooks):
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
                             else _reply_tool_choice(
-                                out.reply_tool_choice for out in tool_output.output
+                                out.reply_tool_choice
+                                for out in tool_output.output
+                                if out.fnc_call_out.reply_required
                             )
                             or "auto",
                         ),
