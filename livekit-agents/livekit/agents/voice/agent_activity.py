@@ -102,7 +102,12 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
-from .tool_executor import _resolve_async_tool_options, _RunningTasks, _ToolExecutor
+from .tool_executor import (
+    _reply_tool_choice,
+    _resolve_async_tool_options,
+    _RunningTasks,
+    _ToolExecutor,
+)
 from .turn import (
     EndpointingOptions,
     PreemptiveGenerationOptions,
@@ -4155,7 +4160,12 @@ class AgentActivity(RecognitionHooks):
                             # a final text response instead of silently stopping.
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
-                            else "auto",
+                            else _reply_tool_choice(
+                                out.reply_tool_choice
+                                for out in tool_output.output
+                                if out.fnc_call_out.reply_required
+                            )
+                            or "auto",
                         ),
                         # the tool reply answers whatever user turn is still unanswered: this
                         # one if the reply only generated tools, or the last turn of a
@@ -4939,7 +4949,12 @@ class AgentActivity(RecognitionHooks):
                             # passing tool response back to the LLM
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
-                            else "auto",
+                            else _reply_tool_choice(
+                                out.reply_tool_choice
+                                for out in tool_output.output
+                                if out.fnc_call_out.reply_required
+                            )
+                            or "auto",
                         ),
                         tool_reply=True,
                     ),
