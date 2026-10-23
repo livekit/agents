@@ -1757,3 +1757,148 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
         "end_of_turn_confidence": 1.0,
         "language_confidence": 0.92,
     }
+
+
+async def test_pii_redaction_and_filtering_options_in_connect_config():
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(
+        api_key="test-key",
+        redact_pii=True,
+        redact_pii_policies=["person_name", "phone_number"],
+        redact_pii_sub="entity_name",
+        include_partial_turns=True,
+        filter_profanity=False,
+    )
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["redact_pii"] == ["true"]
+    assert json.loads(query["redact_pii_policies"][0]) == ["person_name", "phone_number"]
+    assert query["redact_pii_sub"] == ["entity_name"]
+    assert query["include_partial_turns"] == ["true"]
+    assert query["filter_profanity"] == ["false"]
+
+
+async def test_empty_pii_policies_and_unset_filtering_options_are_omitted():
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", redact_pii=True, redact_pii_policies=[])
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["redact_pii"] == ["true"]
+    for key in (
+        "redact_pii_policies",
+        "redact_pii_sub",
+        "include_partial_turns",
+        "filter_profanity",
+    ):
+        assert key not in query
+
+
+@pytest.mark.parametrize(
+    "option", [{"redact_pii_policies": ["person_name"]}, {"redact_pii_sub": "hash"}]
+)
+async def test_pii_details_require_redaction(option):
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="requires 'redact_pii'"):
+        STT(api_key="test-key", **option)
+
+    stt = STT(api_key="test-key", redact_pii=True, **option)
+    stream = _make_stream_for_unit_test(stt)
+    with pytest.raises(ValueError, match="requires 'redact_pii'"):
+        stt.update_options(redact_pii=False)
+    with pytest.raises(ValueError, match="requires 'redact_pii'"):
+        stream.update_options(redact_pii=False)
+
+
+async def test_interim_capability_tracks_partial_turn_options():
+    from livekit.plugins.assemblyai import STT
+
+    assert STT(api_key="test-key").capabilities.interim_results is True
+    assert STT(api_key="test-key", redact_pii=True).capabilities.interim_results is False
+    assert (
+        STT(
+            api_key="test-key", redact_pii=True, include_partial_turns=True
+        ).capabilities.interim_results
+        is True
+    )
+    assert (
+        STT(api_key="test-key", include_partial_turns=False).capabilities.interim_results is False
+    )
+
+    updated = STT(api_key="test-key")
+    updated.update_options(redact_pii=True)
+    assert updated.capabilities.interim_results is False
+    updated.update_options(include_partial_turns=True)
+    assert updated.capabilities.interim_results is True
+
+
+async def test_pii_redacted_final_turn_emits_only_transcript_text():
+    from livekit.plugins.assemblyai import STT
+
+    stream = _make_stream_for_unit_test(STT(api_key="test-key", redact_pii=True))
+    stream._process_stream_event(
+        {
+            "type": "Turn",
+            "transcript": "My name",
+            "utterance": "My name",
+            "end_of_turn": False,
+            "words": [
+                {"text": "My", "start": 0, "end": 200, "confidence": 0.9},
+                {"text": "name", "start": 200, "end": 400, "confidence": 0.9},
+            ],
+        }
+    )
+    stream._process_stream_event(
+        {
+            "type": "Turn",
+            "transcript": "My name is [PERSON_NAME].",
+            "utterance": "My name is Sonny.",
+            "end_of_turn": True,
+            "words": [
+                {"text": "My", "start": 0, "end": 200, "confidence": 0.9},
+                {"text": "name", "start": 200, "end": 400, "confidence": 0.9},
+                {"text": "is", "start": 400, "end": 500, "confidence": 0.9},
+                {"text": "Sonny.", "start": 500, "end": 900, "confidence": 0.9},
+            ],
+        }
+    )
+
+    alternatives = [
+        alternative for event in _drain_events(stream) for alternative in event.alternatives
+    ]
+    assert [alternative.text for alternative in alternatives] == [
+        "My name",
+        "My name",
+        "My name is [PERSON_NAME].",
+        "My name is [PERSON_NAME].",
+        "My name is [PERSON_NAME].",
+    ]
+    for alternative in alternatives[2:]:
+        assert alternative.words == []
+        assert alternative.start_time == alternatives[0].start_time
+        assert alternative.end_time > alternative.start_time
