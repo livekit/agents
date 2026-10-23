@@ -1676,3 +1676,24 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
     assert session._recorder_io is None
     await _cleanup(session)
+
+
+def test_setup_cloud_tracer_leaves_root_logger_to_the_log_sidecar(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.hosted_logs import (
+        HOSTED_LOGS_ENV,
+        HOSTED_LOGS_HANDOFF_FILE_ENV,
+        HOSTED_LOGS_SIDECAR,
+    )
+
+    handoff_file = tmp_path / "sdk-handoff"
+    handoff_file.touch()
+    monkeypatch.setenv(HOSTED_LOGS_ENV, HOSTED_LOGS_SIDECAR)
+    monkeypatch.setenv(HOSTED_LOGS_HANDOFF_FILE_ENV, str(handoff_file))
+    with _stub_cloud_tracer_deps():
+        _setup_cloud_tracer_for_job()
+        cloud = traces_mod._cloud
+        assert cloud._log_batch_processor is not None
+        assert cloud.log_handler is None or cloud.log_handler not in logging.getLogger().handlers

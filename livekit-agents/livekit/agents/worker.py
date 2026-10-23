@@ -52,6 +52,7 @@ from .job import (
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
+from .telemetry.hosted_logs import hand_off_logs_to_sidecar
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import http_context, http_server, is_given
 from .utils.hw import get_cpu_monitor
@@ -736,6 +737,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
             http_context._set_default_cert_env()
 
+            hand_off_logs_to_sidecar()
             logger.info(
                 "starting worker",
                 extra={"version": __version__, "rtc-version": rtc.__version__},
