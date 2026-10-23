@@ -79,11 +79,19 @@ def replace(
     flags = re.IGNORECASE if not case_sensitive else 0
     keys = list(replacements)
     lookup = replacements if case_sensitive else {k.lower(): v for k, v in replacements.items()}
-    # single-pass alternation, longest key first so overlaps prefer the longer match
+    # Two keys that differ only by case are one key to a case-insensitive pattern; the later wins.
+    entries = (
+        list(replacements.items())
+        if case_sensitive
+        else list({k.lower(): (k, v) for k, v in replacements.items()}.values())
+    )
+    entries.sort(key=lambda entry: len(entry[0]), reverse=True)
+    values = [v for _, v in entries]
+    # Single-pass alternation, longest key first so overlaps prefer the longer match. Each key is
+    # its own group so a match maps to its replacement by group index, not by lower-casing the
+    # matched text (IGNORECASE also matches e.g. "İ" and "ſ", whose str.lower() is no key).
     pattern = (
-        re.compile("|".join(re.escape(k) for k in sorted(keys, key=len, reverse=True)), flags)
-        if keys
-        else None
+        re.compile("|".join(f"({re.escape(k)})" for k, _ in entries), flags) if entries else None
     )
     # longest end-anchored run that is a proper prefix of a key (a later chunk may complete it)
     max_prefix = max((len(k) - 1 for k in keys), default=0)
@@ -94,13 +102,20 @@ def replace(
         else None
     )
 
+    def _value(m: re.Match[str]) -> str:
+        # prefer the key spelled like the match ("s" vs "ſ" are distinct keys but one pattern
+        # branch); fall back to the matched group when no key has that spelling
+        key = m.group(0) if case_sensitive else m.group(0).lower()
+        if key in lookup:
+            return lookup[key]
+        assert m.lastindex is not None
+        return values[m.lastindex - 1]
+
     def _apply(text: str) -> str:
         if pattern is None:
             return text
         # map each match to its value literally (no backreference expansion)
-        return pattern.sub(
-            lambda m: lookup[m.group(0) if case_sensitive else m.group(0).lower()], text
-        )
+        return pattern.sub(_value, text)
 
     def _holdback(buffer: str) -> int:
         if holdback_re is None:
