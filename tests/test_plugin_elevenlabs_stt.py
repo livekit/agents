@@ -74,7 +74,7 @@ def _new_stream(
     stream._event_ch = _EventSink()
     stream._speaking = False
     stream._last_partial_text = ""
-    stream._start_time_offset = 0.0
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     return stream
 
 

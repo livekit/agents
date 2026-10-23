@@ -28,7 +28,7 @@ def _stream() -> InferenceSpeechStream:
     stream._speaking = False
     stream._request_id = "req-1"
     stream._speech_duration = 0.0
-    stream._start_time_offset = 0.0
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._pending_extra = None
     stream._opts = SimpleNamespace(language="en")
     return stream
