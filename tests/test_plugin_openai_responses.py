@@ -477,7 +477,7 @@ async def test_incomplete_response_is_non_retryable_and_does_not_update_context(
         )
         assert attempts == 1
         assert llm_model._prev_resp_id == ""
-        assert llm_model._prev_chat_ctx is None
+        assert llm_model._prev_resp_items is None
     finally:
         await llm_model.aclose()
 
@@ -651,3 +651,123 @@ async def test_completed_response_without_cache_write_reports_zero() -> None:
     )
 
     assert usage.cache_creation_tokens == 0
+
+
+class _ScriptedResponsesWS:
+    """Answers each request with its own scripted response and records the payloads."""
+
+    _base_url = "https://api.openai.com/v1"
+
+    def __init__(self, outputs: list[list[dict]]) -> None:
+        self._outputs = outputs
+        self.payloads: list[dict] = []
+
+    def generate_response(self, payload: dict):  # noqa: ANN201
+        self.payloads.append(payload)
+        resp_id = f"resp_{len(self.payloads)}"
+        output = self._outputs[len(self.payloads) - 1]
+        response = {**_RESPONSE_CREATED["response"], "id": resp_id, "status": "completed"}
+        frames = [
+            {"type": "response.created", "sequence_number": 0, "response": response},
+            {
+                "type": "response.completed",
+                "sequence_number": 1,
+                "response": {**response, "output": output},
+            },
+        ]
+
+        async def _replay():  # noqa: ANN202
+            for frame in frames:
+                yield frame
+
+        return _replay()
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _output_message(text: str) -> dict:
+    return {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+
+
+def _output_function_call(call_id: str, name: str) -> dict:
+    return {
+        "type": "function_call",
+        "id": f"fc_{call_id}",
+        "call_id": call_id,
+        "name": name,
+        "arguments": '{"city": "Paris"}',
+        "status": "completed",
+    }
+
+
+async def test_chained_request_sends_only_items_after_previous_response() -> None:
+    ws = _ScriptedResponsesWS(
+        [
+            [
+                _output_function_call("call_1", "get_weather"),
+                _output_message("Let me check."),
+                _output_function_call("call_2", "get_time"),
+            ],
+            [_output_message("It's sunny and 3pm, and tomorrow looks fine.")],
+            [_output_message("You're welcome.")],
+            [],
+        ]
+    )
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    llm_model._ws = ws  # type: ignore[assignment]
+
+    async def _turn() -> None:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0, timeout=5.0)
+        ) as stream:
+            async for _ in stream:
+                pass
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Weather and time in Paris?")
+    await _turn()
+
+    # stored the way the agent stores a generation: one message, calls sharing its id, and
+    # each output right after its call
+    chat_ctx.add_message(role="assistant", content="Let me check.", id="item_a")
+    for i, (call_id, name, output) in enumerate(
+        [("call_1", "get_weather", "sunny"), ("call_2", "get_time", "3pm")]
+    ):
+        chat_ctx.items.append(
+            agents_llm.FunctionCall(
+                id=f"item_a/fnc_{i}", call_id=call_id, name=name, arguments='{"city": "Paris"}'
+            )
+        )
+        chat_ctx.items.append(
+            agents_llm.FunctionCallOutput(call_id=call_id, name=name, output=output, is_error=False)
+        )
+    await _turn()
+
+    # an interrupted reply differs from what the server holds
+    chat_ctx.add_message(role="assistant", content="It's sunny and 3pm,", interrupted=True)
+    chat_ctx.add_message(role="user", content="Thanks!")
+    await _turn()
+
+    chat_ctx.add_message(role="assistant", content="You're welcome.")
+    chat_ctx.add_message(role="user", content="Bye")
+    await _turn()
+    await llm_model.aclose()
+
+    first, tools, interrupted, last = ws.payloads
+    assert "previous_response_id" not in first
+    assert tools["previous_response_id"] == "resp_1"
+    assert tools["input"] == [
+        {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+        {"type": "function_call_output", "call_id": "call_2", "output": "3pm"},
+    ]
+    assert "previous_response_id" not in interrupted
+    assert len(interrupted["input"]) == 8
+    assert last["previous_response_id"] == "resp_3"
+    assert last["input"] == [{"role": "user", "content": "Bye"}]
