@@ -297,9 +297,10 @@ def _drop_ineffective_language_hint(
     other language never reaches Deepgram. Flux is exempt: its hint is gated on the model
     (flux-general-multi), not on the session language.
 
-    Deleting the key is what makes the removal stick where the caller keeps its own copy —
-    a reconnect sends that copy again. Returns whether a hint was removed, so a stream that
-    has already said this can report it only once.
+    Hand this the payload about to be sent, never the stream's stored `extra_kwargs`: the
+    stored copy keeps the caller's hint, so a later model or language that can use it puts
+    it back on the wire. Returns whether a hint was removed, so a stream that has already
+    said this can report it only once.
     """
     if "language_hint" not in extra_kwargs:
         return False
@@ -1350,18 +1351,21 @@ class SpeechStream(stt.SpeechStream):
         self, http_session: aiohttp.ClientSession
     ) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Inference STT WebSocket."""
-        self._guard_language_hint(self._opts.extra_kwargs)
+        # the payload is built from a copy: the stream keeps the caller's hint, so a later
+        # model or language that can use it sends it again
+        extra = dict(self._opts.extra_kwargs)
+        self._guard_language_hint(extra)
         params: dict[str, Any] = {
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
                 "encoding": self._opts.encoding,
                 # merge the framework session keyterms into the user's extra_kwargs keyterm key
                 "extra": {
-                    **self._opts.extra_kwargs,
+                    **extra,
                     **(
                         _keyterms_extra_for_model(
                             self._opts.model,
-                            extra_kwargs=self._opts.extra_kwargs,
+                            extra_kwargs=extra,
                             session_keyterms=self._stt._session_keyterms,
                         )
                         or {}

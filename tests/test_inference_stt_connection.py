@@ -242,7 +242,7 @@ async def test_nova3_language_hint_reaches_session_create() -> None:
     assert session_language == "multi"
 
 
-async def test_nova3_language_hint_is_dropped_outside_multi_mode(
+async def test_nova3_language_hint_is_not_sent_outside_multi_mode(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     extra: dict[str, Any] = {}
@@ -284,9 +284,67 @@ async def test_nova3_language_hint_is_dropped_outside_multi_mode(
     assert "removed `language_hint`" in caplog.text
     assert "model 'deepgram/nova-3'" in caplog.text
     assert "language is 'en'" in caplog.text
-    # the removal belongs to this stream; the parent keeps the caller's baseline
-    assert "language_hint" not in stream._opts.extra_kwargs
+    # the suppressed send lives on the payload, never on the stored options
+    assert stream._opts.extra_kwargs["language_hint"] == ["en", "es"]
     assert stt._opts.extra_kwargs["language_hint"] == ["en", "es"]
+
+
+async def test_a_later_multi_mode_sends_the_hint_again(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A hint this connection could not carry stays on the stream, so the next connection
+    under a language that can use it sends it again."""
+    created: list[dict[str, Any]] = []
+    sockets: list[web.WebSocketResponse] = []
+    updated = asyncio.Event()
+    reconnected = asyncio.Event()
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        sockets.append(ws)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                created.append(event)
+                if len(created) == 2:
+                    reconnected.set()
+            elif event["type"] == "session.update":
+                updated.set()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/nova-3",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+                extra_kwargs={"language_hint": ["en", "es"]},
+            )
+            stream = stt.stream(
+                conn_options=APIConnectOptions(max_retry=1, retry_interval=0.001, timeout=1.0)
+            )
+            try:
+                await _wait_until_stream_is_live(stream)
+                stt.update_options(language="multi")
+                await asyncio.wait_for(updated.wait(), timeout=1.0)
+                # a drop of the socket rebuilds the connection on the new language
+                await sockets[0].close()
+                await asyncio.wait_for(reconnected.wait(), timeout=1.0)
+            finally:
+                await stream.aclose()
+
+    assert len(created) == 2
+    assert "language_hint" not in created[0]["settings"]["extra"]
+    assert created[1]["settings"]["language"] == "multi"
+    assert created[1]["settings"]["extra"]["language_hint"] == ["en", "es"]
+    # the caller's hint survived the suppressed send, on both copies
+    assert stream._opts.extra_kwargs["language_hint"] == ["en", "es"]
+    assert stt._opts.extra_kwargs["language_hint"] == ["en", "es"]
+    assert caplog.text.count("removed `language_hint`") == 1
 
 
 async def test_a_stream_language_keeps_the_hint_the_parent_would_drop() -> None:
