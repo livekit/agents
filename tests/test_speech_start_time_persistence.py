@@ -14,8 +14,10 @@ clears the per-turn state.
 overwritten by every new SOS) and is used as the start of the per-burst
 `user_speaking` OTEL spans. The new `_user_turn_start` is set alongside
 the `_user_turn_span` on the first SOS of a turn and cleared together with
-the span on EOT cleanup. It is the value passed into `_bounce_eou_task`
-and ultimately ends up as `started_speaking_at` on the EOT metrics report.
+the span on EOT cleanup. `started_speaking_at` on the EOT metrics report
+is `_transcribed_speech_start`, the onset of the utterance that produced the
+turn's first final transcript, and falls back to `_user_turn_start` when it
+is unset.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from livekit.agents import LanguageCode
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
@@ -51,6 +55,8 @@ class TestUserTurnStartPersistence:
         audio_recognition._end_of_turn_task = None
         audio_recognition._user_turn_span = None
         audio_recognition._user_turn_start = None
+        audio_recognition._utterances = []
+        audio_recognition._transcribed_speech_start = None
         audio_recognition._eou_wait_span = None
         audio_recognition._eou_wait_started_at_ns = None
         audio_recognition._eou_wait_rearms = 0
@@ -71,6 +77,15 @@ class TestUserTurnStartPersistence:
         audio_recognition._last_speaking_time = None
         audio_recognition._transcription_timeout_handle = None
         audio_recognition._turn_speech_duration = 0.0
+        # state read/written by the _process_stt_event final transcript branch
+        audio_recognition._vad = MagicMock()
+        audio_recognition._stt_aligned_transcript = False
+        audio_recognition._audio_preflight_transcript = ""
+        audio_recognition._final_transcript_received = asyncio.Event()
+        audio_recognition._final_transcript_confidence = []
+        audio_recognition._last_final_transcript_time = None
+        audio_recognition._last_language = None
+        audio_recognition._check_user_turn_limit = MagicMock()  # type: ignore[method-assign]
 
         # collaborators
         audio_recognition._hooks = MagicMock()
@@ -188,3 +203,66 @@ class TestUserTurnStartPersistence:
         # _speech_start_time should now reflect the second burst's start, not the first
         assert audio_recognition._speech_start_time is not None
         assert audio_recognition._speech_start_time > first_burst_speech_start
+
+    async def _noise_speech_then_new_utterance(self, audio_recognition: AudioRecognition) -> float:
+        """Noise at now-30, speech from now-20 to now-19, a new utterance from now-10."""
+        now = time.time()
+        for started_ago, ended_ago in ((30.0, 29.8), (20.0, 19.0)):
+            await audio_recognition._on_vad_event(
+                self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=started_ago)
+            )
+            await audio_recognition._on_vad_event(
+                self._vad_event(
+                    VADEventType.END_OF_SPEECH,
+                    speech_duration=started_ago - ended_ago,
+                    silence_duration=ended_ago,
+                )
+            )
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=10.0)
+        )
+        return now
+
+    @staticmethod
+    def _final_transcript(*, speech_end_time: float | None = None) -> SpeechEvent:
+        return SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(language=LanguageCode("en"), text="hello")],
+            speech_end_time=speech_end_time,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("speech_end_ago", "expected_start_ago"),
+        [
+            pytest.param(19.0, 20.0, id="ended_in_an_earlier_utterance"),
+            # a provider timestamp slightly before the VAD onset (clock skew, a short word)
+            pytest.param(20.5, 20.0, id="clock_skew"),
+            # no evidence of which utterance a late transcript belongs to
+            pytest.param(None, 10.0, id="no_timing"),
+            # timing in a pause (e.g. a provider timeline lagging the wall clock) is not
+            # trusted; the turn's first utterance is the noise that opened it
+            pytest.param(25.0, 10.0, id="matches_no_utterance"),
+        ],
+    )
+    async def test_first_transcript_is_dated_from_its_utterance(
+        self, speech_end_ago: float | None, expected_start_ago: float
+    ):
+        """
+        The turn's first final transcript can arrive after the user started a
+        new utterance. It is dated from the utterance its timing falls in, else
+        from the current one, never from the noise that opened the turn.
+        """
+        audio_recognition = self._create_audio_recognition()
+        now = await self._noise_speech_then_new_utterance(audio_recognition)
+
+        audio_recognition._process_stt_event(
+            self._final_transcript(
+                speech_end_time=now - speech_end_ago if speech_end_ago is not None else None
+            )
+        )
+
+        assert audio_recognition._transcribed_speech_start == pytest.approx(
+            now - expected_start_ago, abs=0.01
+        )
+        assert audio_recognition._user_turn_start == pytest.approx(now - 30.0, abs=0.01)
