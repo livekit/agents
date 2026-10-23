@@ -475,6 +475,9 @@ class JobContext:
                 sr.audio_recording_started_at = recorder_io.recording_started_at
                 sr.duration = sr.timestamp - sr.audio_recording_started_at
 
+        if sr.duration is None and sr.started_at:
+            sr.duration = sr.timestamp - sr.started_at
+
         return sr
 
     @functools.cached_property

@@ -6,6 +6,7 @@ import inspect
 import json
 import logging
 import ssl
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -670,6 +671,21 @@ def test_session_report_constructor_includes_recording_options_in_options() -> N
 
     serialized_recording_options["audio"] = True
     assert report.options.recording_options["audio"] is False
+
+
+def test_make_session_report_duration_without_audio_recording() -> None:
+    from livekit.agents.job import JobContext
+
+    session = _create_simple_session()
+    session._started_at = time.time() - 5.0
+
+    ctx = object.__new__(JobContext)
+    ctx._info = SimpleNamespace(job=_make_mock_job_ctx().job)
+    report = ctx.make_session_report(session)
+
+    assert report.audio_recording_started_at is None
+    assert report.duration is not None
+    assert report.duration > 0
 
 
 async def test_upload_audio_only_no_file() -> None:

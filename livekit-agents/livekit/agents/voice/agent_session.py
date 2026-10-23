@@ -1950,6 +1950,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._activity = self._next_activity
                 self._next_activity = None
 
+                if self._user_state == "listening" and self._agent_state == "listening":
+                    # which tools hold the away window off depends on the current agent
+                    self._set_user_away_timer()
+
                 run_state = self._global_run_state
                 handoff_item = AgentHandoff(
                     old_agent_id=(previous_activity_v.agent.id if previous_activity_v else None),
@@ -2078,8 +2082,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._opts.user_away_timeout is None:
             return
 
-        if _RunningTasks.get(self):
-            # a tool in flight will speak when it lands; the window restarts then (#6883)
+        if any(
+            task.executor._owning_activity in (None, self._activity)
+            for task in _RunningTasks.get(self, {}).values()
+        ):
+            # a tool that can speak when it lands holds the window; a paused agent's can't (#6883)
             return
 
         if (room_io := self._room_io) and (
@@ -2340,8 +2347,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             isinstance(ev.update, ToolCallEnded)
             and self._user_state == "listening"
             and self._agent_state == "listening"
+            and self._user_away_timer is None
         ):
-            # tools hold the window off, so the last one to land restarts it (#6883)
+            # tools hold the window off, so the last one to land restarts it (#6883); a running
+            # timer means the tool that ended belongs to a paused agent and never held it
             self._set_user_away_timer()
 
         self.emit("tool_execution_updated", ev)
