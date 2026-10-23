@@ -203,6 +203,7 @@ async def test_session_scoped_reply_follows_handoff(caplog: pytest.LogCaptureFix
     speakers, current = await _run(first, "handoff", caplog, session_tools=[toolset])
     assert isinstance(current, _Second)
     assert speakers == ["_First", "_Second"]
+    assert "link sent" in _outputs(current)
 
 
 async def test_session_scoped_reply_is_dropped_on_close() -> None:

@@ -529,7 +529,10 @@ class _ToolExecutor:
         )
         chat_ctx = target.chat_ctx.copy()
         chat_ctx.insert(items)
-        await target.update_chat_ctx(chat_ctx)
+        # session tools are valid for any agent, but one not yet started filters by its own tools
+        await target.update_chat_ctx(
+            chat_ctx, exclude_invalid_function_calls=self._owning_activity is not None
+        )
         ctx.session.history.insert(items)
 
         if not any(item.type == "function_call_output" and item.reply_required for item in items):
