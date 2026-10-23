@@ -966,7 +966,7 @@ def live_transcription_to_speech_data(
             if alt["words"]
             else None,
         )
-        if language == "multi" and "languages" in alt:
+        if language == "multi" and alt.get("languages"):
             sd.language = LanguageCode(alt["languages"][0])  # TODO: handle multiple languages
         speech_data.append(sd)
     return speech_data
