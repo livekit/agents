@@ -910,8 +910,27 @@ class JobContext:
             or options.get("transcript", True)
         )
         obs_url = _observability_url(self._info.url)
-        if not (needs_cloud and obs_url):
+        if not obs_url:
             self._stop_log_buffering()
+            return
+
+        if not needs_cloud:
+            # Recording is fully disabled, but _on_session_end still uploads the
+            # session's evaluations, tag metadata, and outcome (its has_evals
+            # branch). Those records travel through the log pipeline, so create
+            # it and register the job; traces, Python logs, and metrics stay off.
+            self._stop_log_buffering()
+            self._telemetry_state = _setup_cloud_tracer(
+                room_id=self.job.room.sid,
+                job_id=self.job.id,
+                agent_name=self.job.agent_name,
+                observability_url=obs_url,
+                enable_traces=False,
+                enable_logs=False,
+                enable_session_report=True,
+                enable_metrics=False,
+                metadata=self._otel_metadata(options, redaction_enabled=redaction_enabled),
+            )
             return
 
         logger.debug("configuring session recording")
