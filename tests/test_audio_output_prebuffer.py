@@ -1,0 +1,389 @@
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from livekit import rtc
+from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities, BufferedAudioOutput
+
+from .fake_io import FakeAudioOutput
+
+pytestmark = pytest.mark.unit
+
+SR = 16000
+
+
+def _frame(duration_s: float) -> rtc.AudioFrame:
+    n = int(SR * duration_s)
+    return rtc.AudioFrame(
+        data=b"\x00\x00" * n,
+        sample_rate=SR,
+        num_channels=1,
+        samples_per_channel=n,
+    )
+
+
+def _buffered(sink: AudioOutput, buffer_duration: float = 0.3) -> BufferedAudioOutput:
+    return BufferedAudioOutput(next_in_chain=sink, buffer_duration=buffer_duration)
+
+
+# -- the buffer holds audio back ----------------------------------------------
+
+
+async def test_first_frames_are_held_until_the_buffer_fills() -> None:
+    sink = FakeAudioOutput()
+    buf = _buffered(sink, 0.3)
+
+    await buf.capture_frame(_frame(0.1))
+    await buf.capture_frame(_frame(0.1))
+    assert sink.captured_playout_segments == 0
+    assert buf.buffered_duration == pytest.approx(0.2)
+
+    # crossing the threshold releases everything held, in order
+    await buf.capture_frame(_frame(0.1))
+    assert sink.captured_playout_segments == 1
+    assert buf.buffered_duration == 0.0
+
+
+async def test_audio_past_the_buffer_goes_straight_through() -> None:
+    sink = FakeAudioOutput()
+    buf = _buffered(sink, 0.1)
+
+    for _ in range(5):
+        await buf.capture_frame(_frame(0.1))
+
+    assert sink.captured_playout_segments == 1
+
+
+# -- short segments -----------------------------------------------------------
+
+
+async def test_flush_releases_a_segment_shorter_than_the_buffer() -> None:
+    sink = FakeAudioOutput()
+    buf = _buffered(sink, 0.3)
+
+    await buf.capture_frame(_frame(0.1))
+    await buf.capture_frame(_frame(0.1))
+    assert sink.captured_playout_segments == 0
+
+    buf.flush()
+    await buf.wait_for_playout()
+
+    assert sink.captured_playout_segments == 1, "a short reply must not be swallowed"
+    assert buf.buffered_duration == 0.0
+
+
+async def test_clear_buffer_drops_the_held_audio() -> None:
+    sink = FakeAudioOutput()
+    buf = _buffered(sink, 0.3)
+
+    await buf.capture_frame(_frame(0.1))
+    buf.clear_buffer()
+
+    assert buf.buffered_duration == 0.0
+    assert sink.captured_playout_segments == 0, "interruption must not play held audio"
+
+
+async def test_clear_buffer_joins_an_in_flight_release_without_hanging() -> None:
+    sink = FakeAudioOutput()
+    buf = _buffered(sink, 0.3)
+
+    await buf.capture_frame(_frame(0.1))
+    buf.flush()
+    buf.clear_buffer()
+
+    # a barge-in right after a flush must not leave wait_for_playout() pending forever
+    await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+
+
+# -- per-segment isolation ----------------------------------------------------
+
+
+async def test_every_segment_primes_again() -> None:
+    sink = FakeAudioOutput()
+    buf = _buffered(sink, 0.1)
+
+    for _ in range(3):
+        await buf.capture_frame(_frame(0.1))
+        buf.flush()
+        await buf.wait_for_playout()
+
+    assert sink.captured_playout_segments == 3
+
+
+# -- re-priming when the sink drains ------------------------------------------
+
+
+async def test_reserve_drains_over_time_so_the_buffer_refills() -> None:
+    sink = FakeAudioOutput()
+    # small buffer, so the reserve runs out while the sink is still playing
+    buf = _buffered(sink, 0.1)
+
+    await buf.capture_frame(_frame(0.1))  # primes, then releases: reserve is now 0.1s
+    assert buf.buffered_duration == 0.0
+
+    # let the sink play out the reserve
+    await asyncio.sleep(0.2)
+    await buf.capture_frame(_frame(0.1))
+
+    assert buf.buffered_duration > 0.0, "a drained reserve should be rebuilt"
+
+
+async def test_reserve_that_has_not_drained_keeps_forwarding() -> None:
+    sink = FakeAudioOutput()
+    buf = _buffered(sink, 0.1)
+
+    await buf.capture_frame(_frame(0.1))  # primes, then releases
+    await buf.capture_frame(_frame(0.1))
+
+    assert buf.buffered_duration == 0.0, "a full reserve must not re-prime"
+
+
+# -- pause --------------------------------------------------------------------
+
+
+async def test_pause_stops_the_reserve_from_draining() -> None:
+    sink = FakeAudioOutput(can_pause=True)
+    buf = _buffered(sink, 0.1)
+
+    await buf.capture_frame(_frame(0.1))  # primes, then releases
+    buf.pause()
+    await asyncio.sleep(0.2)
+
+    assert buf.can_pause is True
+    await buf.capture_frame(_frame(0.1))
+    assert buf.buffered_duration == 0.0, "a paused sink is not draining its reserve"
+
+    buf.resume()
+
+
+# -- configuration ------------------------------------------------------------
+
+
+async def test_zero_duration_forwards_every_frame_immediately() -> None:
+    sink = FakeAudioOutput()
+    buf = _buffered(sink, 0.0)
+
+    await buf.capture_frame(_frame(0.1))
+
+    assert sink.captured_playout_segments == 1
+    assert buf.buffered_duration == 0.0
+
+
+async def test_sample_rate_and_pause_are_taken_from_the_sink() -> None:
+    sink = FakeAudioOutput(sample_rate=SR, can_pause=True)
+    buf = _buffered(sink, 0.1)
+
+    assert buf.sample_rate == SR
+    assert buf.can_pause is True
+
+
+async def test_a_sink_that_cannot_pause_is_reported_as_such() -> None:
+    buf = _buffered(FakeAudioOutput(can_pause=False), 0.1)
+
+    assert buf.can_pause is False
+
+
+# -- Devin regression tests ---------------------------------------------------
+
+
+async def test_interruption_during_flush_does_not_hang() -> None:
+    """
+    Regression test for: when clear_buffer() is called while a flush task is
+    in-flight, cancelling that task must not leave the already-forwarded
+    segment unreported. The wrapper re-arms the sink's completion before
+    clearing it, so wait_for_playout() does not hang.
+    """
+    sink = _TrackingSink()
+    buf = _buffered(sink, 0.3)
+
+    # push enough frames to cross the buffer threshold and auto-release
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))  # 0.4s > 0.3s buffer
+
+    # flush schedules the release task
+    buf.flush()
+
+    # immediate interruption before the task completes
+    buf.clear_buffer()
+
+    # must not hang: the sink reports the interrupted segment
+    ev = await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+
+    assert ev.interrupted is True
+    assert sink.cleared is True
+    # the segment is reported exactly once, so the next reply starts clean
+    assert sink.segments == 1, f"expected one completed segment, got {sink.segments}"
+
+
+async def test_interruption_is_reported_as_interrupted() -> None:
+    """
+    A stopped reply must be reported to the caller as interrupted, never as a
+    normal completion: the sink's flush only arms reporting, and the clear that
+    immediately follows is what settles it.
+    """
+    sink = _TrackingSink()
+    buf = _buffered(sink, 0.3)
+
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))  # 0.4s > 0.3s buffer, forwards downstream
+
+    buf.flush()
+    buf.clear_buffer()
+
+    ev = await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+    assert ev.interrupted is True, "a cleared segment must report interrupted=True"
+
+
+async def test_flush_after_interruption_still_completes_normally() -> None:
+    """
+    The flush-before-clear ordering must not leak: a reply that plays to its
+    end afterwards still reports a normal completion.
+    """
+    sink = _TrackingSink()
+    buf = _buffered(sink, 0.3)
+
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))
+
+    buf.flush()
+    await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))
+    buf.flush()
+
+    ev = await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+    assert ev.interrupted is False, "an uninterrupted reply must report a completion"
+    assert sink.segments == 2
+
+
+async def test_adjacent_replies_do_not_merge_segments() -> None:
+    """
+    Regression test for: flush() closes the wrapper's segment synchronously
+    but delays the sink's flush to a task. If a new reply captures audio
+    before that task runs, it must not enter the previous sink segment.
+    """
+    sink = _TrackingSink()
+    buf = _buffered(sink, 0.1)
+
+    # first reply: fill buffer, auto-releases, then flush
+    await buf.capture_frame(_frame(0.1))
+    await buf.capture_frame(_frame(0.1))
+    buf.flush()
+    await buf.wait_for_playout()
+
+    # second reply must be a separate segment
+    await buf.capture_frame(_frame(0.1))
+    buf.flush()
+    await buf.wait_for_playout()
+
+    assert sink.segments == 2, f"each reply must be its own segment, got {sink.segments}"
+
+
+class _TrackingSink(AudioOutput):
+    """Sink that counts segments and tracks flush/clear state.
+
+    Mirrors the room sink's shape: ``flush()`` only *arms* completion reporting by
+    creating a playout-wait task, and that task reports ``interrupted=True`` if
+    ``clear_buffer()`` arrives first. Reporting is asynchronous in both paths.
+
+    This sink has ``flush_ends_segment=False``: its ``flush()`` only arms a local
+    completion task, and an extra ``flush()`` before ``clear_buffer()`` is required
+    to arm the task so the interruption is consumed.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="TrackingSink",
+            capabilities=AudioOutputCapabilities(pause=True, flush_ends_segment=False),
+        )
+        self.segments = 0
+        self.flushed = False
+        self.cleared = False
+        self.flush_events = 0
+        self._interrupted = False
+        self._flush_task: asyncio.Task[None] | None = None
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+
+    async def _report(self) -> None:
+        # one loop turn, so a clear_buffer() arriving right after flush() wins
+        await asyncio.sleep(0)
+        interrupted = self._interrupted
+        self.segments += 1
+        self.on_playback_finished(playback_position=0.0, interrupted=interrupted)
+
+    def flush(self) -> None:
+        super().flush()
+        self.flushed = True
+        self.flush_events += 1
+        self._interrupted = False
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = asyncio.create_task(self._report())
+
+    def clear_buffer(self) -> None:
+        super().clear_buffer()
+        self.cleared = True
+        self._interrupted = True
+        # like the room sink, this only signals the interruption; a flush-armed
+        # completion task is what turns it into a reported segment. clearing
+        # without a flush therefore leaves the segment unreported, which is what
+        # the wrapper's flush-before-clear ordering prevents.
+
+
+async def test_interruption_does_not_close_an_avatar_stream() -> None:
+    """
+    Regression test for: an interruption must not flush a sink whose flush() ends
+    the segment for the remote receiver. The avatar data-stream sink closes its
+    stream on flush, so a flush issued by clear_buffer() would make the avatar
+    report a normal completion and the stopped reply would look uninterrupted.
+    """
+    sink = _StreamClosingSink()
+    buf = _buffered(sink, 0.3)
+
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))  # 0.4s > 0.3s buffer, forwards downstream
+
+    buf.flush()
+    # the interruption lands before the scheduled release reaches the sink
+    buf.clear_buffer()
+
+    ev = await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+    assert ev.interrupted is True, "the stopped reply must report interrupted=True"
+    # exactly one end of speech, and it must come from the clear, not a flush
+    assert sink.streams_closed == 0, "clearing must not close the avatar's stream"
+    assert sink.clear_calls == 1
+
+
+class _StreamClosingSink(AudioOutput):
+    """Sink whose ``flush()`` has an externally visible end-of-segment effect.
+
+    Mirrors the avatar data-stream sink: ``flush()`` closes the remote stream, so
+    flushing before clearing would end the segment as a normal completion before
+    the clear could interrupt it. Such a sink must not receive an extra flush.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="StreamClosingSink",
+            capabilities=AudioOutputCapabilities(pause=False, flush_ends_segment=True),
+        )
+        self.streams_closed = 0
+        self.clear_calls = 0
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+
+    def flush(self) -> None:
+        super().flush()
+        # closing the remote stream is what the avatar sees as end of speech
+        self.streams_closed += 1
+        self.on_playback_finished(playback_position=0.0, interrupted=False)
+
+    def clear_buffer(self) -> None:
+        super().clear_buffer()
+        self.clear_calls += 1
+        self.on_playback_finished(playback_position=0.0, interrupted=True)

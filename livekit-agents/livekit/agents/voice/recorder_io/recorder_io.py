@@ -392,7 +392,12 @@ class RecorderAudioOutput(io.AudioOutput):
         super().__init__(
             label="RecorderIO",
             next_in_chain=audio_output,
-            capabilities=io.AudioOutputCapabilities(pause=True),
+            capabilities=io.AudioOutputCapabilities(
+                pause=True,
+                flush_ends_segment=audio_output.capabilities.flush_ends_segment
+                if audio_output
+                else False,
+            ),
         )
         self.__recording_io = recording_io
         self.__on_played = on_played

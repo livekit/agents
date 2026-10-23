@@ -627,7 +627,10 @@ class _SyncedAudioOutput(io.AudioOutput):
         super().__init__(
             label="TranscriptSynchronizer",
             next_in_chain=next_in_chain,
-            capabilities=io.AudioOutputCapabilities(pause=True),
+            capabilities=io.AudioOutputCapabilities(
+                pause=True,
+                flush_ends_segment=next_in_chain.capabilities.flush_ends_segment,
+            ),
         )
         self._synchronizer = synchronizer
         self._pushed_duration: float = 0.0
