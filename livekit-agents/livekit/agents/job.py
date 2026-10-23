@@ -464,6 +464,8 @@ class JobContext:
             events=session._recorded_events,
             chat_history=session.history.copy(),
             model_usage=session.usage.model_usage,
+            agent_name=self.job.agent_name,
+            tags=sorted(self._tagger.tags),
         )
 
         if recorder_io:
