@@ -938,6 +938,33 @@ async def test_mode_with_explicit_silence_still_sent():
     assert query["max_turn_silence"] == ["2000"]
 
 
+async def test_mode_with_only_min_silence_leaves_max_unset():
+    """An explicit min silence must not override the mode preset's max silence."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(
+        api_key="test-key",
+        model="universal-3-5-pro",
+        mode="max_accuracy",
+        min_turn_silence=200,
+    )
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["min_turn_silence"] == ["200"]
+    assert "max_turn_silence" not in query
+
+
 async def test_silence_defaults_injected_without_mode():
     """Without `mode`, the plugin still injects its latency-optimized 100ms
     min/max turn silence defaults (the LiveKit default behavior)."""
