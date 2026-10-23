@@ -74,6 +74,7 @@ from ..types import (
 )
 from ..utils import is_given
 from . import gen_ai, pii, trace_types, utils as telemetry_utils
+from .hosted_logs import logs_handled_by_sidecar
 
 if TYPE_CHECKING:
     from ..llm import ChatItem
@@ -973,7 +974,7 @@ class _CloudTelemetry:
                 self._ensure_log_pipeline(url)
                 if self._log_metadata_processor is not None:
                     self._log_metadata_processor.set_metadata(session_metadata)
-                if self._log_handler is not None:
+                if self._log_handler is not None and not logs_handled_by_sidecar():
                     root = logging.getLogger()
                     if self._log_handler not in root.handlers:
                         root.addHandler(self._log_handler)

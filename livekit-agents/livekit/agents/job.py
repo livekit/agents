@@ -46,6 +46,7 @@ from .telemetry import (
     trace_types,
     utils as telemetry_utils,
 )
+from .telemetry.hosted_logs import logs_handled_by_sidecar
 from .telemetry.traces import (
     _BufferingHandler,
     _cloud_log_handler,
@@ -280,6 +281,8 @@ class JobContext:
         if self._info.fake_job or not self._info.job.enable_recording:
             return
         if not _observability_url(self._info.url):
+            return
+        if logs_handled_by_sidecar():
             return
 
         self._early_log_handler = _BufferingHandler()
