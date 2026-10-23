@@ -78,6 +78,7 @@ def replace(
     """
     flags = re.IGNORECASE if not case_sensitive else 0
     keys = list(replacements)
+    lookup = replacements if case_sensitive else {k.lower(): v for k, v in replacements.items()}
     # Two keys that differ only by case are one key to a case-insensitive pattern; the later wins.
     entries = (
         list(replacements.items())
@@ -102,6 +103,11 @@ def replace(
     )
 
     def _value(m: re.Match[str]) -> str:
+        # prefer the key spelled like the match ("s" vs "ſ" are distinct keys but one pattern
+        # branch); fall back to the matched group when no key has that spelling
+        key = m.group(0) if case_sensitive else m.group(0).lower()
+        if key in lookup:
+            return lookup[key]
         assert m.lastindex is not None
         return values[m.lastindex - 1]
 

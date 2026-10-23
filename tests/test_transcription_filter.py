@@ -409,6 +409,19 @@ async def test_replace_case_insensitive_match_with_unicode_case_folding(
     assert result == expected
 
 
+@pytest.mark.parametrize("chunk_size", [1, 3, 100])
+@pytest.mark.parametrize(
+    "replacements",
+    [{"s": "standard", "ſ": "long"}, {"ſ": "long", "s": "standard"}],
+)
+async def test_replace_case_insensitive_keeps_distinct_unicode_keys(
+    replacements: dict[str, str], chunk_size: int
+):
+    """Keys that IGNORECASE treats as equal but str.lower() keeps apart keep their own values."""
+    result = await _collect(replace(replacements)(_stream_text("sſ", chunk_size)))
+    assert result == "standardlong"
+
+
 async def test_replace_edge_cases():
     """Test empty replacements, empty input, no matches, and regex special chars."""
     # empty replacements = passthrough
