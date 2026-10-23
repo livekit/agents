@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -53,6 +55,62 @@ _NO_FORCED_TOOL_CHOICE_PATTERNS = (
     "claude-fable-5-1",
     "claude-mythos-5-1",
 )
+
+
+# FunctionCall.extra key for the thinking blocks of the response that made the call.
+_THINKING_EXTRA_KEY = "anthropic"
+
+
+def _prefix_hashes(
+    system: list[dict[str, Any]] | None,
+    tools: list[dict[str, Any]] | None,
+    messages: list[dict[str, Any]],
+) -> list[str]:
+    """Hash the conversation before each message, and after the last one.
+
+    A thinking block's signature is bound to the system prompt, the tool set and every
+    earlier message, but not to earlier thinking blocks. When that prefix changes, for
+    example after update_instructions() or update_tools(), the API rejects the block on
+    accounts that enforce the binding, so it must not be sent again. The API binds the
+    tools as a set, so they are hashed sorted by name: a new order keeps a block valid.
+    """
+    tools = sorted(tools or [], key=lambda t: str(t.get("name")))
+    digest = hashlib.sha256(json.dumps([system or [], tools], sort_keys=True, default=str).encode())
+    hashes = []
+    for msg in messages:
+        hashes.append(digest.hexdigest())
+        content = [
+            c for c in msg["content"] if c.get("type") not in ("thinking", "redacted_thinking")
+        ]
+        digest.update(json.dumps([msg["role"], content], sort_keys=True, default=str).encode())
+    hashes.append(digest.hexdigest())
+    return hashes
+
+
+def _restore_thinking(
+    messages: list[dict[str, Any]], chat_ctx: ChatContext, hashes: list[str]
+) -> None:
+    """Put the kept thinking blocks back at the start of the assistant turn that made the call.
+
+    The API needs them with the tool result so the model continues from its own reasoning:
+    https://platform.claude.com/docs/en/build-with-claude/thinking#preserving-thinking-blocks
+    """
+    kept = {
+        item.call_id: item.extra[_THINKING_EXTRA_KEY]
+        for item in chat_ctx.items
+        if item.type == "function_call" and _THINKING_EXTRA_KEY in item.extra
+    }
+    if not kept:
+        return
+
+    for i, msg in enumerate(messages):
+        if msg["role"] != "assistant":
+            continue
+        for c in msg["content"]:
+            if c.get("type") == "tool_use" and (data := kept.get(c["id"])):
+                if data["prefix_hash"] == hashes[i]:
+                    msg["content"] = [*data["thinking_blocks"], *msg["content"]]
+                break
 
 
 @dataclass
@@ -255,6 +313,9 @@ class LLM(llm.LLM):
                 for content in extra_data.system_messages
             ]
 
+        hashes = _prefix_hashes(extra.get("system"), extra.get("tools"), anthropic_ctx)
+        _restore_thinking(anthropic_ctx, chat_ctx, hashes)
+
         # add cache control
         if self._opts.caching == "ephemeral":
             if extra.get("system"):
@@ -305,6 +366,7 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
+            prefix_hash=hashes[-1],
         )
 
 
@@ -319,9 +381,13 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         tools: list[Tool],
         conn_options: APIConnectOptions,
+        prefix_hash: str = "",
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._create_anthropic_stream = create_anthropic_stream
+        self._prefix_hash = prefix_hash
+        # thinking blocks of the response so far, kept on its first tool call
+        self._thinking_blocks: list[dict[str, str]] = []
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
@@ -337,6 +403,7 @@ class LLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         retryable = True
+        self._thinking_blocks = []  # a retry starts a new response
         try:
             async with await self._create_anthropic_stream() as stream:
                 async for event in stream:
@@ -386,10 +453,17 @@ class LLMStream(llm.LLMStream):
         elif event.type == "message_delta":
             self._output_tokens += event.usage.output_tokens
         elif event.type == "content_block_start":
-            if event.content_block.type == "tool_use":
-                self._tool_call_id = event.content_block.id
-                self._fnc_name = event.content_block.name
+            block = event.content_block
+            if block.type == "tool_use":
+                self._tool_call_id = block.id
+                self._fnc_name = block.name
                 self._fnc_raw_arguments = ""
+            elif block.type == "thinking":
+                self._thinking_blocks.append(
+                    {"type": "thinking", "thinking": block.thinking, "signature": block.signature}
+                )
+            elif block.type == "redacted_thinking":
+                self._thinking_blocks.append({"type": "redacted_thinking", "data": block.data})
         elif event.type == "content_block_delta":
             delta = event.delta
             if delta.type == "text_delta":
@@ -413,11 +487,25 @@ class LLMStream(llm.LLMStream):
             elif delta.type == "input_json_delta":
                 assert self._fnc_raw_arguments is not None
                 self._fnc_raw_arguments += delta.partial_json
+            elif delta.type == "thinking_delta":
+                self._thinking_blocks[-1]["thinking"] += delta.thinking
+            elif delta.type == "signature_delta":
+                self._thinking_blocks[-1]["signature"] += delta.signature
 
         elif event.type == "content_block_stop":
             if self._tool_call_id is not None:
                 assert self._fnc_name is not None
                 assert self._fnc_raw_arguments is not None
+
+                extra: dict[str, Any] | None = None
+                if self._thinking_blocks:
+                    extra = {
+                        _THINKING_EXTRA_KEY: {
+                            "thinking_blocks": self._thinking_blocks,
+                            "prefix_hash": self._prefix_hash,
+                        }
+                    }
+                    self._thinking_blocks = []
 
                 chat_chunk = llm.ChatChunk(
                     id=self._request_id,
@@ -428,6 +516,7 @@ class LLMStream(llm.LLMStream):
                                 arguments=self._fnc_raw_arguments or "",
                                 name=self._fnc_name or "",
                                 call_id=self._tool_call_id or "",
+                                extra=extra,
                             )
                         ],
                     ),
