@@ -1,12 +1,13 @@
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 from aiohttp import RequestInfo, WSServerHandshakeError
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
-from livekit.agents.utils import ConnectionPool
+from livekit.agents.utils import ConnectionPool, connection_pool
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -92,10 +93,66 @@ async def test_get_expired():
     conn = await pool.get(timeout=10.0)
     pool.put(conn)
     # Artificially set the connection's timestamp in the past to simulate expiration.
-    pool._connections[conn] = time.time() - 2  # 2 seconds ago (max_session_duration is 1)
+    pool._connections[conn] = time.perf_counter() - 2  # 2 seconds ago (max_session_duration is 1)
 
     conn2 = await pool.get(timeout=10.0)
     assert conn2 is not conn, "Expected a new connection to be returned."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wall_jump", [-3600, 3600])
+@pytest.mark.parametrize("elapsed", [1, 61])
+async def test_connection_age_ignores_wall_clock_changes(monkeypatch, wall_jump, elapsed):
+    clock = SimpleNamespace(wall=10000.0, elapsed=100.0)
+    monkeypatch.setattr(
+        connection_pool,
+        "time",
+        SimpleNamespace(
+            time=lambda: clock.wall,
+            perf_counter=lambda: clock.elapsed,
+        ),
+    )
+    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect_factory())
+    conn = await pool.get(timeout=10.0)
+    pool.put(conn)
+
+    clock.wall += elapsed + wall_jump
+    clock.elapsed += elapsed
+    next_conn = await pool.get(timeout=10.0)
+
+    assert (next_conn is conn) == (elapsed <= 60)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh", [False, True])
+async def test_connection_age_refresh_uses_elapsed_time(monkeypatch, refresh):
+    clock = SimpleNamespace(wall=10000.0, elapsed=100.0)
+    monkeypatch.setattr(
+        connection_pool,
+        "time",
+        SimpleNamespace(
+            time=lambda: clock.wall,
+            perf_counter=lambda: clock.elapsed,
+        ),
+    )
+    pool = ConnectionPool(
+        max_session_duration=60,
+        mark_refreshed_on_get=refresh,
+        connect_cb=dummy_connect_factory(),
+    )
+    conn = await pool.get(timeout=10.0)
+    pool.put(conn)
+
+    clock.wall -= 3600
+    clock.elapsed += 40
+    assert await pool.get(timeout=10.0) is conn
+    pool.put(conn)
+
+    clock.wall += 7200
+    clock.elapsed += 40
+    next_conn = await pool.get(timeout=10.0)
+
+    assert (next_conn is conn) == refresh
 
 
 @pytest.mark.asyncio
