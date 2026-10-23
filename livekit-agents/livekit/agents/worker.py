@@ -661,6 +661,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     if self._connection_failed:
                         return web.Response(status=503, text="failed to connect to livekit")
 
+                    # Docs / Node SDK: 503 until RegisterWorkerResponse (and while reconnecting).
+                    # unregistered=True workers never connect; keep / as a liveness probe.
+                    if not unregistered and (self._connecting or self._id == "unregistered"):
+                        return web.Response(status=503, text="not connected to livekit")
+
                     return web.Response(text="OK")
 
                 async def worker(_: Any) -> web.Response:
