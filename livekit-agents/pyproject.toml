@@ -66,6 +66,7 @@ dependencies = [
 mcp = ["mcp>=2.2, <3"]
 codecs = ["numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
+alkove = ["livekit-plugins-alkove>=1.8.8"]
 anam = ["livekit-plugins-anam>=1.8.8"]
 anthropic = ["livekit-plugins-anthropic>=1.8.8"]
 assemblyai = ["livekit-plugins-assemblyai>=1.8.8"]
