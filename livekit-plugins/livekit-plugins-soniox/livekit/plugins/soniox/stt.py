@@ -553,11 +553,17 @@ class SpeechStream(stt.SpeechStream):
 
                 if msg.type == aiohttp.WSMsgType.ERROR:
                     # The heartbeat closes the socket when a ping goes unanswered, and
-                    # that arrives here rather than as a close frame. Treating it as an
-                    # unexpected message type stepped over it and discarded the reason,
-                    # which only survives on `ws.exception()`.
-                    logger.warning("Soniox STT WebSocket error frame: %r", self._ws.exception())
-                    break
+                    # that arrives here rather than as a close frame. Raise so the base
+                    # SpeechStream retry budget / FallbackAdapter can fail over —
+                    # silently reconnecting here loops forever into the same dead peer
+                    # (#8031). Matches deepgram/telnyx/smallestai.
+                    session = self._stt._http_session
+                    if session is not None and session.closed:
+                        return
+                    raise APIConnectionError(
+                        "soniox connection lost",
+                        reset_retry_budget=False,
+                    ) from self._ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning(

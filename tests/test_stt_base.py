@@ -282,3 +282,37 @@ async def test_retry_budget_still_gives_up_on_consecutive_short_lived_attempts()
 
     assert stream.runs == DEFAULT_API_CONNECT_OPTIONS.max_retry + 1
     await stream.aclose()
+
+
+class _HeartbeatLostStream(RecognizeStream):
+    """Stays up past the connect timeout, then raises a heartbeat-style loss.
+
+    Heartbeat failures set ``reset_retry_budget=False`` so they still consume the
+    retry budget (unlike ordinary late drops, which reset it).
+    """
+
+    def __init__(self, *, stt: STT, uptime: float) -> None:
+        super().__init__(
+            stt=stt,
+            conn_options=dataclasses.replace(
+                DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0, timeout=0.05
+            ),
+        )
+        self.runs = 0
+        self._uptime = uptime
+
+    async def _run(self) -> None:
+        self.runs += 1
+        await asyncio.sleep(self._uptime)
+        raise APIConnectionError("connection lost", reset_retry_budget=False)
+
+
+async def test_heartbeat_loss_exhausts_retry_budget_despite_outliving_timeout() -> None:
+    """Late heartbeat failures must not reset `_num_retries` (Devin review on #8063)."""
+    stream = _HeartbeatLostStream(stt=_DummySTT(), uptime=0.1)
+
+    with pytest.raises(APIConnectionError):
+        await stream._task
+
+    assert stream.runs == DEFAULT_API_CONNECT_OPTIONS.max_retry + 1
+    await stream.aclose()
