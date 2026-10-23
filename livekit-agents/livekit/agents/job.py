@@ -68,8 +68,14 @@ from .types import (
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
+from .utils.participant import wait_for_participant_attributes
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
+
+
+_SIP_CALL_STATUS_ATTR = "sip.callStatus"
+_SIP_CALL_ID_FULL_ATTR = "sip.callIDFull"
+_SIP_HEADER_ATTR_PREFIX = "sip.h."
 
 
 def _observability_url(livekit_url: str) -> str | None:
@@ -870,6 +876,63 @@ class JobContext:
         )
         self._track_pending_task(task, name="transfer_sip_participant")
         return task
+
+    async def get_sip_headers(
+        self, participant: rtc.RemoteParticipant | str, *, force_fetch: bool = False
+    ) -> dict[str, str]:
+        """Get the remote SIP headers of a SIP participant, keyed by lowercase header name.
+
+        Inbound calls resolve immediately (the INVITE headers are known at join). Outbound calls
+        resolve once the callee answers (the 200 OK headers).
+
+        By default the headers are read from the participant's ``sip.h.*`` attributes, which only
+        contain the headers selected by the trunk's ``include_headers`` option.
+
+        Args:
+            participant: The SIP participant, or its identity
+            force_fetch: Fetch every remote header from the SIP service with the
+                ``lk.sip.GetRemoteHeaders`` RPC instead of reading the attributes
+
+        Returns:
+            Lowercase header names mapped to their values
+
+        Raises:
+            rtc.RpcError: If the ``lk.sip.GetRemoteHeaders`` RPC fails. The RPC runs when
+                ``force_fetch`` is set, or when the call is active but ``sip.callIDFull``
+                is not set
+        """
+        if self.is_fake_job():
+            logger.warning("job_ctx.get_sip_headers() is not executed while in console mode")
+            return {}
+
+        identity = (
+            participant.identity if isinstance(participant, rtc.RemoteParticipant) else participant
+        )
+        p = await wait_for_participant(
+            self._room, identity=identity, kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        )
+        # sip.callIDFull is set in the same update as the remote header attributes: at join for
+        # inbound, on answer for outbound. callStatus=active without it means that update was lost.
+        await wait_for_participant_attributes(
+            self._room,
+            identity=identity,
+            predicate=lambda attrs: (
+                _SIP_CALL_ID_FULL_ATTR in attrs or attrs.get(_SIP_CALL_STATUS_ATTR) == "active"
+            ),
+            description="remote SIP headers",
+        )
+
+        if not force_fetch and _SIP_CALL_ID_FULL_ATTR in p.attributes:
+            return {
+                k.removeprefix(_SIP_HEADER_ATTR_PREFIX): v
+                for k, v in p.attributes.items()
+                if k.startswith(_SIP_HEADER_ATTR_PREFIX)
+            }
+
+        response = await self._room.local_participant.perform_rpc(
+            destination_identity=identity, method="lk.sip.GetRemoteHeaders", payload="{}"
+        )
+        return {k.lower(): v for k, v in json.loads(response).get("headers", {}).items()}
 
     def shutdown(self, reason: str = "user requested") -> None:
         self._on_shutdown(reason)
