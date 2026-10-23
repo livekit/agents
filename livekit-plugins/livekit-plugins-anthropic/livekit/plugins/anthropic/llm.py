@@ -210,8 +210,14 @@ class LLM(llm.LLM):
             extra["tools"] = tool_schemas
 
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
+            parallel_tool_calls = (
+                parallel_tool_calls
+                if is_given(parallel_tool_calls)
+                else self._opts.parallel_tool_calls
+            )
+            anthropic_tool_choice: dict[str, Any] | None = None
             if is_given(tool_choice):
-                anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
+                anthropic_tool_choice = {"type": "auto"}
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
                     anthropic_tool_choice = {
                         "type": "tool",
@@ -223,25 +229,25 @@ class LLM(llm.LLM):
                     elif tool_choice == "none":
                         extra["tools"] = []
                         anthropic_tool_choice = None
-                if anthropic_tool_choice is not None:
-                    forced = anthropic_tool_choice["type"] in ("any", "tool")
-                    if forced and self._opts.model.startswith(_NO_FORCED_TOOL_CHOICE_PATTERNS):
-                        if not self._forced_tool_choice_warned:
-                            logger.warning(
-                                "anthropic llm: this model does not support a forced "
-                                "tool_choice; sending 'auto' instead",
-                                extra={"lk.pii.model": self._opts.model},
-                            )
-                            self._forced_tool_choice_warned = True
-                        anthropic_tool_choice = {"type": "auto"}
-                    parallel_tool_calls = (
-                        parallel_tool_calls
-                        if is_given(parallel_tool_calls)
-                        else self._opts.parallel_tool_calls
-                    )
-                    if is_given(parallel_tool_calls):
-                        anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
-                    extra["tool_choice"] = anthropic_tool_choice
+            elif is_given(parallel_tool_calls):
+                # Anthropic carries disable_parallel_tool_use on the tool_choice
+                # object, so send the default "auto" choice to pass it along.
+                anthropic_tool_choice = {"type": "auto"}
+
+            if anthropic_tool_choice is not None:
+                forced = anthropic_tool_choice["type"] in ("any", "tool")
+                if forced and self._opts.model.startswith(_NO_FORCED_TOOL_CHOICE_PATTERNS):
+                    if not self._forced_tool_choice_warned:
+                        logger.warning(
+                            "anthropic llm: this model does not support a forced "
+                            "tool_choice; sending 'auto' instead",
+                            extra={"lk.pii.model": self._opts.model},
+                        )
+                        self._forced_tool_choice_warned = True
+                    anthropic_tool_choice = {"type": "auto"}
+                if is_given(parallel_tool_calls):
+                    anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
+                extra["tool_choice"] = anthropic_tool_choice
 
         # Claude 4.6+ does not support prefilling (trailing assistant messages).
         inject_trailing = _model_disables_prefill(self._opts.model)

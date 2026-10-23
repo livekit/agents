@@ -76,6 +76,7 @@ FishAudioModels = Literal[
     "fishaudio/s2.1-pro",
     "fishaudio/s2.1-pro-free",
     "fishaudio/s2-pro",
+    "fishaudio/drama-3",
 ]
 
 TTSModels = (
@@ -483,6 +484,8 @@ class TTS(tts.TTS):
                 return "inworld"
             elif provider == "inworld":
                 return ""  # older inworld models don't support markup
+            elif provider == "fishaudio" and "drama" in model:
+                return "fishaudio_drama"  # free-form direction instead of fixed emotions
             return provider
 
         # llm_instructions / normalize / convert are inherited from the base Markup,
@@ -652,12 +655,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         # alignment arrives finer-grained than a cue, so drop_bracket_cues parks the tail
         # of an unclosed span here between messages
         self._held_tokens: list[TimedString] = []
+        # lower for the model this stream sends, not whatever update_options picks
+        # mid-utterance (fishaudio s2.1-pro and drama-3 lower differently)
+        self._markup_key = tts.markup._provider_key()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = ""
 
         # chunking defaults (cap + expressive batch size) live in _provider_format
-        from ..tts._provider_format import sentence_tokenizer
+        from ..tts._provider_format import convert_markup, normalize_markup, sentence_tokenizer
 
         provider = self._opts.model.split("/")[0]
         sent_tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
@@ -668,7 +674,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(data, self._FlushSentinel):
                     sent_tokenizer_stream.flush()
                     continue
-                sent_tokenizer_stream.push_text(self._tts.markup.normalize(data))
+                sent_tokenizer_stream.push_text(normalize_markup(self._markup_key, data))
 
             sent_tokenizer_stream.end_input()
 
@@ -679,7 +685,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt = base_pkt.copy()
                 # re-normalize at sentence level: tags split across input chunks
                 # aren't caught by the per-chunk normalize in _input_task
-                converted = self._tts.markup.convert(self._tts.markup.normalize(ev.token))
+                normalized = normalize_markup(self._markup_key, ev.token)
+                converted = convert_markup(self._markup_key, normalized)
                 token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:

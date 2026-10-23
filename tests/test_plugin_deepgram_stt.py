@@ -191,6 +191,42 @@ async def test_flux_configure_noop_when_disconnected():
     assert stream._opts.keyterm == ["LiveKit"]
 
 
+def test_flux_turn_resumed_reaches_the_pipeline_as_an_interim():
+    # the pipeline drops a preemptive reply when an interim moves past the preflight
+    # transcript, so TurnResumed has to arrive as one, carrying what the user went on to say
+    from livekit.agents.stt import SpeechEvent, SpeechEventType
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    events: list[SpeechEvent] = []
+    stream = SimpleNamespace(
+        _opts=SimpleNamespace(language="en"),
+        _request_id="",
+        _speaking=False,
+        start_time_offset=0.0,
+        _event_ch=SimpleNamespace(send_nowait=events.append),
+    )
+    stream._send_transcript_event = SpeechStreamv2._send_transcript_event.__get__(stream)
+
+    # the payloads of https://developers.deepgram.com/docs/flux/state, trimmed
+    for event, transcript in [
+        ("StartOfTurn", "I need to"),
+        ("EagerEndOfTurn", "I need to cancel my subscription."),
+        ("TurnResumed", "I need to cancel my subscription please"),
+    ]:
+        words = [{"word": w, "confidence": 0.9} for w in transcript.split()]
+        SpeechStreamv2._process_stream_event(
+            stream,
+            {"type": "TurnInfo", "event": event, "transcript": transcript, "words": words},
+        )
+
+    assert [(e.type, [a.text for a in e.alternatives]) for e in events] == [
+        (SpeechEventType.START_OF_SPEECH, []),
+        (SpeechEventType.INTERIM_TRANSCRIPT, ["I need to"]),
+        (SpeechEventType.PREFLIGHT_TRANSCRIPT, ["I need to cancel my subscription."]),
+        (SpeechEventType.INTERIM_TRANSCRIPT, ["I need to cancel my subscription please"]),
+    ]
+
+
 class _LiveWS:
     """Records what the send loop writes. receive() parks so recv_task stays alive."""
 

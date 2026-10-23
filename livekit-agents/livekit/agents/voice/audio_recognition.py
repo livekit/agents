@@ -132,6 +132,11 @@ class _PreemptiveGenerationInfo:
 
 
 @dataclass
+class _PreflightStaleInfo:
+    new_transcript: str
+
+
+@dataclass
 class _UserTurnTracker:
     words: int = 0
     transcript: str = ""
@@ -157,6 +162,7 @@ class RecognitionHooks(Protocol):
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None: ...
     def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
+    def on_preflight_stale(self, info: _PreflightStaleInfo) -> None: ...
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None: ...
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
@@ -1373,6 +1379,12 @@ class AudioRecognition:
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
+
+            if self._audio_preflight_transcript and self._audio_interim_transcript:
+                # the user kept talking after the preflight (e.g. Deepgram Flux TurnResumed)
+                self._hooks.on_preflight_stale(
+                    _PreflightStaleInfo(new_transcript=self._current_transcript)
+                )
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
             with tracer.use_span(self._ensure_user_turn_span()):
