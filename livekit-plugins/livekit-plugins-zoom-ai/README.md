@@ -21,12 +21,12 @@ uv add "livekit-agents[zoom-ai]"
 
 ## Pre-requisites
 
-The plugin needs a Zoom AI Services API key (or JWT). Create one in [Zoom Platform Studio](https://platform.zoom.us/) under Credentials → API Keys, with the Scribe permissions.
+The plugin needs a Zoom AI Services API key. Create one in [Zoom Platform Studio](https://platform.zoom.us/) under Credentials → API Keys, with the Scribe permissions.
 
 Set it in your `.env` file:
 
 ```
-ZOOM_SCRIBE_API_KEY=<your_zoom_api_key>
+ZOOM_AI_API_KEY=<your_zoom_api_key>
 ```
 
 ## Usage
@@ -79,15 +79,15 @@ Options map to the Scribe API fields of the same name; see the [Scribe docs](htt
 | Option | Default | Description |
 |---|---|---|
 | `mode` | `"live"` | `"live"` (streaming) or `"fast"` (one request per utterance) |
-| `api_key` | `$ZOOM_SCRIBE_API_KEY` | Zoom AI Services API key or JWT |
-| `language` | `"en-US"` | Recognition language ([supported languages](https://developers.zoom.us/docs/ai-services/scribe/#supported-languages)) |
+| `api_key` | `$ZOOM_AI_API_KEY` | Zoom AI Services API key |
+| `language` | `"en-US"` | Recognition language ([supported languages](https://developers.zoom.us/docs/ai-services/scribe/speech-understanding/)); a regional variant Scribe doesn't list uses its base language's locale (`en-GB` → `en-US`) |
 | `model` | `None` | Recognition model; `None` uses Scribe's default |
-| `language_detection` | `None` | Language detection mode; the detected language is in `SpeechData.language` |
+| `language_detection` | `None` | Language detection mode (Live supports `"continuous"`); the language Scribe detects is in `SpeechData.language`. With `zoom-scribe-multilingual` in Live, set it to get each final's language |
 | `silence_duration_ms` | `350` | Live: silence (ms) that ends a turn; `None` uses Scribe's default |
 | `diarization` | `False` | Speaker labels: `SpeechData.speaker_id`, or `metadata["speaker_segments"]` when several people speak in one final |
 | `word_time_offsets` | `False` | Fast: word timings in `SpeechData.words` |
 | `channel_separation` | `False` | Fast: recognize each stereo channel separately; channels in `metadata["channel_segments"]` |
 | `vocabulary` | `None` | Words and phrases to recognize, such as names and product terms |
-| `text_polishing` | `False` | Polished text as the transcript, with the original in `metadata["transcript"]`; if polishing fails, the original text |
-| `extra_kwargs` | `None` | Other Scribe request fields, e.g. `{"config": {"profanity_filter": True}}` |
+| `text_polishing` | `False` | Polished text as the transcript, with the original in `metadata["transcript"]`; if polishing fails, the original text. `en-US` only |
+| `extra_kwargs` | `None` | Other Scribe request fields, e.g. `{"config": {"language_detection": {"candidate_languages": ["en-US", "fr-FR"]}}}` to restrict language detection |
 | `base_url` | `https://api.zoom.us/v2/aiservices/scribe` | Scribe API base URL |

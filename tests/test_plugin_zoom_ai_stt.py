@@ -70,6 +70,8 @@ class FakeScribe:
         self.on_audio: LiveScript | None = None
         # Called right after session.updated; lets a test end the session early.
         self.on_start: LiveScript | None = None
+        # Error events sent in place of session.updated (Scribe rejecting the settings).
+        self.reject_update: list[dict[str, Any]] | None = None
         self.transcript = "Hi there, what is the capital of France?"
         self.fast_status = 200
         self.fast_body: dict[str, Any] = {
@@ -98,6 +100,11 @@ class FakeScribe:
             event = json.loads(msg.data)
             if event["type"] == "session.update":
                 session.updates.append(event)
+                if self.reject_update is not None:
+                    for error in self.reject_update:
+                        await ws.send_json({"type": "error", "error": error})
+                    await ws.close()
+                    break
                 await ws.send_json({"type": "session.updated"})
                 if self.on_start:
                     await self.on_start(ws, session)
@@ -124,8 +131,10 @@ class FakeScribe:
                 "audio": upload.file.read(),
             }
         )
+        # Zoom echoes the request's tracking ID.
+        tracking_id = request.headers.get("x-zm-trackingid", "")
         return web.json_response(
-            self.fast_body, status=self.fast_status, headers={"x-zm-trackingid": "ZOAP-test"}
+            self.fast_body, status=self.fast_status, headers={"x-zm-trackingid": tracking_id}
         )
 
 
@@ -233,13 +242,13 @@ async def run_stream(
 
 
 def test_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ZOOM_SCRIBE_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="ZOOM_SCRIBE_API_KEY"):
+    monkeypatch.delenv("ZOOM_AI_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="ZOOM_AI_API_KEY"):
         zoom_ai.STT()
 
 
 def test_reads_api_key_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ZOOM_SCRIBE_API_KEY", "env-key")
+    monkeypatch.setenv("ZOOM_AI_API_KEY", "env-key")
     assert zoom_ai.STT()._api_key == "env-key"
 
 
@@ -257,18 +266,54 @@ def test_capabilities_and_labels() -> None:
 
 @pytest.mark.parametrize(
     ("given", "expected"),
-    [("en", "en-US"), ("en-us", "en-US"), ("en_US", "en-US"), ("ja", "ja-JP"), ("pt-PT", "pt-PT")],
+    [
+        ("en", "en-US"),
+        ("en-us", "en-US"),
+        ("en_US", "en-US"),
+        ("english", "en-US"),
+        ("ja", "ja-JP"),
+        ("pt-PT", "pt-PT"),
+        ("ko", "ko-KR"),
+        ("ko-KR", "ko-KR"),
+        # whisper locales
+        ("nl", "nl-NL"),
+        ("fil", "tl-PH"),
+        ("tl-PH", "tl-PH"),
+        ("yue", "zh-HK"),
+        ("zh-hk", "zh-HK"),
+        # A regional variant Scribe doesn't list: its base language's locale.
+        ("en-GB", "en-US"),
+        ("fr-CA", "fr-FR"),
+        ("es-MX", "es-ES"),
+        # Anything else is sent for Scribe to validate.
+        ("xx", "xx"),
+        ("xx-YY", "xx-YY"),
+        ("sw-KE", "sw-KE"),
+    ],
 )
 def test_language_mapping(given: str, expected: str) -> None:
     assert zoom_ai.STT(api_key=API_KEY, language=given)._opts.language == expected
+    stt = zoom_ai.STT(api_key=API_KEY)
+    stt.update_options(language=given)
+    assert stt._opts.language == expected
 
 
-@pytest.mark.parametrize("language", ["en-GB", "ko-KR", "xx", "xx-YY"])
-def test_unsupported_language_points_to_the_docs(language: str) -> None:
-    with pytest.raises(ValueError, match="supported-languages"):
-        zoom_ai.STT(api_key=API_KEY, language=language)
-    with pytest.raises(ValueError, match="supported-languages"):
-        zoom_ai.STT(api_key=API_KEY).update_options(language=language)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("[Speaker 1] Hi. [Speaker 2] Hello.", "Hi. Hello."),
+        ("[speaker_1] Hi.", "Hi."),
+        # Channel-separated diarization tags each channel's speakers L and R.
+        ("[Speaker 1L] Hi there. [Speaker 1R] Hello.", "Hi there. Hello."),
+        ("[spk_0] Hi. [channel1] Hello.", "Hi. Hello."),
+        (
+            "Keep [brackets] and [Speaker] as they are.",
+            "Keep [brackets] and [Speaker] as they are.",
+        ),
+    ],
+)
+def test_speaker_tags_are_removed(text: str, expected: str) -> None:
+    assert zoom_stt._clean(text) == expected
 
 
 def test_fast_mode_is_not_streaming() -> None:
@@ -290,7 +335,7 @@ async def test_live_handshake_matches_docs(scribe, http) -> None:
     assert session.protocol == "live-asr"
     assert session.headers["Authorization"] == f"Bearer {API_KEY}"
     assert session.headers["User-Agent"].startswith("livekit-plugins-zoom-ai/")
-    assert session.headers["x-zm-trackingid"].startswith("zoom_ai_community_integration_livekit_")
+    assert session.headers["x-zm-trackingid"].startswith("zoom_ai_community_livekit_")
     # The documented session.update, plus the 350 ms end-of-turn silence.
     assert session.updates == [
         {
@@ -575,8 +620,11 @@ async def test_live_final_without_speech_started_opens_the_turn(scribe, http) ->
 
 
 async def test_live_handshake_rejection_is_a_status_error_without_the_key(http) -> None:
+    tracking_ids: list[str] = []
+
     async def reject(request: web.Request) -> web.Response:
-        return web.Response(status=401, text="Invalid access token")
+        tracking_ids.append(request.headers["x-zm-trackingid"])
+        return web.json_response({"code": 124, "message": "Invalid Access token"}, status=401)
 
     app = web.Application()
     app.router.add_get("/live", reject)
@@ -590,6 +638,9 @@ async def test_live_handshake_rejection_is_a_status_error_without_the_key(http) 
         await server.close()
 
     assert exc.value.status_code == 401
+    assert exc.value.message == "Zoom refused the connection (HTTP 401)"
+    assert exc.value.request_id == tracking_ids[0]  # to match the failure in Zoom's logs
+    assert exc.value.retryable is False
     assert exc.value.__cause__ is None and API_KEY not in repr(exc.value)
 
 
@@ -724,11 +775,67 @@ async def test_live_stream_language_override(scribe, http) -> None:
     assert fake.sessions[0].updates[0]["language"] == "de-DE"
 
 
+async def test_live_update_options_mid_turn_waits_for_the_final(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+    final_sent = asyncio.Event()
+
+    async def on_audio(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        if len(fake.sessions) > 1:
+            return
+        if len(session.audio) >= 3200 and not getattr(session, "_started", False):
+            session._started = True  # type: ignore[attr-defined]
+            await ws.send_json(
+                {"type": "input_audio_buffer.speech_started", "item_id": "i1", "audio_start_ms": 0}
+            )
+        if final_sent.is_set() and not getattr(session, "_done", False):
+            session._done = True  # type: ignore[attr-defined]
+            await ws.send_json(
+                {
+                    "type": "transcription.completed",
+                    "item_id": "i1",
+                    "transcript": "Before the change.",
+                    "audio_start_ms": 0,
+                    "audio_end_ms": 400,
+                }
+            )
+
+    fake.on_audio = on_audio
+    stt = make_stt(http, (live_url, fast_url))
+    stream = stt.stream()
+    events: list[SpeechEvent] = []
+
+    async def collect() -> None:
+        async for ev in stream:
+            events.append(ev)
+
+    collector = asyncio.create_task(collect())
+    for f in frames(0.3):
+        stream.push_frame(f)
+    await wait_until(lambda: stream._speech_started, "speech_started")
+    stt.update_options(silence_duration_ms=600)  # mid-turn
+    for f in frames(0.5):
+        stream.push_frame(f)
+    await asyncio.sleep(0.3)
+    assert len(fake.sessions) == 1  # held while the turn is open
+    final_sent.set()
+    for f in frames(0.3):
+        stream.push_frame(f)
+    await wait_until(
+        lambda: len(fake.sessions) == 2 and bool(fake.sessions[1].updates), "reconnect"
+    )
+    stream.end_input()
+    await asyncio.wait_for(collector, 5)
+
+    finals = [e.alternatives[0].text for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert finals == ["Before the change."]  # the turn in progress kept its transcript
+    assert fake.sessions[1].updates[0]["turn_detection"] == {"silence_duration_ms": 600}
+
+
 async def test_live_update_options_reconnects(scribe, http) -> None:
     fake, live_url, fast_url = scribe
     stt = make_stt(http, (live_url, fast_url))
     stream = stt.stream()
-    for f in frames(0.2):  # more than one 50 ms send chunk
+    for f in frames(0.2):
         stream.push_frame(f)
     await wait_until(lambda: bool(fake.sessions and fake.sessions[0].audio), "audio")
     stt.update_options(language="ja-JP")
@@ -738,6 +845,9 @@ async def test_live_update_options_reconnects(scribe, http) -> None:
     await run_stream(stream, frames(0.2))
 
     assert [s.updates[0]["language"] for s in fake.sessions] == ["en-US", "ja-JP"]
+    # Each session has its own tracking ID.
+    first, second = (s.headers["x-zm-trackingid"] for s in fake.sessions)
+    assert first != second and second.startswith("zoom_ai_community_livekit_")
     assert fake.sessions[1].audio  # streaming continued on the new session
     assert stream._session_offset > 0  # timestamps keep moving forward
 
@@ -828,28 +938,44 @@ async def test_live_reconnects_when_scribe_ends_the_session(scribe, http) -> Non
     assert fake.sessions[1].controls == [{"type": "session.close"}]
 
 
-@pytest.mark.parametrize(
-    ("code", "fatal"),
-    [
-        ("invalid_config", True),
-        ("UNSUPPORTED_LANGUAGE", True),
-        # Scribe sends this one as non-fatal, but it didn't apply the session.update.
-        ("invalid_config", False),
-    ],
-)
-async def test_live_fatal_error_is_raised(scribe, http, code: str, fatal: bool) -> None:
+async def test_live_rejected_settings_are_not_retried(
+    scribe, http, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake, live_url, fast_url = scribe
+    # As production does for text polishing on an unsupported locale: a non-fatal
+    # invalid_config, then a fatal missing_config, in place of session.updated.
+    fake.reject_update = [
+        {"code": "invalid_config", "message": "no polishing", "fatal": False},
+        {"code": "missing_config", "message": "send config", "fatal": True},
+    ]
+    stt = make_stt(http, (live_url, fast_url))
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(APIStatusError) as exc:
+            await run_stream(stt.stream(conn_options=FAST_RETRY), [], end=False)
+
+    assert exc.value.message == "Zoom Scribe Live error missing_config: send config"
+    assert exc.value.retryable is False
+    assert exc.value.request_id == fake.sessions[0].headers["x-zm-trackingid"]
+    assert len(fake.sessions) == 1  # a new session would be rejected the same way
+    assert "Zoom Scribe Live error invalid_config (non-fatal" in caplog.text
+
+
+async def test_live_fatal_error_after_the_session_started_is_retried(scribe, http) -> None:
     fake, live_url, fast_url = scribe
 
-    async def reject(ws: web.WebSocketResponse, session: LiveSession) -> None:
-        error = {"code": code, "message": "bad language", "fatal": fatal}
-        await ws.send_json({"type": "error", "error": error})
+    async def fail_first(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        if len(fake.sessions) == 1:
+            error = {"code": "internal_error", "message": "try again", "fatal": True}
+            await ws.send_json({"type": "error", "error": error})
+            await ws.close()
 
-    fake.on_start = reject
+    fake.on_start = fail_first
     stt = make_stt(http, (live_url, fast_url))
-    with pytest.raises(APIStatusError, match="bad language") as exc:
-        await run_stream(stt.stream(conn_options=FAST_RETRY), [], end=False)
-    assert exc.value.retryable is False
-    assert len(fake.sessions) == 1  # a config error is not retried
+    stream = stt.stream(conn_options=FAST_RETRY)
+    await wait_until(lambda: len(fake.sessions) == 2 and bool(fake.sessions[1].updates), "retry")
+    await run_stream(stream, frames(0.1))
+
+    assert len(fake.sessions) == 2
 
 
 async def test_live_non_fatal_error_keeps_the_session(
@@ -869,7 +995,8 @@ async def test_live_non_fatal_error_keeps_the_session(
     assert any(e.type == SpeechEventType.FINAL_TRANSCRIPT for e in events)
     assert len(fake.sessions) == 1
     # Scribe's message stays out of the log text, under the lk.pii key telemetry filters.
-    [record] = [r for r in caplog.records if "warning (audio_gap)" in r.getMessage()]
+    [record] = [r for r in caplog.records if "error audio_gap (non-fatal" in r.getMessage()]
+    assert fake.sessions[0].headers["x-zm-trackingid"] in record.getMessage()
     assert "late audio" not in record.getMessage()
     assert record.__dict__["lk.pii.message"] == "late audio"
 
@@ -1000,9 +1127,7 @@ async def test_fast_uploads_wav_and_config(scribe, http) -> None:
     [request] = fake.fast_requests
     assert request["headers"]["Authorization"] == f"Bearer {API_KEY}"
     assert request["headers"]["User-Agent"].startswith("livekit-plugins-zoom-ai/")
-    assert request["headers"]["x-zm-trackingid"].startswith(
-        "zoom_ai_community_integration_livekit_"
-    )
+    assert request["headers"]["x-zm-trackingid"].startswith("zoom_ai_community_livekit_")
     assert request["config"] == {"language": "en-US"}
     assert request["outputs"] is None
     assert request["content_type"] == "audio/wav"
@@ -1134,8 +1259,10 @@ async def test_fast_polished_text_has_no_word_timings(scribe, http) -> None:
     ("result", "detection", "expected"),
     [
         ({"language": "es-ES", "segments": []}, "once", "es-ES"),  # one-time detection
-        ({"segments": [{"text": "Hola.", "language": "es"}]}, "continuous", "es"),  # per segment
-        ({"segments": [{"text": "Hola."}]}, "continuous", ""),  # detecting, none reported
+        # Continuous detection: production reports no language, so it is empty; a
+        # segment's language would be used if Scribe sent one.
+        ({"segments": [{"text": "Hola."}]}, "continuous", ""),
+        ({"segments": [{"text": "Hola.", "language": "es"}]}, "continuous", "es"),
         ({"segments": [{"text": "Hola."}]}, None, "en-US"),  # not detecting: the configured one
     ],
 )
@@ -1237,13 +1364,14 @@ async def test_fast_without_diarization_reports_no_speaker(scribe, http) -> None
 async def test_fast_http_error_raises_status_error(scribe, http) -> None:
     fake, live_url, fast_url = scribe
     fake.fast_status = 401
-    fake.fast_body = {"code": 124, "message": "Invalid access token"}
+    fake.fast_body = {"code": 124, "message": "Invalid Access token"}
     stt = make_stt(http, (live_url, fast_url), mode="fast")
 
     with pytest.raises(APIStatusError) as exc:
         await stt.recognize(frames(0.2), conn_options=NO_RETRY)
+    assert exc.value.message == "Zoom Scribe Fast error (HTTP 401): Invalid Access token"
     assert exc.value.status_code == 401
-    assert exc.value.request_id == "ZOAP-test"
+    assert exc.value.request_id == fake.fast_requests[0]["headers"]["x-zm-trackingid"]
     assert exc.value.retryable is False
 
 
