@@ -20,6 +20,7 @@ from google.rpc import error_details_pb2, status_pb2
 from livekit.agents import Agent, AgentSession
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import LLMModelUsage
+from livekit.agents.observability import Tagger
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
@@ -681,6 +682,7 @@ def test_make_session_report_duration_without_audio_recording() -> None:
 
     ctx = object.__new__(JobContext)
     ctx._info = SimpleNamespace(job=_make_mock_job_ctx().job)
+    ctx._tagger = Tagger()
     report = ctx.make_session_report(session)
 
     assert report.audio_recording_started_at is None
