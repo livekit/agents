@@ -19,7 +19,7 @@ from livekit.agents.inference.llm import (
     supports_prompt_cache_breakpoints,
 )
 from livekit.agents.llm import ToolChoice
-from livekit.agents.llm.chat_context import ChatContext, ChatItem
+from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import (
     Tool,
 )
@@ -36,6 +36,7 @@ from openai.types.responses import (
     ResponseCreatedEvent,
     ResponseErrorEvent,
     ResponseFailedEvent,
+    ResponseFunctionToolCall,
     ResponseIncompleteEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
@@ -302,8 +303,8 @@ class LLM(llm.LLM):
         self._active_streams: int = 0
         self._parallel_generation: bool = False
         self._prev_resp_id = ""
-        self._prev_chat_ctx: ChatContext | None = None
-        self._pending_tool_calls = set[str]()  # tool call ids that are pending for a response
+        # the input and output the server holds under _prev_resp_id, as wire items
+        self._prev_resp_items: list[dict[str, Any]] | None = None
 
         if use_websocket:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
@@ -426,31 +427,25 @@ class LLM(llm.LLM):
                 oai_tool_choice = tool_choice
                 extra["tool_choice"] = oai_tool_choice
 
-        input_chat_ctx = chat_ctx
+        # snapshot now: another stream may complete before this one is serialized
+        prev_resp = None
         if (
             self._opts.store is not False
             and self._active_streams == 0
-            and self._prev_chat_ctx is not None
+            and self._prev_resp_items is not None
             and self._prev_resp_id
         ):
-            n = len(self._prev_chat_ctx.items)
-            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(
-                self._prev_chat_ctx
-            ) and self._pending_tool_calls_completed(chat_ctx.items[n:]):
-                # send only the new items appended since the last response
-                input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
-                extra["previous_response_id"] = self._prev_resp_id
-            # if the context was modified otherwise, resend the whole context and omit previous response id
+            prev_resp = (self._prev_resp_id, self._prev_resp_items)
         return LLMStream(
             self,
             model=self._opts.model,
             strict_tool_schema=True,
             client=self._client if self._client else None,
-            chat_ctx=input_chat_ctx,
+            chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
-            full_chat_ctx=chat_ctx,
+            prev_resp=prev_resp,
             prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
         )
 
@@ -473,15 +468,6 @@ class LLM(llm.LLM):
             host = None
         return (host or "").rstrip(".").lower()
 
-    def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
-        if not self._pending_tool_calls:
-            return True
-
-        completed_tool_calls = {
-            item.call_id for item in items if item.type == "function_call_output"
-        }
-        return all(call_id in completed_tool_calls for call_id in self._pending_tool_calls)
-
 
 class LLMStream(llm.LLMStream):
     def __init__(
@@ -495,7 +481,7 @@ class LLMStream(llm.LLMStream):
         tools: list[Tool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
-        full_chat_ctx: llm.ChatContext,
+        prev_resp: tuple[str, list[dict[str, Any]]] | None,
         prompt_cache_breakpoints: bool,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
@@ -504,12 +490,12 @@ class LLMStream(llm.LLMStream):
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
         self._response_completed: bool = False
-        self._pending_tool_calls = set[str]()
+        self._prev_resp = prev_resp
+        self._input_items: list[dict[str, Any]] = []
 
         self._client = client
         self._llm: LLM = llm
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
-        self._full_chat_ctx = full_chat_ctx.copy()
 
     async def _run(self) -> None:
         if self._llm._active_streams > 0:
@@ -521,7 +507,7 @@ class LLMStream(llm.LLMStream):
             self._llm._active_streams -= 1
             if self._llm._active_streams == 0 and self._llm._parallel_generation:
                 self._llm._prev_resp_id = ""
-                self._llm._prev_chat_ctx = None
+                self._llm._prev_resp_items = None
                 self._llm._parallel_generation = False
 
     async def _run_impl(self) -> None:
@@ -529,6 +515,17 @@ class LLMStream(llm.LLMStream):
         chat_ctx, _ = self._chat_ctx.to_provider_format(
             format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
         )
+        # the phase of an assistant message is not compared: the agent merges a response's
+        # messages into one, whose phase may differ from any single one the server holds
+        self._input_items = [{k: v for k, v in it.items() if k != "phase"} for it in chat_ctx]
+        extra_kwargs = self._extra_kwargs
+        if self._prev_resp is not None:
+            prev_resp_id, prev_items = self._prev_resp
+            # the server already holds these items, so send only what follows them;
+            # any difference (e.g. an interrupted reply) resends everything
+            if self._input_items[: len(prev_items)] == prev_items:
+                chat_ctx = chat_ctx[len(prev_items) :]
+                extra_kwargs = {**extra_kwargs, "previous_response_id": prev_resp_id}
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
@@ -550,7 +547,7 @@ class LLMStream(llm.LLMStream):
                     "model": self._model,
                     "input": chat_ctx,
                     "tools": tool_schemas,
-                    **self._extra_kwargs,
+                    **extra_kwargs,
                 }
                 async for raw_event in self._llm._ws.generate_response(payload):
                     parsed_ev = self._parse_ws_event(raw_event)
@@ -577,7 +574,7 @@ class LLMStream(llm.LLMStream):
                         input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
                         stream=True,
                         timeout=httpx.Timeout(self._conn_options.timeout),
-                        **self._extra_kwargs,
+                        **extra_kwargs,
                     ),
                 )
 
@@ -709,9 +706,33 @@ class LLMStream(llm.LLMStream):
                 )
 
         self._response_completed = True
-        self._llm._prev_chat_ctx = self._full_chat_ctx
+
+        def _output_wire_items() -> list[dict[str, Any]]:
+            # the output as the agent stores it: all text as one assistant message, then the
+            # function calls; reasoning and provider tools stay server-side
+            output = event.response.output
+            text = "".join(
+                part.text
+                for item in output
+                if isinstance(item, ResponseOutputMessage)
+                for part in item.content
+                if part.type == "output_text"
+            )
+            items: list[dict[str, Any]] = [{"role": "assistant", "content": text}] if text else []
+            items.extend(
+                {
+                    "call_id": item.call_id,
+                    "type": "function_call",
+                    "name": item.name,
+                    "arguments": item.arguments,
+                }
+                for item in output
+                if isinstance(item, ResponseFunctionToolCall)
+            )
+            return items
+
+        self._llm._prev_resp_items = [*self._input_items, *_output_wire_items()]
         self._llm._prev_resp_id = self._response_id
-        self._llm._pending_tool_calls = self._pending_tool_calls
 
         chunk = None
         if usage := event.response.usage:
@@ -752,7 +773,6 @@ class LLMStream(llm.LLMStream):
                     ],
                 ),
             )
-            self._pending_tool_calls.add(event.item.call_id)
         elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
             # Models like gpt-5.3-codex label assistant messages as intermediate
             # `commentary` or the `final_answer`
