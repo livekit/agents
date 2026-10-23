@@ -8,18 +8,23 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from livekit.agents import AgentSession, inference
-from livekit.agents.llm import ChatContext
+from livekit.agents.llm import ChatContext, ChatMessage, LLMError
+from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
 from livekit.agents.telemetry.traces import (
     _describe_option_object,
     _serialize_option_value,
     _serialize_session_options,
 )
+from livekit.agents.tts import TTSError
 from livekit.agents.types import NOT_GIVEN
-from livekit.agents.voice.report import SessionReport
+from livekit.agents.voice.events import CloseEvent, CloseReason, ErrorEvent
+from livekit.agents.voice.report import _CLOSE_REASON_NAMES, SessionReport
+from livekit.protocol.agent_pb import agent_session as proto_agent_session
 
 pytestmark = pytest.mark.unit
 
@@ -196,18 +201,20 @@ def test_nested_containers_and_key_aliases() -> None:
     _assert_report_safe(out)
 
 
-def _report() -> SessionReport:
+def _report(**kwargs: Any) -> SessionReport:
     return SessionReport(
         job_id="job-1",
         room_id="room-1",
         room="test-room",
         options=AgentSession().options,
-        events=[],
-        chat_history=ChatContext(),
+        events=kwargs.pop("events", []),
+        chat_history=ChatContext(kwargs.pop("chat_items", [])),
+        **kwargs,
     )
 
 
-def test_report_to_dict_default_keys_unchanged() -> None:
+def test_report_to_dict_default_keys() -> None:
+    # the keys before agent_name keep their order; the rest are appended
     assert list(_report().to_dict()) == [
         "job_id",
         "room_id",
@@ -220,6 +227,12 @@ def test_report_to_dict_default_keys_unchanged() -> None:
         "timestamp",
         "usage",
         "sdk_version",
+        "agent_name",
+        "tags",
+        "duration_ms",
+        "user_turns",
+        "errors",
+        "close_reason",
     ]
 
 
@@ -231,3 +244,82 @@ def test_report_to_dict_flags_omit_keys() -> None:
         k: v for k, v in full.items() if k != "chat_history"
     }
     assert report.to_dict(include_events=False) == {k: v for k, v in full.items() if k != "events"}
+
+
+def _llm_error() -> LLMError:
+    return LLMError(timestamp=0.0, label="llm", error=RuntimeError("x"), recoverable=True)
+
+
+def _tts_error() -> TTSError:
+    return TTSError(timestamp=0.0, label="tts", error=RuntimeError("x"), recoverable=True)
+
+
+def test_report_to_dict_computed_keys() -> None:
+    report = _report(
+        agent_name="support",
+        tags=["vip"],
+        duration=12.5,
+        chat_items=[
+            ChatMessage(role="user", content=["hi"]),
+            ChatMessage(role="assistant", content=["hello"]),
+            ChatMessage(role="user", content=["bye"]),
+        ],
+        model_usage=[
+            LLMModelUsage(
+                provider="openai",
+                model="gpt-4o",
+                input_tokens=10,
+                output_tokens=5,
+                input_cached_tokens=2,
+            ),
+            TTSModelUsage(provider="cartesia", model="sonic", characters_count=40),
+        ],
+        events=[
+            ErrorEvent(error=_llm_error(), source=MagicMock()),
+            ErrorEvent(error=_llm_error(), source=MagicMock()),
+            ErrorEvent(error=_tts_error(), source=MagicMock()),
+            CloseEvent(reason=CloseReason.ERROR),
+            CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED),
+        ],
+    )
+
+    out = report.to_dict()
+
+    assert out["usage"] == [
+        {
+            "type": "llm_usage",
+            "provider": "openai",
+            "model": "gpt-4o",
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "input_cached_tokens": 2,
+        },
+        {"type": "tts_usage", "provider": "cartesia", "model": "sonic", "characters_count": 40},
+    ]
+    assert out["agent_name"] == "support"
+    assert out["tags"] == ["vip"]
+    assert out["duration_ms"] == 12500
+    assert out["user_turns"] == 2
+    assert out["errors"] == {"llm": 2, "stt": 0, "tts": 1, "realtime": 0, "interruption": 0}
+    # the last close event wins
+    assert out["close_reason"] == "CR_PARTICIPANT_DISCONNECTED"
+
+
+def test_report_to_dict_computed_keys_empty_session() -> None:
+    out = _report().to_dict()
+
+    assert out["usage"] is None
+    assert out["agent_name"] == ""
+    assert out["tags"] == []
+    assert out["duration_ms"] is None
+    assert out["user_turns"] == 0
+    assert out["errors"] == {"llm": 0, "stt": 0, "tts": 0, "realtime": 0, "interruption": 0}
+    assert out["close_reason"] is None
+
+
+def test_report_close_reasons_match_proto_enum() -> None:
+    # a new SDK close reason without a mapping, or a name the proto lacks, fails here
+    proto_names = proto_agent_session.CloseReason.keys()
+    for reason in CloseReason:
+        assert _CLOSE_REASON_NAMES[reason] in proto_names
+    assert "CR_UNKNOWN" in proto_names

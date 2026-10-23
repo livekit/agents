@@ -8,7 +8,25 @@ from ..llm import ChatContext
 from ..metrics import ModelUsage
 from ..version import __version__
 from .agent_session import AgentSessionOptions
-from .events import AgentEvent
+from .events import AgentEvent, CloseReason
+
+# Maps an ErrorEvent's error type to its key in the report's error counts.
+_ERROR_KEYS = {
+    "llm_error": "llm",
+    "stt_error": "stt",
+    "tts_error": "tts",
+    "realtime_model_error": "realtime",
+    "interruption_detection_error": "interruption",
+}
+
+# Maps a CloseReason to the name of its livekit.agent.CloseReason proto enum value.
+_CLOSE_REASON_NAMES = {
+    CloseReason.ERROR: "CR_ERROR",
+    CloseReason.JOB_SHUTDOWN: "CR_JOB_SHUTDOWN",
+    CloseReason.PARTICIPANT_DISCONNECTED: "CR_PARTICIPANT_DISCONNECTED",
+    CloseReason.USER_INITIATED: "CR_USER_INITIATED",
+    CloseReason.TASK_COMPLETED: "CR_TASK_COMPLETED",
+}
 
 
 @dataclass
@@ -31,6 +49,10 @@ class SessionReport:
     """Usage summaries for the session, one per model/provider combination"""
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
+    agent_name: str = ""
+    """Name the agent was dispatched with"""
+    tags: list[str] = field(default_factory=list)
+    """Tags set on the job's Tagger, sorted"""
 
     def to_dict(self, *, include_chat_history: bool = True, include_events: bool = True) -> dict:
         """Serialize the report. A ``False`` flag omits that key from the result."""
@@ -73,9 +95,44 @@ class SessionReport:
         report["timestamp"] = self.timestamp
         report["usage"] = self._usage_to_dict() if self.model_usage else None
         report["sdk_version"] = self.sdk_version
+        report["agent_name"] = self.agent_name
+        report["tags"] = list(self.tags)
+        report["duration_ms"] = int(self.duration * 1000) if self.duration is not None else None
+        report["user_turns"] = self._user_turns()
+        report["errors"] = self._error_counts()
+        report["close_reason"] = self._close_reason_name()
         return report
+
+    def _user_turns(self) -> int:
+        user_turns = 0
+        for item in self.chat_history.items:
+            if item.type == "message" and item.role == "user":
+                user_turns += 1
+        return user_turns
+
+    def _error_counts(self) -> dict[str, int]:
+        # every key is always present, so readers need no defaults
+        errors = dict.fromkeys(_ERROR_KEYS.values(), 0)
+        for event in self.events:
+            if event.type == "error":
+                key = _ERROR_KEYS.get(getattr(event.error, "type", ""))
+                if key is not None:
+                    errors[key] += 1
+        return errors
+
+    def _close_reason_name(self) -> str | None:
+        """Proto enum name of the last close event's reason, or None without a close event."""
+        name: str | None = None
+        for event in self.events:
+            if event.type == "close":
+                name = _CLOSE_REASON_NAMES.get(event.reason, "CR_UNKNOWN")
+        return name
 
     def _usage_to_dict(self) -> list[dict] | None:
         if self.model_usage is None:
             return None
-        return [summary.model_dump(exclude_defaults=True) for summary in self.model_usage]
+        # exclude_defaults drops ``type``, which tells the usage kinds apart
+        return [
+            {"type": summary.type, **summary.model_dump(exclude_defaults=True)}
+            for summary in self.model_usage
+        ]

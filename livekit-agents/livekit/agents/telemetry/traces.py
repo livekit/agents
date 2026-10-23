@@ -1275,70 +1275,14 @@ def _recording_upload_retry_delay(attempt: int) -> float:
     return random.uniform(0.0, min(2.0**attempt, 8.0))
 
 
-# Maps an ErrorEvent's error type to its key in the session summary's error counts.
-_SUMMARY_ERROR_KEYS = {
-    "llm_error": "llm",
-    "stt_error": "stt",
-    "tts_error": "tts",
-    "realtime_model_error": "realtime",
-    "interruption_detection_error": "interruption",
-}
-
-
-# Maps a CloseReason value (voice.events, not imported here: circular import) to the name of the
-# livekit.agent.CloseReason proto enum value.
-_SUMMARY_CLOSE_REASONS = {
-    "error": "CR_ERROR",
-    "job_shutdown": "CR_JOB_SHUTDOWN",
-    "participant_disconnected": "CR_PARTICIPANT_DISCONNECTED",
-    "user_initiated": "CR_USER_INITIATED",
-    "task_completed": "CR_TASK_COMPLETED",
-}
-
-
-def _session_summary(*, agent_name: str, report: SessionReport, tagger: Tagger) -> dict[str, Any]:
+def _session_summary(report: SessionReport) -> dict[str, Any]:
     """Build the session summary sent in the recording header for agent evals.
 
-    It is the report's ``to_dict`` without chat history, events and the local recording path,
-    plus computed keys. An absent key means "not sent". Schema:
-    ``evalschema/session-summary.schema.json`` in livekit/cloud-protocol.
+    It is the report's ``to_dict`` without chat history, events and the local recording path.
+    Schema: ``evalschema/session-summary.schema.json`` in livekit/cloud-protocol.
     """
     summary = report.to_dict(include_chat_history=False, include_events=False)
     del summary["audio_recording_path"]
-
-    # to_dict drops each usage's ``type`` because it is a default value; evals need it.
-    usage = summary.pop("usage")
-    if usage:
-        summary["usage"] = [
-            {"type": model_usage.type, **usage_dict}
-            for model_usage, usage_dict in zip(report.model_usage or [], usage, strict=True)
-        ]
-
-    summary["agent_name"] = agent_name
-    summary["tags"] = sorted(tagger.tags)
-    if report.duration is not None:
-        summary["duration_ms"] = int(report.duration * 1000)
-
-    user_turns = 0
-    for item in report.chat_history.items:
-        if item.type == "message" and item.role == "user":
-            user_turns += 1
-    summary["user_turns"] = user_turns
-
-    # Events are not uploaded, so the header is the only way evals can see them.
-    errors = dict.fromkeys(_SUMMARY_ERROR_KEYS.values(), 0)
-    close_reason: str | None = None
-    for event in report.events:
-        if event.type == "error":
-            key = _SUMMARY_ERROR_KEYS.get(getattr(event.error, "type", ""))
-            if key is not None:
-                errors[key] += 1
-        elif event.type == "close":
-            close_reason = _SUMMARY_CLOSE_REASONS.get(event.reason.value, "CR_UNKNOWN")
-    summary["errors"] = errors
-    if close_reason is not None:
-        summary["close_reason"] = close_reason
-
     return summary
 
 
@@ -1493,7 +1437,7 @@ async def _upload_session_report(
         redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
         duration=int((report.duration or 0) * 1000),
         session_summary=json.dumps(
-            _session_summary(agent_name=agent_name, report=report, tagger=tagger),
+            _session_summary(report),
             separators=(",", ":"),
         ),
     )

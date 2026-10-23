@@ -691,6 +691,7 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
     )
     assert report.to_dict()["usage"] == [
         {
+            "type": "stt_usage",
             "provider": "api.openai.com",
             "model": "whisper-1",
             "input_tokens": 10,

@@ -17,19 +17,17 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
-from livekit.agents.llm import ChatContext, ChatMessage, LLMError
-from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
-from livekit.agents.telemetry.traces import _SUMMARY_CLOSE_REASONS, _upload_session_report
-from livekit.agents.tts import TTSError
+from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.agents.metrics import LLMModelUsage
+from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
-from livekit.agents.voice.events import AgentEvent, CloseEvent, CloseReason, ErrorEvent
+from livekit.agents.voice.events import CloseEvent, CloseReason
 from livekit.agents.voice.report import SessionReport
 from livekit.protocol import metrics as proto_metrics
-from livekit.protocol.agent_pb import agent_session as proto_agent_session
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 from .fake_llm import FakeLLM
@@ -281,11 +279,10 @@ async def _call_upload(
     tagger: MagicMock | None = None,
     http_session: MagicMock | None = None,
     metadata: dict[str, Any] | None = None,
-    agent_name: str = "test-agent",
 ) -> None:
     """Call _upload_session_report with sensible defaults."""
     await _upload_session_report(
-        agent_name=agent_name,
+        agent_name="test-agent",
         **_observability_endpoint_arg(_upload_session_report),
         report=report,
         tagger=tagger or _make_mock_tagger(),
@@ -748,13 +745,7 @@ async def test_upload_multipart_header_carries_simulation_redaction() -> None:
     assert header.redaction_enabled is True
 
 
-def _make_report(
-    *,
-    duration: float | None = 12.5,
-    chat_items: list[ChatMessage] | None = None,
-    model_usage: list[Any] | None = None,
-    events: list[AgentEvent] | None = None,
-) -> SessionReport:
+def _make_report(**kwargs: Any) -> SessionReport:
     """Create a real SessionReport so the summary sees real ``to_dict`` output."""
     options = AgentSession().options
     options.recording_options = {"audio": False, "traces": False, "logs": False, "transcript": True}
@@ -763,138 +754,59 @@ def _make_report(
         room_id="room-1",
         room="test-room",
         options=options,
-        events=events or [],
-        chat_history=ChatContext(chat_items or []),
-        duration=duration,
+        events=kwargs.pop("events", []),
+        chat_history=ChatContext(kwargs.pop("chat_items", [])),
+        duration=12.5,
         started_at=1000.0,
         timestamp=1010.0,
-        model_usage=model_usage,
         sdk_version="1.0.0",
+        **kwargs,
     )
 
 
 async def _upload_and_read_header(
-    report: SessionReport | MagicMock, tagger: MagicMock
+    report: SessionReport | MagicMock,
 ) -> proto_metrics.MetricsRecordingHeader:
     mock_http = _make_mock_http()
     with _patch_upload_deps():
-        await _call_upload(report, tagger=tagger, http_session=mock_http, agent_name="support")
+        await _call_upload(report, http_session=mock_http)
 
     mp_writer = mock_http.post.call_args.kwargs.get("data") or mock_http.post.call_args[1]["data"]
     parts = _get_multipart_parts(mp_writer)
     return proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
 
 
-def _report_keys(report: SessionReport) -> dict[str, Any]:
-    """The report keys the summary keeps unchanged."""
-    return {
-        "job_id": "job-1",
-        "room_id": "room-1",
-        "room": "test-room",
-        "audio_recording_started_at": None,
-        "options": report.to_dict()["options"],
-        "timestamp": 1010.0,
-        "sdk_version": "1.0.0",
-    }
-
-
-def _llm_error() -> LLMError:
-    return LLMError(timestamp=0.0, label="llm", error=RuntimeError("x"), recoverable=True)
-
-
-def _tts_error() -> TTSError:
-    return TTSError(timestamp=0.0, label="tts", error=RuntimeError("x"), recoverable=True)
+def _expected_summary(report: SessionReport) -> dict[str, Any]:
+    summary = report.to_dict(include_chat_history=False, include_events=False)
+    del summary["audio_recording_path"]
+    return summary
 
 
 async def test_upload_header_carries_session_summary() -> None:
     report = _make_report(
-        chat_items=[
-            ChatMessage(role="user", content=["hi"]),
-            ChatMessage(role="assistant", content=["hello"]),
-            ChatMessage(role="user", content=["bye"]),
-        ],
-        model_usage=[
-            LLMModelUsage(
-                provider="openai",
-                model="gpt-4o",
-                input_tokens=10,
-                output_tokens=5,
-                input_cached_tokens=2,
-            ),
-            TTSModelUsage(provider="cartesia", model="sonic", characters_count=40),
-        ],
-        events=[
-            ErrorEvent(error=_llm_error(), source=MagicMock()),
-            ErrorEvent(error=_llm_error(), source=MagicMock()),
-            ErrorEvent(error=_tts_error(), source=MagicMock()),
-            CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED),
-        ],
+        agent_name="support",
+        tags=["vip"],
+        chat_items=[ChatMessage(role="user", content=["hi"])],
+        model_usage=[LLMModelUsage(provider="openai", model="gpt-4o", input_tokens=10)],
+        events=[CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED)],
     )
-    tagger = _make_mock_tagger()
-    tagger.tags = {"vip"}
 
-    header = await _upload_and_read_header(report, tagger)
+    header = await _upload_and_read_header(report)
 
-    assert json.loads(header.session_summary) == {
-        **_report_keys(report),
-        "usage": [
-            {
-                "type": "llm_usage",
-                "provider": "openai",
-                "model": "gpt-4o",
-                "input_tokens": 10,
-                "output_tokens": 5,
-                "input_cached_tokens": 2,
-            },
-            {
-                "type": "tts_usage",
-                "provider": "cartesia",
-                "model": "sonic",
-                "characters_count": 40,
-            },
-        ],
-        "agent_name": "support",
-        "tags": ["vip"],
-        "duration_ms": 12500,
-        "user_turns": 2,
-        "errors": {"llm": 2, "stt": 0, "tts": 1, "realtime": 0, "interruption": 0},
-        "close_reason": "CR_PARTICIPANT_DISCONNECTED",
-    }
+    summary = json.loads(header.session_summary)
+    assert summary == _expected_summary(report)
+    assert "audio_recording_path" not in summary
+    assert "chat_history" not in summary
+    assert "events" not in summary
     assert header.duration == 12500
 
 
 async def test_session_summary_empty_session() -> None:
     report = _make_report()
 
-    header = await _upload_and_read_header(report, _make_mock_tagger())
+    header = await _upload_and_read_header(report)
 
-    assert json.loads(header.session_summary) == {
-        **_report_keys(report),
-        "agent_name": "support",
-        "tags": [],
-        "duration_ms": 12500,
-        "user_turns": 0,
-        "errors": {"llm": 0, "stt": 0, "tts": 0, "realtime": 0, "interruption": 0},
-    }
-
-
-async def test_session_summary_omits_duration_when_unknown() -> None:
-    report = _make_report(duration=None, model_usage=[])
-
-    header = await _upload_and_read_header(report, _make_mock_tagger())
-
-    summary = json.loads(header.session_summary)
-    assert "duration_ms" not in summary
-    assert "usage" not in summary
-    assert header.duration == 0
-
-
-def test_session_summary_close_reasons_match_proto_enum() -> None:
-    # A new SDK close reason without a mapping, or a name the proto lacks, fails here.
-    proto_names = proto_agent_session.CloseReason.keys()
-    for reason in CloseReason:
-        assert _SUMMARY_CLOSE_REASONS[reason.value] in proto_names
-    assert "CR_UNKNOWN" in proto_names
+    assert json.loads(header.session_summary) == _expected_summary(report)
 
 
 def test_job_context_otel_metadata_includes_redaction_option() -> None:
