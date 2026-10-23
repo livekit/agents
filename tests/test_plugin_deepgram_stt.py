@@ -26,7 +26,7 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
     from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2, STTOptions
 
     opts = STTOptions(
-        model="flux-general-en",
+        model=opts_kwargs.get("model", "flux-general-en"),
         sample_rate=16000,
         keyterm=[],
         endpoint_url="wss://api.deepgram.com/v2/listen",
@@ -44,8 +44,10 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
         _reconnect_event=asyncio.Event(),
         _reconfigure_atask=None,
         _ws=ws,
+        _language_hint_warned=False,
     )
     stream._send_configure = SpeechStreamv2._send_configure.__get__(stream)
+    stream._sends_language_hint = SpeechStreamv2._sends_language_hint.__get__(stream)
     return stream
 
 
@@ -77,7 +79,8 @@ async def test_flux_live_fields_reconfigure_without_reconnect():
     from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
 
     ws = _FakeWS()
-    stream = _make_flux_stream(ws=ws, eot_threshold=0.7)
+    # the multilingual model is the one Deepgram takes a hint for
+    stream = _make_flux_stream(ws=ws, model="flux-general-multi", eot_threshold=0.7)
     SpeechStreamv2.update_options(
         stream, eot_threshold=0.85, keyterm=["LiveKit"], language_hint=["en"]
     )
@@ -618,26 +621,27 @@ def _v2_stt_and_stream(*, model: str, **kwargs):
     return stt, stt.stream(), session
 
 
-async def test_flux_removes_the_language_hint_its_model_cannot_take(caplog):
-    # Deepgram answers a hint on any model but flux-general-multi with a 400, so the
-    # "will be ignored" warning was false: the session failed instead of degrading.
+async def test_flux_keeps_the_language_hint_its_model_cannot_send(caplog):
+    # Deepgram answers a hint on any model but flux-general-multi with a 400, so it stays
+    # off the wire — and stays on the options, so a later model switch can send it.
     from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
 
     with caplog.at_level(logging.WARNING):
         stt, stream, session = _v2_stt_and_stream(model="flux-general-en", language_hint=["en"])
     await _wait_until(lambda: len(session.urls) == 1)
     try:
-        assert stt._opts.language_hint == []
         assert "language_hint" not in SpeechStreamv2._live_config(stream)
         assert "language_hint" not in session.last_params()
-        assert "removed `language_hint`" in caplog.text
+        assert stt._opts.language_hint == ["en"]
+        assert stream._opts.language_hint == ["en"]
+        assert "not sending `language_hint`" in caplog.text
         assert "will be ignored" not in caplog.text
     finally:
         await stream.aclose()
         await stt.aclose()
 
 
-async def test_flux_dropped_language_hint_never_reaches_a_configure_frame(caplog):
+async def test_flux_unsent_language_hint_never_reaches_a_configure_frame(caplog):
     stt, stream, session = _v2_stt_and_stream(model="flux-general-en")
     await _wait_until(lambda: stream._ws is not None)
     try:
@@ -645,11 +649,13 @@ async def test_flux_dropped_language_hint_never_reaches_a_configure_frame(caplog
             stt.update_options(language_hint=["en"])
         await asyncio.sleep(0)
 
-        # a hint the model cannot take is not worth a Configure either
+        # a hint the model cannot take is not worth a Configure either, and the
+        # suppressed send leaves the caller's copy alone
         assert stream._reconfigure_atask is None
         assert session.sockets[-1].frames == []
-        assert stt._opts.language_hint == []
-        assert "removed `language_hint`" in caplog.text
+        assert stt._opts.language_hint == ["en"]
+        assert stream._opts.language_hint == ["en"]
+        assert "not sending `language_hint`" in caplog.text
     finally:
         await stream.aclose()
         await stt.aclose()
@@ -669,27 +675,55 @@ async def test_flux_multilingual_model_still_sends_the_language_hint(caplog):
             "type": "Configure",
             "language_hints": ["en", "es"],
         }
-        assert "removed `language_hint`" not in caplog.text
+        assert "not sending `language_hint`" not in caplog.text
     finally:
         await stream.aclose()
         await stt.aclose()
 
 
-async def test_flux_model_switch_drops_a_stranded_language_hint(caplog):
-    # the multilingual model takes a hint that the model it switches to does not, and the
-    # switch reconnects: the hint must not ride along to the new connection
+async def test_flux_model_round_trip_sends_the_hint_again(caplog):
+    # the model switch reconnects, so the hint must not ride along to a model that rejects
+    # it — and must come back when the stream returns to the multilingual model
+    caplog.set_level(logging.WARNING)
     stt, stream, session = _v2_stt_and_stream(model="flux-general-multi", language_hint=["en"])
     await _wait_until(lambda: len(session.urls) == 1)
     try:
         assert session.last_params()["language_hint"] == ["en"]
 
-        with caplog.at_level(logging.WARNING):
-            stt.update_options(model="flux-general-en")
+        stt.update_options(model="flux-general-en")
         await _wait_until(lambda: len(session.urls) == 2)
-
         assert "language_hint" not in session.last_params()
-        assert stt._opts.language_hint == []
-        assert "removed `language_hint`" in caplog.text
+        assert stt._opts.language_hint == ["en"]
+
+        stt.update_options(model="flux-general-multi")
+        await _wait_until(lambda: len(session.urls) == 3)
+        assert session.last_params()["language_hint"] == ["en"]
+
+        # a stream created after the round trip carries the hint too
+        second = stt.stream()
+        try:
+            await _wait_until(lambda: len(session.urls) == 4)
+            assert session.last_params()["language_hint"] == ["en"]
+        finally:
+            await second.aclose()
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_flux_warns_once_per_stream_across_reconnects(caplog):
+    # the warning belongs to the stream, not to the connection: reconnecting rebuilds the
+    # config, and the caller must not be told again
+    stt, stream, session = _v2_stt_and_stream(model="flux-general-en", language_hint=["en"])
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        stt.update_options(model="flux-general-en")
+        await _wait_until(lambda: len(session.urls) == 2)
+        stt.update_options(model="flux-general-en")
+        await _wait_until(lambda: len(session.urls) == 3)
+
+        assert caplog.text.count("not sending `language_hint`") == 1
+        assert stt._opts.language_hint == ["en"]
     finally:
         await stream.aclose()
         await stt.aclose()
@@ -705,7 +739,7 @@ async def test_v1_multi_language_sends_the_hint_as_repeated_params(caplog):
     try:
         assert session.last_params()["language_hint"] == ["en", "es"]
         assert stream._opts.language_hint == ["en", "es"]
-        assert "removed `language_hint`" not in caplog.text
+        assert "not sending `language_hint`" not in caplog.text
     finally:
         await stream.aclose()
         await stt.aclose()
@@ -721,7 +755,7 @@ async def test_v1_nova3_general_multi_language_sends_the_hint(caplog):
     try:
         assert session.last_params()["language_hint"] == ["en"]
         assert stream._opts.language_hint == ["en"]
-        assert "removed `language_hint`" not in caplog.text
+        assert "not sending `language_hint`" not in caplog.text
     finally:
         await stream.aclose()
         await stt.aclose()
@@ -735,13 +769,13 @@ async def test_v1_hint_model_match_ignores_case_and_whitespace(caplog, model):
     await _wait_until(lambda: len(session.urls) == 1)
     try:
         assert session.last_params()["language_hint"] == ["en"]
-        assert "removed `language_hint`" not in caplog.text
+        assert "not sending `language_hint`" not in caplog.text
     finally:
         await stream.aclose()
         await stt.aclose()
 
 
-async def test_v1_nova2_multi_language_drops_the_hint(caplog):
+async def test_v1_nova2_multi_language_leaves_the_hint_off_the_wire(caplog):
     # a hint is not a nova-2 feature, even though the language alone looks right
     stt, stream, session = _v1_stt_and_stream(
         model="nova-2-general", language="multi", language_hint=["en"]
@@ -751,15 +785,15 @@ async def test_v1_nova2_multi_language_drops_the_hint(caplog):
             await _wait_until(lambda: len(session.urls) == 1)
 
         assert "language_hint" not in session.last_params()
-        assert stream._opts.language_hint == []
-        assert "removed `language_hint`" in caplog.text
+        assert stream._opts.language_hint == ["en"]
+        assert "not sending `language_hint`" in caplog.text
         assert "model 'nova-2-general'" in caplog.text
     finally:
         await stream.aclose()
         await stt.aclose()
 
 
-async def test_v1_nova3_medical_multi_language_drops_the_hint(caplog):
+async def test_v1_nova3_medical_multi_language_leaves_the_hint_off_the_wire(caplog):
     # nova-3-medical is a nova-3 model but not one of the two ids the gateway's gate names,
     # so it takes no hint until someone widens that set deliberately
     stt, stream, session = _v1_stt_and_stream(
@@ -770,8 +804,8 @@ async def test_v1_nova3_medical_multi_language_drops_the_hint(caplog):
             await _wait_until(lambda: len(session.urls) == 1)
 
         assert "language_hint" not in session.last_params()
-        assert stream._opts.language_hint == []
-        assert "removed `language_hint`" in caplog.text
+        assert stream._opts.language_hint == ["en"]
+        assert "not sending `language_hint`" in caplog.text
         assert "model 'nova-3-medical'" in caplog.text
     finally:
         await stream.aclose()
@@ -779,7 +813,7 @@ async def test_v1_nova3_medical_multi_language_drops_the_hint(caplog):
 
 
 @pytest.mark.parametrize("model", ["nova-3-multilingual", "flux-general-en", "nova-9-future"])
-async def test_v1_multi_language_drops_the_hint_outside_the_nova3_set(caplog, model):
+async def test_v1_multi_language_leaves_the_hint_off_the_wire_outside_the_nova3_set(caplog, model):
     # neither another nova-3 alias nor an unknown model is in the accepted set
     stt, stream, session = _v1_stt_and_stream(model=model, language="multi", language_hint=["en"])
     try:
@@ -787,15 +821,15 @@ async def test_v1_multi_language_drops_the_hint_outside_the_nova3_set(caplog, mo
             await _wait_until(lambda: len(session.urls) == 1)
 
         assert "language_hint" not in session.last_params()
-        assert stream._opts.language_hint == []
-        assert "removed `language_hint`" in caplog.text
+        assert stream._opts.language_hint == ["en"]
+        assert "not sending `language_hint`" in caplog.text
         assert f"model '{model}'" in caplog.text
     finally:
         await stream.aclose()
         await stt.aclose()
 
 
-async def test_v1_language_hint_is_dropped_outside_multi_mode(caplog):
+async def test_v1_language_hint_is_not_sent_outside_multi_mode(caplog):
     stt, stream, session = _v1_stt_and_stream(
         model="nova-3", language="en-US", language_hint=["en"]
     )
@@ -804,11 +838,11 @@ async def test_v1_language_hint_is_dropped_outside_multi_mode(caplog):
             await _wait_until(lambda: len(session.urls) == 1)
 
         assert "language_hint" not in session.last_params()
-        assert "removed `language_hint`" in caplog.text
+        assert "not sending `language_hint`" in caplog.text
         assert "model 'nova-3'" in caplog.text
         assert "language is 'en-US'" in caplog.text
-        # the removal belongs to this stream; the parent keeps the caller's baseline
-        assert stream._opts.language_hint == []
+        # the suppressed send leaves the caller's hint on both copies
+        assert stream._opts.language_hint == ["en"]
         assert stt._opts.language_hint == ["en"]
     finally:
         await stream.aclose()
@@ -828,7 +862,51 @@ async def test_v1_language_change_out_of_multi_stops_sending_the_hint(caplog):
             await _wait_until(lambda: len(session.urls) == 2)
 
         assert "language_hint" not in session.last_params()
-        assert "removed `language_hint`" in caplog.text
+        assert "not sending `language_hint`" in caplog.text
+        assert stream._opts.language_hint == ["en"]
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_v1_language_round_trip_sends_the_hint_again(caplog):
+    # multi -> en -> multi on one stream: every language change reconnects, so the hint
+    # leaves the wire and comes back with the language
+    caplog.set_level(logging.WARNING)
+    stt, stream, session = _v1_stt_and_stream(
+        model="nova-3", language="multi", language_hint=["en"]
+    )
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert session.last_params()["language_hint"] == ["en"]
+
+        stt.update_options(language="en-US")
+        await _wait_until(lambda: len(session.urls) == 2)
+        assert "language_hint" not in session.last_params()
+        assert stream._opts.language_hint == ["en"]
+        assert stt._opts.language_hint == ["en"]
+
+        stt.update_options(language="multi")
+        await _wait_until(lambda: len(session.urls) == 3)
+        assert session.last_params()["language_hint"] == ["en"]
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_v1_warns_once_per_stream_across_reconnects(caplog):
+    stt, stream, session = _v1_stt_and_stream(
+        model="nova-3", language="en-US", language_hint=["en"]
+    )
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        stt.update_options(language="en-GB")
+        await _wait_until(lambda: len(session.urls) == 2)
+        stt.update_options(language="en-AU")
+        await _wait_until(lambda: len(session.urls) == 3)
+
+        assert caplog.text.count("not sending `language_hint`") == 1
+        assert stream._opts.language_hint == ["en"]
     finally:
         await stream.aclose()
         await stt.aclose()

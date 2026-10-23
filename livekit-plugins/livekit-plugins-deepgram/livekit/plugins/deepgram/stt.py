@@ -501,6 +501,8 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
         self._pending_keyterm: list[str] | None = None
+        # one warning per stream: a reconnect rebuilds the connect config
+        self._language_hint_warned = False
 
         # Track how much duration has already been reported so we can emit
         # the connection-lifetime remainder on close, matching what Deepgram
@@ -759,8 +761,6 @@ class SpeechStream(stt.SpeechStream):
                         self._reported_duration = 0.0
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        _drop_ineffective_language_hint(self._opts)
-
         live_config: dict[str, Any] = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
@@ -800,7 +800,18 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
         if self._opts.language_hint:
-            live_config["language_hint"] = self._opts.language_hint
+            if _language_hint_applies(self._opts.model, self._opts.language):
+                live_config["language_hint"] = self._opts.language_hint
+            elif not self._language_hint_warned:
+                self._language_hint_warned = True
+                logger.warning(
+                    "not sending `language_hint` for model '%s': Deepgram applies a hint only to "
+                    "Nova-3 (nova-3, nova-3-general) in 'multi' language mode, and this "
+                    "session's language is '%s'. The hint stays set, and is sent again if "
+                    "model and language allow it",
+                    self._opts.model,
+                    self._opts.language if self._opts.language else "unset",
+                )
 
         t0 = time.perf_counter()
         try:
@@ -1065,33 +1076,16 @@ def _validate_tags(tags: list[str]) -> list[str]:
 _NOVA3_LANGUAGE_HINT_MODELS = frozenset({"nova-3", "nova-3-general"})
 
 
-def _drop_ineffective_language_hint(opts: STTOptions) -> None:
-    """Remove a `language_hint` Deepgram would reject, in place, with one warning.
+def _language_hint_applies(model: DeepgramModels | str, language: LanguageCode | None) -> bool:
+    """Whether Deepgram takes a `language_hint` under this model and language.
 
-    A hint applies only to Nova-3 in its multilingual mode (`language=multi`), the same gate
-    the gateway applies. Deepgram fails the session with anything else, so dropping the hint
-    degrades the session instead of failing it.
-
-    Clearing the stored hint makes the removal stick for the stream, so a reconnect
-    neither warns again nor puts the hint back on the wire.
+    A hint applies only to Nova-3's multilingual mode (`language=multi`), the same gate
+    the gateway applies: Deepgram fails the session with anything else, so the caller of
+    this predicate leaves the hint off the wire instead of failing the connection.
     """
-    if not opts.language_hint:
-        return
-    if (
-        opts.language is not None
-        and str(opts.language).lower() == "multi"
-        and str(opts.model).strip().lower() in _NOVA3_LANGUAGE_HINT_MODELS
-    ):
-        return
-
-    opts.language_hint = []
-    logger.warning(
-        "removed `language_hint` for model '%s': Deepgram applies a hint only to Nova-3 "
-        "(nova-3, nova-3-general) in 'multi' language mode, and this session's language "
-        "is '%s'",
-        opts.model,
-        opts.language if opts.language else "unset",
-    )
+    if language is None or str(language).strip().lower() != "multi":
+        return False
+    return str(model).strip().lower() in _NOVA3_LANGUAGE_HINT_MODELS
 
 
 def _validate_keyterm(

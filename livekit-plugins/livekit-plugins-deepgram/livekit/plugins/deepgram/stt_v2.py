@@ -160,8 +160,6 @@ class STTv2(stt.STT):
                     f"eager_eot_threshold ({eager_eot_threshold}) must be less than or equal to eot_threshold "
                     f"({effective_eot}); increase eot_threshold (max 0.9) to use a higher eager value"
                 )
-        language_hint = _drop_unsupported_language_hint(language_hint, model)
-
         self._opts = STTOptions(
             model=model,
             sample_rate=sample_rate,
@@ -287,12 +285,7 @@ class STTv2(stt.STT):
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
-            language_hint = _drop_unsupported_language_hint(language_hint, self._opts.model)
-            self._opts.language_hint = language_hint if is_given(language_hint) else []
-        elif is_given(model) and self._opts.language_hint:
-            # a model switch can strand a hint the new model rejects
-            kept = _drop_unsupported_language_hint(self._opts.language_hint, self._opts.model)
-            self._opts.language_hint = kept if is_given(kept) else []
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
@@ -355,6 +348,8 @@ class SpeechStreamv2(stt.SpeechStream):
         # active connection for in-band Configure updates; None while disconnected
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconfigure_atask: asyncio.Task[None] | None = None
+        # one warning per stream: a reconnect rebuilds the config and must not re-warn
+        self._language_hint_warned = False
 
     def update_options(
         self,
@@ -444,7 +439,7 @@ class SpeechStreamv2(stt.SpeechStream):
         if is_given(keyterm):
             # keyterms replaces the whole list, so send the full effective set
             changed_options["keyterms"] = self._opts.keyterm
-        if is_given(language_hint):
+        if is_given(language_hint) and self._sends_language_hint():
             changed_options["language_hints"] = self._opts.language_hint
 
         if changed_options:
@@ -594,6 +589,22 @@ class SpeechStreamv2(stt.SpeechStream):
                 if ws is not None:
                     await ws.close()
 
+    def _sends_language_hint(self) -> bool:
+        """Whether this connection carries the hint, warning once per stream when it cannot."""
+        if not self._opts.language_hint:
+            return False
+        if _language_hint_applies(self._opts.model):
+            return True
+        if not self._language_hint_warned:
+            self._language_hint_warned = True
+            logger.warning(
+                "not sending `language_hint` for model '%s': Deepgram applies a hint only on "
+                "`flux-general-multi`. The hint stays set, and is sent again if the model "
+                "switches back",
+                self._opts.model,
+            )
+        return False
+
     def _live_config(self) -> dict[str, Any]:
         live_config: dict[str, Any] = {
             "model": self._opts.model,
@@ -617,7 +628,7 @@ class SpeechStreamv2(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
-        if self._opts.language_hint:
+        if self._sends_language_hint():
             live_config["language_hint"] = self._opts.language_hint
 
         if self._opts.numerals:
@@ -782,24 +793,14 @@ def _parse_transcription(
     return [sd]
 
 
-def _drop_unsupported_language_hint(
-    language_hint: NotGivenOr[list[str]], model: V2Models | str
-) -> NotGivenOr[list[str]]:
-    """Remove a `language_hint` the model cannot take, with one warning.
+def _language_hint_applies(model: V2Models | str) -> bool:
+    """Whether `language_hint` reaches the wire for this model.
 
     Deepgram applies a hint only on `flux-general-multi`, its multilingual model, and
-    answers any other model with a 400. Dropping the hint here degrades the session
-    instead of failing it.
+    answers any other model with a 400. The hint stays on the options regardless, so a
+    model switch back to the multilingual one sends it again.
     """
-    if not is_given(language_hint) or not language_hint or model == "flux-general-multi":
-        return language_hint
-
-    logger.warning(
-        "removed `language_hint` for model '%s': Deepgram applies a hint only on "
-        "`flux-general-multi`",
-        model,
-    )
-    return NOT_GIVEN
+    return model == "flux-general-multi"
 
 
 def _validate_tags(tags: list[str]) -> list[str]:
