@@ -317,6 +317,14 @@ class AudioRecognition:
 
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
+        # whether _last_speaking_time came from a signal that marks the END of speech
+        # (VAD end-of-speech, provider speech_end_time, word timestamps, or a
+        # transcript/EOS arrival — all bound speech from above) rather than an onset
+        # or live-speaking signal (START_OF_SPEECH, VAD inference done), which only
+        # bounds it from below. An untimestamped STT end-of-speech may only keep
+        # end-anchors: an onset anchor held through a VAD miss would inflate
+        # transcription_delay by the whole utterance duration (#7960 review)
+        self._last_speaking_time_is_end: bool = False
         self._speech_start_time: float | None = None
 
         # used for manual commit_user_turn
@@ -1059,6 +1067,7 @@ class AudioRecognition:
         self._last_final_transcript_time = None
         self._speech_start_time = None
         self._last_speaking_time = None
+        self._last_speaking_time_is_end = False
         self._vad_speech_started = False
         self._user_turn_committed = False
         self._last_emitted_prediction = None
@@ -1305,6 +1314,7 @@ class AudioRecognition:
 
             if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
+                self._last_speaking_time_is_end = has_stt_end_time
 
             # check user turn limit after accumulating transcript
             self._check_user_turn_limit(transcript)
@@ -1360,6 +1370,7 @@ class AudioRecognition:
 
             if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
+                self._last_speaking_time_is_end = has_stt_end_time
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
                 confidence_vals = list(self._final_transcript_confidence) + [confidence]
@@ -1421,9 +1432,20 @@ class AudioRecognition:
                 # otherwise push the anchor into the future and extend `extra_sleep`,
                 # delaying the turn commit by the skew
                 self._last_speaking_time = min(ev.speech_end_time, now)
-            else:
-                # use an implied version computed based on either word timestamps or current time
+                self._last_speaking_time_is_end = True
+            elif use_stt_speaking_time or not self._last_speaking_time_is_end:
+                # same precedence as the FINAL_TRANSCRIPT path: no VAD, a real provider
+                # timestamp in stt mode (word timestamps bound speech from above, so
+                # they replace the anchor there), or an anchor that is only an onset
+                # (a wired VAD that missed the segment leaves START_OF_SPEECH behind;
+                # it bounds speech from below, so arrival is the honest fallback)
                 self._last_speaking_time = stt_last_speaking_time
+                self._last_speaking_time_is_end = has_stt_end_time
+            # else: an END_OF_SPEECH with no timestamps (e.g. Deepgram Flux's EndOfTurn)
+            # is an explicit boundary but says nothing about when speech ended — its
+            # arrival instant includes STT endpointing and transport delay. A measured
+            # end anchor (a VAD backdate, or the word timestamps the turn's final
+            # transcript already stored) is the better estimate, so keep it (#7960).
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
@@ -1443,6 +1465,7 @@ class AudioRecognition:
 
             self._speaking = True
             self._last_speaking_time = stt_last_speaking_time
+            self._last_speaking_time_is_end = False  # onset: bounds speech from below
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -1482,6 +1505,7 @@ class AudioRecognition:
             # for metrics, get the "earliest" signal of speech as possible
             if ev.raw_accumulated_speech > 0.0:
                 self._last_speaking_time = time.time()
+                self._last_speaking_time_is_end = False  # live-speaking signal: a lower bound
 
                 if self._speech_start_time is None:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
@@ -1507,6 +1531,7 @@ class AudioRecognition:
             self._speaking = False
             speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
             self._last_speaking_time = speech_end_time
+            self._last_speaking_time_is_end = True
 
             # A committed turn clears _vad_speech_started before its late VAD EOS arrives.
             if self._stt_pipeline is not None and vad_speech_started:
