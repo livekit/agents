@@ -196,6 +196,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         self._swap_task: asyncio.Task[None] | None = None
         self._swap_lock = asyncio.Lock()
+        self._settings_tasks: set[asyncio.Task[None]] = set()
+        self._closed = False
         self._initializing = False
         self._initialization_error: Exception | None = None
         # bound by AgentActivity; used to read agent state and drive interrupt/generate_reply on swap
@@ -585,9 +587,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         )
 
     async def update_instructions(self, instructions: str) -> None:
-        async with self._swap_lock:
-            await self._active.update_instructions(instructions)
-            self._instructions = instructions
+        await self._update_settings(instructions=instructions)
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         if self._swapping:
@@ -596,9 +596,36 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         await self._active.update_chat_ctx(chat_ctx)
 
     async def update_tools(self, tools: list[Tool]) -> None:
-        async with self._swap_lock:
-            await self._active.update_tools(tools)
-            self._tools = tools
+        await self._update_settings(tools=list(tools))
+
+    async def _update_settings(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> None:
+        if self._closed:
+            raise RuntimeError("Realtime fallback session is closed")
+
+        async def apply() -> None:
+            async with self._swap_lock:
+                if is_given(instructions):
+                    await self._active.update_instructions(instructions)
+                    self._instructions = instructions
+                if is_given(tools):
+                    await self._active.update_tools(tools)
+                    self._tools = tools
+
+        # Keep the acknowledged child settings and the restart snapshot together,
+        # including when a caller cancels while the child waits for its acknowledgment.
+        task = asyncio.create_task(apply())
+        self._settings_tasks.add(task)
+        task.add_done_callback(self._settings_tasks.discard)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await asyncio.shield(task)
+            raise
 
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
         self._tool_choice = tool_choice
@@ -661,6 +688,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
     async def aclose(self) -> None:
         # cancel an in-flight swap first, else its fresh child would leak past aclose
+        self._closed = True
+        await aio.cancel_and_wait(*self._settings_tasks)
         if self._swap_task is not None:
             await aio.cancel_and_wait(self._swap_task)
         self._unbind(self._active)

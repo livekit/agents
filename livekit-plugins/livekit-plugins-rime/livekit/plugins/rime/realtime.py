@@ -593,7 +593,7 @@ class RealtimeSession(llm.RealtimeSession):
             raise self._unsupported("Prism cannot combine typed input with a reply instruction")
         parent, self._parent = self._parent, None
         report, self._report = self._report, None
-        return self._spawn(self._reply(typed, instruction, parent, report))
+        return self._spawn(self._reply(typed, instruction, parent, report), request=True)
 
     async def _reply(
         self,
@@ -1026,16 +1026,20 @@ class RealtimeSession(llm.RealtimeSession):
         for generation in self._generations.values():
             self._end(generation)
 
-    def _spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+    def _spawn(self, coro: Coroutine[Any, Any, Any], *, request: bool = False) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
         self._tasks.add(task)
-        task.add_done_callback(self._done)
+        task.add_done_callback(lambda finished: self._done(finished, request=request))
         return task
 
-    def _done(self, task: asyncio.Task[Any]) -> None:
+    def _done(self, task: asyncio.Task[Any], *, request: bool) -> None:
         self._tasks.discard(task)
         if not task.cancelled() and (error := task.exception()) is not None:
-            if isinstance(error, Exception) and not isinstance(error, llm.RealtimeError):
+            # The caller receives reply refusals and admission timeouts. An error
+            # in an unobserved background operation must also stop the session.
+            if isinstance(error, Exception) and not (
+                request and isinstance(error, llm.RealtimeError)
+            ):
                 self._fatal(error)
 
     async def aclose(self) -> None:
