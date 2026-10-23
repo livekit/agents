@@ -3622,7 +3622,7 @@ requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "protobuf", specifier = ">=6.33.5" },
     { name = "rime-api", specifier = ">=0.0.1" },
-    { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'realtime'", specifier = ">=0.1.0a16" },
+    { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'realtime'", specifier = ">=0.1.0a21" },
 ]
 provides-extras = ["realtime"]
 
@@ -5844,7 +5844,7 @@ wheels = [
 
 [[package]]
 name = "rimelabs-sdk"
-version = "0.1.0a17"
+version = "0.1.0a21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
@@ -5853,9 +5853,9 @@ dependencies = [
     { name = "rime-api" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4c/b5/3ff0f8fc7cf0c87e494d13ab0bc2130acb2224ade74134686192b14e0881/rimelabs_sdk-0.1.0a17.tar.gz", hash = "sha256:9183d6db59e5abfe443ee902730addac7620f9a82acb23666d4cc7f1480cb623", size = 192530, upload-time = "2026-10-19T20:43:12.714Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/12/cbf7a19cee25f64ef4c8644f16d3d394d10b66883092377abf1079ef105a/rimelabs_sdk-0.1.0a21.tar.gz", hash = "sha256:79e73a9e9cf7182e895a718e9c74224055eb533a3f43c94beac63fc7e4bb1fdd", size = 225119, upload-time = "2026-10-23T20:12:20.517Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7d/69/8207233308a087035b0c5cf32427125e20a2b698ff22bd7f423fe98c86c1/rimelabs_sdk-0.1.0a17-py3-none-any.whl", hash = "sha256:eb044a7cd4276196168ff2747cda61ad8b64e000d3f597d9f68843a792ffb33d", size = 61345, upload-time = "2026-10-19T20:43:11.664Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/26/9fa4429daaae9b0dca83e06946af4cfcffae8f2132350dd05aa3fe72e0a3/rimelabs_sdk-0.1.0a21-py3-none-any.whl", hash = "sha256:9921d6e1561ddb7631de0bff643504d15d73254bf434999d7972d29d62cb52a6", size = 71561, upload-time = "2026-10-23T20:12:19.289Z" },
 ]
 
 [[package]]

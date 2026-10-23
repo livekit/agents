@@ -58,6 +58,7 @@ _SOFT_CAPABILITIES = (
 
 # child events re-emitted on the wrapper
 _FORWARDED_EVENTS: tuple[EventTypes, ...] = (
+    "input_speech_hint",
     "input_speech_started",
     "input_speech_stopped",
     "input_audio_transcription_completed",
@@ -387,6 +388,9 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     def tools(self) -> ToolContext:
         return self._active.tools
 
+    def can_reuse(self, chat_ctx: ChatContext) -> bool:
+        return self._active.can_reuse(chat_ctx)
+
     async def initialize(
         self,
         *,
@@ -581,8 +585,9 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         )
 
     async def update_instructions(self, instructions: str) -> None:
-        self._instructions = instructions
-        await self._active.update_instructions(instructions)
+        async with self._swap_lock:
+            await self._active.update_instructions(instructions)
+            self._instructions = instructions
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         if self._swapping:
@@ -591,8 +596,9 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         await self._active.update_chat_ctx(chat_ctx)
 
     async def update_tools(self, tools: list[Tool]) -> None:
-        self._tools = tools
-        await self._active.update_tools(tools)
+        async with self._swap_lock:
+            await self._active.update_tools(tools)
+            self._tools = tools
 
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
         self._tool_choice = tool_choice

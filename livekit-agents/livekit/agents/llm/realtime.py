@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,13 +20,23 @@ from .tool_context import Tool, ToolChoice, ToolContext
 
 
 @dataclass
+class InputSpeechHintEvent:
+    """Possible caller speech. Lower playback without interrupting a response."""
+
+    audio_start_ms: int
+    gain: float = 0.25
+    timeout: float = 0.6
+
+
+@dataclass
 class InputSpeechStartedEvent:
-    pass
+    interrupt_response: bool = True
 
 
 @dataclass
 class InputSpeechStoppedEvent:
     user_transcription_enabled: bool
+    end_reason: str | None = None
 
 
 @dataclass
@@ -50,6 +60,10 @@ class GenerationCreatedEvent:
     when the active child can change. None uses the receiving session.
     Provider response and message IDs remain unchanged and may be session-scoped.
     """
+    metadata: dict[str, Any] = field(default_factory=dict)
+    input_item_ids: tuple[str, ...] = ()
+    settings_revision: int | None = None
+    provider_request_id: str | None = None
 
 
 class RealtimeModelError(BaseModel):
@@ -59,6 +73,8 @@ class RealtimeModelError(BaseModel):
     label: str
     error: Exception = Field(..., exclude=True)
     recoverable: bool
+    retryable: bool | None = None
+    """Whether the unchanged request may succeed again; does not initiate a retry."""
 
 
 @dataclass
@@ -108,9 +124,22 @@ class RealtimeError(Exception):
             programmatically; ``None`` when the error carries no provider code.
     """
 
-    def __init__(self, message: str, *, code: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        retryable: bool | None = None,
+        request_id: str | None = None,
+        response_id: str | None = None,
+        scope: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.retryable = retryable
+        self.request_id = request_id
+        self.response_id = response_id
+        self.scope = scope
 
 
 class RealtimeModel:
@@ -163,6 +192,7 @@ class RealtimeModel:
 
 
 EventTypes = Literal[
+    "input_speech_hint",
     "input_speech_started",  # serverside VAD (also used for interruptions)
     "input_speech_stopped",  # serverside VAD
     "input_audio_transcription_completed",
@@ -243,6 +273,20 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         mid-session override this to report the currently active model's capabilities.
         """
         return self._realtime_model.capabilities
+
+    def can_reuse(self, chat_ctx: ChatContext) -> bool:
+        """Whether a handoff can keep this conversation with the supplied context.
+
+        Providers may accept a local projection while retaining provider-owned
+        history. This does not grant permission to edit remote history.
+        """
+        return self.capabilities.mutable_chat_context or self.chat_ctx.copy(
+            exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
+        ).is_equivalent(
+            chat_ctx.copy(
+                exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
+            )
+        )
 
     @property
     @abstractmethod

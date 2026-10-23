@@ -101,6 +101,7 @@ from .generation import (
     update_expressive_instructions,
     update_instructions,
 )
+from .io import AudioOutput
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
 from .tool_executor import (
     _reply_tool_choice,
@@ -340,6 +341,9 @@ class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
+        self._speech_hint_timer: asyncio.TimerHandle | None = None
+        self._speech_hint_output: AudioOutput | None = None
+        self._speech_hint_previous_gain = 1.0
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._realtime_user_input_answered_at: float = 0.0
         self._audio_recognition: AudioRecognition | None = None
@@ -1129,17 +1133,7 @@ class AgentActivity(RecognitionHooks):
                 and self.llm is new_activity.llm
             ):
                 # context update is supported or chat context is equivalent
-                reusable = self.llm.capabilities.mutable_chat_context or (
-                    self._rt_session.chat_ctx.copy(
-                        exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
-                    ).is_equivalent(
-                        new_activity.agent.chat_ctx.copy(
-                            exclude_instructions=True,
-                            exclude_handoff=True,
-                            exclude_config_update=True,
-                        )
-                    )
-                )
+                reusable = self._rt_session.can_reuse(new_activity.agent.chat_ctx)
                 # instructions update is supported or instructions are the same
                 reusable = reusable and (
                     self.llm.capabilities.mutable_instructions
@@ -1158,6 +1152,8 @@ class AgentActivity(RecognitionHooks):
                 if reusable:
                     # detach: remove event listeners but don't close the session
                     self._rt_session.off("generation_created", self._on_generation_created)
+                    self._restore_speech_hint()
+                    self._rt_session.off("input_speech_hint", self._on_input_speech_hint)
                     self._rt_session.off("input_speech_started", self._on_input_speech_started)
                     self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
                     self._rt_session.off(
@@ -1268,6 +1264,7 @@ class AgentActivity(RecognitionHooks):
                 logger.debug("created new realtime session for activity, id=%s", self._rt_session)
 
             self._rt_session.on("generation_created", self._on_generation_created)
+            self._rt_session.on("input_speech_hint", self._on_input_speech_hint)
             self._rt_session.on("input_speech_started", self._on_input_speech_started)
             self._rt_session.on("input_speech_stopped", self._on_input_speech_stopped)
             self._rt_session.on(
@@ -1591,6 +1588,7 @@ class AgentActivity(RecognitionHooks):
 
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
+        self._restore_speech_hint()
 
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
@@ -1598,6 +1596,7 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
             self._rt_session.off("generation_created", self._on_generation_created)
+            self._rt_session.off("input_speech_hint", self._on_input_speech_hint)
             self._rt_session.off("input_speech_started", self._on_input_speech_started)
             self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
             self._rt_session.off(
@@ -2255,7 +2254,33 @@ class AgentActivity(RecognitionHooks):
 
         self._interruption_detected = False
 
-    def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
+    def _restore_speech_hint(self) -> None:
+        if self._speech_hint_timer is not None:
+            self._speech_hint_timer.cancel()
+            self._speech_hint_timer = None
+        if self._speech_hint_output is not None:
+            self._speech_hint_output.set_gain(self._speech_hint_previous_gain)
+            self._speech_hint_output = None
+
+    def _on_input_speech_hint(self, ev: llm.InputSpeechHintEvent) -> None:
+        output = self._session.output.audio
+        if output is None or not self._session.output.audio_enabled:
+            return
+        if self._speech_hint_output is not output:
+            self._restore_speech_hint()
+            previous = output.gain
+            if not output.set_gain(previous * ev.gain):
+                return
+            self._speech_hint_output = output
+            self._speech_hint_previous_gain = previous
+        elif self._speech_hint_timer is not None:
+            self._speech_hint_timer.cancel()
+        self._speech_hint_timer = asyncio.get_running_loop().call_later(
+            ev.timeout, self._restore_speech_hint
+        )
+
+    def _on_input_speech_started(self, ev: llm.InputSpeechStartedEvent) -> None:
+        self._restore_speech_hint()
         if self.vad is None or self.using_default_vad:
             self._session._update_user_state("speaking")
             if self._audio_recognition:
@@ -2264,7 +2289,7 @@ class AgentActivity(RecognitionHooks):
                     user_speaking_span=self._session._user_speaking_span,
                 )
 
-        if self._rt_overlapping_speech_enabled:
+        if self._rt_overlapping_speech_enabled or not ev.interrupt_response:
             # the caller talking is not an interruption here; the model ends its own turn
             return
 
@@ -2280,6 +2305,9 @@ class AgentActivity(RecognitionHooks):
                 )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
+        self._restore_speech_hint()
+        if ev.end_reason and self._session._user_speaking_span is not None:
+            self._session._user_speaking_span.set_attribute("lk.end_of_turn_reason", ev.end_reason)
         if self.vad is None or self.using_default_vad:
             if self._audio_recognition:
                 self._audio_recognition._on_end_of_speech(
@@ -2323,6 +2351,7 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
+        self._restore_speech_hint()
         if ev.user_initiated:
             # user_initiated generations are directly handled inside _realtime_reply_task
             return
@@ -4389,6 +4418,14 @@ class AgentActivity(RecognitionHooks):
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
         playback_session = generation_ev.playback_session or self._rt_session
+        if generation_ev.provider_request_id is not None:
+            inference_span.set_attribute(
+                "lk.provider_request_id", generation_ev.provider_request_id
+            )
+        if generation_ev.settings_revision is not None:
+            inference_span.set_attribute("lk.settings_revision", generation_ev.settings_revision)
+        if generation_ev.input_item_ids:
+            inference_span.set_attribute("lk.input_item_ids", list(generation_ev.input_item_ids))
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
             self._session.output.transcription

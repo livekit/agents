@@ -134,7 +134,7 @@ Use Python 3.11 or later for this feature. Existing TTS use still supports 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra installs `rimelabs-sdk>=0.1.0a16` from PyPI. For source
+The realtime extra installs `rimelabs-sdk>=0.1.0a21` from PyPI. For source
 development, install this plugin with its realtime extra from the repository root:
 
 ```sh
@@ -142,25 +142,28 @@ uv sync --package livekit-plugins-rime --extra realtime --inexact
 ```
 
 ```python
-import os
 from livekit.agents import Agent, AgentSession
 from livekit.plugins import rime
+from rimelabs_sdk.realtime import TurnDetection
 
+model = rime.realtime.RealtimeModel(
+    turn_detection=TurnDetection(eagerness="low", end_of_turn_timeout_ms=5000),
+    response_metadata={"workflow": "support"},
+)
 session = AgentSession(
-    llm=rime.realtime.RealtimeModel(
-        endpoint=os.environ["PRISM_URL"],
-        voice=os.environ["PRISM_VOICE"],
-    ),
+    llm=model,
 )
 await session.start(agent=Agent(instructions="Give short, clear answers."), room=ctx.room)
 session.generate_reply(user_input="Hello!")
 ```
 
-Set `RIME_API_KEY` and configure the production Prism endpoint:
+Set `RIME_API_KEY`. The default endpoint is `wss://prism.api.rime.ai/v1/realtime`.
+Set `endpoint=` for a custom deployment and `voice=` if it has no default voice.
+For a complete room agent, see `examples/voice_agents/rime_prism.py`.
 
-```sh
-export PRISM_URL=wss://prism.api.rime.ai/v1/realtime
-```
+Optional constructor settings include `turn_detection`, `timeouts` (`RealtimeTimeouts`),
+`interrupt_on_speech`, `request_id`, and `response_metadata`. Turn timing can be set
+only when opening the conversation. Omitted values use the SDK or server defaults.
 
 The endpoint must accept the SDK's Bearer API-key handshake. Local development
 also accepts `ws://localhost/...`. You can pass `client=Rime(...)` to reuse credentials; the
@@ -174,9 +177,67 @@ and stop cause, including skipped audio. Caller speech sends a truncate.
 Application stops send a playback receipt. Late transcripts keep the user's
 original position in history.
 
-Configuration changes, agent handoff, AgentTask, tool progress updates, video,
-manual audio commit, forced tool selection, per-reply tools, and disabling turn
-detection are unsupported. These operations emit an unrecoverable model error.
+### Session updates and handoff
+
+Use `agent.update_instructions()` and `agent.update_tools()` to change the current
+agent. The adapter waits for Prism to acknowledge the settings. Instruction and
+tool changes during handoff are sent together. A rejected update leaves the
+acknowledged settings unchanged and does not end the conversation. Cancellation
+waits for an outstanding acknowledgment, so the local settings reflect accepted
+updates even when the caller cancels.
+
+Use `await model.update_session(voice="...", interrupt_on_speech=False)` for
+provider settings, or `await model.update_session(response_metadata={"step": "2"})`
+to replace labels for future replies. `model.session_info` exposes the current
+acknowledged settings and the request ID Prism actually used. A gateway may
+replace a supplied `request_id`.
+
+Handoff and AgentTask entry/return can reuse the conversation when both agents
+use the same model and preserve equivalent conversation history. Instructions
+and tools can change. Arbitrary history replacement and resuming tool calls in a
+fresh conversation remain unsupported. The SDK keeps the settings revision that
+each response started with, including its interruption policy.
+
+### Tool fillers
+
+Pass `tool_fillers={"lookup": PrismFiller(type="text", text="Checking your order.")}`
+to the model constructor, importing `PrismFiller` from `rimelabs_sdk.realtime`.
+The keys must name registered tools. `type="none"` suppresses filler; `type="auto"`
+uses generated filler and accepts optional `instructions`. Omitted settings use
+the server default. Replace settings with
+`await model.update_session(tool_fillers={...})`. Removing a tool also removes
+its filler setting. The adapter still executes each tool through LiveKit.
+
+### Events, errors, and early speech hints
+
+Subscribe to the model's `generation_created`, `session_updated`, `speech_stopped`,
+and `speech_hint` events. Generations expose reply labels in `metadata`,
+`input_item_ids`, `settings_revision`, and `provider_request_id`. A stopped-speech
+event includes `end_reason`. Interim transcripts are forwarded before the final
+transcript. Fallback preserves generation metadata and its owning playback session.
+Request IDs and settings revisions are also attached to generation traces.
+
+`PrismError` retains the original `fault`, `code`, `scope`, request and response IDs,
+and `retryable`. The model error event exposes the same retry classification.
+`retryable` describes whether an unchanged request may succeed again;
+`recoverable` describes whether the current LiveKit session can continue.
+Neither flag starts an automatic retry. Do not replay accepted typed turns or
+tool execution. A context-length error requires a new conversation with shorter
+history. An unknown request outcome still closes the SDK conversation.
+
+A speech hint may be a false alarm. LiveKit lowers playback, without cancellation,
+on outputs that support gain control. `speech_hint_gain=0.25` and
+`speech_hint_timeout=0.6` control the gain multiplier and restoration timeout.
+Repeated hints extend the timeout. Confirmed speech follows the interruption
+policy of the reply being played. Console and room output support gain; custom
+outputs can opt in with `AudioOutputCapabilities(gain=True, ...)` and apply their
+gain when submitting samples. Device or remote audio already submitted can retain
+its previous gain. Playback duration and receipts are unchanged.
+
+### Remaining limits
+
+Tool progress updates, video, manual audio commit, forced tool selection,
+per-reply tools, and disabling turn detection remain unsupported.
 Prism cannot enforce `tool_choice="none"`. LiveKit requests it when the tool-step
 limit is reached or while draining a tool reply; the session fails explicitly
 at that point instead of starting another tool round. Use a separate TTS model

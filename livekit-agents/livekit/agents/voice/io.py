@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Literal
+
+import numpy as np
 
 from livekit import rtc
 
@@ -146,6 +149,7 @@ class PlaybackProgressedEvent:
 @dataclass
 class AudioOutputCapabilities:
     pause: bool
+    gain: bool = False
 
 
 class AudioOutput(
@@ -169,6 +173,7 @@ class AudioOutput(
         self.__capturing = False
         self.__playback_finished_event = asyncio.Event()
         self._capabilities = capabilities
+        self._playback_gain = 1.0
 
         self.__playback_segments_count = 0
         self.__playback_finished_count = 0
@@ -313,6 +318,36 @@ class AudioOutput(
     @property
     def can_pause(self) -> bool:
         return self._capabilities.pause and (not self.next_in_chain or self.next_in_chain.can_pause)
+
+    @property
+    def gain(self) -> float:
+        """Current sink gain. Wrappers delegate without scaling the same frame twice."""
+        return self.next_in_chain.gain if self.next_in_chain else self._playback_gain
+
+    def set_gain(self, gain: float) -> bool:
+        """Set playback gain without changing timing; return False for unsupported sinks.
+
+        Audio already submitted to a device may retain its previous gain.
+        """
+        if not math.isfinite(gain) or not 0 <= gain <= 1:
+            raise ValueError("gain must be finite and between 0 and 1")
+        if self.next_in_chain:
+            return self.next_in_chain.set_gain(gain)
+        if not self._capabilities.gain:
+            return False
+        self._playback_gain = gain
+        return True
+
+    def _apply_gain(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        if self._playback_gain == 1.0:
+            return frame
+        samples = np.frombuffer(frame.data, dtype=np.int16)
+        return rtc.AudioFrame(
+            data=(samples * self._playback_gain).astype(np.int16).tobytes(),
+            sample_rate=frame.sample_rate,
+            num_channels=frame.num_channels,
+            samples_per_channel=frame.samples_per_channel,
+        )
 
     @abstractmethod
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:

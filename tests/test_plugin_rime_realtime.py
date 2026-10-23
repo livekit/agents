@@ -29,6 +29,13 @@ class Peer:
         self.socket = None
         self.serial = 0
         self.settings = None
+        self.updates = []
+        self.revision = 0
+        self.request_id = None
+        self.update_started = asyncio.Event()
+        self.update_release = asyncio.Event()
+        self.update_release.set()
+        self.connections = 0
         self.receipts = asyncio.Queue()
         self.truncations = asyncio.Queue()
         self.items = []
@@ -42,6 +49,9 @@ class Peer:
 
     async def handler(self, socket):
         self.socket = socket
+        self.connections += 1
+        self.settings = None
+        self.request_id = socket.request.headers.get("x-request-id", "peer-request")
         await self.emit("session.created", session={"id": "session-1"})
         async for raw in socket:
             event = json.loads(raw)
@@ -61,11 +71,24 @@ class Peer:
                     await self.end(event["response_id"])
                 continue
             if kind == "session.update":
-                self.settings = event["session"]
+                self.update_started.set()
+                await self.update_release.wait()
+                self.updates.append(event["session"])
+                self.settings = {**(self.settings or {}), **event["session"]}
+                self.revision += 1
                 await self.emit(
                     "session.updated",
                     prism_request_event_id=event["event_id"],
-                    session={"id": "session-1", "voice": "test"},
+                    session={
+                        **self.settings,
+                        "id": "session-1",
+                        "voice": self.settings.get("voice", "test"),
+                        "request_id": self.request_id,
+                        "prism_settings_revision": self.revision,
+                        "prism_effective_interrupt_response": self.settings.get(
+                            "turn_detection", {}
+                        ).get("interrupt_response", True),
+                    },
                 )
                 await self.emit("prism.typed_input.ready")
             elif kind == "conversation.item.create":
@@ -152,12 +175,12 @@ class Peer:
 
 
 @asynccontextmanager
-async def peer_model():
+async def peer_model(**options):
     peer = Peer()
     async with serve(peer.handler, "127.0.0.1", 0) as server:
         endpoint = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1/realtime"
         async with Rime(api_key="test") as client:
-            model = rime.realtime.RealtimeModel(endpoint=endpoint, client=client)
+            model = rime.realtime.RealtimeModel(endpoint=endpoint, client=client, **options)
             try:
                 yield peer, model, client
             finally:
@@ -193,8 +216,8 @@ async def test_startup_seeds_history_before_first_request():
         assert [i["text"] for i in peer.items] == ["Earlier question", "Earlier answer"]
         assert all(isinstance(item, llm.ChatMessage) for item in session.chat_ctx.items)
         await session.update_instructions("Be clear")
-        with pytest.raises(PrismUnsupported):
-            await session.update_instructions("Different")
+        await session.update_instructions("Different")
+        assert peer.settings["instructions"] == "Different"
 
 
 @pytest.mark.parametrize("invalid_item", ["system", "image", "tool", "blank", "long"])
@@ -715,7 +738,7 @@ async def test_admission_timeout_leaves_conversation_usable(monkeypatch):
             client.realtime,
             "connect",
             lambda **kwargs: connect(
-                **kwargs, timeouts=r.RealtimeTimeouts(ready_s=0.02, request_s=0.5)
+                **{**kwargs, "timeouts": r.RealtimeTimeouts(ready_s=0.02, request_s=0.5)}
             ),
         )
         session = model.session()
