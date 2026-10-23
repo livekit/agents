@@ -654,6 +654,19 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
     return args_dict
 
 
+def _repaired_arguments_json(json_arguments: str, args_dict: dict[str, Any]) -> str | None:
+    """Return valid JSON for ``args_dict`` when parsing ``json_arguments`` needed a repair.
+
+    Valid arguments return None, so history keeps them exactly as the model wrote them.
+    """
+    try:
+        if from_json(json_arguments) == args_dict:
+            return None
+    except ValueError:
+        pass
+    return json.dumps(args_dict, default=str)
+
+
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
@@ -688,10 +701,10 @@ def prepare_function_arguments(
 
         # write canonical BEFORE validation so a downstream validation failure
         # still leaves valid JSON in chat history
-        if fnc_call is not None:
-            canonical = json.dumps(args_dict, default=str)
-            if canonical != json_arguments:
-                fnc_call.arguments = canonical
+        if fnc_call is not None and (
+            repaired := _repaired_arguments_json(json_arguments, args_dict)
+        ):
+            fnc_call.arguments = repaired
 
     # phase 2: validate + bind
     try:
