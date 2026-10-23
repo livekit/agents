@@ -1,8 +1,10 @@
+import asyncio
 import enum
 import json
 from typing import Annotated, Any, Literal
 
 import pytest
+from unittest.mock import MagicMock
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PositiveInt, ValidationError
 
 from livekit.agents import Agent
@@ -17,6 +19,7 @@ from livekit.agents.llm import (
     function_tool,
 )
 from livekit.agents.llm._strict import to_strict_json_schema
+from .fake_realtime import run_realtime_tool_turn
 from livekit.agents.llm.utils import (
     _json_schema_allows_null,
     build_legacy_openai_schema,
@@ -335,6 +338,74 @@ def test_end_call_tool_ignore_on_enter_flag():
 
     (tool,) = EndCallTool(ignore_on_enter=True).tools
     assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
+
+
+@pytest.mark.parametrize(
+    "end_instructions, output",
+    [
+        (None, None),
+        ("say goodbye to the user", "say goodbye to the user"),
+        ("say goodbye to the user", None),
+    ],
+)
+async def test_end_call_tool_skips_reply_wait_when_turn_already_spoke(
+    monkeypatch, end_instructions, output
+):
+    from livekit.agents.beta import EndCallTool
+    from livekit.agents.beta.tools import end_call
+
+    monkeypatch.setattr(end_call, "get_job_context", MagicMock)
+    called = asyncio.Event()
+
+    async def on_tool_called(_: Toolset.ToolCalledEvent) -> None:
+        called.set()
+
+    async def on_tool_completed(ev: Toolset.ToolCompletedEvent) -> None:
+        ev.output = output
+
+    tool = EndCallTool(
+        end_instructions=end_instructions,
+        on_tool_called=on_tool_called,
+        on_tool_completed=on_tool_completed,
+    )
+    agent = Agent(instructions="test", tools=tool.tools)
+    events: list[str] = []
+
+    def on_session(session: Any) -> None:
+        shutdown = session.shutdown
+        session.shutdown = lambda **kw: (events.append("shutdown"), shutdown(**kw))
+        session.on("close", lambda _: events.append("close"))
+
+    await run_realtime_tool_turn(agent, tool_executed=called, on_session=on_session)
+    assert events[0] == "shutdown"
+
+
+async def test_end_call_tool_waits_for_a_reply_when_turn_was_silent(monkeypatch):
+    from livekit.agents.beta import EndCallTool
+    from livekit.agents.beta.tools import end_call
+
+    monkeypatch.setattr(end_call, "get_job_context", MagicMock)
+    called = asyncio.Event()
+
+    async def on_tool_called(_: Toolset.ToolCalledEvent) -> None:
+        called.set()
+
+    tool = EndCallTool(
+        end_instructions="say goodbye to the user",
+        on_tool_called=on_tool_called,
+    )
+    agent = Agent(instructions="test", tools=tool.tools)
+    events: list[str] = []
+
+    def on_session(session: Any) -> None:
+        shutdown = session.shutdown
+        session.shutdown = lambda **kw: (events.append("shutdown"), shutdown(**kw))
+        session.on("close", lambda _: events.append("close"))
+
+    await run_realtime_tool_turn(
+        agent, tool_executed=called, speak=False, on_session=on_session
+    )
+    assert events[0] == "close"
 
 
 class TestToolExecution:

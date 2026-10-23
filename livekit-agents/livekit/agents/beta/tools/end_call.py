@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ...job import get_job_context
-from ...llm import RealtimeModel, ToolFlag, Toolset, function_tool
+from ...llm import ChatMessage, RealtimeModel, ToolFlag, Toolset, function_tool
 from ...log import logger
 from ...voice.events import CloseEvent, RunContext, SpeechCreatedEvent
 from ...voice.speech_handle import SpeechHandle
@@ -41,7 +41,10 @@ class EndCallTool(Toolset):
         Args:
             extra_description: Additional description to add to the end call tool.
             delete_room: Whether to delete the room when the user ends the call. deleting the room disconnects all remote users, including SIP callers.
-            end_instructions: Tool output to the LLM for generating the tool response.
+            end_instructions: Tool output to the LLM for generating the tool response. With
+                None the session ends once the turn that called the tool is done. Models that
+                speak while calling the tool (GPT-Live, Gemini Live) also shut down after that
+                turn when it already contained assistant speech, even if end_instructions is set.
             ignore_on_enter: Hide the tool during ``on_enter`` so the model can't end the call while greeting.
             on_tool_called: Callback to call when the tool is called.
             on_tool_completed: Callback to call when the tool is completed.
@@ -67,15 +70,30 @@ class EndCallTool(Toolset):
         logger.debug("end_call tool called")
         activity = ctx.session.current_agent._get_activity_or_raise()
         llm_v = activity.llm
+        output: Any = self._end_instructions
 
-        def _on_speech_done(_: SpeechHandle) -> None:
+        def _on_speech_done(speech: SpeechHandle) -> None:
             # read auto_tool_reply_generation from the active realtime session so a fallback
             # adapter reports the model actually in use
             rt_session = activity.realtime_llm_session
             auto_tool_reply = (
                 rt_session is not None and rt_session.capabilities.auto_tool_reply_generation
             )
-            if not isinstance(llm_v, RealtimeModel) or not auto_tool_reply:
+            # a result of None asks for no reply. When the model already spoke in this same
+            # turn (goodbye while calling the tool), waiting for a tool reply only adds a
+            # second goodbye or a 5s timeout (livekit/agents#8010).
+            already_spoke = any(
+                isinstance(item, ChatMessage)
+                and item.role == "assistant"
+                and bool((item.text_content or "").strip())
+                for item in speech.chat_items
+            )
+            if (
+                not isinstance(llm_v, RealtimeModel)
+                or not auto_tool_reply
+                or output is None
+                or already_spoke
+            ):
                 # tool reply will reuse the same speech handle, so we can shutdown the session
                 # directly after this speech handle is done
                 ctx.session.shutdown()
@@ -94,7 +112,8 @@ class EndCallTool(Toolset):
         if self._on_tool_completed:
             await self._on_tool_completed(completed_ev)
 
-        return completed_ev.output
+        output = completed_ev.output
+        return output
 
     async def _delayed_session_shutdown(self, ctx: RunContext) -> None:
         """Shutdown the session after the tool reply is played out"""
