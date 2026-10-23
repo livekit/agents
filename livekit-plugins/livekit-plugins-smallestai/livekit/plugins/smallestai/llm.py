@@ -35,6 +35,7 @@ from livekit.agents.utils import is_given
 from livekit.plugins.openai import LLM as OpenAILLM
 
 from .models import LLMModels
+from .version import __version__
 
 SMALLEST_LLM_BASE_URL = "https://api.smallest.ai/waves/v1"
 
@@ -92,6 +93,7 @@ class LLM(OpenAILLM):
             reasoning_effort=reasoning_effort,
             timeout=timeout,
             max_retries=max_retries,
+            extra_headers={"X-Source": "livekit", "X-LiveKit-Version": __version__},
         )
 
     @property
