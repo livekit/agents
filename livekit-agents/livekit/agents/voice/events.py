@@ -183,7 +183,6 @@ class RunContext(Generic[Userdata_T]):
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
         silent: bool = False,
-        tool_choice: ToolChoice = "none",
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -201,10 +200,6 @@ class RunContext(Generic[Userdata_T]):
                 recorded for the model either way; True keeps it to the model alone, and
                 on the first update releases control without speaking. A realtime model
                 that cannot keep a tool result silent may still answer it.
-            tool_choice: What the reply to this update may call. ``"none"`` by default: a
-                report is not a result, so the model speaks to it rather than acting on it,
-                and without that it can answer a report by calling the same tool again. Set
-                it where the report is genuinely something to act on.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -261,12 +256,14 @@ class RunContext(Generic[Userdata_T]):
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
             self._suppress_reply = silent
-            self._reply_tool_choice = tool_choice
+            # a report is not a result: a model free to call tools can answer
+            # "still searching" by calling the same tool again
+            self._reply_tool_choice = "none"
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]], tool_choice=tool_choice)
+        await self._executor._enqueue_reply(self, [pair[0], pair[1]], tool_choice="none")
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]

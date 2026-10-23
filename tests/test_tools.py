@@ -2653,44 +2653,6 @@ class TestToolCallEvents:
         assert session.generate_reply.call_args.kwargs["tool_choice"] == "none"
 
     @pytest.mark.asyncio
-    async def test_a_report_may_ask_for_the_tools(self):
-        """The default keeps the model speaking, but a tool whose report is genuinely
-        something to act on can say so."""
-        from livekit.agents.voice.events import RunContext
-        from livekit.agents.voice.tool_executor import _ToolExecutor
-
-        @function_tool
-        async def progress_tool(ctx: RunContext) -> None:
-            """p"""
-            await ctx.update("on it")
-            await ctx.update("three matches, which one?", tool_choice="auto")
-
-        import asyncio as _asyncio
-
-        speech = _make_fake_speech()
-        session = _make_reply_session(speech)
-        idle_event = _asyncio.Event()
-        activity = session.wait_for_idle.return_value
-
-        async def _wait_for_idle():
-            await idle_event.wait()
-            return activity
-
-        session.wait_for_idle = _wait_for_idle
-
-        executor = _ToolExecutor()
-        run_ctx = _make_run_context_with_session(session, call_id="c21", name="progress_tool")
-        await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
-        while executor.has_running_tasks:
-            await _asyncio.sleep(0)
-        idle_event.set()
-        assert executor._reply_task is not None
-        await executor._reply_task
-
-        # the report asked for the tools, and the step that answers it gets them
-        assert session.generate_reply.call_args.kwargs["tool_choice"] == "auto"
-
-    @pytest.mark.asyncio
     async def test_a_result_reply_uses_the_default_tool_choice(self):
         """The final return is a result to act on, so its reply may call tools."""
         from livekit.agents.types import NOT_GIVEN

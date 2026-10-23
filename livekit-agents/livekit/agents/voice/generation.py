@@ -1168,7 +1168,7 @@ class ToolExecutionOutput:
     raw_output: Any
     raw_exception: BaseException | None
     reply_tool_choice: llm.ToolChoice | None = None
-    """What the reply to this output may call, when the tool released through ``update()``."""
+    """Tool choice of the reply to this output: ``"none"`` for a report from ``update()``"""
 
 
 def make_tool_output(
