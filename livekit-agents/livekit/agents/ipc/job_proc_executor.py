@@ -189,7 +189,5 @@ class ProcJobExecutor(SupervisedProc):
             extra["job_id"] = self._running_job.job.id
             extra["room"] = self._running_job.job.room.name
             extra["room_id"] = self._running_job.job.room.sid
-            if self._running_job.job.agent_name:
-                extra["lk.agent_name"] = self._running_job.job.agent_name
 
         return extra

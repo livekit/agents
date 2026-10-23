@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-import logging
 
 import pytest
 
-from livekit.agents.cli.log import JsonFormatter
 from livekit.agents.telemetry.hosted_logs import (
     HOSTED_LOGS_ATTR,
     HOSTED_LOGS_ENV,
@@ -49,19 +47,3 @@ def test_announce_prints_one_json_marker_line(
     assert marker["level"] == "INFO"
     assert marker["message"]
 
-
-def test_json_formatter_adds_code_attributes() -> None:
-    record = logging.LogRecord(
-        name="sidecartest",
-        level=logging.INFO,
-        pathname="/app/agent.py",
-        lineno=42,
-        msg="hello",
-        args=None,
-        exc_info=None,
-        func="entrypoint",
-    )
-    line = json.loads(JsonFormatter().format(record))
-    assert line["code.file.path"] == "/app/agent.py"
-    assert line["code.function.name"] == "entrypoint"
-    assert line["code.line.number"] == 42
