@@ -621,6 +621,64 @@ def _v2_stt_and_stream(*, model: str, **kwargs):
     return stt, stt.stream(), session
 
 
+_PRERECORDED_RESPONSE = {
+    "metadata": {"request_id": "batch-request"},
+    "results": {
+        "channels": [
+            {
+                "detected_language": "en",
+                "alternatives": [
+                    {
+                        "transcript": "hello",
+                        "confidence": 0.99,
+                        "words": [{"word": "hello", "start": 0.0, "end": 0.5, "confidence": 0.99}],
+                    }
+                ],
+            }
+        ]
+    },
+}
+
+
+class _BatchResponse:
+    """The prerecorded response; only `json()` is read off it."""
+
+    async def __aenter__(self) -> _BatchResponse:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def json(self) -> dict:
+        return _PRERECORDED_RESPONSE
+
+
+class _BatchSession:
+    """Records every batch request URL. `_ConnectRecordingSession`'s other half."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.urls: list[str] = []
+
+    def post(self, *, url: str, **_: object) -> _BatchResponse:
+        self.urls.append(url)
+        return _BatchResponse()
+
+    def last_params(self) -> dict[str, list[str]]:
+        return parse_qs(urlsplit(self.urls[-1]).query)
+
+
+def _v1_stt_and_http_session(**kwargs):
+    """A real STT and the session its batch requests post through, which never dials out."""
+    from typing import Any, cast
+
+    from livekit.plugins.deepgram import STT
+
+    session = _BatchSession()
+    stt = STT(api_key="test-key", http_session=cast(Any, session), **kwargs)
+    return stt, session
+
+
 async def test_flux_keeps_the_language_hint_its_model_cannot_send(caplog):
     # Deepgram answers a hint on any model but flux-general-multi with a 400, so it stays
     # off the wire — and stays on the options, so a later model switch can send it.
@@ -910,3 +968,58 @@ async def test_v1_warns_once_per_stream_across_reconnects(caplog):
     finally:
         await stream.aclose()
         await stt.aclose()
+
+
+@pytest.mark.parametrize("model", ["nova-3", "nova-3-general", "NOVA-3"])
+async def test_v1_batch_request_carries_the_hint_the_gate_allows(caplog, model):
+    # Deepgram's hint covers the prerecorded API too, one param per language
+    caplog.set_level(logging.WARNING)
+    stt, session = _v1_stt_and_http_session(
+        model=model, language="multi", language_hint=["en", "es"]
+    )
+    await stt.recognize([_frame(160)])
+
+    assert session.last_params()["language_hint"] == ["en", "es"]
+    assert session.last_params()["language"] == ["multi"]
+    assert stt._opts.language_hint == ["en", "es"]
+    assert "not sending `language_hint`" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("model", "language"),
+    [("nova-2-general", "multi"), ("nova-3-medical", "multi"), ("nova-3", "en-US")],
+)
+async def test_v1_batch_request_drops_a_hint_the_gate_excludes_and_warns_once(
+    caplog, model, language
+):
+    stt, session = _v1_stt_and_http_session(
+        model=model, language=language, language_hint=["en", "es"]
+    )
+    with caplog.at_level(logging.WARNING):
+        await stt.recognize([_frame(160)])
+        await stt.recognize([_frame(160)])
+
+    assert len(session.urls) == 2
+    for url in session.urls:
+        assert "language_hint" not in parse_qs(urlsplit(url).query)
+
+    # the warning belongs to the instance: the second request does not repeat it
+    assert caplog.text.count("not sending `language_hint`") == 1
+    assert f"model '{model}'" in caplog.text
+    # the suppressed send leaves the caller's hint on the options
+    assert stt._opts.language_hint == ["en", "es"]
+
+
+async def test_v1_batch_hint_survives_an_option_update(caplog):
+    # update_options keeps the hint the same way, so a later allowed request sends it
+    caplog.set_level(logging.WARNING)
+    stt, session = _v1_stt_and_http_session(model="nova-3", language="en-US", language_hint=["en"])
+    with caplog.at_level(logging.WARNING):
+        await stt.recognize([_frame(160)])
+        assert "language_hint" not in session.last_params()
+
+        stt.update_options(language="multi")
+        await stt.recognize([_frame(160)])
+
+    assert session.last_params()["language_hint"] == ["en"]
+    assert stt._opts.language_hint == ["en"]

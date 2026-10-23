@@ -231,6 +231,8 @@ class STT(stt.STT):
         self._session_keyterms: list[str] = []
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+        # one warning per instance: every batch request rebuilds its config
+        self._language_hint_warned = False
 
     @property
     def model(self) -> str:
@@ -274,6 +276,13 @@ class STT(stt.STT):
 
         if config.language:
             recognize_config["language"] = config.language
+
+        if self._opts.language_hint:
+            if _language_hint_applies(config.model, config.language):
+                recognize_config["language_hint"] = self._opts.language_hint
+            elif not self._language_hint_warned:
+                self._language_hint_warned = True
+                _warn_language_hint_not_sent(config.model, config.language)
 
         try:
             async with self._ensure_session().post(
@@ -804,14 +813,7 @@ class SpeechStream(stt.SpeechStream):
                 live_config["language_hint"] = self._opts.language_hint
             elif not self._language_hint_warned:
                 self._language_hint_warned = True
-                logger.warning(
-                    "not sending `language_hint` for model '%s': Deepgram applies a hint only to "
-                    "Nova-3 (nova-3, nova-3-general) in 'multi' language mode, and this "
-                    "session's language is '%s'. The hint stays set, and is sent again if "
-                    "model and language allow it",
-                    self._opts.model,
-                    self._opts.language if self._opts.language else "unset",
-                )
+                _warn_language_hint_not_sent(self._opts.model, self._opts.language)
 
         t0 = time.perf_counter()
         try:
@@ -1086,6 +1088,19 @@ def _language_hint_applies(model: DeepgramModels | str, language: LanguageCode |
     if language is None or str(language).strip().lower() != "multi":
         return False
     return str(model).strip().lower() in _NOVA3_LANGUAGE_HINT_MODELS
+
+
+def _warn_language_hint_not_sent(
+    model: DeepgramModels | str, language: LanguageCode | None
+) -> None:
+    logger.warning(
+        "not sending `language_hint` for model '%s': Deepgram applies a hint only to "
+        "Nova-3 (nova-3, nova-3-general) in 'multi' language mode, and this "
+        "session's language is '%s'. The hint stays set, and is sent again if "
+        "model and language allow it",
+        model,
+        language if language else "unset",
+    )
 
 
 def _validate_keyterm(
