@@ -352,6 +352,7 @@ class AgentActivity(RecognitionHooks):
 
         self._started = False
         self._closed = False
+        self._closed_event = asyncio.Event()
         self._scheduling_paused = True
         # set while scheduling runs, and once the activity has closed
         self._scheduling_resumed = asyncio.Event()
@@ -1649,6 +1650,7 @@ class AgentActivity(RecognitionHooks):
 
     async def aclose(self) -> None:
         # `aclose` must only be called by AgentSession
+        self._closed_event.set()
 
         async with self._lock:
             if self._closed:
@@ -2117,72 +2119,92 @@ class AgentActivity(RecognitionHooks):
 
         Raises ``ActivityClosedError`` if the activity has terminally closed.
         """
-        agent_active = True
-        user_active = True
 
-        async def _wait_for_eou() -> None:
-            # eou is part of the user turn and may spawn a new speech handle,
-            # so an in-flight eou keeps both the user and the agent active.
-            nonlocal user_active
-            if (
-                self._audio_recognition
-                and (eou_task := self._audio_recognition._end_of_turn_task)
-                and not eou_task.done()
-            ):
-                user_active = True
-                await asyncio.shield(eou_task)
+        async def _wait() -> None:
+            agent_active = True
+            user_active = True
 
-            if (user_turn_task := self._user_turn_completed_atask) and not user_turn_task.done():
-                user_active = True
-                await asyncio.shield(user_turn_task)
+            async def _wait_for_eou() -> None:
+                # eou is part of the user turn and may spawn a new speech handle,
+                # so an in-flight eou keeps both the user and the agent active.
+                nonlocal user_active
+                if (
+                    self._audio_recognition
+                    and (eou_task := self._audio_recognition._end_of_turn_task)
+                    and not eou_task.done()
+                ):
+                    user_active = True
+                    await asyncio.shield(eou_task)
 
-        while (wait_for_agent and agent_active) or (wait_for_user and user_active):
+                if (
+                    user_turn_task := self._user_turn_completed_atask
+                ) and not user_turn_task.done():
+                    user_active = True
+                    await asyncio.shield(user_turn_task)
+
+            while (wait_for_agent and agent_active) or (wait_for_user and user_active):
+                if self._closed or self._session._closing:
+                    raise ActivityClosedError(f"activity {self.agent.label} is closing")
+
+                if wait_for_agent:
+                    await _wait_for_eou()
+
+                    if self._current_speech is None and not self._speech_q:
+                        agent_active = False
+                    else:
+                        agent_active = True
+                        if (speech := self._current_speech) and speech._generations:
+                            await speech._wait_for_generation()
+                        elif speech:
+                            # held by min_consecutive_speech_delay; wait instead of spinning
+                            authorized = asyncio.ensure_future(speech._wait_for_authorization())
+                            try:
+                                await asyncio.wait(
+                                    [authorized, speech._done_fut],
+                                    return_when=asyncio.FIRST_COMPLETED,
+                                )
+                            finally:
+                                authorized.cancel()
+                        await asyncio.sleep(0)
+
+                if wait_for_user:
+                    if self._audio_recognition and self._audio_recognition._speaking:
+                        user_active = True
+                        await self._audio_recognition._wait_for_user_silence()
+                    else:
+                        user_active = False
+
+                    await _wait_for_eou()
+
+                if self._session._user_turn_claims > 0:
+                    # `AgentSession.claim_user_turn` is holding idle open
+                    await self._session._user_turn_released.wait()
+                    agent_active = wait_for_agent
+                    user_active = wait_for_user
+
+                if self._session._idle_holds > 0 and not _IdleHoldContextVar.get():
+                    # another caller holds `_wait_for_idle_and_hold` — block until release
+                    await self._session._idle_released.wait()
+                    agent_active = wait_for_agent
+                    user_active = wait_for_user
+
             if self._closed or self._session._closing:
                 raise ActivityClosedError(f"activity {self.agent.label} is closing")
 
-            if wait_for_agent:
-                await _wait_for_eou()
-
-                if self._current_speech is None and not self._speech_q:
-                    agent_active = False
-                else:
-                    agent_active = True
-                    if (speech := self._current_speech) and speech._generations:
-                        await speech._wait_for_generation()
-                    elif speech:
-                        # held by min_consecutive_speech_delay; wait instead of spinning
-                        authorized = asyncio.ensure_future(speech._wait_for_authorization())
-                        try:
-                            await asyncio.wait(
-                                [authorized, speech._done_fut], return_when=asyncio.FIRST_COMPLETED
-                            )
-                        finally:
-                            authorized.cancel()
-                    await asyncio.sleep(0)
-
-            if wait_for_user:
-                if self._audio_recognition and self._audio_recognition._speaking:
-                    user_active = True
-                    await self._audio_recognition._wait_for_user_silence()
-                else:
-                    user_active = False
-
-                await _wait_for_eou()
-
-            if self._session._user_turn_claims > 0:
-                # `AgentSession.claim_user_turn` is holding idle open
-                await self._session._user_turn_released.wait()
-                agent_active = wait_for_agent
-                user_active = wait_for_user
-
-            if self._session._idle_holds > 0 and not _IdleHoldContextVar.get():
-                # another caller holds `_wait_for_idle_and_hold` — block until release
-                await self._session._idle_released.wait()
-                agent_active = wait_for_agent
-                user_active = wait_for_user
-
-        if self._closed or self._session._closing:
-            raise ActivityClosedError(f"activity {self.agent.label} is closing")
+        idle_task = asyncio.create_task(_wait())
+        activity_closed_task = asyncio.create_task(self._closed_event.wait())
+        session_closing_task = asyncio.create_task(self._session._closing_event.wait())
+        tasks = (idle_task, activity_closed_task, session_closing_task)
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if self._closed_event.is_set() or self._session._closing_event.is_set():
+                raise ActivityClosedError(f"activity {self.agent.label} is closing")
+            await idle_task
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # -- Realtime Session events --
 
