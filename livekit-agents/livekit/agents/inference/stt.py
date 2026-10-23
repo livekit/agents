@@ -1201,6 +1201,14 @@ class SpeechStream(stt.SpeechStream):
                         retryable=True,
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if input_ended.is_set() or http_session.closed:
+                        return
+                    # a missed heartbeat pong surfaces here; the reason is only on ws.exception()
+                    raise APIConnectionError(
+                        "LiveKit Inference STT connection lost"
+                    ) from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected LiveKit Inference STT message type %s", msg.type)
                     continue
@@ -1341,7 +1349,10 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await asyncio.wait_for(
                 http_session.ws_connect(
-                    f"{base_url}/stt?{urlencode({'model': self._opts.model})}", headers=headers
+                    f"{base_url}/stt?{urlencode({'model': self._opts.model})}",
+                    headers=headers,
+                    # without it a half-open socket parks recv_task forever
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )
