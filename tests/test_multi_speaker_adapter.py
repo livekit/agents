@@ -150,6 +150,63 @@ class _HiccupStream(RecognizeStream):
         raise APIConnectionError("brief connection hiccup")
 
 
+class _OffsetProbeSTT(_RecordingSTT):
+    """First leg dies at once; the retried leg records the offset the wrapper seeded.
+
+    ``max_retry=0`` on the leg mirrors a plugin that has already spent its own retry budget,
+    so the failure escapes to ``MultiSpeakerAdapterWrapper._run`` and the wrapper rebuilds
+    the leg -- the reconnect path under test.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.legs: list[_OffsetProbeStream] = []
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = _CONN,
+    ) -> RecognizeStream:
+        leg = _OffsetProbeStream(
+            stt=self,
+            conn_options=APIConnectOptions(max_retry=0, retry_interval=0.0, timeout=5.0),
+            fail=not self.legs,
+        )
+        self.legs.append(leg)
+        return leg
+
+
+class _OffsetProbeStream(RecognizeStream):
+    """Emits timestamps the way an aligned-transcript provider does: offset + relative time."""
+
+    def __init__(self, *, stt: _OffsetProbeSTT, conn_options: APIConnectOptions, fail: bool):
+        super().__init__(stt=stt, conn_options=conn_options)
+        self._fail = fail
+        self.offset_at_run: float | None = None
+
+    async def _run(self) -> None:
+        self.offset_at_run = self.start_time_offset
+        if self._fail:
+            raise APIConnectionError("stream died")
+
+        self._event_ch.send_nowait(
+            SpeechEvent(
+                type=SpeechEventType.FINAL_TRANSCRIPT,
+                request_id="req-2",
+                alternatives=[
+                    SpeechData(
+                        language="en",
+                        text="hello",
+                        speaker_id="A",
+                        start_time=self.start_time_offset,
+                        end_time=self.start_time_offset + 0.9,
+                    )
+                ],
+            )
+        )
+
+
 class _FakeSession(rtc.EventEmitter[Any]):
     pass
 
@@ -307,3 +364,53 @@ async def test_successful_transcript_forgives_earlier_hiccups() -> None:
     await utils.aio.cancel_and_wait(task)
     with contextlib.suppress(Exception):
         await stream.aclose()
+
+
+async def test_retried_wrapped_stream_inherits_start_time_offset() -> None:
+    """A wrapper-level retry must keep provider timestamps on the input timeline.
+
+    ``MultiSpeakerAdapterWrapper._run`` builds a fresh wrapped stream on every attempt.
+    Unless that leg inherits the wrapper's accumulated ``start_time_offset`` (as every
+    ``FallbackRecognizeStream`` leg does), its provider clock restarts at zero while the
+    pipeline anchor and the detector's ``_pushed_duration`` keep running. Word-aligned
+    timestamps and the primary-speaker RMS lookup then target the wrong audio.
+    """
+    inner = _OffsetProbeSTT()
+    adapter = MultiSpeakerAdapter(stt=inner)
+    conn = APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=5.0)
+
+    stream = adapter.stream(conn_options=conn)
+    # what stt_node seeds when the pipeline starts 30s into the session input
+    stream.start_time_offset = 30.0
+
+    transcripts: list[SpeechData] = []
+    fatal: list[BaseException] = []
+    got_event = asyncio.Event()
+
+    async def _read() -> None:
+        try:
+            async for ev in stream:
+                if ev.type == SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives[0].text:
+                    transcripts.append(ev.alternatives[0])
+                    got_event.set()
+        except Exception as e:  # noqa: BLE001 - recorded, asserted on below
+            fatal.append(e)
+            got_event.set()
+
+    task = asyncio.create_task(_read())
+    try:
+        await asyncio.wait_for(got_event.wait(), 5.0)
+
+        assert not fatal, f"recognition died instead of retrying: {fatal}"
+        assert len(inner.legs) == 2, f"expected one retried leg, got {len(inner.legs)}"
+        # both the failed leg and the recreated one continue the wrapper's clock
+        assert inner.legs[0].offset_at_run is not None
+        assert inner.legs[0].offset_at_run >= 30.0
+        assert inner.legs[1].offset_at_run is not None
+        assert inner.legs[1].offset_at_run >= 30.0
+        # provider-relative end time must land on the original input timeline
+        assert transcripts[0].end_time >= 30.9
+    finally:
+        await utils.aio.cancel_and_wait(task)
+        with contextlib.suppress(Exception):
+            await stream.aclose()
