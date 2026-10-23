@@ -139,3 +139,27 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         assert session.sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+@pytest.mark.parametrize("end_time", [0.4, 0.0, None])
+def test_endpoint_preserves_word_timing(end_time):
+    from types import SimpleNamespace
+
+    from livekit.agents import LanguageCode, stt
+    from livekit.plugins.telnyx import stt as telnyx_stt
+
+    stream = object.__new__(telnyx_stt.SpeechStream)
+    stream._speaking = False
+    stream._language = LanguageCode("en")
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
+    events = []
+    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    message = {"transcript": "hello", "is_final": True}
+    if end_time is not None:
+        message["words"] = [{"word": "hello", "start": 0.1, "end": end_time}]
+    stream._process_stream_event(message)
+    assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    if end_time:
+        assert events[-1].alternatives[0].end_time == pytest.approx(7.4)
+    else:
+        assert events[-1].alternatives == []

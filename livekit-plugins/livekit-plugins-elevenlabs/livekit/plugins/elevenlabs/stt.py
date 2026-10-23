@@ -38,7 +38,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.stt import SpeechEventType, STTCapabilities
+from livekit.agents.stt import SpeechData, SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
@@ -478,6 +478,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
         self._last_partial_text = ""
+        self._final_alternatives: list[SpeechData] = []
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
             duration=5.0,
@@ -672,7 +673,9 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 self._last_partial_text = ""
+                self._final_alternatives = []
                 if self._opts.previous_text:
                     # Must be the first input_audio_chunk on the connection.
                     await ws.send_str(
@@ -852,20 +855,22 @@ class SpeechStream(stt.SpeechStream):
 
                 # Send FINAL_TRANSCRIPT but keep speaking=True
                 # Multiple commits can occur within the same speech segment
+                self._final_alternatives = [speech_data] if end_time > 0 else []
                 final_event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[speech_data],
                 )
                 self._event_ch.send_nowait(final_event)
-                if self._server_vad is not None:
-                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
-                    self._speaking = False
-            else:
-                # Empty commit signals end of speech segment (similar to Cartesia's is_final flag)
-                # This groups multiple committed transcripts into one speech segment
-                if self._speaking:
-                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
-                    self._speaking = False
+
+            if self._speaking and (not text or self._server_vad is not None):
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=SpeechEventType.END_OF_SPEECH,
+                        alternatives=self._final_alternatives,
+                    )
+                )
+                self._final_alternatives = []
+                self._speaking = False
 
         elif message_type in ("committed_transcript", "committed_transcript_with_timestamps"):
             # the other copy of a commit the branch above already emitted

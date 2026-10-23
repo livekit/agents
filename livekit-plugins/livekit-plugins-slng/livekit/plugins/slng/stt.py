@@ -568,7 +568,9 @@ class SpeechStream(stt.SpeechStream):
         pending_failover: (
             tuple[Literal["hard_fail", "timeout"], BaseException | None, float | None] | None
         ) = None
-        pending_replay: bytes | None = None
+        pending_replay: tuple[bytes, float] | None = None
+        connection_offset = 0.0
+        audio_position = 0.0
         finalize_requested_for_buffer = False
         pending_switch_succeeded: (
             tuple[str | None, str | None, Literal["hard_fail", "timeout"], float | None] | None
@@ -710,7 +712,7 @@ class SpeechStream(stt.SpeechStream):
             count_usage: bool,
         ) -> None:
             nonlocal last_client_send_at, sent_audio_since_finalize
-            nonlocal finalize_requested_for_buffer
+            nonlocal finalize_requested_for_buffer, audio_position
             async with send_lock:
                 await ws.send_bytes(payload)
                 last_client_send_at = asyncio.get_running_loop().time()
@@ -718,6 +720,7 @@ class SpeechStream(stt.SpeechStream):
                 if count_usage:
                     finalize_requested_for_buffer = False
             if count_usage:
+                audio_position += audio_duration_from_bytes(payload)
                 self._speech_duration += audio_duration_from_bytes(payload)
 
         async def handle_user_state_change() -> None:
@@ -790,7 +793,10 @@ class SpeechStream(stt.SpeechStream):
                     protocol_close_sent = False
                     pending_non_empty_transcript = False
                     sent_audio_since_finalize = False
-                    pending_replay = bytes(buffered_audio)
+                    pending_replay = (
+                        bytes(buffered_audio),
+                        audio_position - audio_duration_from_bytes(buffered_audio),
+                    )
                     return True
                 logger.error(
                     "STT fallback exhausted (reason=%s timeout_s=%s error=%s): from=%s",
@@ -844,7 +850,14 @@ class SpeechStream(stt.SpeechStream):
             sent_audio_since_finalize = False
             with contextlib.suppress(Exception):
                 self._candidate_state.select(self._active_endpoint_index)
-            pending_replay = bytes(buffered_audio)
+            pending_replay = (
+                (
+                    bytes(buffered_audio),
+                    audio_position - audio_duration_from_bytes(buffered_audio),
+                )
+                if buffered_audio
+                else None
+            )
             return True
 
         async def next_audio_frame() -> Any | None:
@@ -871,7 +884,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
             if pending_replay:
-                replay_data = pending_replay
+                replay_data, _ = pending_replay
                 pending_replay = None
                 chunk_bytes = samples_per_buffer * bytes_per_sample
                 for i in range(0, len(replay_data), chunk_bytes):
@@ -1111,8 +1124,8 @@ class SpeechStream(stt.SpeechStream):
                                 language=language,
                                 text=text,
                                 confidence=confidence,
-                                start_time=start_time,
-                                end_time=end_time,
+                                start_time=start_time + connection_offset if end_time > 0 else 0.0,
+                                end_time=end_time + connection_offset if end_time > 0 else 0.0,
                             )
                         ],
                     )
@@ -1124,7 +1137,10 @@ class SpeechStream(stt.SpeechStream):
                     if is_final:
                         speech_started = False
                         self._event_ch.send_nowait(
-                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.END_OF_SPEECH,
+                                alternatives=event.alternatives if end_time > 0 else [],
+                            )
                         )
                         emit_recognition_usage()
                         recover_primary_if_ready()
@@ -1142,10 +1158,16 @@ class SpeechStream(stt.SpeechStream):
 
             pending_frames: list[Any] = []
             if pending_replay is None:
+                self._input_ch.restart_provider_clock()
                 first = await next_audio_frame()
                 if first is None:
                     return
                 pending_frames.append(first)
+                connection_offset = self.start_time_offset
+                audio_position = connection_offset
+                buffered_audio.clear()
+            else:
+                connection_offset = pending_replay[1]
 
             endpoint = self._connections[self._active_endpoint_index].endpoint
             model = current_model()

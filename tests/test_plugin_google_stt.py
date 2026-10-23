@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import gc
+from types import SimpleNamespace
 
 import pytest
 from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1
@@ -104,6 +105,101 @@ def _default_stt_options() -> STTOptions:
         min_confidence_threshold=0.65,
         profanity_filter=False,
     )
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("offset", [0.4, 0.0])
+async def test_google_endpoint_preserves_event_offset(version: int, offset: float) -> None:
+    api = cloud_speech_v2 if version == 2 else cloud_speech_v1
+    field = "speech_event_offset" if version == 2 else "speech_event_time"
+    response = api.StreamingRecognizeResponse(
+        speech_event_type=api.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END,
+        **{field: Duration(nanos=round(offset * 1e9))},
+    )
+
+    async def responses():
+        yield response
+
+    async def recognize(**kwargs):
+        return responses()
+
+    options = _default_stt_options()
+    options.model = "chirp_3" if version == 2 else "default"
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        pool=_FakeConnectionPool(SimpleNamespace(streaming_recognize=recognize)),
+        recognizer_cb=lambda _client: "",
+        config=options,
+    )
+    stream.start_time_offset = 7.0
+    try:
+        events = [event async for event in stream]
+        endpoint = next(event for event in events if event.type == SpeechEventType.END_OF_SPEECH)
+        if offset:
+            assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
+        else:
+            assert endpoint.alternatives == []
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("end_time", [0.4, 0.0, None])
+async def test_reconnect_endpoint_preserves_final_timing(monkeypatch, version, end_time):
+    from livekit.plugins.google import stt as google_stt
+
+    monkeypatch.setattr(google_stt, "_max_session_duration", -1)
+    api = cloud_speech_v2 if version == 2 else cloud_speech_v1
+    words = []
+    if end_time is not None:
+        end_field = "end_offset" if version == 2 else "end_time"
+        words = [api.WordInfo(word="hello", **{end_field: Duration(nanos=round(end_time * 1e9))})]
+    calls = 0
+
+    async def responses():
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return
+        yield api.StreamingRecognizeResponse(
+            speech_event_type=api.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN,
+        )
+        yield api.StreamingRecognizeResponse(
+            results=[
+                api.StreamingRecognitionResult(
+                    is_final=True,
+                    alternatives=[
+                        api.SpeechRecognitionAlternative(transcript="hello", words=words)
+                    ],
+                )
+            ]
+        )
+
+    async def recognize(**kwargs):
+        return responses()
+
+    options = _default_stt_options()
+    options.model = "chirp_3" if version == 2 else "default"
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        pool=_FakeConnectionPool(SimpleNamespace(streaming_recognize=recognize)),
+        recognizer_cb=lambda _client: "",
+        config=options,
+    )
+    stream.start_time_offset = 7.0
+    try:
+        async with asyncio.timeout(2):
+            events = [event async for event in stream]
+        endpoint = next(event for event in events if event.type == SpeechEventType.END_OF_SPEECH)
+        if end_time:
+            assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
+        else:
+            assert endpoint.alternatives == []
+        assert calls == 2
+    finally:
+        await stream.aclose()
 
 
 async def test_google_stt_stream_cancel_does_not_leak_chanclosed_task():
@@ -703,3 +799,83 @@ async def test_voice_activity_timeout_partial_update(mock_google_adc):
     stt.update_options(speech_end_timeout=5.0)
     assert stt._config.speech_start_timeout == 20.0
     assert stt._config.speech_end_timeout == 5.0
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("reason", ["options", "rotation"])
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch, version, reason):
+    from livekit.plugins.google import stt as google_stt
+
+    from .stt_reconnect import ReconnectClock, wait_until
+
+    clock = ReconnectClock(monkeypatch)
+    calls = []
+    api = cloud_speech_v2 if version == 2 else cloud_speech_v1
+
+    class Call:
+        def __init__(self, requests):
+            self.requests = requests
+            self.responses = asyncio.Queue()
+            self.audio = []
+            self.sender = asyncio.create_task(self.send())
+
+        async def send(self):
+            try:
+                async for request in self.requests:
+                    self.audio.append(request)
+            finally:
+                await self.requests.aclose()
+
+        def cancel(self):
+            self.sender.cancel()
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            return await self.responses.get()
+
+    async def recognize(*, requests):
+        call = Call(requests)
+        calls.append(call)
+        return call
+
+    options = _default_stt_options()
+    options.model = "chirp_3" if version == 2 else "default"
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=0),
+        pool=_FakeConnectionPool(SimpleNamespace(streaming_recognize=recognize)),
+        recognizer_cb=lambda _client: "",
+        config=options,
+    )
+    stream.start_time_offset = 7.0
+    try:
+        await clock.push(stream, captured_at=1000.0)
+        assert stream.start_time_offset == pytest.approx(7.0)
+        clock.now = 1010.0
+        if reason == "options":
+            stream.update_options(languages=["fr"])
+        else:
+            monkeypatch.setattr(google_stt, "_max_session_duration", 5)
+            calls[0].responses.put_nowait(
+                api.StreamingRecognizeResponse(
+                    results=[
+                        api.StreamingRecognitionResult(
+                            is_final=True,
+                            alternatives=[api.SpeechRecognitionAlternative(transcript="hello")],
+                        )
+                    ],
+                )
+            )
+        await wait_until(lambda: len(calls) == 2)
+        await clock.push(stream, captured_at=1010.0)
+        assert calls[0].sender.done()
+        assert stream.start_time_offset == pytest.approx(17.0)
+        assert len(calls[0].audio) == 2  # configuration and only the first connection's audio
+    finally:
+        await stream.aclose()
+        for call in calls:
+            call.cancel()
+        await asyncio.gather(*(call.sender for call in calls), return_exceptions=True)

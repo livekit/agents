@@ -1113,7 +1113,14 @@ class SpeechStream(stt.SpeechStream):
                     self._session_id,
                 )
 
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=final_event.alternatives
+                    if words and words[-1].get("end", 0) > 0
+                    else [],
+                )
+            )
 
             if self._speech_duration > 0.0:
                 usage_event = stt.SpeechEvent(

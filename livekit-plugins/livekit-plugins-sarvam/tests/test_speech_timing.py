@@ -31,6 +31,7 @@ def _make_stream_under_test(
     instance._input_ch = SimpleNamespace(start_time_offset=0.0)  # type: ignore[attr-defined]
     instance._utterance_speech_start_wall = None  # type: ignore[attr-defined]
     instance._pending_final_data = None  # type: ignore[attr-defined]
+    instance._final_alternatives = []
     instance._pending_eos = False  # type: ignore[attr-defined]
     instance._eos_fallback_task = None  # type: ignore[attr-defined]
     instance._eos_fallback_timeout = eos_fallback_timeout  # type: ignore[attr-defined]
@@ -75,7 +76,7 @@ async def test_start_speech_sets_speech_start_time() -> None:
 
 
 async def test_end_speech_emits_bare_end_of_speech() -> None:
-    # Like every other STT plugin, END_OF_SPEECH carries no alternatives/timing.
+    # A boundary without provider timing remains untimed.
     instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
@@ -114,6 +115,25 @@ async def test_final_end_time_uses_speech_end_when_present() -> None:
     final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
     assert final.alternatives[0].start_time == pytest.approx(0.5)
     assert final.alternatives[0].end_time == pytest.approx(1.7)
+
+
+@pytest.mark.parametrize("end_time", [0.4, 0.0, None])
+@pytest.mark.parametrize("end_first", [False, True])
+async def test_endpoint_preserves_provider_timing(end_time, end_first):
+    instance, captured = _make_stream_under_test()
+    instance.start_time_offset = 7.0
+    await instance._handle_events(_event("START_SPEECH"))
+    if end_first:
+        await instance._handle_events(_event("END_SPEECH"))
+    await instance._handle_transcript_data(_ws_message(speech_end=end_time))
+    if not end_first:
+        await instance._handle_events(_event("END_SPEECH"))
+    endpoints = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)
+    assert len(endpoints) == 1
+    if end_time:
+        assert endpoints[0].alternatives[0].end_time == pytest.approx(7.4)
+    else:
+        assert endpoints[0].alternatives == []
 
 
 async def test_final_timing_includes_start_time_offset() -> None:
@@ -231,6 +251,7 @@ async def test_aclose_cancels_pending_eos_fallback(monkeypatch: pytest.MonkeyPat
     instance._ws = None  # type: ignore[attr-defined]
     instance._session = SimpleNamespace(closed=True)  # type: ignore[attr-defined]
     instance._client_request_id = "client"  # type: ignore[attr-defined]
+    instance._stt = SimpleNamespace(_streams={instance})
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
