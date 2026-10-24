@@ -44,8 +44,9 @@ def split_sentences(
 
     # mark end of sentence punctuations with <stop>
     # (also Arabic "؟", Urdu "۔" and the Devanagari/Bengali dandas "।" "॥")
-    text = re.sub(r"([.!?。！？؟۔।॥])([\"”])", "\\1\\2<stop>", text)
-    text = re.sub(r"([.!?。！？؟۔।॥])(?![\"”])", "\\1<stop>", text)
+    # a run like "?!" or "!!!" ends one sentence
+    text = re.sub(r"([.!?。！？؟۔।॥]+)([\"”])", "\\1\\2<stop>", text)
+    text = re.sub(r"([.!?。！？؟۔।॥]+)(?![\"”.!?。！？؟۔।॥])", "\\1<stop>", text)
 
     text = text.replace("<prd>",".")
     # fmt: on
