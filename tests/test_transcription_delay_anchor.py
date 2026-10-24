@@ -5,14 +5,20 @@
 (wall clock when the user stopped talking). The second term is the
 ``_last_speaking_time`` anchor: a VAD measures it against the local clock — the
 session's auto-loaded default VAD included — and it is the better estimate
-whenever it exists. The provider-derived value (``end_time + input_started_at``,
-clamped to ``now``) takes over when there is no VAD anchor to beat: no VAD at
-all, or a segment the VAD missed.
+whenever it exists. The provider-derived value (a position on the pipeline's
+pushed-audio timeline, mapped back to the wall clock) takes over when there is no
+VAD anchor to beat: no VAD at all, or a segment the VAD missed.
 
 ``turn_detection="stt"`` adds one exception: the provider owns the turn boundary
 there, so a *real* provider timestamp replaces the VAD anchor, as does an explicit
 ``END_OF_SPEECH``. A transcript with a missing ``end_time`` does not — the estimate
 would collapse to the transcript-arrival instant and report a ~0 delay.
+
+In ``stt`` mode the same provider timestamp is also kept in
+``_stopped_speaking_at``, the value the end-of-turn metrics report as
+``stopped_speaking_at``: unlike the anchor, it is never overwritten by an
+``END_OF_SPEECH`` that carries no timing (its arrival time is an endpointing
+signal, not the moment the user stopped talking).
 
 Every test below runs under both turn detection modes; where the two disagree,
 the expectation is spelled out per mode rather than duplicated into a second
@@ -27,11 +33,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import stt
 from livekit.agents.voice import audio_recognition
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
     _compute_end_of_turn_metrics,
+    _STTPipeline,
 )
 
 pytestmark = pytest.mark.unit
@@ -40,8 +48,36 @@ pytestmark = pytest.mark.unit
 both_modes = pytest.mark.parametrize("mode", ["vad", "stt"])
 
 
+def _make_pipeline(input_started_at: float) -> _STTPipeline:
+    """A real pipeline whose clock is established: positions map onto the anchor."""
+    pipeline = _STTPipeline.__new__(_STTPipeline)
+    pipeline._audio_ch = MagicMock()  # type: ignore[attr-defined]
+    pipeline.input_started_at = input_started_at
+    pipeline.pushed_duration = 0.0
+    pipeline._arrival_lags = [(0.0, 0.0)]  # type: ignore[attr-defined]
+    return pipeline
+
+
+class _FakeClock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _frame(duration: float = 0.1) -> rtc.AudioFrame:
+    return rtc.AudioFrame.create(
+        sample_rate=16000, num_channels=1, samples_per_channel=int(16000 * duration)
+    )
+
+
 def _make_recognition(
-    *, vad: object | None, input_started_at: float, mode: str = "vad"
+    *,
+    vad: object | None,
+    input_started_at: float | None,
+    mode: str = "vad",
+    pipeline: _STTPipeline | None = None,
 ) -> AudioRecognition:
     """Wire the attributes ``_on_stt_event`` touches for transcript events."""
     ar = AudioRecognition.__new__(AudioRecognition)
@@ -76,11 +112,11 @@ def _make_recognition(
     ar._last_final_transcript_time = None
     ar._turn_tracker = MagicMock()
     ar._last_speaking_time = None
+    ar._stopped_speaking_at = None
     ar._sample_rate = None
     ar._vad_ch = None
     ar._interruption_ch = None
-    ar._stt_pipeline = MagicMock()
-    ar._stt_pipeline.input_started_at = input_started_at
+    ar._stt_pipeline = pipeline if pipeline is not None else _make_pipeline(input_started_at)
     ar._check_user_turn_limit = MagicMock()  # type: ignore[method-assign]
     ar._speech_start_time = None
     # only reached by the stt-mode END_OF_SPEECH / START_OF_SPEECH branches
@@ -90,6 +126,8 @@ def _make_recognition(
     ar._eou_wait_started_at_ns = None
     ar._eou_wait_rearms = 0
     ar._eou_wait_floor_ns = None
+    ar._eou_wait_not_committed = 0
+    ar._user_turn_resumes = 0
     ar._eou_detection_span = None
     ar._stt_model = None
     ar._stt_provider = None
@@ -332,3 +370,99 @@ async def test_wired_vad_speaking_state_reaches_the_transcript_hooks(mode: str) 
 
     expected = False if mode == "stt" else None
     assert ar._hooks.on_final_transcript.call_args.kwargs["speaking"] is expected
+
+
+# ---------------------------------------------------------------------------
+# The provider-derived stop time feeding the end-of-turn metrics
+# ---------------------------------------------------------------------------
+
+
+async def test_stt_end_of_speech_without_timestamps_keeps_the_word_end_for_metrics() -> None:
+    """The regression: an untimestamped ``END_OF_SPEECH`` is an endpointing signal,
+    so the anchor moves to its arrival, but the metrics must keep reporting the
+    word end from the last transcript instead of turning it into a 0-delay."""
+    now = time.time()
+    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
+
+    await ar._on_stt_event(_final_transcript(end_time=9.4))  # provider word end: now - 0.6
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=[]))
+
+    assert ar._last_speaking_time >= now
+    assert ar._stopped_speaking_at == pytest.approx(now - 0.6, abs=0.1)
+
+
+async def test_provider_word_end_is_tracked_from_preflight_transcripts() -> None:
+    """Preflight transcripts land before the final and carry the same word timing."""
+    now = time.time()
+    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
+
+    await ar._on_stt_event(_preflight_transcript(end_time=9.4))
+
+    assert ar._stopped_speaking_at == pytest.approx(now - 0.6, abs=0.1)
+
+
+async def test_vad_mode_keeps_the_endpointing_anchor_for_the_metrics() -> None:
+    """The provider value is an stt-mode concept: with a VAD the anchor is the
+    better estimate (it is measured against the local clock) and the metrics keep
+    using it."""
+    now = time.time()
+    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="vad")
+
+    await ar._on_stt_event(_final_transcript(end_time=9.4))
+
+    assert ar._stopped_speaking_at is None
+
+
+async def test_new_speech_segment_clears_the_previous_stop_time() -> None:
+    now = time.time()
+    ar = _make_recognition(vad=None, input_started_at=now - 10.0, mode="stt")
+
+    await ar._on_stt_event(_final_transcript(end_time=9.4))
+    assert ar._stopped_speaking_at is not None
+
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
+    assert ar._stopped_speaking_at is None
+
+
+async def test_provider_word_end_is_mapped_across_a_mic_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider positions only advance while audio flows.
+
+    After 5 s without mic frames the same position is 5 s further back in time, so
+    the word end (and with it every delay) must be shifted by the gap. Without it
+    the value lands before the turn start and the metrics are dropped entirely.
+    """
+    clock = _FakeClock(time.time() - 10.0)
+    monkeypatch.setattr(audio_recognition.time, "time", clock)
+    pipeline = _make_pipeline(clock.now - 0.1)  # anchor one frame before the first push
+
+    for _ in range(3):  # 0.3 s of audio in real time
+        pipeline.push_frame(_frame(0.1))
+        clock.now += 0.1
+    clock.now += 5.0  # the mic goes quiet
+    for _ in range(4):  # positions 0.3–0.7, captured 5 s later
+        pipeline.push_frame(_frame(0.1))
+        clock.now += 0.1
+
+    ar = _make_recognition(
+        vad=None, input_started_at=pipeline.input_started_at, mode="stt", pipeline=pipeline
+    )
+    speech_start = pipeline.input_started_at + 4.5  # after the gap
+
+    await ar._on_stt_event(_final_transcript(end_time=0.65))
+
+    expected = pipeline.input_started_at + 0.65 + 5.0
+    assert ar._stopped_speaking_at == pytest.approx(expected, abs=0.05)
+    assert expected > speech_start
+
+    metrics = _compute_end_of_turn_metrics(
+        speech_start_time=speech_start,
+        last_speaking_time=ar._last_speaking_time,
+        provider_speaking_time=ar._stopped_speaking_at,
+        last_final_transcript_time=expected + 0.2,
+        now=expected + 0.4,
+    )
+    assert metrics.stopped_speaking_at == pytest.approx(expected, abs=0.05)
+    assert metrics.transcription_delay == pytest.approx(0.2, abs=0.05)

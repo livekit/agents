@@ -107,3 +107,64 @@ def test_missing_anchor_is_skipped(
     assert metrics.stopped_speaking_at is None
     assert metrics.transcription_delay is None
     assert metrics.end_of_turn_delay is None
+
+
+def test_provider_stop_time_is_preferred_over_the_anchor() -> None:
+    """The metrics report where the user actually stopped talking.
+
+    In stt turn detection the endpointing anchor moves to the arrival of an
+    untimestamped ``END_OF_SPEECH`` (an explicit endpointing signal), but the
+    provider's word end from the last transcript is the better reported value.
+    """
+    started = 1000.0
+    anchor = 1005.6  # END_OF_SPEECH arrival, 0.6 s after the last word
+    provider = 1005.0  # the word end, from the last final transcript
+
+    metrics = _compute_end_of_turn_metrics(
+        speech_start_time=started,
+        last_speaking_time=anchor,
+        provider_speaking_time=provider,
+        last_final_transcript_time=1005.2,
+        now=1005.8,
+    )
+
+    assert metrics.stopped_speaking_at == provider
+    assert metrics.transcription_delay == pytest.approx(0.2)
+    assert metrics.end_of_turn_delay == pytest.approx(0.8)
+
+
+def test_provider_stop_time_predating_the_segment_falls_back_to_the_anchor() -> None:
+    """A provider value left over from an earlier segment is dropped.
+
+    The same consistency rule as the stale anchor above applies: the value cannot
+    predate the turn it is reported for, so the endpointing anchor is used instead
+    of skipping the metrics altogether.
+    """
+    started = 1010.0  # a new segment opened after the stale provider value
+    anchor = 1012.5
+
+    metrics = _compute_end_of_turn_metrics(
+        speech_start_time=started,
+        last_speaking_time=anchor,
+        provider_speaking_time=1005.0,  # from the previous segment
+        last_final_transcript_time=1012.6,
+        now=1012.8,
+    )
+
+    assert metrics.stopped_speaking_at == anchor
+    assert metrics.transcription_delay == pytest.approx(0.1)
+    assert metrics.end_of_turn_delay == pytest.approx(0.3)
+
+
+def test_stale_provider_value_does_not_rescue_a_stale_anchor() -> None:
+    """Both values stale: skipped like any out-of-order anchor."""
+    metrics = _compute_end_of_turn_metrics(
+        speech_start_time=1010.0,
+        last_speaking_time=1005.0,
+        provider_speaking_time=1001.0,
+        last_final_transcript_time=1012.6,
+        now=1012.8,
+    )
+
+    assert metrics.stopped_speaking_at is None
+    assert metrics.end_of_turn_delay is None

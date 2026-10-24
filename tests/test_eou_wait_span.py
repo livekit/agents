@@ -98,6 +98,7 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ar._stt_request_ids = []
     ar._stt_events = []
     ar._last_speaking_time = None
+    ar._stopped_speaking_at = None
     ar._last_final_transcript_time = None
     ar._speech_start_time = None
     ar._vad_speech_started = False
