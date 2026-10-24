@@ -3453,15 +3453,16 @@ class AgentActivity(RecognitionHooks):
             speech_handle._mark_generation_done()
             # send the spoken text, placed by when it started, so the model's history keeps
             # the order it was said in even if the user spoke during playback
-            rt_chat_ctx = self._rt_session.chat_ctx.copy()
-            rt_chat_ctx.insert(spoken_msg)
-            try:
-                await self._rt_session.update_chat_ctx(rt_chat_ctx)
-            except llm.RealtimeError as e:
-                logger.warning(
-                    "failed to add the spoken message to the realtime chat context",
-                    extra={"error": str(e)},
-                )
+            async with self._rt_chat_ctx_lock:
+                rt_chat_ctx = self._rt_session.chat_ctx.copy()
+                rt_chat_ctx.insert(spoken_msg)
+                try:
+                    await self._rt_session.update_chat_ctx(rt_chat_ctx)
+                except llm.RealtimeError as e:
+                    logger.warning(
+                        "failed to add the spoken message to the realtime chat context",
+                        extra={"error": str(e)},
+                    )
 
     def _on_enter_ignored_tools(self, tool_ctx: llm.ToolContext) -> list[llm.Tool]:
         """Tools flagged IGNORE_ON_ENTER, when this reply runs inside on_enter."""
