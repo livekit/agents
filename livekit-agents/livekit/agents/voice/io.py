@@ -174,6 +174,7 @@ class AudioOutput(
         self.__playback_finished_event = asyncio.Event()
         self._capabilities = capabilities
         self._playback_gain = 1.0
+        self._playback_gain_revision = object()
 
         self.__playback_segments_count = 0
         self.__playback_finished_count = 0
@@ -324,6 +325,13 @@ class AudioOutput(
         """Current sink gain. Wrappers delegate without scaling the same frame twice."""
         return self.next_in_chain.gain if self.next_in_chain else self._playback_gain
 
+    @property
+    def _gain_revision(self) -> object:
+        """Identify the leaf's latest gain write, including writes of the same value."""
+        if self.next_in_chain:
+            return self.next_in_chain._gain_revision
+        return self._playback_gain_revision
+
     def set_gain(self, gain: float) -> bool:
         """Set playback gain without changing timing; return False for unsupported sinks.
 
@@ -336,6 +344,7 @@ class AudioOutput(
         if not self._capabilities.gain:
             return False
         self._playback_gain = gain
+        self._playback_gain_revision = object()
         return True
 
     def _apply_gain(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:

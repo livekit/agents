@@ -276,7 +276,8 @@ remove supported history items, or start a new conversation with shorter history
 A speech hint may be a false alarm. LiveKit lowers playback, without cancellation,
 on outputs that support gain control. `speech_hint_gain=0.25` and
 `speech_hint_timeout=0.6` control the gain multiplier and restoration timeout.
-Repeated hints extend the timeout. Confirmed speech follows the interruption
+Repeated hints extend the timeout. A later application gain change is preserved;
+a subsequent hint uses that gain as its baseline. Confirmed speech follows the interruption
 policy of the reply being played. Console and room output support gain; custom
 outputs can opt in with `AudioOutputCapabilities(gain=True, ...)` and apply their
 gain when submitting samples. Device or remote audio already submitted can retain
@@ -292,7 +293,9 @@ at that point instead of starting another tool round. Use a separate TTS model
 for `session.say`.
 
 Microphone input and output streams have bounded queues. A queue overflow ends
-the session. LiveKit drains unused audio when audio output is absent or disabled.
+the session. Reaching the 128-generation retention limit with unresolved playback
+also ends the session, rather than forgetting a required receipt. LiveKit drains
+unused audio when audio output is absent or disabled.
 There is no automatic reconnect or tool replay in the SDK or Prism adapter.
 An application can opt into LiveKit's realtime fallback adapter. It forwards
 initialization, typed turns, and playback reports. An explicit restart opens a
