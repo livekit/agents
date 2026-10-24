@@ -293,6 +293,11 @@ class GeminiTranslationSession(TranslationModelSession[None]):
         # set to replace the connection, e.g. once the target language changed
         self._restart = asyncio.Event()
         self._num_retries = 0
+        # the language the current connection was set up with; audio still arriving from an
+        # old connection after a retarget is in that one, not the new target
+        self._output_language = self._opts.target_language
+        # audio whose send failed, sent first on the next connection so no speech is lost
+        self._unsent_audio: types.Blob | None = None
 
         self._input_segmenter = _TranscriptSegmenter(
             self._opts.transcript_segment_timeout,
@@ -309,13 +314,13 @@ class GeminiTranslationSession(TranslationModelSession[None]):
             on_text=lambda text, language: self.emit(
                 "output_transcript",
                 OutputTranscript(
-                    text=text, is_final=False, language=language or self._opts.target_language
+                    text=text, is_final=False, language=language or self._output_language
                 ),
             ),
             on_final=lambda language: self.emit(
                 "output_transcript",
                 OutputTranscript(
-                    text="", is_final=True, language=language or self._opts.target_language
+                    text="", is_final=True, language=language or self._output_language
                 ),
             ),
             loop=self._loop,
@@ -347,14 +352,26 @@ class GeminiTranslationSession(TranslationModelSession[None]):
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
-            for nf in self._bstream.write(f.data.tobytes()):
-                with contextlib.suppress(utils.aio.channel.ChanClosed):
-                    self._msg_ch.send_nowait(
-                        types.Blob(
-                            data=nf.data.tobytes(),
-                            mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
-                        )
+            self._send_audio(self._bstream.write(f.data.tobytes()))
+
+    def _send_audio(self, frames: list[rtc.AudioFrame]) -> None:
+        for nf in frames:
+            with contextlib.suppress(utils.aio.channel.ChanClosed):
+                self._msg_ch.send_nowait(
+                    types.Blob(
+                        data=nf.data.tobytes(),
+                        mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
                     )
+                )
+
+    def _flush_input_audio(self) -> None:
+        """Send the tail of the input still held short of a full chunk."""
+        if self._input_resampler is not None:
+            for f in self._input_resampler.flush():
+                self._send_audio(self._bstream.write(f.data.tobytes()))
+            self._input_resampler = None
+
+        self._send_audio(self._bstream.flush())
 
     def clear_audio(self) -> None:
         # what the server sent is already here; drop what the consumer has not read yet
@@ -373,8 +390,9 @@ class GeminiTranslationSession(TranslationModelSession[None]):
     async def aclose(self) -> None:
         if not self._closing:
             self._closing = True
+            self._flush_input_audio()
+            # the send task drains what is queued, then ends the connection
             self._msg_ch.close()
-            self._restart.set()
 
         # a failure that ended the session was already emitted as an error
         with contextlib.suppress(Exception):
@@ -430,8 +448,10 @@ class GeminiTranslationSession(TranslationModelSession[None]):
                 self._restart.clear()
                 connected = False
                 try:
+                    language = self._opts.target_language
                     async with self._connect(self._build_connect_config()) as session:
                         connected = True
+                        self._output_language = language
                         await self._run_session(session)
 
                 except Exception as e:
@@ -476,8 +496,20 @@ class GeminiTranslationSession(TranslationModelSession[None]):
             await utils.aio.cancel_and_wait(*tasks)
 
     async def _send_task(self, session: AsyncSession) -> None:
+        if (blob := self._unsent_audio) is not None:
+            self._unsent_audio = None
+            await self._send_or_keep(session, blob)
+
         async for blob in self._msg_ch:
+            await self._send_or_keep(session, blob)
+
+    async def _send_or_keep(self, session: AsyncSession, blob: types.Blob) -> None:
+        try:
             await session.send_realtime_input(audio=blob)
+        except Exception:
+            # a failed send means the connection is going; keep the audio for the next one
+            self._unsent_audio = blob
+            raise
 
     async def _recv_task(self, session: AsyncSession) -> None:
         while True:
@@ -531,7 +563,7 @@ class GeminiTranslationSession(TranslationModelSession[None]):
         )
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._audio_ch.send_nowait(
-                TranslatedAudioFrame(frame=frame, language=self._opts.target_language)
+                TranslatedAudioFrame(frame=frame, language=self._output_language)
             )
             self._speaking = True
 

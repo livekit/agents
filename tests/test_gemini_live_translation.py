@@ -26,6 +26,7 @@ class _FakeLiveSession:
     def __init__(self, config: types.LiveConnectConfig) -> None:
         self.config = config
         self.sent: list[types.Blob] = []
+        self.fail_sends = False
         self._incoming: asyncio.Queue[types.LiveServerMessage | Exception] = asyncio.Queue()
 
     def emit(self, **server_content: Any) -> None:
@@ -40,6 +41,8 @@ class _FakeLiveSession:
         self._incoming.put_nowait(ConnectionError("connection lost"))
 
     async def send_realtime_input(self, *, audio: types.Blob) -> None:
+        if self.fail_sends:
+            raise ConnectionResetError("connection reset")
         self.sent.append(audio)
 
     async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
@@ -62,6 +65,23 @@ def _connect_hook(monkeypatch: pytest.MonkeyPatch) -> list[_FakeLiveSession]:
 
     monkeypatch.setattr(GeminiTranslationSession, "_connect", _connect)
     return conns
+
+
+def _pcm(duration: float, *, fill: int) -> bytes:
+    return bytes([fill, 0]) * int(16000 * duration)
+
+
+def _frame(duration: float, *, fill: int) -> rtc.AudioFrame:
+    data = _pcm(duration, fill=fill)
+    return rtc.AudioFrame(
+        data=data, sample_rate=16000, num_channels=1, samples_per_channel=len(data) // 2
+    )
+
+
+def _audio_turn() -> types.Content:
+    return types.Content(
+        parts=[types.Part(inline_data=types.Blob(data=bytes([2, 0]) * 480, mime_type="audio/pcm"))]
+    )
 
 
 def _model(**kwargs: Any) -> GeminiTranslationModel:
@@ -237,5 +257,56 @@ async def test_a_dropped_connection_retries_then_gives_up(
         # the stream ends rather than waiting on a session that will not reconnect
         async for _ in session.audio_stream:
             pass
+    finally:
+        await session.aclose()
+
+
+async def test_audio_whose_send_failed_goes_out_on_the_next_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(conn_options=APIConnectOptions(max_retry=3, retry_interval=0)).session()
+    try:
+        await _wait_for(lambda: bool(conns))
+        conns[0].fail_sends = True
+        session.push_audio(_frame(0.1, fill=3))
+
+        await _wait_for(lambda: len(conns) == 2 and bool(conns[1].sent))
+        assert [b.data for b in conns[1].sent] == [_pcm(0.1, fill=3)]
+    finally:
+        await session.aclose()
+
+
+async def test_closing_sends_the_tail_short_of_a_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model().session()
+    await _wait_for(lambda: bool(conns))
+    # 80ms: less than one 100ms chunk
+    session.push_audio(_frame(0.08, fill=4))
+    await session.aclose()
+
+    assert [b.data for b in conns[0].sent] == [_pcm(0.08, fill=4)]
+
+
+async def test_audio_from_before_a_retarget_keeps_its_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model().session()
+    try:
+        await _wait_for(lambda: bool(conns))
+        stream = aiter(session.audio_stream)
+        conns[0].emit(model_turn=_audio_turn())
+        first = await asyncio.wait_for(anext(stream), 2)
+
+        session.update_options(target_language="fr")
+        await _wait_for(lambda: len(conns) == 2)
+        conns[1].emit(model_turn=_audio_turn())
+        # the old connection's speech is closed off before the new one starts
+        assert isinstance(await asyncio.wait_for(anext(stream), 2), OutputSpeechStopped)
+        second = await asyncio.wait_for(anext(stream), 2)
+
+        assert isinstance(first, TranslatedAudioFrame) and first.language == "es"
+        assert isinstance(second, TranslatedAudioFrame) and second.language == "fr"
     finally:
         await session.aclose()
