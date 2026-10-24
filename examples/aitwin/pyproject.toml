@@ -1,0 +1,21 @@
+[project]
+name = "livekit-example-aitwin"
+version = "0"
+description = "LiveKit Agents (STT+LLM+TTS) + AiTwin server alignVisemes + browser lipsync"
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
+    "livekit-agents[openai,silero]>=1.5.17,<2.0.0",
+    "livekit-api>=1.1.0",
+    "openai>=1.40.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+]
+
+[tool.uv]
+# an example is a script collection, not an installable distribution
+package = false
+# No [tool.uv.sources] here: the workspace root repoints the livekit-* deps at
+# the in-repo copies for members, and staying free of workspace-only references
+# is what lets a copy of this directory resolve on its own, outside the repo.
