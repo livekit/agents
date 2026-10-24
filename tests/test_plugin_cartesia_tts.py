@@ -354,3 +354,24 @@ async def test_phoneme_timestamps_message_is_not_reported_as_unexpected(caplog):
 
     assert frames, "audio after the phoneme message must still be synthesized"
     assert not [r for r in caplog.records if "unexpected message" in r.getMessage()]
+
+
+@pytest.mark.parametrize("speed", [1, 2, 1.25])
+def test_sonic_3_accepts_numeric_speed(speed):
+    from livekit.plugins.cartesia import TTS
+    from livekit.plugins.cartesia.tts import _to_cartesia_options
+
+    tts = TTS(api_key=SECRET_API_KEY, model="sonic-3", speed=speed)
+    options = _to_cartesia_options(tts._opts, streaming=True)
+    assert options["generation_config"]["speed"] == speed
+
+    tts.update_options(speed=1)
+    assert _to_cartesia_options(tts._opts, streaming=True)["generation_config"]["speed"] == 1
+
+
+@pytest.mark.parametrize("speed", ["fast", True])
+def test_sonic_3_rejects_non_numeric_speed(speed):
+    from livekit.plugins.cartesia import TTS
+
+    with pytest.raises(ValueError, match="speed must be a number for sonic-3"):
+        TTS(api_key=SECRET_API_KEY, model="sonic-3", speed=speed)

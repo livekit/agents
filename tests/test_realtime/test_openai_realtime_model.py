@@ -457,7 +457,8 @@ async def test_an_error_outliving_its_update_is_still_reported() -> None:
     chat_ctx.add_message(role="user", content="hello", id="item_1")
     update = asyncio.create_task(session.update_chat_ctx(chat_ctx))
     await asyncio.sleep(0)  # let it send the create and start waiting on it
-    assert (waiter := session._item_create_future.get("item_1")) is not None
+    waiter = session._item_create_future.get("item_1")
+    assert waiter is not None
     waiter.set_result(None)  # what conversation.item.added does
     await update
 
@@ -690,6 +691,7 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
     )
     assert report.to_dict()["usage"] == [
         {
+            "type": "stt_usage",
             "provider": "api.openai.com",
             "model": "whisper-1",
             "input_tokens": 10,

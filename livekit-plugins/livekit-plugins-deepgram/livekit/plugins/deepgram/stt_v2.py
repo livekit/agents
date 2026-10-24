@@ -723,7 +723,8 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._send_transcript_event(stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, data)
 
             elif event_type == "TurnResumed":
-                # sending interim transcript will abort eager end of turn
+                # the interim stops the preemptive generation started for the eager end of turn
+                # once the transcript has moved past it
                 self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
 
             elif event_type == "EndOfTurn":

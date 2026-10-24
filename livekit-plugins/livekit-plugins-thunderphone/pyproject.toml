@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents[codecs]>=1.8.8", "livekit-plugins-openai>=1.8.8"]
+dependencies = ["livekit-agents[codecs]>=1.8.9", "livekit-plugins-openai>=1.8.8"]
 
 [tool.mypy]
 plugins = ["pydantic.mypy"]

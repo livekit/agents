@@ -90,7 +90,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 from livekit.agents.voice.generation import remove_instructions
 
 from .openai_types import RealtimeModels
@@ -127,7 +127,7 @@ NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VOICE = "marin"
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 # Azure OpenAI Realtime API uses old-style (beta) event names.
 # This mapping normalizes them to the current OpenAI GA event names
@@ -1959,8 +1959,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "message":
             item_generation = _MessageGeneration(
@@ -1987,8 +1989,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item_id) is not None, "item_id is None"
-        assert (item_type := event.part.type) is not None, "part.type is None"
+        item_id = event.item_id
+        assert item_id is not None, "item_id is None"
+        item_type = event.part.type
+        assert item_type is not None, "part.type is None"
 
         if item_type == "text" and self._realtime_model.capabilities.audio_output:
             logger.warning(
@@ -2248,8 +2252,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "function_call" and isinstance(
             event.item, RealtimeConversationItemFunctionCall
