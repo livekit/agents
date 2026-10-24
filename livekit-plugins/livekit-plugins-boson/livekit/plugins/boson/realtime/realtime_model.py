@@ -4,12 +4,9 @@ Boson speaks a dialect of the OpenAI Realtime protocol, so this builds on the
 OpenAI plugin and overrides where the two differ. The differences that reach
 callers are:
 
-- ``session.update`` replaces the whole session rather than merging into it, so
-  every update resends the full configuration.
 - ``instructions`` on ``generate_reply()`` applies to that turn only. Per-response
   ``tools``/``tool_choice`` are accepted by the server and ignored, so they are
   scoped at the session level instead.
-- ``conversation.item.create`` is a plain insert; it never triggers a reply.
 - The server does not persist sessions. Each connection starts empty, and a
   reconnect replays the chat context from the client.
 - Consecutive same-role speech merges into a single conversation item, which is
@@ -194,10 +191,9 @@ class RealtimeModel(openai_rt.RealtimeModel):
                 that does not authenticate.
             model: Server-side model name.
             voice: Output voice name.
-            instructions: System prompt for the session. Unlike OpenAI, the server
-                replaces the whole prompt on every session update, so this is
-                resent with each one; ``generate_reply(instructions=...)``
-                replaces it for a single turn.
+            instructions: System prompt for the session.
+                ``generate_reply(instructions=...)`` replaces it for a single
+                turn.
             output_modalities: Exactly one of ``["text"]`` or ``["audio"]``.
                 ``None`` selects ``["audio"]``. Mixed and empty lists raise
                 ``ValueError`` -- the server has no combined mode.
@@ -411,12 +407,17 @@ class RealtimeModel(openai_rt.RealtimeModel):
         if is_given(speed):
             self._boson_opts.speed = speed
             self._opts.speed = speed
+        # Merged rather than replaced, as the open sessions' servers do with
+        # the same update, so a session started later gets the same config.
         if is_given(turn_detection):
-            self._boson_opts.turn_detection = _copy_dict_or_none(turn_detection)
+            self._boson_opts.turn_detection = _merge_session_value(
+                self._boson_opts.turn_detection, _copy_dict_or_none(turn_detection)
+            )
             self._capabilities.turn_detection = self._boson_opts.turn_detection is not None
         if is_given(input_audio_transcription):
-            self._boson_opts.input_audio_transcription = _normalize_input_audio_transcription(
-                input_audio_transcription
+            self._boson_opts.input_audio_transcription = _merge_session_value(
+                self._boson_opts.input_audio_transcription,
+                _normalize_input_audio_transcription(input_audio_transcription),
             )
             self._capabilities.user_transcription = _input_audio_transcription_enabled(
                 self._boson_opts.input_audio_transcription
@@ -686,9 +687,9 @@ class RealtimeSession(openai_rt.RealtimeSession):
         return self._build_session_update_event("session_update_")
 
     def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
-        # The server treats session.update as a full replace (not OpenAI's
-        # partial merge), so a tools-only update must carry the whole config.
-        return self._build_session_update_event("tools_update_", tools=tools)
+        return _session_update_event(
+            "tools_update_", {"tools": self._tools_to_boson_warning_on_drop(tools)}
+        )
 
     def _warn_unsupported_tool_type_once(self, dropped: int) -> None:
         if self._unsupported_tool_type_warned:
@@ -891,9 +892,12 @@ class RealtimeSession(openai_rt.RealtimeSession):
             )
         return events
 
-    def _build_session_update_event(
-        self, event_prefix: str, tools: list[llm.Tool] | None = None
-    ) -> dict[str, Any]:
+    def _build_session_update_event(self, event_prefix: str) -> dict[str, Any]:
+        """The whole session configuration, for a session that holds none yet.
+
+        Every later change sends only the fields it touches: the server merges
+        a ``session.update`` into what it already has.
+        """
         audio_input: dict[str, Any] = {
             "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
             "turn_detection": self._boson_opts.turn_detection,
@@ -910,7 +914,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
         }
 
         payload: dict[str, Any] = {
-            "type": "realtime",
             "model": self._boson_opts.model,
             # The session-level value, which update_instructions keeps in sync
             # with the base's own copy. Read from here rather than that copy
@@ -922,20 +925,14 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 "input": audio_input,
                 "output": audio_output,
             },
-            "tools": self._tools_to_boson_warning_on_drop(
-                tools if tools is not None else self._tools.flatten()
-            ),
+            "tools": self._tools_to_boson_warning_on_drop(self._tools.flatten()),
             "tool_choice": _tool_choice_to_boson(self._boson_opts.tool_choice),
             "max_output_tokens": self._boson_opts.max_output_tokens,
             "truncation": self._boson_opts.truncation,
         }
         if is_given(self._boson_opts.temperature):
             payload["temperature"] = self._boson_opts.temperature
-        return {
-            "type": "session.update",
-            "event_id": utils.shortuuid(event_prefix),
-            "session": payload,
-        }
+        return _session_update_event(event_prefix, payload)
 
     def _tools_to_boson_warning_on_drop(self, tools: list[llm.Tool]) -> list[dict[str, Any]]:
         """Convert tools for the wire, warning once if any were dropped.
@@ -954,8 +951,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
     async def update_instructions(self, instructions: str) -> None:
         """Replace the system prompt for the rest of this session.
 
-        Takes effect on the next turn. Because the server replaces the whole
-        session on update, this resends the full configuration alongside it.
+        Takes effect on the next turn.
 
         Args:
             instructions: The new system prompt.
@@ -965,7 +961,9 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # two.
         self._boson_opts.instructions = instructions
         self._instructions = instructions
-        self.send_event(self._build_session_update_event("instructions_update_"))
+        self.send_event(
+            _session_update_event("instructions_update_", {"instructions": instructions})
+        )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """Bring the server's conversation in line with ``chat_ctx``.
@@ -1018,8 +1016,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
     ) -> None:
         """Change this session's configuration, leaving the model's untouched.
 
-        Omitted arguments are left alone. Because the server replaces the whole
-        session on update, one changed field resends everything.
+        Omitted arguments are left alone, and only the given ones are sent.
 
         Args:
             tool_choice: How the model picks tools.
@@ -1043,35 +1040,67 @@ class RealtimeSession(openai_rt.RealtimeSession):
             max_output_tokens if is_given(max_output_tokens) else max_response_output_tokens
         )
 
+        payload: dict[str, Any] = {}
+        audio_input: dict[str, Any] = {}
+        audio_output: dict[str, Any] = {}
+
         if is_given(tool_choice):
             self._boson_opts.tool_choice = tool_choice
             self._opts.tool_choice = tool_choice
+            payload["tool_choice"] = _tool_choice_to_boson(tool_choice)
         if is_given(voice):
             self._boson_opts.voice = voice
             self._opts.voice = voice
+            audio_output["voice"] = voice
         if is_given(temperature):
             self._boson_opts.temperature = temperature
+            payload["temperature"] = temperature
         if is_given(next_max_output_tokens) and next_max_output_tokens is not None:
             self._boson_opts.max_output_tokens = next_max_output_tokens
             self._opts.max_response_output_tokens = next_max_output_tokens
+            payload["max_output_tokens"] = next_max_output_tokens
         if is_given(speed):
             self._boson_opts.speed = speed
             self._opts.speed = speed
+            audio_output["speed"] = speed
+        # The server merges a dict into the one it holds, so the local copy
+        # does too: it is what a reconnect sends to a server holding nothing.
+        # A field left out of a merge keeps its old value, so switching one of
+        # these off has to send an explicit `null`.
         if is_given(turn_detection):
-            self._boson_opts.turn_detection = _copy_dict_or_none(turn_detection)
+            self._boson_opts.turn_detection = _merge_session_value(
+                self._boson_opts.turn_detection, _copy_dict_or_none(turn_detection)
+            )
+            audio_input["turn_detection"] = self._boson_opts.turn_detection
         if is_given(input_audio_transcription):
-            self._boson_opts.input_audio_transcription = _normalize_input_audio_transcription(
-                input_audio_transcription
+            self._boson_opts.input_audio_transcription = _merge_session_value(
+                self._boson_opts.input_audio_transcription,
+                _normalize_input_audio_transcription(input_audio_transcription),
+            )
+            audio_input["transcription"] = (
+                self._boson_opts.input_audio_transcription
+                if is_given(self._boson_opts.input_audio_transcription)
+                else None
             )
         if is_given(input_audio_noise_reduction):
             self._boson_opts.noise_reduction = _build_noise_reduction(input_audio_noise_reduction)
+            audio_input["noise_reduction"] = self._boson_opts.noise_reduction
         # Unlike turn_detection/noise_reduction, `truncation` does not accept
         # `null` on the wire: sending one is rejected hard enough to end the
         # whole session, not just the one request. Guard against `None` the
         # same way max_output_tokens guards its own non-nullable field.
         if is_given(truncation) and truncation is not None:
             self._boson_opts.truncation = truncation
-        self.send_event(self._build_session_update_event("options_update_"))
+            payload["truncation"] = truncation
+
+        if audio_input or audio_output:
+            payload["audio"] = {}
+            if audio_input:
+                payload["audio"]["input"] = audio_input
+            if audio_output:
+                payload["audio"]["output"] = audio_output
+        if payload:
+            self.send_event(_session_update_event("options_update_", payload))
 
     def generate_reply(
         self,
@@ -1496,6 +1525,28 @@ def _is_boson_fatal_error(error: dict[str, Any]) -> bool:
     return error.get("code") in _BOSON_FATAL_ERROR_CODES or (
         error.get("type") in _BOSON_FATAL_ERROR_TYPES
     )
+
+
+def _session_update_event(event_prefix: str, session: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "session.update",
+        "event_id": utils.shortuuid(event_prefix),
+        "session": {"type": "realtime", **session},
+    }
+
+
+def _merge_session_value(base: Any, update: Any) -> Any:
+    """Apply ``update`` to ``base`` the way the server merges ``session.update``.
+
+    Dicts merge key by key, recursively; anything else, ``None`` included,
+    replaces the old value outright.
+    """
+    if not isinstance(base, dict) or not isinstance(update, dict):
+        return update
+    merged = dict(base)
+    for key, value in update.items():
+        merged[key] = _merge_session_value(merged.get(key), value)
+    return merged
 
 
 def _copy_dict_or_none(value: Any | None) -> dict[str, Any] | None:

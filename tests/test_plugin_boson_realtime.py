@@ -578,7 +578,7 @@ async def test_boson_realtime_update_options_sends_boson_options(monkeypatch):
         assert event["type"] == "session.update"
         assert event["session"]["audio"]["input"]["transcription"] == {"model": "asr-v2"}
         assert event["session"]["audio"]["input"]["turn_detection"] == {
-            "type": "server_vad",
+            **realtime.realtime_model._DEFAULT_TURN_DETECTION,
             "silence_duration_ms": 900,
         }
         assert event["session"]["audio"]["input"]["noise_reduction"] == {"type": "near_field"}
@@ -589,7 +589,9 @@ async def test_boson_realtime_update_options_sends_boson_options(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_boson_realtime_update_options_omits_explicit_none_transcription(monkeypatch):
+async def test_boson_realtime_update_options_clears_transcription_with_null(monkeypatch):
+    # The server merges session.update, so leaving `transcription` out would
+    # keep the old config; clearing it has to say so explicitly.
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 
     model = realtime.RealtimeModel(
@@ -606,8 +608,123 @@ async def test_boson_realtime_update_options_omits_explicit_none_transcription(m
 
         event = await session._msg_ch.recv()
         assert event["type"] == "session.update"
-        assert "transcription" not in event["session"]["audio"]["input"]
+        assert event["session"]["audio"]["input"] == {"transcription": None}
         assert model.capabilities.user_transcription is False
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_session_updates_send_only_what_changed(monkeypatch):
+    # The server merges session.update into the config it holds, so a change
+    # carries only its own fields.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    async def lookup_policy():
+        return "ok"
+
+    model = realtime.RealtimeModel(
+        url="ws://localhost:8000/v1/realtime/",
+        api_key="test-key",
+        instructions="Be concise.",
+    )
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        await session.update_tools([llm.function_tool(lookup_policy)])
+        event = await session._msg_ch.recv()
+        assert set(event["session"]) == {"type", "tools"}
+        assert [tool["name"] for tool in event["session"]["tools"]] == ["lookup_policy"]
+
+        await session.update_instructions("Be thorough.")
+        event = await session._msg_ch.recv()
+        assert event["session"] == {"type": "realtime", "instructions": "Be thorough."}
+
+        session.update_options(voice="coral", temperature=0.5)
+        event = await session._msg_ch.recv()
+        assert event["session"] == {
+            "type": "realtime",
+            "temperature": 0.5,
+            "audio": {"output": {"voice": "coral"}},
+        }
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_reconnect_config_carries_every_partial_update(monkeypatch):
+    # Partial updates only work while the server holds the rest. A reconnect
+    # starts a session that holds nothing, so the config it sends first must
+    # still include everything changed piecemeal before.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    async def lookup_policy():
+        return "ok"
+
+    model = realtime.RealtimeModel(
+        url="ws://localhost:8000/v1/realtime/",
+        api_key="test-key",
+        instructions="Be concise.",
+        input_audio_transcription={"model": "asr-v1", "language": "en"},
+    )
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        await session.update_tools([llm.function_tool(lookup_policy)])
+        await session.update_instructions("Be thorough.")
+        session.update_options(voice="coral", truncation="disabled")
+        # Dicts are merged into what the server holds, not swapped for it: the
+        # server keeps the threshold and the language left out here.
+        session.update_options(
+            turn_detection={"type": "server_vad", "create_response": False},
+            input_audio_transcription={"model": "asr-v2"},
+        )
+
+        full = session._create_session_update_event()["session"]
+        assert full["instructions"] == "Be thorough."
+        assert [tool["name"] for tool in full["tools"]] == ["lookup_policy"]
+        assert full["audio"]["output"]["voice"] == "coral"
+        assert full["truncation"] == "disabled"
+        assert full["audio"]["input"]["turn_detection"] == {
+            **realtime.realtime_model._DEFAULT_TURN_DETECTION,
+            "create_response": False,
+        }
+        assert full["audio"]["input"]["transcription"] == {"model": "asr-v2", "language": "en"}
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_session_updates_clear_with_explicit_empties(monkeypatch):
+    # Under merge, an omitted field keeps its old value; turning something off
+    # has to send the empty value itself.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    async def lookup_policy():
+        return "ok"
+
+    model = realtime.RealtimeModel(
+        url="ws://localhost:8000/v1/realtime/",
+        api_key="test-key",
+        input_audio_noise_reduction="near_field",
+    )
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        await session.update_tools([llm.function_tool(lookup_policy)])
+        await session._msg_ch.recv()
+
+        await session.update_tools([])
+        event = await session._msg_ch.recv()
+        assert event["session"]["tools"] == []
+
+        session.update_options(input_audio_noise_reduction=None)
+        event = await session._msg_ch.recv()
+        assert event["session"]["audio"] == {"input": {"noise_reduction": None}}
     finally:
         await session.aclose()
         await model.aclose()
@@ -657,7 +774,7 @@ async def test_boson_realtime_unsupported_tool_type_warns_once(monkeypatch):
         assert len(warnings) == 1
 
         # Warned once per session, not once per session.update.
-        session.update_options(voice="coral")
+        await session.update_tools([_UnknownTool()])  # type: ignore[list-item]
         await session._msg_ch.recv()
         assert len(warnings) == 1
     finally:
@@ -1998,7 +2115,7 @@ async def test_boson_realtime_update_options_ignores_none_truncation(monkeypatch
         model.update_options(truncation=None, voice="coral")
 
         event = await session._msg_ch.recv()
-        assert event["session"]["truncation"] == "disabled"
+        assert "truncation" not in event["session"]
         assert event["session"]["audio"]["output"]["voice"] == "coral"
     finally:
         await session.aclose()
