@@ -55,6 +55,9 @@ class MultilingualModel(EOUModelBase):
                         if threshold:
                             # cache by base language so the base class lookup finds it
                             self._languages[language.language] = {"threshold": threshold}
+                            # resolve it like a cached one, so a custom unlikely_threshold
+                            # also applies to this first lookup
+                            threshold = await super().unlikely_threshold(language)
             except Exception as e:
                 logger.warning("Error fetching threshold for language %s", language, exc_info=e)
 
