@@ -36,6 +36,8 @@ RESULT_URL = "https://00000000000000000000000000000000.r2.cloudflarestorage.com/
         "durable_pending",
         "cancel",
         "eof",
+        "short_resume",
+        "short_resume_eof",
     ],
 )
 async def test_native_streaming_websocket_contract(session, monkeypatch, case):
@@ -48,16 +50,17 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
 
         def push_frame(self, frame):
             self.count += 1
+            resumed = case in {"short_resume", "short_resume_eof"}
             self.events.put_nowait(
                 SimpleNamespace(
                     type=vad.VADEventType.INFERENCE_DONE,
                     frames=[frame],
-                    raw_accumulated_silence=0 if self.count == 1 else 0.032,
+                    raw_accumulated_silence=0 if self.count in (1, 3) else 0.032,
                 )
             )
-            if self.count == 1:
+            if self.count == 1 or (resumed and self.count == 3):
                 self.events.put_nowait(SimpleNamespace(type=vad.VADEventType.START_OF_SPEECH))
-            elif case != "eof":
+            elif case != "eof" and not (case == "short_resume_eof" and self.count == 4):
                 self.events.put_nowait(
                     SimpleNamespace(
                         type=vad.VADEventType.END_OF_SPEECH,
@@ -168,7 +171,7 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
         Response(
             {
                 "text": "wrong" if case == "bad_artifact" else "Hello LiveKit.",
-                "audio_duration_ms": 520,
+                "audio_duration_ms": 600 if case.startswith("short_resume") else 520,
             }
         ),
     ]
@@ -177,7 +180,7 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
             monkeypatch.setattr(client, "get", session.get)
             provider = giggy.STT(api_key=KEY, vad=Detector(), http_session=client)
             stream = provider.stream(conn_options=APIConnectOptions(timeout=2, max_retry=5))
-            stream.push_frame(audio(duration=0.5))
+            stream.push_frame(audio(duration=0.2 if case.startswith("short_resume") else 0.5))
             if case == "cancel":
                 async with asyncio.timeout(3):
                     while not received:
@@ -186,7 +189,11 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
                 await asyncio.wait_for(disconnected.wait(), 3)
                 assert not controls
             else:
-                stream.push_frame(audio(duration=0.02))
+                if case.startswith("short_resume"):
+                    for duration in (0.1, 0.2, 0.1):
+                        stream.push_frame(audio(duration=duration))
+                else:
+                    stream.push_frame(audio(duration=0.02))
                 stream.end_input()
                 events = []
                 if case == "durable_pending":
@@ -211,11 +218,17 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
                     assert [e.type for e in events] == [
                         stt.SpeechEventType.START_OF_SPEECH,
                         stt.SpeechEventType.END_OF_SPEECH,
+                        *(
+                            [stt.SpeechEventType.START_OF_SPEECH, stt.SpeechEventType.END_OF_SPEECH]
+                            if case.startswith("short_resume")
+                            else []
+                        ),
                         stt.SpeechEventType.FINAL_TRANSCRIPT,
                         stt.SpeechEventType.RECOGNITION_USAGE,
                     ]
-                assert b"".join(received) == bytes(audio(duration=0.5).data) + bytes(
-                    audio(duration=0.02).data
+                durations = (0.2, 0.1, 0.2, 0.1) if case.startswith("short_resume") else (0.5, 0.02)
+                assert b"".join(received) == b"".join(
+                    bytes(audio(duration=d).data) for d in durations
                 )
                 assert any(c["type"] == "prepare" for c in controls)
                 if case == "eof":

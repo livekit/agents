@@ -607,6 +607,15 @@ class SpeechStream(stt.RecognizeStream):
     async def _consume_vad(self, detector: lk_vad.VADStream) -> None:
         async for event in detector:
             if event.type == lk_vad.VADEventType.INFERENCE_DONE:
+                # Silero publishes START after INFERENCE_DONE for the same
+                # window. Let that START withdraw a short end before deciding
+                # to finalize it on the following window.
+                if (
+                    self._active is not None
+                    and self._active["short_end"]
+                    and self._active["samples"] >= 8000
+                ):
+                    self._finish_turn()
                 pcm = b"".join(frame.data.cast("B") for frame in event.frames)
                 if not pcm or self._unprocessed[: len(pcm)] != pcm:
                     raise ValueError("VAD did not preserve the input PCM timeline.")
@@ -616,14 +625,13 @@ class SpeechStream(stt.RecognizeStream):
                     del self._pre_roll[:-32000]
                 else:
                     self._queue_audio(self._active, pcm, event.raw_accumulated_silence > 0)
-                    if self._active["short_end"] and self._active["samples"] >= 8000:
-                        self._finish_turn()
             elif event.type == lk_vad.VADEventType.START_OF_SPEECH:
                 if self._active is None:
                     self._begin_turn()
                 else:
                     self._active["short_end"] = False
                     self._active["boundary"] = None
+                    self._active["speech_end"] = None
                 self._event_ch.send_nowait(stt.SpeechEvent(stt.SpeechEventType.START_OF_SPEECH))
             elif event.type == lk_vad.VADEventType.END_OF_SPEECH and self._active is not None:
                 self._active["speech_end"] = (
