@@ -191,6 +191,7 @@ class _Message:
     transcript: str = ""
     played_transcript: str | None = None
     discarded: bool = False
+    playback_ms: int | None = None
 
 
 @dataclass
@@ -205,6 +206,10 @@ class _Generation:
     abandoned: bool = False
     interrupt_on_speech: bool = True
     playback_done: bool = False
+    response_playback_ms: int | None = None
+    response_stopped: bool = False
+    caller_interrupted: bool = False
+    cancel_requested: bool = False
 
 
 class RealtimeSession(llm.RealtimeSession):
@@ -258,9 +263,13 @@ class RealtimeSession(llm.RealtimeSession):
     def _record_settings(self) -> None:
         info = self._require().info
         if info.settings_revision is not None:
-            self._interruption_policies[info.settings_revision] = info.interrupt_on_speech
-            while len(self._interruption_policies) > 128:
-                self._interruption_policies.popitem(last=False)
+            # Retain policy changes, not every settings revision. Voice, labels,
+            # and truncation updates must not evict an older reply's policy.
+            previous = next(reversed(self._interruption_policies.values()), None)
+            if previous is None or previous != info.interrupt_on_speech:
+                self._interruption_policies[info.settings_revision] = info.interrupt_on_speech
+                while len(self._interruption_policies) > 128:
+                    self._interruption_policies.popitem(last=False)
         self._model.emit("session_updated", info)
 
     def _response_policy(self, revision: int | None) -> bool:
@@ -739,7 +748,13 @@ class RealtimeSession(llm.RealtimeSession):
         generation = self._generations[response.response_id]
         if not generation.abandoned:
             generation.abandoned = True
-            await self._finish_playback(response, 0, True)
+            self.playback_finished(
+                response_id=response.response_id,
+                message_id=None,
+                audio_end_ms=0,
+                interrupted=True,
+                interrupted_by_user=False,
+            )
 
     def interrupt(self) -> None:
         if (
@@ -782,48 +797,110 @@ class RealtimeSession(llm.RealtimeSession):
         if self._closed or self._failure is not None or response_id is None:
             return
         generation = self._generations.get(response_id)
-        if generation is None:
+        if generation is None or generation.playback_done:
             return
-        if message_id is not None and message_id not in generation.outputs:
-            return
-        generation.playback_done = True
-        if interrupted and interrupted_by_user:
-            outputs = (
-                [generation.outputs[message_id]]
-                if message_id is not None
-                else list(generation.outputs.values())
-            )
-            if message_id is None:
-                generation.skipped_by_user = True
+        if message_id is not None:
+            message = generation.outputs.get(message_id)
+            if message is None or message.playback_ms is not None:
+                return
+            outputs = [message]
+            message.playback_ms = audio_end_ms
+        else:
+            if generation.response_playback_ms is not None:
+                return
+            generation.response_playback_ms = audio_end_ms
+            generation.response_stopped = interrupted
+            outputs = [m for m in generation.outputs.values() if m.playback_ms is None]
             for message in outputs:
-                message.discarded = True
-                message.text.close()
-                message.audio.close()
-                if is_given(audio_transcript) or generation.skipped_by_user or audio_end_ms == 0:
-                    message.played_transcript = (
-                        audio_transcript if is_given(audio_transcript) else ""
-                    )
-                    if generation.ended:
-                        self._chat._upsert_item(
-                            llm.ChatMessage(
-                                id=message.output.item_id,
-                                role="assistant",
-                                content=[message.played_transcript],
-                            )
-                        )
-                self._spawn(
-                    self._report_playback(
-                        r.PlaybackInterrupted(output=message.output, audio_end_ms=audio_end_ms)
+                message.playback_ms = 0
+                if interrupted:
+                    # A response-wide stop has no remaining player, including
+                    # outputs announced before this callback reached the adapter.
+                    message.discarded = True
+                    message.played_transcript = ""
+                    message.text.close()
+                    message.audio.close()
+        if interrupted and interrupted_by_user:
+            generation.caller_interrupted = True
+            generation.response_stopped = True
+            generation.skipped_by_user = True
+            for message in outputs:
+                self._interrupt_output(
+                    generation, message, audio_end_ms, audio_transcript=audio_transcript
+                )
+            if message_id is not None:
+                # Caller speech stops the response's remaining outputs too. They
+                # may already be announced but have no player after interruption.
+                after_interrupted = False
+                for message in generation.outputs.values():
+                    if message.output.item_id == message_id:
+                        after_interrupted = True
+                    elif after_interrupted and message.playback_ms is None:
+                        message.playback_ms = 0
+                        self._interrupt_output(generation, message, 0)
+        elif interrupted:
+            generation.response_stopped = True
+            if message_id is not None:
+                after_interrupted = False
+                for message in generation.outputs.values():
+                    if message.output.item_id == message_id:
+                        after_interrupted = True
+                    elif after_interrupted and message.playback_ms is None:
+                        message.playback_ms = 0
+                        message.discarded = True
+                        message.played_transcript = ""
+                        message.text.close()
+                        message.audio.close()
+            if not generation.cancel_requested:
+                generation.cancel_requested = True
+                self._spawn(self._cancel(generation.ref))
+        self._maybe_finish_playback(generation)
+
+    def _interrupt_output(
+        self,
+        generation: _Generation,
+        message: _Message,
+        audio_end_ms: int,
+        *,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        message.discarded = True
+        message.text.close()
+        message.audio.close()
+        if is_given(audio_transcript) or audio_end_ms == 0:
+            message.played_transcript = audio_transcript if is_given(audio_transcript) else ""
+            if generation.ended:
+                self._chat._upsert_item(
+                    llm.ChatMessage(
+                        id=message.output.item_id,
+                        role="assistant",
+                        content=[message.played_transcript],
                     )
                 )
-        else:
-            self._spawn(self._finish_playback(generation.ref, audio_end_ms, interrupted))
+        self._spawn(
+            self._report_playback(
+                r.PlaybackInterrupted(output=message.output, audio_end_ms=audio_end_ms)
+            )
+        )
 
-    async def _finish_playback(
-        self, response: r.ResponseRef, played_ms: int, interrupted: bool
-    ) -> None:
-        if interrupted:
-            await self._cancel(response)
+    def _maybe_finish_playback(self, generation: _Generation) -> None:
+        if generation.playback_done or not generation.ended:
+            return
+        if not generation.outputs and generation.response_playback_ms is None:
+            return
+        if any(message.playback_ms is None for message in generation.outputs.values()):
+            return
+        generation.playback_done = True
+        if generation.caller_interrupted:
+            # Caller interruption uses per-output truncations, not a response drain.
+            return
+        if generation.response_playback_ms is not None:
+            played_ms = generation.response_playback_ms
+        else:
+            played_ms = sum(message.playback_ms or 0 for message in generation.outputs.values())
+        self._spawn(self._finish_playback(generation.ref, played_ms))
+
+    async def _finish_playback(self, response: r.ResponseRef, played_ms: int) -> None:
         await self._report_playback(r.PlaybackFinished(response=response, played_ms=played_ms))
 
     async def _cancel(self, response: r.ResponseRef) -> None:
@@ -978,16 +1055,14 @@ class RealtimeSession(llm.RealtimeSession):
                 return
             message = _Message(payload.output)
             generation.outputs[payload.output.item_id] = message
-            if generation.skipped_by_user:
+            if generation.response_stopped:
+                message.playback_ms = 0
                 message.discarded = True
                 message.played_transcript = ""
                 message.text.close()
                 message.audio.close()
-                self._spawn(
-                    self._report_playback(
-                        r.PlaybackInterrupted(output=payload.output, audio_end_ms=0)
-                    )
-                )
+                if generation.skipped_by_user:
+                    self._interrupt_output(generation, message, 0)
                 return
             modalities: asyncio.Future[list[Literal["text", "audio"]]] = (
                 asyncio.get_running_loop().create_future()
@@ -1070,6 +1145,8 @@ class RealtimeSession(llm.RealtimeSession):
             message.audio.close()
         generation.messages.close()
         generation.functions.close()
+        if self._failure is None and not self._closed:
+            self._maybe_finish_playback(generation)
 
     def _unsupported(self, message: str) -> PrismUnsupported:
         error = PrismUnsupported(message)
