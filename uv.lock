@@ -3002,12 +3002,14 @@ source = { editable = "livekit-plugins/livekit-plugins-giggy" }
 dependencies = [
     { name = "aiohttp" },
     { name = "livekit-agents" },
+    { name = "livekit-plugins-silero" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10,<4" },
     { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-plugins-silero", editable = "livekit-plugins/livekit-plugins-silero" },
 ]
 
 [[package]]
