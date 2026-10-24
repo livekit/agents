@@ -67,7 +67,7 @@ async def test_cancelled_update_during_swap_applies_once_after_replacement():
     fallback = llm.RealtimeModelFallbackAdapter([model])
     session = fallback.session()
     try:
-        await session.initialize(chat_ctx=context("old"))
+        await session._update_session(chat_ctx=context("old"))
         old = model.active_session
         old.block_aclose = asyncio.Event()
         restarting = asyncio.create_task(fallback.restart_session())

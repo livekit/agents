@@ -29,7 +29,7 @@ async def _finish(peer, pending, request):
 async def test_explicit_reply_reuses_a_typed_turn_after_zero_effect_refusal():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         message = await session.set_input_text("Original question")
         peer.refusals["response.create"] = ("invalid_request", "event")
         with pytest.raises(PrismError):
@@ -46,7 +46,7 @@ async def test_explicit_reply_reuses_a_typed_turn_after_zero_effect_refusal():
 async def test_explicit_reply_reuses_a_typed_turn_after_admission_timeout():
     async with peer_model(timeouts=r.RealtimeTimeouts(ready_s=0.02)) as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         first = session.generate_reply()
         await _finish(peer, first, await peer.next())
         # No playback receipt or new readiness event has admitted another request.
@@ -65,7 +65,7 @@ async def test_explicit_reply_reuses_a_typed_turn_after_admission_timeout():
 async def test_new_explicit_input_supersedes_a_restored_unsent_turn():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         old = await session.set_input_text("Old question")
         peer.refusals["response.create"] = ("invalid_request", "event")
         with pytest.raises(PrismError):
@@ -83,7 +83,7 @@ async def test_new_explicit_input_supersedes_a_restored_unsent_turn():
 async def test_late_refusal_does_not_restore_an_old_turn_over_newer_input():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         old = await session.set_input_text("Old question")
         first = session.generate_reply()
         request = await peer.next()
@@ -111,7 +111,7 @@ async def test_late_refusal_does_not_restore_an_old_turn_over_newer_input():
 async def test_accepted_turn_identity_does_not_use_a_newer_staged_item_id():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         old = await session.set_input_text("Accepted first")
         first = session.generate_reply()
         first_request = await peer.next()
@@ -133,7 +133,7 @@ async def test_accepted_turn_identity_does_not_use_a_newer_staged_item_id():
 async def test_cancelled_late_accepted_typed_turn_is_never_replayed():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         await session.set_input_text("Accepted once")
         pending = session.generate_reply()
         request = await peer.next()
@@ -153,7 +153,7 @@ async def test_cancelled_late_accepted_typed_turn_is_never_replayed():
 async def test_unknown_request_outcome_does_not_restore_typed_input():
     async with peer_model(timeouts=r.RealtimeTimeouts(request_s=0.02)) as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         await session.set_input_text("Unknown outcome")
         pending = session.generate_reply()
         await peer.next()
@@ -167,7 +167,7 @@ async def test_unknown_request_outcome_does_not_restore_typed_input():
 async def test_superseded_typed_turn_is_not_restored_as_an_unsent_question():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         await session.set_input_text("Superseded")
         peer.refusals["response.create"] = ("typed_turn_superseded", "event")
         with pytest.raises(PrismError):

@@ -22,7 +22,7 @@ from .test_plugin_rime_realtime import peer_model
 async def test_audio_converts_formats_outside_sdk_support(sample_rate, channels):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         frame = rtc.AudioFrame(
             data=np.full((sample_rate // 5, channels), 1000, dtype=np.int16).tobytes(),
             sample_rate=sample_rate,
@@ -41,7 +41,7 @@ async def test_audio_converts_formats_outside_sdk_support(sample_rate, channels)
 async def test_audio_resampling_keeps_state_between_short_frames():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         frame = rtc.AudioFrame(
             data=np.full(441, 1000, dtype=np.int16).tobytes(),
             sample_rate=44100,
@@ -61,7 +61,7 @@ async def test_audio_resampling_keeps_state_between_short_frames():
 async def test_audio_conversion_discards_buffered_samples_on_reset(reset):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         session.push_audio(
             rtc.AudioFrame(
                 data=np.full(100, 30000, dtype=np.int16).tobytes(),
@@ -87,7 +87,7 @@ async def test_audio_conversion_discards_buffered_samples_on_reset(reset):
 async def test_sdk_supported_audio_reaches_sdk_unchanged(sample_rate, channels, monkeypatch):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         sdk = session._require()
         send_audio = sdk.send_audio
         chunks = []
@@ -110,7 +110,7 @@ async def test_sdk_supported_audio_reaches_sdk_unchanged(sample_rate, channels, 
 async def test_clear_audio_follows_inflight_audio_and_discards_queued_audio(monkeypatch):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         sdk = session._require()
         send = sdk._send
         clear = sdk.clear_audio

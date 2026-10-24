@@ -73,7 +73,7 @@ async def test_prism_restart_initialization_failure_opens_backup_once(monkeypatc
             reconnected = []
             session.on("session_reconnected", reconnected.append)
             try:
-                await session.initialize(instructions="test")
+                await session._update_session(instructions="test")
                 primary_peer.refusals["session.update"] = ("invalid_session", "event")
                 await adapter.restart_session()
                 if session._swap_task is not None:

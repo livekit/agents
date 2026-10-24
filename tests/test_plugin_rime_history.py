@@ -47,7 +47,7 @@ async def test_truncation_at_connect_update_and_restart(policy):
         fallback = llm.RealtimeModelFallbackAdapter([model])
         session = fallback.session()
         try:
-            await session.initialize(instructions="Help")
+            await session._update_session(instructions="Help")
             if policy is None:
                 assert "truncation" not in peer.settings
                 assert model.session_info.truncation is None
@@ -64,7 +64,7 @@ async def test_truncation_at_connect_update_and_restart(policy):
 async def test_rejected_truncation_leaves_acknowledged_policy_unchanged():
     async with peer_model(truncation="auto") as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         peer.refusals["session.update"] = ("invalid_session", "event")
         with pytest.raises(PrismError):
             await model.update_session(truncation="disabled")
@@ -109,7 +109,7 @@ async def test_context_edits_preserve_local_identity_and_server_order(edit):
     async with peer_model() as (peer, model, _):
         session = model.session()
         original = messages("one", "two", "three")
-        await session.initialize(chat_ctx=original)
+        await session._update_session(chat_ctx=original)
         target = original.copy()
         if edit == "append":
             target.add_message(role="system", content="four")
@@ -142,7 +142,7 @@ async def test_completed_tool_pair_deletion_and_restart_do_not_execute_tools():
         fallback = llm.RealtimeModelFallbackAdapter([model])
         session = fallback.session()
         try:
-            await session.initialize(chat_ctx=tool_history())
+            await session._update_session(chat_ctx=tool_history())
             await fallback.restart_session()
             assert len(await model.get_history()) == 5
             target = session.chat_ctx.copy(exclude_function_call=True)
@@ -160,7 +160,7 @@ async def test_invalid_batch_sends_nothing_and_keeps_conversation_usable(invalid
     async with peer_model() as (peer, model, _):
         session = model.session()
         original = messages("keep")
-        await session.initialize(chat_ctx=original)
+        await session._update_session(chat_ctx=original)
         target = original.copy()
         target.add_message(role="system", content="valid addition")
         if invalid == "orphan":
@@ -188,7 +188,7 @@ async def test_rejected_first_operation_leaves_history_unchanged():
     async with peer_model() as (peer, model, _):
         session = model.session()
         original = messages("keep")
-        await session.initialize(chat_ctx=original)
+        await session._update_session(chat_ctx=original)
         peer.refusals["conversation.item.create"] = ("invalid_request", "event")
         target = original.copy()
         target.add_message(role="system", content="rejected")
@@ -203,7 +203,7 @@ async def test_rejected_first_operation_leaves_history_unchanged():
 async def test_partial_history_failure_closes_uncertain_conversation():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(chat_ctx=messages("old"))
+        await session._update_session(chat_ctx=messages("old"))
         peer.fail_history_at = len(peer.history_operations) + 2
         errors = asyncio.Queue()
         session.on("error", errors.put_nowait)
@@ -218,7 +218,7 @@ async def test_partial_history_failure_closes_uncertain_conversation():
 async def test_cancelled_history_update_settles_and_commits_accepted_change():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(chat_ctx=messages("old"))
+        await session._update_session(chat_ctx=messages("old"))
         peer.history_started.clear()
         peer.history_release.clear()
         target = session.chat_ctx
@@ -242,7 +242,7 @@ async def test_cancelled_history_update_settles_and_commits_accepted_change():
 async def test_running_reply_snapshot_does_not_remove_live_local_items():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         message = await session.set_input_text("question")
         pending = session.generate_reply()
         response_id = await peer.start(await peer.next())
@@ -306,7 +306,7 @@ async def test_deleting_half_a_tool_pair_is_rejected_before_mutation(removed_typ
     async with peer_model() as (peer, model, _):
         session = model.session()
         ctx = tool_history()
-        await session.initialize(chat_ctx=ctx)
+        await session._update_session(chat_ctx=ctx)
         before = len(peer.history_operations)
         target = llm.ChatContext([i for i in ctx.items if not isinstance(i, removed_type)])
         with pytest.raises(llm.RealtimeError):
@@ -318,7 +318,7 @@ async def test_deleting_half_a_tool_pair_is_rejected_before_mutation(removed_typ
 async def test_history_read_refusal_uses_the_adapter_error_and_keeps_session():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         peer.refusals["prism.conversation.get"] = ("invalid_request", "event")
         with pytest.raises(PrismError) as raised:
             await model.get_history()
@@ -329,7 +329,7 @@ async def test_history_read_refusal_uses_the_adapter_error_and_keeps_session():
 async def test_reply_waiting_for_readiness_does_not_block_live_tool_results():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         first = session.generate_reply()
         parent = await peer.start(await peer.next())
         generation = await first
@@ -366,7 +366,7 @@ async def test_reply_waiting_for_readiness_does_not_block_live_tool_results():
 async def test_reply_started_during_final_rebuild_acknowledgment_requires_recovery(ended):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(chat_ctx=messages("old"))
+        await session._update_session(chat_ctx=messages("old"))
         peer.block_history_at = len(peer.history_operations) + 2
         peer.history_release.clear()
         change = asyncio.create_task(session.update_chat_ctx(messages("replacement")))
@@ -423,7 +423,7 @@ async def test_omitted_new_options_preserve_existing_text_history_requests():
     async with peer_model() as (peer, model, _):
         session = model.session()
         original = messages("seed")
-        await session.initialize(chat_ctx=original)
+        await session._update_session(chat_ctx=original)
         target = session.chat_ctx
         target.add_message(role="assistant", content="appended history")
         await session.update_chat_ctx(target)
@@ -437,7 +437,7 @@ async def test_omitted_new_options_preserve_existing_text_history_requests():
 async def test_truncation_updates_do_not_evict_an_older_response_interruption_policy():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         original_revision = model.session_info.settings_revision
         for _ in range(129):
             await model.update_session(truncation="auto")

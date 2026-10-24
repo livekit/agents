@@ -1315,7 +1315,7 @@ class AgentActivity(RecognitionHooks):
                 reset_chat_ctx = capabilities.mutable_chat_context
                 reset_tools = capabilities.mutable_tools
 
-            await self._rt_session.initialize(
+            await self._rt_session._update_session(
                 instructions=self._render_realtime_instructions(self._agent.instructions)
                 if reset_instructions
                 else NOT_GIVEN,
@@ -2337,8 +2337,6 @@ class AgentActivity(RecognitionHooks):
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         self._restore_speech_hint()
-        if ev.end_reason and self._session._user_speaking_span is not None:
-            self._session._user_speaking_span.set_attribute("lk.end_of_turn_reason", ev.end_reason)
         if self.vad is None or self.using_default_vad:
             if self._audio_recognition:
                 self._audio_recognition._on_end_of_speech(
@@ -4471,14 +4469,6 @@ class AgentActivity(RecognitionHooks):
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
         playback_session = generation_ev.playback_session or self._rt_session
-        if generation_ev.provider_request_id is not None:
-            inference_span.set_attribute(
-                "lk.provider_request_id", generation_ev.provider_request_id
-            )
-        if generation_ev.settings_revision is not None:
-            inference_span.set_attribute("lk.settings_revision", generation_ev.settings_revision)
-        if generation_ev.input_item_ids:
-            inference_span.set_attribute("lk.input_item_ids", list(generation_ev.input_item_ids))
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
             self._session.output.transcription

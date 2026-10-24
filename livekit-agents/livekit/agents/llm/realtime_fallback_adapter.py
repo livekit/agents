@@ -393,7 +393,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     def can_reuse(self, chat_ctx: ChatContext) -> bool:
         return self._active.can_reuse(chat_ctx)
 
-    async def initialize(
+    async def _update_session(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -469,7 +469,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                         )
                         self._bind(self._active)
                         instructions, chat_ctx, tools = self._instructions, history, self._tools
-                    await self._active.initialize(
+                    await self._active._update_session(
                         instructions=instructions, chat_ctx=chat_ctx, tools=tools
                     )
                     if replacing and is_given(self._tool_choice):

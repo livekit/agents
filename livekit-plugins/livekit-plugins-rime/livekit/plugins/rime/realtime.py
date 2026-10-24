@@ -38,15 +38,36 @@ class PrismError(llm.RealtimeError):
     """A Prism refusal with its original fault and retry classification."""
 
     def __init__(self, fault: r.RealtimeFault):
-        super().__init__(
-            f"{fault.code}: {fault.message}",
-            code=fault.code,
-            retryable=fault.retryable,
-            request_id=fault.request_id,
-            response_id=fault.response_id,
-            scope=fault.scope,
-        )
+        super().__init__(f"{fault.code}: {fault.message}", code=fault.code)
         self.fault = fault
+        self.retryable = fault.retryable
+        self.request_id = fault.request_id
+        self.response_id = fault.response_id
+        self.scope = fault.scope
+
+
+@dataclass
+class PrismGenerationCreatedEvent(llm.GenerationCreatedEvent):
+    """A LiveKit generation with Prism response diagnostics."""
+
+    metadata: dict[str, Any] = field(default_factory=dict)
+    input_item_ids: tuple[str, ...] = ()
+    settings_revision: int | None = None
+    provider_request_id: str | None = None
+
+
+@dataclass
+class PrismSpeechStoppedEvent(llm.InputSpeechStoppedEvent):
+    """A stopped-speech event with Prism's end-of-turn reason."""
+
+    end_reason: str | None = None
+
+
+class PrismModelError(llm.RealtimeModelError):
+    """A LiveKit model error with Prism's separate retry classification."""
+
+    retryable: bool | None = None
+    """Whether the unchanged request may succeed again; does not initiate a retry."""
 
 
 class RealtimeModel(
@@ -197,7 +218,7 @@ class _Message:
 @dataclass
 class _Generation:
     ref: r.ResponseRef
-    event: llm.GenerationCreatedEvent
+    event: PrismGenerationCreatedEvent
     messages: utils.aio.Chan[llm.MessageGeneration]
     functions: utils.aio.Chan[llm.FunctionCall]
     outputs: dict[str, _Message] = field(default_factory=dict)
@@ -319,7 +340,7 @@ class RealtimeSession(llm.RealtimeSession):
             raise self._unsupported("Prism session is not open")
         return self._sdk
 
-    async def initialize(
+    async def _update_session(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -965,7 +986,7 @@ class RealtimeSession(llm.RealtimeSession):
             )
         elif isinstance(payload, r.SpeechStopped):
             self._caller_speaking = False
-            stopped = llm.InputSpeechStoppedEvent(
+            stopped = PrismSpeechStoppedEvent(
                 user_transcription_enabled=True, end_reason=payload.end_reason
             )
             self.emit("input_speech_stopped", stopped)
@@ -1032,7 +1053,7 @@ class RealtimeSession(llm.RealtimeSession):
                 self._generations.popitem(last=False)
             messages = utils.aio.Chan[llm.MessageGeneration](maxsize=128)
             functions = utils.aio.Chan[llm.FunctionCall](maxsize=128)
-            created = llm.GenerationCreatedEvent(
+            created = PrismGenerationCreatedEvent(
                 message_stream=messages,
                 function_stream=functions,
                 user_initiated=event.request_id is not None,
@@ -1163,13 +1184,13 @@ class RealtimeSession(llm.RealtimeSession):
     def _emit_error(self, error: Exception, *, recoverable: bool) -> None:
         self.emit(
             "error",
-            llm.RealtimeModelError(
+            PrismModelError(
                 timestamp=time.time(),
                 label=self._model.label,
                 error=error,
                 recoverable=recoverable,
                 retryable=error.retryable
-                if isinstance(error, (llm.RealtimeError,))
+                if isinstance(error, PrismError)
                 else (error.fault.retryable if isinstance(error, r.RimeRealtimeError) else None),
             ),
         )

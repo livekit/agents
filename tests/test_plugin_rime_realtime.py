@@ -281,7 +281,9 @@ async def peer_model(**options):
 async def test_history_note_is_not_a_typed_turn():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test", tools=[], chat_ctx=llm.ChatContext.empty())
+        await session._update_session(
+            instructions="test", tools=[], chat_ctx=llm.ChatContext.empty()
+        )
         ctx = session.chat_ctx
         ctx.add_message(role="user", content="A history note")
         await session.update_chat_ctx(ctx)
@@ -302,7 +304,7 @@ async def test_startup_seeds_history_before_first_request():
         ctx.items.append(llm.AgentConfigUpdate(instructions="Old configuration"))
         ctx.add_message(role="user", content="Earlier question")
         ctx.add_message(role="assistant", content="Earlier answer")
-        await session.initialize(instructions="Be clear", chat_ctx=ctx, tools=[])
+        await session._update_session(instructions="Be clear", chat_ctx=ctx, tools=[])
         assert peer.settings["instructions"] == "Be clear"
         assert [i["text"] for i in peer.items] == ["Earlier question", "Earlier answer"]
         assert all(isinstance(item, llm.ChatMessage) for item in session.chat_ctx.items)
@@ -315,7 +317,7 @@ async def test_startup_seeds_history_before_first_request():
 async def test_history_update_validates_all_new_items_before_sending(invalid_item):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         ctx = session.chat_ctx
         ctx.add_message(role="user", content="Valid new history")
         if invalid_item == "developer":
@@ -446,7 +448,7 @@ async def test_agent_session_caller_interrupt_reports_truncate():
 async def test_late_transcript_keeps_user_before_assistant():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         await peer.emit("input_audio_buffer.speech_started", item_id="u", audio_start_ms=0)
         await peer.emit("input_audio_buffer.committed", item_id="u")
         response_id = await peer.start()
@@ -502,7 +504,7 @@ async def test_forced_tool_choice_emits_fatal_error():
         session = model.session()
         errors = []
         session.on("error", errors.append)
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         with pytest.raises(PrismUnsupported):
             session.update_options(tool_choice="none")
         assert errors[-1].recoverable is False
@@ -510,7 +512,7 @@ async def test_forced_tool_choice_emits_fatal_error():
 
 async def test_injected_client_stays_open():
     async with peer_model() as (peer, model, client):
-        await model.session().initialize(instructions="test")
+        await model.session()._update_session(instructions="test")
         await model.aclose()
         async with client.realtime.connect(endpoint=model._endpoint) as session:
             assert session.info.session_id == "session-1"
@@ -519,7 +521,7 @@ async def test_injected_client_stays_open():
 async def test_skipped_response_reports_zero_playback_for_its_own_id():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         future = session.generate_reply()
         request = await peer.next()
         response_id = await peer.start(request)
@@ -541,7 +543,7 @@ async def test_skipped_response_reports_zero_playback_for_its_own_id():
 async def test_caller_skips_response_before_output_item_arrives(has_message):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         future = session.generate_reply()
         response_id = await peer.start(await peer.next())
         await future
@@ -576,7 +578,7 @@ async def test_caller_skipped_response_discards_late_output(delta_type, interrup
         session = model.session()
         errors = []
         session.on("error", errors.append)
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         future = session.generate_reply()
         response_id = await peer.start(await peer.next())
         generation = await future
@@ -682,7 +684,7 @@ async def test_agent_session_tool_step_limit_reports_unsupported_tool_choice(max
 async def test_abandoned_reply_does_not_generate_after_ready():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         # Consume the initial ready, then leave the second request waiting for playback.
         first = session.generate_reply()
         request = await peer.next()
@@ -729,7 +731,7 @@ async def test_agent_session_releases_resources_after_connection_failure():
 async def test_cleanup_after_explicit_close_and_fresh_session():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         future = session.generate_reply()
         response_id = await peer.start(await peer.next())
         await future
@@ -743,7 +745,7 @@ async def test_cleanup_after_explicit_close_and_fresh_session():
             interrupted_by_user=False,
         )
         replacement = model.session()
-        await replacement.initialize(instructions="new conversation")
+        await replacement._update_session(instructions="new conversation")
         assert replacement.chat_ctx.items == []
         future = replacement.generate_reply()
         response_id = await peer.start(await peer.next())
@@ -763,7 +765,7 @@ async def test_playback_refusal_keeps_session_usable(operation, code):
         session = model.session()
         errors = asyncio.Queue()
         session.on("error", errors.put_nowait)
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         future = session.generate_reply()
         response_id = await peer.start(await peer.next())
         generation = await future
@@ -803,7 +805,7 @@ async def test_other_playback_failures_remain_fatal(code, scope):
         session = model.session()
         errors = asyncio.Queue()
         session.on("error", errors.put_nowait)
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         future = session.generate_reply()
         response_id = await peer.start(await peer.next())
         generation = await future
@@ -835,7 +837,7 @@ async def test_admission_timeout_leaves_conversation_usable(monkeypatch):
         session = model.session()
         errors = []
         session.on("error", errors.append)
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         first = session.generate_reply()
         response_id = await peer.start(await peer.next())
         await first
@@ -857,7 +859,7 @@ async def test_cancel_before_acceptance_reports_zero_playback_after_terminal():
         session = model.session()
         errors = []
         session.on("error", errors.append)
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         future = session.generate_reply()
         request = await peer.next()
         future.cancel()
@@ -961,7 +963,7 @@ async def test_expired_tool_continuation_reports_result_without_reexecution(code
 async def test_stale_playback_message_is_ignored(interrupted, by_user):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="test")
+        await session._update_session(instructions="test")
         reply = session.generate_reply()
         response_id = await peer.start(await peer.next())
         item_id = await peer.message(response_id)

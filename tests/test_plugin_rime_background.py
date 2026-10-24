@@ -36,7 +36,7 @@ async def test_background_dependency_error_stops_the_session(monkeypatch):
         session = model.session()
         errors = asyncio.Queue()
         session.on("error", errors.put_nowait)
-        await session.initialize(instructions="Help")
+        await session._update_session(instructions="Help")
         session.clear_audio()
         error = await asyncio.wait_for(errors.get(), 3)
         assert error.error is failure
@@ -51,7 +51,7 @@ async def test_reply_refusal_reaches_caller_without_stopping_session():
         session = model.session()
         errors = asyncio.Queue()
         session.on("error", errors.put_nowait)
-        await session.initialize(instructions="Help")
+        await session._update_session(instructions="Help")
         peer.refusals["response.create"] = ("invalid_request", "event")
         with pytest.raises(PrismError) as raised:
             await asyncio.wait_for(session.generate_reply(), 3)
@@ -73,7 +73,7 @@ async def test_session_fault_reports_one_fatal_error():
         session = model.session()
         errors = asyncio.Queue()
         session.on("error", errors.put_nowait)
-        await session.initialize(instructions="Help")
+        await session._update_session(instructions="Help")
         await peer.emit(
             "error",
             error={

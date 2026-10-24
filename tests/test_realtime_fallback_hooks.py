@@ -28,7 +28,7 @@ class _AtomicSession(FakeRealtimeSession):
         self.playback_reports: list[dict[str, Any]] = []
         self.playback_reported = asyncio.Event()
 
-    async def initialize(
+    async def _update_session(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -36,10 +36,10 @@ class _AtomicSession(FakeRealtimeSession):
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
         self.initialized = True
-        await super().initialize(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
+        await super()._update_session(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        assert self.initialized, "initialize must open the provider session first"
+        assert self.initialized, "initial configuration must open the provider session first"
         await super().update_chat_ctx(chat_ctx)
 
     async def set_input_text(
@@ -89,7 +89,7 @@ async def test_atomic_initialization_and_typed_turn_survive_restart() -> None:
     initial = ChatContext.empty()
     initial.add_message(role="user", content="history")
     try:
-        await session.initialize(instructions="Be concise.", chat_ctx=initial, tools=[])
+        await session._update_session(instructions="Be concise.", chat_ctx=initial, tools=[])
         first = model.active_session
         assert first.initialized
         typed = await session.set_input_text("new turn", message_id="typed-turn")
@@ -119,10 +119,10 @@ async def test_initialization_preserves_omitted_settings_across_restart(clear: b
     adapter = RealtimeModelFallbackAdapter([model])
     session = adapter.session()
     try:
-        await session.initialize(instructions="Saved instructions", tools=[lookup])
+        await session._update_session(instructions="Saved instructions", tools=[lookup])
         if clear:
-            await session.initialize(instructions="", tools=[])
-        await session.initialize(chat_ctx=ChatContext.empty())
+            await session._update_session(instructions="", tools=[])
+        await session._update_session(chat_ctx=ChatContext.empty())
         await adapter.restart_session()
         replacement = model.active_session
         assert replacement.updated_instructions == ("" if clear else "Saved instructions")
@@ -159,7 +159,7 @@ async def test_playback_reaches_owning_child_after_swap(
     adapter = RealtimeModelFallbackAdapter([model])
     session = adapter.session()
     try:
-        await session.initialize()
+        await session._update_session()
         original = model.active_session
         generation = _generation(response_id, "original-message")
         if source == "event":
@@ -198,7 +198,7 @@ async def test_skipped_playback_without_message_uses_original_response_owner() -
     adapter = RealtimeModelFallbackAdapter([model])
     session = adapter.session()
     try:
-        await session.initialize()
+        await session._update_session()
         original = model.active_session
         future = session.generate_reply()
         original._reply_futs[0].set_result(_generation("skipped-response", "unread-message"))
@@ -241,7 +241,7 @@ async def test_cancelled_wrapper_reports_already_accepted_generation_to_original
         adapter = RealtimeModelFallbackAdapter([adapter])
     session = adapter.session()
     try:
-        await session.initialize()
+        await session._update_session()
         original = model.active_session
         future = session.generate_reply()
         original._reply_futs[0].set_result(_generation("accepted-response", "unread-message"))
@@ -271,7 +271,7 @@ async def test_reused_session_ids_keep_distinct_playback_owners(consume_messages
     adapter = RealtimeModelFallbackAdapter([model])
     session = adapter.session()
     try:
-        await session.initialize()
+        await session._update_session()
         original = model.active_session
         generations = []
         for index in range(2):
@@ -308,7 +308,7 @@ async def test_nested_fallback_preserves_the_provider_playback_owner() -> None:
     outer = RealtimeModelFallbackAdapter([inner])
     session = outer.session()
     try:
-        await session.initialize()
+        await session._update_session()
         original = model.active_session
         future = session.generate_reply()
         original._reply_futs[0].set_result(_generation("nested-response", "nested-message"))
@@ -395,11 +395,13 @@ async def test_initialization_tries_each_candidate_and_preserves_history(exhaust
     try:
         if exhausted:
             with pytest.raises(RuntimeError, match="startup failure 1"):
-                await session.initialize(
+                await session._update_session(
                     instructions="Saved instructions", chat_ctx=history, tools=[]
                 )
         else:
-            await session.initialize(instructions="Saved instructions", chat_ctx=history, tools=[])
+            await session._update_session(
+                instructions="Saved instructions", chat_ctx=history, tools=[]
+            )
             assert backup.active_session.chat_ctx.items == history.items
             assert backup.active_session.updated_instructions == "Saved instructions"
             assert not backup.active_session.closed
@@ -418,10 +420,10 @@ async def test_closing_during_initialization_cancels_and_closes_child():
     release = asyncio.Event()
 
     class SlowSession(FakeRealtimeSession):
-        async def initialize(self, **kwargs):
+        async def _update_session(self, **kwargs):
             entered.set()
             await release.wait()
-            await super().initialize(**kwargs)
+            await super()._update_session(**kwargs)
 
     class SlowModel(FakeRealtimeModel):
         def session(self, *, turn_detection_disabled=False):
@@ -432,7 +434,7 @@ async def test_closing_during_initialization_cancels_and_closes_child():
     model = SlowModel()
     adapter = RealtimeModelFallbackAdapter([model])
     session = adapter.session()
-    initializing = asyncio.create_task(session.initialize())
+    initializing = asyncio.create_task(session._update_session())
     try:
         await asyncio.wait_for(entered.wait(), 1)
         await asyncio.wait_for(session.aclose(), 1)

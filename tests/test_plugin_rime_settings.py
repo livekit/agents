@@ -16,7 +16,12 @@ from rimelabs_sdk import realtime as r
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool, llm
 from livekit.agents.voice.io import AudioOutputCapabilities
-from livekit.plugins.rime.realtime import PrismError
+from livekit.plugins.rime.realtime import (
+    PrismError,
+    PrismGenerationCreatedEvent,
+    PrismModelError,
+    PrismSpeechStoppedEvent,
+)
 
 from .fake_io import FakeAudioOutput
 from .test_plugin_rime_realtime import peer_model
@@ -45,7 +50,7 @@ async def test_connection_settings_fillers_and_session_information():
         tool_fillers={"lookup": r.PrismFiller(type="text", text="Checking your order.")},
     ) as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="Help", tools=[lookup])
+        await session._update_session(instructions="Help", tools=[lookup])
         assert peer.request_id == "livekit-validation"
         assert peer.settings["turn_detection"]["eagerness"] == "low"
         assert peer.settings["turn_detection"]["prism_end_of_turn_timeout_ms"] == 3000
@@ -60,8 +65,8 @@ async def test_connection_settings_fillers_and_session_information():
 async def test_settings_change_atomically_and_rejection_preserves_session():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="Original")
-        await session.initialize(instructions="Billing", tools=[lookup])
+        await session._update_session(instructions="Original")
+        await session._update_session(instructions="Billing", tools=[lookup])
         assert peer.updates[-1]["instructions"] == "Billing"
         assert peer.updates[-1]["tools"][0]["function"]["name"] == "lookup"
         await model.update_session(voice="new-voice", interrupt_on_speech=False)
@@ -77,7 +82,7 @@ async def test_settings_change_atomically_and_rejection_preserves_session():
         assert raised.value.retryable is False
         assert peer.settings["instructions"] == "Billing"
         assert model.session_info.settings_revision == old_revision
-        await session.initialize(instructions="", tools=[])
+        await session._update_session(instructions="", tools=[])
         assert peer.settings["instructions"] == ""
         assert peer.settings["tools"] == []
         assert peer.connections == 1
@@ -86,7 +91,7 @@ async def test_settings_change_atomically_and_rejection_preserves_session():
 async def test_cancelled_update_waits_for_acknowledged_settings():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="Original")
+        await session._update_session(instructions="Original")
         peer.update_started.clear()
         peer.update_release.clear()
         change = asyncio.create_task(session.update_tools([lookup]))
@@ -107,7 +112,7 @@ async def test_cancelled_fallback_update_survives_restart(setting):
         fallback = llm.RealtimeModelFallbackAdapter([model])
         session = fallback.session()
         try:
-            await session.initialize(instructions="Original")
+            await session._update_session(instructions="Original")
             peer.update_started.clear()
             peer.update_release.clear()
             change = asyncio.create_task(
@@ -218,7 +223,7 @@ async def test_tool_handoff_preserves_the_pending_tool_result():
 async def test_reply_keeps_interruption_policy_from_its_settings_revision():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="Help")
+        await session._update_session(instructions="Help")
         original_revision = peer.revision
         await model.update_session(interrupt_on_speech=False)
         started = []
@@ -239,7 +244,7 @@ async def test_reply_keeps_interruption_policy_from_its_settings_revision():
 async def test_generation_diagnostics_and_transcript_deltas():
     async with peer_model(request_id="diagnostics") as (peer, model, _):
         session = model.session()
-        await session.initialize(instructions="Help")
+        await session._update_session(instructions="Help")
         generations, stopped, transcripts = [], [], []
         model.on("generation_created", generations.append)
         session.on("input_speech_stopped", stopped.append)
@@ -269,7 +274,9 @@ async def test_generation_diagnostics_and_transcript_deltas():
         await wait_until(lambda: generations and stopped and len(transcripts) == 2)
         assert [event.transcript for event in transcripts] == ["Hel", "Hello"]
         assert all(not event.is_final for event in transcripts)
+        assert isinstance(stopped[0], PrismSpeechStoppedEvent)
         assert stopped[0].end_reason == "semantic"
+        assert isinstance(generations[0], PrismGenerationCreatedEvent)
         assert generations[0].metadata == {"workflow": "billing"}
         assert generations[0].input_item_ids == ("input-1",)
         assert generations[0].provider_request_id == "diagnostics"
@@ -280,25 +287,35 @@ async def test_generation_diagnostics_and_transcript_deltas():
     "code,retryable",
     [("capacity_exceeded", True), ("response_timeout", True), ("context_length_exceeded", False)],
 )
-async def test_fault_retryability_does_not_replay_requests(code, retryable):
+@pytest.mark.parametrize("via_fallback", [False, True])
+async def test_fault_retryability_does_not_replay_requests(code, retryable, via_fallback):
     async with peer_model() as (peer, model, _):
-        session = model.session()
-        errors = []
-        session.on("error", errors.append)
-        await session.initialize(instructions="Help")
-        await peer.emit(
-            "error",
-            error={
-                "code": code,
-                "message": "Provider refusal",
-                "scope": "response",
-                "owner": {"kind": "response", "response_id": "response-1"},
-            },
-        )
-        await wait_until(lambda: errors)
-        assert errors[0].retryable is retryable
-        assert errors[0].error.scope == "response"
-        assert peer.requests.empty()
+        realtime_model = llm.RealtimeModelFallbackAdapter([model]) if via_fallback else model
+        async with AgentSession(llm=realtime_model) as session:
+            errors = []
+            session.on("error", errors.append)
+            await session.start(Agent(instructions="Help"))
+            await peer.emit(
+                "error",
+                error={
+                    "code": code,
+                    "message": "Provider refusal",
+                    "scope": "response",
+                    "owner": {"kind": "response", "response_id": "response-1"},
+                },
+            )
+            await wait_until(lambda: errors)
+            model_error = errors[0].error
+            assert isinstance(model_error, PrismModelError)
+            assert model_error.retryable is retryable
+            assert isinstance(model_error.error, PrismError)
+            assert model_error.error.retryable is retryable
+            assert model_error.error.code == code
+            assert model_error.error.scope == "response"
+            assert model_error.error.response_id == "response-1"
+            assert model_error.error.fault.code == code
+            assert errors[0].model_dump()["error"]["retryable"] is retryable
+            assert peer.requests.empty()
 
 
 class GainOutput(FakeAudioOutput):
@@ -359,23 +376,50 @@ async def test_noninterrupting_response_ignores_confirmed_speech():
             await asyncio.wait_for(speech.wait_for_playout(), 3)
 
 
-async def test_fallback_preserves_generation_metadata_and_speech_hints():
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("source", ["reply", "event"])
+async def test_fallback_preserves_generation_metadata_and_speech_hints(nested, source):
     async with peer_model(request_id="fallback-request") as (peer, model, _):
         fallback = llm.RealtimeModelFallbackAdapter([model])
+        if nested:
+            fallback = llm.RealtimeModelFallbackAdapter([fallback])
         session = fallback.session()
-        hints = []
+        hints, generations = [], []
         session.on("input_speech_hint", hints.append)
+        session.on("generation_created", generations.append)
         try:
-            await session.initialize(instructions="Help")
+            await session._update_session(instructions="Help")
             await session.set_input_text("Hello")
             pending = session.generate_reply()
             request = await peer.next()
             request["response"]["metadata"]["step"] = "2"
             response_id = await peer.start(request)
-            generation = await asyncio.wait_for(pending, 3)
+            if source == "reply":
+                generation = await asyncio.wait_for(pending, 3)
+                assert generation.input_item_ids == ("typed-1",)
+            else:
+                await pending
+                # An autonomous response travels through event forwarding rather
+                # than the future returned by generate_reply().
+                await peer.end(response_id)
+                response_id = "autonomous-response"
+                await peer.emit(
+                    "response.created",
+                    response={
+                        "id": response_id,
+                        "metadata": {"prism_cause": "user_audio", "step": "2"},
+                        "prism_input_item_ids": ["input-2"],
+                        "prism_settings_revision": peer.revision,
+                    },
+                )
+                await wait_until(lambda: generations)
+                generation = generations[0]
+                assert generation.input_item_ids == ("input-2",)
+            assert isinstance(generation, PrismGenerationCreatedEvent)
             assert generation.metadata == {"step": "2"}
+            assert generation.settings_revision == (peer.revision if source == "event" else None)
             assert generation.provider_request_id == "fallback-request"
-            assert generation.playback_session is not None
+            assert generation.playback_session is model._session
             await peer.emit("prism.input_audio_buffer.speech_hint", audio_start_ms=0)
             await wait_until(lambda: hints)
             await peer.end(response_id)

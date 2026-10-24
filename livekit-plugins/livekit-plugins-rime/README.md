@@ -259,14 +259,19 @@ its filler setting. The adapter still executes each tool through LiveKit.
 ### Events, errors, and early speech hints
 
 Subscribe to the model's `generation_created`, `session_updated`, `speech_stopped`,
-and `speech_hint` events. Generations expose reply labels in `metadata`,
+and `speech_hint` events. `PrismGenerationCreatedEvent` extends LiveKit's generation
+event with reply labels in `metadata`,
 `input_item_ids`, `settings_revision`, and `provider_request_id`. A stopped-speech
-event includes `end_reason`. Interim transcripts are forwarded before the final
+event is a `PrismSpeechStoppedEvent` with `end_reason`. Import these types from
+`livekit.plugins.rime.realtime`. Interim transcripts are forwarded before the final
 transcript. Fallback preserves generation metadata and its owning playback session.
-Request IDs and settings revisions are also attached to generation traces.
+Prism diagnostics remain on these events; shared generation traces do not copy
+the provider request ID, input item IDs, settings revision, or speech end reason.
+LiveKit's existing response ID attribution remains unchanged.
 
 `PrismError` retains the original `fault`, `code`, `scope`, request and response IDs,
-and `retryable`. The model error event exposes the same retry classification.
+and `retryable`. `PrismModelError` extends LiveKit's model error event with the
+same retry classification. It is also available from `livekit.plugins.rime.realtime`.
 `retryable` describes whether an unchanged request may succeed again;
 `recoverable` describes whether the current LiveKit session can continue.
 Neither flag starts an automatic retry. Do not replay accepted typed turns or

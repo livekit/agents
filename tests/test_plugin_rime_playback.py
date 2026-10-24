@@ -81,7 +81,7 @@ async def test_agent_session_sends_one_aggregate_receipt_for_multiple_messages()
 async def test_first_completed_message_neither_drains_nor_changes_interruption_policy():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         response_id, ids = await completed_two_messages(peer, session)
         report(session, response_id, ids[0], 100)
         await model.get_history()
@@ -99,7 +99,7 @@ async def test_first_completed_message_neither_drains_nor_changes_interruption_p
 async def test_callbacks_before_response_end_wait_for_later_outputs():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         pending = session.generate_reply()
         response_id = await peer.start(await peer.next())
         generation = await pending
@@ -119,7 +119,7 @@ async def test_callbacks_before_response_end_wait_for_later_outputs():
 async def test_duplicate_and_out_of_order_callbacks_drain_once(reverse):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         response_id, ids = await completed_two_messages(peer, session)
         order = list(reversed(ids)) if reverse else ids
         for item in order:
@@ -135,7 +135,7 @@ async def test_duplicate_and_out_of_order_callbacks_drain_once(reverse):
 async def test_mixed_full_and_caller_interrupted_messages_only_truncate():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         response_id, ids = await completed_two_messages(peer, session)
         report(session, response_id, ids[0], 100)
         report(session, response_id, ids[1], 50, interrupted=True, by_user=True)
@@ -151,7 +151,7 @@ async def test_mixed_full_and_caller_interrupted_messages_only_truncate():
 async def test_empty_response_and_duplicate_none_callbacks_drain_once():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         pending = session.generate_reply()
         response_id = await peer.start(await peer.next())
         generation = await pending
@@ -167,7 +167,7 @@ async def test_empty_response_and_duplicate_none_callbacks_drain_once():
 async def test_response_wide_application_stop_discards_late_outputs_and_drains_once():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         pending = session.generate_reply()
         response_id = await peer.start(await peer.next())
         generation = await pending
@@ -189,7 +189,7 @@ async def test_response_wide_application_stop_discards_late_outputs_and_drains_o
 async def test_all_skipped_messages_send_one_zero_position_receipt():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         response_id, ids = await completed_two_messages(peer, session)
         for item in ids:
             report(session, response_id, item, 0, interrupted=True)
@@ -203,7 +203,7 @@ async def test_response_wide_stop_discards_late_audio_for_existing_outputs():
         session = model.session()
         errors = asyncio.Queue()
         session.on("error", errors.put_nowait)
-        await session.initialize()
+        await session._update_session()
         pending = session.generate_reply()
         response_id = await peer.start(await peer.next())
         generation = await pending
@@ -234,7 +234,7 @@ async def test_response_wide_stop_discards_late_audio_for_existing_outputs():
 async def test_caller_stop_accounts_for_unplayed_later_messages(later_already_announced):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         pending = session.generate_reply()
         response_id = await peer.start(await peer.next())
         generation = await pending
@@ -268,7 +268,7 @@ async def test_caller_stop_accounts_for_unplayed_later_messages(later_already_an
 async def test_per_message_application_stop_accounts_remaining_unplayed_outputs(announced):
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session.initialize()
+        await session._update_session()
         pending = session.generate_reply()
         response_id = await peer.start(await peer.next())
         generation = await pending

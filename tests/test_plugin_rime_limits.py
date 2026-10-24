@@ -41,7 +41,7 @@ async def test_generation_limit_fails_instead_of_forgetting_unresolved_playback(
         generations = asyncio.Queue()
         session.on("error", errors.put_nowait)
         session.on("generation_created", generations.put_nowait)
-        await session.initialize()
+        await session._update_session()
         oldest = await spontaneous_response(peer, generations, 0)
         for index in range(1, 128):
             response_id = await spontaneous_response(peer, generations, index)
@@ -69,7 +69,7 @@ async def test_generation_limit_retires_completed_records_and_keeps_admission_us
         generations = asyncio.Queue()
         session.on("error", errors.put_nowait)
         session.on("generation_created", generations.put_nowait)
-        await session.initialize()
+        await session._update_session()
         for index in range(130):
             response_id = await spontaneous_response(peer, generations, index)
             finish(session, response_id)
