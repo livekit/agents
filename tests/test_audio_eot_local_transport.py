@@ -35,6 +35,15 @@ def _frame(num_samples: int) -> rtc.AudioFrame:
     )
 
 
+NOW = 1000.0
+
+
+@pytest.fixture(autouse=True)
+def frozen_clock():
+    with patch("livekit.agents.inference.eot.transports.time.time", return_value=NOW):
+        yield
+
+
 @pytest.fixture
 def transport() -> _LocalTransport:
     opts = TurnDetectorOptions(
@@ -59,7 +68,7 @@ async def test_turn_samples_count_from_the_turn_start_past_the_window(
 ) -> None:
     transport.push_frame(_frame(8000))  # silence before the user speaks
     transport.push_frame(_frame(4000))
-    transport.on_start_of_turn(0.25)  # the turn covers the last 4000 samples
+    transport.on_start_of_turn(NOW - 0.25)  # the turn covers the last 4000 samples
     for _ in range(2 * EOT_MAX_SAMPLES // 1600):
         transport.push_frame(_frame(1600))
 
@@ -70,11 +79,11 @@ async def test_turn_samples_count_from_the_turn_start_past_the_window(
 
 
 async def test_flush_starts_a_new_turn(transport: _LocalTransport) -> None:
-    transport.on_start_of_turn(0.0)
+    transport.on_start_of_turn(NOW)
     transport.push_frame(_frame(16000))
     transport.flush()
     transport.push_frame(_frame(3200))
-    transport.on_start_of_turn(0.1)
+    transport.on_start_of_turn(NOW - 0.1)
 
     window, turn_samples = await _predict(transport)
 
@@ -94,7 +103,7 @@ async def test_turn_without_a_start_counts_from_flush(transport: _LocalTransport
 
 async def test_turn_longer_than_the_audio_clamps_to_flush(transport: _LocalTransport) -> None:
     transport.push_frame(_frame(1600))
-    transport.on_start_of_turn(1.0)
+    transport.on_start_of_turn(NOW - 1.0)
 
     _, turn_samples = await _predict(transport)
 

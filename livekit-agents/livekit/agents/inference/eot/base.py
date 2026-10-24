@@ -52,7 +52,7 @@ class _StreamingTurnDetectionTransport(Protocol):
 
     def run_inference(self, request_id: str) -> None: ...
     def push_frame(self, frame: rtc.AudioFrame) -> None: ...
-    def on_start_of_turn(self, turn_duration: float) -> None: ...
+    def on_start_of_turn(self, started_at: float) -> None: ...
     def flush(self) -> None: ...
 
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None: ...
@@ -96,7 +96,7 @@ class _BaseStreamingTurnDetectorStream:
 
     @dataclass
     class _StartOfTurnSentinel:
-        turn_duration: float
+        started_at: float
 
     def __init__(
         self,
@@ -242,10 +242,8 @@ class _BaseStreamingTurnDetectorStream:
         """The user turn started at ``started_at``; it lasts until the next flush."""
         if self._audio_ch.closed:
             return
-        # measured now, against the audio pushed so far, so queueing can't stretch it
-        turn_duration = max(0.0, time.time() - started_at)
         self._audio_ch.send_nowait(
-            _BaseStreamingTurnDetectorStream._StartOfTurnSentinel(turn_duration=turn_duration)
+            _BaseStreamingTurnDetectorStream._StartOfTurnSentinel(started_at=started_at)
         )
 
     def end_input(self) -> None:
@@ -346,7 +344,7 @@ class _BaseStreamingTurnDetectorStream:
             if isinstance(item, _BaseStreamingTurnDetectorStream._FlushSentinel):
                 self._transport.flush()
             elif isinstance(item, _BaseStreamingTurnDetectorStream._StartOfTurnSentinel):
-                self._transport.on_start_of_turn(item.turn_duration)
+                self._transport.on_start_of_turn(item.started_at)
             else:
                 self._transport.push_frame(item)
 
