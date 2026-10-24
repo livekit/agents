@@ -1,12 +1,16 @@
+use crate::agent_session::cycle::{Cycle, TurnTimer};
+use crate::agent_session::{Driver, SessionShared};
 use crate::generation::GenEvent;
-use crate::agent_session::SessionShared;
+use crate::trace::{DetectorLeg, DetectorStep, InputStep};
+use lk_agents_abi::AbortHandle;
+use lk_agents_abi::metrics::base::LlmMetrics;
 pub use lk_agents_abi::turn::keyterms::{
     DetectionLlm, KeytermDetectionConfig, KeytermUpdate, KeytermsChanged, ResolvedKeytermDetection,
 };
-use lk_agents_abi::metrics::base::LlmMetrics;
-use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, HostRef, Llm, Role, Vocabulary};
+use lk_agents_abi::{
+    ChatContext, ChatItem, ChatMessage, HostRef, Llm, Role, SpawnerExt, Ts, Vocabulary,
+};
 use std::sync::Arc;
-use lk_agents_abi::AbortHandle;
 
 /// Bound on a single pass so a stuck LLM call can't hold the single-flight guard; a timeout changes
 /// nothing.
@@ -318,7 +322,9 @@ pub fn resolved_keyterm_detection(r: &KeytermDetection) -> ResolvedKeytermDetect
 /// `_resolve_detection`: the defaults, then whatever keys the caller set. `turn_interval` comes
 /// back clamped to at least 1, and an empty `instructions` resolves to the default prompt.
 #[lk_agents_abi::host(export(name = "resolve_keyterm_detection", pid = false))]
-pub fn resolve_keyterm_detection(config: Option<KeytermDetectionConfig>) -> ResolvedKeytermDetection {
+pub fn resolve_keyterm_detection(
+    config: Option<KeytermDetectionConfig>,
+) -> ResolvedKeytermDetection {
     resolved_keyterm_detection(&resolve_detection(config.as_ref()))
 }
 
@@ -378,7 +384,7 @@ impl TurnGate {
 #[derive(Debug, Clone, Default)]
 pub struct KeytermState {
     static_terms: Vec<String>,
-    /// Confirmed terms, oldest first -- the order *is* the eviction order.
+    /// Confirmed terms, oldest first: the order *is* the eviction order.
     detected: Vec<String>,
     /// Term -> the pass it was added on, in insertion order (shown to the detector in that order).
     pending: Vec<(String, u64)>,
@@ -734,7 +740,8 @@ impl Pass {
             .map(|(role, text)| TranscriptItem { role: *role, text })
             .collect();
         let current = self.state.current();
-        let current: Vec<(&str, bool)> = current.iter().map(|(t, applied)| (t.as_str(), *applied)).collect();
+        let current: Vec<(&str, bool)> =
+            current.iter().map(|(t, applied)| (t.as_str(), *applied)).collect();
         let prompt = format_detector_input(&items, &current)?;
         let req = self.next_req;
         self.next_req += 1;
@@ -756,5 +763,130 @@ impl Pass {
         if !list.is_empty() {
             out.push(KeytermEffect::Push(list));
         }
+    }
+}
+
+/// The detector as the driver runs it: started with the session, fed the conversation's items,
+/// its requests run off the loop and bounded.
+impl Driver {
+    /// `KeytermDetector.start(session, stt)`: the state survives handoffs, and static terms reach
+    /// the recogniser at once.
+    pub(crate) fn keyterms_start(&mut self, setup: KeytermSetup, cycle: &mut Cycle) {
+        let (slot, initial) = KeytermSlot::start(setup);
+        self.session.keyterms = Some(slot);
+        if !initial.is_empty() {
+            self.push_keyterms(initial, cycle);
+        }
+    }
+
+    pub(crate) fn keyterms_step(&mut self, now: Ts, input: KeytermIn, cycle: &mut Cycle) {
+        let Some(slot) = self.session.keyterms.as_mut() else { return };
+        let out = slot.step(input);
+        self.perform_keyterms(now, out, cycle);
+    }
+
+    /// `_on_conversation_item_added`; fed only while a pass could run, as the reference subscribes.
+    pub(crate) fn keyterms_on_item(&mut self, now: Ts, item: &ChatItem, cycle: &mut Cycle) {
+        let detecting = self.session.keyterms.as_ref().is_some_and(KeytermSlot::detecting)
+            && self.session.stt.as_ref().is_some_and(|stt| stt.capabilities().keyterms);
+        if !detecting {
+            return;
+        }
+        let ChatItem::Message(m) = item else { return };
+        let text = m.raw_text_content().unwrap_or_default();
+        self.keyterms_step(now, KeytermIn::Item { role: m.role, text }, cycle);
+    }
+
+    /// The STT leg changed under a handoff: a different recogniser gets the full list.
+    pub(crate) fn keyterms_on_stt_swap(&mut self, now: Ts, same_stt: bool, cycle: &mut Cycle) {
+        if self.session.keyterms.is_none() {
+            return;
+        }
+        cycle.trace(DetectorStep::KeytermsRebound { same_stt });
+        self.keyterms_step(now, KeytermIn::AgentUpdated { same_stt }, cycle);
+    }
+
+    pub(crate) fn on_keyterm_answer(
+        &mut self,
+        now: Ts,
+        req: u64,
+        arguments: Option<String>,
+        failed: bool,
+        metrics: Option<Box<LlmMetrics>>,
+        cycle: &mut Cycle,
+    ) {
+        let Some(slot) = self.session.keyterms.as_mut() else { return };
+        if slot.answered(req) {
+            cycle.machine().cancel(TurnTimer::KeytermTimeout);
+        }
+        // Rides the session stream like the reply LLM's metrics, with no speech.
+        if let Some(m) = metrics {
+            cycle.machine().emit(crate::events::SessionEvent::MetricsCollected {
+                metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Llm(*m)),
+                speech: None,
+            });
+        }
+        if failed {
+            return self.keyterms_failed(now, req, cycle);
+        }
+        cycle.trace(InputStep::LegVerdict { leg: DetectorLeg::Keyterms, req });
+        // Strict JSON; a malformed document is an empty update.
+        let parsed =
+            arguments.as_deref().and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok());
+        let update = parse_record_keyterms(parsed.as_ref());
+        self.keyterms_step(now, KeytermIn::Answer { req, update }, cycle);
+    }
+
+    /// `asyncio.wait_for(.., timeout)` expired: no change, the slot frees.
+    pub(crate) fn on_keyterm_timeout(&mut self, now: Ts, cycle: &mut Cycle) {
+        let Some(slot) = self.session.keyterms.as_mut() else { return };
+        let Some(req) = slot.time_out() else { return };
+        self.keyterms_failed(now, req, cycle);
+    }
+
+    fn keyterms_failed(&mut self, now: Ts, req: u64, cycle: &mut Cycle) {
+        cycle.trace(InputStep::LegFailed { leg: DetectorLeg::Keyterms, recoverable: true });
+        self.keyterms_step(now, KeytermIn::Failed { req }, cycle);
+    }
+
+    fn perform_keyterms(&mut self, now: Ts, out: Vec<KeytermEffect>, cycle: &mut Cycle) {
+        for effect in out {
+            match effect {
+                KeytermEffect::Request { req, prompt } => {
+                    self.request_keyterms(now, req, prompt, cycle)
+                }
+                KeytermEffect::Push(terms) => self.push_keyterms(terms, cycle),
+                KeytermEffect::Cancel { req } => {
+                    if let Some(slot) = self.session.keyterms.as_mut() {
+                        slot.cancel(req);
+                    }
+                    cycle.machine().cancel(TurnTimer::KeytermTimeout);
+                }
+            }
+        }
+    }
+
+    fn push_keyterms(&mut self, terms: Vec<String>, cycle: &mut Cycle) {
+        if let Some(stt) = self.session.stt.as_ref() {
+            stt.update_keyterms(&terms);
+        }
+        cycle.trace(DetectorStep::KeytermsPushed { terms });
+    }
+
+    /// One request, bounded by the pass's timeout, run off the loop.
+    fn request_keyterms(&mut self, now: Ts, req: u64, prompt: String, cycle: &mut Cycle) {
+        let Some(slot) = self.session.keyterms.as_mut() else { return };
+        let Some(llm) = slot.llm() else {
+            // The machine asked with no model to ask: fed back as a failure so the slot frees.
+            self.keyterms_step(now, KeytermIn::Failed { req }, cycle);
+            return;
+        };
+        cycle.trace(InputStep::LegRequested { leg: DetectorLeg::Keyterms, req });
+        cycle.machine().arm(TurnTimer::KeytermTimeout, now.saturating_add(slot.timeout()));
+        let request = slot.request(prompt, self.step.wall());
+        let shared = Arc::clone(&self.shared);
+        let handle =
+            shared.spawner.clone().spawn_unboxed(detection_pass(shared.clone(), llm, request, req));
+        slot.set_inflight(req, handle);
     }
 }

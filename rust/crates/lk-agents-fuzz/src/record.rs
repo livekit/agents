@@ -411,6 +411,7 @@ pub enum Answer {
     IdleRefused(IdleRefused),
     Hold(u64),
     Committed(String),
+    CommitSuperseded,
     HandoffOk,
     HandoffRefused(HandoffRefused),
     DrainOk,

@@ -144,7 +144,10 @@ enum SttLeg {
     Opening,
     /// In the leg table's peer row behind `gate`: frames flow while the machine listens. `sink`
     /// is that row's, for the host's own frames.
-    Installed { gate: Arc<AtomicBool>, sink: Arc<dyn StreamSink<AudioFrame>> },
+    Installed {
+        gate: Arc<AtomicBool>,
+        sink: Arc<dyn StreamSink<AudioFrame>>,
+    },
     /// Cleared; an open that lands now is discarded.
     Done,
 }
@@ -378,7 +381,7 @@ impl AmdSystem {
                 // `interrupt(force=True)`: the greeting is being spoken over.
                 Effect::Interrupt { force } => {
                     let _ =
-                        self.peer.send(Origin::Amd, SpeechCommand::Interrupt { force, done: None });
+                        self.peer.send(Origin::Amd, SpeechCommand::Interrupt { force, call: None });
                 }
             }
         }

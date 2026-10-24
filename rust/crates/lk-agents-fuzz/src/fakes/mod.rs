@@ -217,6 +217,8 @@ pub struct Registry {
     api: std::sync::OnceLock<
         lk_agents_voice::agent_session::Tx<lk_agents_voice::agent_session::Command>,
     >,
+    /// The session's open calls, the run's and the tool bodies' alike; the run settles them.
+    calls: lk_agents_voice::agent_session::Calls,
 }
 
 impl Registry {
@@ -230,6 +232,7 @@ impl Registry {
             tool_serial: AtomicU32::new(0),
             voice_down: std::sync::atomic::AtomicBool::new(false),
             api: std::sync::OnceLock::new(),
+            calls: Default::default(),
         };
         (Arc::new(registry), receiver)
     }
@@ -260,6 +263,10 @@ impl Registry {
         &self,
     ) -> Option<&lk_agents_voice::agent_session::Tx<lk_agents_voice::agent_session::Command>> {
         self.api.get()
+    }
+
+    pub(crate) fn calls(&self) -> &lk_agents_voice::agent_session::Calls {
+        &self.calls
     }
 
     /// The next slot of a kind.

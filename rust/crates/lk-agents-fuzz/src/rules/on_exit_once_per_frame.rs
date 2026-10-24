@@ -109,7 +109,6 @@ fn drain_then_close() -> Case {
             Input::Advance { ms: Millis(50) },
             Input::Close { drain: false },
         ],
-        schedule: 0,
-        random: vec![],
+        ..Case::default()
     }
 }

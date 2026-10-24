@@ -5,7 +5,7 @@ use std::sync::Arc;
 use lk_agents_abi::FunctionCall;
 use lk_agents_voice::{
     agent_activity::scheduling::SpeechId,
-    agent_session::{Origin, SpeechCommand},
+    agent_session::{Answer as DriverAnswer, Origin, SpeechCommand},
     tool_executor::{ToolAnswer, ToolRunner},
 };
 use tokio::sync::oneshot;
@@ -52,11 +52,10 @@ impl ToolRunner for FakeTools {
                 // The body asks from its own origin, as the binding stamps a tool's commands;
                 // the driver's answer -- idle, or refused by the close -- ends the wait either way.
                 if let Some(api) = self.registry.api() {
-                    let (done, idle) = oneshot::channel();
+                    let (asking, idle) = self.registry.calls().open(DriverAnswer::idle);
                     let origin = Origin::Tool { call_id: call.call_id.clone() };
-                    let asked = api
-                        .send_from(origin, SpeechCommand::WaitForIdle { hold: None, done }.into())
-                        .is_ok();
+                    let ask = SpeechCommand::WaitForIdle { hold: None, call: Some(asking) };
+                    let asked = api.send_from(origin, ask.into()).is_ok();
                     if asked {
                         let _ = idle.await;
                     }

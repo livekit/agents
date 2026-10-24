@@ -69,8 +69,8 @@ mod tests {
         for seed in 0..8u64 {
             let setup = Setup { stt: true, ..sample_setup(&mut Rng::with_seed(seed)) };
             let case = explore_at(setup, seed, 150, Dials::conversation()).case;
-            let run = crate::drive::simulate(async {
-                let mut run = Run::start(&case.setup).await;
+            let run = crate::drive::simulate_with(case.schedule, async {
+                let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
                 for input in &case.inputs {
                     run.apply(input).await;
                 }

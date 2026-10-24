@@ -49,7 +49,7 @@ pub(crate) async fn realtime_generation_task(
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
     // Locked for the step by the one task that ever reads it; the channel outlives the step.
     let mut rx = events.lock().await;
-    let audio_out = shared.audio_out();
+    let audio_out = shared.output.audio();
     // `realtime_audio_output_node`: frames go to the node, which emits into the sink itself.
     let node = shared.realtime_audio.clone();
     let node_out =
@@ -58,7 +58,7 @@ pub(crate) async fn realtime_generation_task(
         Some(n) => Some(n),
         None => audio_out.as_deref(),
     };
-    // The calls run as they arrive, alongside the playout (`agent_activity.py:4122`).
+    // The calls run as they arrive, alongside the playout.
     let mut tools = ToolStep::new();
     let mut generation = Generation {
         shared,
@@ -205,7 +205,7 @@ impl Segment for Generation<'_> {
                 }
                 Event::FunctionCall(ready) => {
                     // Stamped at its execution start: the call arrives during the generation,
-                    // before the message it belongs to is placed (`agent_activity.py:4108-4113`).
+                    // before the message it belongs to is placed.
                     let mut call = *ready.call;
                     call.created_at = self.shared.time.wall();
                     self.tools.dispatch(self.shared, self.handle, self.ctx, call);

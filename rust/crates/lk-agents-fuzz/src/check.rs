@@ -23,6 +23,17 @@ pub enum Subject {
     Resource(Kind, u32),
 }
 
+impl Subject {
+    /// What the subject is, without which one: two speeches failing one contract are one finding.
+    pub fn kind(&self) -> String {
+        match self {
+            Subject::Session => "Session".into(),
+            Subject::Speech(_) => "Speech".into(),
+            Subject::Resource(kind, _) => format!("{kind:?}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Failure {
     pub contract: String,

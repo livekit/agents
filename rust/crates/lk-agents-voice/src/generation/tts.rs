@@ -4,8 +4,8 @@ use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_te
 use super::llm::{Retried, SegEvent, extend, report_metrics, retry};
 use super::pipeline_reply::{fatal, teardown_deadline};
 use super::playout::{Next, Segment, first_frame, perform_audio_forwarding, unheard};
-use crate::agent_session::SessionShared;
 use crate::agent_session::DriverError;
+use crate::agent_session::SessionShared;
 use crate::generation::{Attempt, TurnAccumulator};
 use crate::speech_handle::SpeechHandle;
 use crate::trace::{GenerationStep, ProviderLeg};
@@ -393,8 +393,8 @@ impl SynthesisPlayout<'_> {
             let mut started_at = None;
             let result = if self.gate.wait(shared, handle).await {
                 // Outputs can change while a speculative reply waits for its turn.
-                let audio = self.gate.audio_enabled.then(|| shared.audio_out()).flatten();
-                let text = self.gate.text_enabled.then(|| shared.text_out()).flatten();
+                let audio = self.gate.audio_enabled.then(|| shared.output.audio()).flatten();
+                let text = self.gate.text_enabled.then(|| shared.output.transcription()).flatten();
                 let leg = TextLeg::new(text.as_deref(), None, shared, handle.id());
                 let mut buffered = SynthesizedSegment {
                     rx: &mut self.rx,
@@ -425,7 +425,7 @@ impl SynthesisPlayout<'_> {
         if !self.gate.wait(shared, handle).await {
             return;
         }
-        let out = self.gate.text_enabled.then(|| shared.text_out()).flatten();
+        let out = self.gate.text_enabled.then(|| shared.output.transcription()).flatten();
         let leg = TextLeg::new(out.as_deref(), None, shared, handle.id());
         while let Ok(event) = self.rx.try_recv() {
             leg.forward(event).await;
@@ -460,13 +460,6 @@ impl Segment for SynthesizedSegment<'_, '_> {
     fn started_speaking(&mut self, at: f64) {
         self.started_at.get_or_insert(at);
     }
-}
-
-/// `use_aligned_transcript` less its audio-output half: `use_tts_aligned_transcript` is `True`
-/// (not-given is off) and the TTS aligns.
-pub(super) fn aligned_transcript(shared: &SessionShared, tts: &dyn Tts) -> bool {
-    shared.opts.speech.use_tts_aligned_transcript == Some(true)
-        && tts.capabilities().aligned_transcript
 }
 
 /// `_aligned_transcript_or_text`: the item is the stamped words, with timings; if nothing was

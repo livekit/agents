@@ -2,12 +2,12 @@
 //!
 //! This is a guard, not a demonstration. Tokio randomises the branch order of an unbiased
 //! `select!`, so concurrent generations used to race differently on every run and a finding landed
-//! on a different speech each time. `drive::simulate` pins that RNG and gives each case its own
+//! on a different speech each time. `drive::simulate_with` pins that RNG and gives each case its own
 //! runtime. Anything that reintroduces real nondeterminism -- a `HashMap` iterated for ordering,
 //! wall-clock time read as data, a fresh `select!` outside a seeded runtime -- fails here first,
 //! with a diff, instead of showing up months later as a corpus that stopped reproducing.
 use lk_agents_fuzz::{
-    drive::{Run, simulate},
+    drive::{Run, simulate_with},
     record::Recording,
     replay, search,
 };
@@ -39,8 +39,8 @@ fn fingerprint(r: &Recording) -> String {
 }
 
 fn replayed(case: &lk_agents_fuzz::drive::Case) -> String {
-    simulate(async {
-        let mut run = Run::start(&case.setup).await;
+    simulate_with(case.schedule, async {
+        let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
         for input in &case.inputs {
             run.apply(input).await;
         }

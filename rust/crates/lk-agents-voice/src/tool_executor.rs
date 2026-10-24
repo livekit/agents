@@ -1,6 +1,6 @@
 use crate::agent::{Source, Visibility};
-use crate::agent_session::cycle::Cycle;
 use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::cycle::Cycle;
 use crate::agent_session::{Driver, FillerSource, HookId, Origin};
 use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
@@ -82,8 +82,10 @@ mod tools {
         }
 
         pub(crate) fn live_blocking(&self, speech: SpeechId) -> u32 {
-            u32::try_from(self.running.iter().filter(|r| r.speech == speech && r.updates == 0).count())
-                .unwrap_or(u32::MAX)
+            u32::try_from(
+                self.running.iter().filter(|r| r.speech == speech && r.updates == 0).count(),
+            )
+            .unwrap_or(u32::MAX)
         }
 
         /// A hosted call enters the running set.
@@ -133,7 +135,12 @@ mod tools {
         }
 
         /// An update's pair, batched for the next deferred reply.
-        pub(crate) fn queue_update(&mut self, agent: String, items: Vec<ChatItem>, update_id: String) {
+        pub(crate) fn queue_update(
+            &mut self,
+            agent: String,
+            items: Vec<ChatItem>,
+            update_id: String,
+        ) {
             self.pending.push(Pending { agent, items, update_id });
         }
 
@@ -199,8 +206,10 @@ mod tools {
             speech: SpeechId,
             source: FillerSource,
         ) {
-            self.fillers
-                .insert(id, FillerRun { sched, call_id, speech, source, asking: None, armed: None });
+            self.fillers.insert(
+                id,
+                FillerRun { sched, call_id, speech, source, asking: None, armed: None },
+            );
         }
 
         /// The scope closed: whether its timer was armed, and the source hook it was asking.
@@ -285,7 +294,11 @@ mod tools {
 
         /// The timer a wait needs: `WaitForIdle` disarms, a dwell or cooldown (re)arms at its deadline.
         /// `None` when the scope is gone.
-        pub(crate) fn filler_wait(&mut self, id: FillerId, until: Option<Ts>) -> Option<FillerTimer> {
+        pub(crate) fn filler_wait(
+            &mut self,
+            id: FillerId,
+            until: Option<Ts>,
+        ) -> Option<FillerTimer> {
             let run = self.fillers.get_mut(&id)?;
             Some(match until {
                 None => FillerTimer { cancel: run.armed.take().is_some(), arm: None },
@@ -473,13 +486,19 @@ pub enum ToolEnd {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolAnswer {
     /// The tool returned `value` as JSON, with `Agent`s set aside in `agents`.
-    Returned { value: Option<serde_json::Value>, agents: Vec<HostRef> },
+    Returned {
+        value: Option<serde_json::Value>,
+        agents: Vec<HostRef>,
+    },
     Raised(ToolRaise),
     /// A value the model can't be told about (`_is_valid_function_output`).
     Invalid,
     Cancelled,
     /// `ctx.update(message)`: rendered `message`, `raw` as written; the tool runs on.
-    Detached { message: String, raw: String },
+    Detached {
+        message: String,
+        raw: String,
+    },
 }
 
 /// The three exception kinds the reference tells apart (`llm/utils.py`, `make_function_call_output`).
@@ -507,7 +526,8 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolAnswer {
     type Error = pyo3::PyErr;
 
     fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        let raw: lk_agents_abi::llm::tool_executor::RawToolAnswer = lk_agents_abi::python::extract_generated(&obj.to_owned())?;
+        let raw: lk_agents_abi::llm::tool_executor::RawToolAnswer =
+            lk_agents_abi::python::extract_generated(&obj.to_owned())?;
         ToolAnswer::try_from(raw).map_err(pyo3::exceptions::PyValueError::new_err)
     }
 }
@@ -519,17 +539,24 @@ impl TryFrom<lk_agents_abi::llm::tool_executor::RawToolAnswer> for ToolAnswer {
     /// error, never a guess.
     fn try_from(raw: lk_agents_abi::llm::tool_executor::RawToolAnswer) -> Result<Self, String> {
         use lk_agents_abi::llm::tool_executor::{ToolAnswerKind, ToolRaiseKind};
-        let kind = ToolAnswerKind::from_wire(&raw.kind).ok_or_else(|| format!("unknown tool answer kind {:?}", raw.kind))?;
-        let message = |m: Option<String>| m.ok_or_else(|| format!("a `{}` answer carries a `message`", raw.kind));
+        let kind = ToolAnswerKind::from_wire(&raw.kind)
+            .ok_or_else(|| format!("unknown tool answer kind {:?}", raw.kind))?;
+        let message = |m: Option<String>| {
+            m.ok_or_else(|| format!("a `{}` answer carries a `message`", raw.kind))
+        };
         Ok(match kind {
-            ToolAnswerKind::Returned => ToolAnswer::Returned { value: raw.value, agents: raw.agents },
+            ToolAnswerKind::Returned => {
+                ToolAnswer::Returned { value: raw.value, agents: raw.agents }
+            }
             ToolAnswerKind::Raised => {
                 let raised = raw.error.as_deref().and_then(ToolRaiseKind::from_wire);
-                ToolAnswer::Raised(match raised.ok_or_else(|| format!("unknown raised kind {:?}", raw.error))? {
-                    ToolRaiseKind::ToolError => ToolRaise::ToolError(message(raw.message)?),
-                    ToolRaiseKind::StopResponse => ToolRaise::StopResponse,
-                    ToolRaiseKind::Internal => ToolRaise::Internal,
-                })
+                ToolAnswer::Raised(
+                    match raised.ok_or_else(|| format!("unknown raised kind {:?}", raw.error))? {
+                        ToolRaiseKind::ToolError => ToolRaise::ToolError(message(raw.message)?),
+                        ToolRaiseKind::StopResponse => ToolRaise::StopResponse,
+                        ToolRaiseKind::Internal => ToolRaise::Internal,
+                    },
+                )
             }
             ToolAnswerKind::Invalid => ToolAnswer::Invalid,
             ToolAnswerKind::Cancelled => ToolAnswer::Cancelled,
@@ -625,9 +652,15 @@ pub enum ToolOutcome {
     Silent,
     Error(String),
     /// A handoff, with its text; a bare handoff asks for no reply.
-    Handoff { agent: HostRef, text: Option<String> },
+    Handoff {
+        agent: HostRef,
+        text: Option<String>,
+    },
     /// A progress update: answered like a reply, and the call is marked non-blocking.
-    Detached { message: String, raw: String },
+    Detached {
+        message: String,
+        raw: String,
+    },
     /// The host cancelled the tool: an empty output, no reply, not an error.
     Cancelled,
     Missing,
@@ -784,8 +817,7 @@ pub struct StepDecision {
 
 impl StepDecision {
     /// `function_tools_executed` was handled: the next step from what the handlers left
-    /// (`cancel_tool_reply()`, `cancel_agent_handoff()`; agent_activity.py:3657-3670,
-    /// :4338-4345). An interrupted step stays interrupted.
+    /// (`cancel_tool_reply()`, `cancel_agent_handoff()`). An interrupted step stays interrupted.
     pub fn settle(mut self, event: ToolsExecutedEvent) -> StepDecision {
         self.commit = commit_of(&event.function_calls, &event.function_call_outputs);
         if self.next != NextStep::Interrupted {
@@ -848,7 +880,7 @@ pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
         return interrupted(inputs.tool_output);
     }
 
-    // No tool output: nothing at all -- no event, no commit, no increment.
+    // No tool output: nothing at all: no event, no commit, no increment.
     if inputs.tool_output.is_empty() {
         return quiet(NextStep::Done);
     }
@@ -975,7 +1007,7 @@ impl Driver {
         cycle: &mut Cycle,
     ) {
         let Some(Handling { speech, step, mut event, warnings, verdict }) =
-            self.activity.tools_mut().executed_handled(hook)
+            self.activity.tools.executed_handled(hook)
         else {
             return;
         };
@@ -1030,20 +1062,20 @@ impl Driver {
             // A call the request never advertised is answered by the driver and reaches the
             // handle only here. Once, by id.
             if let ChatItem::FunctionCall(_) = &item
-                && let Some(h) = self.activity.scheduling_task().handle(speech)
+                && let Some(h) = self.activity.scheduling_task.handle(speech)
                 && !h.chat_items().iter().any(|i| i.id() == item.id())
             {
                 h.item_added(&item);
             }
-            let _ = self.commit_item(item, source, Visibility::Both, cycle);
+            self.commit_item(item, source, Visibility::Both, cycle);
         }
-        // `self.scheduling_paused` (agent_activity.py:3659): the activity that made the speech
-        // drains -- paused, left behind by a handoff, or a task that has its result.
-        let draining = self.activity.scheduling_task().is_paused()
-            || self.activity.speech_frame(speech).is_some_and(|f| f != self.activity.agent())
-            || self.activity.tasks().driving_settled();
+        // `self.scheduling_paused`: the activity that made the speech
+        // drains: paused, left behind by a handoff, or a task that has its result.
+        let draining = self.activity.scheduling_task.is_paused()
+            || self.activity.speech_frame(speech).is_some_and(|f| *f != self.activity.agent)
+            || self.activity.tasks.driving_settled();
         // The step's follow-up plans against the frame once this is published.
-        self.activity.mark_tools_committed(speech, step, draining);
+        self.activity.tools_committed.insert((speech, step), draining);
         self.activity.set_tools_in_flight(speech, false);
         self.publish_frame();
         for w in &warnings {
@@ -1080,14 +1112,18 @@ impl Driver {
 
     /// Another live speech is in its tools.
     pub(crate) fn tools_running_elsewhere(&self, speech: SpeechId) -> bool {
-        let scheduling = self.activity.scheduling_task();
-        self.activity.speeches_in_tools().any(|id| id != speech && scheduling.contains(id))
+        let scheduling = &self.activity.scheduling_task;
+        self.activity
+            .tools_in_flight
+            .iter()
+            .copied()
+            .any(|id| id != speech && scheduling.contains(id))
     }
 
     /// The speech whose tool sent the command (`Origin::Tool`).
     pub(crate) fn tool_speech(&self, origin: &Origin) -> Option<SpeechId> {
         match origin {
-            Origin::Tool { call_id } => self.activity.tools().speech_of(call_id),
+            Origin::Tool { call_id } => self.activity.tools.speech_of(call_id),
             Origin::Host | Origin::Hook | Origin::Task | Origin::Amd | Origin::Ivr => None,
         }
     }
@@ -1098,7 +1134,12 @@ mod host_answer_tests {
     use super::{ToolAnswer, ToolRaise};
     use lk_agents_abi::llm::tool_executor::RawToolAnswer;
 
-    fn raw(kind: &str, error: Option<&str>, message: Option<&str>, detached_raw: Option<&str>) -> RawToolAnswer {
+    fn raw(
+        kind: &str,
+        error: Option<&str>,
+        message: Option<&str>,
+        detached_raw: Option<&str>,
+    ) -> RawToolAnswer {
         RawToolAnswer {
             kind: kind.to_owned(),
             value: None,
@@ -1116,7 +1157,10 @@ mod host_answer_tests {
         returned.value = Some(serde_json::json!({"temp": 12}));
         assert_eq!(
             ToolAnswer::try_from(returned),
-            Ok(ToolAnswer::Returned { value: Some(serde_json::json!({"temp": 12})), agents: Vec::new() })
+            Ok(ToolAnswer::Returned {
+                value: Some(serde_json::json!({"temp": 12})),
+                agents: Vec::new()
+            })
         );
         assert_eq!(
             ToolAnswer::try_from(raw("raised", Some("tool_error"), Some("nope"), None)),
@@ -1126,12 +1170,26 @@ mod host_answer_tests {
             ToolAnswer::try_from(raw("raised", Some("stop_response"), None, None)),
             Ok(ToolAnswer::Raised(ToolRaise::StopResponse))
         );
-        assert_eq!(ToolAnswer::try_from(raw("raised", Some("internal"), None, None)), Ok(ToolAnswer::Raised(ToolRaise::Internal)));
-        assert_eq!(ToolAnswer::try_from(raw("invalid", None, None, None)), Ok(ToolAnswer::Invalid));
-        assert_eq!(ToolAnswer::try_from(raw("cancelled", None, None, None)), Ok(ToolAnswer::Cancelled));
         assert_eq!(
-            ToolAnswer::try_from(raw("detached", None, Some("The tool has updated: working"), Some("working"))),
-            Ok(ToolAnswer::Detached { message: "The tool has updated: working".to_owned(), raw: "working".to_owned() })
+            ToolAnswer::try_from(raw("raised", Some("internal"), None, None)),
+            Ok(ToolAnswer::Raised(ToolRaise::Internal))
+        );
+        assert_eq!(ToolAnswer::try_from(raw("invalid", None, None, None)), Ok(ToolAnswer::Invalid));
+        assert_eq!(
+            ToolAnswer::try_from(raw("cancelled", None, None, None)),
+            Ok(ToolAnswer::Cancelled)
+        );
+        assert_eq!(
+            ToolAnswer::try_from(raw(
+                "detached",
+                None,
+                Some("The tool has updated: working"),
+                Some("working")
+            )),
+            Ok(ToolAnswer::Detached {
+                message: "The tool has updated: working".to_owned(),
+                raw: "working".to_owned()
+            })
         );
     }
 
@@ -1139,9 +1197,21 @@ mod host_answer_tests {
     #[test]
     fn a_malformed_answer_is_refused_rather_than_guessed() {
         assert!(ToolAnswer::try_from(raw("done", None, None, None)).is_err(), "an unknown kind");
-        assert!(ToolAnswer::try_from(raw("raised", None, None, None)).is_err(), "a raise without its kind");
-        assert!(ToolAnswer::try_from(raw("raised", Some("tool_error"), None, None)).is_err(), "a ToolError without its message");
-        assert!(ToolAnswer::try_from(raw("detached", None, None, None)).is_err(), "an update without its message");
-        assert!(ToolAnswer::try_from(raw("detached", None, Some("m"), None)).is_err(), "an update without its raw text");
+        assert!(
+            ToolAnswer::try_from(raw("raised", None, None, None)).is_err(),
+            "a raise without its kind"
+        );
+        assert!(
+            ToolAnswer::try_from(raw("raised", Some("tool_error"), None, None)).is_err(),
+            "a ToolError without its message"
+        );
+        assert!(
+            ToolAnswer::try_from(raw("detached", None, None, None)).is_err(),
+            "an update without its message"
+        );
+        assert!(
+            ToolAnswer::try_from(raw("detached", None, Some("m"), None)).is_err(),
+            "an update without its raw text"
+        );
     }
 }

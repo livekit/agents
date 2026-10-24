@@ -71,7 +71,7 @@ fn nothing_grows_with_the_conversation() {
         };
         let case = explore_at(setup, seed, budget, Dials::conversation()).case;
         let run = simulate_with(case.schedule, async {
-            let mut run = Run::start(&case.setup).await;
+            let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
             for input in &case.inputs {
                 run.apply(input).await;
             }

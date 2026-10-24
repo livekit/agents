@@ -62,7 +62,7 @@ point of view.
 | [backend-api.md](backend-api.md) | built | the threads service, its history and tasks, thread grants, `AgentClient` |
 | [planned-backend-api.md](planned-backend-api.md) | planned | `lk.threads`, watching a thread, the Node client |
 | [rust-core.md](rust-core.md) | built | the Rust core: crates, boundaries, bindings, testing, codebase rules |
-| [planned-rust-core.md](planned-rust-core.md) | planned | the run unit of work in Rust, binding moves, CI checks |
+| [planned-rust-core.md](planned-rust-core.md) | planned | the run unit of work in Rust, binding moves, CI checks, cores and the runtime (the voice core as a state machine) |
 | [examples/use-cases/](examples/use-cases/README.md) | mixed | fourteen complete agents, one idea each |
 
 ## Running it

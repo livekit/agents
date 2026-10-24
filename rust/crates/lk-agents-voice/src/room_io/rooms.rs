@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use lk_agents_abi::VirtualClock;
 use lk_agents_rtc::{
-    DisconnectReason, FakeRoom, FakeRtc, FakeTrackPublication, FrameSynth, ParticipantKind, RtcRoom,
-    StreamInfo, UnknownDisconnectReason,
+    DisconnectReason, FakeRoom, FakeRtc, FakeTrackPublication, FrameSynth, ParticipantKind,
+    RtcRoom, StreamInfo, UnknownDisconnectReason,
 };
 
 #[cfg(feature = "python")]
@@ -34,7 +34,7 @@ pub enum RoomRefused {
     Reason(#[from] UnknownDisconnectReason),
 }
 
-/// A room, a clock, and a microphone -- no network. The session takes the room's `VirtualClock`
+/// A room, a clock, and a microphone: no network. The session takes the room's `VirtualClock`
 /// as its `Timebase`, so driver timers and the playout model cannot drift. A test drives it from
 /// the loop thread while the driver reads it from a tokio worker.
 #[lk_agents_abi::class(name = "FakeRoom")]
@@ -58,7 +58,13 @@ impl ScriptedRoom {
         }
         let (rtc, clock) = FakeRtc::with_virtual_clock();
         let room = rtc.room(&name);
-        Ok(ScriptedRoom { rtc, room, clock, mic: Mutex::new(None), synth: FrameSynth::new(sample_rate, FRAME_MS) })
+        Ok(ScriptedRoom {
+            rtc,
+            room,
+            clock,
+            mic: Mutex::new(None),
+            synth: FrameSynth::new(sample_rate, FRAME_MS),
+        })
     }
 
     /// The room, as the seam sees it.
@@ -92,7 +98,8 @@ impl ScriptedRoom {
     pub fn join(&self, identity: String, track_sid: Option<String>) {
         let sid = track_sid.unwrap_or_else(|| format!("TR_{identity}"));
         let participant = self.room.add_participant(identity.as_str(), ParticipantKind::Standard);
-        *self.mic.lock().unwrap_or_else(|p| p.into_inner()) = Some(participant.publish_microphone(sid));
+        *self.mic.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(participant.publish_microphone(sid));
     }
 
     /// Push `frames` of 20 ms of speech from the joined participant. Returns how many a reader
@@ -131,7 +138,12 @@ impl ScriptedRoom {
     /// Every text stream the agent opened, as `(topic, text)`. The transcript path's output.
     #[host(method)]
     pub fn text_streams(&self) -> Vec<(String, String)> {
-        self.room.local_participant().text_streams().into_iter().map(|s| (s.opts.topic.clone(), s.text())).collect()
+        self.room
+            .local_participant()
+            .text_streams()
+            .into_iter()
+            .map(|s| (s.opts.topic.clone(), s.text()))
+            .collect()
     }
 
     /// `identity` sends `text` on `lk.chat`, as a stream with id `stream_id`. `False` if nobody
@@ -165,7 +177,7 @@ impl ScriptedRoom {
 }
 
 /// A session with no RTC room, on the real clock. Built on [`FakeRtc::offline`] but on the wall
-/// clock ([`Timebase::real`]), since a console session is a real conversation -- unless it is built
+/// clock ([`Timebase::real`]), since a console session is a real conversation: unless it is built
 /// on an asyncio loop on virtual time, whose clock it then takes (the ambient clock).
 #[lk_agents_abi::class]
 pub struct OfflineRoom {
@@ -184,7 +196,9 @@ impl OfflineRoom {
         }
         // One clock, shared: the room gets the timebase's clock (`FakeRtc::offline` says why).
         #[cfg(feature = "python")]
-        let time = Timebase::of_clock(<Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient());
+        let time = Timebase::of_clock(
+            <Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient(),
+        );
         #[cfg(not(feature = "python"))]
         let time = Timebase::real();
         let (rtc, room) = FakeRtc::offline(&name, time.clock());

@@ -33,8 +33,7 @@ impl Rule for DtmfReportsWhatWasPressed {
         let host = r.host_view();
         let internal = r.internal_view();
         for call in host.api_calls() {
-            let Input::Dtmf { input: DtmfInput::Start, digits, confirm, .. } = call.input()
-            else {
+            let Input::Dtmf { input: DtmfInput::Start, digits, confirm, .. } = call.input() else {
                 continue;
             };
             let Some((at, Answer::Dtmf(outcome))) = call.returned() else { continue };
@@ -188,7 +187,6 @@ fn two_collections() -> Case {
             key(DtmfKey::Pound),
             Input::Advance { ms: Millis(100) },
         ],
-        schedule: 0,
-        random: vec![],
+        ..Case::default()
     }
 }

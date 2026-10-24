@@ -14,7 +14,7 @@ impl Run {
     /// The trace observer is installed before the loop is spawned, so the first step the driver
     /// decides is stamped from the same counter as everything else the case observes. That one
     /// counter is what makes the recording a happens-before order rather than a pile of clocks.
-    pub async fn start(setup: &Setup) -> Run {
+    pub async fn start(setup: &Setup, schedule: u64, policy: Policy) -> Run {
         let time = Timebase::simulated();
         let stamps = Stamps::new(time.clone());
         let (registry, records) = Registry::new(stamps.clone());
@@ -129,7 +129,7 @@ impl Run {
             Some((mic, (registry.new_mic(), frames)))
         };
         let (mut driver, session) = DriverBuilder {
-            time,
+            time: time.clone(),
             spawner: tasks.clone(),
             config: DriverConfig::new(config, legs),
             thresholds: lk_agents_abi::tokenize::language::ThresholdOptions::new(
@@ -216,7 +216,7 @@ impl Run {
         // The systems are the host's to start, right after `start()`: the navigator so an `Ivr`
         // command has a reader, the AMD as the reference's `await amd.execute()`.
         if setup.ivr.is_some() {
-            lk_agents_voice::agent_session::start(&session.peer, session.ivr_detection);
+            lk_agents_voice::agent_session::start_ivr(&session.peer, session.ivr_detection);
         }
         if setup.amd {
             let llm = fakes::FakeLlm::new(registry.clone());
@@ -228,13 +228,15 @@ impl Run {
             let _ = amd.input(AmdIn::Start(AmdStart::DetectionTimer));
             let _ = amd.input(AmdIn::Start(AmdStart::Listening));
         }
-        let driver = tokio::spawn(async move { driver.run().await });
+        driver.open(time.read());
         let mut run = Run {
             sync,
             room: room_tx,
             room_io: room_io_tx,
             session,
             driver: Some(driver),
+            queue: super::queue::Queue::new(schedule, policy),
+            time,
             tasks,
             stamps,
             registry,
@@ -319,7 +321,7 @@ pub(super) fn frame(
         options: SessionPatch::default(),
         previous: PreviousActivity::Pause,
         next: NewActivity::Start,
-        done: None,
+        call: None,
         task: None,
     }
 }
@@ -392,6 +394,7 @@ pub(super) fn patch(
         Knob::Interruptions => patch.turn.interruption.enabled = Some(on),
         Knob::MinInterruptionWords => patch.turn.interruption.min_words = Some(words.0),
         Knob::UserAway => patch.timers.user_away = delay.map(Nullable::Value),
+        Knob::MaxToolSteps => patch.speech.max_tool_steps = Some(words.0),
     }
     patch
 }

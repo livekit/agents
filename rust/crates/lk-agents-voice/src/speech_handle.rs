@@ -76,9 +76,15 @@ impl<'py> pyo3::IntoPyObject<'py> for SpeechException {
     type Error = pyo3::PyErr;
 
     fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        let runtime_error = |msg: String| pyo3::exceptions::PyRuntimeError::new_err(msg).value(py).clone().into_any();
+        let runtime_error = |msg: String| {
+            pyo3::exceptions::PyRuntimeError::new_err(msg).value(py).clone().into_any()
+        };
         Ok(match &self.0 {
-            ProviderError::Host { error, .. } => match error.host_ref.clone().and_then(|r| lk_agents_abi::python::resolve_captured(py, r)) {
+            ProviderError::Host { error, .. } => match error
+                .host_ref
+                .clone()
+                .and_then(|r| lk_agents_abi::python::resolve_captured(py, r))
+            {
                 Some(obj) => obj.into_bound(py),
                 None => runtime_error(error.to_string()),
             },
@@ -88,13 +94,21 @@ impl<'py> pyo3::IntoPyObject<'py> for SpeechException {
 }
 
 impl HostSpeech {
-    pub fn pending(api: Api, requested_allow: Option<bool>) -> (tokio::sync::oneshot::Sender<Arc<SpeechHandle>>, Self) {
-        let (tx, promise) = SpeechPromise::pending(requested_allow);
-        (tx, HostSpeech { promise: Arc::new(promise), api, detached_id: String::new() })
+    pub fn pending(
+        api: Api,
+        rx: tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>,
+        requested_allow: Option<bool>,
+    ) -> Self {
+        let promise = SpeechPromise::pending(rx, requested_allow);
+        HostSpeech { promise: Arc::new(promise), api, detached_id: String::new() }
     }
 
     pub fn from_core(handle: Arc<SpeechHandle>, api: Api) -> Self {
-        HostSpeech { promise: Arc::new(SpeechPromise::ready(handle)), api, detached_id: String::new() }
+        HostSpeech {
+            promise: Arc::new(SpeechPromise::ready(handle)),
+            api,
+            detached_id: String::new(),
+        }
     }
 
     pub fn object(handle: &Arc<SpeechHandle>, api: &Api) -> lk_agents_abi::CoreObject {
@@ -110,10 +124,7 @@ impl HostSpeech {
     }
 }
 
-#[lk_agents_abi::host(object(
-    name = "SpeechHandle",
-    cell = "arc"
-))]
+#[lk_agents_abi::host(object(name = "SpeechHandle", cell = "arc"))]
 impl HostSpeech {
     /// A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
     /// behind it.
@@ -184,7 +195,11 @@ impl HostSpeech {
                 }
                 // A closed loop has no speech left to protect.
                 let _ = self.api.send(
-                    crate::agent_session::SpeechCommand::SetAllowInterruptions { speech: h.id(), allow: value }.into(),
+                    crate::agent_session::SpeechCommand::SetAllowInterruptions {
+                        speech: h.id(),
+                        allow: value,
+                    }
+                    .into(),
                 );
                 Ok(())
             }
@@ -206,12 +221,18 @@ impl HostSpeech {
     /// `interrupt(force=)` (`speech_handle.py:185`). Synchronous; if the speech does not exist yet,
     /// a task sends the command once it does, so the interrupt is not lost.
     #[host(method(kw_only, defaults(force = false)))]
-    pub fn interrupt(&self, force: bool, #[host(ambient)] spawner: Arc<dyn lk_agents_abi::Spawner>) -> Result<(), SpeechRefused> {
+    pub fn interrupt(
+        &self,
+        force: bool,
+        #[host(ambient)] spawner: Arc<dyn lk_agents_abi::Spawner>,
+    ) -> Result<(), SpeechRefused> {
         match self.promise.interrupt(force)? {
             InterruptRequest::Nothing => {}
             InterruptRequest::Now(speech) => {
                 // A closed loop has nothing left to interrupt.
-                let _ = self.api.send(crate::agent_session::SpeechCommand::InterruptSpeech { speech, force }.into());
+                let _ = self.api.send(
+                    crate::agent_session::SpeechCommand::InterruptSpeech { speech, force }.into(),
+                );
             }
             InterruptRequest::WhenCreated => {
                 let promise = Arc::clone(&self.promise);
@@ -547,6 +568,11 @@ impl SpeechHandle {
         self.interruptions.borrow().allow
     }
 
+    /// The user may cut it now: not interrupted already, and interruptions allowed.
+    pub fn interruptible(&self) -> bool {
+        !self.interrupted() && self.allow_interruptions()
+    }
+
     /// The `allow_interruptions` setter. Ignores the hold count, so a set during a hold is undone by
     /// the last release, as in the reference.
     pub fn set_allow_interruptions(&self, value: bool) -> Result<(), SpeechError> {
@@ -837,10 +863,10 @@ impl SpeechPromise {
     }
 
     pub fn pending(
+        rx: tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>,
         requested_allow: Option<bool>,
-    ) -> (tokio::sync::oneshot::Sender<Arc<SpeechHandle>>, Self) {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        (tx, Self::base(Default::default(), Some(rx), requested_allow, false))
+    ) -> Self {
+        Self::base(Default::default(), Some(rx), requested_allow, false)
     }
 
     pub fn detached(allow_interruptions: bool) -> Self {
@@ -1021,4 +1047,3 @@ impl std::fmt::Debug for SpeechHandle {
             .finish_non_exhaustive()
     }
 }
-

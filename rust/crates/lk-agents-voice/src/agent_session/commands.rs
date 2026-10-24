@@ -3,10 +3,10 @@
 
 use crate::agent_activity::pause::InterruptRefusal;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::tool_executor::Toolset;
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
+use crate::tool_executor::Toolset;
 use crate::workflows::{TaskHandle, TaskId};
 use lk_agents_abi::{ChatContext, Llm, Maybe, Stt, Tts, Vad};
 use lk_agents_voice::io::AudioInput;
@@ -23,7 +23,10 @@ pub enum Command {
     Video(lk_agents_abi::ImageContent),
     Close(Close),
     /// An id nobody waits on is dropped.
-    HookDone { id: HookId, outcome: HookOutcome },
+    HookDone {
+        id: HookId,
+        outcome: HookOutcome,
+    },
     /// Plugin-measured only (VAD, realtime usage, EOT/interruption); LLM/TTS/STT/EOU never come
     /// from here.
     HostMetrics(Box<lk_agents_abi::metrics::base::AgentMetrics>),
@@ -75,9 +78,13 @@ pub struct HookId(pub u64);
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum IvrCommand {
     /// A running navigator stands.
-    Start { max_silence: std::time::Duration },
+    Start {
+        max_silence: std::time::Duration,
+    },
     /// A final counted as if heard (AMD's greeting), so the first menu repeat is the second chunk.
-    SeedTranscript { text: String },
+    SeedTranscript {
+        text: String,
+    },
     Close,
     /// Added to the **session's** tools before `Start` and AMD's resume; acted on by the core, not
     /// relayed.
@@ -92,10 +99,16 @@ pub enum HookOutcome {
     Turn(Vec<crate::agent::TurnEdit>),
     Described(Box<AgentUpdate>),
     Rendered(String),
-    Filler { text: Option<String>, spoke: bool },
+    Filler {
+        text: Option<String>,
+        spoke: bool,
+    },
     /// `function_tools_executed` handled: each output's `reply_required`, in order, and the event's
     /// `handoff_required`, as the handlers left them.
-    ToolsExecuted { reply_required: Vec<bool>, handoff_required: bool },
+    ToolsExecuted {
+        reply_required: Vec<bool>,
+        handoff_required: bool,
+    },
     /// `on_user_turn_completed` skips the reply; a describe drops the handoff.
     Failed,
 }
@@ -122,13 +135,63 @@ impl std::str::FromStr for Origin {
             "hook" => Ok(Origin::Hook),
             "task" => Ok(Origin::Task),
             other => match other.strip_prefix("tool:") {
-                Some(call_id) if !call_id.is_empty() => Ok(Origin::Tool { call_id: call_id.to_owned() }),
+                Some(call_id) if !call_id.is_empty() => {
+                    Ok(Origin::Tool { call_id: call_id.to_owned() })
+                }
                 Some(_) | None => Err(format!(
                     "origin must be None, \"host\", \"hook\", \"task\" or \"tool:<call_id>\", got {other:?}"
                 )),
             },
         }
     }
+}
+
+/// A `commit_user_turn()` superseded by a newer one; the host's future is cancelled.
+#[lk_agents_abi::host(error(kind = "asyncio.CancelledError"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("superseded by a newer commit_user_turn()")]
+pub struct CommitSuperseded;
+
+/// The id a caller gives a command it awaits; the answer carries it back. `None` where a command
+/// takes one means nobody awaits the answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CallId(pub u64);
+
+/// What an awaited command is answered with, once, on the session's answer stream.
+#[derive(Debug)]
+pub enum Answer {
+    Speech(Arc<SpeechHandle>),
+    Interrupt(Result<(), InterruptRefusal>),
+    Commit(Result<String, CommitSuperseded>),
+    Idle(Result<(), IdleRefused>),
+    Hold(Result<HoldId, IdleRefused>),
+    Drain(Result<(), DrainRefused>),
+    Handoff(Result<(), HandoffRefused>),
+    Dtmf(crate::workflows::builtins::dtmf::DtmfOutcome),
+}
+
+macro_rules! answer_picks {
+    ($($pick:ident: $variant:ident($payload:ty)),* $(,)?) => {
+        impl Answer {
+            $(pub fn $pick(self) -> Option<$payload> {
+                match self {
+                    Answer::$variant(payload) => Some(payload),
+                    _ => None,
+                }
+            })*
+        }
+    };
+}
+
+answer_picks! {
+    speech: Speech(Arc<SpeechHandle>),
+    interrupt: Interrupt(Result<(), InterruptRefusal>),
+    commit: Commit(Result<String, CommitSuperseded>),
+    idle: Idle(Result<(), IdleRefused>),
+    hold: Hold(Result<HoldId, IdleRefused>),
+    drain: Drain(Result<(), DrainRefused>),
+    handoff: Handoff(Result<(), HandoffRefused>),
+    dtmf: Dtmf(crate::workflows::builtins::dtmf::DtmfOutcome),
 }
 
 #[derive(Debug)]
@@ -222,11 +285,11 @@ impl From<TaskCommand> for Command {
     }
 }
 
-/// Outlives the frame across handoffs. The binding sends `Clear` and `Configure`; `Commit` is the
-/// loop's own tail of `SpeechCommand::CommitUserTurn`.
+/// Outlives the frame across handoffs.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum TurnCommand {
-    /// Sent by the loop to itself, never by a host; a typed turn is `generate_reply(user_input=)`.
+    /// Commit the turn now (`commit_user_turn`'s tail); a typed turn is
+    /// `generate_reply(user_input=)`.
     Commit {
         /// `commit_user_turn(skip_reply=True)`: close the turn, keep the transcript, generate nothing.
         skip_reply: bool,
@@ -241,14 +304,16 @@ pub enum TurnCommand {
 /// One collection at a time.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum DtmfCommand {
-    /// `done` is answered once with the first outcome, or `Stopped`; the confirm arm is spoken by
-    /// the driver.
+    /// Answered once with the first outcome, or `Stopped`; the confirm arm is spoken by the
+    /// driver.
     Start {
         collector: crate::workflows::builtins::dtmf::DtmfCollector,
-        done: tokio::sync::oneshot::Sender<crate::workflows::builtins::dtmf::DtmfOutcome>,
+        call: Option<CallId>,
     },
     /// Ignored with no collection running.
-    Digit { digit: String },
+    Digit {
+        digit: String,
+    },
     Stop,
 }
 
@@ -266,7 +331,7 @@ pub enum SpeechCommand {
         /// `None` takes the session default.
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        handle: tokio::sync::oneshot::Sender<Arc<SpeechHandle>>,
+        call: Option<CallId>,
     },
     GenerateReply {
         /// `None` replies to the context as it stands.
@@ -282,15 +347,12 @@ pub enum SpeechCommand {
         /// Whole, because specs, host objects and runner must agree.
         toolset: Option<Arc<Toolset>>,
         on_enter: bool,
-        handle: tokio::sync::oneshot::Sender<Arc<SpeechHandle>>,
+        call: Option<CallId>,
     },
     /// A pending preemptive generation is dropped; the current speech is interrupted (a refusal is
     /// the whole answer); the socket is told once; the queue is walked in pop order up to the first
     /// refusal, each speech whole.
-    Interrupt {
-        force: bool,
-        done: Option<tokio::sync::oneshot::Sender<Result<(), InterruptRefusal>>>,
-    },
+    Interrupt { force: bool, call: Option<CallId> },
     /// Unforced it is scoped to the playing step; `force` ends the speech, tools and all.
     InterruptSpeech { speech: SpeechId, force: bool },
     /// Flush, wait for the final (skipped if one landed in the last 0.5 s), commit. No STT or
@@ -300,16 +362,13 @@ pub enum SpeechCommand {
         transcript_timeout: std::time::Duration,
         stt_flush_duration: std::time::Duration,
         skip_reply: bool,
-        done: tokio::sync::oneshot::Sender<String>,
+        call: Option<CallId>,
     },
     /// Idle: nothing current, queued or being decided, the user silent, no claim or foreign hold.
-    WaitForIdle {
-        hold: Option<HoldId>,
-        done: tokio::sync::oneshot::Sender<Result<(), IdleRefused>>,
-    },
+    WaitForIdle { hold: Option<HoldId>, call: Option<CallId> },
     /// `RunContext.foreground()`: wait for idle, then hold it until `ReleaseFloor`; a waiter naming
     /// the hold passes through.
-    HoldFloor { done: tokio::sync::oneshot::Sender<Result<HoldId, IdleRefused>> },
+    HoldFloor { call: Option<CallId> },
     /// Unknown ids are a no-op.
     ReleaseFloor { hold: HoldId },
     /// Pins the user state to `speaking` and holds idle open. Reentrant.
@@ -458,7 +517,10 @@ pub enum FrameCommand {
     SetVideoInput(Option<HostVideo>),
     /// The leg stays: a muted mic stops feeding STT; a disabled output plans speech without a
     /// voice.
-    SetIoEnabled { leg: IoLeg, enabled: bool },
+    SetIoEnabled {
+        leg: IoLeg,
+        enabled: bool,
+    },
     /// **Replaces** the running frame's context (already filtered host-side).
     UpdateChatCtx(Vec<lk_agents_abi::ChatItem>),
     /// A playing speech is **interrupted** (nobody can hear it); the pause facts are re-read at
@@ -477,7 +539,9 @@ pub enum FrameCommand {
     /// Runs the driving frame's `on_exit` (once per frame), then pauses scheduling until the speech
     /// in flight finishes, tools included. A second joins. Refused only if the pause is lifted or
     /// the loop ends.
-    Drain { done: Option<tokio::sync::oneshot::Sender<Result<(), DrainRefused>>> },
+    Drain {
+        call: Option<CallId>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
@@ -520,7 +584,7 @@ pub struct AgentUpdate {
     pub previous: PreviousActivity,
     /// `Start` runs the arriving frame's `on_enter`; `Resume` does not.
     pub next: NewActivity,
-    pub done: Option<tokio::sync::oneshot::Sender<Result<(), HandoffRefused>>>,
+    pub call: Option<CallId>,
     /// `None` is a host handoff.
     pub task: Option<TaskId>,
 }
@@ -560,13 +624,11 @@ impl AgentUpdate {
             options: Default::default(),
             previous: PreviousActivity::Close,
             next: NewActivity::Start,
-            done: None,
+            call: None,
             task: None,
         }
     }
-}
 
-impl AgentUpdate {
     pub(crate) fn reopens(&self) -> &'static str {
         match (self.stt.is_given(), self.vad.is_given()) {
             (false, false) => "",
@@ -591,7 +653,7 @@ impl std::fmt::Debug for AgentUpdate {
             .field("options", &self.options)
             .field("previous", &self.previous)
             .field("next", &self.next)
-            .field("awaited", &self.done.is_some())
+            .field("call", &self.call)
             .finish()
     }
 }

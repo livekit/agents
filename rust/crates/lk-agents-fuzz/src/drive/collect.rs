@@ -45,7 +45,7 @@ impl Run {
                 },
             );
         }
-        self.record.set_driver_finished(self.driver.as_ref().is_none_or(JoinHandle::is_finished));
+        self.record.set_driver_finished(self.driver.is_none());
         self.record.set_now(now);
     }
 

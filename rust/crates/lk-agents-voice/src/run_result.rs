@@ -1,9 +1,14 @@
-use crate::agent_activity::hooks::HandoffId;
+//! `AgentSession.run()`: the run open on the session, what it owns, and its verdict.
+
+use crate::agent::Source;
+use crate::agent_activity::handoff::HandoffId;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::{HoldId, HookId};
-use crate::events::{RunFailure, RunId, RunOutcome, RunRefusal};
+use crate::agent_session::cycle::Cycle;
+use crate::agent_session::{Driver, HoldId, HookId, HookKind, Origin};
+use crate::events::{RunFailure, RunId, RunOutcome, RunRefusal, SessionEvent};
 use crate::speech_handle::SpeechHandle;
-use lk_agents_abi::HostRef;
+use crate::trace::HandoffStep;
+use lk_agents_abi::{HostRef, Ts};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -74,7 +79,7 @@ pub(super) struct Runs {
 }
 
 impl Runs {
-    /// `Command::Run`: open, or refuse -- a run already open, or a closing session.
+    /// `Command::Run`: open, or refuse: a run already open, or a closing session.
     pub(super) fn open(&mut self, spec: &RunSpec, closing: bool) -> Result<RunId, RunRefusal> {
         if self.open.is_some() {
             return Err(RunRefusal::Nested);
@@ -107,7 +112,10 @@ impl Runs {
     /// The foreground holds the open run owns (`session._foreground_guards` it watches).
     pub(super) fn owned_holds(&self) -> Vec<HoldId> {
         let Some(r) = &self.open else { return Vec::new() };
-        r.owned.iter().filter_map(|o| if let Owned::Hold(h) = o { Some(*h) } else { None }).collect()
+        r.owned
+            .iter()
+            .filter_map(|o| if let Owned::Hold(h) = o { Some(*h) } else { None })
+            .collect()
     }
 
     /// Own `what`, if a run is open and it is not owned already: `Some(run)` when newly owned.
@@ -183,5 +191,184 @@ impl Runs {
     pub(super) fn close(&mut self) -> Option<(RunId, Option<Arc<SpeechHandle>>)> {
         self.dirty = false;
         self.open.take().map(|r| (r.id, r.last))
+    }
+}
+
+/// The open run's ownership, as the driver records it while the run is open.
+impl Driver {
+    /// `Command::Run`: `AgentSession.run()` / `start(capture_run=True)`.
+    pub(crate) fn on_run(&mut self, now: Ts, spec: RunSpec, cycle: &mut Cycle) {
+        let closing = self.session.closing.is_some();
+        let run = match self.session.runs.open(&spec, closing) {
+            Ok(run) => run,
+            Err(cause) => {
+                cycle.machine().emit(SessionEvent::RunRefused { cause });
+                return;
+            }
+        };
+        // Before the reply, so the run's start precedes its items on the host stream.
+        cycle.machine().emit(SessionEvent::RunStarted { run });
+        if let Some(text) = spec.user_input {
+            self.run_reply(now, Some(text), None, cycle);
+        }
+    }
+
+    /// The run's own `generate_reply(..)`, pipeline or realtime; owned like any session reply.
+    fn run_reply(
+        &mut self,
+        now: Ts,
+        user_input: Option<String>,
+        instructions: Option<String>,
+        cycle: &mut Cycle,
+    ) {
+        if self.activity.rt_session.is_some() {
+            self.realtime_reply(now, user_input, instructions, None, None, None, cycle);
+            return;
+        }
+        let _ = self.generate_reply_speech(
+            now,
+            user_input,
+            instructions,
+            None,
+            None,
+            None,
+            None,
+            false,
+            cycle,
+        );
+    }
+
+    pub(crate) fn run_own(&mut self, what: Owned, cycle: &mut Cycle) {
+        if let Some(run) = self.session.runs.own(what) {
+            cycle.trace(HandoffStep::RunOwned { run, what });
+        }
+    }
+
+    pub(crate) fn run_release(&mut self, what: Owned, cycle: &mut Cycle) {
+        if let Some(run) = self.session.runs.release(what, None) {
+            cycle.trace(HandoffStep::RunReleased { run, what });
+        }
+    }
+
+    /// A speech left the loop (`release_speech`): the run's verdict moves to it.
+    pub(crate) fn run_speech_ended(&mut self, handle: &Arc<SpeechHandle>, cycle: &mut Cycle) {
+        let what = Owned::Speech(handle.id());
+        match self.session.runs.release(what, Some(handle)) {
+            Some(run) => cycle.trace(HandoffStep::RunReleased { run, what }),
+            None => self.session.runs.forget_speech(handle.id()),
+        }
+    }
+
+    /// A `HoldFloor` from an owned speech's tool is the run's.
+    pub(crate) fn run_own_hold(&mut self, origin: &Origin, hold: HoldId, cycle: &mut Cycle) {
+        let Origin::Tool { call_id } = origin else { return };
+        if let Some(speech) = self.activity.tools.speech_of(call_id)
+            && self.session.runs.owns(Owned::Speech(speech))
+        {
+            self.run_own(Owned::Hold(hold), cycle);
+        }
+    }
+
+    /// The run an item belongs to: the open run for its own speeches and the handoff record. The
+    /// `run(user_input=)` user message is not the run's, as in the reference (`RunResult.events`
+    /// opens with the reply), and neither is a committed call: a run call became the run's when it
+    /// started (`RunItemAdded`); a call answered without running is no run's.
+    pub(crate) fn run_of_item(&self, source: &Source) -> Option<RunId> {
+        let open = self.session.runs.id()?;
+        match source {
+            Source::Reply { speech, .. }
+            | Source::Say { speech }
+            | Source::ToolOutput { speech, .. }
+            | Source::ToolUpdate { speech, .. } => {
+                self.session.runs.owns(Owned::Speech(*speech)).then_some(open)
+            }
+            Source::Handoff => Some(open),
+            Source::UserInput { .. }
+            | Source::ToolCall { .. }
+            | Source::UserTurn { .. }
+            | Source::ConfigUpdate
+            | Source::HostCtx
+            | Source::UserTyped
+            | Source::Remote { .. } => None,
+        }
+    }
+
+    /// An inline task's frame landed: suspend the awaiting speech, the parent's running `on_enter`
+    /// and every foreground hold, so the run settles on the task: a `foreground()` scope waiting
+    /// on the task can't end before it either.
+    pub(crate) fn run_suspend_for_task(
+        &mut self,
+        speech: Option<SpeechId>,
+        cycle: &mut Cycle,
+    ) -> Vec<Owned> {
+        let mut suspended = Vec::new();
+        if let Some(s) = speech
+            && let Some(run) = self.session.runs.release(Owned::Speech(s), None)
+        {
+            cycle.trace(HandoffStep::RunReleased { run, what: Owned::Speech(s) });
+            suspended.push(Owned::Speech(s));
+        }
+        for id in self.activity.callbacks.pending_of(HookKind::OnEnter) {
+            if let Some(run) = self.session.runs.release(Owned::Hook(id), None) {
+                cycle.trace(HandoffStep::RunReleased { run, what: Owned::Hook(id) });
+                suspended.push(Owned::Hook(id));
+            }
+        }
+        for hold in self.session.runs.owned_holds() {
+            if let Some(run) = self.session.runs.release(Owned::Hold(hold), None) {
+                cycle.trace(HandoffStep::RunReleased { run, what: Owned::Hold(hold) });
+                suspended.push(Owned::Hold(hold));
+            }
+        }
+        suspended
+    }
+
+    /// The task is over: what was suspended is the current run's again, if still live.
+    pub(crate) fn run_resume_after_task(&mut self, suspended: Vec<Owned>, cycle: &mut Cycle) {
+        for what in suspended {
+            let live = match what {
+                Owned::Speech(s) => self.activity.scheduling_task.contains(s),
+                Owned::Hook(h) => self.activity.callbacks.is_pending(h),
+                Owned::Hold(h) => self.session.idle.live(h),
+                Owned::Handoff(_) => false,
+            };
+            if live {
+                self.run_own(what, cycle);
+            }
+        }
+    }
+
+    /// The settle check after every wake; returns whether a re-prompt was created.
+    pub(crate) fn run_check(&mut self, now: Ts, cycle: &mut Cycle) -> bool {
+        match self.session.runs.decide() {
+            Decided::Open => false,
+            Decided::Retry { run, attempt, instructions } => {
+                cycle.trace(HandoffStep::RunRetried { run, attempt });
+                self.run_reply(now, None, Some(instructions), cycle);
+                true
+            }
+            Decided::Settled { run, outcome, speech } => {
+                cycle.machine().emit(SessionEvent::RunSettled { run, outcome, speech });
+                false
+            }
+        }
+    }
+
+    /// The close's hard edge: an open run ends `Closed`, before `Close`.
+    pub(crate) fn run_close(&mut self, cycle: &mut Cycle) {
+        if let Some((run, speech)) = self.session.runs.close() {
+            cycle.machine().emit(SessionEvent::RunSettled {
+                run,
+                outcome: RunOutcome::Closed,
+                speech,
+            });
+        }
+    }
+
+    /// The loop ended with a run open: settled `Closed` directly on the stream.
+    pub(crate) fn run_close_at_end(&mut self) {
+        if let Some((run, speech)) = self.session.runs.close() {
+            self.emit_now(SessionEvent::RunSettled { run, outcome: RunOutcome::Closed, speech });
+        }
     }
 }

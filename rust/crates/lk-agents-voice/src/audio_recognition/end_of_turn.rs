@@ -8,7 +8,9 @@ use super::{
     user_transcript,
 };
 use crate::agent_activity::pause::TurnSettled;
-use crate::agent_session::cycle::{Decision, Effects, FlushReason, TurnTimer};
+use crate::agent_session::cycle::{
+    Decision, Effect, Effects, FlushReason, ProviderCall, TurnTimer,
+};
 use crate::events::{
     AgentBackchannelOpportunityEvent, EotPredictionEvent, SessionEvent, TranscriptionTimeoutEvent,
     UserTurnExceededEvent,
@@ -214,7 +216,7 @@ impl AudioRecognition {
                 if let Phase::Awaiting { run, req, deadline: Some(_) } = &self.phase {
                     let (run, req) = (*run, *req);
                     self.fired = Some(timer);
-                    // `._bounce_eou_task` -- the one site that cancels with `timed_out=True`.
+                    // `._bounce_eou_task`: the one site that cancels with `timed_out=True`.
                     eff.cancel_eot(req, true);
                     eff.append(self.enter_delaying(now, run, run.min_delay, None, None));
                     self.fired = None;
@@ -290,7 +292,7 @@ impl AudioRecognition {
         eff.append(self.reset_transcription_timeout());
 
         // "reset stt to clear the buffer from previous user turn" (a stream swap here).
-        eff.flush_stt();
+        eff.push(Effect::Provider(ProviderCall::FlushStt));
         eff
     }
 

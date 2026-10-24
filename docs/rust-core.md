@@ -174,12 +174,20 @@ the journal, never internal state.
 **Voice fuzz.** `lk-agents-fuzz` runs a real voice session against dumb
 fakes: every event at a provider boundary (a transcript, a detector tick, a
 playout report, a socket drop) is an input the case sends. Runs are
-deterministic: paused virtual time, a seeded scheduler, session-scoped ids.
-`rules/` holds one guarantee per file, each with its own examples;
-`replay/` holds saved cases. `cargo test` runs the rules' examples, the
-determinism check and the saved corpus; the search campaign is behind
-`--ignored` (`tests/survey.rs`, `tests/soak.rs`). The contracts and the
-search design are in `rust/crates/lk-agents-voice/TEST_STRATEGY.md`.
+deterministic: paused virtual time, session-scoped ids. The run owns the
+driver's queue: it calls `handle` itself and delivers a due wake first. Then
+the case's policy, saved with the case, chooses between the next pending event
+and a turn for one of the driver's ready tasks: arrival order drains the queue
+first, as the channel does; partial-order sampling picks events by random
+priority within each source's order and interleaves task turns at random. The
+search (`src/search/`) plays the person, the developer's program
+and the providers, each acting on what it observed, with a per-seed dial of
+uniform moves from none to almost all. `rules/` holds one guarantee per file,
+each with its own examples; `replay/` holds saved cases. `cargo test` runs
+the rules' examples, the determinism check and the saved corpus; the search
+campaign is behind `--ignored` (`tests/survey.rs`, `tests/soak.rs`). The
+contracts are in `rust/crates/lk-agents-voice/TEST_STRATEGY.md`; what the
+search reaches and misses is in `rust/crates/lk-agents-fuzz/COVERAGE.md`.
 
 **Storage.** `lk-agents-storage/tests/{agentdb_local,run_local,turn_local}.rs`
 run against agentstore through the public API of a staging project
@@ -236,6 +244,60 @@ These hold for every change under `rust/`.
   `livekit-agents` wheel, built `cp310-abi3` (one build for 3.10 and later).
   No separate package, no ABI version check.
 
+### Cores and the runtime
+
+What decides is a core; what talks is `lk-agents-runtime`, one crate for all
+I/O, the way everything Python lives in `lk-agents-py`. A script that only
+awaits I/O in sequence (a statement, then the next) stays a script in the
+runtime; the decisions inside it (a lease, a policy, a retry) are a core.
+`WorkerState` (`lk-agents-worker/src/state.rs`) is the model. The crate
+layout, the voice design and the migration are in
+[planned-rust-core.md](planned-rust-core.md#cores-and-the-runtime).
+
+- **A core is a state machine.** `handle(event, now) -> effects`, and
+  `wake_at() -> Option<Ts>` for when it next wants `Event::Wake`: no
+  `async`, no spawn, no lock, no timer of its own. `now` carries the session
+  clock and the wall time.
+- **A core is deterministic.** Its effects depend only on its events and
+  their `now`: no clock read, no entropy (ids are counters), no iteration
+  over a randomly hashed map, nothing shared with another thread. The layout
+  check rejects `RandomState`, `Instant::now`, `SystemTime::now` and `rand`
+  in core crates.
+- **Only `lk-agents-runtime` depends on an async runtime.** No other
+  product crate has tokio, futures or an executor in its dependency tree
+  with default features, and no core depends on `lk-agents-runtime`.
+  `#[host]` items in a core are synchronous; every async binding expands in
+  the runtime. Enforced by the layout check over `cargo tree`.
+- **Events and effects are data.** Typed records, never closures or
+  channels. A core's event log replays it exactly.
+- **Every request is answered.** An API call, a hook call, a tool call and
+  a provider request each carry an id; the answer is an event or effect with
+  that id, a timeout is a wake, and a core does not settle while an answer
+  is owed. An id is never reused; an answer for a settled id is dropped and
+  journalled.
+- **The host reads a view.** What the host reads synchronously (a speech
+  handle's state, resolved options) is a view the runtime keeps, written only
+  by the core's effects. The host's own monotone requests (`interrupt()`)
+  show in the view at once; every other write waits for the core.
+- **The runtime decides nothing.** `lk-agents-runtime` owns the tokio
+  runtime, sockets, streams, the real clock, the rtc proxies and the event
+  queues; it executes effects and turns what happens into events. A branch
+  on state belongs in a core.
+- **Tokio is for I/O.** A client that sends a request and returns the
+  answer is a runtime function; a client with state (reconnects, retries, a
+  fallback across providers, a stream protocol) keeps that state in a core.
+- **Frames bypass the decision core.** Audio and video frames move through
+  a data plane, itself a core: its gates change only by the decision core's
+  effects, and it reports counters back as events.
+- **One owner, one event at a time.** A core belongs to one sequence and
+  handles its events in order, never two at once. The runtime owns the
+  queue and calls `handle`; in tests the fuzzer owns it. No thread per
+  session: cores are stepped on the shared runtime.
+- **Tests drive the core directly.** A test feeds events and reads effects;
+  the fuzzer is the core's event queue, and its scheduling policy chooses
+  which pending event goes next. A deterministic executor is only for
+  `lk-agents-runtime`'s own tests.
+
 ### Names and layout
 
 - **Names follow the Python reference.** The same concept carries the
@@ -288,6 +350,15 @@ The framework is typed end to end, in Python and in Node.
 - **Lean: delete over add.** Extend the existing mechanism before
   adding one. Delete dead code and stale docs. Inline single-use helpers.
   Comments are one line of why; no narration.
+- **A method earns its place.** It keeps an invariant (writes several
+  fields together, emits effects or answers, validates) or names a
+  non-trivial computation used twice. Otherwise it is a `pub(crate)` field:
+  a private field with a getter is for state only an invariant-keeping
+  method may write, and there are no bare setters.
+- **Split by what the developer sees.** A struct that bundles concerns is
+  split by the outcome its users see, named after the Python API
+  (`callbacks.rs`, `handoff.rs`, `drain.rs`, `dtmf.rs`), never after internal
+  mechanics.
 - **Shared crates.** Never vendor or re-implement LiveKit's own crates
   (`livekit-protocol`, `livekit-api`, `livekit-token`); a missing field gets
   an upstream PR. A third-party dependency is a case-by-case cost call

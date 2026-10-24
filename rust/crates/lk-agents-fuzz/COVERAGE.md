@@ -34,7 +34,7 @@ Five promises follow. Everything here is measured against them.
 ## 2. The search
 
 One generator (`src/search/conversation.rs`). A run is a setup (which models exist and how
-they are configured) and a sequence of inputs, on paused virtual time with a seeded scheduler.
+they are configured) and a sequence of inputs, on paused virtual time in tokio's fixed task order.
 The generator plays four actors, each of which acts only on what it observed:
 
 - **The person** speaks, pauses, hesitates, makes noise, has someone else in the room, drops off
@@ -410,33 +410,33 @@ user state.
 - **Never sent**: a tool that hands off (`fakes/tools.rs:76`, `agents` always empty, so
   `request_describe` and the `DescribeAgent` hook are unreachable); a tool that calls `say`,
   `generate_reply`, `update_*` or holds the floor (only `wait_for_idle` from a tool, so run
-  ownership of a tool's hold, `lifecycle.rs:741`, is untested); realtime tool calls.
+  ownership of a tool's hold, `Driver::run_own_hold`, is untested); realtime tool calls.
 
-### 5.6 Handoffs, tasks, hooks and runs (`handoff.rs`, `tasks.rs`, `hooks.rs`, `run_result.rs`)
+### 5.6 Handoffs, drains, tasks, callbacks and runs (`handoff.rs`, `drain.rs`, `tasks.rs`, `callbacks.rs`, `run_result.rs`)
 
 - **Phases**: *hook running* per kind (`HookIssued{kind}` until `HookFinished{kind}`; four kinds
   beyond on_exit, on_enter and the turn hook have no column); *run open* (`Emitted(RunStarted)`
   until `RunSettled`). A *handoff in flight*, a *queued second handoff* and an *inline task
   active* cannot be computed: the handoff's begin, queueing and refusal
-  (`handoff.rs:35,48,93`) and a task's entry and exit (`tasks.rs`) write no journal step.
+  (`begin_handoff`, `refuse_handoff`) and a task's entry and exit (`tasks.rs`) write no journal step.
 - **Not checked**: a handoff is refused only when closing or its drain was refused; a
   successful handoff journals `AgentUpdated` and then `on_enter`; queued handoffs run in order;
   every hooked call with a bound finishes by its deadline (the soak's seed 2 Hook residue
   points here: a hosted `on_enter` has no deadline but an open run owns it,
-  `hooks.rs:758,776`); a task's awaiter is always released and its parent restored once; every
+  `Driver::issue_hook`); a task's awaiter is always released and its parent restored once; every
   `RunStarted` settles once, nested runs are refused, retries stay under the cap.
 - **Never sent**: hook answers `Described` and `ToolsExecuted` (`apply.rs:141-148`), turn edits
   `ReplaceItems` and `UpdateUserMessage`; a completed, failed or cancelled `TaskHandle`
   (`apply.rs:490`), tasks with `preserve_function_call_history=false` or a parent; `capture_run`.
 
-### 5.7 Lifecycle and errors (`lifecycle.rs`, `agent_session/mod.rs`)
+### 5.7 Close and errors (`agent_session/closing.rs`, `agent_session/mod.rs`)
 
 - **Phases**: the close runs unwinding, exiting, draining, edge, committing, closing legs,
-  closed (`lifecycle.rs:219-255`), with one step (`Close::Requested{drain}`) for all of it; a
+  closed (`Driver::close_advance`), with one step (`Close::Requested{drain}`) for all of it; a
   drain close and a hard close could be two columns from that step alone.
 - **Not checked**: the session closes with `error` at exactly `max_unrecoverable_errors + 1`
   consecutive unrecoverable errors on one leg, and the count resets when the agent speaks or a
-  transcript arrives (`agent_session/mod.rs:236-254`); a close that is not an error waits for
+  transcript arrives (`ErrorBudget`); a close that is not an error waits for
   the trailing transcript; a second close joins the first.
 - **Never sent**: close reasons other than `user_initiated`, a close carrying an error
   (`apply.rs:439`).

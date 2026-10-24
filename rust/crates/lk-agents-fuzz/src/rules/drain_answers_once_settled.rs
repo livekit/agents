@@ -74,7 +74,9 @@ impl Rule for DrainAnswersOnceSettled {
 
             // Nothing announced is still open.
             for (_, step) in before {
-                let Step::Emitted(SessionEvent::SpeechCreated { speech, .. }) = step else { continue };
+                let Step::Emitted(SessionEvent::SpeechCreated { speech, .. }) = step else {
+                    continue;
+                };
                 let id = speech.id();
                 let done = before.iter().any(|(_, s)| {
                     matches!(s, Step::Emitted(SessionEvent::SpeechDone { speech: d, .. }) if *d == id)
@@ -165,7 +167,6 @@ fn drain_while_speaking() -> Case {
             Input::Drain { wait: true },
             Input::Advance { ms: Millis(50) },
         ],
-        schedule: 0,
-        random: vec![],
+        ..Case::default()
     }
 }

@@ -6,9 +6,9 @@
 //! own, a handoff is refused as closing, a DTMF collection is answered stopped. The one future the
 //! driver drops on purpose is a `say` or `generate_reply` that reached the session after the host
 //! asked it to drain or close, or after the driver began closing on its own: it never spoke, and
-//! the dropped future says so. The other is a `commit_user_turn` a newer commit superseded, which
-//! the API reports as superseded. Any other dropped future, and any call with no result once the
-//! driver has exited, is a call the driver forgot.
+//! the dropped future says so. A `commit_user_turn` answered superseded must have been superseded
+//! by a newer commit. Any other dropped future, and any call with no result once the driver has
+//! exited, is a call the driver forgot.
 use lk_agents_voice::trace::{Step, TurnStep};
 
 use crate::{
@@ -25,7 +25,7 @@ impl Rule for ApiCallsReturn {
         id: "api_calls_return",
         guarantee: "Every API call gets its result; only a say or generate_reply made after the session began closing may have its future dropped.",
         examples: &[returned, refused_after_closing_began, commit_superseded],
-        counterexamples: &[dropped_before_closing_began, no_result_at_exit],
+        counterexamples: &[dropped_before_closing_began, no_result_at_exit, superseded_by_nothing],
         probe: None,
     };
 
@@ -46,18 +46,25 @@ impl Rule for ApiCallsReturn {
         for call in r.host_view().api_calls() {
             let verdict = match call.returned() {
                 Some((_, Answer::Lost)) => {
-                    let speaks = matches!(call.input(), Input::Say { .. } | Input::GenerateReply { .. });
-                    let after_closing_began = began_closing.is_some_and(|began| call.called_at() > began);
-                    let superseded = matches!(call.input(), Input::CommitUserTurn { .. })
-                        && r.internal_view().commit_superseded_after(call.called_at());
-                    ((speaks && after_closing_began) || superseded)
-                        .then_some(())
-                        .ok_or("its future was dropped")
+                    let speaks =
+                        matches!(call.input(), Input::Say { .. } | Input::GenerateReply { .. });
+                    let after_closing_began =
+                        began_closing.is_some_and(|began| call.called_at() > began);
+                    (speaks && after_closing_began).then_some(()).ok_or("its future was dropped")
                 }
+                Some((_, Answer::CommitSuperseded)) => r
+                    .internal_view()
+                    .commit_superseded_after(call.called_at())
+                    .then_some(())
+                    .ok_or("answered superseded, but no newer commit superseded it"),
                 Some(_) => Ok(()),
                 None => Err("it never got a result"),
             };
-            check.expect(&call, verdict.is_ok(), format!("{:?}: {}", call.input(), verdict.err().unwrap_or("")));
+            check.expect(
+                &call,
+                verdict.is_ok(),
+                format!("{:?}: {}", call.input(), verdict.err().unwrap_or("")),
+            );
         }
     }
 }
@@ -87,18 +94,21 @@ fn refused_after_closing_began() -> Recording {
         .done()
 }
 
-/// A second `commit_user_turn` superseded the first, whose future the driver dropped.
-fn commit_superseded() -> Recording {
-    let commit = Input::CommitUserTurn {
+fn commit() -> Input {
+    Input::CommitUserTurn {
         transcript_timeout: Millis(1000),
         stt_flush: Millis(100),
         skip_reply: false,
-    };
+    }
+}
+
+/// A second `commit_user_turn` superseded the first, answered superseded.
+fn commit_superseded() -> Recording {
     Authored::new()
-        .api_call(commit.clone())
-        .api_call(commit)
+        .api_call(commit())
+        .api_call(commit())
         .journal(Step::Turn(TurnStep::CommitSuperseded))
-        .result(0, Answer::Lost)
+        .result(0, Answer::CommitSuperseded)
         .returns(Answer::Committed("hello".into()))
         .driver_finished()
         .done()
@@ -107,6 +117,11 @@ fn commit_superseded() -> Recording {
 /// Nobody asked to close and the `say`'s future was dropped.
 fn dropped_before_closing_began() -> Recording {
     Authored::new().api_call(say()).returns(Answer::Lost).driver_finished().done()
+}
+
+/// A `commit_user_turn` answered superseded with no newer commit.
+fn superseded_by_nothing() -> Recording {
+    Authored::new().api_call(commit()).returns(Answer::CommitSuperseded).driver_finished().done()
 }
 
 /// The driver exited and the `say` never got a result.

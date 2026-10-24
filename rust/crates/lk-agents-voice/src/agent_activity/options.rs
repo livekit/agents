@@ -4,18 +4,19 @@
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::DiagnosticEvent;
 use crate::turn::{
-    Endpointing, Interruption, Nullable, PreemptiveGeneration, TurnPatch, TurnPolicy, UserTurnLimit,
-    count, endpointing_patch, migrate_turn_handling, nullable, secs, turn_handling_patch,
+    Endpointing, Interruption, Nullable, PreemptiveGeneration, TurnPatch, TurnPolicy,
+    UserTurnLimit, count, endpointing_patch, migrate_turn_handling, nullable, secs,
+    turn_handling_patch,
 };
 use lk_agents_abi::Maybe;
 use lk_agents_abi::Vocabulary;
 pub use lk_agents_abi::voice::session_options::{
-    DeprecatedTurnKwargs, DetectorKind, EndpointingKwargs, EndpointingMode,
-    EndpointingOverrides, HostValue, InterruptionGateVerdict, InterruptionKwargs,
-    InterruptionMode, LegSet, PreemptiveKwargs, RecordingOptions, RecordingOverrides,
-    ResolvedEndpointing, ResolvedInterruption, ResolvedPreemptiveGeneration,
-    ResolvedSessionOptions, ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet,
-    TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs, UserTurnLimitKwargs,
+    DeprecatedTurnKwargs, DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides,
+    HostValue, InterruptionGateVerdict, InterruptionKwargs, InterruptionMode, LegSet,
+    PreemptiveKwargs, RecordingOptions, RecordingOverrides, ResolvedEndpointing,
+    ResolvedInterruption, ResolvedPreemptiveGeneration, ResolvedSessionOptions,
+    ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet, TurnDetection,
+    TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs, UserTurnLimitKwargs,
 };
 use std::time::Duration;
 
@@ -26,13 +27,18 @@ const TURN_HANDLING_HINT: &str = "Use turn_handling=TurnHandlingOptions(...) ins
 
 const STT_CONTEXT_HINT: &str = "Use stt_context_options=STTContextOptions(...) instead";
 
-/// `_RECORDING_ALL_ON`. Note `redaction: false` -- "all on" is about the four capture keys.
+/// `_RECORDING_ALL_ON`. Note `redaction: false`: "all on" is about the four capture keys.
 pub const RECORDING_ALL_ON: RecordingOptions =
     RecordingOptions { audio: true, traces: true, logs: true, transcript: true, redaction: false };
 
 /// `_RECORDING_ALL_OFF`.
-pub const RECORDING_ALL_OFF: RecordingOptions =
-    RecordingOptions { audio: false, traces: false, logs: false, transcript: false, redaction: false };
+pub const RECORDING_ALL_OFF: RecordingOptions = RecordingOptions {
+    audio: false,
+    traces: false,
+    logs: false,
+    transcript: false,
+    redaction: false,
+};
 
 /// `AgentActivity._resolve_interruption_detection`: said only when the caller asked for `adaptive`.
 pub const INTERRUPTION_DETECTION_INCOMPATIBLE: &str = "interruption_detection is provided, but it's not compatible with the current configuration and will be disabled";
@@ -60,7 +66,7 @@ pub struct SessionConfig {
 pub struct SpeechPolicy {
     pub max_tool_steps: u32,
     pub min_consecutive_speech_delay: Duration,
-    /// `use_tts_aligned_transcript`: `None` is the reference's `NOT_GIVEN` -- "if the TTS can".
+    /// `use_tts_aligned_transcript`: `None` is the reference's `NOT_GIVEN`, "if the TTS can".
     pub use_tts_aligned_transcript: Option<bool>,
     /// `tts_text_transforms`: `None` is "run none".
     pub tts_text_transforms: Option<TextTransformSet>,
@@ -396,7 +402,11 @@ pub fn session_layer(kw: &SessionKwargs) -> (SessionPatch, Vec<DiagnosticEvent>)
     p.turn.ivr_detection = Some(ivr_detection);
     p.speech.max_tool_steps = Some(count(max_tool_steps));
     p.speech.min_consecutive_speech_delay = Some(secs(min_consecutive_speech_delay));
-    p.speech.use_tts_aligned_transcript = nullable_of(use_tts_aligned_transcript);
+    // `NOT_GIVEN` resolves to `None`.
+    p.speech.use_tts_aligned_transcript = match use_tts_aligned_transcript {
+        Maybe::NotGiven => None,
+        Maybe::Given(on) => Some(Nullable::Value(on)),
+    };
     p.speech.tts_text_transforms = nullable(tts_text_transforms, |t| t);
     p.timers.user_away = Some(Nullable::from_option(user_away_timeout.map(secs)));
     p.timers.transcription_timeout = Some(Nullable::from_option(transcription_timeout.map(secs)));
@@ -443,14 +453,6 @@ pub fn update_patch(kw: &UpdateKwargs) -> (SessionPatch, Vec<DiagnosticEvent>) {
     (p, diagnostics)
 }
 
-/// `session.options.turn_detection_mode`: the literal, or `None` for `Auto` -- "from the legs".
-fn turn_detection_literal(d: TurnDetection) -> Option<&'static str> {
-    match d {
-        TurnDetection::Auto => None,
-        mode => Some(mode.as_str()),
-    }
-}
-
 /// [`SessionConfig`] as the host's `ResolvedSessionOptions`. `session` is read for
 /// `endpointing_overrides` only. No `..`, so a new leaf must be named.
 pub fn resolved_session_options(
@@ -495,15 +497,14 @@ pub fn resolved_session_options(
                 tts_text_transforms,
             },
         timers:
-            c::Timers {
-                user_away,
-                transcription_timeout,
-                aec_warmup,
-                session_close_transcript_timeout,
-            },
+            c::Timers { user_away, transcription_timeout, aec_warmup, session_close_transcript_timeout },
     } = *cfg;
-    let crate::turn::EndpointingPatch { mode: o_mode, min_delay: o_min, max_delay: o_max, alpha: o_alpha } =
-        session.turn.endpointing;
+    let crate::turn::EndpointingPatch {
+        mode: o_mode,
+        min_delay: o_min,
+        max_delay: o_max,
+        alpha: o_alpha,
+    } = session.turn.endpointing;
     ResolvedSessionOptions {
         endpointing: ResolvedEndpointing {
             mode: mode.as_str().to_owned(),
@@ -519,7 +520,8 @@ pub fn resolved_session_options(
             min_words,
             resume_false_interruption,
             false_interruption_timeout: false_interruption_timeout.map(|d| d.as_secs_f64()),
-            backchannel_boundary: backchannel_boundary.map(|(s, e)| (s.as_secs_f64(), e.as_secs_f64())),
+            backchannel_boundary: backchannel_boundary
+                .map(|(s, e)| (s.as_secs_f64(), e.as_secs_f64())),
         },
         preemptive_generation: ResolvedPreemptiveGeneration {
             enabled: preemptive_enabled,
@@ -527,8 +529,13 @@ pub fn resolved_session_options(
             max_speech_duration: max_speech_duration.as_secs_f64(),
             max_retries,
         },
-        user_turn_limit: ResolvedUserTurnLimit { max_words, max_duration: max_duration.map(|d| d.as_secs_f64()) },
-        turn_detection_mode: turn_detection_literal(detection).map(str::to_owned),
+        user_turn_limit: ResolvedUserTurnLimit {
+            max_words,
+            max_duration: max_duration.map(|d| d.as_secs_f64()),
+        },
+        // The literal, or `None` for `Auto`: "from the legs".
+        turn_detection_mode: (detection != TurnDetection::Auto)
+            .then(|| detection.as_str().to_owned()),
         endpointing_overrides: EndpointingOverrides {
             mode: o_mode.map(|m| m.as_str().to_owned()),
             min_delay: o_min.map(|d| d.as_secs_f64()),
@@ -547,14 +554,6 @@ pub fn resolved_session_options(
     }
 }
 
-/// A `Maybe<T>` whose resolved leaf is `Option<T>` (`NOT_GIVEN` resolves to `None`).
-fn nullable_of<T>(v: Maybe<T>) -> Option<Nullable<T>> {
-    match v {
-        Maybe::NotGiven => None,
-        Maybe::Given(t) => Some(Nullable::Value(t)),
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordingRequest {
     All(bool),
@@ -570,9 +569,11 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for RecordingRequest {
         if let Ok(b) = obj.extract::<bool>() {
             return Ok(RecordingRequest::All(b));
         }
-        let dict = obj
-            .cast::<pyo3::types::PyDict>()
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("record must be a bool or a RecordingOptions dict"))?;
+        let dict = obj.cast::<pyo3::types::PyDict>().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err(
+                "record must be a bool or a RecordingOptions dict",
+            )
+        })?;
         Ok(RecordingRequest::Granular(dict.extract::<RecordingOverrides>()?))
     }
 }
@@ -648,7 +649,10 @@ pub enum InterruptionGate {
     /// `cannot_gatekeep` (no aligned streaming STT, no VAD, `manual` / `realtime_llm`, or a
     /// server-detected realtime model), `interruptions_disabled`, `asked_vad` (the agent or the
     /// session said `"vad"`), or `production_default` (nobody asked, self-hosted production).
-    VadOnly { reason: &'static str, diagnostic: Option<DiagnosticEvent> },
+    VadOnly {
+        reason: &'static str,
+        diagnostic: Option<DiagnosticEvent>,
+    },
 }
 
 impl InterruptionGate {
@@ -752,7 +756,9 @@ impl HostOptions {
     #[host(new)]
     pub fn new(kwargs: SessionKwargs) -> Self {
         let (session, diagnostics) = session_layer(&kwargs);
-        HostOptions { state: std::sync::Mutex::new(HostOptionsState { kwargs, session, diagnostics }) }
+        HostOptions {
+            state: std::sync::Mutex::new(HostOptionsState { kwargs, session, diagnostics }),
+        }
     }
 
     /// `update_options(..)` before the session runs, on the same `merge` the driver uses.
@@ -836,7 +842,7 @@ pub fn rt_server_turn_detection_for_host(
     crate::agent_activity::realtime::server_turn_detection_enabled(&caps, side)
 }
 
-/// `AgentActivity._resolve_interruption_detection` (`agent_activity.py:4706`): whether to build the
+/// `AgentActivity._resolve_interruption_detection`: whether to build the
 /// detector, as `{"build", "reason", "level", "message"}`. Constructing it stays the host's.
 #[lk_agents_abi::host(export(name = "resolve_interruption_detector", kw_only))]
 #[allow(clippy::too_many_arguments)]
@@ -855,10 +861,13 @@ pub fn resolve_interruption_detector_for_host(
 ) -> InterruptionGateVerdict {
     let inputs = InterruptionGateInputs {
         stt: match (stt_aligned_transcript, stt_streaming) {
-            (Some(aligned_transcript), Some(streaming)) => Some(SttGate { aligned_transcript, streaming }),
+            (Some(aligned_transcript), Some(streaming)) => {
+                Some(SttGate { aligned_transcript, streaming })
+            }
             _ => None,
         },
-        realtime: realtime.then_some(RealtimeGate { server_turn_detection: rt_server_turn_detection }),
+        realtime: realtime
+            .then_some(RealtimeGate { server_turn_detection: rt_server_turn_detection }),
         has_vad,
         // A detector object's repr, or nothing said, parses to `Auto`, as `"unset"` does.
         turn_detection: turn_detection.and_then(|s| s.parse().ok()).unwrap_or(TurnDetection::Auto),
@@ -874,4 +883,3 @@ pub fn resolve_interruption_detector_for_host(
     };
     resolve_interruption_detector(&inputs).verdict()
 }
-

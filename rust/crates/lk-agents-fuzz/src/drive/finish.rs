@@ -249,7 +249,7 @@ pub fn run(case: Case) -> Outcome {
 
 async fn run_in(case: Case) -> Outcome {
     let started = Instant::now();
-    let mut run = Run::start(&case.setup).await;
+    let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
     let mut outcome = Outcome { case: case.clone(), ..Outcome::default() };
 
     for input in &case.inputs {
@@ -318,6 +318,8 @@ pub async fn finish(mut run: Run, mut outcome: Outcome, started: Instant) -> Out
             detail: stuck,
         });
     }
+    // What the tasks did on their way out is part of the run.
+    run.collect();
     record_outcome(&run, &mut outcome);
     outcome
 }
@@ -357,8 +359,20 @@ fn record_outcome(run: &Run, outcome: &mut Outcome) {
 
 /// The phases of a conversation, in COVERAGE.md's column order.
 pub const PHASES: [&str; 14] = [
-    "starting", "idle", "listening", "person_speaking", "away", "thinking", "speaking", "overlap",
-    "tool_running", "turn_hook", "draining", "on_exit", "on_enter", "closing",
+    "starting",
+    "idle",
+    "listening",
+    "person_speaking",
+    "away",
+    "thinking",
+    "speaking",
+    "overlap",
+    "tool_running",
+    "turn_hook",
+    "draining",
+    "on_exit",
+    "on_enter",
+    "closing",
 ];
 
 /// For each input, every phase the conversation was in when it was applied.

@@ -76,7 +76,7 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
 }
 
 // Catches: `RoomIo::on_agent_state_changed` with no caller, so the agent never writes
-// `lk.agent.state` and a frontend keyed on it shows the agent stuck (`room_io.py:427`).
+// `lk.agent.state` and a frontend keyed on it shows the agent stuck.
 #[tokio::test(start_paused = true)]
 async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     let (room, fixed) = fake_room("agent-state");
@@ -106,15 +106,17 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
         .collect();
     assert!(!written.is_empty(), "no `lk.agent.state` write reached the room");
     assert_eq!(
-        room.local_participant().attributes().get(lk_agents_abi::ATTRIBUTE_AGENT_STATE).map(String::as_str),
+        room.local_participant()
+            .attributes()
+            .get(lk_agents_abi::ATTRIBUTE_AGENT_STATE)
+            .map(String::as_str),
         Some("listening"),
         "the room's attribute is not the agent's current state (writes: {written:?})"
     );
 }
 
 /// A room-only session whose host answers every hook but `on_exit`, which the test answers.
-async fn session_holding_exits()
--> (SessionApi, tokio::sync::mpsc::UnboundedReceiver<HookId>) {
+async fn session_holding_exits() -> (SessionApi, tokio::sync::mpsc::UnboundedReceiver<HookId>) {
     // A host that runs hooks: without a bound the driver treats `on_exit` as over at once.
     let api = room_only(fake_room("session-api-test").1, Some(10.0));
     let (exits_tx, exits) = tokio::sync::mpsc::unbounded_channel();
@@ -170,14 +172,14 @@ async fn settle() {
 #[tokio::test(start_paused = true)]
 async fn a_drain_during_a_handoff_joins_it_and_is_answered_at_the_swap() {
     let (api, mut exits) = session_holding_exits().await;
-    let (swapped, swap) = tokio::sync::oneshot::channel();
+    let (call, swap) = api.call(Answer::handoff).expect("the loop runs");
     let mut update = AgentUpdate::frame("next", Instructions::plain("You are next."));
-    update.done = Some(swapped);
+    update.call = Some(call);
     api.send(FrameCommand::Update(Box::new(update))).expect("the loop runs");
     let exit = exits.recv().await.expect("the handoff issues the frame's on_exit");
 
-    let (drained, mut drain) = tokio::sync::oneshot::channel();
-    api.send(FrameCommand::Drain { done: Some(drained) }).expect("the loop runs");
+    let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
+    api.send(FrameCommand::Drain { call: Some(call) }).expect("the loop runs");
     settle().await;
     assert!(
         matches!(drain.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
@@ -198,23 +200,22 @@ async fn a_drain_during_an_inline_tasks_entry_exits_the_paused_parent_not_the_ta
     let (api, mut exits) = session_holding_exits().await;
     // A speech still being said holds the entry's pause, so the drain arrives inside it.
     let (words, rx) = tokio::sync::mpsc::channel::<lk_agents_abi::AudioFrame>(4);
-    let (handle, _speech) = tokio::sync::oneshot::channel();
     api.send(SpeechCommand::Say {
         text: SayText::Audio { text: "One moment.".into(), rx },
         allow_interruptions: None,
         add_to_chat_ctx: true,
-        handle,
+        call: None,
     })
     .expect("the loop runs");
     settle().await;
-    let (entered, mut entry) = tokio::sync::oneshot::channel();
+    let (call, mut entry) = api.call(Answer::handoff).expect("the loop runs");
     let mut update = AgentUpdate::frame("task", Instructions::plain("You are the task."));
     update.previous = PreviousActivity::Pause;
-    update.done = Some(entered);
+    update.call = Some(call);
     api.send(FrameCommand::Update(Box::new(update))).expect("the loop runs");
     settle().await;
-    let (drained, mut drain) = tokio::sync::oneshot::channel();
-    api.send(FrameCommand::Drain { done: Some(drained) }).expect("the loop runs");
+    let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
+    api.send(FrameCommand::Drain { call: Some(call) }).expect("the loop runs");
     settle().await;
     assert!(
         matches!(entry.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
@@ -229,7 +230,10 @@ async fn a_drain_during_an_inline_tasks_entry_exits_the_paused_parent_not_the_ta
     assert_eq!(on_exits(&api, Some("task")), 0, "the drain moved to the task's frame");
     let steps = api.steps();
     let issued = steps.iter().position(|s| {
-        matches!(s, Step::Handoff(crate::trace::HandoffStep::HookIssued { kind: HookKind::OnExit, .. }))
+        matches!(
+            s,
+            Step::Handoff(crate::trace::HandoffStep::HookIssued { kind: HookKind::OnExit, .. })
+        )
     });
     let installed = steps
         .iter()
@@ -244,10 +248,10 @@ async fn a_drain_during_an_inline_tasks_entry_exits_the_paused_parent_not_the_ta
     assert_eq!(drain.await.expect("answered"), Ok(()), "bound to the parent, answered");
 
     // The task hands back; the parent resumes live and is closed: its `on_exit` ran already.
-    let (resumed, resume) = tokio::sync::oneshot::channel();
+    let (call, resume) = api.call(Answer::handoff).expect("the loop runs");
     let mut back = AgentUpdate::frame("agent", Instructions::plain(String::new()));
     back.next = NewActivity::Resume;
-    back.done = Some(resumed);
+    back.call = Some(call);
     api.send(FrameCommand::Update(Box::new(back))).expect("the loop runs");
     let task_exit = exits.recv().await.expect("leaving the task runs its own on_exit");
     answer_exit(&api, task_exit);
@@ -276,8 +280,8 @@ async fn a_drain_during_the_close_is_answered_by_the_closes_drain() {
     api.send(Command::Close(Close::default())).expect("the loop runs");
     let exit = exits.recv().await.expect("the close issues the frame's on_exit");
 
-    let (drained, mut drain) = tokio::sync::oneshot::channel();
-    api.send(FrameCommand::Drain { done: Some(drained) }).expect("the loop runs");
+    let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
+    api.send(FrameCommand::Drain { call: Some(call) }).expect("the loop runs");
     settle().await;
     assert!(
         matches!(drain.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),

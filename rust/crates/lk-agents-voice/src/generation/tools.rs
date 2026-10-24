@@ -1,8 +1,8 @@
 //! `perform_tool_executions`: a step's calls, run as they arrive and answered in the model's order.
 
-use crate::generation::{GenEvent, ReplyContext};
 use crate::agent_session::SessionShared;
 use crate::events::{DiagnosticEvent, SessionEvent};
+use crate::generation::{GenEvent, ReplyContext};
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{StepDecision, ToolEnd, ToolExecution, ToolOutcome, answer};
 use lk_agents_abi::FunctionCall;
@@ -180,13 +180,13 @@ pub(crate) async fn run_tools(
         // or step increment.
         interrupted: handle.interrupted_speech(),
         num_steps: handle.num_steps(),
-        max_tool_steps: shared.opts.speech.max_tool_steps,
+        max_tool_steps: ctx.speech.max_tool_steps,
         forwarded_text_empty,
         user_metrics: ctx.user_metrics.clone(),
     });
 
     // A host running hooks runs the event's handlers before the step goes on: they may cancel the
-    // reply or the handoff (agent_activity.py:3657-3670). A loop gone answers nothing, and nothing
+    // reply or the handoff. A loop gone answers nothing, and nothing
     // changed.
     let (tx, rx) = tokio::sync::oneshot::channel();
     let waits = shared.hook_host && decision.tools_executed.is_some();

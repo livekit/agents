@@ -5,16 +5,18 @@
 use crate::agent_activity::options::{
     RECORDING_ALL_OFF, RecordingRequest, records_anything, resolve_recording_options,
 };
-use crate::tool_executor::Toolset;
+use crate::agent_session::builder::DriverBuilder;
+use crate::agent_session::calls::Calls;
 use crate::agent_session::commands::{
-    AgentUpdate, Close, Command, HostRecorder, NewActivity, Origin, PreviousActivity,
-    RecorderCommand, SayText, SpeechCommand,
+    AgentUpdate, Answer, CallId, Close, Command, HostRecorder, NewActivity, Origin,
+    PreviousActivity, RecorderCommand, SayText, SpeechCommand,
 };
-use crate::agent_session::driver::{DriverBuilder, DriverError, Peer, Rx, SessionHandle, Tx, start};
+use crate::agent_session::driver::{DriverError, Peer, Rx, SessionHandle, Tx, start_ivr};
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::Timebase;
 use crate::events::SessionEvent;
 use crate::generation::Instructions;
+use crate::tool_executor::Toolset;
 use crate::trace::{CoreStep, Step, Trace};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::HostWire;
@@ -84,8 +86,10 @@ impl SessionApi {
         &self,
         capture_run: bool,
         drain: impl FnOnce(SessionRunner) -> lk_agents_abi::BoxFuture<'static, ()> + Send + 'static,
-    ) -> Result<impl std::future::Future<Output = Result<(), DriverError>> + Send + 'static, OpenRefused>
-    {
+    ) -> Result<
+        impl std::future::Future<Output = Result<(), DriverError>> + Send + 'static,
+        OpenRefused,
+    > {
         // Its own statement: an inline `MutexGuard` would live through the `match`, and the
         // already-started arm's relock would deadlock.
         let current = std::mem::replace(&mut *self.lock(), Stage::Closed);
@@ -102,6 +106,7 @@ impl SessionApi {
         let spawner = Arc::clone(&self.spawner);
         let stage = Arc::clone(&self.stage);
         let anchor = self.anchor;
+        let time = self.time.clone();
         Ok(async move {
             let Ready { mut builder, interruption } = ready;
             if capture_run {
@@ -121,17 +126,19 @@ impl SessionApi {
             builder.room_io_events = room_io.events();
 
             let (mut driver, handle) = builder.start().await?;
-            let SessionHandle { api, events, trace, peer, ivr_detection } = handle;
+            let SessionHandle { api, events, answers, trace, peer, ivr_detection } = handle;
             // The IVR navigator's task, subscribed before the opening cycle.
-            start(&peer, ivr_detection);
+            start_ivr(&peer, ivr_detection);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
             // `start()` sees `listening` dispatched first.
-            driver.open().await;
+            driver.open(time.read());
             let (opening_tx, opening_rx) = tokio::sync::oneshot::channel();
             let opening = Opening { left: events.len(), delivered: Some(opening_tx) };
 
             let mut tasks = Vec::new();
             tasks.push(spawner.spawn_unboxed(async move { driver.run().await }));
+            let calls = Calls::default();
+            tasks.push(spawner.spawn_unboxed(calls.clone().pump(answers)));
             // Drained whether or not anybody listens: the queue is unbounded.
             let (drained_tx, drained) = tokio::sync::oneshot::channel();
             let runner = SessionRunner {
@@ -145,6 +152,7 @@ impl SessionApi {
 
             *stage.lock().unwrap_or_else(|p| p.into_inner()) = Stage::Running(Running {
                 api,
+                calls,
                 trace,
                 peer,
                 amd: None,
@@ -197,6 +205,14 @@ impl SessionApi {
 
     pub fn api(&self) -> Result<Tx<Command>, SessionRefused> {
         self.running(|r| Ok(r.api.clone()))
+    }
+
+    /// A call to await: its id goes in the command, `pick` takes its answer.
+    pub fn call<T: Send + 'static>(
+        &self,
+        pick: fn(Answer) -> Option<T>,
+    ) -> Result<(CallId, tokio::sync::oneshot::Receiver<T>), SessionRefused> {
+        self.running(|r| Ok(r.calls.open(pick)))
     }
 
     pub fn send(&self, cmd: impl Into<Command>) -> Result<(), SessionRefused> {
@@ -309,7 +325,8 @@ impl SessionApi {
         stt: Leg<dyn Stt>,
         vad: &Leg<dyn Vad>,
         speaker_filter: Maybe<Option<crate::audio::SpeakerFilterConfig>>,
-    ) -> (Leg<dyn Llm>, Leg<dyn Tts>, Leg<dyn Stt>, Option<Option<crate::audio::SpeakerFilterConfig>>) {
+    ) -> (Leg<dyn Llm>, Leg<dyn Tts>, Leg<dyn Stt>, Option<Option<crate::audio::SpeakerFilterConfig>>)
+    {
         fn map<T: ?Sized>(leg: Leg<T>, f: impl FnOnce(Arc<T>) -> Arc<T>) -> Leg<T> {
             match leg {
                 Maybe::Given(Some(v)) => Maybe::Given(Some(f(v))),
@@ -322,7 +339,8 @@ impl SessionApi {
             }
         }
         let clock = self.time.clock();
-        let (llm, tts, stt) = (map(llm, llm_leg), map(tts, |t| tts_leg(t, clock)), map(stt, stt_leg));
+        let (llm, tts, stt) =
+            (map(llm, llm_leg), map(tts, |t| tts_leg(t, clock)), map(stt, stt_leg));
         {
             let mut legs = self.legs.lock().unwrap_or_else(|p| p.into_inner());
             slot(&mut legs.stt, &stt);
@@ -341,7 +359,10 @@ impl SessionApi {
     /// Shared by `update_agent`, `hook_described` and `enter_task`. A host frame change closes the
     /// frame it leaves and starts the one it installs; the driver sets an inline task's pair
     /// itself.
-    fn frame(&self, frame: HostFrame) -> (AgentUpdate, Option<Option<crate::audio::SpeakerFilterConfig>>) {
+    fn frame(
+        &self,
+        frame: HostFrame,
+    ) -> (AgentUpdate, Option<Option<crate::audio::SpeakerFilterConfig>>) {
         let HostFrame {
             instructions,
             agent,
@@ -371,7 +392,7 @@ impl SessionApi {
             options,
             previous: PreviousActivity::Close,
             next: NewActivity::Start,
-            done: None,
+            call: None,
             task: None,
         };
         (update, speaker_filter)
@@ -385,8 +406,14 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<crate::speech_handle::HostSpeech, CommandRefused> {
         let origin = origin_of(origin)?;
-        let (handle, speech) = crate::speech_handle::HostSpeech::pending(self.api()?, allow_interruptions);
-        self.send_from(origin, SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, handle })?;
+        let (call, rx) = self.call(Answer::speech)?;
+        let speech =
+            crate::speech_handle::HostSpeech::pending(self.api()?, rx, allow_interruptions);
+        let call = Some(call);
+        self.send_from(
+            origin,
+            SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call },
+        )?;
         Ok(speech)
     }
 }
@@ -422,7 +449,8 @@ pub fn plan_session_start(
     // The reference's order: absent `record` takes the job's setting; `text_only` forces audio off
     // after; primacy is claimed unless held; a non-primary recorder is refused if asked, downgraded
     // if defaulted.
-    let mut recording = resolve_recording_options(requested.unwrap_or(RecordingRequest::All(job_default)));
+    let mut recording =
+        resolve_recording_options(requested.unwrap_or(RecordingRequest::All(job_default)));
     if text_only {
         recording.audio = false;
     }
@@ -445,8 +473,10 @@ pub fn plan_session_start(
 // with a drain that serialises each `HostEvent`, every other method sends a command.
 
 /// Decided before assembly but *opened* at [`SessionApi::open`], on the runtime (opening spawns).
-pub type InterruptionPortFactory =
-    Box<dyn FnOnce(lk_agents_abi::WallAnchor) -> Arc<dyn crate::agent_activity::pause::InterruptionPort> + Send>;
+pub type InterruptionPortFactory = Box<
+    dyn FnOnce(lk_agents_abi::WallAnchor) -> Arc<dyn crate::agent_activity::pause::InterruptionPort>
+        + Send,
+>;
 
 /// The loop's close watchdogs are 5 s; also the bound on every host teardown after the loop.
 pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -493,6 +523,7 @@ struct Ready {
 
 struct Running {
     api: Tx<Command>,
+    calls: Calls,
     trace: Arc<Mutex<Trace>>,
     peer: Peer,
     /// One per session.
@@ -503,8 +534,8 @@ struct Running {
     drained: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
-/// Owns the turn-detector stream it closes once the loop is gone (the driver's legs never owned it,
-/// `audio_recognition.py:855`); a session built with no options object answers `None`.
+/// Owns the turn-detector stream it closes once the loop is gone (the driver's legs never owned
+/// it); a session built with no options object answers `None`.
 #[derive(Default)]
 struct HostParts {
     events: Option<Arc<dyn SessionEvents>>,
@@ -529,7 +560,7 @@ struct Opening {
 
 impl SessionRunner {
     /// `None` once the loop has returned. The room's transcript leg is fed before the event is
-    /// handed back so one utterance's segments land in order (`room_io.py:195`).
+    /// handed back so one utterance's segments land in order.
     pub async fn next_host_event(&mut self) -> Option<HostEvent> {
         // Asked again: the event handed back last was handled by the host.
         if self.opening.left == 0
@@ -558,8 +589,8 @@ impl Drop for SessionRunner {
     }
 }
 
-/// `room_io.py:194-195`: the agent's state edge (written as `lk.agent.state`) and the user's
-/// transcript (`room_io.py:362`).
+/// What the room I/O mirrors: the agent's state edge (written as `lk.agent.state`) and the user's
+/// transcript.
 async fn forward_to_room_io(room_io: &Arc<crate::room_io::RoomIo>, ev: &SessionEvent) {
     match ev {
         SessionEvent::AgentStateChanged { new, .. } => room_io.on_agent_state_changed(new.as_str()),
@@ -585,7 +616,10 @@ impl<T> Reply<T> {
 impl<T> std::future::Future for Reply<T> {
     type Output = T;
 
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<T> {
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<T> {
         self.0.as_mut().poll(cx)
     }
 }
@@ -607,12 +641,6 @@ pub enum CommandRefused {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("This generation handle does not allow interruptions")]
 pub struct NotInterruptible;
-
-/// A `commit_user_turn()` superseded by a newer one; the host's future is cancelled.
-#[lk_agents_abi::host(error(kind = "asyncio.CancelledError"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("superseded by a newer commit_user_turn()")]
-pub struct CommitSuperseded;
 
 fn origin_of(origin: Option<&str>) -> Result<Origin, CommandRefused> {
     origin.map_or(Ok(Origin::Host), |o| o.parse().map_err(CommandRefused::Invalid))
@@ -651,7 +679,9 @@ struct HostedRoom(Arc<dyn HostRoom>, Timebase);
 #[cfg(feature = "python")]
 impl HostedRoom {
     fn new(room: Arc<dyn HostRoom>, clock: Option<Arc<dyn lk_agents_abi::Clock>>) -> Self {
-        let clock = clock.unwrap_or_else(<Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient);
+        let clock = clock.unwrap_or_else(
+            <Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient,
+        );
         HostedRoom(room, Timebase::of_clock(clock))
     }
 }
@@ -677,11 +707,15 @@ impl lk_agents_abi::python::HostProxy for dyn SessionRoom {
         if let Some(native) = lk_agents_abi::python::native::<dyn SessionRoom>(obj) {
             return Ok(native);
         }
-        let host = <dyn HostRoom as lk_agents_abi::python::HostProxy>::from_host(obj, clock.clone())?;
+        let host =
+            <dyn HostRoom as lk_agents_abi::python::HostProxy>::from_host(obj, clock.clone())?;
         Ok(Arc::new(HostedRoom::new(host, clock)))
     }
 
-    fn view(handle: lk_agents_abi::python::HostHandle, clock: Option<Arc<dyn lk_agents_abi::Clock>>) -> pyo3::PyResult<Box<Self>> {
+    fn view(
+        handle: lk_agents_abi::python::HostHandle,
+        clock: Option<Arc<dyn lk_agents_abi::Clock>>,
+    ) -> pyo3::PyResult<Box<Self>> {
         let host = <dyn HostRoom as lk_agents_abi::python::HostProxy>::view(handle, clock.clone())?;
         Ok(Box::new(HostedRoom::new(Arc::from(host), clock)))
     }
@@ -713,7 +747,9 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for HostMetricsRecord {
     fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
         lk_agents_abi::metrics::base::AgentMetrics::extract_known(&obj.to_owned())?
             .map(HostMetricsRecord)
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("host_metrics: not an AgentMetrics record"))
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err("host_metrics: not an AgentMetrics record")
+            })
     }
 }
 
@@ -785,8 +821,10 @@ fn host_toolset(
     Toolset {
         specs: tools.unwrap_or_default(),
         host,
-        runner: runner
-            .map(|r| Arc::new(crate::tool_executor::HostTools(r)) as Arc<dyn crate::tool_executor::ToolRunner>),
+        runner: runner.map(|r| {
+            Arc::new(crate::tool_executor::HostTools(r))
+                as Arc<dyn crate::tool_executor::ToolRunner>
+        }),
     }
 }
 
@@ -815,7 +853,11 @@ fn llm_leg(llm: Arc<dyn Llm>) -> Arc<dyn Llm> {
 /// A non-streaming TTS is split into sentences with BlingFire, as the reference.
 fn tts_leg(tts: Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Arc<dyn Tts> {
     let tts = tts.with_conn_options(&engine_retries()).unwrap_or(tts);
-    lk_agents_abi::StreamAdapter::adapted(tts, lk_agents_media::blingfire::SentenceBuffer::factory(), clock)
+    lk_agents_abi::StreamAdapter::adapted(
+        tts,
+        lk_agents_media::blingfire::SentenceBuffer::factory(),
+        clock,
+    )
 }
 
 /// Why a host session could not be assembled. A node factory that raised comes back as the
@@ -873,7 +915,9 @@ impl TextPusher {
     }
 }
 
-pub struct FramePusher(std::sync::Mutex<Option<tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>>>);
+pub struct FramePusher(
+    std::sync::Mutex<Option<tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>>>,
+);
 
 #[lk_agents_abi::host(object(cell = "arc"))]
 impl FramePusher {

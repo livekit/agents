@@ -4,9 +4,9 @@
 use crate::agent_activity::options::{DetectorKind, LegSet, SessionConfig};
 use crate::agent_activity::pause::count_min_words;
 use crate::agent_session::cycle::{Effects, TurnTimer};
+use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
 use crate::events::{AgentBackchannelOpportunityEvent, SessionEvent, UserTranscriptEvent};
-use crate::audio_recognition::overlap::OverlapJudge;
 use lk_agents_abi::tokenize::language::{LanguageCode, ThresholdOptions};
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{ChatContext, EotPrediction, SpeechEvent, Ts};
@@ -44,7 +44,8 @@ pub struct AudioRecognition {
     phase: Phase,
     endpointing: Endpointing,
     thresholds: ThresholdOptions,
-    wall_anchor: Option<WallAnchor>,
+    /// Pairs wall and monotonic clocks so server onsets map without reading a clock.
+    pub(crate) wall_anchor: Option<WallAnchor>,
 
     // --- transcript accumulation -------------------------------------------------------------
     audio_transcript: String,
@@ -70,8 +71,9 @@ pub struct AudioRecognition {
     /// `_ignore_user_transcript_until`.
     ignore_user_transcript_until: Option<Ts>,
     transcript_buffer: VecDeque<SpeechEvent>,
-    /// `_STTPipeline.input_started_at`, owned by the driver and pushed in.
-    input_started_at: Option<Ts>,
+    /// `_STTPipeline.input_started_at`, owned by the driver: the STT stream's anchor, stamped on
+    /// the first frame and reset on stream swap; every hold-window test is relative to it.
+    pub(crate) input_started_at: Option<Ts>,
     /// `_adaptive_interruption_active`: the channel is open. Unlike the static config flag,
     /// teardown clears this one.
     interruption_active: bool,
@@ -276,24 +278,6 @@ impl AudioRecognition {
 
     // --- driver-owned inputs -----------------------------------------------------------------
 
-    /// The STT stream's anchor, stamped on the first frame (`._push_audio`) and reset on stream
-    /// swap; every hold-window test is relative to it.
-    pub fn set_input_started_at(&mut self, at: Option<Ts>) {
-        self.input_started_at = at;
-    }
-
-    pub fn input_started_at(&self) -> Option<Ts> {
-        self.input_started_at
-    }
-
-    pub fn set_wall_anchor(&mut self, anchor: WallAnchor) {
-        self.wall_anchor = Some(anchor);
-    }
-
-    pub fn wall_anchor(&self) -> Option<WallAnchor> {
-        self.wall_anchor
-    }
-
     /// The turn detector and the interruption port, as the session opened them.
     pub(crate) fn set_detectors(
         &mut self,
@@ -366,7 +350,7 @@ pub(super) struct TurnEdits {
 
 pub(super) struct PendingCommit {
     pub(super) skip_reply: bool,
-    pub(super) done: tokio::sync::oneshot::Sender<String>,
+    pub(super) call: Option<crate::agent_session::CallId>,
     pub(super) deadline: Ts,
     pub(super) close: bool,
 }

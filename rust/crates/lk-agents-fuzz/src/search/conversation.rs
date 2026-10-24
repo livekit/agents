@@ -39,7 +39,7 @@ use lk_agents_voice::{
 
 use super::uniform;
 use crate::{
-    drive::{Case, Outcome, Run, Setup},
+    drive::{Case, Outcome, Policy, Run, Setup},
     input::{
         AGENT_TURNS, AgentText, Confidence, Count, HookAnswer, Input, Make, Millis, Ref, RoomIn,
         RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode, USER_TURNS, UserText,
@@ -154,8 +154,6 @@ const JITTER_MS: Range<u64> = 10..60;
 /// How long a gap stalls: from a network hiccup to a stall the driver's own timers notice.
 const STALL_MS: Range<u64> = 100..500;
 
-
-
 // ==============================================================================================
 // What the providers say about a stretch
 // ==============================================================================================
@@ -201,8 +199,6 @@ const STT_LATE_FINAL_MS: Range<u64> = 1_500..3_000;
 /// as a streaming provider does, so a long turn has many and a short one has one.
 const STT_INTERIM_EVERY_MS: u64 = 400;
 
-
-
 /// Detector confidence while speaking: straddles 50, so hysteresis and flicker are reached.
 const SPEAKING_P: Range<u8> = 45..95;
 
@@ -214,8 +210,6 @@ const SILENT_P: Range<u8> = 0..20;
 const EOT_DONE_P: Range<u8> = 70..101;
 
 const EOT_MORE_P: Range<u8> = 0..31;
-
-
 
 /// Speech over the agent shorter than this is judged a backchannel -- "mm-hm" -- not a barge-in,
 /// the distinction the adaptive detector exists to make. Matches the driver's default minimum
@@ -428,7 +422,8 @@ impl Dials {
     pub fn of(seed: u64) -> Self {
         let mut rng = Rng::with_seed(seed ^ 0x6361_6c6c);
         // A standard normal from two uniforms (Box-Muller).
-        let normal = (-2.0 * (1.0 - rng.f64()).ln()).sqrt() * (std::f64::consts::TAU * rng.f64()).cos();
+        let normal =
+            (-2.0 * (1.0 - rng.f64()).ln()).sqrt() * (std::f64::consts::TAU * rng.f64()).cos();
         let length = (CALL_MEDIAN_MS.ln() + CALL_SPREAD * normal).exp();
         Dials {
             randomness: randomness(seed),
@@ -445,9 +440,9 @@ impl Dials {
 async fn converse_in(setup: Setup, seed: u64, budget: usize, dials: Dials) -> Outcome {
     let started = Instant::now();
     let mut talk = Talk {
-        run: Run::start(&setup).await,
+        run: Run::start(&setup, seed, Policy::of(seed)).await,
         outcome: Outcome {
-            case: Case { setup, schedule: seed, ..Case::default() },
+            case: Case { setup, schedule: seed, policy: Policy::of(seed), ..Case::default() },
             ..Outcome::default()
         },
         rng: Rng::with_seed(seed),
@@ -629,7 +624,11 @@ impl Talk {
 
     /// The session began closing: the host or the room asked, or the session gave up on its own.
     fn closing(&self) -> bool {
-        self.run.record.applied().iter().any(|a| a.accepted && matches!(a.input, Input::Close { .. }))
+        self.run
+            .record
+            .applied()
+            .iter()
+            .any(|a| a.accepted && matches!(a.input, Input::Close { .. }))
             || self.run.record.internal_view().close_requested().is_some()
     }
 

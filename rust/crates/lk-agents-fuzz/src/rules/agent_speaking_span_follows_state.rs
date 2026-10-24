@@ -44,7 +44,10 @@ impl Rule for AgentSpeakingSpanFollowsState {
                 SessionEvent::AgentStateChanged { old, new } if *new == AgentState::Speaking => {
                     let spanned = matches!(
                         previous,
-                        Some(SessionEvent::SpanStarted(SpanStarted { span: Span::AgentSpeaking, .. }))
+                        Some(SessionEvent::SpanStarted(SpanStarted {
+                            span: Span::AgentSpeaking,
+                            ..
+                        }))
                     );
                     check.expect(
                         Subject::Session,
@@ -162,7 +165,6 @@ fn the_agent_speaks() -> Case {
             },
             Input::Advance { ms: Millis(200) },
         ],
-        schedule: 0,
-        random: vec![],
+        ..Case::default()
     }
 }

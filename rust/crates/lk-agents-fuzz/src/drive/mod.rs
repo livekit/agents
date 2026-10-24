@@ -33,7 +33,9 @@ use lk_agents_abi::{
 };
 use lk_agents_rtc::RoomEvent;
 use lk_agents_voice::{
-    agent_activity::lifecycle::RoomLinkConfig,
+    DriverBuilder, SessionHandle,
+    agent::TurnEdit,
+    agent_activity::DriverConfig,
     agent_activity::options::{ConfigStack, LegSet, SessionPatch, TurnDetection},
     agent_activity::options::{
         Deployment, InterruptionGate, InterruptionGateInputs, RealtimeGate, SttGate,
@@ -41,16 +43,12 @@ use lk_agents_voice::{
     },
     agent_activity::pause::InterruptRefusal,
     agent_activity::scheduling::SpeechId,
-    DriverBuilder, SessionHandle,
-    agent::TurnEdit,
-    agent_activity::DriverConfig,
     agent_session::{
-        AgentUpdate, Close, Command, DrainRefused, DtmfCommand, FillerSource, FrameCommand,
-        HandoffRefused, HoldId, HookId, HookOutcome, HostAudio, HostAudioOut, HostEvent,
-        HostRecorder, HostTextOut, HostVideo, IdleRefused, IvrCommand, NewActivity,
-        PreviousActivity, RecorderCommand, SayText, SpeechCommand, TaskCommand, TaskEntry,
-        Timebase, ToolUpdate, TurnCommand,
-        cycle::Decision,
+        AgentUpdate, Answer as DriverAnswer, Close, Command, CommitSuperseded, DrainRefused,
+        Driver, DtmfCommand, Event, FillerSource, FrameCommand, HandoffRefused, HoldId, HookId,
+        HookOutcome, HostAudio, HostAudioOut, HostEvent, HostRecorder, HostTextOut, HostVideo,
+        IdleRefused, IvrCommand, NewActivity, PreviousActivity, RecorderCommand, SayText,
+        SpeechCommand, TaskCommand, TaskEntry, Timebase, ToolUpdate, TurnCommand, cycle::Decision,
     },
     amd::{
         classifier::{AmdConfig, In as AmdIn, Start as AmdStart},
@@ -62,6 +60,7 @@ use lk_agents_voice::{
     io::{AudioOutput, TextOutput},
     keyterm_detection::{KeytermDetection, KeytermSetup},
     room_io::RoomIoEvent,
+    room_io::link::RoomLinkConfig,
     run_result::{RunOutput, RunSpec},
     speech_handle::SpeechHandle,
     tool_executor::{ToolAnswer as Answered, Toolset},
@@ -92,19 +91,22 @@ use crate::{
     },
 };
 use lk_agents_abi::{
-    voice::session_options::{DetectorKind, EndpointingMode, InterruptionMode},
     turn::interruption::InterruptionPort,
+    voice::session_options::{DetectorKind, EndpointingMode, InterruptionMode},
 };
 
 mod apply;
 mod collect;
 mod finish;
+mod queue;
 mod start;
 
 pub use apply::BUDGET_MS;
 pub use finish::{Outcome, PHASES, finish, guard, run};
+pub use queue::Policy;
 
 use self::apply::{Feeding, Pending};
+use self::queue::Next;
 // ==============================================================================================
 // What a session is built with
 // ==============================================================================================
@@ -242,6 +244,10 @@ pub struct Case {
     /// in a case with none is one a real call produces with correct providers.
     #[serde(default)]
     pub random: Vec<usize>,
+    /// How the run's queue picked the next pending event. Arrival order for every case saved
+    /// before the run owned its queue.
+    #[serde(default)]
+    pub policy: Policy,
 }
 
 impl Default for Setup {
@@ -311,6 +317,9 @@ pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .start_paused(true)
+        // The run's own future is polled after every task, so the queue owner can step the driver
+        // between any two polls of the tasks it spawned.
+        .event_interval(1)
         .rng_seed(tokio::runtime::RngSeed::from_bytes(&seed))
         .build()
         .expect("simulation runtime")
@@ -355,7 +364,11 @@ pub struct Run {
     /// session layer closes its own.
     sync: Option<Arc<lk_agents_voice::transcription::synchronizer::TranscriptSynchronizer>>,
     session: SessionHandle,
-    driver: Option<JoinHandle<()>>,
+    /// The session's core, stepped by the run itself: the run owns its queue. `None` once it
+    /// finished, or panicked.
+    driver: Option<Driver>,
+    queue: queue::Queue,
+    time: Timebase,
     tasks: Arc<Tasks>,
     stamps: Stamps,
     pub registry: Arc<Registry>,
@@ -391,12 +404,4 @@ pub struct Run {
     room_io: tokio::sync::mpsc::UnboundedSender<RoomIoEvent>,
     pub setup: Setup,
     pub record: Recording,
-}
-
-impl Drop for Run {
-    fn drop(&mut self) {
-        if let Some(driver) = &self.driver {
-            driver.abort();
-        }
-    }
 }

@@ -150,6 +150,9 @@ pub struct SessionChatCtx {
     items: Vec<Committed>,
     ids: BTreeSet<String>,
     frame: String,
+    /// Bumped by every commit that adds or replaces; a preemptive generation planned against an
+    /// older version is discarded.
+    version: u64,
 }
 
 impl SessionChatCtx {
@@ -182,10 +185,28 @@ impl SessionChatCtx {
         &self.frame
     }
 
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
     /// The only write, inserted by the item's own `created_at`; an existing id is replaced in
     /// place. The fixed-id instructions message is never recorded.
     #[must_use = "a commit is performed by the driver: the speech is told, the event is emitted"]
     pub fn commit(
+        &mut self,
+        item: ChatItem,
+        source: Source,
+        visibility: Visibility,
+        agent: &str,
+    ) -> (Committed, CommitOutcome) {
+        let commit = self.insert(item, source, visibility, agent);
+        if commit.1 != CommitOutcome::Filtered {
+            self.version += 1;
+        }
+        commit
+    }
+
+    fn insert(
         &mut self,
         item: ChatItem,
         source: Source,
@@ -215,8 +236,9 @@ impl SessionChatCtx {
         (entry, outcome)
     }
 
-    /// `Agent.update_chat_ctx`: `agent`'s view becomes exactly `items`. Dropped items stay in
-    /// history; known items are promoted in place; new ones are `HostCtx`, frame-only.
+    /// `Agent.update_chat_ctx`: `agent`'s view becomes exactly `items` (the version is kept).
+    /// Dropped items stay in history; known items are promoted in place; new ones are `HostCtx`,
+    /// frame-only.
     pub fn update_agent_chat_ctx(&mut self, items: Vec<ChatItem>, agent: &str) {
         self.frame = agent.to_owned();
         let incoming: BTreeSet<&str> = items.iter().map(ChatItem::id).collect();
@@ -235,7 +257,7 @@ impl SessionChatCtx {
             }
         });
         for item in items {
-            let _ = self.commit(item, Source::HostCtx, Visibility::Model, agent);
+            let _ = self.insert(item, Source::HostCtx, Visibility::Model, agent);
         }
     }
 

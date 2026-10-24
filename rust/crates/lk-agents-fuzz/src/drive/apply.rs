@@ -27,11 +27,12 @@ impl Run {
         if let Input::Close { .. } = input
             && let Some(sync) = self.sync.take()
         {
-            sync.aclose().await;
+            self.drive(Some(self.budget()), async move { sync.aclose().await }).await;
         }
         let accepted = match input {
             Input::Advance { ms } => {
-                tokio::time::sleep(Duration::from_millis(ms.0)).await;
+                let until = self.time.now().saturating_add(Duration::from_millis(ms.0));
+                self.drive(Some(until), std::future::pending::<()>()).await;
                 true
             }
             Input::AwaitAnswer { answer } => self.await_answer(answer.nth).await,
@@ -129,7 +130,8 @@ answers! {
         Settled::of(r.map_or_else(Answer::IdleRefused, |()| Answer::IdleOk));
     Hold(Result<HoldId, IdleRefused>) r =>
         Settled::of(r.map_or_else(Answer::IdleRefused, |hold| Answer::Hold(hold.0)));
-    Commit(String) text => Settled::of(Answer::Committed(text));
+    Commit(Result<String, CommitSuperseded>) r =>
+        Settled::of(r.map_or(Answer::CommitSuperseded, Answer::Committed));
     Handoff(Result<(), HandoffRefused>) r =>
         Settled::of(r.map_or_else(Answer::HandoffRefused, |()| Answer::HandoffOk));
     Drain(Result<(), DrainRefused>) r =>
@@ -208,11 +210,13 @@ impl Run {
         let mut waiting: Option<Pending> = None;
         let mut stream: Option<(bool, Feeding)> = None;
         let registry = self.registry.clone();
+        let calls = registry.calls();
 
         let command: Command = match input {
             Input::Say { text: AgentText(text), input: say, allow, to_ctx } => {
-                let (handle, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::speech);
                 waiting = Some(Pending::Speech(rx));
+                let call = Some(call);
                 let text = match say {
                     SayInput::Words => SayText::Text(text.clone()),
                     SayInput::TextStream => {
@@ -227,10 +231,10 @@ impl Run {
                     }
                 };
                 let (allow_interruptions, add_to_chat_ctx) = (*allow, *to_ctx);
-                SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, handle }.into()
+                SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call }.into()
             }
             Input::GenerateReply { user_input, instructions, allow } => {
-                let (handle, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::speech);
                 waiting = Some(Pending::Speech(rx));
                 SpeechCommand::GenerateReply {
                     user_input: user_input.clone().map(|UserText(t)| t),
@@ -240,17 +244,17 @@ impl Run {
                     chat_ctx: None,
                     toolset: None,
                     on_enter: false,
-                    handle,
+                    call: Some(call),
                 }
                 .into()
             }
             Input::Interrupt { force, wait } => {
-                let done = wait.then(|| {
-                    let (tx, rx) = oneshot::channel();
+                let call = wait.then(|| {
+                    let (call, rx) = calls.open(DriverAnswer::interrupt);
                     waiting = Some(Pending::Interrupt(rx));
-                    tx
+                    call
                 });
-                SpeechCommand::Interrupt { force: *force, done }.into()
+                SpeechCommand::Interrupt { force: *force, call }.into()
             }
             Input::InterruptSpeech { speech, force } => {
                 let Some(speech) = self.speech_id(*speech) else { return false };
@@ -261,13 +265,13 @@ impl Run {
                 SpeechCommand::SetAllowInterruptions { speech, allow: *allow }.into()
             }
             Input::CommitUserTurn { transcript_timeout, stt_flush, skip_reply } => {
-                let (done, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::commit);
                 waiting = Some(Pending::Commit(rx));
                 SpeechCommand::CommitUserTurn {
                     transcript_timeout: Duration::from_millis(transcript_timeout.0),
                     stt_flush_duration: Duration::from_millis(stt_flush.0),
                     skip_reply: *skip_reply,
-                    done,
+                    call: Some(call),
                 }
                 .into()
             }
@@ -276,14 +280,14 @@ impl Run {
                     Some(None) => return false,
                     given => given.flatten(),
                 };
-                let (done, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::idle);
                 waiting = Some(Pending::Idle(rx));
-                SpeechCommand::WaitForIdle { hold, done }.into()
+                SpeechCommand::WaitForIdle { hold, call: Some(call) }.into()
             }
             Input::HoldFloor {} => {
-                let (done, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::hold);
                 waiting = Some(Pending::Hold(rx));
-                SpeechCommand::HoldFloor { done }.into()
+                SpeechCommand::HoldFloor { call: Some(call) }.into()
             }
             Input::ReleaseFloor { hold } => {
                 let Some(hold) = self.hold_id(*hold) else { return false };
@@ -346,13 +350,13 @@ impl Run {
             }
 
             Input::Handoff { agent, instructions, tools, pause_previous, resume } => {
-                let (done, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::handoff);
                 waiting = Some(Pending::Handoff(rx));
                 let mut frame = frame(&registry, agent, &instructions.0, tools);
                 frame.previous =
                     if *pause_previous { PreviousActivity::Pause } else { PreviousActivity::Close };
                 frame.next = if *resume { NewActivity::Resume } else { NewActivity::Start };
-                frame.done = Some(done);
+                frame.call = Some(call);
                 FrameCommand::Update(Box::new(frame)).into()
             }
             Input::SetSpeakerFilter { enabled } => {
@@ -422,12 +426,12 @@ impl Run {
             }
 
             Input::Drain { wait } => {
-                let done = wait.then(|| {
-                    let (tx, rx) = oneshot::channel();
+                let call = wait.then(|| {
+                    let (call, rx) = calls.open(DriverAnswer::drain);
                     waiting = Some(Pending::Drain(rx));
-                    tx
+                    call
                 });
-                FrameCommand::Drain { done }.into()
+                FrameCommand::Drain { call }.into()
             }
             Input::PushVideo {} => Command::Video(ImageContent {
                 id: "img_case".into(),
@@ -472,9 +476,9 @@ impl Run {
                     ) else {
                         return false;
                     };
-                    let (done, rx) = oneshot::channel();
+                    let (call, rx) = calls.open(DriverAnswer::dtmf);
                     waiting = Some(Pending::Dtmf(rx));
-                    DtmfCommand::Start { collector, done }.into()
+                    DtmfCommand::Start { collector, call: Some(call) }.into()
                 }
                 DtmfInput::Digit => DtmfCommand::Digit { digit: key.digit().to_owned() }.into(),
                 DtmfInput::Stop => DtmfCommand::Stop.into(),
@@ -741,14 +745,16 @@ const MAX_JOIN_ROUNDS: u32 = 100;
 
 impl Run {
     async fn await_answer(&mut self, nth: u32) -> bool {
-        let Some(waiting) = self.pending.get_mut(&nth) else { return false };
-        match tokio::time::timeout(Duration::from_millis(BUDGET_MS), waiting.recv()).await {
-            Ok(settled) => {
-                self.pending.remove(&nth);
+        let Some(mut waiting) = self.pending.remove(&nth) else { return false };
+        match self.drive(Some(self.budget()), waiting.recv()).await {
+            Some(settled) => {
                 self.record_answer(nth, settled);
                 true
             }
-            Err(_) => false,
+            None => {
+                self.pending.insert(nth, waiting);
+                false
+            }
         }
     }
 
@@ -756,21 +762,115 @@ impl Run {
         let Some(resource) = self.record.resource(Kind::Speech, nth) else { return false };
         let Id::Speech(speech) = resource.id() else { return false };
         let Some(handle) = self.handles.get(&speech.0).cloned() else { return false };
-        tokio::time::timeout(Duration::from_millis(BUDGET_MS), handle.wait_for_done()).await.is_ok()
+        self.drive(Some(self.budget()), async move { handle.wait_for_done().await }).await.is_some()
     }
 
     async fn await_exit(&mut self) -> bool {
-        let Some(driver) = &mut self.driver else { return true };
-        let Ok(joined) = tokio::time::timeout(Duration::from_millis(BUDGET_MS), driver).await
-        else {
-            return false;
-        };
-        self.driver = None;
-        if let Err(error) = joined {
-            self.record.set_driver_panic(format!("{error}"));
+        self.drive(Some(self.budget()), std::future::pending::<()>()).await;
+        let exited = self.driver.is_none();
+        if exited {
+            self.record.enter_phase(Phase::Closed);
         }
-        self.record.enter_phase(Phase::Closed);
-        true
+        exited
+    }
+
+    /// How long one awaited thing may take from now.
+    pub(super) fn budget(&self) -> Ts {
+        self.time.now().saturating_add(Duration::from_millis(BUDGET_MS))
+    }
+
+    /// Step the session until `done` resolves, virtual time reaches `until`, or the driver is gone.
+    /// What reached the queue is pending; a due wake is delivered before any same-instant input;
+    /// then the policy chooses between the next pending event and a scheduling round for the
+    /// driver's ready tasks. Once the driver stopped it finishes and is dropped, as a session's
+    /// loop is, so what waited on it is released. `None` unless `done` resolved.
+    pub(super) async fn drive<T>(
+        &mut self,
+        until: Option<Ts>,
+        done: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        let mut done = std::pin::pin!(done);
+        loop {
+            tokio::select! {
+                biased;
+                value = &mut done => return Some(value),
+                () = std::future::ready(()) => {}
+            }
+            let Some(driver) = &mut self.driver else { return None };
+            while let Some(input) = driver.try_next_input() {
+                self.queue.push(input);
+            }
+            if driver.stopped() {
+                let undelivered = self.queue.drain();
+                self.step(|driver| driver.finish(undelivered));
+                self.drop_driver();
+                continue;
+            }
+            let now = self.time.now();
+            let wake_at = driver.wake_at();
+            if wake_at.is_some_and(|at| at <= now) {
+                let now = self.time.read();
+                self.step(|driver| driver.handle(Event::Wake, now));
+                continue;
+            }
+            match self.queue.next(tasks_runnable()) {
+                Some(Next::Event(input)) => {
+                    let now = self.time.read();
+                    self.step(|driver| driver.handle(Event::Input(input), now));
+                    continue;
+                }
+                Some(Next::Tasks) => {
+                    one_task_turn().await;
+                    continue;
+                }
+                None => {}
+            }
+            if until.is_some_and(|until| now >= until) {
+                return None;
+            }
+            let next = [wake_at, until].into_iter().flatten().min();
+            let settled = driver.settled();
+            tokio::select! {
+                biased;
+                value = &mut done => return Some(value),
+                () = self.time.wait_until_opt(next) => {}
+                () = settled => {}
+                input = driver.next_input() => match input {
+                    Some(input) => self.queue.push(input),
+                    None => return None,
+                },
+            }
+        }
+    }
+
+    /// One call into the driver. A panic is a finding about the driver, recorded, and the end of
+    /// it: the driver is dropped.
+    fn step(&mut self, call: impl FnOnce(&mut Driver)) {
+        let Some(driver) = &mut self.driver else { return };
+        let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(driver)));
+        self.settle_answers();
+        if let Err(panic) = called {
+            let message = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_default();
+            self.record.set_driver_panic(message);
+            self.drop_driver();
+        }
+    }
+
+    /// Hands every answer the step produced to its caller, as the runtime's answer pump does.
+    fn settle_answers(&mut self) {
+        while let Ok((call, answer)) = self.session.answers.try_recv() {
+            self.registry.calls().settle(call, answer);
+        }
+    }
+
+    /// The core is gone, as production drops it: a call it never answered is closed.
+    fn drop_driver(&mut self) {
+        self.driver = None;
+        self.registry.calls().close();
     }
 
     /// Await every retained task.
@@ -796,4 +896,25 @@ impl Run {
         }
         Err(format!("still spawning tasks after {MAX_JOIN_ROUNDS} rounds of joining"))
     }
+}
+
+/// Let the runtime poll one task, then come back: the run's future wakes itself and, with an event
+/// interval of one, is polled again after the next task. `yield_now` defers its wake until every
+/// ready task has run, which would never let the driver step between two of them.
+async fn one_task_turn() {
+    let mut turned = false;
+    std::future::poll_fn(|cx| {
+        if std::mem::replace(&mut turned, true) {
+            return std::task::Poll::Ready(());
+        }
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    })
+    .await
+}
+
+/// Whether a task the driver spawned is ready to run: a turn would move it.
+fn tasks_runnable() -> bool {
+    let metrics = tokio::runtime::Handle::current().metrics();
+    metrics.global_queue_depth() + metrics.worker_local_queue_depth(0) > 0
 }

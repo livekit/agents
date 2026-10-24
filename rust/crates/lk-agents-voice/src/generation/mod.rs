@@ -14,11 +14,11 @@ use crate::tool_executor::Toolset;
 use lk_agents_abi::Modality;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
-use lk_agents_abi::{
-    ApiConnectOptions, ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FunctionCall,
-    FrameId, FunctionCallOutput, Llm, MetricsReport, Role, ToolSpec, Tts,
-};
 pub use lk_agents_abi::voice::session_options::Instructions;
+use lk_agents_abi::{
+    ApiConnectOptions, ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FrameId,
+    FunctionCall, FunctionCallOutput, Llm, MetricsReport, Role, ToolSpec, Tts,
+};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -33,11 +33,14 @@ pub const RUNNING_PLACEHOLDER_KEY: &str = "__lk_running_placeholder__";
 #[lk_agents_abi::host(export(pid = false, name = "instructions_message_id"))]
 pub const INSTRUCTIONS_MESSAGE_ID: &str = "lk.agent_task.instructions";
 
-/// `remove_instructions(chat_ctx)` (`voice/generation.py:570`) as a plan: the positions of every
+/// `remove_instructions(chat_ctx)` as a plan: the positions of every
 /// [`INSTRUCTIONS_MESSAGE_ID`] item, ascending, given the items' ids.
 #[lk_agents_abi::host(export(name = "remove_instructions", pid = false))]
 pub fn instructions_positions(item_ids: impl IntoIterator<Item = impl Into<String>>) -> Vec<usize> {
-    lk_agents_abi::tts::markup::positions_of(item_ids.into_iter().map(Into::into), INSTRUCTIONS_MESSAGE_ID)
+    lk_agents_abi::tts::markup::positions_of(
+        item_ids.into_iter().map(Into::into),
+        INSTRUCTIONS_MESSAGE_ID,
+    )
 }
 
 /// Python truthiness for an `f64`: zero is "absent".
@@ -158,7 +161,7 @@ impl TurnAccumulator {
         let mut metrics = MetricsReport {
             llm_node_ttft: stats.llm_ttft,
             llm_node_tps: stats.llm_tps,
-        // `_time_to_first_sentence`; `None` unless both anchors exist.
+            // `_time_to_first_sentence`; `None` unless both anchors exist.
             llm_node_ttfs: match (stats.llm_started_at, self.first_tts.synthesis_started_at) {
                 (Some(llm_started), Some(synth_started)) => Some(synth_started - llm_started),
                 (Some(_), None) | (None, Some(_)) | (None, None) => None,
@@ -553,6 +556,9 @@ pub struct ReplyContext {
     /// step.
     pub toolset: Option<Arc<Toolset>>,
     pub providers: Providers,
+    /// The speech options as of the reply's creation: a later `update_options` reaches the next
+    /// reply, not this one.
+    pub speech: crate::agent_activity::options::SpeechPolicy,
 }
 
 /// Snapshotted at creation: a reply in flight keeps the providers it started with.
@@ -620,9 +626,15 @@ impl PlanSpec {
 pub enum GenEvent {
     /// With an audio output the edge is [`GenEvent::PlaybackStarted`]'s. Between them the only
     /// setters of `_agent_speaking`.
-    FirstFrame { speech: SpeechId },
+    FirstFrame {
+        speech: SpeechId,
+    },
 
-    Done { speech: SpeechId, outcome: Box<TurnOutcome>, interrupted: bool },
+    Done {
+        speech: SpeechId,
+        outcome: Box<TurnOutcome>,
+        interrupted: bool,
+    },
 
     /// Forwarded to the bus, ordered against every other `GenEvent`.
     Emit(Box<crate::events::SessionEvent>),
@@ -646,9 +658,15 @@ pub enum GenEvent {
         verdict: Option<tokio::sync::oneshot::Sender<crate::tool_executor::ToolsVerdict>>,
     },
 
-    ToolStep { speech: SpeechId, step: u32 },
+    ToolStep {
+        speech: SpeechId,
+        step: u32,
+    },
 
-    Handoff { speech: SpeechId, agent: lk_agents_abi::HostRef },
+    Handoff {
+        speech: SpeechId,
+        agent: lk_agents_abi::HostRef,
+    },
 
     /// Reported **before** the step's tools run, so the loop can end the current speech per step.
     StepSpoken {
@@ -663,14 +681,25 @@ pub enum GenEvent {
 
     /// The error is **moved**, never formatted: a [`ProviderError::Host`] owns a side-table entry
     /// only the binding can release.
-    Failed { speech: SpeechId, error: Box<ProviderError> },
+    Failed {
+        speech: SpeechId,
+        error: Box<ProviderError>,
+    },
 
     Trace(crate::trace::Step),
     /// As the sink reported it: the loop's `speaking` edge (`_on_first_frame`).
-    PlaybackStarted { speech: SpeechId },
+    PlaybackStarted {
+        speech: SpeechId,
+    },
     /// Not reported when the hold ended with the speech's interruption.
-    LaunchReleased { speech: SpeechId },
-    ChatFinished { speech: SpeechId, step: u32, error: Option<crate::trace::FailureClass> },
+    LaunchReleased {
+        speech: SpeechId,
+    },
+    ChatFinished {
+        speech: SpeechId,
+        step: u32,
+        error: Option<crate::trace::FailureClass>,
+    },
     /// `hosted`, or answered by the driver itself (an unadvertised name).
     ToolCallStarted {
         speech: SpeechId,

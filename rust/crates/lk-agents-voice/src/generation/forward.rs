@@ -3,14 +3,12 @@
 
 use super::llm::{SegEvent, extend};
 use super::playout::{Next, Segment, first_frame, perform_audio_forwarding, silent, unheard};
-use super::tts::{
-    Aligned, Lost, SynthesisEvent, SynthesisPlayout, aligned_transcript, perform_tts_inference,
-};
+use super::tts::{Aligned, Lost, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
 use crate::agent_activity::scheduling::SpeechId;
-use crate::generation::{GenEvent, ReplyContext, ReplySource};
-use crate::agent_session::SessionShared;
 use crate::agent_session::DriverError;
+use crate::agent_session::SessionShared;
 use crate::generation::TurnAccumulator;
+use crate::generation::{GenEvent, ReplyContext, ReplySource};
 use crate::speech_handle::SpeechHandle;
 use crate::trace::PlayoutStep;
 use crate::transcription::Heard;
@@ -40,8 +38,8 @@ pub(super) async fn voice_leg(
 ) -> Result<Option<Spoken>, DriverError> {
     let mut gate = PlaybackGate::default();
     let synthesis = matches!(voice, Voice::Tts(_))
-        && shared.audio_out_enabled_flag()
-        && shared.audio_out().is_some();
+        && shared.output.audio_enabled()
+        && shared.output.audio().is_some();
     if synthesis {
         let early = matches!(ctx.source, ReplySource::Llm) && ctx.preemptive_tts;
         let ready = early
@@ -61,15 +59,16 @@ pub(super) async fn voice_leg(
         return Ok(None);
     }
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
-    let audio_enabled = shared.audio_out_enabled_flag();
-    let text_enabled = shared.text_out_enabled_flag();
+    let audio_enabled = shared.output.audio_enabled();
+    let text_enabled = shared.output.transcription_enabled();
     // No sink: the caller's frames are left undrained, so `say(audio=)` does not wait on them.
-    let has_sink = audio_enabled && shared.audio_out().is_some();
+    let has_sink = audio_enabled && shared.output.audio().is_some();
     let voice = if has_sink { voice } else { Voice::Silent };
     let mut pump = Pump {
         shared,
         handle,
         voice,
+        aligned_transcript: ctx.speech.use_tts_aligned_transcript == Some(true),
         gate: &mut gate,
         acc: &mut acc,
         text_enabled,
@@ -112,8 +111,8 @@ impl PlaybackGate {
         if ready {
             handle.clear_authorization();
             self.at = Some(shared.time.wall());
-            self.audio_enabled = shared.audio_out_enabled_flag();
-            self.text_enabled = shared.text_out_enabled_flag();
+            self.audio_enabled = shared.output.audio_enabled();
+            self.text_enabled = shared.output.transcription_enabled();
         }
         ready
     }
@@ -124,6 +123,8 @@ struct Pump<'a> {
     shared: &'a Arc<SessionShared>,
     handle: &'a Arc<SpeechHandle>,
     voice: Voice,
+    /// `use_tts_aligned_transcript` is `True` (not-given is off).
+    aligned_transcript: bool,
     gate: &'a mut PlaybackGate,
     acc: &'a mut TurnAccumulator,
     /// Both flags are fixed for the speech, as of the voice leg.
@@ -175,8 +176,8 @@ impl Pump<'_> {
         }
         // Re-read at every segment's start: a swap moves the next segment (only a playing one is
         // interrupted), and a synchroniser swapped in between segments gets their words.
-        let audio_out = self.audio_enabled.then(|| shared.audio_out()).flatten();
-        let text = self.text_enabled.then(|| shared.text_out()).flatten();
+        let audio_out = self.audio_enabled.then(|| shared.output.audio()).flatten();
+        let text = self.text_enabled.then(|| shared.output.transcription()).flatten();
         let synthesis = matches!(self.voice, Voice::Tts(_)) && audio_out.is_some();
         if !synthesis && !self.gate.wait(shared, self.handle).await {
             return Ok(unheard());
@@ -189,9 +190,11 @@ impl Pump<'_> {
             .then(|| TextLeg::new(text.as_deref(), deferred, shared, self.handle.id()));
         let text_out = leg.as_ref();
         // The aligned path: an audio output, the option on, and a TTS that aligns. The leg then
-        // carries the synthesiser's stamped words *instead of* the deltas.
+        // carries the synthesiser's stamped words instead of the deltas.
         let aligned_path = match (&self.voice, &audio_out) {
-            (Voice::Tts(tts), Some(_)) => aligned_transcript(shared, tts.as_ref()),
+            (Voice::Tts(tts), Some(_)) => {
+                self.aligned_transcript && tts.capabilities().aligned_transcript
+            }
             _ => false,
         };
         let mut aligned = aligned_path.then(|| Aligned {

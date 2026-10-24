@@ -40,7 +40,7 @@ impl Cycle {
         self.frame
     }
 
-    /// The buffer to hand a machine. Every caller pairs it with [`Cycle::absorb`].
+    /// Where this cycle's effects are written; [`Cycle::take`] and [`Cycle::peek`] read them.
     pub fn machine(&mut self) -> &mut Effects {
         &mut self.machine
     }
@@ -66,12 +66,13 @@ impl Cycle {
                 Effect::Detector(call) => {
                     self.record(Step::Input(InputStep::DetectorCalled(*call)))
                 }
-                Effect::Audio(crate::agent_session::cycle::AudioOp::Gate { speech, op, cause }) => self
-                    .record(Step::Interrupt(InterruptStep::PlayoutGate {
+                Effect::Audio(crate::agent_session::cycle::AudioOp::Gate { speech, op, cause }) => {
+                    self.record(Step::Interrupt(InterruptStep::PlayoutGate {
                         speech: *speech,
                         op: *op,
                         cause: *cause,
-                    })),
+                    }))
+                }
                 // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
                 Effect::Audio(
                     crate::agent_session::cycle::AudioOp::SetInput
@@ -102,7 +103,7 @@ impl Cycle {
         std::mem::take(&mut self.todo)
     }
 
-    /// Read the to-do list without draining it. Tests only.
+    /// Read the to-do list without draining it.
     pub fn peek(&mut self) -> &[Effect] {
         self.absorb();
         &self.todo
@@ -144,6 +145,7 @@ pub enum Effect {
     Detector(DetectorCall),
 }
 
+#[cfg(test)]
 impl Effect {
     pub fn cancel(timer: TurnTimer) -> Effect {
         Effect::Timer(TimerOp::Cancel(timer))
@@ -161,11 +163,11 @@ impl Effects {
         Effects::default()
     }
 
-    /// So a test can assert one transition at a time.
     pub fn take(&mut self) -> Vec<Effect> {
         std::mem::take(&mut self.effects)
     }
 
+    #[cfg(test)]
     pub fn as_slice(&self) -> &[Effect] {
         &self.effects
     }
@@ -211,26 +213,9 @@ impl Effects {
         self.push(Effect::Detector(DetectorCall::Flush(reason)));
     }
 
-    pub fn open_leg(&mut self, leg: LegKind, open: u64) {
-        self.push(Effect::Provider(ProviderCall::OpenLeg { leg, open }));
-    }
-
     /// The close's edge and its `CloseLegs` phase.
     pub fn close_turn_detector(&mut self) {
         self.push(Effect::Detector(DetectorCall::Close));
-    }
-
-    /// The caller has checked a sink exists.
-    pub fn gate(&mut self, speech: SpeechId, op: GateOp, cause: GateCause) {
-        self.push(Effect::Audio(AudioOp::Gate { speech, op, cause }));
-    }
-
-    pub fn flush_vad(&mut self) {
-        self.push(Effect::Provider(ProviderCall::FlushVad));
-    }
-
-    pub fn flush_stt(&mut self) {
-        self.push(Effect::Provider(ProviderCall::FlushStt));
     }
 }
 
@@ -341,7 +326,11 @@ impl FlushReason {
 pub enum AudioOp {
     /// Pushed only when a sink exists, so the journal's `PlayoutGate` is exactly the sink's
     /// history.
-    Gate { speech: SpeechId, op: GateOp, cause: GateCause },
+    Gate {
+        speech: SpeechId,
+        op: GateOp,
+        cause: GateCause,
+    },
     /// The old pump stops first.
     SetInput,
     SetVideoInput,
@@ -386,9 +375,13 @@ pub enum Decision {
     /// Still subject to `decide_interrupt`'s guards.
     Barge(BargeTrigger),
     /// Journal-only.
-    EndpointingDelayUpdated { min_delay: std::time::Duration },
+    EndpointingDelayUpdated {
+        min_delay: std::time::Duration,
+    },
     /// Even when a VAD end already closed the user's speech. Journal-only.
-    TurnDeclared { owner: TurnDetectionMode },
+    TurnDeclared {
+        owner: TurnDetectionMode,
+    },
 }
 
 /// Guard 1 of `decide_interrupt`.
@@ -402,10 +395,10 @@ pub enum BargeGuard {
 
 impl Driver {
     /// Perform the buffered port calls, under the frame that produced them.
-    pub(crate) async fn execute(&mut self, mut cycle: Cycle) {
+    pub(crate) fn execute(&mut self, mut cycle: Cycle) {
         let frames = Arc::clone(&self.shared.frames);
         let _scope = frames.enter(cycle.frame());
-        let now = self.shared.time.now();
+        let now = self.step.now;
 
         // A performed decision may ask for more, so drain until nothing is left, in order.
         loop {
@@ -431,24 +424,30 @@ impl Driver {
         self.dtmf_on_event(now, ev, cycle);
         match ev {
             SessionEvent::StartOfSpeech(e) => {
-                cycle.machine().append(self.session.update_user_state(e.at, UserState::Speaking));
+                cycle
+                    .machine()
+                    .append(self.session.presence.update_user_state(e.at, UserState::Speaking));
             }
             SessionEvent::EndOfSpeech(e) => {
-                cycle.machine().append(self.session.update_user_state(e.at, UserState::Listening));
+                cycle
+                    .machine()
+                    .append(self.session.presence.update_user_state(e.at, UserState::Listening));
             }
             SessionEvent::UserTranscript(t) => {
                 // Any non-empty transcript is the STT recovering
                 // (`AgentSession._user_input_transcribed`).
                 if let Some(a) = t.ev.best_alternative() {
-                    self.session.on_transcript(&a.text);
+                    self.session.errors.on_transcript(&a.text);
                 }
                 if t.is_final {
-                    cycle.machine().append(self.session.on_final_transcript(now));
+                    let closing = self.session.closing_past_edge();
+                    cycle.machine().append(self.session.presence.on_final_transcript(now, closing));
                 }
             }
             // The IVR navigator reads the two state edges off the feed, as `IVRActivity` does.
             SessionEvent::AgentStateChanged { .. } | SessionEvent::UserStateChanged { .. } => {
-                cycle.machine().append(self.session.reconcile_away_timer(now));
+                let closing = self.session.closing_past_edge();
+                cycle.machine().append(self.session.presence.reconcile_away_timer(now, closing));
             }
             SessionEvent::MetricsCollected { .. }
             | SessionEvent::SpanStarted(_)
@@ -478,7 +477,7 @@ impl Driver {
             | SessionEvent::Close { .. } => {}
             // `_on_conversation_item_added`: the keyterm pass's turn gate.
             SessionEvent::ItemAdded { item, .. } => {
-                if self.session.keyterms().is_some() {
+                if self.session.keyterms.is_some() {
                     let item = (**item).clone();
                     self.keyterms_on_item(now, &item, cycle);
                 }
@@ -489,7 +488,7 @@ impl Driver {
     /// `SessionEvent::FloorChanged` when `_current_speech` differs from the last announced one.
     /// Returns whether an emit was queued.
     pub(crate) fn publish_current_speech(&mut self, cycle: &mut Cycle) -> bool {
-        let current = self.activity.scheduling_task().current_speech();
+        let current = self.activity.scheduling_task.current_speech();
         let Some(holder) = self.activity.announce_current_speech(current) else { return false };
         cycle.machine().emit(SessionEvent::FloorChanged { holder });
         true
@@ -519,8 +518,8 @@ impl Driver {
                 // "mm-hm" cannot prefix the next turn. The reference's `turn_detection not in
                 // ("manual", "realtime_llm")` guard is unported: `TurnConfig::mode` is private.
                 if matches!(ev, SessionEvent::BackchannelConfirmed)
-                    && self.session.options().turn.interruption.detection_enabled
-                    && self.activity.rt_session().is_some()
+                    && self.session.config.effective.turn.interruption.detection_enabled
+                    && self.activity.rt_session.is_some()
                 {
                     self.rt_send(
                         lk_agents_abi::RealtimeCommand::ClearAudio(
@@ -532,7 +531,7 @@ impl Driver {
                 // The turn machine cannot mint ids (pure tier), so the utterance's shared item id
                 // is stamped here, where the emission leaves the driver.
                 if let SessionEvent::UserTranscript(t) = &mut ev {
-                    let id = self.session.user_transcript_item_id(t.is_final);
+                    let id = self.session.ids.user_transcript_item(t.is_final);
                     let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
                     self.journal(Step::Turn(TurnStep::TranscriptSegment {
                         id: id.clone(),
@@ -562,7 +561,7 @@ impl Driver {
             }
             // A session without a turn detector asks for no flush.
             E::Detector(D::Flush(reason)) => {
-                if let Some(d) = self.activity.audio_recognition().eot() {
+                if let Some(d) = self.activity.audio_recognition.eot() {
                     d.flush(reason.as_str());
                 }
             }
@@ -570,19 +569,19 @@ impl Driver {
             // `_generate_reply` is the one `timed_out=True` site. A session without a detector
             // asks for none.
             E::Detector(D::CancelEot { req: _, timed_out }) => {
-                if let Some(d) = self.activity.audio_recognition().eot() {
+                if let Some(d) = self.activity.audio_recognition.eot() {
                     d.cancel(timed_out);
                 }
             }
             // Not awaited, like the reference's `send_nowait` on `_interruption_ch`. A session
             // with no detector raises no signals.
             E::Detector(D::Signal(signal)) => {
-                if let Some(d) = self.activity.audio_recognition().interruption().cloned() {
+                if let Some(d) = self.activity.audio_recognition.interruption().cloned() {
                     match signal {
                         crate::audio_recognition::InterruptionSignal::OverlapStarted { .. } => {
                             let overlap = self
                                 .activity
-                                .audio_recognition()
+                                .audio_recognition
                                 .open_overlap()
                                 .unwrap_or(lk_agents_abi::turn::detector::ReqId(0));
                             d.signal_overlap(overlap, signal);
@@ -607,7 +606,7 @@ impl Driver {
                 self.on_turn_settled(now, settled, cycle)
             }
             E::Decision(Decision::BargeGuard(BargeGuard::Set(value))) => {
-                self.session.set_by_audio_activity_enabled(value);
+                self.session.by_audio_activity = value;
             }
             E::Decision(Decision::BargeGuard(BargeGuard::Restore)) => {
                 self.restore_audio_activity_guard();
@@ -618,11 +617,11 @@ impl Driver {
             E::Decision(Decision::Barge(trigger)) => {
                 self.interrupt_by_audio_activity(now, cycle, trigger);
                 if let BargeTrigger::DetectorVerdict { ignore_user_transcript_until } = trigger
-                    && self.activity.paused_speech().paused_handle().is_none()
+                    && self.activity.paused_speech.paused_handle().is_none()
                 {
                     let eff = self
                         .activity
-                        .audio_recognition_mut()
+                        .audio_recognition
                         .on_end_of_agent_speech(now, ignore_user_transcript_until);
                     cycle.machine().append(eff);
                 }
@@ -654,12 +653,12 @@ impl Driver {
                 });
             }
             E::Detector(D::Close) => {
-                if let Some(leg) = self.activity.audio_recognition().eot() {
+                if let Some(leg) = self.activity.audio_recognition.eot() {
                     leg.close();
                 }
             }
             E::Audio(AudioOp::Gate { speech: _, op, cause: _ }) => {
-                if let Some(out) = self.shared.audio_out() {
+                if let Some(out) = self.shared.output.audio() {
                     match op {
                         GateOp::Pause => out.pause(),
                         GateOp::Resume => out.resume(),
@@ -672,7 +671,7 @@ impl Driver {
             E::Audio(AudioOp::SetInput) => self.input.swap_audio_pump(&*self.shared.spawner),
             E::Audio(AudioOp::SetVideoInput) => self.input.swap_video_pump(&*self.shared.spawner),
             E::Realtime(crate::agent_session::cycle::RealtimeSend(cmd)) => {
-                if let Some(session) = self.activity.rt_session() {
+                if let Some(session) = self.activity.rt_session.as_ref() {
                     session.send(cmd);
                 }
             }
