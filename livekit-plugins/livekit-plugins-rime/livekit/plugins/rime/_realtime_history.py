@@ -89,6 +89,7 @@ class PrismHistory:
         self._sdk, self._chat, self._calls = sdk, chat, calls
         self._ids: dict[str, str] = {}
         self._active: dict[str, set[str]] = {}
+        self._response_revision = 0
 
     @staticmethod
     def validate(
@@ -122,6 +123,7 @@ class PrismHistory:
     ) -> None:
         # This method never awaits: event consumption must not wait on a history lock.
         if isinstance(payload, r.ResponseStarted):
+            self._response_revision += 1
             ids = set(payload.input_item_ids)
             if payload.input_item_id:
                 ids.add(payload.input_item_id)
@@ -146,6 +148,7 @@ class PrismHistory:
     async def sync(
         self, target: llm.ChatContext
     ) -> list[tuple[r.ToolCallRef, llm.FunctionCallOutput]]:
+        response_revision = self._response_revision
         old = list(self._chat.items)
         desired = _items(target)
         old_ids = {i.id for i in old}
@@ -220,10 +223,12 @@ class PrismHistory:
                     if item.call_id in deleted_calls:
                         continue
                     deleted_calls.add(item.call_id)
-                if rebuild and self._active:
+                if rebuild and self._response_revision != response_revision:
                     raise HistoryUpdateError("A new reply started during history replacement")
                 await self._sdk.delete_item(self._ids[item.id])
                 committed = True
+                if rebuild and self._response_revision != response_revision:
+                    raise HistoryUpdateError("A new reply started during history replacement")
             for item in to_create:
                 if (
                     not rebuild
@@ -235,13 +240,15 @@ class PrismHistory:
                     await self._sdk.submit_tool_result(ref, wire.output)
                     submitted.append((ref, item))
                 else:
-                    if rebuild and self._active:
+                    if rebuild and self._response_revision != response_revision:
                         raise HistoryUpdateError("A new reply started during history replacement")
                     # New IDs avoid reusing identities retained in Prism's record.
                     wire_item = replace(_wire(item), id=utils.shortuuid("lk_"))
                     ref_item = await self._sdk.create_item(wire_item)
                     self._ids[item.id] = ref_item.item_id
                 committed = True
+                if rebuild and self._response_revision != response_revision:
+                    raise HistoryUpdateError("A new reply started during history replacement")
         except Exception as error:
             if committed:
                 raise HistoryUpdateError(

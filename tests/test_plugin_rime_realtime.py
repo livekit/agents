@@ -45,6 +45,7 @@ class Peer:
         self.history_release = asyncio.Event()
         self.history_release.set()
         self.fail_history_at = None
+        self.block_history_at = None
         self.running = {}
         self.history_serial = 0
         self.refusals = {}
@@ -130,7 +131,10 @@ class Peer:
             elif kind in ("conversation.item.create", "conversation.item.delete"):
                 self.history_operations.append(event)
                 self.history_started.set()
-                await self.history_release.wait()
+                if self.block_history_at is None or self.block_history_at == len(
+                    self.history_operations
+                ):
+                    await self.history_release.wait()
                 if self.fail_history_at == len(self.history_operations):
                     await self.emit(
                         "error",
