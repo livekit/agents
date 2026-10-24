@@ -48,7 +48,6 @@ The LLM writes emotion markers into its reply, and the avatar changes expression
 ```python
 class MyAgent(Agent):
     def tts_node(self, text, model_settings):
-        # When you use ElevenLabs v3/v4, pass style="brackets".
         return keyframe.emotion_tts_node(self, text, model_settings)
 ```
 
@@ -64,9 +63,13 @@ Use the configuration that matches your TTS:
   )
   ```
 
-- ElevenLabs v3/v4 plugin, where one `[happy]` audio tag steers both the voice and the face (`use_tts_aligned_transcript=True` keeps tags out of transcripts):
+- ElevenLabs v3/v4 plugin, where one `[happy]` audio tag steers both the voice and the face. Pass `style="brackets"` to both functions, and set `use_tts_aligned_transcript=True` to keep tags out of transcripts:
 
   ```python
+  class MyAgent(Agent):
+      def tts_node(self, text, model_settings):
+          return keyframe.emotion_tts_node(self, text, model_settings, style="brackets")
+
   agent = MyAgent(
       instructions=f"{MY_INSTRUCTIONS}\n\n{keyframe.emotion_instructions(style='brackets')}",
   )

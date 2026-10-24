@@ -37,7 +37,7 @@ MAX_TAG_LENGTH = 32
 # cap on the attributes of an unclosed "<expr" held before it is released as text
 _MAX_EXPR_HOLD = 256
 
-BRACKET_TAG_RE = re.compile(rf"\[(?P<name>[^\[\]\n]{{1,{MAX_TAG_LENGTH}}})\]")
+_BRACKET_TAG_RE = re.compile(rf"\[(?P<name>[^\[\]\n]{{1,{MAX_TAG_LENGTH}}})\]")
 _EXPR_TAG_RE = re.compile(r"<expr\b(?P<attrs>[^>]*?)/?\s*>|</expr\s*>")
 _EXPR_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
 
@@ -97,7 +97,7 @@ _EXPR = _Syntax(
     emotion=_expr_emotion,
 )
 _BRACKETS = _Syntax(
-    whole=BRACKET_TAG_RE,
+    whole=_BRACKET_TAG_RE,
     partial=re.compile(rf"\[[^\[\]\n]{{0,{MAX_TAG_LENGTH}}}\Z"),
     emotion=lambda match, allowed: emotion_for_tag(match.group("name"), allowed),
 )

@@ -627,14 +627,10 @@ def _cue_times(frames: list[rtc.AudioFrame]) -> list[tuple[str, float]]:
 
 
 def _planner(
-    text: str,
-    *,
-    style: _tags.MarkerStyle = "expr",
-    aligned: bool = True,
-    max_cue_hold: float = 0.5,
+    text: str, *, aligned: bool = True, max_cue_hold: float = 0.5
 ) -> _tts_node._CuePlanner:
-    planner = _tts_node._CuePlanner(style=style, aligned=aligned, max_cue_hold=max_cue_hold)
-    planner.spoken = _parse([text], style=style, forward_expr=False)[2].spoken
+    planner = _tts_node._CuePlanner(aligned=aligned, max_cue_hold=max_cue_hold)
+    planner.spoken = _parse([text], forward_expr=False)[2].spoken
     return planner
 
 
@@ -734,43 +730,6 @@ def test_planner_resyncs_on_a_long_word_after_an_unmatched_token() -> None:
     )
     # "happy" was in the skipped span: it resolves where coverage resumed
     assert _cue_times(_run(planner, 2.0)) == [("happy", 0.9), ("sad", 1.4)]
-
-
-def test_planner_skips_bracket_tokens_in_the_alignment() -> None:
-    planner = _planner("Okay [sad] sad news.", style="brackets")
-    planner.add_marker(_tags.Marker(len("okay"), "sad"))
-    planner.add_timings(
-        [
-            _timed("Okay ", 0.0, 0.4),
-            # the tag is aligned as a word of its own, ahead of the word it names
-            _timed("[sad] ", 0.4, 0.4),
-            _timed("sad ", 0.6, 0.9),
-            _timed("news.", 0.9, 1.3),
-        ]
-    )
-    assert _cue_times(_run(planner, 1.3)) == [("sad", 0.6)]
-
-
-def test_planner_skips_the_tail_of_a_tag_whose_start_was_dropped() -> None:
-    planner = _planner("[excited] We did it. [sad] Sadly I am still so excited.", style="brackets")
-    planner.add_marker(_tags.Marker(len("wedidit"), "sad"))
-    planner.add_timings(
-        [
-            # matched as a word, the tail would jump to the "excited" at the end
-            _timed("xcited] ", 0.0, 0.0),
-            _timed("We ", 0.0, 0.2),
-            _timed("did ", 0.2, 0.4),
-            _timed("it. ", 0.4, 0.6),
-            _timed("[sad] ", 0.7, 0.7),
-            _timed("Sadly ", 0.7, 1.1),
-            _timed("I ", 1.1, 1.2),
-            _timed("am ", 1.2, 1.4),
-            _timed("still ", 1.4, 1.7),
-            _timed("so ", 1.7, 1.9),
-            _timed("excited.", 1.9, 2.5),
-        ]
-    )
-    assert _cue_times(_run(planner, 2.5)) == [("sad", 0.7)]
 
 
 def test_planner_matches_a_first_word_missing_its_first_letters() -> None:
@@ -922,6 +881,18 @@ def _timed_frame(ms: int, *tokens: TimedString) -> rtc.AudioFrame:
     return frame
 
 
+async def _bracket_frames(node: _FakeNode, *chunks: str) -> list[rtc.AudioFrame]:
+    """``_emotion_frames`` in the brackets style, on a TTS with word timings."""
+    gen = _tts_node._emotion_frames(
+        _chunks(*chunks), node, style="brackets", forward_expr=False, aligned=True
+    )
+    return [f async for f in gen]
+
+
+def _transcripts(frames: list[rtc.AudioFrame]) -> list[list[str]]:
+    return [[str(t) for t in f.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])] for f in frames]
+
+
 MARKED = (
     '<expr type="expression" label="happy"/> Hello ',
     'there. <expr type="expr',
@@ -966,45 +937,24 @@ async def test_emotion_frames_drops_bracket_tags_from_transcripts() -> None:
             _timed_frame(400, _timed("[sad] ", 0.3, 0.3), _timed("then.", 0.3, 0.7)),
         ]
     )
-    frames = [
-        f
-        async for f in _tts_node._emotion_frames(
-            _chunks("[happy] Okay [sa", "d] then."),
-            node,
-            style="brackets",
-            forward_expr=False,
-            aligned=True,
-        )
-    ]
+    frames = await _bracket_frames(node, "[happy] Okay [sa", "d] then.")
     assert node.text == "[happy] Okay [sad] then."
     assert [_cues(f) for f in frames] == [[("happy", 0.0)], [("sad", 0.0)]]
-    assert [[str(t) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames] == [
-        ["Okay "],
-        ["then."],
-    ]
+    assert _transcripts(frames) == [["Okay "], ["then."]]
 
 
 async def test_emotion_frames_releases_a_bracket_left_open_at_the_end() -> None:
     node = _FakeNode(
         [
             _timed_frame(300, _timed("[happy] ", 0.0, 0.0), _timed("Okay, ", 0.0, 0.3)),
-            _timed_frame(200, _timed("see ", 0.3, 0.45), _timed("[", 0.45, 0.5)),
+            _timed_frame(200, _timed("look ", 0.3, 0.4), _timed("[this ", 0.4, 0.45)),
+            _timed_frame(200, _timed("over ", 0.45, 0.5), _timed("here", 0.5, 0.6)),
         ]
     )
-    # the closing marker has no word to resolve at, which keeps the last frame back
-    # until the reply ends
-    text = ("[happy] Okay, see [", '<expr type="expression" label="sad"/>')
-    frames = [
-        f
-        async for f in _tts_node._emotion_frames(
-            _chunks(*text), node, style="brackets", forward_expr=False, aligned=True
-        )
-    ]
-    # the "[" was held back in case it opened a tag; at the end it is text after all
-    assert [[str(t) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames] == [
-        ["Okay, "],
-        ["see ", "["],
-    ]
+    frames = await _bracket_frames(node, "[happy] Okay, look [this over here")
+    # the words from "[" on were held back in case they opened a tag; at the end they are
+    # text after all, and the last frame, kept back for them, carries them
+    assert _transcripts(frames) == [["Okay, "], ["look "], ["[this ", "over ", "here"]]
 
 
 @pytest.mark.parametrize(
@@ -1022,17 +972,57 @@ async def test_emotion_frames_drops_the_tail_of_a_tag_whose_start_was_dropped(
     first: list[TimedString],
 ) -> None:
     node = _FakeNode([_timed_frame(300, *first), _timed_frame(400, _timed("then.", 0.3, 0.7))])
-    frames = [
-        f
-        async for f in _tts_node._emotion_frames(
-            _chunks("[happy] Okay then."), node, style="brackets", forward_expr=False, aligned=True
-        )
-    ]
+    frames = await _bracket_frames(node, "[happy] Okay then.")
     transcripts = [
         [(str(t), t.start_time) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames
     ]
     assert transcripts == [[("Okay ", 0.1)], [("then.", 0.3)]]
     assert _cue_times(frames) == [("happy", 0.0)]
+
+
+async def test_emotion_frames_does_not_match_the_tail_of_a_dropped_tag_start() -> None:
+    words = [
+        # matched as a word, the tail would jump to the "excited" at the end
+        ("xcited] ", 0.0, 0.0),
+        ("We ", 0.0, 0.2),
+        ("did ", 0.2, 0.4),
+        ("it. ", 0.4, 0.6),
+        ("[sad] ", 0.7, 0.7),
+        ("Sadly ", 0.7, 1.1),
+        ("I ", 1.1, 1.2),
+        ("am ", 1.2, 1.4),
+        ("still ", 1.4, 1.7),
+        ("so ", 1.7, 1.9),
+        ("excited.", 1.9, 2.5),
+    ]
+    node = _FakeNode([_timed_frame(2500, *(_timed(*w) for w in words))])
+    frames = await _bracket_frames(node, "[excited] We did it. [sad] Sadly I am still so excited.")
+    assert _cue_times(frames) == [("excited", 0.0), ("sad", 0.7)]
+
+
+async def test_emotion_frames_skips_a_multi_word_tag_in_the_alignment() -> None:
+    # the alignment splits at spaces, so the tag arrives as two tokens; matched as a word,
+    # "[strong" would jump ahead to the "strong" at the end and place "sad" at 0.0
+    node = _FakeNode(
+        [
+            _timed_frame(
+                300,
+                _timed("[strong ", 0.0, 0.0),
+                _timed("accent] ", 0.0, 0.0),
+                _timed("Okay. ", 0.0, 0.3),
+            ),
+            _timed_frame(
+                400,
+                _timed("[sad] ", 0.3, 0.3),
+                _timed("That ", 0.4, 0.5),
+                _timed("was ", 0.5, 0.6),
+                _timed("strong.", 0.6, 0.7),
+            ),
+        ]
+    )
+    frames = await _bracket_frames(node, "[strong accent] Okay. [sad] That was strong.")
+    assert _cue_times(frames) == [("sad", 0.4)]
+    assert _transcripts(frames) == [["Okay. "], ["That ", "was ", "strong."]]
 
 
 async def test_emotion_frames_keeps_a_later_word_that_ends_in_a_bracket() -> None:
@@ -1042,20 +1032,8 @@ async def test_emotion_frames_keeps_a_later_word_that_ends_in_a_bracket() -> Non
             _timed_frame(400, _timed("see] ", 0.3, 0.5), _timed("then.", 0.5, 0.7)),
         ]
     )
-    frames = [
-        f
-        async for f in _tts_node._emotion_frames(
-            _chunks("[happy] Okay see] then."),
-            node,
-            style="brackets",
-            forward_expr=False,
-            aligned=True,
-        )
-    ]
-    assert [[str(t) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames] == [
-        ["Okay "],
-        ["see] ", "then."],
-    ]
+    frames = await _bracket_frames(node, "[happy] Okay see] then.")
+    assert _transcripts(frames) == [["Okay "], ["see] ", "then."]]
 
 
 async def test_emotion_frames_leaves_brackets_alone_in_the_expr_style() -> None:
@@ -1072,10 +1050,7 @@ async def test_emotion_frames_leaves_brackets_alone_in_the_expr_style() -> None:
         )
     ]
     assert node.text == "ppy] See [1] there."
-    assert [[str(t) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames] == [
-        ["ppy] ", "See "],
-        ["[1] ", "there."],
-    ]
+    assert _transcripts(frames) == [["ppy] ", "See "], ["[1] ", "there."]]
 
 
 async def test_emotion_frames_closes_the_inner_node_early() -> None:

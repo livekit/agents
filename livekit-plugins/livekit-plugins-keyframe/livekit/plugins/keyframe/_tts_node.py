@@ -26,7 +26,7 @@ from livekit.agents.tts._provider_format import drop_bracket_cues
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, TimedString
 from livekit.agents.voice import Agent, AgentSession, ModelSettings
 
-from ._tags import BRACKET_TAG_RE, MAX_TAG_LENGTH, Marker, MarkerStyle, TagParser, normalize
+from ._tags import MAX_TAG_LENGTH, Marker, MarkerStyle, TagParser, normalize
 from .log import logger
 from .types import EMOTIONS, USERDATA_EMOTION_CUES, Emotion, EmotionCue
 
@@ -52,12 +52,9 @@ _TAG_TAIL_RE = re.compile(rf"^\s*[^\s\[\]]{{0,{MAX_TAG_LENGTH}}}\]")
 _warned_sessions: weakref.WeakSet[AgentSession[Any]] = weakref.WeakSet()
 
 
-def _clean_aligned(text: str, style: MarkerStyle) -> str:
-    """Normalized spoken characters of a TTS-aligned token, markers removed."""
-    text = _XML_TAG_RE.sub("", text)
-    if style == "brackets":
-        text = _TAG_TAIL_RE.sub("", BRACKET_TAG_RE.sub("", text))
-    return normalize(text)
+def _clean_aligned(text: str) -> str:
+    """Normalized spoken characters of a TTS-aligned token, markup removed."""
+    return normalize(_XML_TAG_RE.sub("", text))
 
 
 def _drop_tag_tail(tokens: list[TimedString]) -> list[TimedString]:
@@ -86,12 +83,15 @@ def _drop_tag_tail(tokens: list[TimedString]) -> list[TimedString]:
     return tokens
 
 
-class _BracketTranscript:
-    """Keeps ``[tag]`` markers out of a reply's TTS-aligned transcript.
+class _BracketFilter:
+    """Removes ``[tag]`` markers from a reply's TTS alignment.
 
-    ``drop_bracket_cues`` removes whole tags. An alignment that drops the reply's first
-    characters can also start inside its opening tag, so the first words lose the tail
-    of one (``_drop_tag_tail``).
+    The TTS aligns each tag as words of its own, split at its spaces. The filtered tokens
+    are the transcript, and what the cue planner matches against the text.
+
+    ``drop_bracket_cues`` removes whole tags, across tokens. An alignment that drops the
+    reply's first characters can also start inside its opening tag, so the first words
+    lose the tail of one (``_drop_tag_tail``).
     """
 
     def __init__(self) -> None:
@@ -103,6 +103,11 @@ class _BracketTranscript:
             self._started = True
             tokens = _drop_tag_tail(tokens)
         return drop_bracket_cues(tokens, self._held)
+
+    @property
+    def holding(self) -> bool:
+        """Whether tokens are held back in case they open a tag."""
+        return bool(self._held)
 
     def flush(self) -> list[TimedString]:
         """The tokens held back in case they opened a tag, at the end of the reply."""
@@ -133,13 +138,14 @@ class _CuePlanner:
     are seconds from the start of the reply's audio.
     """
 
-    def __init__(self, *, style: MarkerStyle = "expr", aligned: bool, max_cue_hold: float) -> None:
-        self._style = style
+    def __init__(self, *, aligned: bool, max_cue_hold: float) -> None:
         self._aligned = aligned
         self._max_cue_hold = max_cue_hold
 
         self.spoken = ""
         """Normalized spoken text sent to the TTS so far (``TagParser.spoken``)."""
+        self.keep_last = False
+        """Hold the newest frame back: the caller may still attach data to the last one."""
         self._text_done = False
         self._pending: deque[Marker] = deque()
         self._resolved: list[tuple[float, Emotion]] = []
@@ -187,7 +193,7 @@ class _CuePlanner:
         if not self._aligned:
             return
         for token in tokens:
-            word = _clean_aligned(token, self._style)
+            word = _clean_aligned(token)
             if not word:
                 continue
             at = self.spoken.find(word, self._cover_pos)
@@ -263,10 +269,13 @@ class _CuePlanner:
 
     def _may_release(self, frame_end: float) -> bool:
         if frame_end >= self._received_end - 1e-6 and (
-            self._pending or any(at >= frame_end - 1e-6 for at, _ in self._resolved)
+            self.keep_last
+            or self._pending
+            or any(at >= frame_end - 1e-6 for at, _ in self._resolved)
         ):
-            # the newest frame waits while a cue may still land on or past it: finish()
-            # puts whatever is left on the last frame, which must not have been yielded
+            # the newest frame waits while a cue may still land on or past it, or the caller
+            # asks: finish() puts whatever is left on the last frame, which must not have
+            # been yielded
             return False
         if not self._pending:
             return True
@@ -316,9 +325,8 @@ async def _emotion_frames(
         max_cue_hold: Seconds of audio held back while a marker waits for its timing.
     """
     parser = TagParser(style=style, emotions=emotions, forward_expr=forward_expr)
-    planner = _CuePlanner(style=style, aligned=aligned, max_cue_hold=max_cue_hold)
-    # the TTS aligns [tag] markers as words of their own
-    transcript = _BracketTranscript() if style == "brackets" else None
+    planner = _CuePlanner(aligned=aligned, max_cue_hold=max_cue_hold)
+    brackets = _BracketFilter() if style == "brackets" else None
 
     def _take(out: str, markers: list[Marker]) -> str:
         # the markers come first: each is anchored before the text forwarded with it
@@ -346,13 +354,19 @@ async def _emotion_frames(
                 for t in frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])
                 if isinstance(t, str)
             ]
+            if brackets is not None and timed:
+                timed = brackets.push(timed)
+                frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed
+                # tokens held back in case they open a tag ride on the last frame if the
+                # reply ends first
+                planner.keep_last = brackets.holding
             planner.add_timings(timed)
-            if transcript is not None and timed:
-                frame.userdata[USERDATA_TIMED_TRANSCRIPT] = transcript.push(timed)
             for released in planner.push_frame(frame):
                 yield released
+        tail = brackets.flush() if brackets is not None else []
+        planner.add_timings(tail)
         last = planner.finish()
-        if transcript is not None and last and (tail := transcript.flush()):
+        if tail and last:
             last[-1].userdata[USERDATA_TIMED_TRANSCRIPT] = [
                 *last[-1].userdata.get(USERDATA_TIMED_TRANSCRIPT, []),
                 *tail,
