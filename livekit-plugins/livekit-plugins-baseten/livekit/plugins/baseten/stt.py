@@ -487,6 +487,15 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    # A heartbeat timeout arrives as an ERROR frame rather than a close
+                    # frame, and the branch below would step over it: the loop would end
+                    # normally and the base stream only reports a failure when `_run`
+                    # raises. The reason only survives on `ws.exception()`.
+                    raise APIConnectionError(
+                        message="Baseten STT websocket failed"
+                    ) from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("Unexpected Baseten message type: %s", msg.type)
                     continue
@@ -634,7 +643,18 @@ class SpeechStream(stt.SpeechStream):
             "Authorization": f"Api-Key {self._api_key}",
         }
 
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers, ssl=ssl_context)
+        ws = await self._session.ws_connect(
+            # Without a heartbeat aiohttp never notices a socket that died without a
+            # FIN/RST. The five-second `wait_for` in the receive loop is a polling
+            # timeout rather than a liveness bound -- it fires, hits `continue`, and
+            # the loop carries on -- so nothing ever escalates the dead socket and
+            # neither a reconnect nor a FallbackAdapter switch is triggered. An
+            # unanswered ping closes the socket, arriving here as an ERROR frame.
+            self._model_endpoint,
+            headers=headers,
+            ssl=ssl_context,
+            heartbeat=30.0,
+        )
 
         # Build metadata matching Baseten's StreamingWhisperInput schema.
         # See: https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api

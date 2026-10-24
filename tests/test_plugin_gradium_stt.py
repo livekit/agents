@@ -60,7 +60,7 @@ async def test_speech_stream_sends_language_in_json_config():
             sent_messages.append(message)
 
     class FakeSession:
-        async def ws_connect(self, url, headers):
+        async def ws_connect(self, url, headers, **kwargs):
             return FakeWebSocket()
 
     stt = STT(api_key="test-key")
@@ -86,3 +86,46 @@ async def test_speech_stream_sends_language_in_json_config():
 
     setup_msg = json.loads(sent_messages[0])
     assert setup_msg["json_config"] == {"language": "pt", "temp": 0.3}
+
+
+async def test_socket_is_opened_with_a_heartbeat() -> None:
+    """Without a heartbeat aiohttp never notices a socket that died without a FIN/RST.
+
+    The five-second `wait_for` in the receive loop is a polling timeout, not a
+    liveness bound: it fires, hits `continue`, and the loop carries on, so nothing
+    escalates the dead socket. Measured against a server that accepts the upgrade
+    and then answers nothing, this plugin sat for 75s without noticing.
+    """
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, LanguageCode
+    from livekit.plugins.gradium import STT
+    from livekit.plugins.gradium.stt import SpeechStream, STTOptions
+
+    captured: dict[str, object] = {}
+
+    class FakeWebSocket:
+        async def send_str(self, message: str) -> None:
+            pass
+
+    class FakeSession:
+        async def ws_connect(self, url, headers, **kwargs):
+            captured.update(kwargs)
+            return FakeWebSocket()
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = SpeechStream(
+            stt=STT(api_key="test-key"),
+            opts=STTOptions(language=LanguageCode("en")),
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+            api_key="test-key",
+            model_endpoint="wss://api.gradium.ai/api/speech/asr",
+            model_name="default",
+            http_session=FakeSession(),
+        )
+
+    await stream._connect_ws()
+
+    assert captured.get("heartbeat") == 30.0

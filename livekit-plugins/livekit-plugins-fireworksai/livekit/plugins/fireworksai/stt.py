@@ -27,6 +27,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -372,6 +373,15 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    # A heartbeat timeout arrives as an ERROR frame rather than a close
+                    # frame, and the branch below would step over it: the loop would end
+                    # normally and the base stream only reports a failure when `_run`
+                    # raises. The reason only survives on `ws.exception()`.
+                    raise APIConnectionError(
+                        message="Fireworks AI STT websocket failed"
+                    ) from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("unexpected FireworksAI message type %s", msg.type)
                     continue
@@ -443,7 +453,17 @@ class SpeechStream(stt.SpeechStream):
         ws_url = str(self._opts.base_url).rstrip("/") + _STREAMING_PATH
         filtered_config = {k: v for k, v in live_config.items() if v is not None}
         url = f"{ws_url}?{urlencode(filtered_config, doseq=True)}"
-        ws = await self._session.ws_connect(url, headers=headers)
+        ws = await self._session.ws_connect(
+            # Without a heartbeat aiohttp never notices a socket that died without a
+            # FIN/RST. The five-second `wait_for` in the receive loop is a polling
+            # timeout rather than a liveness bound -- it fires, hits `continue`, and
+            # the loop carries on -- so nothing ever escalates the dead socket and
+            # neither a reconnect nor a FallbackAdapter switch is triggered. An
+            # unanswered ping closes the socket, arriving here as an ERROR frame.
+            url,
+            headers=headers,
+            heartbeat=30.0,
+        )
         logger.info("connected to Fireworks AI STT")
         return ws
 
