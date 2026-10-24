@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs, images]>=1.8.8",
+    "livekit-agents[codecs, images]>=1.8.9",
     # keywords/languages on the transcription APIs landed in 2.50; 3.x moved the HTTP
     # stack to httpx2; the decisions endpoint arrived in 3.28.
     "openai>=3.28,<4",

@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.8.8",
+    "livekit-agents[codecs]>=1.8.9",
     "numpy>=1.26",
     "python-socketio[asyncio_client]>=5.13",
 ]
