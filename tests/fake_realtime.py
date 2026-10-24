@@ -39,6 +39,7 @@ def fake_capabilities(**overrides: bool) -> RealtimeCapabilities:
         "supports_say": True,
         # a different interruption model rather than a richer one, so it stays off
         "supports_overlapping_speech": False,
+        "generate_reply_during_tool_call": True,
     }
     defaults.update(overrides)
     return RealtimeCapabilities(**defaults)
@@ -58,6 +59,8 @@ class FakeRealtimeSession(RealtimeSession):
         self.audio_cleared = False
         self.pushed_audio: list[rtc.AudioFrame] = []
         self.generate_reply_calls = 0
+        # ordered session ops for tests that assert tool-output vs reply ordering
+        self.event_log: list[str] = []
         self.updated_instructions: str | None = None
         self.tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
         self.say_calls: list[str | AsyncIterable[str]] = []
@@ -87,6 +90,8 @@ class FakeRealtimeSession(RealtimeSession):
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         if self.update_error is not None:
             raise self.update_error
+        if any(getattr(item, "type", None) == "function_call_output" for item in chat_ctx.items):
+            self.event_log.append("function_call_output")
         self._chat_ctx = chat_ctx
 
     async def update_tools(self, tools: list[Tool]) -> None:
@@ -109,6 +114,7 @@ class FakeRealtimeSession(RealtimeSession):
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]:
         self.generate_reply_calls += 1
+        self.event_log.append("generate_reply")
         fut: asyncio.Future[GenerationCreatedEvent] = asyncio.get_event_loop().create_future()
         self._reply_futs.append(fut)
         return fut

@@ -482,6 +482,10 @@ class AgentActivity(RecognitionHooks):
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
 
+        # generate_reply() handles from inside a tool, held until function_call_output
+        # is pushed when the realtime model rejects response.create beforehand (#7915)
+        self._deferred_tool_replies: list[tuple[int, SpeechHandle]] = []
+
     def _resolve_rt_turn_detection_enabled(self) -> bool:
         """Whether a realtime model's server-side turn detection is on for this session.
 
@@ -1899,9 +1903,49 @@ class AgentActivity(RecognitionHooks):
             task.add_done_callback(self._on_pipeline_reply_done)
 
         if schedule_speech:
-            self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+            called_from_tool = False
+            if task is not None:
+                if task_info := _get_activity_task_info(task):
+                    called_from_tool = task_info.function_call is not None
+
+            defer_until_tool_output = (
+                called_from_tool
+                and isinstance(self.llm, llm.RealtimeModel)
+                and not self.llm.capabilities.generate_reply_during_tool_call
+            )
+            if defer_until_tool_output:
+                # Gemini Live cancels response.create while a function call is still open;
+                # schedule after the tool output is pushed instead (#7915).
+                handle._deferred_until_tool_output = True
+                self._deferred_tool_replies.append((SpeechHandle.SPEECH_PRIORITY_NORMAL, handle))
+            else:
+                self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
         return handle
+
+    def _flush_deferred_tool_replies(self) -> None:
+        deferred = self._deferred_tool_replies
+        self._deferred_tool_replies = []
+        for priority, handle in deferred:
+            handle._deferred_until_tool_output = False
+            if handle.done():
+                continue
+            self._schedule_speech(handle, priority, force=True)
+
+    def _cancel_deferred_tool_replies(
+        self, *, force: bool = True, source: InterruptionSource = "programmatic"
+    ) -> None:
+        deferred = self._deferred_tool_replies
+        kept: list[tuple[int, SpeechHandle]] = []
+        self._deferred_tool_replies = []
+        for priority, handle in deferred:
+            if force or handle.allow_interruptions:
+                handle._deferred_until_tool_output = False
+                handle.interrupt(force=True, source=source)
+            else:
+                # protected deferred replies survive a non-forced interrupt
+                kept.append((priority, handle))
+        self._deferred_tool_replies = kept
 
     def _cancel_preemptive_generation(self) -> None:
         if self._preemptive_generation is not None:
@@ -1948,8 +1992,13 @@ class AgentActivity(RecognitionHooks):
         interrupted_speeches = self._interrupt_background_speeches(force=force, source=source)
 
         if self._current_speech is not None:
+            # check the active speech before dropping deferred in-tool replies:
+            # a rejected interrupt must leave those replies queued (#7915 follow-up)
             self._current_speech.interrupt(force=force, source=source)
             interrupted_speeches.append(self._current_speech)
+
+        # only cancel deferred replies once the interrupt is allowed to proceed
+        self._cancel_deferred_tool_replies(force=force, source=source)
 
         if self._rt_session is not None:
             self._rt_session.interrupt()
@@ -4813,6 +4862,7 @@ class AgentActivity(RecognitionHooks):
                     )
             if timeout_cancel is not None:
                 raise timeout_cancel
+            self._cancel_deferred_tool_replies()
             return
 
         # wait for the tool execution to complete
@@ -4915,11 +4965,13 @@ class AgentActivity(RecognitionHooks):
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
                     run_state._watch_handle(task)
 
+                tool_outputs_synced = False
                 try:
                     async with self._rt_chat_ctx_lock:
                         chat_ctx = self._rt_session.chat_ctx.copy()
                         chat_ctx.items.extend(new_fnc_outputs)
                         await self._rt_session.update_chat_ctx(chat_ctx)
+                    tool_outputs_synced = True
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to update chat context before generating the function calls results",  # noqa: E501
@@ -4929,6 +4981,14 @@ class AgentActivity(RecognitionHooks):
                         if self._pending_auto_tool_reply_fut is auto_reply_fut:
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
+
+                if tool_outputs_synced:
+                    # tool outputs are on the server: release replies deferred for #7915
+                    self._flush_deferred_tool_replies()
+                else:
+                    # the function call is still open server-side; a reply now would be
+                    # cancelled or answer without the tool output
+                    self._cancel_deferred_tool_replies()
 
             tool_reply_expected = fnc_executed_ev.has_tool_reply
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
@@ -4964,6 +5024,9 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
+
+        # tools finished with nothing to sync: still release any deferred replies
+        self._flush_deferred_tool_replies()
 
         # no reply follows, so nothing else clears the "thinking" the tool asserted
         if not tool_reply_expected and self._no_pending_speech:

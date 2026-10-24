@@ -54,6 +54,7 @@ _SOFT_CAPABILITIES = (
     "per_response_tool_choice",
     "supports_say",
     "can_disable_turn_detection",
+    "generate_reply_during_tool_call",
 )
 
 # child events re-emitted on the wrapper
