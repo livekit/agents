@@ -214,6 +214,10 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = F
     host, port_str = connect_addr.rsplit(":", 1)
     port = int(port_str)
 
+    # console is a dev-only mode; is_dev_mode() reads the env, not the
+    # run(devmode=...) argument, and the legacy CLI exports it for console
+    os.environ["LIVEKIT_DEV_MODE"] = "1"
+
     setup_logging("DEBUG", devmode=True, console=True)
 
     loop = asyncio.new_event_loop()
@@ -305,6 +309,10 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
         raise ValueError("--cli-addr requires --dev")
 
     devmode = args.dev
+    if devmode:
+        # is_dev_mode() reads the env, not the run(devmode=...) argument; the
+        # legacy CLI exported it for its dev/console commands
+        os.environ["LIVEKIT_DEV_MODE"] = "1"
     colored_logs = devmode or args.log_format == "colored"
 
     setup_logging(args.log_level, devmode=colored_logs, console=False, compact=args.simulation)
