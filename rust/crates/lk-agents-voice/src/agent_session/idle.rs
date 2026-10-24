@@ -1,4 +1,4 @@
-//! `wait_for_idle()` and `hold_floor()`: the asks waiting for an idle instant, and the floor holds
+//! `wait_for_idle()` and `wait_for_idle_and_hold()`: the asks waiting for an idle instant, and the floor holds
 //! that only their own asks pass (`_idle_holds`).
 
 use std::collections::BTreeSet;
@@ -12,7 +12,7 @@ pub(crate) struct IdleWaiter {
     pub(crate) hold: Option<HoldId>,
     /// The speech whose tool asked; its interruption withdraws the ask. `None` for the host.
     pub(crate) speech: Option<SpeechId>,
-    /// `hold_floor()`'s hold: minted at the ask, granted when idle answers it.
+    /// `wait_for_idle_and_hold()`'s hold: minted at the ask, granted when idle answers it.
     pub(crate) grant: Option<HoldId>,
     pub(crate) call: Option<RequestId>,
 }
@@ -84,7 +84,7 @@ impl IdleHolds {
         std::mem::take(&mut self.waiters)
     }
 
-    /// `release_floor(hold)`: whether it was held.
+    /// `release_idle_hold(hold)`: whether it was held.
     pub(crate) fn release(&mut self, hold: HoldId) -> bool {
         self.holds.remove(&hold)
     }
@@ -104,7 +104,7 @@ mod tests {
     }
 
     // Catches: holds checked against the state before the pass, so a wait asked after a
-    // `hold_floor()` slips past the hold granted in the same idle instant.
+    // `wait_for_idle_and_hold()` slips past the hold granted in the same idle instant.
     #[test]
     fn a_hold_granted_in_a_pass_holds_off_the_asks_after_it() {
         let mut gate = IdleHolds::default();

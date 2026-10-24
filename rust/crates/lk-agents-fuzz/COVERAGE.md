@@ -187,7 +187,7 @@ Seeds (of 1,024) in which each input landed in each phase. `#` 20 or more, `+` 1
 never. Exact numbers are in the appendix.
 
 **Reading it.** For the 40 developer API inputs (520 cells): 435 well covered, 77 rare, 8
-never, all while the agent starts: `InterruptSpeech`, `SetAllowInterruptions`, `ReleaseFloor`,
+never, all while the agent starts: `InterruptSpeech`, `SetAllowInterruptions`, `ReleaseIdleHold`,
 `FillerStart`, `FillerStop`, `SetRunOutput`, `FeedAudio` (each needs something that does not
 exist yet at start: a speech, a hold, a tool, a stream) and `Close`. For comparison, the same table
 had 24 never with the earlier two separate modes, and 98 to 136 with conversations alone.
@@ -225,8 +225,8 @@ had 24 never with the earlier two separate modes, and 98 to 136 with conversatio
 | `ClaimUserTurn` | + | # | # | # | # | # | # | # | + | # | # | # | # |
 | `ReleaseUserTurn` | + | # | # | # | # | # | # | # | + | # | # | # | # |
 | `WaitForIdle` | # | # | # | # | # | # | + | # | + | # | # | # | # |
-| `HoldFloor` | # | # | # | # | # | # | # | # | # | # | # | # | # |
-| `ReleaseFloor` | . | # | # | # | # | + | + | # | + | # | # | # | # |
+| `WaitForIdleAndHold` | # | # | # | # | # | # | # | # | # | # | # | # | # |
+| `ReleaseIdleHold` | . | # | # | # | # | + | + | # | + | # | # | # | # |
 | `PauseAuthorization` | + | # | # | # | # | # | # | # | + | # | # | # | # |
 | `ResumeAuthorization` | + | # | # | # | # | # | # | # | + | # | # | # | # |
 | `FillerStart` | . | # | # | # | # | # | # | # | + | # | # | # | # |
@@ -327,7 +327,7 @@ speech. Scheduling can be paused (a drain), refusing new speech except tool repl
 - **Phases that could be columns**, all from existing steps: *speech queued* (`SpeechCreated`
   until `Speech::Authorized` or `SpeechDone`), *queue backlog* (two or more queued), *speech
   gap* (`FloorArmed` until `FloorReleased`), *floor held by the developer*
-  (`IdleAnswered{hold: Some}` until `FloorHoldReleased`), *authorization held*
+  (`IdleAnswered{hold: Some}` until `IdleHoldReleased`), *authorization held*
   (`AuthorizationPaused` until `AuthorizationResumed`), *scheduling paused* (`SchedulingPaused`
   until `SchedulingPauseSettled`), *preemptive reply in flight* (`Emitted(PreemptiveGeneration)`
   until `Turn::PreemptiveReconciled` or `PreemptiveRefused`), *tool blocked on a task*
@@ -711,7 +711,7 @@ harness waiting, not an actor's operation.
 | `FillerStop` | 0 | 19 | 190 | 41 | 196 | 17 | 12 | 196 | 3 | 144 | 9 | 120 | 4 |
 | `GenerateReply` | 103 | 652 | 738 | 477 | 402 | 45 | 29 | 356 | 33 | 378 | 162 | 507 | 370 |
 | `Handoff` | 67 | 465 | 658 | 337 | 391 | 48 | 29 | 356 | 7 | 336 | 48 | 398 | 365 |
-| `HoldFloor` | 90 | 628 | 742 | 491 | 515 | 126 | 97 | 444 | 47 | 475 | 200 | 522 | 386 |
+| `WaitForIdleAndHold` | 90 | 628 | 742 | 491 | 515 | 126 | 97 | 444 | 47 | 475 | 200 | 522 | 386 |
 | `HookDone` | 0 | 414 | 431 | 220 | 350 | 18 | 16 | 264 | 54 | 235 | 119 | 671 | 38 |
 | `HookDoneLate` | 0 | 346 | 632 | 271 | 367 | 47 | 34 | 337 | 4 | 336 | 35 | 340 | 302 |
 | `HostMetrics` | 11 | 368 | 637 | 289 | 391 | 48 | 30 | 345 | 4 | 338 | 40 | 374 | 306 |
@@ -732,7 +732,7 @@ harness waiting, not an actor's operation.
 | `PushVideo` | 15 | 369 | 634 | 280 | 372 | 48 | 28 | 342 | 8 | 342 | 53 | 384 | 305 |
 | `RealtimeEvent` | 7 | 198 | 191 | 126 | 3 | 0 | 0 | 1 | 14 | 90 | 21 | 152 | 17 |
 | `Recorder` | 6 | 370 | 631 | 299 | 382 | 43 | 27 | 343 | 12 | 336 | 50 | 379 | 319 |
-| `ReleaseFloor` | 0 | 451 | 411 | 364 | 251 | 16 | 9 | 244 | 3 | 173 | 26 | 257 | 147 |
+| `ReleaseIdleHold` | 0 | 451 | 411 | 364 | 251 | 16 | 9 | 244 | 3 | 173 | 26 | 257 | 147 |
 | `ReleaseUserTurn` | 15 | 371 | 777 | 310 | 409 | 51 | 31 | 364 | 9 | 353 | 54 | 396 | 413 |
 | `ResumeAuthorization` | 12 | 418 | 708 | 321 | 428 | 51 | 33 | 366 | 6 | 373 | 54 | 383 | 406 |
 | `Room` | 14 | 214 | 462 | 166 | 242 | 15 | 9 | 250 | 4 | 253 | 26 | 251 | 285 |

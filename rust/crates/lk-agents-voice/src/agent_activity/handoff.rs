@@ -479,7 +479,7 @@ impl Driver {
         // A step waiting on its `function_tools_executed` handlers goes on as issued: its results
         // are committed and its reply decided.
         for (id, kind) in pending {
-            if kind == HookKind::ToolsExecuted {
+            if kind == HookKind::FunctionToolsExecuted {
                 self.on_tools_executed_handled(id, None, out);
             }
         }

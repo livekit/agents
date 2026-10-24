@@ -2,7 +2,7 @@
 //! systems hold.
 
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::AgentSession;
+use crate::agent_session::LiveSession;
 use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{
     Answer, Close, Command, HostRecorder, IvrCommand, Origin, RequestId, Sent,
@@ -228,7 +228,7 @@ pub enum Event {
 /// [`AgentActivity`](crate::agent_activity::AgentActivity), and the [`AgentInput`] legs. Every
 /// decision is journalled into the shared trace, dated on the session clock.
 pub struct Driver {
-    pub(crate) session: AgentSession,
+    pub(crate) session: LiveSession,
     pub(crate) activity: crate::agent_activity::AgentActivity,
     pub(crate) input: crate::io::AgentInput,
     /// Machines never see it; [`Out`] carries it for them.

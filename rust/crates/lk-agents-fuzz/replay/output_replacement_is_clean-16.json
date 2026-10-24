@@ -60,7 +60,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "PushVideo": {}
@@ -110,7 +110,7 @@
         "ResumeAuthorization": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "GenerateReply": {
@@ -176,7 +176,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Ivr": {
@@ -200,10 +200,10 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "InterruptSpeech": {
@@ -212,7 +212,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "LlmToolCall": {
@@ -247,10 +247,10 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "LlmToolCall": {
@@ -272,7 +272,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "InterruptSpeech": {
@@ -331,7 +331,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "LlmToolCall": {
@@ -346,7 +346,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "LlmToolCall": {
@@ -363,7 +363,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "SetIoEnabled": {
@@ -383,7 +383,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "LlmToolCall": {
@@ -443,7 +443,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "WaitForIdle": {

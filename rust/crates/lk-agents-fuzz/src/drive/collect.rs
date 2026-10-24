@@ -152,7 +152,7 @@ impl Run {
                 Step::Speech(SpeechStep::IdleAnswered { hold: Some(hold), .. }) => {
                     self.open_once(at, Kind::Hold, Id::Hold(*hold), Detail::None);
                 }
-                Step::Speech(SpeechStep::FloorHoldReleased { hold }) => {
+                Step::Speech(SpeechStep::IdleHoldReleased { hold }) => {
                     self.close_by_id(at, Kind::Hold, Id::Hold(*hold));
                 }
                 Step::Generation(GenerationStep::FillerStarted { filler, .. }) => {

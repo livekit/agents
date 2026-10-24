@@ -294,7 +294,7 @@ impl AudioRecognition {
     }
 
     /// `update_options(endpointing_opts=..)`: the estimator is replaced, learned floor and all.
-    pub fn set_endpointing(&mut self, cfg: &crate::turn::Endpointing) {
+    pub fn set_endpointing(&mut self, cfg: &crate::turn::EndpointingOptions) {
         self.endpointing = Endpointing::new(cfg);
     }
 
@@ -735,7 +735,7 @@ enum Start {
 }
 
 fn user_transcript(ev: &SpeechEvent, is_final: bool, speaking: Option<bool>) -> SessionEvent {
-    SessionEvent::UserTranscript(Box::new(UserTranscriptEvent {
+    SessionEvent::UserInputTranscribed(Box::new(UserTranscriptEvent {
         ev: ev.clone(),
         is_final,
         speaking,

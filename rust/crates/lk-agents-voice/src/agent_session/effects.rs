@@ -433,7 +433,7 @@ impl Driver {
                 out.machine()
                     .append(self.session.states.update_user_state(e.at, UserState::Listening));
             }
-            SessionEvent::UserTranscript(t) => {
+            SessionEvent::UserInputTranscribed(t) => {
                 // Any non-empty transcript is the STT recovering
                 // (`AgentSession._user_input_transcribed`).
                 if let Some(a) = t.ev.best_alternative() {
@@ -458,13 +458,13 @@ impl Driver {
             | SessionEvent::AgentBackchannelOpportunity(_)
             | SessionEvent::PreemptiveGeneration(_)
             | SessionEvent::UserTurnExceeded(_)
-            | SessionEvent::TranscriptionTimeout(_)
+            | SessionEvent::UserTranscriptionTimeout(_)
             | SessionEvent::BackchannelConfirmed
             | SessionEvent::OverlapInterruption(_)
             | SessionEvent::AgentFalseInterruption { .. }
             | SessionEvent::UserTurnCompleted(_)
             | SessionEvent::SpeechCreated { .. }
-            | SessionEvent::ToolsExecuted(_)
+            | SessionEvent::FunctionToolsExecuted(_)
             | SessionEvent::ToolExecutionUpdated(_)
             | SessionEvent::SpeechDone { .. }
             | SessionEvent::FloorChanged { .. }
@@ -476,7 +476,7 @@ impl Driver {
             | SessionEvent::ContextCarried { .. }
             | SessionEvent::Close { .. } => {}
             // `_on_conversation_item_added`: the keyterm pass's turn gate.
-            SessionEvent::ItemAdded { item, .. } => {
+            SessionEvent::ConversationItemAdded { item, .. } => {
                 if self.session.keyterms.is_some() {
                     let item = (**item).clone();
                     self.keyterms_on_item(now, &item, out);
@@ -530,7 +530,7 @@ impl Driver {
                 }
                 // The turn machine cannot mint ids (pure tier), so the utterance's shared item id
                 // is stamped here, where the emission leaves the driver.
-                if let SessionEvent::UserTranscript(t) = &mut ev {
+                if let SessionEvent::UserInputTranscribed(t) = &mut ev {
                     let id = self.session.ids.user_transcript_item(t.is_final);
                     let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
                     self.journal(Step::Turn(TurnStep::TranscriptSegment {

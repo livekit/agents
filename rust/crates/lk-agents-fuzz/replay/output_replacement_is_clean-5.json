@@ -93,7 +93,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Ivr": {
@@ -141,7 +141,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Say": {
@@ -152,7 +152,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "HostMetrics": {}
@@ -165,7 +165,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "SetTranscriptionOutput": {
@@ -185,16 +185,16 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "ClearTurn": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "UpdateInstructions": {
@@ -250,10 +250,10 @@
         "ClaimUserTurn": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "SetStaticKeyterms": {
@@ -270,7 +270,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "UpdateInstructions": {
@@ -378,7 +378,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "UpdateModels": {
@@ -393,7 +393,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "GenerateReply": {
@@ -403,7 +403,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "GenerateReply": {
@@ -424,7 +424,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "GenerateReply": {
@@ -437,7 +437,7 @@
         "ClearTurn": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "UpdateTools": {
@@ -540,7 +540,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "CommitUserTurn": {
@@ -550,7 +550,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Advance": {

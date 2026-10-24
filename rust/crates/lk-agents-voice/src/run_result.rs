@@ -259,7 +259,7 @@ impl Driver {
         }
     }
 
-    /// A `HoldFloor` from an owned speech's tool is the run's.
+    /// A `WaitForIdleAndHold` from an owned speech's tool is the run's.
     pub(crate) fn run_own_hold(&mut self, origin: &Origin, hold: HoldId, out: &mut Out) {
         let Origin::Tool { call_id } = origin else { return };
         if let Some(speech) = self.activity.tools.speech_of(call_id)

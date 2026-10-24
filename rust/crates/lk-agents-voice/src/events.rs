@@ -366,12 +366,12 @@ pub enum SessionEvent {
     Diagnostic(DiagnosticEvent),
     EotPrediction(EotPredictionEvent),
     AgentBackchannelOpportunity(AgentBackchannelOpportunityEvent),
-    UserTranscript(Box<UserTranscriptEvent>),
+    UserInputTranscribed(Box<UserTranscriptEvent>),
     StartOfSpeech(StartOfSpeechEvent),
     EndOfSpeech(EndOfSpeechEvent),
     PreemptiveGeneration(PreemptiveGenerationEvent),
     UserTurnExceeded(UserTurnExceededEvent),
-    TranscriptionTimeout(TranscriptionTimeoutEvent),
+    UserTranscriptionTimeout(TranscriptionTimeoutEvent),
     /// `on_backchannel_confirmed`: the driver clears the realtime model's buffered audio.
     BackchannelConfirmed,
     /// `on_interruption`: the overlap was a real interruption.
@@ -409,7 +409,7 @@ pub enum SessionEvent {
         at: Ts,
     },
     /// `function_tools_executed`: one batch of tool calls, with their outputs.
-    ToolsExecuted(Box<crate::tool_executor::ToolsExecutedEvent>),
+    FunctionToolsExecuted(Box<crate::tool_executor::ToolsExecutedEvent>),
     /// `tool_execution_updated`: one call's start, updates, terminal entry and deferred reply.
     ToolExecutionUpdated(ToolLifecycle),
     /// A speech ended, for every kind and cause, after every `ItemAdded` it produced; the handle is
@@ -439,7 +439,7 @@ pub enum SessionEvent {
         reason: lk_agents_abi::voice::events::CloseReason,
         error: Option<lk_agents_abi::errors::ProviderError>,
     },
-    ItemAdded {
+    ConversationItemAdded {
         item: Box<lk_agents_abi::ChatItem>,
         /// Which agent produced it, as the host's opaque id. Stamped here because only the loop
         /// orders a handoff turn's items before the swap.

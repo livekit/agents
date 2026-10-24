@@ -37,7 +37,7 @@ impl Run {
             // A recognition stream left mid-utterance keeps the caller "speaking", which keeps the
             // session from ever being idle.
             (Kind::Utterance, &|nth| Input::SttEnd { utterance: Ref::new(nth) }),
-            (Kind::Hold, &|nth| Input::ReleaseFloor { hold: Ref::new(nth) }),
+            (Kind::Hold, &|nth| Input::ReleaseIdleHold { hold: Ref::new(nth) }),
             (Kind::Hook, &|nth| Input::HookDone {
                 hook: Ref::new(nth),
                 answer: HookAnswer::Returned,

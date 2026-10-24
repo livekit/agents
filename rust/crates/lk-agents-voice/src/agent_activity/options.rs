@@ -4,8 +4,8 @@
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::DiagnosticEvent;
 use crate::turn::{
-    Endpointing, Interruption, Nullable, PreemptiveGeneration, TurnPatch, TurnPolicy,
-    UserTurnLimit, count, endpointing_patch, migrate_turn_handling, nullable, secs,
+    EndpointingOptions, InterruptionOptions, Nullable, PreemptiveGenerationOptions, TurnPatch, TurnHandlingOptions,
+    UserTurnLimitOptions, count, endpointing_patch, migrate_turn_handling, nullable, secs,
     turn_handling_patch,
 };
 use lk_agents_abi::Maybe;
@@ -57,7 +57,7 @@ pub enum ConfigLayer {
 /// Built only by [`ConfigStack::resolve`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SessionConfig {
-    pub turn: TurnPolicy,
+    pub turn: TurnHandlingOptions,
     pub speech: SpeechPolicy,
     pub timers: Timers,
 }
@@ -191,16 +191,16 @@ pub const fn defaults(legs: &LegSet) -> SessionConfig {
     };
     let detection = TurnDetection::Auto;
     SessionConfig {
-        turn: TurnPolicy {
+        turn: TurnHandlingOptions {
             detection,
             owner: resolve_turn_detection_mode(detection, legs),
-            endpointing: Endpointing {
+            endpointing: EndpointingOptions {
                 mode: EndpointingMode::Fixed,
                 min_delay,
                 max_delay,
                 alpha: 0.9,
             },
-            interruption: Interruption {
+            interruption: InterruptionOptions {
                 enabled: true,
                 mode: None,
                 detection_enabled: legs.adaptive_detector,
@@ -215,13 +215,13 @@ pub const fn defaults(legs: &LegSet) -> SessionConfig {
                     Duration::from_millis(1000),
                 )),
             },
-            preemptive: PreemptiveGeneration {
+            preemptive: PreemptiveGenerationOptions {
                 enabled: true,
                 preemptive_tts: false,
                 max_speech_duration: Duration::from_millis(10_000),
                 max_retries: 3,
             },
-            user_turn_limit: UserTurnLimit { max_words: None, max_duration: None },
+            user_turn_limit: UserTurnLimitOptions { max_words: None, max_duration: None },
             ivr_detection: false,
         },
         speech: SpeechPolicy {
@@ -462,12 +462,12 @@ pub fn resolved_session_options(
     use crate::agent_activity::options as c;
     let SessionConfig {
         turn:
-            crate::turn::TurnPolicy {
+            crate::turn::TurnHandlingOptions {
                 detection,
                 owner: _,
-                endpointing: crate::turn::Endpointing { mode, min_delay, max_delay, alpha },
+                endpointing: crate::turn::EndpointingOptions { mode, min_delay, max_delay, alpha },
                 interruption:
-                    crate::turn::Interruption {
+                    crate::turn::InterruptionOptions {
                         enabled,
                         mode: interruption_mode,
                         detection_enabled: _,
@@ -480,13 +480,13 @@ pub fn resolved_session_options(
                         backchannel_boundary,
                     },
                 preemptive:
-                    crate::turn::PreemptiveGeneration {
+                    crate::turn::PreemptiveGenerationOptions {
                         enabled: preemptive_enabled,
                         preemptive_tts,
                         max_speech_duration,
                         max_retries,
                     },
-                user_turn_limit: crate::turn::UserTurnLimit { max_words, max_duration },
+                user_turn_limit: crate::turn::UserTurnLimitOptions { max_words, max_duration },
                 ivr_detection,
             },
         speech:

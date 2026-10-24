@@ -263,7 +263,7 @@ impl<'a> HostView<'a> {
     }
 
     /// Every API call developer code made that returns a value -- `say`, `interrupt`,
-    /// `wait_for_idle`, `hold_floor`, `commit_user_turn`, `handoff`, `drain`, a DTMF start --
+    /// `wait_for_idle`, `wait_for_idle_and_hold`, `commit_user_turn`, `handoff`, `drain`, a DTMF start --
     /// in the order they were made. Each is a future the developer awaits.
     pub fn api_calls(&self) -> Vec<ApiCallView<'a>> {
         self.0

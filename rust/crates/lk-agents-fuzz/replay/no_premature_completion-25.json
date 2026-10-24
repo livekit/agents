@@ -58,7 +58,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Configure": {
@@ -70,7 +70,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Say": {
@@ -89,13 +89,13 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "GenerateReply": {
@@ -112,7 +112,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "ClearTurn": {}
@@ -138,7 +138,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Say": {
@@ -176,7 +176,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Run": {
@@ -205,7 +205,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Say": {
@@ -224,7 +224,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "GenerateReply": {
@@ -241,7 +241,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Say": {
@@ -269,7 +269,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "UpdateModels": {
@@ -310,7 +310,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "SetIoEnabled": {
@@ -319,10 +319,10 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "CommitTurn": {
@@ -410,7 +410,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Ivr": {
@@ -452,10 +452,10 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "PushVideo": {}
@@ -494,7 +494,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "SetAudioOutput": {

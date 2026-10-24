@@ -1041,7 +1041,7 @@ pub enum HostWire {
     SpeechCreated(SpeechCreated),
     Diagnostic(DiagnosticWire),
     #[python(kind = "function_tools_executed")]
-    ToolsExecuted(ToolsExecutedEvent),
+    FunctionToolsExecuted(ToolsExecutedEvent),
     #[python(ignored)]
     UserTurnCompleted(UserTurnCompletedWire),
     EotPrediction(EotPrediction),

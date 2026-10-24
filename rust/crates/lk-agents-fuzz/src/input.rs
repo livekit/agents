@@ -594,8 +594,8 @@ inputs! {
         opens [Answer] leaf speech::CommitUserTurn;
     /// `wait_for_idle()`. Naming a hold is how its own holder passes through.
     WaitForIdle { hold: Option<Ref<Hold>> } opens [Answer] leaf speech::WaitForIdle;
-    HoldFloor { } opens [Hold, Answer] leaf speech::HoldFloor;
-    ReleaseFloor { hold: Ref<Hold> } leaf speech::ReleaseFloor;
+    WaitForIdleAndHold { } opens [Hold, Answer] leaf speech::WaitForIdleAndHold;
+    ReleaseIdleHold { hold: Ref<Hold> } leaf speech::ReleaseIdleHold;
     ClaimUserTurn { } leaf speech::ClaimUserTurn;
     ReleaseUserTurn { } leaf speech::ReleaseUserTurn;
     /// `AgentTask.complete(result)` from inside a speech's tool.

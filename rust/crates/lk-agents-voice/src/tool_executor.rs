@@ -1103,7 +1103,7 @@ impl Driver {
         let Some(executed) = executed else { return };
         // Not the host's to emit: after the commit, as before any hook existed for it.
         if !hosted {
-            out.machine().emit(SessionEvent::ToolsExecuted(executed.clone()));
+            out.machine().emit(SessionEvent::FunctionToolsExecuted(executed.clone()));
         }
         if let Some(verdict) = verdict {
             let _ = verdict.send(ToolsVerdict { executed: *executed });

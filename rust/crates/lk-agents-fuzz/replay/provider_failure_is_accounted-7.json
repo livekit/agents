@@ -29,7 +29,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "GenerateReply": {
@@ -58,7 +58,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Say": {
@@ -116,7 +116,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "AwaitExit": {}
@@ -142,13 +142,13 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "FeedAudio": {
@@ -173,7 +173,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "InterruptSpeech": {
@@ -219,7 +219,7 @@
         "HostMetrics": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "SetVideoInput": {
@@ -242,19 +242,19 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Say": {
@@ -295,10 +295,10 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "LlmToolCall": {
@@ -314,7 +314,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "Task": {
@@ -347,7 +347,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "LlmToolCall": {

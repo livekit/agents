@@ -1,7 +1,7 @@
 //! Every API call gets its result.
 //!
 //! A call that returns a value -- `say`, `generate_reply`, `interrupt`, `commit_user_turn`,
-//! `wait_for_idle`, `hold_floor`, `handoff`, `drain`, a DTMF start -- is a future the developer
+//! `wait_for_idle`, `wait_for_idle_and_hold`, `handoff`, `drain`, a DTMF start -- is a future the developer
 //! awaits, and the driver owes it a result even while closing: a pending drain joins the close's
 //! own, a handoff is refused as closing, a DTMF collection is answered stopped. The one future the
 //! driver drops on purpose is a `say` or `generate_reply` that reached the session after the host

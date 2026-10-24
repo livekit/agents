@@ -37,7 +37,7 @@ pub const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 /// `voice/agent_activity.py`'s `AgentActivity`: the running agent's frame (its name, prompt and
 /// tools), its audio recognition, the speech queue and the current speech, the false-interruption
 /// pause, the hooks and inline tasks, and the realtime session. The `Driver` orchestrates it
-/// together with the [`AgentSession`](crate::agent_session::AgentSession): what spans two of its
+/// together with the [`LiveSession`](crate::agent_session::LiveSession): what spans two of its
 /// components is the driver's to answer.
 pub(crate) struct AgentActivity {
     /// The running agent's id (`AgentActivity.agent.id`).
@@ -282,7 +282,7 @@ pub struct DriverConfig {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConfigDiff {
     /// The endpointing leaves changed: replace the model.
-    pub endpointing: Option<crate::turn::Endpointing>,
+    pub endpointing: Option<crate::turn::EndpointingOptions>,
     /// The resolved mode changed: `AudioRecognition::set_turn_detection_mode`.
     pub turn_detection_mode: Option<crate::audio_recognition::TurnDetectionMode>,
     /// `timers.aec_warmup` changed (the host's outbound-SIP re-evaluation): the labels' window.
@@ -646,7 +646,7 @@ impl Driver {
         match outcome {
             CommitOutcome::Added => {
                 let run = self.run_of_item(&entry.source);
-                out.machine().emit(crate::events::SessionEvent::ItemAdded {
+                out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
                     item: Box::new(entry.item),
                     agent: entry.agent,
                     source: entry.source,

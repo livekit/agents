@@ -284,14 +284,14 @@ impl Run {
                 waiting = Some(Pending::Idle(rx));
                 SpeechCommand::WaitForIdle { hold, call: Some(call) }.into()
             }
-            Input::HoldFloor {} => {
+            Input::WaitForIdleAndHold {} => {
                 let (call, rx) = calls.open(DriverAnswer::hold);
                 waiting = Some(Pending::Hold(rx));
-                SpeechCommand::HoldFloor { call: Some(call) }.into()
+                SpeechCommand::WaitForIdleAndHold { call: Some(call) }.into()
             }
-            Input::ReleaseFloor { hold } => {
+            Input::ReleaseIdleHold { hold } => {
                 let Some(hold) = self.hold_id(*hold) else { return false };
-                SpeechCommand::ReleaseFloor { hold }.into()
+                SpeechCommand::ReleaseIdleHold { hold }.into()
             }
             Input::ClaimUserTurn {} => SpeechCommand::ClaimUserTurn.into(),
             Input::ReleaseUserTurn {} => SpeechCommand::ReleaseUserTurn.into(),

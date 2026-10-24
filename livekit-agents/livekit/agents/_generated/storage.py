@@ -152,6 +152,14 @@ class AcquireRequest(BaseModel):
     """The `run_started` event's payload: the task id, the stream id, the channel."""
     events_after: int = 0
     """Load the lane's events after this id (0: all)."""
+    submit: SubmittedTask | None = None
+    """The turn's `submitted` row, written first in the same batch; `None` for a run with no
+    row (a voice turn) or one submitted earlier.
+    """
+    pickup: bool = False
+    """Take `task_id`'s row to `working` under the lease, in the same batch."""
+    tasks_limit: int = 0
+    """Load the lane's newest task rows, this many."""
 
 
 class Loaded(BaseModel):
@@ -164,6 +172,14 @@ class Loaded(BaseModel):
     lane: LaneRow
     items: list[ChatItemRow]
     events: list[EventRow]
+    tasks: list[TaskRow] = Field(default_factory=list)
+    """The newest task rows, `tasks_limit` of them, newest first, as of the acquire."""
+    submitted: bool | None = None
+    """Whether `submit` inserted its row; `Some(false)` is a `task_id` or `messageId` that
+    already had one.
+    """
+    picked_up: bool = False
+    """Whether `pickup` moved the row to `working`; `false` when it is terminal or missing."""
     tip: int
 
 
@@ -229,6 +245,8 @@ class CommitRequest(BaseModel):
     run_ended: EventWrite
     """The `run_ended` event, written last."""
     after: LeaseAfter = "release"
+    read_task: str | None = None
+    """A task row to read back after the writes, in the same batch: the answer's record."""
 
 
 class CommitResult(BaseModel):
@@ -238,6 +256,8 @@ class CommitResult(BaseModel):
     version: int
     """The version after the bump; the loaded one under `concurrent`."""
     tip: int
+    task: TaskRow | None = None
+    """`read_task`'s row after the commit, when it asked for one and the row exists."""
 
 
 class RunEndedRequest(BaseModel):

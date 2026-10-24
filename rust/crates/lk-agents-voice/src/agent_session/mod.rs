@@ -46,7 +46,7 @@ pub const DEFAULT_AEC_WARMUP: Duration = Duration::from_secs(3);
 
 /// `voice/agent_session.py`'s `AgentSession`. The `Driver` orchestrates it together with the
 /// [`AgentActivity`](crate::agent_activity::AgentActivity).
-pub(crate) struct AgentSession {
+pub(crate) struct LiveSession {
     pub(crate) states: AgentUserState,
     pub(crate) aec: AecWarmup,
     /// Guard 1. Cleared when the adaptive detector takes interruption over.
@@ -102,7 +102,7 @@ pub(crate) struct StartOptions {
     pub(crate) run: Option<crate::run_result::RunSpec>,
 }
 
-impl AgentSession {
+impl LiveSession {
     pub(crate) fn new(config: DriverConfig, parts: SessionParts) -> Self {
         let SessionParts {
             llm,
@@ -121,7 +121,7 @@ impl AgentSession {
             record.update_agent_chat_ctx(items, &agent);
         }
         let cfg = &config.effective;
-        AgentSession {
+        LiveSession {
             states: AgentUserState::new(cfg.timers.user_away),
             aec: AecWarmup::new(cfg.timers.aec_warmup),
             by_audio_activity: cfg.turn.interruption.by_audio_activity,
@@ -343,7 +343,7 @@ impl IdMint {
 pub struct SessionShared {
     pub time: Timebase,
     /// `session.output`.
-    pub output: Output,
+    pub output: AgentOutput,
     pub recorder: Arc<std::sync::RwLock<Option<crate::recorder_io::RecorderTap>>>,
     pub recorder_observer: std::sync::Mutex<Option<Arc<dyn crate::io::PlaybackObserver>>>,
     /// Published by the loop every iteration, read by `perform_audio_forwarding` before its first
@@ -394,19 +394,19 @@ impl SessionShared {
 
 /// `session.output`: the agent's audio and transcription outputs, each swappable while the session
 /// runs (a reply keeps the one it started with) and each with its switch.
-pub struct Output {
+pub struct AgentOutput {
     audio: std::sync::RwLock<Option<Arc<dyn AudioOutput>>>,
     audio_enabled: std::sync::atomic::AtomicBool,
     transcription: std::sync::RwLock<Option<Arc<dyn TextOutput>>>,
     transcription_enabled: std::sync::atomic::AtomicBool,
 }
 
-impl Output {
+impl AgentOutput {
     pub fn new(
         audio: Option<Arc<dyn AudioOutput>>,
         transcription: Option<Arc<dyn TextOutput>>,
     ) -> Self {
-        Output {
+        AgentOutput {
             audio: std::sync::RwLock::new(audio),
             audio_enabled: std::sync::atomic::AtomicBool::new(true),
             transcription: std::sync::RwLock::new(transcription),
@@ -485,11 +485,11 @@ mod label_tests {
     use crate::events::SessionEvent;
     use lk_agents_abi::Ts;
 
-    fn state(aec: Option<Duration>) -> AgentSession {
+    fn state(aec: Option<Duration>) -> LiveSession {
         let legs = crate::agent_activity::options::LegSet::none();
         let mut config = DriverConfig::new(Default::default(), legs);
         config.effective.timers.aec_warmup = aec;
-        AgentSession::new(config, SessionParts::default())
+        LiveSession::new(config, SessionParts::default())
     }
 
     fn arms(eff: &Effects) -> Vec<Ts> {

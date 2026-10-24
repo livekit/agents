@@ -156,7 +156,7 @@ impl Driver {
                 let speech = self.tool_speech(&self.command_origin);
                 self.session.idle.ask(IdleWaiter { hold, speech, grant: None, call });
             }
-            SpeechCommand::HoldFloor { call } => {
+            SpeechCommand::WaitForIdleAndHold { call } => {
                 // Minted at the ask, so the run a tool's hold belongs to can own it before idle.
                 let id = self.session.idle.mint_hold();
                 let origin = self.command_origin.clone();
@@ -164,9 +164,9 @@ impl Driver {
                 let speech = self.tool_speech(&self.command_origin);
                 self.session.idle.ask(IdleWaiter { hold: None, speech, grant: Some(id), call });
             }
-            SpeechCommand::ReleaseFloor { hold } => {
+            SpeechCommand::ReleaseIdleHold { hold } => {
                 if self.session.idle.release(hold) {
-                    out.trace(SpeechStep::FloorHoldReleased { hold });
+                    out.trace(SpeechStep::IdleHoldReleased { hold });
                 }
                 self.run_release(crate::run_result::Owned::Hold(hold), out);
             }
@@ -726,7 +726,7 @@ impl Driver {
                 if let (Some(event), Some(verdict)) = (&executed, verdict) {
                     let id = self.activity.hooks.mint();
                     let call =
-                        HookCall::ToolsExecuted { id, speech, event: Box::new((**event).clone()) };
+                        HookCall::FunctionToolsExecuted { id, speech, event: Box::new((**event).clone()) };
                     let wait = self.hook_wait();
                     if self.activity.hook_bound.is_some()
                         && self.issue_hook(now, call, Some(wait), out)

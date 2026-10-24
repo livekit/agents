@@ -5,7 +5,7 @@ use super::driver::*;
 use crate::agent_activity::pause::{PausedSpeech, sink_facts};
 use crate::agent_activity::scheduling::SpeechScheduler;
 use crate::agent_activity::{ActivityParts, DriverConfig, GateSnapshot, PIPELINE_SAMPLE_RATE};
-use crate::agent_session::AgentSession;
+use crate::agent_session::LiveSession;
 use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{Command, Origin};
 use crate::agent_session::host_events::HostEvent;
@@ -267,7 +267,7 @@ impl DriverBuilder {
 
         let shared = Arc::new(SessionShared {
             time: self.time.clone(),
-            output: crate::agent_session::Output::new(
+            output: crate::agent_session::AgentOutput::new(
                 self.audio_out.clone(),
                 self.text_out.clone(),
             ),
@@ -304,7 +304,7 @@ impl DriverBuilder {
 
         // The constructor context as the agent's view, not announced (the host has it). The prompt
         // is rendered per request.
-        let session = AgentSession::new(
+        let session = LiveSession::new(
             config,
             crate::agent_session::SessionParts {
                 llm: self.llm,

@@ -1,6 +1,6 @@
 //! `wait_for_idle` is not answered while another caller's floor hold is outstanding.
 //!
-//! A hold is live from the moment the driver answered the `HoldFloor` that took it until it
+//! A hold is live from the moment the driver answered the `WaitForIdleAndHold` that took it until it
 //! releases it; the run opens and closes a `Hold` resource on exactly those two journal steps. A
 //! waiter that names the hold passes through; every other waiter must wait.
 use crate::{
@@ -47,8 +47,8 @@ impl Rule for IdleRespectsHolds {
 /// A hold was taken and released before the idle call.
 fn idle_after_release() -> Recording {
     Authored::new()
-        .sent_opening(Input::HoldFloor {}, &[(Kind::Hold, Detail::None)])
-        .sent(Input::ReleaseFloor { hold: Ref::new(0) })
+        .sent_opening(Input::WaitForIdleAndHold {}, &[(Kind::Hold, Detail::None)])
+        .sent(Input::ReleaseIdleHold { hold: Ref::new(0) })
         .closed(Kind::Hold, 0)
         .sent_opening(Input::WaitForIdle { hold: None }, &[(Kind::Answer, Detail::None)])
         .result(0, Answer::IdleOk)
@@ -58,7 +58,7 @@ fn idle_after_release() -> Recording {
 /// One caller holds the floor, another asks for idle without naming it, and is answered.
 fn idle_while_held() -> Recording {
     Authored::new()
-        .sent_opening(Input::HoldFloor {}, &[(Kind::Hold, Detail::None)])
+        .sent_opening(Input::WaitForIdleAndHold {}, &[(Kind::Hold, Detail::None)])
         .sent_opening(Input::WaitForIdle { hold: None }, &[(Kind::Answer, Detail::None)])
         .result(0, Answer::IdleOk)
         .done()

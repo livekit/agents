@@ -31,7 +31,7 @@ use std::time::Duration;
 /// `voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
 /// `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
 /// borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
-#[lk_agents_abi::host(object(name = "AgentSession"))]
+#[lk_agents_abi::host(object(name = "LiveSession"))]
 impl SessionApi {
     /// Assemble a session; the loop begins at `start()`.
     ///
@@ -804,7 +804,7 @@ impl SessionApi {
     /// `cancel_agent_handoff()`).
     #[host(method(send = Command::HookDone {
         id: HookId(id),
-        outcome: HookOutcome::ToolsExecuted { reply_required, handoff_required },
+        outcome: HookOutcome::FunctionToolsExecuted { reply_required, handoff_required },
     }))]
     pub fn hook_tools_executed(
         &self,
@@ -1058,21 +1058,21 @@ impl SessionApi {
     }
 
     /// `RunContext.foreground()`: wait for idle, then hold the floor until
-    /// [`release_floor`](Self::release_floor). Answers the hold's id.
+    /// [`release_idle_hold`](Self::release_idle_hold). Answers the hold's id.
     #[host(method(kw_only))]
-    pub fn hold_floor(
+    pub fn wait_for_idle_and_hold(
         &self,
         origin: Option<&str>,
     ) -> Result<Reply<Result<u64, IdleRefused>>, CommandRefused> {
         let (call, rx) = self.call(Answer::hold)?;
-        self.send_from(origin_of(origin)?, SpeechCommand::HoldFloor { call: Some(call) })?;
+        self.send_from(origin_of(origin)?, SpeechCommand::WaitForIdleAndHold { call: Some(call) })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)).map(|h| h.0) }))
     }
 
     /// `_wait_for_idle_and_hold`'s exit. A hold the loop no longer has is a no-op, and so is a
     /// closed loop: it has released everything already.
-    #[host(method(send = SpeechCommand::ReleaseFloor { hold: HoldId(hold) }))]
-    pub fn release_floor(&self, hold: u64);
+    #[host(method(send = SpeechCommand::ReleaseIdleHold { hold: HoldId(hold) }))]
+    pub fn release_idle_hold(&self, hold: u64);
 
     /// `AgentSession._claim_user_turn()`'s enter: pins the user state to `speaking` and holds
     /// `wait_for_idle` open. Reentrant.

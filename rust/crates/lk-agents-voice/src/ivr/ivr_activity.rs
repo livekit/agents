@@ -248,7 +248,7 @@ impl IvrSystem {
     fn on_watched(&mut self, now: Ts, item: SystemTap) {
         match item {
             // `_on_user_input_transcribed`: finals only, while a navigator runs.
-            SystemTap::Session(SessionEvent::UserTranscript(t)) if t.is_final => {
+            SystemTap::Session(SessionEvent::UserInputTranscribed(t)) if t.is_final => {
                 let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
                 self.on_final(&text);
             }

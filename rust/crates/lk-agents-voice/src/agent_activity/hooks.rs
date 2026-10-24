@@ -98,7 +98,7 @@ impl Driver {
             HookCall::DescribeAgent { speech, .. } => (None, Some(*speech), None, None),
             HookCall::RenderToolReply { at_tail, .. } => (None, None, None, Some(*at_tail)),
             HookCall::FillerSource { .. } => (None, None, None, None),
-            HookCall::ToolsExecuted { speech, .. } => (None, Some(*speech), None, None),
+            HookCall::FunctionToolsExecuted { speech, .. } => (None, Some(*speech), None, None),
         };
         out.trace(HandoffStep::HookIssued { hook: id, kind, agent, speech, turn, at_tail });
         let hosted =
@@ -122,7 +122,7 @@ impl Driver {
             | HookKind::OnUserTurnCompleted
             | HookKind::RenderToolReply
             | HookKind::FillerSource
-            | HookKind::ToolsExecuted => {}
+            | HookKind::FunctionToolsExecuted => {}
         }
         true
     }
@@ -179,7 +179,7 @@ impl Driver {
             | HookOutcome::Described(_)
             | HookOutcome::Rendered(_)
             | HookOutcome::Filler { .. }
-            | HookOutcome::ToolsExecuted { .. } => HookEnd::Returned { edits: 0 },
+            | HookOutcome::FunctionToolsExecuted { .. } => HookEnd::Returned { edits: 0 },
         };
         // An id nobody waits on (a late answer) is dropped.
         let Some(kind) = self.finish_hook(id, how, out) else { return };
@@ -206,7 +206,7 @@ impl Driver {
         outcome: HookOutcome,
         out: &mut Out,
     ) {
-        use HookOutcome::{Described, Failed, Filler, Rendered, Returned, ToolsExecuted, Turn};
+        use HookOutcome::{Described, Failed, Filler, Rendered, Returned, FunctionToolsExecuted, Turn};
         let fits = matches!(
             (kind, &outcome),
             (HookKind::OnExit | HookKind::OnEnter, Returned | Failed)
@@ -214,7 +214,7 @@ impl Driver {
                 | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed)
                 | (HookKind::RenderToolReply, Rendered(_) | Returned | Failed)
                 | (HookKind::FillerSource, Filler { .. } | Returned | Failed)
-                | (HookKind::ToolsExecuted, ToolsExecuted { .. } | Returned | Failed)
+                | (HookKind::FunctionToolsExecuted, FunctionToolsExecuted { .. } | Returned | Failed)
         );
         // The sequence must not hang on a malformed answer: it goes on as if unanswered.
         if !fits {
@@ -237,7 +237,7 @@ impl Driver {
                 | Turn(_)
                 | Rendered(_)
                 | Filler { .. }
-                | ToolsExecuted { .. } => self.drop_describe(now, id, out),
+                | FunctionToolsExecuted { .. } => self.drop_describe(now, id, out),
             },
             // "error occurred during on_user_turn_completed": return, no reply.
             HookKind::OnUserTurnCompleted => {
@@ -249,7 +249,7 @@ impl Driver {
                     | Described(_)
                     | Rendered(_)
                     | Filler { .. }
-                    | ToolsExecuted { .. } => Vec::new(),
+                    | FunctionToolsExecuted { .. } => Vec::new(),
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
@@ -265,7 +265,7 @@ impl Driver {
                     | Turn(_)
                     | Described(_)
                     | Filler { .. }
-                    | ToolsExecuted { .. } => None,
+                    | FunctionToolsExecuted { .. } => None,
                 };
                 self.on_tool_reply_rendered(now, id, text, out)
             }
@@ -278,14 +278,14 @@ impl Driver {
                     | Turn(_)
                     | Described(_)
                     | Rendered(_)
-                    | ToolsExecuted { .. } => (None, false),
+                    | FunctionToolsExecuted { .. } => (None, false),
                 };
                 self.on_filler_source(now, id, text, spoke, out)
             }
             // What the handlers left; unanswered, the event stands as issued.
-            HookKind::ToolsExecuted => {
+            HookKind::FunctionToolsExecuted => {
                 let left = match outcome {
-                    ToolsExecuted { reply_required, handoff_required } => {
+                    FunctionToolsExecuted { reply_required, handoff_required } => {
                         Some((reply_required, handoff_required))
                     }
                     Failed | Returned | Turn(_) | Described(_) | Rendered(_) | Filler { .. } => {

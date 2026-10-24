@@ -544,7 +544,7 @@ pub fn instructions_message_id() -> String {
     lk_agents_voice::generation::INSTRUCTIONS_MESSAGE_ID.to_string()
 }
 
-/// `remove_instructions(chat_ctx)` (`voice/generation.py:570`) as a plan: the positions of every
+/// `remove_instructions(chat_ctx)` as a plan: the positions of every
 /// `INSTRUCTIONS_MESSAGE_ID` item, ascending, given the items' ids.
 #[napi(js_name = "removeInstructions")]
 pub fn remove_instructions(item_ids: Vec<String>) -> Vec<i64> {

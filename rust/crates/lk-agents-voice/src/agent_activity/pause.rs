@@ -10,7 +10,7 @@ use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
 use crate::speech_handle::SpeechError;
 use crate::trace::{InputStep, InterruptCause, InterruptStep, SpeechStep};
-use crate::turn::Interruption;
+use crate::turn::InterruptionOptions;
 use lk_agents_abi::Ts;
 use lk_agents_abi::tokenize::{WordTokenizerOptions, count_words};
 use lk_agents_abi::voice::events::AgentState;
@@ -30,7 +30,7 @@ mod paused_speech {
     #[derive(Debug, Clone)]
     pub struct PausedSpeech {
         /// The interruption options, read off the resolved configuration at construction.
-        interruption: Interruption,
+        interruption: InterruptionOptions,
         /// The sink's capabilities as of the last `refresh_pause_facts`.
         sink: AudioOutputCapabilities,
         /// `session.output.audio_enabled and session.output.audio is not None`, likewise.

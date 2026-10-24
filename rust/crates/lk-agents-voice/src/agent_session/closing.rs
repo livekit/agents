@@ -488,7 +488,7 @@ impl Driver {
                 self.answer(call, Answer::Idle(Err(IdleRefused::Closing)));
                 return;
             }
-            Command::Speech(SpeechCommand::HoldFloor { call }) => {
+            Command::Speech(SpeechCommand::WaitForIdleAndHold { call }) => {
                 out.trace(SpeechStep::IdleAnswered { hold: None, closing: true });
                 self.answer(call, Answer::Hold(Err(IdleRefused::Closing)));
                 return;
@@ -502,7 +502,7 @@ impl Driver {
             // Nothing awaits these: a dropped one is a lost instruction, not a lost promise.
             Command::Speech(
                 SpeechCommand::InterruptSpeech { .. }
-                | SpeechCommand::ReleaseFloor { .. }
+                | SpeechCommand::ReleaseIdleHold { .. }
                 | SpeechCommand::ClaimUserTurn
                 | SpeechCommand::ReleaseUserTurn
                 | SpeechCommand::SetAllowInterruptions { .. }
@@ -669,7 +669,7 @@ impl Driver {
     }
 
     /// `_on_error` (activity then session): the `ErrorEvent` for every failed attempt, then the
-    /// close policy on unrecoverable ones ([`AgentSession`](crate::agent_session::AgentSession)'s counters).
+    /// close policy on unrecoverable ones ([`ErrorCounts`](crate::agent_session::ErrorCounts)).
     pub(crate) fn report_error(
         &mut self,
         now: Ts,

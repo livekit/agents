@@ -174,7 +174,7 @@ pub enum SpeechStep {
         until: Ts,
     },
     FloorReleased,
-    FloorHoldReleased {
+    IdleHoldReleased {
         hold: crate::agent_session::HoldId,
     },
     /// Scheduling stopped accepting new turns. `except` is every speech the pause doesn't wait for
@@ -190,7 +190,7 @@ pub enum SpeechStep {
     AuthorizationPaused,
     /// The hold came off; the held speech takes the floor on this same iteration.
     AuthorizationResumed,
-    /// A `WaitForIdle`/`HoldFloor` answered; `closing` when it was the refusal.
+    /// A `WaitForIdle`/`WaitForIdleAndHold` answered; `closing` when it was the refusal.
     IdleAnswered {
         hold: Option<crate::agent_session::HoldId>,
         closing: bool,
@@ -802,7 +802,7 @@ impl Step {
                 SpeechStep::SayRefused { .. }
                 | SpeechStep::FloorArmed { .. }
                 | SpeechStep::FloorReleased
-                | SpeechStep::FloorHoldReleased { .. }
+                | SpeechStep::IdleHoldReleased { .. }
                 | SpeechStep::SchedulingPaused { .. }
                 | SpeechStep::SchedulingPauseSettled
                 | SpeechStep::SchedulingPauseRefused { .. }

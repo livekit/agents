@@ -105,7 +105,7 @@ pub enum HookOutcome {
     },
     /// `function_tools_executed` handled: each output's `reply_required`, in order, and the event's
     /// `handoff_required`, as the handlers left them.
-    ToolsExecuted {
+    FunctionToolsExecuted {
         reply_required: Vec<bool>,
         handoff_required: bool,
     },
@@ -209,7 +209,7 @@ impl Command {
         }
         match self {
             Command::Speech(c) => leaf!(c; SpeechCommand: Say, GenerateReply, Interrupt,
-                InterruptSpeech, CommitUserTurn, WaitForIdle, HoldFloor, ReleaseFloor, ClaimUserTurn,
+                InterruptSpeech, CommitUserTurn, WaitForIdle, WaitForIdleAndHold, ReleaseIdleHold, ClaimUserTurn,
                 ReleaseUserTurn, SetAllowInterruptions, SetRunOutput, ToolUpdate, FillerStart,
                 FillerStop, PauseAuthorization, ResumeAuthorization),
             Command::Frame(c) => leaf!(c; FrameCommand: Update, SetSpeakerFilter,
@@ -366,11 +366,11 @@ pub enum SpeechCommand {
     },
     /// Idle: nothing current, queued or being decided, the user silent, no claim or foreign hold.
     WaitForIdle { hold: Option<HoldId>, call: Option<RequestId> },
-    /// `RunContext.foreground()`: wait for idle, then hold it until `ReleaseFloor`; a waiter naming
+    /// `RunContext.foreground()`: wait for idle, then hold it until `ReleaseIdleHold`; a waiter naming
     /// the hold passes through.
-    HoldFloor { call: Option<RequestId> },
+    WaitForIdleAndHold { call: Option<RequestId> },
     /// Unknown ids are a no-op.
-    ReleaseFloor { hold: HoldId },
+    ReleaseIdleHold { hold: HoldId },
     /// Pins the user state to `speaking` and holds idle open. Reentrant.
     ClaimUserTurn,
     /// The last release re-derives the user state.
@@ -422,7 +422,7 @@ pub enum ToolUpdate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HoldId(pub u64);
 
-/// Why a `WaitForIdle`/`HoldFloor` was answered without reaching idle: `_core.SessionClosing`,
+/// Why a `WaitForIdle`/`WaitForIdleAndHold` was answered without reaching idle: `_core.SessionClosing`,
 /// which the shim raises as `ActivityClosedError`.
 #[lk_agents_abi::host(error(kind = "livekit.agents._core.SessionClosing"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
@@ -562,7 +562,7 @@ impl DrainRefused {
 }
 
 pub struct AgentUpdate {
-    /// Stamped on every `SessionEvent::ItemAdded`; the host maps it back to its `Agent`.
+    /// Stamped on every `SessionEvent::ConversationItemAdded`; the host maps it back to its `Agent`.
     pub agent: String,
     /// Workflow tasks put their persona in the modality variants.
     pub instructions: Instructions,
@@ -664,7 +664,7 @@ pyo3::create_exception!(
     _core,
     SessionClosing,
     pyo3::exceptions::PyRuntimeError,
-    "`wait_for_idle()`/`hold_floor()` refused: the session is closing. The shim raises `ActivityClosedError`."
+    "`wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing. The shim raises `ActivityClosedError`."
 );
 
 #[cfg(feature = "python")]

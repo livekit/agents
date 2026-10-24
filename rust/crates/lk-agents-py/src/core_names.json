@@ -2,7 +2,6 @@
  "about": "The frozen public surface of livekit.agents._core: every name dir() returns that does not start with '__', sorted. exports::tests asserts the #[export] table produces exactly this list (minus the ffmpeg-gated SessionRecorder in a workspace build), so an #[export] added, dropped or renamed fails in Rust before the extension is built. Taken from the extension built at 29a8d150, before registration moved to #[export].",
  "regenerate": "After an INTENDED surface change: build the extension (cd python/livekit-agents && env -u PYTHONHOME VIRTUAL_ENV=../../.venv-dev maturin develop; a wheel is maturin build -i ../../.venv-dev/bin/python), then run  .venv-dev/bin/python -c \"import json, livekit.agents._core as c; print(json.dumps(sorted(n for n in dir(c) if not n.startswith('__')), indent=1))\"  and replace the list under 'names'. Then update python/livekit-agents/livekit/agents/_core.pyi, which is hand-written, to match.",
  "names": [
-  "AgentSession",
   "AudioByteStream",
   "AudioDecoder",
   "AudioEmitter",
@@ -65,6 +64,7 @@
   "JudgeLlm",
   "JudgmentResult",
   "Lease",
+  "LiveSession",
   "LlmChoiceParser",
   "LlmMetricState",
   "LlmResponseState",

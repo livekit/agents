@@ -34,7 +34,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "ReleaseUserTurn": {}
@@ -216,7 +216,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "GenerateReply": {
@@ -245,7 +245,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "PushVideo": {}
@@ -309,7 +309,7 @@
         }
       },
       {
-        "ReleaseFloor": {
+        "ReleaseIdleHold": {
           "hold": 0
         }
       },

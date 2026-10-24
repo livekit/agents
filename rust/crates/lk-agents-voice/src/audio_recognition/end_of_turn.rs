@@ -236,7 +236,7 @@ impl AudioRecognition {
                 if let Some(turn_start) = self.user_turn_start
                     && !self.turn_transcript_received
                 {
-                    eff.emit(SessionEvent::TranscriptionTimeout(TranscriptionTimeoutEvent {
+                    eff.emit(SessionEvent::UserTranscriptionTimeout(TranscriptionTimeoutEvent {
                         speech_duration: self.turn_speech_duration,
                         turn_start,
                     }));

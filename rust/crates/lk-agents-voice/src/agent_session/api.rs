@@ -32,7 +32,7 @@ use std::time::Duration;
 /// The host's end of a session: assembled by [`host_new`](Self::host_new), opened once, commanded through
 /// [`send`](Self::send), closed through [`close`](Self::close). Every method takes `&self`; one
 /// `Mutex` around a small enum, off every per-frame path.
-#[lk_agents_abi::class(name = "AgentSession")]
+#[lk_agents_abi::class(name = "LiveSession")]
 pub struct SessionApi {
     /// `Arc`, so `open`'s future can write the running loop back after the borrow ended.
     stage: Arc<Mutex<Stage>>,
@@ -594,7 +594,7 @@ impl Drop for SessionRunner {
 async fn forward_to_room_io(room_io: &Arc<crate::room_io::RoomIo>, ev: &SessionEvent) {
     match ev {
         SessionEvent::AgentStateChanged { new, .. } => room_io.on_agent_state_changed(new.as_str()),
-        SessionEvent::UserTranscript(t) => {
+        SessionEvent::UserInputTranscribed(t) => {
             let text = t.ev.best_alternative().map(|a| a.text.as_str()).unwrap_or_default();
             let _ = room_io.on_user_input_transcribed(text, t.is_final).await;
         }

@@ -698,10 +698,10 @@ impl FramePusher {
 /// `voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
 /// `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
 /// borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
-use crate::session::AgentSession;
+use crate::session::LiveSession;
 
 #[napi]
-impl AgentSession {
+impl LiveSession {
     #[napi(js_name = "start", ts_return_type = "Promise<void>")]
     pub fn start<'env>(&self, env: &'env Env, capture_run: Option<bool>) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
         let reply = crate::host_error::run(env, || {
@@ -943,10 +943,10 @@ impl AgentSession {
         })
     }
 
-    #[napi(js_name = "holdFloor", ts_return_type = "Promise<number>")]
-    pub fn hold_floor<'env>(&self, env: &'env Env, origin: Option<String>) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, i64>> {
+    #[napi(js_name = "waitForIdleAndHold", ts_return_type = "Promise<number>")]
+    pub fn wait_for_idle_and_hold<'env>(&self, env: &'env Env, origin: Option<String>) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, i64>> {
         let reply = crate::host_error::run(env, || {
-            self.inner.hold_floor(origin.as_deref()).map_err(crate::generated::errors::command_refused_to_node)
+            self.inner.wait_for_idle_and_hold(origin.as_deref()).map_err(crate::generated::errors::command_refused_to_node)
         })?;
         env.spawn_future_with_callback(async move { Ok(reply.await.map_err(crate::host_error::idle_refused_to_node)) }, |env, out| match out {
             Ok(out) => Ok(i64::try_from(out).unwrap_or(i64::MAX)),
@@ -954,11 +954,11 @@ impl AgentSession {
         })
     }
 
-    #[napi(js_name = "releaseFloor")]
-    pub fn release_floor(&self, env: Env, hold: i64) -> napi::Result<()> {
+    #[napi(js_name = "releaseIdleHold")]
+    pub fn release_idle_hold(&self, env: Env, hold: i64) -> napi::Result<()> {
         crate::host_error::run(&env, || {
             let hold = <u64>::try_from(hold).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("hold: {e}")))?;
-            self.inner.release_floor(hold);
+            self.inner.release_idle_hold(hold);
             Ok(())
         })
     }
