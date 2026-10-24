@@ -2439,7 +2439,7 @@ requires-dist = [
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-plugins-vakyam", marker = "extra == 'vakyam'", editable = "livekit-plugins/livekit-plugins-vakyam" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
-    { name = "livekit-protocol", specifier = ">=1.1.21,<2" },
+    { name = "livekit-protocol", specifier = ">=1.1.28,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.2,<3" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
@@ -2716,14 +2716,14 @@ version = "0"
 source = { virtual = "examples/voice_agents" }
 dependencies = [
     { name = "duckduckgo-search" },
-    { name = "livekit-agents", extra = ["cartesia", "deepgram", "elevenlabs", "mcp", "openai", "silero", "turn-detector"] },
+    { name = "livekit-agents", extra = ["assemblyai", "cartesia", "deepgram", "elevenlabs", "mcp", "openai", "silero", "turn-detector"] },
     { name = "python-dotenv" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "duckduckgo-search", specifier = ">=8.0" },
-    { name = "livekit-agents", extras = ["openai", "cartesia", "elevenlabs", "deepgram", "silero", "turn-detector", "mcp"], editable = "livekit-agents" },
+    { name = "livekit-agents", extras = ["openai", "assemblyai", "cartesia", "elevenlabs", "deepgram", "silero", "turn-detector", "mcp"], editable = "livekit-agents" },
     { name = "python-dotenv", specifier = ">=1.0" },
 ]
 
@@ -3918,15 +3918,15 @@ requires-dist = [
 
 [[package]]
 name = "livekit-protocol"
-version = "1.1.21"
+version = "1.1.28"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7f/ae/9d60fe37d85623e68a2e36ae31d18c671949db67d2a13a6438410d930466/livekit_protocol-1.1.21.tar.gz", hash = "sha256:8bb1ac1aba5d37d0af43e9d56d129a5d16295cbd91518b00fd157e258f20a6ef", size = 122363, upload-time = "2026-07-21T18:28:26.372Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/35/07/75f43def2129092e9adffe8db1449d1698c6485d3bce5ca549785b018309/livekit_protocol-1.1.28.tar.gz", hash = "sha256:ee4918b6c29601f46c29fbc914f44438c6dcee96a767a2224933e80743f78f00", size = 132898, upload-time = "2026-10-23T22:00:04.127Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/d2/ec10b1cdf912235c2b07898be6ba2535e50f23e8980bb719f29decbd8034/livekit_protocol-1.1.21-py3-none-any.whl", hash = "sha256:ce0bb763327c91349ee8831843c4f8bd72132c4d06ac572171f2ae5c0217211d", size = 149245, upload-time = "2026-07-21T18:28:24.985Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/e0/74a6350bfe115d8e1a64988ea099ff830be6e2d5dccea6a65e7c8457c721/livekit_protocol-1.1.28-py3-none-any.whl", hash = "sha256:07298358ccb342ab588c4b445e3bfed22659b4b03e9da035627358a31496c56a", size = 160778, upload-time = "2026-10-23T22:00:02.437Z" },
 ]
 
 [[package]]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import json
 import logging
 import ssl
 import time
@@ -17,12 +18,17 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
+from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.agents.metrics import LLMModelUsage
+from livekit.agents.observability import Tagger
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
+from livekit.agents.voice.events import CloseEvent, CloseReason
+from livekit.agents.voice.report import SessionReport
 from livekit.protocol import metrics as proto_metrics
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
@@ -109,10 +115,17 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.audio_recording_path = None
     report.audio_recording_started_at = None
     report.duration = 10.0
+    report.sdk_version = "1.0.0"
     report.started_at = 1000.0
     report.timestamp = 1010.0
     report.options = MagicMock()
     report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
+    # a fresh dict per call: the session summary edits the one it gets
+    report.to_dict.side_effect = lambda **_: {
+        "job_id": "job-1",
+        "audio_recording_path": None,
+        "usage": None,
+    }
     return report
 
 
@@ -669,6 +682,7 @@ def test_make_session_report_duration_without_audio_recording() -> None:
 
     ctx = object.__new__(JobContext)
     ctx._info = SimpleNamespace(job=_make_mock_job_ctx().job)
+    ctx._tagger = Tagger()
     report = ctx.make_session_report(session)
 
     assert report.audio_recording_started_at is None
@@ -747,6 +761,67 @@ async def test_upload_multipart_header_carries_simulation_redaction() -> None:
     header = proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
     assert header.simulated is True
     assert header.redaction_enabled is True
+
+
+def _make_report(**kwargs: Any) -> SessionReport:
+    """Create a real SessionReport so the summary sees real ``to_dict`` output."""
+    options = AgentSession().options
+    options.recording_options = {"audio": False, "traces": False, "logs": False, "transcript": True}
+    return SessionReport(
+        job_id="job-1",
+        room_id="room-1",
+        room="test-room",
+        options=options,
+        events=kwargs.pop("events", []),
+        chat_history=ChatContext(kwargs.pop("chat_items", [])),
+        duration=12.5,
+        started_at=1000.0,
+        timestamp=1010.0,
+        sdk_version="1.0.0",
+        **kwargs,
+    )
+
+
+async def _upload_and_read_header(
+    report: SessionReport | MagicMock,
+) -> proto_metrics.MetricsRecordingHeader:
+    mock_http = _make_mock_http()
+    with _patch_upload_deps():
+        await _call_upload(report, http_session=mock_http)
+
+    mp_writer = mock_http.post.call_args.kwargs.get("data") or mock_http.post.call_args[1]["data"]
+    parts = _get_multipart_parts(mp_writer)
+    return proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
+
+
+def _expected_summary(report: SessionReport) -> dict[str, Any]:
+    return report.to_dict(include_chat_history=False, include_events=False)
+
+
+async def test_upload_header_carries_session_summary() -> None:
+    report = _make_report(
+        agent_name="support",
+        tags=["vip"],
+        chat_items=[ChatMessage(role="user", content=["hi"])],
+        model_usage=[LLMModelUsage(provider="openai", model="gpt-4o", input_tokens=10)],
+        events=[CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED)],
+    )
+
+    header = await _upload_and_read_header(report)
+
+    summary = json.loads(header.session_summary)
+    assert summary == _expected_summary(report)
+    assert "chat_history" not in summary
+    assert "events" not in summary
+    assert header.duration == 12500
+
+
+async def test_session_summary_empty_session() -> None:
+    report = _make_report()
+
+    header = await _upload_and_read_header(report)
+
+    assert json.loads(header.session_summary) == _expected_summary(report)
 
 
 def test_job_context_otel_metadata_includes_redaction_option() -> None:
