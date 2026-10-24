@@ -61,6 +61,35 @@ stt = mistralai.STT(
 )
 ```
 
+#### Self-hosted Voxtral Realtime (vLLM)
+
+`SelfHostedSTT` streams to Voxtral Realtime on your own vLLM server, over vLLM's
+`/v1/realtime` WebSocket. No Mistral API key is needed.
+
+```bash
+vllm serve mistralai/Voxtral-Mini-4B-Realtime-2602
+```
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import mistralai, silero
+
+session = AgentSession(
+    stt=mistralai.SelfHostedSTT(base_url="http://gpu-box:8000"),
+    vad=silero.VAD.load(),
+    # llm=..., tts=...
+)
+```
+
+Each user turn is one transcription run. The session's VAD or turn detector ends the turn,
+which flushes the STT and produces the final transcript, so give the session a `vad` (or
+pass one to `SelfHostedSTT(vad=...)` when it has none). Pass `api_key` if the server was
+started with `--api-key`.
+
+A run holds one token of context per 80 ms of audio, silence between turns included. Set
+`max_model_len` to the server's `--max-model-len` (default 2048, about 164 s): the STT ends a
+long run at a pause before it fills, and starts the next one without dropping audio.
+
 ### Text-to-Speech (TTS)
 
 ```python
