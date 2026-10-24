@@ -83,6 +83,8 @@ class _PendingFunctionCall:
     name: str
     tool_call_id: str
     arguments: str = ""
+    # the index the provider sent; Mistral gives every call index 0 unless told otherwise
+    index: int | None = None
 
 
 class LLM(llm.LLM):
@@ -565,11 +567,27 @@ def _parse_completion_delta(
     tool_calls = delta.tool_calls
     if tool_calls is not UNSET and tool_calls is not None:
         for tc in tool_calls:
-            if tc.index is not None:
-                call_index = tc.index
-            else:
-                call_index = max(pending_fnc_calls.keys(), default=-1) + 1
             call_id = tc.id if tc.id not in (None, "null") else ""
+            call_index = None
+            if tc.index is not None:
+                # A delta continues the latest call that has its index, unless it
+                # carries the id of a different call: Mistral sends parallel calls
+                # whole, all with the default index 0.
+                call_index = next(
+                    (
+                        key
+                        for key in reversed(pending_fnc_calls)
+                        if pending_fnc_calls[key].index == tc.index
+                        and (
+                            not call_id
+                            or not pending_fnc_calls[key].tool_call_id
+                            or call_id == pending_fnc_calls[key].tool_call_id
+                        )
+                    ),
+                    None,
+                )
+            if call_index is None:
+                call_index = max(pending_fnc_calls.keys(), default=-1) + 1
             name = tc.function.name if tc.function else ""
             args = tc.function.arguments if tc.function else ""
             if isinstance(args, dict):
@@ -581,10 +599,13 @@ def _parse_completion_delta(
                     name=name,
                     tool_call_id=call_id,
                     arguments=args,
+                    index=tc.index,
                 )
             else:
                 if name:
                     pending_fnc_calls[call_index].name = name
+                if call_id and not pending_fnc_calls[call_index].tool_call_id:
+                    pending_fnc_calls[call_index].tool_call_id = call_id
                 pending_fnc_calls[call_index].arguments += args
 
     if finish_reason == "tool_calls":
