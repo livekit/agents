@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "A powerful framework for building realtime voice AI agents"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10,<3.15"
+requires-python = ">=3.15,<3.16"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
 classifiers = [
@@ -53,7 +53,7 @@ dependencies = [
     # Direct HTTP clients (inference, MCP) use httpx2, matching the OpenAI 3 / MCP 2 SDKs.
     "httpx2>=2.12,<3",
     "aiofiles>=24",
-    "json-repair==0.63.5",
+    "json-repair==0.64.0",
     "pyyaml>=6.0.3",
     # Required by the deprecated rich CLI (`cli.run_app`); drop when it is removed.
     "typer>=0.15.1",
