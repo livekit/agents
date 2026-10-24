@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from livekit.agents import Plugin
 
+from .log import logger
 from .tts import (
     TTS,
     AudioFormat,
@@ -45,7 +46,7 @@ __all__ = [
 
 class HumeAIPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(HumeAIPlugin())

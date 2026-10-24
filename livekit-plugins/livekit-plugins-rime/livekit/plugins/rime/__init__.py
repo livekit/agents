@@ -17,6 +17,7 @@
 See https://docs.livekit.io/agents/integrations/tts/rime/ for more information.
 """
 
+from .log import logger
 from .tts import TTS, ChunkedStream
 from .version import __version__
 
@@ -27,7 +28,7 @@ from livekit.agents import Plugin
 
 class RimePlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(RimePlugin())

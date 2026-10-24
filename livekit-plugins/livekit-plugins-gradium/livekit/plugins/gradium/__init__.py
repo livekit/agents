@@ -28,7 +28,7 @@ from livekit.agents import Plugin
 
 class GradiumPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(GradiumPlugin())
