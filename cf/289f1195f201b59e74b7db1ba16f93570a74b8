@@ -1,0 +1,27 @@
+livekit-agents/livekit/agents/inference/eot/base.py
+  s_b6ebb92b33ee85::t_55f9fbaadec0ae 55,99,246,347
+livekit-agents/livekit/agents/inference/eot/transports.py
+  s_b6ebb92b33ee85::t_d5f516f8ba0bfe 124,431-432
+tests/test_audio_eot_local_transport.py
+  s_b6ebb92b33ee85::t_b798aa06423421 38-46,71,82,86,106
+tests/test_audio_turn_detector_fallback.py
+  s_b6ebb92b33ee85::t_bfa33fb8495b84 112-113
+tests/test_turn_detection_fsm.py
+  s_b6ebb92b33ee85::t_6b81e49963bbf6 54-55,97-98,105,112-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cf289f1195f201b59e74b7db1ba16f93570a74b8",
+  "prompts": {},
+  "sessions": {
+    "s_b6ebb92b33ee85": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ffd5347-5f1e-4331-bcb5-8dce87ae0dd4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
