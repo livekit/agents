@@ -4244,10 +4244,19 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
-        # inside on_enter, hide flagged tools even when no tools= was passed (fall back to self.tools)
+        # inside on_enter, hide flagged tools even when no tools= was passed (fall back to self.tools).
+        # skip that fallback when the active model can neither take per-response tools nor update
+        # them mid-session: swapping them would restart the provider session and drop this reply
+        capabilities = self._rt_session.capabilities
         turn_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
         tool_ctx = llm.ToolContext(tools if tools is not None else self.tools)
-        on_enter_ignored = self._on_enter_ignored_tools(tool_ctx)
+        on_enter_ignored = (
+            self._on_enter_ignored_tools(tool_ctx)
+            if tools is not None
+            or capabilities.per_response_tool_choice
+            or capabilities.mutable_tools
+            else []
+        )
         if tools is not None or on_enter_ignored:
             tool_ctx._exclude(on_enter_ignored)
             turn_tools = tool_ctx.flatten()
@@ -4255,10 +4264,7 @@ class AgentActivity(RecognitionHooks):
         ori_tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
         ori_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
         try:
-            if not (
-                per_response_tool_choice
-                := self._rt_session.realtime_model.capabilities.per_response_tool_choice
-            ):
+            if not (per_response_tool_choice := capabilities.per_response_tool_choice):
                 # update the tool and tool choice at the session level if they are specified
                 if (
                     is_given(model_settings.tool_choice)
