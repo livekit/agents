@@ -118,7 +118,7 @@ async def test_pcm_and_request() -> None:
     assert b"".join(bytes(event.frame.data) for event in events) == PCM
     session.post.assert_called_once()
     args, kwargs = session.post.call_args
-    assert args == ("https://giggy.ai/v1/audio/speech",)
+    assert args == ("https://api.giggy.ai/v1/audio/speech",)
     assert kwargs["json"] == {
         "model": "giggyspeech",
         "input": "Complete text.",

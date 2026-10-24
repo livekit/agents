@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10,<3.15"
 keywords = ["livekit", "giggy", "tts", "stt", "text-to-speech", "speech-to-text", "voice-agents"]
-dependencies = ["livekit-agents>=1.8.5,<2", "aiohttp>=3.10,<4"]
+dependencies = ["livekit-agents>=1.8.5,<2", "livekit-plugins-silero>=1.8.5,<2", "aiohttp>=3.10,<4"]
 
 [project.urls]
 Documentation = "https://giggy.ai/docs/speech-api"

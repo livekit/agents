@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import wave
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import aiohttp
@@ -22,6 +23,211 @@ pytestmark = pytest.mark.unit
 KEY = "offline-stt-key"
 GENERATION = "00000000-0000-4000-8000-000000000001"
 RESULT_URL = "https://00000000000000000000000000000000.r2.cloudflarestorage.com/transcript.json?signature=offline"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "success",
+        "bad_ack",
+        "bad_identity",
+        "bad_attempt",
+        "bad_artifact",
+        "durable_pending",
+        "cancel",
+        "eof",
+    ],
+)
+async def test_native_streaming_websocket_contract(session, monkeypatch, case):
+    from livekit.agents import vad
+    from livekit.plugins.giggy import stt as implementation
+
+    class Detection:
+        def __init__(self):
+            self.events, self.count = asyncio.Queue(), 0
+
+        def push_frame(self, frame):
+            self.count += 1
+            self.events.put_nowait(
+                SimpleNamespace(
+                    type=vad.VADEventType.INFERENCE_DONE,
+                    frames=[frame],
+                    raw_accumulated_silence=0 if self.count == 1 else 0.032,
+                )
+            )
+            if self.count == 1:
+                self.events.put_nowait(SimpleNamespace(type=vad.VADEventType.START_OF_SPEECH))
+            elif case != "eof":
+                self.events.put_nowait(
+                    SimpleNamespace(
+                        type=vad.VADEventType.END_OF_SPEECH,
+                        silence_duration=0.1,
+                        inference_duration=0,
+                    )
+                )
+
+        def end_input(self):
+            self.events.put_nowait(None)
+
+        async def aclose(self):
+            pass
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            event = await self.events.get()
+            if event is None:
+                raise StopAsyncIteration
+            return event
+
+    class Detector:
+        def stream(self):
+            return Detection()
+
+    received, controls = [], []
+    disconnected = asyncio.Event()
+
+    async def handler(request):
+        assert request.headers["Authorization"] == "Bearer " + KEY
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        start = await socket.receive_json()
+        assert start["options"] == {"endpointing": "external"} and start["sampleRateHz"] == 16000
+        await socket.send_json({"type": "generation_created", "generation_uuid": GENERATION})
+        await socket.send_json(
+            {"type": "ready", "generation_uuid": GENERATION, "attempt": 1, "sampleRateHz": 16000}
+        )
+        try:
+            async for message in socket:
+                if message.type == aiohttp.WSMsgType.BINARY:
+                    received.append(message.data)
+                    continue
+                body = json.loads(message.data)
+                controls.append(body)
+                if body["type"] == "prepare":
+                    assert (
+                        body["decode_end_sample"] is None
+                        or body["decode_end_sample"] <= sum(map(len, received)) // 2
+                    )
+                    continue
+                assert body == {"type": "stop"}
+                await socket.send_json(
+                    {
+                        "type": "input_complete",
+                        "generation_uuid": GENERATION,
+                        "sequence": len(received) + (1 if case == "bad_ack" else 0),
+                    }
+                )
+                await socket.send_json(
+                    {
+                        "type": "transcription",
+                        "generation_uuid": "00000000-0000-4000-8000-000000000099"
+                        if case == "bad_identity"
+                        else GENERATION,
+                        "attempt": 2 if case == "bad_attempt" else 1,
+                        "sequence": 0,
+                        "replace": True,
+                        "is_final": True,
+                        "alternatives": [{"transcript": "Hello LiveKit."}],
+                    }
+                )
+                await socket.send_json(
+                    {
+                        "type": "generation_updated",
+                        "generation_uuid": GENERATION,
+                        "status": "completed",
+                    }
+                )
+                break
+        finally:
+            disconnected.set()
+            await socket.close()
+        return socket
+
+    app = web.Application()
+    app.router.add_get("/v1/audio/transcriptions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 0).start()
+    monkeypatch.setattr(
+        implementation, "GIGGY_ORIGIN", f"http://127.0.0.1:{runner.addresses[0][1]}"
+    )
+    metadata = Response(
+        {
+            "generation": {
+                "generation_uuid": GENERATION,
+                "status": "completed",
+                "result": {"url": RESULT_URL},
+            }
+        },
+        hold=case == "durable_pending",
+    )
+    session.get.side_effect = [
+        metadata,
+        Response(
+            {
+                "text": "wrong" if case == "bad_artifact" else "Hello LiveKit.",
+                "audio_duration_ms": 520,
+            }
+        ),
+    ]
+    try:
+        async with aiohttp.ClientSession() as client:
+            monkeypatch.setattr(client, "get", session.get)
+            provider = giggy.STT(api_key=KEY, vad=Detector(), http_session=client)
+            stream = provider.stream(conn_options=APIConnectOptions(timeout=2, max_retry=5))
+            stream.push_frame(audio(duration=0.5))
+            if case == "cancel":
+                async with asyncio.timeout(3):
+                    while not received:
+                        await asyncio.sleep(0.001)
+                await stream.aclose()
+                await asyncio.wait_for(disconnected.wait(), 3)
+                assert not controls
+            else:
+                stream.push_frame(audio(duration=0.02))
+                stream.end_input()
+                events = []
+                if case == "durable_pending":
+                    async with asyncio.timeout(3):
+                        async for event in stream:
+                            events.append(event)
+                            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                                break
+                    await asyncio.wait_for(metadata.started.wait(), 3)
+                    assert not metadata.closed
+                elif case in {"bad_ack", "bad_identity", "bad_attempt", "bad_artifact"}:
+                    with pytest.raises(APIConnectionError):
+                        async with asyncio.timeout(3):
+                            async for event in stream:
+                                events.append(event)
+                    assert any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in events) is (
+                        case == "bad_artifact"
+                    )
+                else:
+                    async with asyncio.timeout(3):
+                        events = [event async for event in stream]
+                    assert [e.type for e in events] == [
+                        stt.SpeechEventType.START_OF_SPEECH,
+                        stt.SpeechEventType.END_OF_SPEECH,
+                        stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        stt.SpeechEventType.RECOGNITION_USAGE,
+                    ]
+                assert b"".join(received) == bytes(audio(duration=0.5).data) + bytes(
+                    audio(duration=0.02).data
+                )
+                assert any(c["type"] == "prepare" for c in controls)
+                if case == "eof":
+                    assert [c for c in controls if c["type"] == "prepare"][-1] == {
+                        "type": "prepare",
+                        "decode_end_sample": None,
+                    }
+                await stream.aclose()
+            await provider.aclose()
+            assert not client.closed
+    finally:
+        await runner.cleanup()
 
 
 class Response:
@@ -138,8 +344,8 @@ def test_stt_exports_and_credentials(monkeypatch):
     provider = giggy.STT()
     assert provider.provider == "Giggy"
     assert provider.model == "giggyspeech-stt"
-    assert provider.capabilities.streaming is False
-    assert provider.capabilities.interim_results is False
+    assert provider.capabilities.streaming is True
+    assert provider.capabilities.interim_results is True
 
 
 @pytest.mark.parametrize("language", [None, "en-US", "English", "yue", "fil"])
@@ -158,7 +364,7 @@ async def test_stt_native_request(session, language, rate, monkeypatch):
     assert result.alternatives[0].source_languages == ["en"]
     session.post.assert_called_once()
     args, kwargs = session.post.call_args
-    assert args == ("https://giggy.ai/v1/audio/transcriptions",)
+    assert args == ("https://api.giggy.ai/v1/audio/transcriptions",)
     assert kwargs["params"]["mode"] == "streaming"
     assert kwargs["params"]["client_request_id"] == GENERATION
     assert kwargs["headers"] == {

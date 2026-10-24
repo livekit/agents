@@ -20,7 +20,7 @@ provider = giggy.TTS(voice="YOUR_GIGGY_VOICE_UUID", speed=1.0)
 
 Use `provider` as the TTS component of your existing `AgentSession`.
 The model is `giggyspeech`; synthesis submits complete text to
-`POST https://giggy.ai/v1/audio/speech` and delivers progressive, signed PCM16
+`POST https://api.giggy.ai/v1/audio/speech` and delivers progressive, signed PCM16
 little-endian audio at 24 kHz, mono. Speed ranges from 0.25 to 4.
 
 Incremental text input and aligned transcripts are not supported. LiveKit's
@@ -41,58 +41,67 @@ Choose a value that allows for the service's first-audio wait.
 
 ## Speech recognition
 
-`giggy.STT` recognizes complete utterances through the canonical V21
-`POST /v1/audio/transcriptions` WAV endpoint in paid Streaming mode.
-It requires `GIGGY_API_KEY`; no voice UUID is needed for recognition.
+`giggy.STT` accepts live audio through
+`wss://api.giggy.ai/v1/audio/transcriptions`. It reports `streaming=True` and
+`interim_results=True`. An API key is required; no voice UUID is needed.
+This native streaming implementation is an unreleased source change and requires
+Giggy's matching WebSocket preparation handler; it is not in a published package.
 
 ```python
 from livekit.agents import AgentSession
-from livekit.plugins import giggy, silero
+from livekit.plugins import giggy
 
 session = AgentSession(
     stt=giggy.STT(language="en"),
-    vad=silero.VAD.load(),
     tts=giggy.TTS(voice="YOUR_GIGGY_VOICE_UUID"),
 )
 ```
 
-Supply your existing LLM configuration to the session. Install
-`livekit-plugins-silero` separately when using this VAD example. AgentSession's
-standard VAD stream adapter collects each utterance and calls the recognizer.
-Direct callers can also use `await recognizer.recognize(audio_frame)`.
+Supply your existing LLM configuration. LiveKit feeds frames directly to the
+provider's native stream. The included Silero endpoint detector defaults to
+100 ms silence, 200 ms sustained speech, onset threshold 0.7 and continuation
+threshold 0.35. Pass `vad=your_detector` to `giggy.STT` to select a compatible
+LiveKit VAD. Keep application turn-detection settings fixed during comparisons.
 
-Recognition accepts mono LiveKit audio frames, resamples to native 16 kHz PCM16
-when necessary, and uploads a complete WAV without padding. Audio must be at
-least 0.5 seconds and at most 12 hours, matching V21's uploaded-recording limit.
-Encoding stages the WAV in a temporary file using bounded audio chunks, and
-aiohttp streams the file upload without merging the full recording in memory.
-The separate live-microphone protocol's 30-second limit does not apply here.
-Configure VAD to capture valid utterances. The default overall recognition
-deadline is 90 seconds; `recognition_timeout` can be set explicitly.
-`APIConnectOptions.timeout` controls connection acquisition, socket connection,
-and idle reads. Use a deadline appropriate for the recording length and service wait.
+The stream resamples mono frames to 16 kHz PCM16, retains up to one second of
+real pre-roll and sends real audio while speech is happening. During candidate
+silence it sends the existing canonical `decode_end_sample` through a `prepare`
+control, allowing decoding to overlap endpoint confirmation. Resumed speech
+withdraws that hint. All captured audio, including the real tail, is still sent;
+the hint neither ends input nor changes accepted-duration billing.
 
-Language defaults to automatic detection. Set a supported language name or BCP-47
-code, such as `"English"` or `"en-US"`, in the constructor or per recognition call.
-Detected languages are returned in the final transcript's `source_languages`.
+Each utterance requires 0.5–30 seconds of real PCM; shorter captures wait for
+real audio or fail at clean EOF, and longer turns fail explicitly. No padding,
+transport fallback, automatic replay or automatic retry is used. Up to eight
+operations can finish concurrently with at most 30 seconds of aggregate queued
+PCM. Final transcripts retain utterance order. Native interim/final events are
+validated against generation, attempt, sequence and the final input ACK. Final
+text is delivered before saved-result verification; keep consuming the stream
+and surface verification errors even after final text was delivered.
 
-The provider reports `streaming=False` and `interim_results=False`: its input is
-a completed utterance. It consumes cumulative SSE snapshots internally and
-returns a final transcript only after canonical completion and verification of
-the saved transcript text and decoded audio duration. It does not expose Giggy's
-separate live-microphone WebSocket input protocol or word alignment.
+`stream.end_input()` cleanly drains captured input and verifies saved results.
+`stream.aclose()` aborts unfinished operations. `await recognizer.aclose()` closes
+all streams and explicit recording requests, rejects new work and leaves borrowed
+HTTP sessions open. The overall per-turn deadline defaults to 90 seconds;
+`APIConnectOptions.timeout` bounds connection acquisition and idle socket reads.
 
-Each recognition is admitted once with its own `client_request_id`; automatic
-retries and redirects are disabled. Closing or cancelling recognition closes
-the active SSE response, requesting cancellation through the existing server
-rail. Completion or GPU cancellation timing is not benchmarked by offline tests.
-`await recognizer.aclose()` cancels active recognition and rejects new requests.
-Borrowed sessions remain open. Use a session without default authentication,
-credential headers, or cookies: signed transcript artifacts are fetched without
-the API key. Artifact destinations are restricted to HTTPS on port 443 using
-Cloudflare R2's canonical `<32-hex-account-id>.r2.cloudflarestorage.com` hosts,
-as used by Giggy's result signer. Redirects and URL credentials are rejected.
-The SDK exposes no alternate recognition provider or transport.
+Language defaults to detection. A supported name or BCP-47 code, such as
+`"English"` or `"en-US"`, can be supplied at construction or per stream. No word
+alignment or model confidence is fabricated.
+
+For an already completed recording, explicit
+`await recognizer.recognize(audio_frame)` retains the WAV/SSE interface and
+returns after canonical completion and saved text/duration verification. It
+accepts 0.5 seconds–12 hours and stages bounded WAV chunks in a temporary file.
+This recording latency is distinct from live speech-end-to-final latency.
+It is not a fallback for a failed live stream.
+
+Use credential-free borrowed sessions without default auth headers or cookies.
+Signed artifacts are fetched without the Giggy key and restricted to canonical
+HTTPS Cloudflare R2 account hosts on port 443; artifact redirects and URL
+credentials are rejected. Input ACK, canonical completion, saved text and accepted
+duration are verified. Offline tests do not establish production latency or
+live-room behavior.
 
 STT uses Streaming pricing, currently 8,000 credits per input audio hour,
 rounded up per request. Paid production recognition and live-room testing are

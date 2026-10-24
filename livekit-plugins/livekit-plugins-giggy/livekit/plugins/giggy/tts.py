@@ -17,7 +17,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
-GIGGY_URL = "https://giggy.ai/v1/audio/speech"
+GIGGY_URL = "https://api.giggy.ai/v1/audio/speech"
 GIGGY_MODEL = "giggyspeech"
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
