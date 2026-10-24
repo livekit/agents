@@ -141,14 +141,15 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[s
             if strict:
                 fnc = llm.utils.build_strict_openai_schema(tool)
                 function_data = fnc["function"]
-                schemas.append(
-                    {
-                        "name": function_data["name"],
-                        "description": function_data.get("description") or "",
-                        "input_schema": function_data["parameters"],
-                        "strict": True,
-                    }
-                )
+                schema = {
+                    "name": function_data["name"],
+                    "description": function_data.get("description") or "",
+                    "input_schema": function_data["parameters"],
+                }
+                # tools strict mode can't describe come back without the flag
+                if function_data.get("strict"):
+                    schema["strict"] = True
+                schemas.append(schema)
             else:
                 fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
                 schemas.append(
