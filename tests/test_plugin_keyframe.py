@@ -493,10 +493,30 @@ def test_parser_handles_the_unclosed_form_and_other_marker_types() -> None:
 
 def test_parser_finds_bracket_tags_and_always_forwards_them() -> None:
     chunks = ["[ha", "ppy] Okay. [warmly] sure [sa", "d] end"]
-    out, markers, parser = _parse(chunks, forward_expr=False)
+    out, markers, parser = _parse(chunks, style="brackets", forward_expr=False)
     assert out == "[happy] Okay. [warmly] sure [sad] end"
     assert markers == [_tags.Marker(0, "happy"), _tags.Marker(len("okaysure"), "sad")]
-    assert parser.saw_brackets
+    assert parser.spoken == "okaysureend"
+
+
+def test_parser_reads_brackets_as_text_in_the_expr_style() -> None:
+    text = 'See [1] <expr type="expression" label="happy"/>[happy] there.'
+    out, markers, parser = _parse([text], forward_expr=False)
+    assert out == "See [1] [happy] there."
+    assert markers == [_tags.Marker(len("see1"), "happy")]
+    assert parser.spoken == "see1happythere"
+
+
+def test_parser_reads_expr_markup_in_the_brackets_style() -> None:
+    text = '<expr type="expression" label="sad"/> Oh [happy] no.'
+    out, markers, _ = _parse([text], style="brackets", forward_expr=False)
+    assert out == " Oh [happy] no."
+    assert markers == [_tags.Marker(0, "sad"), _tags.Marker(len("oh"), "happy")]
+
+
+def test_parser_rejects_an_unknown_style() -> None:
+    with pytest.raises(ValueError):
+        _tags.TagParser(style="other", forward_expr=False)  # type: ignore[arg-type]
 
 
 def test_parser_reports_only_the_allowed_emotions() -> None:
@@ -517,7 +537,7 @@ def test_parser_gives_up_holding_an_unclosed_expr() -> None:
 
 def test_parser_treats_long_or_multiline_brackets_as_text() -> None:
     long_run = "[" + "x" * (_tags.MAX_TAG_LENGTH + 1) + "]"
-    out, markers, _ = _parse([long_run, " [a\nb] [happy]"], forward_expr=False)
+    out, markers, _ = _parse([long_run, " [a\nb] [happy]"], style="brackets", forward_expr=False)
     assert out == f"{long_run} [a\nb] [happy]"
     # their letters count as spoken
     assert markers == [_tags.Marker(len("x" * 33 + "ab"), "happy")]
@@ -525,8 +545,9 @@ def test_parser_treats_long_or_multiline_brackets_as_text() -> None:
 
 @pytest.mark.parametrize("text", ["hi [par", 'hi <expr type="expression" label="x"'])
 def test_parser_releases_a_partial_marker_at_the_end_of_the_stream(text: str) -> None:
-    out, markers, _ = _parse([text], forward_expr=False)
-    assert (out, markers) == (text, [])
+    parser = _tags.TagParser(style="brackets", forward_expr=False)
+    assert parser.push(text) == ("hi ", []), "held: the marker may complete"
+    assert parser.flush() == (text.removeprefix("hi "), [])
 
 
 def test_parser_ignores_a_legacy_expression_tag() -> None:
@@ -606,11 +627,14 @@ def _cue_times(frames: list[rtc.AudioFrame]) -> list[tuple[str, float]]:
 
 
 def _planner(
-    text: str, *, aligned: bool = True, max_cue_hold: float = 0.5
+    text: str,
+    *,
+    style: _tags.MarkerStyle = "expr",
+    aligned: bool = True,
+    max_cue_hold: float = 0.5,
 ) -> _tts_node._CuePlanner:
-    planner = _tts_node._CuePlanner(aligned=aligned, max_cue_hold=max_cue_hold)
-    # what TagParser.spoken holds for this text: markers out, letters and digits only
-    planner.spoken = _tags.normalize(_tags.strip_markers(text))
+    planner = _tts_node._CuePlanner(style=style, aligned=aligned, max_cue_hold=max_cue_hold)
+    planner.spoken = _parse([text], style=style, forward_expr=False)[2].spoken
     return planner
 
 
@@ -713,7 +737,7 @@ def test_planner_resyncs_on_a_long_word_after_an_unmatched_token() -> None:
 
 
 def test_planner_skips_bracket_tokens_in_the_alignment() -> None:
-    planner = _planner("Okay [sad] sad news.")
+    planner = _planner("Okay [sad] sad news.", style="brackets")
     planner.add_marker(_tags.Marker(len("okay"), "sad"))
     planner.add_timings(
         [
@@ -728,7 +752,7 @@ def test_planner_skips_bracket_tokens_in_the_alignment() -> None:
 
 
 def test_planner_skips_the_tail_of_a_tag_whose_start_was_dropped() -> None:
-    planner = _planner("[excited] We did it. [sad] Sadly I am still so excited.")
+    planner = _planner("[excited] We did it. [sad] Sadly I am still so excited.", style="brackets")
     planner.add_marker(_tags.Marker(len("wedidit"), "sad"))
     planner.add_timings(
         [
@@ -785,7 +809,7 @@ def test_planner_matches_a_short_last_word_at_the_end_of_the_text() -> None:
 def test_planner_sentence_timings_without_end_times() -> None:
     # StreamAdapter: one TimedString per sentence, raw markup included, start_time only
     text = 'Hello there. <expr type="expression" label="sad"/> Now sad words.'
-    planner = _planner(_tags.strip_markers(text))
+    planner = _planner(text)
     planner.add_marker(_tags.Marker(len("hellothere"), "sad"))
 
     planner.add_timings([TimedString("Hello there. ", start_time=0.0)])
@@ -945,7 +969,11 @@ async def test_emotion_frames_drops_bracket_tags_from_transcripts() -> None:
     frames = [
         f
         async for f in _tts_node._emotion_frames(
-            _chunks("[happy] Okay [sa", "d] then."), node, forward_expr=False, aligned=True
+            _chunks("[happy] Okay [sa", "d] then."),
+            node,
+            style="brackets",
+            forward_expr=False,
+            aligned=True,
         )
     ]
     assert node.text == "[happy] Okay [sad] then."
@@ -969,13 +997,84 @@ async def test_emotion_frames_releases_a_bracket_left_open_at_the_end() -> None:
     frames = [
         f
         async for f in _tts_node._emotion_frames(
-            _chunks(*text), node, forward_expr=False, aligned=True
+            _chunks(*text), node, style="brackets", forward_expr=False, aligned=True
         )
     ]
     # the "[" was held back in case it opened a tag; at the end it is text after all
     assert [[str(t) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames] == [
         ["Okay, "],
         ["see ", "["],
+    ]
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        # the alignment dropped the tag's first letters
+        [_timed("ppy] ", 0.0, 0.0), _timed("Okay ", 0.1, 0.3)],
+        # ... and the tail is glued to the next word, which keeps its timing
+        [_timed("ppy]Okay ", 0.1, 0.3)],
+        # ... and all of the tag but its closing bracket
+        [_timed("] ", 0.0, 0.0), _timed("Okay ", 0.1, 0.3)],
+    ],
+)
+async def test_emotion_frames_drops_the_tail_of_a_tag_whose_start_was_dropped(
+    first: list[TimedString],
+) -> None:
+    node = _FakeNode([_timed_frame(300, *first), _timed_frame(400, _timed("then.", 0.3, 0.7))])
+    frames = [
+        f
+        async for f in _tts_node._emotion_frames(
+            _chunks("[happy] Okay then."), node, style="brackets", forward_expr=False, aligned=True
+        )
+    ]
+    transcripts = [
+        [(str(t), t.start_time) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames
+    ]
+    assert transcripts == [[("Okay ", 0.1)], [("then.", 0.3)]]
+    assert _cue_times(frames) == [("happy", 0.0)]
+
+
+async def test_emotion_frames_keeps_a_later_word_that_ends_in_a_bracket() -> None:
+    node = _FakeNode(
+        [
+            _timed_frame(300, _timed("[happy] ", 0.0, 0.0), _timed("Okay ", 0.0, 0.3)),
+            _timed_frame(400, _timed("see] ", 0.3, 0.5), _timed("then.", 0.5, 0.7)),
+        ]
+    )
+    frames = [
+        f
+        async for f in _tts_node._emotion_frames(
+            _chunks("[happy] Okay see] then."),
+            node,
+            style="brackets",
+            forward_expr=False,
+            aligned=True,
+        )
+    ]
+    assert [[str(t) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames] == [
+        ["Okay "],
+        ["see] ", "then."],
+    ]
+
+
+async def test_emotion_frames_leaves_brackets_alone_in_the_expr_style() -> None:
+    node = _FakeNode(
+        [
+            _timed_frame(300, _timed("ppy] ", 0.0, 0.0), _timed("See ", 0.0, 0.2)),
+            _timed_frame(400, _timed("[1] ", 0.2, 0.5), _timed("there.", 0.5, 0.7)),
+        ]
+    )
+    frames = [
+        f
+        async for f in _tts_node._emotion_frames(
+            _chunks("ppy] See [1] there."), node, forward_expr=False, aligned=True
+        )
+    ]
+    assert node.text == "ppy] See [1] there."
+    assert [[str(t) for t in f.userdata[USERDATA_TIMED_TRANSCRIPT]] for f in frames] == [
+        ["ppy] ", "See "],
+        ["[1] ", "there."],
     ]
 
 
@@ -1119,6 +1218,42 @@ async def test_emotion_tts_node_holds_audio_back_for_a_pending_cue(
     ]
     # a cue whose audio already went out rides a later frame, with a negative offset
     assert (sad.offset < 0) is late
+
+
+@pytest.mark.parametrize(
+    ("style", "aligned", "aligned_transcript", "warning"),
+    [
+        ("brackets", True, False, "set use_tts_aligned_transcript=True"),
+        ("brackets", False, True, "needs word timings"),
+        ("brackets", True, True, None),
+        # square brackets are text in the expr style
+        ("expr", True, False, None),
+    ],
+)
+async def test_emotion_tts_node_warns_once_when_bracket_tags_reach_the_transcript(
+    caplog: pytest.LogCaptureFixture,
+    style: _tags.MarkerStyle,
+    aligned: bool,
+    aligned_transcript: bool,
+    warning: str | None,
+) -> None:
+    agent = Agent(instructions="test", use_tts_aligned_transcript=aligned_transcript)
+    session = await _start_session(agent, _SessionTTS(streaming=True, aligned=aligned))
+    try:
+        with caplog.at_level(logging.WARNING, logger="livekit.plugins.keyframe"):
+            for _ in range(2):
+                node = emotion_tts_node(
+                    agent, _chunks("[happy] Okay."), ModelSettings(), style=style
+                )
+                assert [f async for f in node]
+    finally:
+        await session.aclose()
+
+    warnings = [r.message for r in caplog.records if "[tag] markers" in r.message]
+    if warning is None:
+        assert warnings == []
+    else:
+        assert len(warnings) == 1 and warning in warnings[0]
 
 
 def test_emotion_instructions() -> None:

@@ -1,14 +1,18 @@
 """Emotion markers in LLM text, found while the text streams to the TTS.
 
-Two marker styles are recognized:
+Two marker styles (:data:`MarkerStyle`):
 
-- LiveKit's expressive markup, ``<expr type="expression" label="happy"/>``. The label
-  sets the avatar emotion it names as a whole word, so a free-form (Inworld) label such
-  as "warm, concerned" works too. Other ``<expr>`` types (break, sound, prosody, spell)
-  are not emotions; the words inside a wrapping marker still count as spoken.
-- Bracketed audio tags, ``[happy]``, as ElevenLabs v3/v4 voices read natively. A tag sets
-  an emotion only when it is exactly the emotion's name. Longer bracketed runs, and ones
-  spanning a newline, are text (``MAX_TAG_LENGTH``).
+- ``"expr"``: LiveKit's expressive markup, ``<expr type="expression" label="happy"/>``.
+  The label sets the emotion it names as a whole word, so a free-form (Inworld) label
+  such as "warm, concerned" works too. Other ``<expr>`` types (break, sound, prosody,
+  spell) are not emotions; the words inside a wrapping marker still count as spoken.
+- ``"brackets"``: audio tags, ``[happy]``, as ElevenLabs v3/v4 voices read natively. A
+  tag sets an emotion only when it is exactly the emotion's name; other tags
+  (``[whispers]``) steer the voice only. A bracketed run longer than
+  ``MAX_TAG_LENGTH``, or spanning a line, is text.
+
+``<expr>`` markup is read in either style, since no prose looks like it. Square brackets
+are tags only in the brackets style; in any other they are text the TTS reads ("[1]").
 
 Each marker is reported with an *anchor*: the number of normalized spoken characters
 (letters and digits, lowercased) before it. The planner in ``_tts_node`` resolves the
@@ -18,21 +22,24 @@ anchor to a time once the TTS reports where those characters were spoken.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Literal, get_args
 
 from .types import EMOTIONS, Emotion
+
+MarkerStyle = Literal["expr", "brackets"]
+"""How the LLM writes emotion markers: ``<expr>`` markup, or ``[tag]`` audio tags."""
 
 MAX_TAG_LENGTH = 32
 """Longer bracketed runs are text, not tags."""
 
-# cap on how long an unclosed "<expr" is held before it is released as plain text
+# cap on the attributes of an unclosed "<expr" held before it is released as text
 _MAX_EXPR_HOLD = 256
 
+BRACKET_TAG_RE = re.compile(rf"\[(?P<name>[^\[\]\n]{{1,{MAX_TAG_LENGTH}}})\]")
 _EXPR_TAG_RE = re.compile(r"<expr\b(?P<attrs>[^>]*?)/?\s*>|</expr\s*>")
 _EXPR_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
-_BRACKET_TAG_RE = re.compile(rf"\[(?P<name>[^\[\]\n]{{1,{MAX_TAG_LENGTH}}})\]")
-_EXPR_PREFIXES = ("<expr", "</expr")
 
 
 @dataclass(frozen=True)
@@ -47,19 +54,6 @@ class Marker:
 def normalize(text: str) -> str:
     """Letters and digits only, lowercased, so TTS alignment can be compared with text."""
     return "".join(ch for ch in text.lower() if ch.isalnum())
-
-
-def _may_be_expr(rest: str) -> bool:
-    """Whether ``rest`` (which starts with "<") opens an expr tag that has not closed yet."""
-    for prefix in _EXPR_PREFIXES:
-        if len(rest) <= len(prefix):
-            if prefix.startswith(rest):
-                return True
-        elif rest.startswith(prefix) and not (
-            rest[len(prefix)].isalnum() or rest[len(prefix)] == "_"
-        ):
-            return True
-    return False
 
 
 def emotion_for_label(label: str, allowed: Sequence[Emotion] = EMOTIONS) -> Emotion | None:
@@ -78,6 +72,37 @@ def emotion_for_tag(name: str, allowed: Sequence[Emotion] = EMOTIONS) -> Emotion
     return next((e for e in allowed if e == name), None)
 
 
+@dataclass(frozen=True)
+class _Syntax:
+    """One way of writing a marker."""
+
+    whole: re.Pattern[str]
+    """A complete marker."""
+    partial: re.Pattern[str]
+    """A marker cut off by the end of the text, which the next chunk may complete."""
+    emotion: Callable[[re.Match[str], Sequence[Emotion]], Emotion | None]
+    """The emotion in the allowed set that a complete marker sets, if any."""
+
+
+def _expr_emotion(match: re.Match[str], allowed: Sequence[Emotion]) -> Emotion | None:
+    attrs = dict(_EXPR_ATTR_RE.findall(match.group("attrs") or ""))
+    if attrs.get("type") != "expression":
+        return None
+    return emotion_for_label(attrs.get("label", ""), allowed)
+
+
+_EXPR = _Syntax(
+    whole=_EXPR_TAG_RE,
+    partial=re.compile(rf"</?(?:e|ex|exp|expr(?:\W[^>]{{0,{_MAX_EXPR_HOLD}}})?)?\Z"),
+    emotion=_expr_emotion,
+)
+_BRACKETS = _Syntax(
+    whole=BRACKET_TAG_RE,
+    partial=re.compile(rf"\[[^\[\]\n]{{0,{MAX_TAG_LENGTH}}}\Z"),
+    emotion=lambda match, allowed: emotion_for_tag(match.group("name"), allowed),
+)
+
+
 class TagParser:
     """Streaming parser: feed text chunks, get the text to forward and the markers found.
 
@@ -85,26 +110,30 @@ class TagParser:
     marker), so the forwarded text never carries half a tag.
 
     Args:
+        style: The markers to read. ``<expr>`` markup is read in either style.
         emotions: Emotions a marker may resolve to.
         forward_expr: Pass ``<expr>`` markup on to the TTS. ``True`` when the session TTS
             lowers it (expressive mode), ``False`` to strip it so the TTS does not read
-            it aloud.
-        forward_brackets: Pass ``[tag]`` markers on to the TTS.
+            it aloud. ``[tag]`` markers always go on: the TTS reads them.
     """
 
     def __init__(
         self,
         *,
+        style: MarkerStyle = "expr",
         emotions: Sequence[Emotion] = EMOTIONS,
         forward_expr: bool,
-        forward_brackets: bool = True,
     ) -> None:
+        if style not in get_args(MarkerStyle):
+            raise ValueError(f"unknown marker style {style!r}")
+        # each syntax by the character that opens it, with whether its markers go on
+        self._syntaxes: dict[str, tuple[_Syntax, bool]] = {"<": (_EXPR, forward_expr)}
+        if style == "brackets":
+            self._syntaxes["["] = (_BRACKETS, True)
+        self._opener = re.compile("|".join(map(re.escape, self._syntaxes)))
         self._emotions = emotions
-        self._forward_expr = forward_expr
-        self._forward_brackets = forward_brackets
         self._buf = ""
         self._spoken = ""
-        self._saw_brackets = False
 
     @property
     def spoken(self) -> str:
@@ -116,11 +145,6 @@ class TagParser:
         """Normalized spoken characters forwarded so far."""
         return len(self._spoken)
 
-    @property
-    def saw_brackets(self) -> bool:
-        """Whether any ``[tag]`` marker was forwarded."""
-        return self._saw_brackets
-
     def push(self, text: str) -> tuple[str, list[Marker]]:
         self._buf += text
         return self._consume(final=False)
@@ -129,99 +153,31 @@ class TagParser:
         return self._consume(final=True)
 
     def _consume(self, *, final: bool) -> tuple[str, list[Marker]]:
-        buf = self._buf
+        buf, pos = self._buf, 0
         out: list[str] = []
         markers: list[Marker] = []
-        pos = 0
-        while pos < len(buf):
-            lt, lb = buf.find("<", pos), buf.find("[", pos)
-            candidates = [i for i in (lt, lb) if i != -1]
-            if not candidates:
-                self._emit_text(buf[pos:], out)
-                pos = len(buf)
-                break
-            i = min(candidates)
+        while (opener := self._opener.search(buf, pos)) is not None:
+            i = opener.start()
             self._emit_text(buf[pos:i], out)
-            pos = i
-
-            if buf[i] == "<":
-                consumed = self._consume_expr(buf, i, out, markers, final=final)
+            syntax, forward = self._syntaxes[buf[i]]
+            if match := syntax.whole.match(buf, i):
+                if (emotion := syntax.emotion(match, self._emotions)) is not None:
+                    markers.append(Marker(self.anchor, emotion))
+                if forward:
+                    out.append(match.group())
+                pos = match.end()
+            elif not final and syntax.partial.match(buf, i):
+                self._buf = buf[i:]
+                return "".join(out), markers
             else:
-                consumed = self._consume_bracket(buf, i, out, markers, final=final)
-            if consumed is None:
-                break  # held for the next chunk
-            pos = consumed
+                self._emit_text(buf[i], out)  # not a marker after all
+                pos = i + 1
 
-        self._buf = buf[pos:]
+        self._emit_text(buf[pos:], out)
+        self._buf = ""
         return "".join(out), markers
 
     def _emit_text(self, text: str, out: list[str]) -> None:
         if text:
             out.append(text)
             self._spoken += normalize(text)
-
-    def _consume_expr(
-        self, buf: str, i: int, out: list[str], markers: list[Marker], *, final: bool
-    ) -> int | None:
-        """Handle a "<" at ``i``; return where to continue, or None to hold."""
-        rest = buf[i:]
-        match = _EXPR_TAG_RE.match(rest)
-        if match is None:
-            if _may_be_expr(rest) and not final and len(rest) <= _MAX_EXPR_HOLD:
-                return None
-            self._emit_text("<", out)
-            return i + 1
-
-        attrs = match.group("attrs")
-        if attrs is not None:  # an opening or self-closing marker
-            parsed = dict(_EXPR_ATTR_RE.findall(attrs))
-            if parsed.get("type") == "expression":
-                emotion = emotion_for_label(parsed.get("label", ""), self._emotions)
-                if emotion is not None:
-                    markers.append(Marker(self.anchor, emotion))
-        if self._forward_expr:
-            out.append(match.group(0))
-        return i + match.end()
-
-    def _consume_bracket(
-        self, buf: str, i: int, out: list[str], markers: list[Marker], *, final: bool
-    ) -> int | None:
-        """Handle a "[" at ``i``; return where to continue, or None to hold."""
-        rest = buf[i:]
-        match = _BRACKET_TAG_RE.match(rest)
-        if match is None:
-            # an unclosed tag may still close in the next chunk, unless it is already
-            # too long or spans a line
-            open_run = rest[1:]
-            if (
-                not final
-                and len(open_run) <= MAX_TAG_LENGTH
-                and "\n" not in open_run
-                and "]" not in open_run
-            ):
-                return None
-            self._emit_text("[", out)
-            return i + 1
-
-        name = match.group("name").strip()
-        if not name:
-            self._emit_text(match.group(0), out)
-            return i + match.end()
-
-        emotion = emotion_for_tag(name, self._emotions)
-        if emotion is not None:
-            markers.append(Marker(self.anchor, emotion))
-        if self._forward_brackets:
-            self._saw_brackets = True
-            out.append(match.group(0))
-        return i + match.end()
-
-
-def strip_markers(text: str) -> str:
-    """Remove ``<expr>`` markup and ``[tag]`` markers from ``text``, keeping the words.
-
-    Used on TTS-aligned text before matching it against the parsed text, so the two
-    normalize to the same characters.
-    """
-    text = _EXPR_TAG_RE.sub("", text)
-    return _BRACKET_TAG_RE.sub("", text)
