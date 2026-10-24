@@ -74,11 +74,13 @@ def split_words(
         elif (
             split_cjk_clauses
             and char in _CJK_CLAUSE_PUNCTUATION
-            and pos > 0
-            and _CJK_TEXT.match(text[pos - 1])
+            # a mark at the start of the text also ends a word: a word stream tokenizes
+            # the text left after the words it already emitted, so the CJK text this
+            # mark follows is usually in an earlier chunk (see BufferedTokenStream)
+            and (pos == 0 or _CJK_TEXT.match(text[pos - 1]))
             # a "，" or "：" inside a full-width number like １，０００ or １０：３０, which a
             # TTS would stop reading as one number once the words are joined with a space
-            and not (char in "，：" and text[pos - 1].isdigit())
+            and not (char in "，：" and pos > 0 and text[pos - 1].isdigit())
         ):
             # commit the word with its punctuation, otherwise a CJK reply is a single
             # word and a word stream (e.g. a TTS input) holds it until the end
