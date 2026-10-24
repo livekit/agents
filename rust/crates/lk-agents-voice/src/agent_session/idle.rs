@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::agent_activity::scheduling::SpeechId;
 
-use super::{Answer, CallId, HoldId, IdleRefused};
+use super::{Answer, HoldId, IdleRefused, RequestId};
 
 pub(crate) struct IdleWaiter {
     /// The hold the caller is inside, which it may pass through.
@@ -14,7 +14,7 @@ pub(crate) struct IdleWaiter {
     pub(crate) speech: Option<SpeechId>,
     /// `hold_floor()`'s hold: minted at the ask, granted when idle answers it.
     pub(crate) grant: Option<HoldId>,
-    pub(crate) call: Option<CallId>,
+    pub(crate) call: Option<RequestId>,
 }
 
 impl IdleWaiter {

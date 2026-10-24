@@ -36,7 +36,9 @@ impl Rule for InterruptionHasCause {
             let permitted = match cause {
                 InterruptCause::Host => host_interrupted_before(&inputs, at),
                 InterruptCause::Closing => inputs.close_asked_at().is_some_and(|c| c < at),
-                InterruptCause::BargeIn | InterruptCause::UserTurn => user_input_before(&inputs, at),
+                InterruptCause::ByAudioActivity | InterruptCause::UserTurn => {
+                    user_input_before(&inputs, at)
+                }
                 InterruptCause::Detector
                 | InterruptCause::Superseded
                 | InterruptCause::ScheduleRejected

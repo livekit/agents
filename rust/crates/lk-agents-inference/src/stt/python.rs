@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use lk_agents_abi::python::{Ambient, HostProxy, check_pid};
 use lk_agents_abi::inference::fallback::SttFallbackModel;
+use lk_agents_abi::python::{Ambient, HostProxy, check_pid};
 use pyo3::prelude::*;
 
 use serde_json::Value;
@@ -52,7 +52,8 @@ impl InferenceStt {
         let clock = clock.map(|c| session_clock(c, "clock")).transpose()?;
         check_pid()?;
         // A client is built per stream, so the session clock arrives here; absent, wall clock.
-        let clock: Arc<dyn lk_agents_abi::Clock> = clock.unwrap_or_else(<Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient);
+        let clock: Arc<dyn lk_agents_abi::Clock> =
+            clock.unwrap_or_else(<Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient);
         let extra_kwargs: ExtraKwargs = match extra_kwargs {
             Some(v) if !v.is_none() => v.extract()?,
             _ => ExtraKwargs::default(),
@@ -85,7 +86,9 @@ impl InferenceStt {
         // Client-side VAD (Speechmatics): send `session.finalize` on end of speech.
         let native = match vad {
             // On the same clock as the socket: the VAD's `close` deadline is read against it.
-            Some(obj) if !obj.is_none() => native.with_vad(<dyn lk_agents_abi::Vad as HostProxy>::from_host(obj, Some(clock))?),
+            Some(obj) if !obj.is_none() => {
+                native.with_vad(<dyn lk_agents_abi::Vad as HostProxy>::from_host(obj, Some(clock))?)
+            }
             _ => native,
         };
         Ok(InferenceStt { inner: Arc::new(native) })
@@ -96,7 +99,12 @@ impl InferenceStt {
 impl InferenceSttStream {
     /// A mid-stream `session.update`, for the providers that take one (AssemblyAI, Deepgram Flux).
     #[pyo3(signature = (*, model = None, language = None, extra = None))]
-    fn update_options(&self, model: Option<String>, language: Option<String>, extra: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+    fn update_options(
+        &self,
+        model: Option<String>,
+        language: Option<String>,
+        extra: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
         check_pid()?;
         let extra: Option<ExtraKwargs> = match extra {
             Some(v) if !v.is_none() => Some(v.extract()?),
@@ -113,7 +121,8 @@ impl InferenceSttStream {
     /// and lose the tail of the speech.
     fn apply_keyterms(&self, extra: &Bound<'_, PyAny>) -> PyResult<()> {
         check_pid()?;
-        let extra: ExtraKwargs = if extra.is_none() { ExtraKwargs::default() } else { extra.extract()? };
+        let extra: ExtraKwargs =
+            if extra.is_none() { ExtraKwargs::default() } else { extra.extract()? };
         self.sink.apply_keyterms(extra.0);
         Ok(())
     }
@@ -148,7 +157,7 @@ pub fn stt_keyterms_extra_for_model<'py>(
 /// The whole `STTCapabilities` fold, as a dict the host constructs the dataclass from.
 ///
 /// `aligned_transcript` is `all()` over the primary and fallback models: any turn may be served by
-/// a fallback, and falsely claiming alignment disables the fast VAD barge-in path.
+/// a fallback, and falsely claiming alignment disables the fast VAD interruption path.
 #[pyfunction]
 #[pyo3(signature = (model = None, *, fallback = None, extra_kwargs = None))]
 pub fn stt_capabilities<'py>(
@@ -160,8 +169,11 @@ pub fn stt_capabilities<'py>(
     check_pid()?;
     let extra = json_map(extra_kwargs)?;
     // Only `model` is read off each entry.
-    let models: Vec<stt_opts::FallbackModel> =
-        fallback.unwrap_or_default().into_iter().map(|model| stt_opts::FallbackModel { model, extra_kwargs: None }).collect();
+    let models: Vec<stt_opts::FallbackModel> = fallback
+        .unwrap_or_default()
+        .into_iter()
+        .map(|model| stt_opts::FallbackModel { model, extra_kwargs: None })
+        .collect();
     let caps = stt_opts::capabilities(model, &models, Some(&extra));
     Ok(caps.into_pyobject(py)?.into_any())
 }

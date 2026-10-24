@@ -49,7 +49,7 @@ pub const DEFAULT_AEC_WARMUP: Duration = Duration::from_secs(3);
 pub(crate) struct AgentSession {
     pub(crate) presence: Presence,
     pub(crate) aec: AecWarmup,
-    /// Guard 1. Cleared when the adaptive detector takes barge-in over.
+    /// Guard 1. Cleared when the adaptive detector takes interruption over.
     pub(crate) by_audio_activity: bool,
     pub(crate) errors: ErrorBudget,
     pub(crate) ids: Ids,

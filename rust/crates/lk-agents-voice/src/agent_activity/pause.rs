@@ -1,11 +1,11 @@
-//! Interruption: barge-in, `interrupt()`, and the false-interruption pause
+//! Interruption: interruption, `interrupt()`, and the false-interruption pause
 //! ([`PausedSpeech`]).
 
 use crate::agent_activity::options::SessionConfig;
 use crate::agent_activity::scheduling::{SpeechId, Status};
 use crate::agent_session::cycle::Cycle;
 use crate::agent_session::cycle::{GateCause, GateOp, TurnTimer};
-use crate::agent_session::{Answer, CallId, Driver};
+use crate::agent_session::{Answer, Driver, RequestId};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
 use crate::speech_handle::SpeechError;
@@ -162,12 +162,12 @@ mod paused_speech {
     }
 }
 
-/// What a barge-in did, journalled as `InterruptStep::BargeIn`. A refusal is not a report: it is
-/// journalled as `InterruptStep::BargeRefused(reason)` instead.
+/// What a interruption did, journalled as `InterruptStep::ByAudioActivity`. A refusal is not a report: it is
+/// journalled as `InterruptStep::ByAudioActivityRefused(reason)` instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterruptReport {
     pub speech: SpeechId,
-    pub trigger: BargeTrigger,
+    pub trigger: AudioInterruptTrigger,
     /// `_pause_enabled()` held: the playout was paused, nothing was interrupted.
     pub paused: bool,
     /// The handle was told to stop, and whether it landed *now*; `None` for a pause or a refusal.
@@ -197,12 +197,12 @@ pub use lk_agents_abi::turn::interruption::InterruptionPort;
 
 pub(crate) struct InterruptWaiter {
     pub(crate) speeches: Vec<SpeechId>,
-    pub(crate) call: Option<CallId>,
+    pub(crate) call: Option<RequestId>,
 }
 
 /// One variant per path, with the measurement its gate reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
-pub enum BargeTrigger {
+pub enum AudioInterruptTrigger {
     /// A local VAD `inference_done`: `duration` against `min_interruption_duration`; `raw_silence`
     /// is the "VAD speech still ongoing" half of the own-turn-tail gate. Clamped by the caller.
     VadThreshold { duration: Duration, raw_silence: Duration },
@@ -217,7 +217,7 @@ pub enum BargeTrigger {
     DetectorVerdict { ignore_user_transcript_until: Ts },
 }
 
-/// Which guard refused, so "barge-in did nothing" is debuggable; journalled as `BargeRefused`.
+/// Which guard refused, so "interruption did nothing" is debuggable; journalled as `ByAudioActivityRefused`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
 pub enum InterruptRefusal {
     /// Turn detection is `manual` or `realtime_llm`: no local audio activity may stop the agent.
@@ -226,7 +226,7 @@ pub enum InterruptRefusal {
     TooShort,
     /// `stt` detection, the STT ended the turn, and the VAD accumulates silence: the turn's tail.
     OwnTurnTail,
-    /// Barge-in by audio activity is off, or taken over by the adaptive detector.
+    /// InterruptByAudioActivity-in by audio activity is off, or taken over by the adaptive detector.
     Disabled,
     /// AEC has not settled, so the "user speech" may be the agent's own echo.
     AecWarmup,
@@ -241,7 +241,7 @@ pub enum InterruptRefusal {
 }
 
 /// `len(split_words(text, split_character=True))`: on here (off in `user_turn_limit`) so a CJK
-/// utterance can reach `min_words`. The one tokenizer for barge-in, commit and transcript triggers.
+/// utterance can reach `min_words`. The one tokenizer for interruption, commit and transcript triggers.
 pub fn count_min_words(text: &str) -> usize {
     count_words(text, WordTokenizerOptions { split_character: true, ..Default::default() })
 }
@@ -294,7 +294,7 @@ impl Driver {
         step_only: bool,
         cycle: &mut Cycle,
     ) -> Result<InterruptOutcome, SpeechError> {
-        let Some(handle) = self.activity.scheduling_task.handle(speech).cloned() else {
+        let Some(handle) = self.activity.speech_scheduler.handle(speech).cloned() else {
             return Ok(InterruptOutcome::Already);
         };
         let landed = if step_only { handle.interrupt_step()? } else { handle.interrupt(force)? };
@@ -307,7 +307,7 @@ impl Driver {
         // speech would cut the current one. The clear precedes any `Resume`; the position is read
         // after it. `cut`, never a bare `clear_buffer`: the flush closes the segment in the
         // trackers, or the next speech's wait resolves on this cut's event.
-        let in_the_sink = self.activity.scheduling_task.current_speech() == Some(speech)
+        let in_the_sink = self.activity.speech_scheduler.current_speech() == Some(speech)
             || self.activity.paused_speech.paused_handle() == Some(speech);
         let audio_out = in_the_sink.then(|| self.shared.output.audio()).flatten();
         let position = audio_out.as_deref().map(|out| {
@@ -331,7 +331,7 @@ impl Driver {
         // Never authorized now; the watchdog is armed on the session clock. Nothing fires after
         // the close: every handle is interrupted there and the loop exits.
         let closing = self.session.closing_past_edge();
-        if let Some(at) = self.activity.scheduling_task.interrupted(speech, now, !closing) {
+        if let Some(at) = self.activity.speech_scheduler.interrupted(speech, now, !closing) {
             cycle.trace(SpeechStep::WatchdogArmed { speech, at });
         }
         // A realtime server keeps generating (into its own mirror) until told not to.
@@ -353,12 +353,12 @@ impl Driver {
     /// Interrupt a paused speech the way `_cancel_speech_pause(interrupt=True)` does: refused for a
     /// handle already interrupted or never interruptible, and a hold taken since is kept.
     fn interrupt_paused(&mut self, now: Ts, speech: SpeechId, cycle: &mut Cycle) {
-        let Some(h) = self.activity.scheduling_task.handle(speech) else { return };
+        let Some(h) = self.activity.speech_scheduler.handle(speech) else { return };
         if !h.interruptible() {
             return;
         }
         if self.interrupt_speech(now, speech, InterruptCause::UserTurn, false, cycle).is_err() {
-            cycle.trace(InterruptStep::BargeRefused(InterruptRefusal::NotAllowed));
+            cycle.trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed));
         }
     }
 
@@ -370,7 +370,7 @@ impl Driver {
     }
 
     /// `_on_overlap_speech_event` plus `on_interruption`; the decisions are
-    /// [`AudioRecognition::on_overlap_verdict`]'s. A leg failure hands barge-in back to the VAD and never
+    /// [`AudioRecognition::on_overlap_verdict`]'s. A leg failure hands interruption back to the VAD and never
     /// errors; an unrecoverable one also stops the sentinels.
     pub(crate) fn on_overlap_verdict(
         &mut self,
@@ -424,14 +424,14 @@ impl Driver {
         &mut self,
         now: Ts,
         cycle: &mut Cycle,
-        trigger: BargeTrigger,
+        trigger: AudioInterruptTrigger,
     ) -> bool {
         // The sink as it is *now*, not as it was at start.
         self.refresh_pause_facts(now, cycle);
-        let speech = match self.barge_in_guards(trigger) {
+        let speech = match self.audio_interrupt_guards(trigger) {
             Ok(speech) => speech,
             Err(refusal) => {
-                cycle.trace(InterruptStep::BargeRefused(refusal));
+                cycle.trace(InterruptStep::ByAudioActivityRefused(refusal));
                 return false;
             }
         };
@@ -444,45 +444,55 @@ impl Driver {
                 report.paused = true;
                 // `on_interruption` passes the overlap's start as the ignore window; others `now`.
                 let ignore_user_transcript_until = match trigger {
-                    BargeTrigger::DetectorVerdict { ignore_user_transcript_until } => {
+                    AudioInterruptTrigger::DetectorVerdict { ignore_user_transcript_until } => {
                         ignore_user_transcript_until
                     }
-                    BargeTrigger::VadThreshold { .. }
-                    | BargeTrigger::SttInterim { .. }
-                    | BargeTrigger::SttFinal { .. }
-                    | BargeTrigger::ServerOnset => now,
+                    AudioInterruptTrigger::VadThreshold { .. }
+                    | AudioInterruptTrigger::SttInterim { .. }
+                    | AudioInterruptTrigger::SttFinal { .. }
+                    | AudioInterruptTrigger::ServerOnset => now,
                 };
                 // The record before the sink goes quiet, so the resume has something to resume.
                 let agent_state = self.session.presence.agent_state();
                 self.activity.paused_speech.update_paused_speech(speech, agent_state, timeout);
-                self.gate_op(cycle, speech, GateOp::Pause, GateCause::BargeIn);
+                self.gate_op(cycle, speech, GateOp::Pause, GateCause::ByAudioActivity);
                 // `listening` before the flush below re-enters `AudioRecognition`.
                 self.set_agent_state(now, AgentState::Listening, cycle);
                 let turn = &mut self.activity.audio_recognition;
                 let eff = turn.on_end_of_agent_speech(now, ignore_user_transcript_until);
                 cycle.machine().append(eff);
-                // Hands barge-in back to audio activity (undoes guard 1).
+                // Hands interruption back to audio activity (undoes guard 1).
                 if self.session.config.effective.turn.interruption.detection_enabled {
                     self.session.by_audio_activity = true;
                 }
             }
             // The handle may have stopped allowing interruptions since guard 5 read it. A
-            // barge-in never overrides `allow_interruptions`; only the host may.
-            None => match self.interrupt_speech(now, speech, InterruptCause::BargeIn, false, cycle)
-            {
+            // interruption never overrides `allow_interruptions`; only the host may.
+            None => match self.interrupt_speech(
+                now,
+                speech,
+                InterruptCause::ByAudioActivity,
+                false,
+                cycle,
+            ) {
                 Ok(outcome) => report.interrupted = Some(outcome != InterruptOutcome::Already),
-                Err(_) => cycle.trace(InterruptStep::BargeRefused(InterruptRefusal::NotAllowed)),
+                Err(_) => {
+                    cycle.trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed))
+                }
             },
         }
         // A pause keeps the realtime generation so playout can resume.
         let socket_told = self.activity.rt_session.is_some() && report.interrupted == Some(true);
-        cycle.trace(InterruptStep::BargeIn(Box::new(report)));
+        cycle.trace(InterruptStep::ByAudioActivity(Box::new(report)));
         socket_told
     }
 
     /// The calling path's gate, then `_interrupt_by_audio_activity`'s guards in its order: the
     /// current speech to barge into, or the guard that refused.
-    fn barge_in_guards(&self, trigger: BargeTrigger) -> Result<SpeechId, InterruptRefusal> {
+    fn audio_interrupt_guards(
+        &self,
+        trigger: AudioInterruptTrigger,
+    ) -> Result<SpeechId, InterruptRefusal> {
         use InterruptRefusal as R;
         let (turn, session) = (&self.activity.audio_recognition, &self.session);
         let options = &self.session.config.effective.turn.interruption;
@@ -492,7 +502,7 @@ impl Driver {
             TurnDetectionMode::Manual | TurnDetectionMode::RealtimeLlm => false,
         };
         match trigger {
-            BargeTrigger::VadThreshold { duration, raw_silence } => {
+            AudioInterruptTrigger::VadThreshold { duration, raw_silence } => {
                 if !owns_turn {
                     return Err(R::ManualTurnDetection);
                 }
@@ -509,7 +519,8 @@ impl Driver {
                     return Err(R::OwnTurnTail);
                 }
             }
-            BargeTrigger::SttInterim { words } | BargeTrigger::SttFinal { words } => {
+            AudioInterruptTrigger::SttInterim { words }
+            | AudioInterruptTrigger::SttFinal { words } => {
                 if !owns_turn {
                     return Err(R::ManualTurnDetection);
                 }
@@ -517,9 +528,9 @@ impl Driver {
                     return Err(R::TooFewWords);
                 }
             }
-            BargeTrigger::ServerOnset | BargeTrigger::DetectorVerdict { .. } => {}
+            AudioInterruptTrigger::ServerOnset | AudioInterruptTrigger::DetectorVerdict { .. } => {}
         }
-        // Guard 1: the adaptive detector clears it while it owns barge-in.
+        // Guard 1: the adaptive detector clears it while it owns interruption.
         if !session.by_audio_activity {
             return Err(R::Disabled);
         }
@@ -535,7 +546,7 @@ impl Driver {
             caps.turn_detection
                 && !(caps.can_disable_turn_detection && (stt_enabled || self.input.has_vad()))
         });
-        if realtime_turn_detection && trigger != BargeTrigger::ServerOnset {
+        if realtime_turn_detection && trigger != AudioInterruptTrigger::ServerOnset {
             return Err(R::RealtimeTurnDetection);
         }
         // Guard 4: `min_words > 0` enables it; with no transcript source it is skipped. The
@@ -613,11 +624,11 @@ impl Driver {
     /// makes it a real interruption: no event.
     fn on_false_interruption(&mut self, now: Ts, cycle: &mut Cycle) {
         let Some(paused) = self.activity.paused_speech.take_paused() else { return };
-        if self.activity.scheduling_task.current_speech().is_some_and(|c| c != paused.handle) {
+        if self.activity.speech_scheduler.current_speech().is_some_and(|c| c != paused.handle) {
             return;
         }
         // The one predicate (the reference drops `audio_enabled` here; this port does not).
-        let done = self.activity.scheduling_task.handle(paused.handle).is_none_or(|h| h.done());
+        let done = self.activity.speech_scheduler.handle(paused.handle).is_none_or(|h| h.done());
         let resumed = self.activity.paused_speech.pause_timeout().is_some() && !done;
         cycle.machine().emit(SessionEvent::AgentFalseInterruption { resumed });
         if resumed {
@@ -692,7 +703,7 @@ impl Driver {
         self.cancel_preemptive_generation(now, abandoned, cycle);
         let mut reached = Vec::new();
         let mut socket_told = false;
-        if let Some(id) = self.activity.scheduling_task.current_speech() {
+        if let Some(id) = self.activity.speech_scheduler.current_speech() {
             self.cancel_false_interruption_timer(cycle);
             if self.interrupt_or_refuse(now, id, force, cause, cycle)? {
                 reached.push(id);
@@ -701,7 +712,7 @@ impl Driver {
         }
         // The next speech (AMD's hold, or the consecutive-speech gap) is the reference's
         // `_current_speech` already, so AMD's forced interrupt cuts the reply made under the hold.
-        let candidate = self.activity.scheduling_task.next_speech();
+        let candidate = self.activity.speech_scheduler.next_speech();
         if let Some(id) = candidate
             && self.interrupt_or_refuse(now, id, force, cause, cycle)?
         {
@@ -715,10 +726,10 @@ impl Driver {
         // reference, so they end (outputs commit, no follow-up).
         let working: Vec<SpeechId> = self
             .activity
-            .scheduling_task
+            .speech_scheduler
             .speech_ids()
             .filter(|id| {
-                let status = self.activity.scheduling_task.status(*id);
+                let status = self.activity.speech_scheduler.status(*id);
                 matches!(status, Some(Status::Working | Status::Parked))
             })
             .collect();
@@ -730,7 +741,7 @@ impl Driver {
             }
         }
         // In pop order: the first refusal keeps that speech and all behind it (the reference breaks).
-        for id in self.activity.scheduling_task.speech_q().clone() {
+        for id in self.activity.speech_scheduler.speech_q().clone() {
             match self.stop_speech(now, id, cause, force, false, cycle) {
                 Ok(InterruptOutcome::Now { .. }) => reached.push(id),
                 Ok(InterruptOutcome::Already) => {}
@@ -756,7 +767,7 @@ impl Driver {
             Ok(outcome) => Ok(matches!(outcome, InterruptOutcome::Now { .. })),
             Err(_) => {
                 let refusal = InterruptRefusal::NotAllowed;
-                cycle.trace(InterruptStep::BargeRefused(refusal));
+                cycle.trace(InterruptStep::ByAudioActivityRefused(refusal));
                 Err(refusal)
             }
         }
@@ -766,7 +777,7 @@ impl Driver {
         let mut waiters = std::mem::take(&mut self.activity.interrupt_waiters);
         waiters.retain_mut(|w| {
             // Done means released (items committed), not merely the handle's flag.
-            if w.speeches.iter().any(|id| self.activity.scheduling_task.contains(*id)) {
+            if w.speeches.iter().any(|id| self.activity.speech_scheduler.contains(*id)) {
                 return true;
             }
             cycle.trace(InterruptStep::InterruptSettled {

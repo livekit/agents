@@ -411,7 +411,7 @@ pub trait AudioOutput: Send + Sync {
     /// End the current segment. **Not the caller's entry point** -- use [`AudioOutputExt::flush`].
     fn flush_segment(&self);
 
-    /// Throw away buffered audio and stop playback immediately. Synchronous: this is barge-in.
+    /// Throw away buffered audio and stop playback immediately. Synchronous: this is interruption.
     fn clear_buffer(&self);
 
     fn on_attached(&self) {
@@ -686,7 +686,7 @@ impl CoreAudioSink {
         self.0.flush_segment();
     }
 
-    /// Barge-in: drop whatever has not played.
+    /// InterruptByAudioActivity-in: drop whatever has not played.
     #[host(method)]
     pub fn clear_buffer(&self) {
         self.0.clear_buffer();

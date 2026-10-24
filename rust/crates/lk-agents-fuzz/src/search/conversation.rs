@@ -109,7 +109,7 @@ impl Persona {
 
 /// One stretch of the person's microphone: speaking or silent, this long, at this pacing.
 ///
-/// The one primitive. A pause is a silent segment, a barge-in is a speech segment placed while
+/// The one primitive. A pause is a silent segment, a interruption is a speech segment placed while
 /// the agent's speech is live, a hesitation is a speech segment the person is not done after,
 /// and the detector's and recogniser's verdicts are placed around a speech segment from the
 /// models below. Not to be confused with [`Kind::Segment`], a flushed audio segment on the
@@ -211,7 +211,7 @@ const EOT_DONE_P: Range<u8> = 70..101;
 
 const EOT_MORE_P: Range<u8> = 0..31;
 
-/// Speech over the agent shorter than this is judged a backchannel -- "mm-hm" -- not a barge-in,
+/// Speech over the agent shorter than this is judged a backchannel -- "mm-hm" -- not a interruption,
 /// the distinction the adaptive detector exists to make. Matches the driver's default minimum
 /// interruption duration, so by default the detector and the driver agree on what counts.
 const BACKCHANNEL_MS: u64 = 500;
@@ -244,7 +244,7 @@ struct Host {
     unprompted: u8,
     /// The chance, per beat, of a call inside whatever the conversation is doing.
     during: u8,
-    /// The same while the agent's audio is playing, barge-ins included: the window a developer
+    /// The same while the agent's audio is playing, interruptions included: the window a developer
     /// most often acts in, and the one a run spends least time in.
     speaking: u8,
     /// How often the model answers with a tool call rather than words, when the agent has tools:
@@ -348,7 +348,7 @@ impl Providers {
 /// over orders of magnitude, from one in ten thousand (a conversation with nothing random in it)
 /// to a thousand (uniform moves with a conversation step now and then), so every decade gets as
 /// many seeds as every other. A flat draw of a probability instead spent nearly every seed in
-/// runs a random close ended early: measured on 2026-10-22, barge-ins went unreached.
+/// runs a random close ended early: measured on 2026-10-22, interruptions went unreached.
 pub fn randomness(seed: u64) -> f64 {
     10f64.powf(Rng::with_seed(seed ^ 0x636f_6865_7265_6e63).f64() * 7.0 - 4.0)
 }
@@ -738,7 +738,7 @@ impl Talk {
 
 /// The person's side: a stretch of microphone, and what the providers say about it.
 impl Talk {
-    /// "Mm-hm" over the agent: short enough to be a backchannel, not a barge-in.
+    /// "Mm-hm" over the agent: short enough to be a backchannel, not a interruption.
     fn backchannel(&mut self) -> Segment {
         let text = BACKCHANNELS[self.rng.usize(0..BACKCHANNELS.len())];
         let dur_ms = self.rng.u64(BACKCHANNEL_SAID_MS);
@@ -1001,7 +1001,7 @@ impl Talk {
             // A prediction the driver asked for shows up here too, after the advance.
             self.predict(seg.done).await?;
             // The detector answers when it has heard enough: a stretch long enough to be a
-            // barge-in is judged as soon as it is one, a shorter one once it has ended.
+            // interruption is judged as soon as it is one, a shorter one once it has ended.
             let evidence = seg.dur_ms >= BACKCHANNEL_MS || vad_ended;
             if overlapping && !judged && evidence && vad_started_at.is_some_and(|at| elapsed > at) {
                 let barge = seg.dur_ms >= BACKCHANNEL_MS;
@@ -1286,7 +1286,7 @@ impl Talk {
             }
             // The model, the tools and the hooks answer whatever the person decides to do next:
             // their answers go out before the person hears the reply and makes up their mind,
-            // so a tool that asks for idle has asked before any barge-in lands on its step.
+            // so a tool that asks for idle has asked before any interruption lands on its step.
             self.beat().await?;
             for row in std::mem::take(&mut rows) {
                 self.send(row).await?;

@@ -191,7 +191,7 @@ pub mod diagnostics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
 pub enum SpeechOutcome {
     Completed,
-    /// Cut short: a barge-in, `interrupt()`, or the interruption watchdog.
+    /// Cut short: a interruption, `interrupt()`, or the interruption watchdog.
     Interrupted,
     /// A provider failed it; the handle's `exception()` carries the error.
     Failed,
@@ -262,12 +262,23 @@ pub enum RunFailure {
 /// One entry of a tool call's lifecycle (`ToolExecutionUpdatedEvent.update`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolLifecycle {
-    Started { call: lk_agents_abi::FunctionCall },
+    Started {
+        call: lk_agents_abi::FunctionCall,
+    },
     /// `ctx.update(message)`: `id` is the call's own first, then `{call_id}_update_N`.
-    Updated { id: String, call_id: String, message: String },
+    Updated {
+        id: String,
+        call_id: String,
+        message: String,
+    },
     /// The call's single terminal entry (`{call_id}_final` once detached); `message` is `None`
     /// when there is nothing to voice.
-    Ended { id: String, call_id: String, message: Option<String>, status: ToolEndStatus },
+    Ended {
+        id: String,
+        call_id: String,
+        message: Option<String>,
+        status: ToolEndStatus,
+    },
     /// The deferred reply covering `update_ids`: `Scheduled`, then one of the three ends.
     Reply {
         update_ids: Vec<String>,

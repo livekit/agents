@@ -669,7 +669,7 @@ inputs! {
     MicFrames { mic: Ref<Mic>, chunks: Count };
     /// One detector tick: confidence, verdict, and the duration of what it is reporting -- of
     /// the speech when `speaking`, of the silence otherwise. A real detector restates that total on
-    /// every inference, and the driver decides a barge-in from exactly this number.
+    /// every inference, and the driver decides a interruption from exactly this number.
     VadInference { vad: Ref<Vad>, probability: Confidence, speaking: bool, duration: Millis };
     VadStart { vad: Ref<Vad>, speech_ms: Millis };
     VadEnd { vad: Ref<Vad>, silence_ms: Millis };
@@ -679,7 +679,7 @@ inputs! {
     EotAnswer { prediction: Ref<Prediction>, probability: Confidence, backchannel: Option<Confidence> };
     /// The predictor fails that request instead.
     EotFail { prediction: Ref<Prediction> };
-    /// The interruption detector's judgement of the current overlap: a real barge-in, or not.
+    /// The interruption detector's judgement of the current overlap: a real interruption, or not.
     OverlapVerdict { port: Ref<Interruption>, is_interruption: bool, agent_ended: bool };
     OverlapFail { port: Ref<Interruption> };
     /// The caller starts speaking on a recognition stream.

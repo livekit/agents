@@ -48,7 +48,7 @@ async fn published() -> (Arc<FakeRtc>, Arc<FakeRoom>, Arc<FakeAudioSource>) {
 
 // Catches the bug that would make this whole double worthless: a `clear_queue` that resets a
 // counter without dropping queued audio. Every interruption test in the pipeline would then
-// pass while barge-in shipped broken -- the agent talks over the user and nothing fails.
+// pass while interruption shipped broken -- the agent talks over the user and nothing fails.
 #[tokio::test(start_paused = true)]
 async fn clear_queue_really_discards_the_audio_that_had_not_played() {
     let (rtc, _room, source) = published().await;
@@ -81,15 +81,9 @@ async fn wait_for_playout_waits_for_the_clock() {
     eventually(source.capture(&frame(1))).await.unwrap();
     eventually(source.capture(&frame(2))).await.unwrap(); // 40 ms queued
 
-    assert!(
-        timeout(NEVER, source.wait_for_playout()).await.is_err(),
-        "returned with 40 ms left"
-    );
+    assert!(timeout(NEVER, source.wait_for_playout()).await.is_err(), "returned with 40 ms left");
     rtc.advance(ms(20));
-    assert!(
-        timeout(NEVER, source.wait_for_playout()).await.is_err(),
-        "returned with 20 ms left"
-    );
+    assert!(timeout(NEVER, source.wait_for_playout()).await.is_err(), "returned with 20 ms left");
     rtc.advance(ms(20));
 
     let info = timeout(NEVER, source.wait_for_playout()).await.expect("the queue has drained");
@@ -103,7 +97,7 @@ async fn wait_for_playout_waits_for_the_clock() {
     assert_eq!(eventually(source.wait_for_playout()).await.played, ms(20));
 }
 
-// Catches: `clear_queue` not waking a parked `wait_for_playout`. That is the barge-in path,
+// Catches: `clear_queue` not waking a parked `wait_for_playout`. That is the interruption path,
 // and the symptom is an agent that goes silent but never reports the interruption -- the turn
 // never ends and the session wedges.
 #[tokio::test(start_paused = true)]
@@ -175,10 +169,7 @@ async fn closing_the_source_accounts_the_queue_as_discarded() {
         eventually(source.wait_for_playout()).await,
         PlaybackInfo { played: Duration::ZERO, discarded: ms(40) }
     );
-    assert_eq!(
-        eventually(source.capture(&frame(3))).await,
-        Err(RtcError::Closed("audio source"))
-    );
+    assert_eq!(eventually(source.capture(&frame(3))).await, Err(RtcError::Closed("audio source")));
 }
 
 // ---- the stream honours what it was opened with ------------------------------------------
@@ -313,8 +304,7 @@ async fn unpublishing_ends_the_frame_stream() {
 async fn closing_the_room_ends_every_stream_and_reports_disconnected() {
     let (_rtc, room, _s) = published().await;
     let user = room.add_participant("user", ParticipantKind::Standard);
-    let mut stream =
-        user.publish_microphone("TR_mic").audio_stream(AudioStreamOptions::default());
+    let mut stream = user.publish_microphone("TR_mic").audio_stream(AudioStreamOptions::default());
     let mut events = room.events();
 
     room.close(DisconnectReason::RoomDeleted);
@@ -416,10 +406,7 @@ async fn a_duplicate_identity_drops_the_older_participant_first() {
     let second = room.add_participant("user", ParticipantKind::Standard);
     assert!(!Arc::ptr_eq(&first, &second));
     assert_eq!(room.remote_participants().len(), 1, "one participant per identity");
-    assert!(Arc::ptr_eq(
-        &room.fake_participant(&"user".into()).expect("the newcomer"),
-        &second
-    ));
+    assert!(Arc::ptr_eq(&room.fake_participant(&"user".into()).expect("the newcomer"), &second));
     let mut seen = Vec::new();
     while let Ok(ev) = events.try_recv() {
         seen.push(match ev {
@@ -601,10 +588,7 @@ async fn byte_streams_carry_their_header() {
     let (_rtc, room, _s) = published().await;
     let topic = "lk.agent.pre-connect-audio-buffer";
     let mut handler = room.byte_streams(topic).unwrap();
-    assert_eq!(
-        room.byte_streams(topic).unwrap_err(),
-        RtcError::TopicInUse { topic: topic.into() }
-    );
+    assert_eq!(room.byte_streams(topic).unwrap_err(), RtcError::TopicInUse { topic: topic.into() });
 
     let info = StreamInfo {
         topic: topic.into(),
@@ -746,10 +730,7 @@ async fn a_failed_connect_is_reported_once_and_opens_nothing() {
     let (rtc, _) = FakeRtc::with_virtual_clock();
     rtc.fail_next_connect(RtcError::host("connection refused"));
 
-    assert_eq!(
-        rtc.connect("wss://x", "t").await.err(),
-        Some(RtcError::host("connection refused"))
-    );
+    assert_eq!(rtc.connect("wss://x", "t").await.err(), Some(RtcError::host("connection refused")));
     assert!(rtc.rooms().is_empty(), "a failed dial must not leave a room behind");
     assert!(rtc.connect("wss://x", "t").await.is_ok(), "the failure must not stick");
     assert_eq!(rtc.connect_calls().len(), 1);
@@ -825,7 +806,8 @@ fn synthetic_speech_is_non_silent_and_distinct_per_frame_and_undelivered_frames_
     assert!(quiet.data.iter().all(|&x| x == 0));
 
     let (rtc, _) = FakeRtc::with_virtual_clock();
-    let mic = rtc.room("s").add_participant("user", ParticipantKind::Standard).publish_microphone("TR");
+    let mic =
+        rtc.room("s").add_participant("user", ParticipantKind::Standard).publish_microphone("TR");
     assert_eq!(mic.push_frames([synth.frame(false)]), 0, "nobody is reading");
     let _stream = mic.audio_stream(AudioStreamOptions::default());
     assert_eq!(mic.push_frames((0..3).map(|_| synth.frame(false))), 3);
@@ -840,7 +822,8 @@ async fn an_offline_room_is_connected_and_runs_on_the_callers_clock() {
     assert_eq!(room.name(), "console");
     assert!(room.connection_state().is_connected());
     assert!(room.remote_participants().is_empty());
-    let (source, _) = room.local().publish_audio_track(TrackPublishOptions::default()).await.unwrap();
+    let (source, _) =
+        room.local().publish_audio_track(TrackPublishOptions::default()).await.unwrap();
     eventually(source.capture(&frame(1))).await.unwrap();
     clock.advance(ms(20));
     rtc.settle();

@@ -115,7 +115,7 @@ impl AudioByteStream {
         Flushed { frames: vec![Frame { data, samples_per_channel }], dropped_bytes: 0 }
     }
 
-    /// Drop everything buffered and restart progressive sizing (called on barge-in, so the next
+    /// Drop everything buffered and restart progressive sizing (called on interruption, so the next
     /// word is not a full frame late).
     #[host(method)]
     pub fn clear(&mut self) {
@@ -130,19 +130,30 @@ impl AudioByteStream {
 impl AudioByteStream {
     /// Accepts `bytes | bytearray | memoryview`, as the reference does.
     #[pyo3(name = "push")]
-    fn host_push(&mut self, py: pyo3::Python<'_>, data: &[u8]) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
+    fn host_push(
+        &mut self,
+        py: pyo3::Python<'_>,
+        data: &[u8],
+    ) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
         let frames = self.push(data);
         self.to_host_frames(py, frames)
     }
 
     /// Public alias of `push` in the reference.
     #[pyo3(name = "write")]
-    fn host_write(&mut self, py: pyo3::Python<'_>, data: &[u8]) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
+    fn host_write(
+        &mut self,
+        py: pyo3::Python<'_>,
+        data: &[u8],
+    ) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
         self.host_push(py, data)
     }
 
     #[pyo3(name = "flush")]
-    fn host_flush(&mut self, py: pyo3::Python<'_>) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
+    fn host_flush(
+        &mut self,
+        py: pyo3::Python<'_>,
+    ) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
         use pyo3::types::PyAnyMethods as _;
         let flushed = self.flush();
         if flushed.dropped_bytes > 0 {
@@ -158,10 +169,19 @@ impl AudioByteStream {
 
 #[cfg(feature = "python")]
 impl AudioByteStream {
-    fn to_host_frames(&self, py: pyo3::Python<'_>, frames: Vec<Frame>) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
-        let frames = frames
-            .into_iter()
-            .map(|f| crate::AudioFrame::new(f.data, self.sample_rate, self.num_channels, f.samples_per_channel));
+    fn to_host_frames(
+        &self,
+        py: pyo3::Python<'_>,
+        frames: Vec<Frame>,
+    ) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
+        let frames = frames.into_iter().map(|f| {
+            crate::AudioFrame::new(
+                f.data,
+                self.sample_rate,
+                self.num_channels,
+                f.samples_per_channel,
+            )
+        });
         Ok(pyo3::types::PyList::new(py, frames)?.unbind())
     }
 }
@@ -177,7 +197,6 @@ mod tests {
     fn sizes(frames: &[Frame]) -> Vec<u32> {
         frames.iter().map(|f| f.samples_per_channel).collect()
     }
-
 
     // Catches: progressive mode not ramping (a 20 ms first frame).
     #[test]

@@ -1,10 +1,10 @@
 //! `voice/agent_activity.py`'s `AgentActivity`: the running agent's frame and components, the
 //! driver's configuration, and the frame commands (prompt, tools, context, IO) the driver applies.
 
-pub mod callbacks;
 pub mod drain;
 pub mod dtmf;
 pub mod handoff;
+pub mod hooks;
 pub mod io;
 pub mod options;
 pub mod pause;
@@ -18,7 +18,7 @@ pub mod tools;
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_activity::options::{ConfigStack, LegSet, SessionConfig};
 use crate::agent_activity::pause::{InterruptOutcome, PausedSpeech};
-use crate::agent_activity::scheduling::{SchedulingTask, SpeechId};
+use crate::agent_activity::scheduling::{SpeechId, SpeechScheduler};
 use crate::agent_session::cycle::Cycle;
 use crate::agent_session::{Driver, FrameCommand, HostAudio, HostAudioOut, HostTextOut, HostVideo};
 use crate::audio::{GateInputs, audio_gate};
@@ -50,7 +50,7 @@ pub(crate) struct AgentActivity {
     pub(crate) audio_recognition: AudioRecognition,
     /// `_speech_q`, `_current_speech`, `_scheduling_paused`, `_preemptive_generation`, and every
     /// live speech's handle.
-    pub(crate) scheduling_task: SchedulingTask,
+    pub(crate) speech_scheduler: SpeechScheduler,
     /// `_paused_speech` and the false-interruption timer.
     pub(crate) paused_speech: PausedSpeech,
     /// The frame each speech was created in: late tool items belong to it.
@@ -70,7 +70,7 @@ pub(crate) struct AgentActivity {
     /// How long a hook whose answer is needed is waited on; `None` when no host runs hooks.
     pub(crate) hook_bound: Option<Duration>,
     /// The developer's callbacks in flight.
-    pub(crate) callbacks: crate::agent_activity::callbacks::Callbacks,
+    pub(crate) hooks: crate::agent_activity::hooks::Hooks,
     /// `update_agent()`: the switches asked for and in progress, and each agent's `on_exit`.
     pub(crate) handoff: crate::agent_activity::handoff::Handoff,
     /// The host's `drain()`.
@@ -109,7 +109,7 @@ pub(crate) struct ActivityParts {
     pub(crate) instructions: crate::generation::Instructions,
     pub(crate) toolset: crate::tool_executor::Toolset,
     pub(crate) audio_recognition: AudioRecognition,
-    pub(crate) scheduling_task: SchedulingTask,
+    pub(crate) speech_scheduler: SpeechScheduler,
     pub(crate) paused_speech: PausedSpeech,
     pub(crate) hook_bound: Option<Duration>,
     pub(crate) rt_session: Option<Arc<dyn lk_agents_abi::RealtimeSession>>,
@@ -126,7 +126,7 @@ impl AgentActivity {
             instructions,
             toolset,
             audio_recognition,
-            scheduling_task,
+            speech_scheduler,
             paused_speech,
             hook_bound,
             rt_session,
@@ -141,7 +141,7 @@ impl AgentActivity {
             toolset: Arc::new(toolset),
             tools: Default::default(),
             audio_recognition,
-            scheduling_task,
+            speech_scheduler,
             paused_speech,
             speech_frames: BTreeMap::new(),
             finished: BTreeSet::new(),
@@ -151,7 +151,7 @@ impl AgentActivity {
             announced_current_speech: None,
             interrupt_waiters: Vec::new(),
             hook_bound,
-            callbacks: Default::default(),
+            hooks: Default::default(),
             handoff: Default::default(),
             drain: Default::default(),
             dtmf: None,
@@ -336,7 +336,7 @@ impl DriverConfig {
 const VERDICT_UNPUBLISHED: u8 = u8::MAX;
 
 /// The pump runs at 50 fps outside the driver loop: staleness is one loop iteration, and the
-/// barge-in leg is never substituted.
+/// interruption leg is never substituted.
 #[derive(Debug)]
 pub struct GateSnapshot {
     /// [`VERDICT_PASS`], [`VERDICT_DISCARD`], or [`VERDICT_UNPUBLISHED`] until the first `publish`.
@@ -455,7 +455,7 @@ impl Driver {
                 if !audio || playing {
                     // A segment playing into the old sink can't move: force-interrupt it (and the
                     // realtime socket, once), rather than report a playout nobody received.
-                    let socket_told = match self.activity.scheduling_task.current_speech() {
+                    let socket_told = match self.activity.speech_scheduler.current_speech() {
                         Some(speech) => {
                             let realtime = self.is_realtime_speech(speech);
                             match self.interrupt_speech(
@@ -642,7 +642,7 @@ impl Driver {
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
             entry.source.speech().filter(|_| !matches!(entry.source, Source::ToolCall { .. }));
-        if let Some(h) = tell_speech.and_then(|id| self.activity.scheduling_task.handle(id)) {
+        if let Some(h) = tell_speech.and_then(|id| self.activity.speech_scheduler.handle(id)) {
             h.item_added(&entry.item);
         }
         match outcome {

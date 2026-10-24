@@ -222,7 +222,7 @@ impl Segment for Generation<'_> {
     }
 }
 
-/// The node in front of the session's sink; boundaries and barge-in still reach `out` directly.
+/// The node in front of the session's sink; boundaries and interruption still reach `out` directly.
 pub(crate) struct NodeOutput<'a> {
     pub(crate) node: &'a dyn RealtimeAudioNode,
     pub(crate) out: &'a dyn AudioOutput,

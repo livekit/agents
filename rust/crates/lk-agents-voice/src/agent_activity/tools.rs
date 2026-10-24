@@ -253,7 +253,7 @@ impl Driver {
             self.session.record.agent_chat_ctx().items.last().map(|i| i.id().to_owned());
         let at_tail = last_pending.is_some() && last_pending == last_record;
         let call_ids = batch.update_ids();
-        let id = self.activity.callbacks.mint();
+        let id = self.activity.hooks.mint();
         let call = HookCall::RenderToolReply {
             id,
             agent: self.activity.agent.clone(),
@@ -338,7 +338,7 @@ impl Driver {
     /// A speech ended: if it was the deferred reply, its fate is reported and the next batch may go.
     pub(crate) fn tool_reply_done(&mut self, now: Ts, speech: SpeechId, cycle: &mut Cycle) {
         let Some(update_ids) = self.activity.tools.reply_done(speech) else { return };
-        let status = match self.activity.scheduling_task.handle(speech) {
+        let status = match self.activity.speech_scheduler.handle(speech) {
             Some(h) if h.interrupted() => ToolReplyStatus::Interrupted,
             // The instruction permits an empty response when the agent already covered the result.
             Some(h) if h.chat_items().is_empty() => ToolReplyStatus::Skipped,
@@ -367,7 +367,7 @@ impl Driver {
         cycle: &mut Cycle,
     ) {
         let fresh =
-            !self.activity.tools.has_filler(id) && self.activity.scheduling_task.contains(speech);
+            !self.activity.tools.has_filler(id) && self.activity.speech_scheduler.contains(speech);
         let sched = fresh.then(|| {
             FillerScheduler::new(delay.as_secs_f64(), interval.map(|d| d.as_secs_f64()), max_steps)
         });
@@ -386,7 +386,7 @@ impl Driver {
             cycle.machine().cancel(TurnTimer::Filler(id));
         }
         if let Some(hook) = asking {
-            self.activity.callbacks.finish(hook);
+            self.activity.hooks.finish(hook);
         }
         cycle.trace(GenerationStep::FillerStopped { filler: id, cause });
     }
@@ -496,7 +496,7 @@ impl Driver {
                     self.fire_filler(now, id, step, Some(text), false, cycle)
                 }
                 Some(FillerSource::Host) => {
-                    let hook = self.activity.callbacks.mint();
+                    let hook = self.activity.hooks.mint();
                     let wait = self.hook_wait();
                     let call = HookCall::FillerSource { id: hook, filler: id, step };
                     if !self.issue_hook(now, call, Some(wait), cycle) {

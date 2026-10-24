@@ -352,7 +352,7 @@ impl<'a> SpeechView<'a> {
 
     /// Started by the driver on a preflight transcript, before the turn ended.
     pub fn is_speculative(&self) -> bool {
-        self.kind() == Some(SpeechKind::Guess)
+        self.kind() == Some(SpeechKind::Preemptive)
     }
 
     /// When the host was told this speech exists.

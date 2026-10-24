@@ -129,7 +129,7 @@ impl ScriptedRoom {
         self.room.local_participant().played_bytes()
     }
 
-    /// Bytes cut by an interruption. Non-zero is the barge-in signal.
+    /// Bytes cut by an interruption. Non-zero is the interruption signal.
     #[host(method)]
     pub fn discarded_bytes(&self) -> usize {
         self.room.local_participant().discarded_bytes()

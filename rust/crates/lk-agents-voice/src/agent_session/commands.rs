@@ -155,7 +155,7 @@ pub struct CommitSuperseded;
 /// The id a caller gives a command it awaits; the answer carries it back. `None` where a command
 /// takes one means nobody awaits the answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CallId(pub u64);
+pub struct RequestId(pub u64);
 
 /// What an awaited command is answered with, once, on the session's answer stream.
 #[derive(Debug)]
@@ -308,7 +308,7 @@ pub enum DtmfCommand {
     /// driver.
     Start {
         collector: crate::workflows::builtins::dtmf::DtmfCollector,
-        call: Option<CallId>,
+        call: Option<RequestId>,
     },
     /// Ignored with no collection running.
     Digit {
@@ -331,7 +331,7 @@ pub enum SpeechCommand {
         /// `None` takes the session default.
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        call: Option<CallId>,
+        call: Option<RequestId>,
     },
     GenerateReply {
         /// `None` replies to the context as it stands.
@@ -347,12 +347,12 @@ pub enum SpeechCommand {
         /// Whole, because specs, host objects and runner must agree.
         toolset: Option<Arc<Toolset>>,
         on_enter: bool,
-        call: Option<CallId>,
+        call: Option<RequestId>,
     },
     /// A pending preemptive generation is dropped; the current speech is interrupted (a refusal is
     /// the whole answer); the socket is told once; the queue is walked in pop order up to the first
     /// refusal, each speech whole.
-    Interrupt { force: bool, call: Option<CallId> },
+    Interrupt { force: bool, call: Option<RequestId> },
     /// Unforced it is scoped to the playing step; `force` ends the speech, tools and all.
     InterruptSpeech { speech: SpeechId, force: bool },
     /// Flush, wait for the final (skipped if one landed in the last 0.5 s), commit. No STT or
@@ -362,13 +362,13 @@ pub enum SpeechCommand {
         transcript_timeout: std::time::Duration,
         stt_flush_duration: std::time::Duration,
         skip_reply: bool,
-        call: Option<CallId>,
+        call: Option<RequestId>,
     },
     /// Idle: nothing current, queued or being decided, the user silent, no claim or foreign hold.
-    WaitForIdle { hold: Option<HoldId>, call: Option<CallId> },
+    WaitForIdle { hold: Option<HoldId>, call: Option<RequestId> },
     /// `RunContext.foreground()`: wait for idle, then hold it until `ReleaseFloor`; a waiter naming
     /// the hold passes through.
-    HoldFloor { call: Option<CallId> },
+    HoldFloor { call: Option<RequestId> },
     /// Unknown ids are a no-op.
     ReleaseFloor { hold: HoldId },
     /// Pins the user state to `speaking` and holds idle open. Reentrant.
@@ -540,7 +540,7 @@ pub enum FrameCommand {
     /// in flight finishes, tools included. A second joins. Refused only if the pause is lifted or
     /// the loop ends.
     Drain {
-        call: Option<CallId>,
+        call: Option<RequestId>,
     },
 }
 
@@ -584,7 +584,7 @@ pub struct AgentUpdate {
     pub previous: PreviousActivity,
     /// `Start` runs the arriving frame's `on_enter`; `Resume` does not.
     pub next: NewActivity,
-    pub call: Option<CallId>,
+    pub call: Option<RequestId>,
     /// `None` is a host handoff.
     pub task: Option<TaskId>,
 }

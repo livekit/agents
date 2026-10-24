@@ -4,7 +4,7 @@
 use crate::agent_activity::handoff::FrameExit;
 use crate::agent_activity::scheduling::PauseCause;
 use crate::agent_session::cycle::Cycle;
-use crate::agent_session::{Answer, CallId, DrainRefused, Driver, HookId, PreviousActivity};
+use crate::agent_session::{Answer, DrainRefused, Driver, HookId, PreviousActivity, RequestId};
 use crate::trace::HandoffStep;
 use lk_agents_abi::Ts;
 
@@ -14,13 +14,13 @@ pub(crate) struct Drain {
     current: Option<AgentDrain>,
     /// Answered `Ok` once no speech is open and, for an agent an inline task paused
     /// (`Some(hook)`), once its `on_exit` ended.
-    left: Vec<(Option<HookId>, CallId)>,
+    left: Vec<(Option<HookId>, RequestId)>,
 }
 
 struct AgentDrain {
     phase: Phase,
     /// Every caller still waiting; answered together.
-    waiters: Vec<CallId>,
+    waiters: Vec<RequestId>,
 }
 
 enum Phase {
@@ -50,7 +50,7 @@ enum Poll {
 impl Drain {
     /// Every caller still waiting, taken: a left agent's first, then the driving agent's (whose
     /// drain is forgotten).
-    pub(crate) fn take_waiters(&mut self) -> Vec<CallId> {
+    pub(crate) fn take_waiters(&mut self) -> Vec<RequestId> {
         let mut waiters: Vec<_> =
             std::mem::take(&mut self.left).into_iter().map(|(_, w)| w).collect();
         if let Some(drain) = self.current.take() {
@@ -65,7 +65,7 @@ impl Drain {
     }
 
     /// The drain answers: its callers. `None` leaves the agent `Drained`; a refusal forgets it.
-    fn finish(&mut self, refused: Option<DrainRefused>) -> Option<Vec<CallId>> {
+    fn finish(&mut self, refused: Option<DrainRefused>) -> Option<Vec<RequestId>> {
         let drain = self.current.as_mut()?;
         let waiters = std::mem::take(&mut drain.waiters);
         match refused {
@@ -98,7 +98,7 @@ impl Drain {
 
     /// Callers of a left agent waiting on nothing but quiet (none while any waits on an
     /// `on_exit`), taken.
-    fn take_left_ready(&mut self) -> Vec<CallId> {
+    fn take_left_ready(&mut self) -> Vec<RequestId> {
         let (ready, waiting) =
             std::mem::take(&mut self.left).into_iter().partition(|(h, _)| h.is_none());
         self.left = waiting;
@@ -110,11 +110,11 @@ impl Driver {
     /// `AgentActivity.drain()`, for `waiters` (one request, or the ones a handoff handed on).
     /// Never refused while running; it waits where the reference's `_lock` would: on the close's
     /// drain, a handoff's swap, or the agent's `on_exit` then the pause.
-    pub(crate) fn drain(&mut self, now: Ts, waiters: Vec<CallId>, cycle: &mut Cycle) {
+    pub(crate) fn drain(&mut self, now: Ts, waiters: Vec<RequestId>, cycle: &mut Cycle) {
         if self.session.closing.is_some() {
             return self.join_close_drain(waiters, cycle);
         }
-        let quiet = self.activity.scheduling_task.is_empty();
+        let quiet = self.activity.speech_scheduler.is_empty();
         let switching = self.activity.handoff.switching();
         let Some(drain) = &mut self.activity.drain.current else {
             // A handoff in progress: these callers wait for its `on_exit` and pause.
@@ -168,7 +168,7 @@ impl Driver {
             (PreviousActivity::Close, _) | (PreviousActivity::Pause, FrameExit::Exited) => None,
             (PreviousActivity::Pause, FrameExit::Exiting(hook)) => Some(hook),
             (PreviousActivity::Pause, FrameExit::Running) => {
-                let hook = self.activity.callbacks.mint();
+                let hook = self.activity.hooks.mint();
                 cycle.trace(HandoffStep::DrainStarted { exit_hook: Some(hook) });
                 (!self.issue_on_exit(now, hook, cycle)).then_some(hook)
             }
@@ -192,7 +192,7 @@ impl Driver {
 
     /// Callers whose agent was left for good, answered `Ok` once no speech is open.
     fn left_drains_ready(&mut self, cycle: &mut Cycle) {
-        if !self.activity.scheduling_task.is_empty() {
+        if !self.activity.speech_scheduler.is_empty() {
             return;
         }
         let ready = self.activity.drain.take_left_ready();
@@ -233,7 +233,7 @@ impl Driver {
     /// Has the drain's pause settled? Settled: waiters answered `Ok`; refused: with the reason.
     pub(crate) fn drain_ready(&mut self, cycle: &mut Cycle) {
         self.left_drains_ready(cycle);
-        let quiet = self.activity.scheduling_task.is_empty();
+        let quiet = self.activity.speech_scheduler.is_empty();
         match self.activity.drain.poll(quiet) {
             Poll::Settled => self.finish_drain(None, cycle),
             Poll::Waiting => {}
@@ -260,7 +260,7 @@ impl Driver {
     /// One caller answered on its own: a refusal at the request, or an agent already drained.
     pub(crate) fn answer_drain(
         &mut self,
-        call: Option<CallId>,
+        call: Option<RequestId>,
         refused: Option<DrainRefused>,
         cycle: &mut Cycle,
     ) {

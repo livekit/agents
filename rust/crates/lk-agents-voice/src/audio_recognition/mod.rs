@@ -36,7 +36,7 @@ const NON_SPECIFIC_LANGUAGE_CODES: [&str; 2] = ["auto", "multi"];
 pub struct AudioRecognition {
     /// `_turn_detector`; `None` commits turns on silence alone.
     eot: Option<std::sync::Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
-    /// The interruption detector's port; `None` is VAD-only barge-in.
+    /// The interruption detector's port; `None` is VAD-only interruption.
     interruption: Option<std::sync::Arc<dyn crate::agent_activity::pause::InterruptionPort>>,
     /// `_commit_user_turn_atask` waiting for the final transcript.
     pending_commit: Option<PendingCommit>,
@@ -215,7 +215,7 @@ impl AudioRecognition {
         &self.phase
     }
 
-    /// `_current_transcript`: this turn's transcript, interim included (the barge-in `min_words`
+    /// `_current_transcript`: this turn's transcript, interim included (the interruption `min_words`
     /// guard reads this). An empty interim adds no separator.
     pub fn current_transcript(&self) -> String {
         if self.interim_transcript.is_empty() {
@@ -350,7 +350,7 @@ pub(super) struct TurnEdits {
 
 pub(super) struct PendingCommit {
     pub(super) skip_reply: bool,
-    pub(super) call: Option<crate::agent_session::CallId>,
+    pub(super) call: Option<crate::agent_session::RequestId>,
     pub(super) deadline: Ts,
     pub(super) close: bool,
 }

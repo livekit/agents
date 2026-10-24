@@ -8,8 +8,8 @@ use crate::agent_activity::options::{
 use crate::agent_session::builder::DriverBuilder;
 use crate::agent_session::calls::Calls;
 use crate::agent_session::commands::{
-    AgentUpdate, Answer, CallId, Close, Command, HostRecorder, NewActivity, Origin,
-    PreviousActivity, RecorderCommand, SayText, SpeechCommand,
+    AgentUpdate, Answer, Close, Command, HostRecorder, NewActivity, Origin, PreviousActivity,
+    RecorderCommand, RequestId, SayText, SpeechCommand,
 };
 use crate::agent_session::driver::{DriverError, Peer, Rx, SessionHandle, Tx, start_ivr};
 use crate::agent_session::host_events::HostEvent;
@@ -211,7 +211,7 @@ impl SessionApi {
     pub fn call<T: Send + 'static>(
         &self,
         pick: fn(Answer) -> Option<T>,
-    ) -> Result<(CallId, tokio::sync::oneshot::Receiver<T>), SessionRefused> {
+    ) -> Result<(RequestId, tokio::sync::oneshot::Receiver<T>), SessionRefused> {
         self.running(|r| Ok(r.calls.open(pick)))
     }
 

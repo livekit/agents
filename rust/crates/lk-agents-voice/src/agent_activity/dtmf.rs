@@ -3,7 +3,7 @@
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::cycle::{Cycle, TurnTimer};
-use crate::agent_session::{Answer, CallId, Driver, DtmfCommand};
+use crate::agent_session::{Answer, Driver, DtmfCommand, RequestId};
 use crate::events::SessionEvent;
 use crate::trace::{InterruptCause, InterruptStep};
 use crate::workflows::builtins::dtmf::{DtmfAction, DtmfCollector, DtmfOutcome, DtmfReply};
@@ -13,7 +13,7 @@ use lk_agents_abi::Ts;
 pub(crate) struct DtmfCollection {
     pub(crate) collector: DtmfCollector,
     /// Answered once with the first outcome, or `Stopped`.
-    pub(crate) call: Option<CallId>,
+    pub(crate) call: Option<RequestId>,
     /// Whether `TurnTimer::DtmfDebounce` is armed, so a cancel is never a cancel of nothing.
     pub(crate) armed: bool,
     /// The confirm arm's read-back: the collector's guard is held until this speech is done.
@@ -143,7 +143,7 @@ impl Driver {
             false,
             cycle,
         );
-        let queued = self.activity.scheduling_task.contains(h.id());
+        let queued = self.activity.speech_scheduler.contains(h.id());
         let Some(dtmf) = &mut self.activity.dtmf else { return };
         if queued {
             dtmf.confirm = Some(h.id());

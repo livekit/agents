@@ -2,11 +2,11 @@
 //! generation.
 
 use crate::agent_activity::ConfigDiff;
-use crate::agent_activity::pause::{BargeTrigger, InterruptOutcome, InterruptRefusal};
-use crate::agent_activity::scheduling::{PreemptRefusal, PreemptiveDiscard, SpeechKind, Status};
+use crate::agent_activity::pause::{AudioInterruptTrigger, InterruptOutcome, InterruptRefusal};
+use crate::agent_activity::scheduling::{PreemptiveDiscard, PreemptiveRefusal, SpeechKind, Status};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::cycle::Cycle;
-use crate::agent_session::{Answer, CallId, CommitSuperseded, Driver, TurnCommand};
+use crate::agent_session::{Answer, CommitSuperseded, Driver, RequestId, TurnCommand};
 use crate::audio::{LegId, Tagged};
 use crate::audio_recognition::{
     CommitInputs, CommitSpeech, CommitVerdict, EndOfTurnInfo, PendingCommit, Phase, TurnEdits,
@@ -88,7 +88,7 @@ impl Driver {
             self.perform_pending_commit(now, cycle);
         }
 
-        // A final is the barge-in failsafe if VAD failed (`on_final_transcript`); with no VAD a
+        // A final is the interruption failsafe if VAD failed (`on_final_transcript`); with no VAD a
         // non-empty interim is the onset (`on_interim_transcript`). The gates are `decide_interrupt`'s.
         let words = ev
             .best_alternative()
@@ -96,10 +96,18 @@ impl Driver {
         let has_vad = self.input.has_vad();
         match ev.kind {
             SpeechEventType::FinalTranscript => {
-                self.interrupt_by_audio_activity(now, cycle, BargeTrigger::SttFinal { words });
+                self.interrupt_by_audio_activity(
+                    now,
+                    cycle,
+                    AudioInterruptTrigger::SttFinal { words },
+                );
             }
             SpeechEventType::InterimTranscript if !has_vad => {
-                self.interrupt_by_audio_activity(now, cycle, BargeTrigger::SttInterim { words });
+                self.interrupt_by_audio_activity(
+                    now,
+                    cycle,
+                    AudioInterruptTrigger::SttInterim { words },
+                );
             }
             SpeechEventType::InterimTranscript
             | SpeechEventType::StartOfSpeech
@@ -131,7 +139,7 @@ impl Driver {
                 self.interrupt_by_audio_activity(
                     now,
                     cycle,
-                    BargeTrigger::VadThreshold {
+                    AudioInterruptTrigger::VadThreshold {
                         duration: secs(ev.speech_duration),
                         raw_silence: secs(ev.raw_accumulated_silence),
                     },
@@ -170,8 +178,8 @@ impl Driver {
                 // `_commit_user_turn`'s tail. The commit decides the turn in this cycle, so no
                 // preemptive generation may start for it (it would be a parked speech with no
                 // owner).
-                cycle.trace(TurnStep::PreemptRefused(
-                    crate::agent_activity::scheduling::PreemptRefusal::ManualTurn,
+                cycle.trace(TurnStep::PreemptiveRefused(
+                    crate::agent_activity::scheduling::PreemptiveRefusal::ManualTurn,
                 ));
                 let eff = self.activity.audio_recognition.commit_user_turn(now, None, skip_reply);
                 cycle.machine().append(eff);
@@ -257,7 +265,7 @@ impl Driver {
         let decision = decide_commit(&CommitInputs {
             // `_scheduling_paused` holds through the hard edge (only a resume clears it, and the
             // close never resumes), so past the edge it is read off `closing`.
-            scheduling_paused: self.activity.scheduling_task.is_paused()
+            scheduling_paused: self.activity.speech_scheduler.is_paused()
                 || self.session.closing_past_edge(),
             // The reference sets `_closing` before the drain: the requested close.
             closing: self.session.closing.is_some(),
@@ -331,7 +339,7 @@ impl Driver {
         // answers or the bound passes. A newer turn ends the older one's wait, with no edits.
         if let Some(previous) = self.activity.pending_turn.take() {
             if let Some(hook) = previous.hook {
-                self.activity.callbacks.finish(hook);
+                self.activity.hooks.finish(hook);
                 cycle.trace(HandoffStep::HookFinished {
                     hook,
                     kind: crate::agent_session::HookKind::OnUserTurnCompleted,
@@ -407,7 +415,9 @@ impl Driver {
         match self.interrupt_speech(now, current.id(), InterruptCause::UserTurn, false, cycle) {
             Ok(InterruptOutcome::Now { .. } | InterruptOutcome::Already) => {}
             // A hold taken since the guard was read: the handle's to keep, said by name.
-            Err(_) => cycle.trace(InterruptStep::BargeRefused(InterruptRefusal::NotAllowed)),
+            Err(_) => {
+                cycle.trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed))
+            }
         }
     }
 
@@ -417,13 +427,13 @@ impl Driver {
         let paused = self.activity.paused_speech.paused_handle();
         let speaking = self.session.presence.agent_state() == AgentState::Speaking;
         // The newest reply first: it is the one the turn being re-committed created.
-        let unheard = self.activity.scheduling_task.handles().rev().find_map(|(id, handle)| {
+        let unheard = self.activity.speech_scheduler.handles().rev().find_map(|(id, handle)| {
             if handle.interrupted() || handle.done() {
                 return None;
             }
-            let scheduling = &self.activity.scheduling_task;
+            let scheduling = &self.activity.speech_scheduler;
             let reply = match scheduling.kind(id)? {
-                SpeechKind::TurnReply | SpeechKind::Guess => true,
+                SpeechKind::TurnReply | SpeechKind::Preemptive => true,
                 SpeechKind::Say | SpeechKind::GenerateReply | SpeechKind::Realtime => false,
             };
             let unheard = match scheduling.status(id)? {
@@ -481,7 +491,7 @@ impl Driver {
         transcript_timeout: Duration,
         stt_flush_duration: Duration,
         mut skip_reply: bool,
-        call: Option<CallId>,
+        call: Option<RequestId>,
         cycle: &mut Cycle,
     ) {
         // A realtime session commits its server buffer itself, and only when the server does not
@@ -528,7 +538,7 @@ impl Driver {
         stt_flush_duration: Duration,
         skip_reply: bool,
         close: bool,
-        call: Option<CallId>,
+        call: Option<RequestId>,
         cycle: &mut Cycle,
     ) {
         // A newer commit cancels the waiting one (`_commit_user_turn_atask`).
@@ -582,12 +592,12 @@ impl Driver {
         cycle: &mut Cycle,
     ) {
         let policy = self.session.config.effective.turn.preemptive;
-        let s = &self.activity.scheduling_task;
+        let s = &self.activity.speech_scheduler;
         let speaking = s.current_speech_uninterrupted();
         let refusal = if !policy.enabled {
-            Some(PreemptRefusal::Disabled)
+            Some(PreemptiveRefusal::Disabled)
         } else if self.activity.rt_session.is_some() {
-            Some(PreemptRefusal::Realtime)
+            Some(PreemptiveRefusal::Realtime)
         // The transition window: the leaving agent starts no preemptive generation
         // (`_new_turns_blocked`), which covers the `on_exit` phase before the scheduling task's
         // pause.
@@ -596,24 +606,24 @@ impl Driver {
             || s.is_paused()
             || self.session.closing_past_edge()
         {
-            Some(PreemptRefusal::SchedulingPaused)
+            Some(PreemptiveRefusal::SchedulingPaused)
         // An agent still talking has no turn to be early for; an interrupted one does.
         } else if speaking {
-            Some(PreemptRefusal::AgentSpeaking)
+            Some(PreemptiveRefusal::AgentSpeaking)
         // Strictly past `max_speech_duration`; a limit of zero refuses any timed onset.
         } else if started_speaking_at
             .is_some_and(|at| now.saturating_duration_since(at) > policy.max_speech_duration)
         {
-            Some(PreemptRefusal::TooLong)
+            Some(PreemptiveRefusal::TooLong)
         } else if s.preemptive_generation_count() >= policy.max_retries {
-            Some(PreemptRefusal::RetriesExhausted)
+            Some(PreemptiveRefusal::RetriesExhausted)
         } else {
             None
         };
         if let Some(refusal) = refusal {
-            return cycle.trace(TurnStep::PreemptRefused(refusal));
+            return cycle.trace(TurnStep::PreemptiveRefused(refusal));
         }
-        self.activity.scheduling_task.preflight = Some(transcript.clone());
+        self.activity.speech_scheduler.preflight = Some(transcript.clone());
         // The preemptive generation belongs to the turn after the last commit; `generate_reply`
         // checks it.
         self.activity.key_preemptive_generation(self.session.record.version());
@@ -631,7 +641,7 @@ impl Driver {
             SpeechSpec {
                 new_message: Some(user),
                 ..SpeechSpec::new(
-                    SpeechKind::Guess,
+                    SpeechKind::Preemptive,
                     ReplySource::Llm,
                     self.session.config.effective.turn.interruption.enabled,
                 )

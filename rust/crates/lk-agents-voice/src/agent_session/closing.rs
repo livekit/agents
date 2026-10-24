@@ -6,7 +6,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::CloseReason;
 
-use super::{CallId, HookId};
+use super::{HookId, RequestId};
 
 use crate::agent_activity::handoff::Exit;
 use crate::agent_activity::pause::InterruptOutcome;
@@ -47,7 +47,7 @@ pub(crate) struct Closing {
     settled: Option<tokio::sync::oneshot::Receiver<()>>,
     /// Host `drain()`s answered by the close's own drain (the reference's drain waits on the
     /// activity lock `_aclose_impl` holds). Answered `Ok` once the edge has settled.
-    drains: Vec<CallId>,
+    drains: Vec<RequestId>,
     /// `drains` was answered: a later caller is answered at once.
     drains_answered: bool,
 }
@@ -107,7 +107,7 @@ impl Closing {
         reason: CloseReason,
         error: Option<ProviderError>,
         deadline: Ts,
-        drains: Vec<CallId>,
+        drains: Vec<RequestId>,
     ) -> Self {
         let phase = ClosePhase::Unwinding { deadline: Some(deadline) };
         Closing { reason, error, phase, settled: None, drains, drains_answered: false }
@@ -142,12 +142,12 @@ impl Closing {
         !self.drains_answered
     }
 
-    pub(crate) fn join_drains(&mut self, waiters: Vec<CallId>) {
+    pub(crate) fn join_drains(&mut self, waiters: Vec<RequestId>) {
         self.drains.extend(waiters);
     }
 
     /// The close's `drain()` callers, once: empty when answered already or nobody waits.
-    pub(crate) fn take_drains(&mut self) -> Vec<CallId> {
+    pub(crate) fn take_drains(&mut self) -> Vec<RequestId> {
         if std::mem::replace(&mut self.drains_answered, true) {
             return Vec::new();
         }
@@ -155,7 +155,7 @@ impl Closing {
     }
 
     /// Whoever still waits on the close's drain when the loop ends, answered or not.
-    pub(crate) fn remaining_drains(&mut self) -> Vec<CallId> {
+    pub(crate) fn remaining_drains(&mut self) -> Vec<RequestId> {
         std::mem::take(&mut self.drains)
     }
 }
@@ -236,7 +236,7 @@ impl Driver {
     }
 
     fn force_cut_open(&mut self, now: Ts, cycle: &mut Cycle) {
-        let open: Vec<SpeechId> = self.activity.scheduling_task.speech_ids().collect();
+        let open: Vec<SpeechId> = self.activity.speech_scheduler.speech_ids().collect();
         for speech in open {
             match self.interrupt_speech(now, speech, InterruptCause::Closing, true, cycle) {
                 Ok(InterruptOutcome::Now { .. }) => {}
@@ -255,7 +255,7 @@ impl Driver {
         }
     }
 
-    pub(crate) fn join_close_drain(&mut self, waiters: Vec<CallId>, cycle: &mut Cycle) {
+    pub(crate) fn join_close_drain(&mut self, waiters: Vec<RequestId>, cycle: &mut Cycle) {
         if waiters.is_empty() {
             return;
         }
@@ -309,7 +309,7 @@ impl Driver {
             match self.session.close_phase().zip(self.session.closing.as_ref().map(|c| c.reason)) {
                 // Every speech the edge cut has reported (or the bound released it).
                 Some((ClosePhase::Edge { .. }, reason))
-                    if self.activity.scheduling_task.is_empty() =>
+                    if self.activity.speech_scheduler.is_empty() =>
                 {
                     let timeout =
                         self.session.config.effective.timers.session_close_transcript_timeout;
@@ -399,7 +399,7 @@ impl Driver {
             }
             // The edge's bound passed with a cut speech unreported: released by the close.
             ClosePhase::Edge { .. } => {
-                let open: Vec<SpeechId> = self.activity.scheduling_task.speech_ids().collect();
+                let open: Vec<SpeechId> = self.activity.speech_scheduler.speech_ids().collect();
                 for speech in open {
                     cycle.trace(CloseStep::Performed(CloseAct::Released { speech }));
                     self.release_speech(now, speech, cycle);

@@ -375,11 +375,11 @@ impl Driver {
             return self.refuse_closing(&entry.handle, None, cycle);
         }
         if let Some(speech) = entry.speech {
-            // An interrupted speech cannot anchor a task; a live one is held so a barge-in cannot
+            // An interrupted speech cannot anchor a task; a live one is held so a interruption cannot
             // end it under the tool (`_inline_task_slot`).
             let held = self
                 .activity
-                .scheduling_task
+                .speech_scheduler
                 .handle(speech)
                 .is_some_and(|h| !h.interrupted() && h.hold_interruptions().is_ok());
             if !held {
@@ -565,7 +565,7 @@ impl Driver {
         if cancel {
             // `interrupt(force=True)`: every speech of the driving frame but parked parent speeches.
             let blocked = &self.activity.drain_blocked;
-            let open: Vec<SpeechId> = (self.activity.scheduling_task.speech_ids())
+            let open: Vec<SpeechId> = (self.activity.speech_scheduler.speech_ids())
                 .filter(|s| !blocked.contains(*s))
                 .collect();
             for speech in open {
@@ -603,7 +603,7 @@ impl Driver {
 
     /// An orphaned task's awaiting speech, cut whole (its outputs still commit).
     fn cut_orphaned(&mut self, now: Ts, speech: SpeechId, cycle: &mut Cycle) {
-        if self.activity.scheduling_task.contains(speech)
+        if self.activity.speech_scheduler.contains(speech)
             && self.interrupt_speech(now, speech, InterruptCause::Handoff, true, cycle).is_err()
         {
             cycle.trace(CoreStep::PortFailure(
@@ -658,7 +658,7 @@ impl Driver {
                 cycle.trace(SpeechStep::Blocked { speech, blocked: false });
                 self.set_drain_blocked(speech, false, cycle);
             }
-            if let Some(h) = self.activity.scheduling_task.handle(speech) {
+            if let Some(h) = self.activity.speech_scheduler.handle(speech) {
                 h.release_interruptions();
             }
         }

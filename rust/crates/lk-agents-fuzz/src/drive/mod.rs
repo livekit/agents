@@ -126,7 +126,7 @@ pub struct Setup {
     /// An end-of-turn predictor on the microphone leg: the third observer of the person.
     #[serde(default)]
     pub eot: bool,
-    /// The adaptive interruption detector: judges whether an overlap is a barge-in.
+    /// The adaptive interruption detector: judges whether an overlap is a interruption.
     #[serde(default)]
     pub interruption: bool,
     /// Learn the endpointing delay from the conversation instead of a fixed one.

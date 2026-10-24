@@ -6,14 +6,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::TimedString;
-use async_trait::async_trait;
 use crate::errors::{ApiError, ProviderError};
+use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::utils::clock::{Clock, Ts};
-use crate::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
 use crate::tts::tts::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use crate::types::identity::ProviderId;
+use crate::utils::clock::{Clock, Ts};
+use crate::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
 
 /// No default implementation on purpose: segmentation boundaries are audible, and the reference's
 /// default is blingfire's, not a hand-rolled punctuation splitter.
@@ -47,7 +47,11 @@ impl StreamAdapter {
     }
 
     /// Itself when it has a duplex path, else adapted; decided per instance by its capabilities.
-    pub fn adapted(tts: Arc<dyn Tts>, splitter: SplitterFactory, clock: Arc<dyn Clock>) -> Arc<dyn Tts> {
+    pub fn adapted(
+        tts: Arc<dyn Tts>,
+        splitter: SplitterFactory,
+        clock: Arc<dyn Clock>,
+    ) -> Arc<dyn Tts> {
         if tts.capabilities().streaming {
             return tts;
         }
@@ -77,8 +81,9 @@ pub async fn adapter_stream(
     timeout: f64,
     #[host(ambient)] clock: Arc<dyn Clock>,
 ) -> Result<(TtsSink, TtsSource), ProviderError> {
-    let options = crate::ApiConnectOptions::new(maximum, interval, timeout)
-        .map_err(|e| ProviderError::Local(ApiError { retryable: false, ..ApiError::new(e.to_string()) }))?;
+    let options = crate::ApiConnectOptions::new(maximum, interval, timeout).map_err(|e| {
+        ProviderError::Local(ApiError { retryable: false, ..ApiError::new(e.to_string()) })
+    })?;
     let provider = provider.with_conn_options(&options).unwrap_or(provider);
     StreamAdapter::new(provider, Arc::new(|| Box::new(PreSplit)), clock).stream().await
 }
@@ -291,7 +296,9 @@ impl AdapterSource {
             if sentence.trim_matches(crate::tokenize::is_py_space).is_empty() {
                 continue;
             }
-            self.current = Some(self.tts.synthesize(sentence.trim_matches(crate::tokenize::is_py_space)).await?);
+            self.current = Some(
+                self.tts.synthesize(sentence.trim_matches(crate::tokenize::is_py_space)).await?,
+            );
         }
     }
 }
@@ -314,8 +321,11 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
                     }
                     // Hold only once no further audio can arrive; a queued whitespace-only sentence
                     // is not audio. Once true it stays true.
-                    let more_audio_coming =
-                        !self.input_done || self.pending.iter().any(|s| !s.trim_matches(crate::tokenize::is_py_space).is_empty());
+                    let more_audio_coming = !self.input_done
+                        || self
+                            .pending
+                            .iter()
+                            .any(|s| !s.trim_matches(crate::tokenize::is_py_space).is_empty());
                     if !more_audio_coming {
                         if let Some(previous) = self.held.replace(frame) {
                             return Ok(Some(previous));
@@ -785,7 +795,7 @@ mod tests {
         bounded("frame 2", source.next()).await.unwrap(); // exhausts "one.", closes it, starts "two."
         assert_eq!(closed.load(Ordering::Relaxed), 1, "an exhausted inner stream is closed");
 
-        // Tear down mid-reply, the barge-in shape.
+        // Tear down mid-reply, the interruption shape.
         let how = bounded("close", source.close(NO_DEADLINE)).await;
         assert_eq!(closed.load(Ordering::Relaxed), 2, "the in-flight inner stream is closed too");
         assert_eq!(how, Closed::Clean, "every inner stream acknowledged, so the adapter does too");

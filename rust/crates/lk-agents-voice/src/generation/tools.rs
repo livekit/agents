@@ -176,7 +176,7 @@ pub(crate) async fn run_tools(
     let mut decision = crate::tool_executor::next_step(crate::tool_executor::StepInputs {
         tool_output: &executions,
         interrupted_before_tools,
-        // Re-read after: a barge-in during a tool suppresses the reply, not the handoff, commit
+        // Re-read after: a interruption during a tool suppresses the reply, not the handoff, commit
         // or step increment.
         interrupted: handle.interrupted_speech(),
         num_steps: handle.num_steps(),

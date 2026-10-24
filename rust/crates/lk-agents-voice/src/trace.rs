@@ -113,11 +113,11 @@ pub enum TurnStep {
     SttFlushed {
         frames: u32,
     },
-    GuessReconciled {
+    PreemptiveReconciled {
         speech: SpeechId,
         verdict: PreemptiveVerdict,
     },
-    PreemptRefused(crate::agent_activity::scheduling::PreemptRefusal),
+    PreemptiveRefused(crate::agent_activity::scheduling::PreemptiveRefusal),
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -212,11 +212,11 @@ pub enum SpeechStep {
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum InterruptStep {
-    BargeIn(Box<crate::agent_activity::pause::InterruptReport>),
-    /// A barge-in check refused before any effect ran.
-    BargeRefused(InterruptRefusal),
+    ByAudioActivity(Box<crate::agent_activity::pause::InterruptReport>),
+    /// A interruption check refused before any effect ran.
+    ByAudioActivityRefused(InterruptRefusal),
     /// Only produced by [`folded`](crate::trace::folded): the barge step above repeated `count` times.
-    BargeRepeated {
+    ByAudioActivityRepeated {
         count: u32,
     },
     Interrupted {
@@ -672,7 +672,7 @@ pub enum CloseAct {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterruptCause {
-    BargeIn,
+    ByAudioActivity,
     Host,
     /// A detector's verdict (AMD: a machine answered), forced past `allow_interruptions`.
     Detector,
@@ -776,7 +776,7 @@ impl Step {
             Step::Decided(_) => None,
             Step::Core(_) => None,
             Step::Turn(step) => match step {
-                TurnStep::GuessReconciled { speech, .. } => Some(*speech),
+                TurnStep::PreemptiveReconciled { speech, .. } => Some(*speech),
                 TurnStep::EndOfTurn { .. }
                 | TurnStep::UserTurnClaims { .. }
                 | TurnStep::CommitRequested { .. }
@@ -784,7 +784,7 @@ impl Step {
                 | TurnStep::CommitSuperseded
                 | TurnStep::TranscriptSegment { .. }
                 | TurnStep::SttFlushed { .. }
-                | TurnStep::PreemptRefused(_) => None,
+                | TurnStep::PreemptiveRefused(_) => None,
             },
             Step::Speech(step) => match step {
                 SpeechStep::ReplyCreated { speech }
@@ -817,9 +817,9 @@ impl Step {
                 | InterruptStep::InterruptWalkStopped { speech }
                 | InterruptStep::PlayoutGate { speech, .. } => Some(*speech),
                 InterruptStep::HostInterrupt { speech, .. } => *speech,
-                InterruptStep::BargeIn(_)
-                | InterruptStep::BargeRefused(_)
-                | InterruptStep::BargeRepeated { .. }
+                InterruptStep::ByAudioActivity(_)
+                | InterruptStep::ByAudioActivityRefused(_)
+                | InterruptStep::ByAudioActivityRepeated { .. }
                 | InterruptStep::InterruptSettled { .. }
                 | InterruptStep::OverlapVerdict { .. }
                 | InterruptStep::OverlapRefused(_) => None,
@@ -932,12 +932,12 @@ pub fn step_names() -> Vec<String> {
 fn is_barge(step: &Step) -> bool {
     matches!(
         step,
-        Step::Interrupt(InterruptStep::BargeIn(_))
-            | Step::Interrupt(InterruptStep::BargeRefused(_))
+        Step::Interrupt(InterruptStep::ByAudioActivity(_))
+            | Step::Interrupt(InterruptStep::ByAudioActivityRefused(_))
     )
 }
 
-/// Consecutive identical barge steps become the first plus [`InterruptStep::BargeRepeated`].
+/// Consecutive identical barge steps become the first plus [`InterruptStep::ByAudioActivityRepeated`].
 pub fn folded(steps: &[Step]) -> Vec<Step> {
     let mut out: Vec<Step> = Vec::with_capacity(steps.len());
     let mut run: Option<(&Step, u32)> = None;
@@ -948,9 +948,13 @@ pub fn folded(steps: &[Step]) -> Vec<Step> {
         {
             *count += 1;
             match out.last_mut() {
-                Some(Step::Interrupt(InterruptStep::BargeRepeated { count: c })) => *c = *count,
+                Some(Step::Interrupt(InterruptStep::ByAudioActivityRepeated { count: c })) => {
+                    *c = *count
+                }
                 Some(_) | None => {
-                    out.push(Step::Interrupt(InterruptStep::BargeRepeated { count: *count }))
+                    out.push(Step::Interrupt(InterruptStep::ByAudioActivityRepeated {
+                        count: *count,
+                    }))
                 }
             }
             continue;

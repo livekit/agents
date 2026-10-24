@@ -5,7 +5,7 @@ use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::AgentSession;
 use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{
-    Answer, CallId, Close, Command, HostRecorder, IvrCommand, Origin, Sent,
+    Answer, Close, Command, HostRecorder, IvrCommand, Origin, RequestId, Sent,
 };
 use crate::agent_session::cycle::{Cycle, TurnTimer};
 use crate::agent_session::host_events::HostEvent;
@@ -131,7 +131,7 @@ pub struct SessionHandle {
     /// Every event, in the order the driver emitted it.
     pub events: Rx<HostEvent>,
     /// Each awaited command's answer, once, by its call id.
-    pub answers: Rx<(CallId, Answer)>,
+    pub answers: Rx<(RequestId, Answer)>,
     pub trace: Arc<Mutex<Trace>>,
     /// What a system runs on; the host starts the systems it configures on this after `start()`.
     pub peer: Peer,
@@ -237,7 +237,7 @@ pub struct Driver {
     /// What the spawned tasks share with the loop, the session clock among it.
     pub(crate) shared: Arc<SessionShared>,
     pub(crate) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
-    pub(super) answers: tokio::sync::mpsc::UnboundedSender<(CallId, Answer)>,
+    pub(super) answers: tokio::sync::mpsc::UnboundedSender<(RequestId, Answer)>,
     pub(super) inputs: Rx<Input>,
     pub(super) trace: Arc<Mutex<Trace>>,
     /// The core knows no subscriber.
@@ -279,7 +279,7 @@ impl Driver {
         self.step.set(now);
         let now = now.at;
         // The AEC warmup is *not* armed here but at the first `speaking` edge; armed now, it would
-        // refuse every barge-in for the session.
+        // refuse every interruption for the session.
         self.publish_gate();
         // The away deadline runs from start: both are silent until somebody speaks.
         {
@@ -338,7 +338,7 @@ impl Driver {
     }
 
     /// Answer an awaited command; `None` is a command nobody awaits.
-    pub(crate) fn answer(&self, call: Option<CallId>, answer: Answer) {
+    pub(crate) fn answer(&self, call: Option<RequestId>, answer: Answer) {
         if let Some(call) = call {
             let _ = self.answers.send((call, answer));
         }
@@ -390,11 +390,11 @@ impl Driver {
     fn next_deadline(&self) -> Option<Ts> {
         [
             self.timers.next_deadline(),
-            self.activity.scheduling_task.next_deadline(),
+            self.activity.speech_scheduler.next_deadline(),
             self.activity.pending_turn.as_ref().map(|p| p.deadline),
             self.session.close_phase().and_then(super::ClosePhase::deadline),
             self.activity.audio_recognition.commit_deadline(),
-            self.activity.callbacks.next_deadline(),
+            self.activity.hooks.next_deadline(),
         ]
         .into_iter()
         .flatten()
@@ -407,7 +407,7 @@ impl Driver {
         let live = self.activity.tasks.watched()?;
         let speech_ended = live
             .speech()
-            .is_some_and(|s| self.activity.scheduling_task.handle(s).is_none_or(|h| h.done()));
+            .is_some_and(|s| self.activity.speech_scheduler.handle(s).is_none_or(|h| h.done()));
         (live.handle().done() || speech_ended).then(|| live.handle().id())
     }
 
@@ -481,7 +481,7 @@ impl Driver {
     }
 
     /// **Already done**, not dropped: an unattached handle would answer `done() == false` forever.
-    pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<CallId>) {
+    pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<RequestId>) {
         let id = self.session.ids.next_speech_id();
         let handle = Arc::new(SpeechHandle::new(
             id,
@@ -594,7 +594,7 @@ impl Driver {
             && let Some(pending) = self.activity.pending_turn.take()
         {
             if let Some(hook) = pending.hook {
-                self.activity.callbacks.finish(hook);
+                self.activity.hooks.finish(hook);
                 cycle.trace(HandoffStep::HookFinished {
                     hook,
                     kind: crate::agent_session::HookKind::OnUserTurnCompleted,
@@ -693,7 +693,7 @@ impl Driver {
             .launching()
             .into_iter()
             .filter(|speech| {
-                self.activity.scheduling_task.handle(*speech).is_some_and(|h| h.interruptible())
+                self.activity.speech_scheduler.handle(*speech).is_some_and(|h| h.interruptible())
             })
             .collect()
     }

@@ -839,7 +839,7 @@ impl Recording {
 
     /// Journal step variants this run produced, as `Family::Variant`.
     pub fn journal_names(&self) -> BTreeSet<String> {
-        // The folded view is part of the vocabulary: `BargeRepeated` is only ever produced by
+        // The folded view is part of the vocabulary: `ByAudioActivityRepeated` is only ever produced by
         // folding a run of identical barge steps, so a journal that folds to it reached it. The
         // rules keep reading the raw steps; only the reach count reads the fold.
         let steps: Vec<Step> = self.journal.iter().map(|(_, step)| step.clone()).collect();

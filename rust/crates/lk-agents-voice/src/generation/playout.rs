@@ -1,9 +1,9 @@
 //! `perform_audio_forwarding`: one segment's frames pushed to the sink, and what the sink reports.
 
 use crate::agent_activity::scheduling::SpeechId;
-use crate::generation::GenEvent;
-use crate::agent_session::SessionShared;
 use crate::agent_session::DriverError;
+use crate::agent_session::SessionShared;
+use crate::generation::GenEvent;
 use crate::generation::TurnAccumulator;
 use crate::speech_handle::SpeechHandle;
 use crate::trace::{PlayoutStep, SinkCall};
@@ -437,7 +437,7 @@ impl Playing<'_> {
     }
 
     async fn cut<S: Segment>(&mut self, segment: &mut S, text: String) -> Heard {
-        // Synchronous: barge-in may not wait for a lock.
+        // Synchronous: interruption may not wait for a lock.
         clear_sink(self.shared, self.handle.id(), self.out);
         self.drain(segment);
         let heard = self.heard_at_cut(text).await;

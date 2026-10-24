@@ -768,7 +768,7 @@ pub struct ReplyRequest {
 pub enum NextStep {
     /// The turn is over: no tool output, or tool output that asked for no reply.
     Done,
-    /// Barge-in; finished tools are still in [`StepDecision::commit`].
+    /// InterruptByAudioActivity-in; finished tools are still in [`StepDecision::commit`].
     Interrupted,
     /// A tool returned an `Agent`: update and drain, then still run `follow_up` if any.
     Handoff {
@@ -864,7 +864,7 @@ pub struct StepInputs<'a> {
     pub tool_output: &'a [ToolExecution],
     /// Interrupted before the executions were awaited: [`NextStep::Interrupted`].
     pub interrupted_before_tools: bool,
-    /// Re-read after the executions: a barge-in during a tool suppresses the reply but not the
+    /// Re-read after the executions: a interruption during a tool suppresses the reply but not the
     /// handoff, commit or step increment.
     pub interrupted: bool,
     /// The step count before increment; starts at 1.
@@ -1062,7 +1062,7 @@ impl Driver {
             // A call the request never advertised is answered by the driver and reaches the
             // handle only here. Once, by id.
             if let ChatItem::FunctionCall(_) = &item
-                && let Some(h) = self.activity.scheduling_task.handle(speech)
+                && let Some(h) = self.activity.speech_scheduler.handle(speech)
                 && !h.chat_items().iter().any(|i| i.id() == item.id())
             {
                 h.item_added(&item);
@@ -1071,7 +1071,7 @@ impl Driver {
         }
         // `self.scheduling_paused`: the activity that made the speech
         // drains: paused, left behind by a handoff, or a task that has its result.
-        let draining = self.activity.scheduling_task.is_paused()
+        let draining = self.activity.speech_scheduler.is_paused()
             || self.activity.speech_frame(speech).is_some_and(|f| *f != self.activity.agent)
             || self.activity.tasks.driving_settled();
         // The step's follow-up plans against the frame once this is published.
@@ -1112,7 +1112,7 @@ impl Driver {
 
     /// Another live speech is in its tools.
     pub(crate) fn tools_running_elsewhere(&self, speech: SpeechId) -> bool {
-        let scheduling = &self.activity.scheduling_task;
+        let scheduling = &self.activity.speech_scheduler;
         self.activity
             .tools_in_flight
             .iter()

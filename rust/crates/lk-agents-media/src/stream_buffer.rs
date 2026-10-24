@@ -143,7 +143,7 @@ mod tests {
     // Catches: `close` draining like `end_input` does. `aclose()` closes mid-decode to tear the
     // stream down; if the reader kept serving buffered bytes, the decode thread would keep
     // emitting frames for an utterance that was already cancelled -- the agent talks over the
-    // user after a barge-in.
+    // user after a interruption.
     #[test]
     fn close_stops_immediately_even_with_bytes_still_unread() {
         let b = StreamBuffer::new();

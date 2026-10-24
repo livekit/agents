@@ -162,7 +162,7 @@ impl HostSpeech {
     }
 
     /// `True` from the tick `interrupt()` was called, and once the loop has interrupted the speech
-    /// for any reason (a barge-in, a supersede, the close).
+    /// for any reason (a interruption, a supersede, the close).
     #[host(getter)]
     pub fn interrupted(&self) -> bool {
         self.promise.interrupted()

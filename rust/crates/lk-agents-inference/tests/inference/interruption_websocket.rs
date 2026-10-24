@@ -5,7 +5,7 @@
 //! actually *wires* the core to a WebSocket -- handshake, `session.create`, the 8-byte binary
 //! header, and a verdict coming back out as an `OverlappingSpeechEvent`. A unit test cannot
 //! distinguish "the core is right" from "the core is right and never called", and every one of
-//! those four steps is a silent failure in production: no barge-in, no error, no log.
+//! those four steps is a silent failure in production: no interruption, no error, no log.
 
 use crate::support;
 
@@ -34,7 +34,9 @@ fn frame(n: usize) -> AudioFrame {
     }
 }
 
-fn detector(port: u16) -> (AdaptiveInterruptionDetector, tokio::sync::mpsc::UnboundedReceiver<DetectorEvent>) {
+fn detector(
+    port: u16,
+) -> (AdaptiveInterruptionDetector, tokio::sync::mpsc::UnboundedReceiver<DetectorEvent>) {
     let opts = InterruptionOptions::new(
         Some(0.7),
         MIN_INTERRUPTION_DURATION,
@@ -52,7 +54,10 @@ fn detector(port: u16) -> (AdaptiveInterruptionDetector, tokio::sync::mpsc::Unbo
 
 /// 1 s of agent-only audio, then the user starts over it for one detection interval: exactly one
 /// request.
-fn push_one_overlap(stream: &lk_agents_inference::interruption::InterruptionStream, span: Option<HostRef>) {
+fn push_one_overlap(
+    stream: &lk_agents_inference::interruption::InterruptionStream,
+    span: Option<HostRef>,
+) {
     stream.push(InputEvent::AgentSpeechStarted).unwrap();
     stream.push(InputEvent::Audio(frame(SR as usize))).unwrap();
     stream
@@ -65,7 +70,7 @@ fn push_one_overlap(stream: &lk_agents_inference::interruption::InterruptionStre
     stream.push(InputEvent::Audio(frame(1600))).unwrap();
 }
 
-/// A `/bargein` gateway that answers the first audio frame with a barge-in.
+/// A `/bargein` gateway that answers the first audio frame with a interruption.
 ///
 /// Returns the port and a handle that yields the `session.create` the client sent, so the test can
 /// assert on the handshake as well as on the verdict.
@@ -120,7 +125,7 @@ async fn fake_gateway() -> (u16, tokio::task::JoinHandle<(String, u64)>) {
 // Catches: the driver never reaching the wire. Any of -- `session.create` not sent (the gateway
 // waits forever), the audio sent without or with a byte-swapped 8-byte header (every verdict misses
 // the cache and reports a zero RTT), the verdict parsed but never emitted to the consumer -- ends
-// with barge-in silently not working and nothing in the logs.
+// with interruption silently not working and nothing in the logs.
 #[tokio::test]
 async fn a_verdict_from_a_real_socket_reaches_the_consumer_as_an_event() {
     let (port, gateway) = fake_gateway().await;
@@ -201,9 +206,15 @@ async fn a_private_stream_keeps_its_verdict_and_span_write_to_itself() {
     push_one_overlap(&stream, Some(HostRef::new(7, &registry)));
 
     let span = within("the span write", stream.recv_event()).await;
-    assert!(matches!(&span, Some(StreamEvent::SpanUpdate { span, .. }) if span.id() == 7), "{span:?}");
+    assert!(
+        matches!(&span, Some(StreamEvent::SpanUpdate { span, .. }) if span.id() == 7),
+        "{span:?}"
+    );
     let verdict = within("the verdict", stream.recv_event()).await;
     assert!(matches!(verdict, Some(StreamEvent::Overlap(_))), "{verdict:?}");
     within("the gateway task to finish", gateway).await.unwrap();
-    assert!(detector_events.try_recv().is_err(), "the detector's channel is the session stream's alone");
+    assert!(
+        detector_events.try_recv().is_err(),
+        "the detector's channel is the session stream's alone"
+    );
 }

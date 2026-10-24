@@ -247,12 +247,12 @@ impl Driver {
             // The AMD system's authorization hold: the scheduling task keeps its head.
             SpeechCommand::PauseAuthorization => {
                 cycle.trace(SpeechStep::AuthorizationPaused);
-                self.activity.scheduling_task.authorization_paused = true;
+                self.activity.speech_scheduler.authorization_paused = true;
             }
             // Its release: the head is authorized in this same cycle.
             SpeechCommand::ResumeAuthorization => {
                 cycle.trace(SpeechStep::AuthorizationResumed);
-                self.activity.scheduling_task.authorization_paused = false;
+                self.activity.speech_scheduler.authorization_paused = false;
             }
             SpeechCommand::Interrupt { force, call } => {
                 // The AMD's verdict is a detector's cut, not a host interrupt: no `HostInterrupt`
@@ -279,7 +279,7 @@ impl Driver {
             SpeechCommand::InterruptSpeech { speech: id, force } => {
                 cycle.trace(InterruptStep::HostInterrupt { speech: Some(id), force });
                 let tell_socket = if !force
-                    && self.activity.scheduling_task.status(id) == Some(Status::Working)
+                    && self.activity.speech_scheduler.status(id) == Some(Status::Working)
                 {
                     // Unforced, on a speech whose tools are running (the tool interrupting its own
                     // handle): scoped to that step, journalled, and the tool reply still follows.
@@ -301,7 +301,9 @@ impl Driver {
                         Ok(InterruptOutcome::Already) => false,
                         // The reference raises before anything moves.
                         Err(_) => {
-                            cycle.trace(InterruptStep::BargeRefused(InterruptRefusal::NotAllowed));
+                            cycle.trace(InterruptStep::ByAudioActivityRefused(
+                                InterruptRefusal::NotAllowed,
+                            ));
                             false
                         }
                     }
@@ -313,10 +315,10 @@ impl Driver {
                 // they were saying.
                 self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, cycle);
             }
-            // `disallow_interruptions()` and its release: read live by barge-in, so no scheduling
+            // `disallow_interruptions()` and its release: read live by interruption, so no scheduling
             // step. A done handle refuses quietly; an unknown id is a no-op.
             SpeechCommand::SetAllowInterruptions { speech, allow } => {
-                if let Some(h) = self.activity.scheduling_task.handle(speech) {
+                if let Some(h) = self.activity.speech_scheduler.handle(speech) {
                     let _ = h.set_allow_interruptions(allow);
                     cycle.trace(InterruptStep::InterruptionsToggled {
                         speech,
@@ -430,7 +432,7 @@ impl Driver {
         let stale = self.activity.preemptive_record_version != self.session.record.version();
         if let Some(preemptive_turn) = self.activity.preemptive_turn.take()
             && (preemptive_turn != info.turn_id || edited || stale)
-            && self.activity.scheduling_task.preemptive_generation().is_some()
+            && self.activity.speech_scheduler.preemptive_generation().is_some()
         {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, cycle);
         }
@@ -723,7 +725,7 @@ impl Driver {
                 // With a host running hooks, `function_tools_executed` is its to emit, and the step
                 // waits for what the handlers leave.
                 if let (Some(event), Some(verdict)) = (&executed, verdict) {
-                    let id = self.activity.callbacks.mint();
+                    let id = self.activity.hooks.mint();
                     let call =
                         HookCall::ToolsExecuted { id, speech, event: Box::new((**event).clone()) };
                     let wait = self.hook_wait();
@@ -766,7 +768,7 @@ impl Driver {
                 self.activity.set_tools_in_flight(speech, false);
                 // Released by the close's edge already: the edge was its end (`CloseAct::Released`).
                 if self.activity.finished.contains(&speech)
-                    && !self.activity.scheduling_task.contains(speech)
+                    && !self.activity.speech_scheduler.contains(speech)
                 {
                     return;
                 }
@@ -774,7 +776,7 @@ impl Driver {
                     speech,
                     class: crate::trace::FailureClass::of(&error),
                 });
-                if let Some(handle) = self.activity.scheduling_task.handle(speech) {
+                if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
                     // Moved, not formatted: the binding releases a `ProviderError::Host`'s entry.
                     handle.mark_done(Some(*error));
                 }
@@ -794,7 +796,7 @@ impl Driver {
                 // uninterruptible while parked.
                 let cause = match self
                     .activity
-                    .scheduling_task
+                    .speech_scheduler
                     .handle(speech)
                     .map(|h| h.allow_interruptions())
                 {
@@ -807,7 +809,8 @@ impl Driver {
                 let failed = error.is_some();
                 cycle.trace(GenerationStep::ChatFinished { speech, step, error });
                 // A failed preemptive generation answers nothing; the commit starts a fresh reply.
-                if failed && self.activity.scheduling_task.preemptive_generation() == Some(speech) {
+                if failed && self.activity.speech_scheduler.preemptive_generation() == Some(speech)
+                {
                     self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, cycle);
                 }
             }
@@ -820,7 +823,7 @@ impl Driver {
         }
     }
 
-    /// `_on_first_frame`: `speaking` and `_on_start_of_agent_speech` (which enables barge-in) at
+    /// `_on_first_frame`: `speaking` and `_on_start_of_agent_speech` (which enables interruption) at
     /// the same instant, once per step.
     fn agent_started_speaking(&mut self, now: Ts, speech: SpeechId, cycle: &mut Cycle) {
         if !self.activity.spoke.insert(speech) {
@@ -852,29 +855,29 @@ impl Driver {
         self.activity.spoke.remove(&speech);
         if let Some(msg) = item {
             let item = ChatItem::Message(*msg);
-            let source = match self.activity.scheduling_task.kind(speech) {
+            let source = match self.activity.speech_scheduler.kind(speech) {
                 Some(SpeechKind::Say) => Source::Say { speech },
                 Some(
                     SpeechKind::TurnReply
                     | SpeechKind::GenerateReply
-                    | SpeechKind::Guess
+                    | SpeechKind::Preemptive
                     | SpeechKind::Realtime,
                 )
                 | None => Source::Reply { speech, step },
             };
-            if self.activity.scheduling_task.add_to_chat_ctx(speech) {
+            if self.activity.speech_scheduler.add_to_chat_ctx(speech) {
                 self.commit_item(item, source, Visibility::Both, cycle);
-            } else if let Some(h) = self.activity.scheduling_task.handle(speech) {
+            } else if let Some(h) = self.activity.speech_scheduler.handle(speech) {
                 h.item_added(&item);
             }
         }
-        self.activity.scheduling_task.spoken(speech, now);
+        self.activity.speech_scheduler.spoken(speech, now);
         // A blocked current speech's step ending is what a pause from inside its tool waits on.
         self.settle_scheduling_pause(cycle);
         // The state moves on the speech's interruption, not the step's; a filler ending inside
         // another speech's tool span goes back to `thinking` (listening would arm the away timer).
         let speech_interrupted =
-            self.activity.scheduling_task.handle(speech).is_some_and(|h| h.interrupted_speech());
+            self.activity.speech_scheduler.handle(speech).is_some_and(|h| h.interrupted_speech());
         let eos = end_of_speech(
             speech_interrupted,
             has_tool_output,
@@ -908,7 +911,7 @@ impl Driver {
     ) {
         // Already released by the close's hard edge: a second terminal would be a second end.
         if self.activity.finished.contains(&speech)
-            && !self.activity.scheduling_task.contains(speech)
+            && !self.activity.speech_scheduler.contains(speech)
         {
             return;
         }
@@ -917,7 +920,7 @@ impl Driver {
             text: outcome.forwarded_text.clone(),
             interrupted,
         });
-        if let Some(h) = self.activity.scheduling_task.handle(speech) {
+        if let Some(h) = self.activity.speech_scheduler.handle(speech) {
             cycle.trace(SpeechStep::ItemsRecorded {
                 speech,
                 ids: h.chat_items().iter().map(|it| it.id().to_owned()).collect(),
@@ -926,7 +929,7 @@ impl Driver {
         // **`speaking` belongs to the current speech**: releasing a refused `Say` or a discarded
         // preemptive generation must not drop the agent out of `speaking` while another speech
         // plays.
-        let was_current = self.activity.scheduling_task.current_speech() == Some(speech);
+        let was_current = self.activity.speech_scheduler.current_speech() == Some(speech);
         let eos = end_of_speech(
             interrupted,
             false,
@@ -944,19 +947,19 @@ impl Driver {
         // `_scheduling_task`'s post-await release: a finished current speech that is the paused one
         // drops the pause and resumes the sink. The release at `Authorized` can miss a pause taken
         // in the same instant, which would leave the sink paused until the close.
-        if self.activity.scheduling_task.current_speech() == Some(speech) {
+        if self.activity.speech_scheduler.current_speech() == Some(speech) {
             self.release_paused_speech(speech, cycle);
         }
         // A close ending a speech with blocking tools still running: they are answered with the
         // closing error before the speech's own `SpeechDone`; nothing is journalled after `close`.
         if self.session.closing.is_some()
-            && self.activity.scheduling_task.contains(speech)
+            && self.activity.speech_scheduler.contains(speech)
             && self.activity.tools.live_blocking(speech) > 0
             && self.session.close_phase() != Some(ClosePhase::Closed)
         {
             self.end_live_tools(now, speech, cycle);
         }
-        if let Some(h) = self.activity.scheduling_task.handle(speech) {
+        if let Some(h) = self.activity.speech_scheduler.handle(speech) {
             // The host learns of the end only here, with the handle already `done()` (idempotent).
             if !h.done() {
                 h.mark_done(None);
@@ -1014,7 +1017,7 @@ impl Driver {
         // Busy: every held handle is in flight, except one whose tools run (the current speech is
         // released for `foreground()` from inside a tool) and a live preemptive generation. A
         // speech parked for an inline task still plays its step, so it counts.
-        let scheduling = &activity.scheduling_task;
+        let scheduling = &activity.speech_scheduler;
         let winding_down = scheduling.speech_ids().any(|id| match scheduling.status(id) {
             None => true,
             Some(Status::Working) => !activity.tools_in_flight.contains(&id),

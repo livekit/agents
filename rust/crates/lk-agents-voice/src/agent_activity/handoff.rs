@@ -199,7 +199,7 @@ impl Driver {
         agent: lk_agents_abi::HostRef,
         cycle: &mut Cycle,
     ) {
-        let id = self.activity.callbacks.mint();
+        let id = self.activity.hooks.mint();
         let wait = self.hook_wait();
         if self.issue_hook(now, HookCall::DescribeAgent { id, agent, speech }, Some(wait), cycle) {
             self.activity.handoff.queue.push_back(Queued::Describing(id));
@@ -334,10 +334,8 @@ impl Driver {
     /// waited for while it exits, none once it ran.
     pub(crate) fn frame_exit(&mut self) -> Exit {
         match self.activity.handoff.exit {
-            FrameExit::Running => Exit::Issue(self.activity.callbacks.mint()),
-            FrameExit::Exiting(hook) if self.activity.callbacks.is_pending(hook) => {
-                Exit::Wait(hook)
-            }
+            FrameExit::Running => Exit::Issue(self.activity.hooks.mint()),
+            FrameExit::Exiting(hook) if self.activity.hooks.is_pending(hook) => Exit::Wait(hook),
             FrameExit::Exiting(_) | FrameExit::Exited => Exit::Done,
         }
     }
@@ -427,7 +425,7 @@ impl Driver {
             self.settle_drain_at_swap(now, previous, cycle);
         }
         self.activity.handoff.swapped(previous, next);
-        self.activity.callbacks.stop_describing();
+        self.activity.hooks.stop_describing();
         self.answer(call, Answer::Handoff(Ok(())));
         // The task's step precedes its `on_enter`, as `AgentUpdated` does.
         if let Some(task) = task {
@@ -451,7 +449,7 @@ impl Driver {
     /// `update_agent`) through the swap. A describe pending across a swap opens none for the
     /// arriving agent.
     pub(crate) fn in_window(&self) -> bool {
-        self.activity.handoff.switching() || self.activity.callbacks.describing()
+        self.activity.handoff.switching() || self.activity.hooks.describing()
     }
 
     fn deliver_parked_turn(&mut self, now: Ts, cycle: &mut Cycle) {
@@ -478,7 +476,7 @@ impl Driver {
         self.refuse_handoffs(cycle);
         self.activity.tools.abandon_replies();
         // All abandoned before any is let go: the run reads what is still pending.
-        let pending = self.activity.callbacks.take_all();
+        let pending = self.activity.hooks.take_all();
         for &(id, kind) in &pending {
             let how = HookEnd::Abandoned;
             cycle.trace(HandoffStep::HookFinished { hook: id, kind, how });

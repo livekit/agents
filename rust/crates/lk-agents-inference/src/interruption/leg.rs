@@ -110,7 +110,7 @@ struct InterruptionAudioSink(tokio::sync::mpsc::UnboundedSender<InputEvent>);
 
 impl StreamSink<AudioFrame> for InterruptionAudioSink {
     fn push(&self, frame: AudioFrame) -> Result<(), lk_agents_abi::errors::ProviderError> {
-        // `Ok(())` even when the send fails: a dead detector falls back to VAD-only barge-in.
+        // `Ok(())` even when the send fails: a dead detector falls back to VAD-only interruption.
         let _ = self.0.send(InputEvent::Audio(frame));
         Ok(())
     }

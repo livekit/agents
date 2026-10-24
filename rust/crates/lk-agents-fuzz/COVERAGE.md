@@ -330,7 +330,7 @@ speech. Scheduling can be paused (a drain), refusing new speech except tool repl
   (`IdleAnswered{hold: Some}` until `FloorHoldReleased`), *authorization held*
   (`AuthorizationPaused` until `AuthorizationResumed`), *scheduling paused* (`SchedulingPaused`
   until `SchedulingPauseSettled`), *preemptive reply in flight* (`Emitted(PreemptiveGeneration)`
-  until `Turn::GuessReconciled` or `PreemptRefused`), *tool blocked on a task*
+  until `Turn::PreemptiveReconciled` or `PreemptiveRefused`), *tool blocked on a task*
   (`Blocked{true}` until `Blocked{false}`).
 - **Checked**: nothing speculative plays before it is authorised
   (`playback_requires_authorization`); every speech ends
@@ -412,7 +412,7 @@ user state.
   `generate_reply`, `update_*` or holds the floor (only `wait_for_idle` from a tool, so run
   ownership of a tool's hold, `Driver::run_own_hold`, is untested); realtime tool calls.
 
-### 5.6 Handoffs, drains, tasks, callbacks and runs (`handoff.rs`, `drain.rs`, `tasks.rs`, `callbacks.rs`, `run_result.rs`)
+### 5.6 Handoffs, drains, tasks, hooks and runs (`handoff.rs`, `drain.rs`, `tasks.rs`, `hooks.rs`, `run_result.rs`)
 
 - **Phases**: *hook running* per kind (`HookIssued{kind}` until `HookFinished{kind}`; four kinds
   beyond on_exit, on_enter and the turn hook have no column); *run open* (`Emitted(RunStarted)`

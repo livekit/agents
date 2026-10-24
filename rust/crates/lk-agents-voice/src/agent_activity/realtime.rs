@@ -3,11 +3,11 @@
 
 use crate::agent::{Source, Visibility};
 use crate::agent_activity::options::TurnDetection;
-use crate::agent_activity::pause::BargeTrigger;
+use crate::agent_activity::pause::AudioInterruptTrigger;
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::cycle::{Cycle, TurnTimer};
-use crate::agent_session::{Answer, CallId, Close, ClosePhase, Closing, Driver, Tx};
+use crate::agent_session::{Answer, Close, ClosePhase, Closing, Driver, RequestId, Tx};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::generation::ReplySource;
@@ -115,7 +115,7 @@ pub(crate) mod realtime_turns {
     pub(super) struct Pending {
         pub(super) key: RequestKey,
         pub(super) request: Request,
-        pub(super) call: Option<CallId>,
+        pub(super) call: Option<RequestId>,
         pub(super) allow_interruptions: Option<bool>,
     }
 
@@ -206,7 +206,7 @@ pub(crate) mod realtime_turns {
             &mut self,
             req_id: String,
             request: Request,
-            call: Option<CallId>,
+            call: Option<RequestId>,
             allow_interruptions: Option<bool>,
         ) -> RequestKey {
             let key = self.mint_key();
@@ -441,11 +441,11 @@ impl Driver {
         match ev {
             Event::InputSpeechStarted(_) => {
                 // Server-side VAD in the local `StartOfSpeech`'s position: the turn learns the
-                // onset, the resume timer is cancelled, then the guarded barge-in.
+                // onset, the resume timer is cancelled, then the guarded interruption.
                 let eff = self.activity.audio_recognition.on_server(now, ServerSpeech::Started);
                 cycle.machine().append(eff);
                 self.on_start_of_speech(cycle);
-                self.interrupt_by_audio_activity(now, cycle, BargeTrigger::ServerOnset);
+                self.interrupt_by_audio_activity(now, cycle, AudioInterruptTrigger::ServerOnset);
             }
             Event::InputSpeechStopped(_) => {
                 let eff = self.activity.audio_recognition.on_server(now, ServerSpeech::Stopped);
@@ -523,7 +523,7 @@ impl Driver {
         &mut self,
         now: Ts,
         request: Request,
-        call: Option<CallId>,
+        call: Option<RequestId>,
         allow_interruptions: Option<bool>,
         cycle: &mut Cycle,
     ) {
@@ -536,7 +536,7 @@ impl Driver {
         now: Ts,
         req_id: String,
         request: Request,
-        call: Option<CallId>,
+        call: Option<RequestId>,
         allow_interruptions: Option<bool>,
         cycle: &mut Cycle,
     ) {
@@ -593,7 +593,7 @@ impl Driver {
         Some(pending)
     }
 
-    fn settle(&mut self, request: Request, call: Option<CallId>, how: Settled) {
+    fn settle(&mut self, request: Request, call: Option<RequestId>, how: Settled) {
         // A follow-up that will never come: the player finishes with what it has.
         if let Request::ToolFollowUp { speech, .. } = request {
             self.activity.realtime_players.remove(&speech);
@@ -715,7 +715,7 @@ impl Driver {
     fn start_realtime_speech(
         &mut self,
         now: Ts,
-        asked: Option<Option<CallId>>,
+        asked: Option<Option<RequestId>>,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         cycle: &mut Cycle,
@@ -872,12 +872,12 @@ impl Driver {
         }
     }
 
-    pub(crate) fn fail_waiter(&mut self, call: Option<CallId>, message: &str) {
+    pub(crate) fn fail_waiter(&mut self, call: Option<RequestId>, message: &str) {
         self.answer_waiter(call, Settled::Failed(RealtimeError::new(message)));
     }
 
     /// A handle never in the speech queue, minted only when a caller awaits it.
-    pub(crate) fn answer_waiter(&mut self, call: Option<CallId>, how: Settled) {
+    pub(crate) fn answer_waiter(&mut self, call: Option<RequestId>, how: Settled) {
         if call.is_none() {
             return;
         }
@@ -954,7 +954,7 @@ impl Driver {
         instructions: Option<String>,
         allow_interruptions: Option<bool>,
         tool_choice: Option<lk_agents_abi::ToolChoice>,
-        call: Option<CallId>,
+        call: Option<RequestId>,
         cycle: &mut Cycle,
     ) {
         if self.activity.rt_session.is_none() {
@@ -1027,7 +1027,7 @@ impl Driver {
         self.commit_item(item, Source::Remote { item_id: id }, Visibility::Both, cycle);
     }
 
-    /// The open generation cancelled and truncated to what was heard. The barge-in decision is
+    /// The open generation cancelled and truncated to what was heard. The interruption decision is
     /// `decide_interrupt`'s; this only actuates it.
     pub(crate) fn realtime_interrupt(&mut self, cycle: &mut Cycle) {
         if self.activity.rt_session.is_none() {
@@ -1046,9 +1046,9 @@ impl Driver {
             .flatten();
         // Only a generation whose speech stopped: the cancel is session-wide, and a speech that
         // plays on keeps its response.
-        let current = self.activity.scheduling_task.current_speech();
+        let current = self.activity.speech_scheduler.current_speech();
         let playing_on: BTreeSet<SpeechId> = {
-            let tasks = &self.activity.scheduling_task;
+            let tasks = &self.activity.speech_scheduler;
             let open = self.activity.realtime_turns.open_speeches();
             open.into_iter()
                 .filter(|s| tasks.handle(*s).is_some_and(|h| !h.interrupted()))

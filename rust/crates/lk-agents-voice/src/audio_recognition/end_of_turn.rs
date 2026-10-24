@@ -349,7 +349,7 @@ impl AudioRecognition {
             }
         }
 
-        // "reset turn-scoped barge-in state once per logical turn (commit or drop)"
+        // "reset turn-scoped interruption state once per logical turn (commit or drop)"
         eff.append(self.overlap.step(In::TurnClosed).1);
 
         // The turn is consumed (`_user_turn_committed = False`); the user may still be talking.
@@ -418,7 +418,7 @@ impl AudioRecognition {
     // --- the user turn limit ------------------------------------------------------------------------
 
     /// `_check_user_turn_limit`. Words are counted with `split_character` off (#2366), unlike the
-    /// barge-in guard, so CJK text hits `max_duration` long before `max_words`.
+    /// interruption guard, so CJK text hits `max_duration` long before `max_words`.
     pub(super) fn check_user_turn_limit(&mut self, now: Ts, transcript: &str) -> Effects {
         let mut eff = Effects::new();
         let limit = self.cfg.user_turn_limit;

@@ -1,4 +1,4 @@
-//! The adaptive-interruption seam: barge-in or backchannel? One trait so a half-wired session is
+//! The adaptive-interruption seam: interruption or backchannel? One trait so a half-wired session is
 //! unrepresentable. `audio` gets the real frames at pipeline rate; the implementor resamples.
 
 use std::sync::Arc;
@@ -42,7 +42,7 @@ pub trait InterruptionPort: Send + Sync {
     }
 
     /// One per overlap, not per frame. `Closed` ends the pump; the session carries on with VAD-only
-    /// barge-in.
+    /// interruption.
     async fn next_event(&self) -> LegEvent<OverlapVerdict>;
 }
 
@@ -89,7 +89,10 @@ impl crate::python::HostProxy for dyn InterruptionSource {
         })
     }
 
-    fn view(_handle: crate::python::HostHandle, _clock: Option<Arc<dyn crate::Clock>>) -> pyo3::PyResult<Box<Self>> {
+    fn view(
+        _handle: crate::python::HostHandle,
+        _clock: Option<Arc<dyn crate::Clock>>,
+    ) -> pyo3::PyResult<Box<Self>> {
         Err(pyo3::exceptions::PyTypeError::new_err("an interruption detector is native only"))
     }
 }

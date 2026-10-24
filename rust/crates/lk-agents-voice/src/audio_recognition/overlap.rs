@@ -1,8 +1,8 @@
 //! `OverlapJudge`: the adaptive interruption channel's verdicts on speech over the agent.
 
 use super::{InterruptionSignal, OverlapVerdict};
-use crate::agent_activity::pause::BargeTrigger;
-use crate::agent_session::cycle::{BargeGuard, Decision, Effects};
+use crate::agent_activity::pause::AudioInterruptTrigger;
+use crate::agent_session::cycle::{AudioInterruptGuard, Decision, Effects};
 use crate::events::{OverlapInterruptionEvent, SessionEvent};
 use lk_agents_abi::Ts;
 use lk_agents_abi::turn::detector::ReqId;
@@ -35,7 +35,7 @@ pub enum In {
     },
     /// The question dies with the speech it was about.
     AgentSpeechEnded,
-    /// The turn committed or was dropped: turn-scoped barge-in state resets once per logical turn.
+    /// The turn committed or was dropped: turn-scoped interruption state resets once per logical turn.
     TurnClosed,
 }
 
@@ -63,7 +63,7 @@ pub struct OverlapJudge {
     backchannel_over_agent: bool,
     interruption_detected: bool,
     boundary_armed: bool,
-    /// Barge-in is the detector's until `Release`; outlives `judging`.
+    /// InterruptByAudioActivity-in is the detector's until `Release`; outlives `judging`.
     guard_taken: bool,
 }
 
@@ -87,7 +87,7 @@ impl OverlapJudge {
     fn release_guard(&mut self) -> Effects {
         let mut eff = Effects::new();
         if std::mem::take(&mut self.guard_taken) {
-            eff.decide(Decision::BargeGuard(BargeGuard::Restore));
+            eff.decide(Decision::AudioInterruptGuard(AudioInterruptGuard::Restore));
         }
         eff
     }
@@ -121,9 +121,9 @@ impl OverlapJudge {
                 self.seq += 1;
                 self.judging = Some(ReqId(self.seq));
                 self.guard_taken = true;
-                // The detector owns barge-in during the overlap, or the VAD would interrupt
+                // The detector owns interruption during the overlap, or the VAD would interrupt
                 // before the verdict.
-                eff.decide(Decision::BargeGuard(BargeGuard::Set(false)));
+                eff.decide(Decision::AudioInterruptGuard(AudioInterruptGuard::Set(false)));
                 eff.signal(InterruptionSignal::OverlapStarted { started_at, speech_duration });
             }
             In::Ended { ended_at, agent_ended } => {
@@ -155,7 +155,7 @@ impl OverlapJudge {
                     eff.append(self.release_guard());
                     return (Some(OverlapRefusal::InsideBoundary), eff);
                 }
-                // `on_interruption`: the guard goes back before the barge-in. A backchannel verdict
+                // `on_interruption`: the guard goes back before the interruption. A backchannel verdict
                 // keeps it until the agent speech ends, or the VAD would cut what was just cleared.
                 if verdict.is_interruption {
                     eff.append(self.release_guard());
@@ -177,9 +177,11 @@ impl OverlapJudge {
                         ignore_user_transcript_until: until,
                     }));
                     // Permission to *ask*: `decide_interrupt` still rules.
-                    eff.decide(Decision::Barge(BargeTrigger::DetectorVerdict {
-                        ignore_user_transcript_until: until,
-                    }));
+                    eff.decide(Decision::InterruptByAudioActivity(
+                        AudioInterruptTrigger::DetectorVerdict {
+                            ignore_user_transcript_until: until,
+                        },
+                    ));
                 }
             }
             In::Boundary { armed } => self.boundary_armed = armed,
@@ -200,7 +202,7 @@ impl OverlapJudge {
                 eff.append(self.release_guard());
             }
             In::TurnClosed => {
-                // "reset turn-scoped barge-in state once per logical turn (commit or drop)"
+                // "reset turn-scoped interruption state once per logical turn (commit or drop)"
                 self.backchannel_over_agent = false;
                 self.in_turn = false;
             }

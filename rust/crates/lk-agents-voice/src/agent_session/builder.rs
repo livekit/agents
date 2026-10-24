@@ -3,7 +3,7 @@
 
 use super::driver::*;
 use crate::agent_activity::pause::{PausedSpeech, sink_facts};
-use crate::agent_activity::scheduling::SchedulingTask;
+use crate::agent_activity::scheduling::SpeechScheduler;
 use crate::agent_activity::{ActivityParts, DriverConfig, GateSnapshot, PIPELINE_SAMPLE_RATE};
 use crate::agent_session::AgentSession;
 use crate::agent_session::SessionShared;
@@ -63,7 +63,7 @@ pub struct DriverBuilder {
     pub room_link: Option<crate::room_io::link::RoomLinkConfig>,
     /// `None` commits turns on silence alone.
     pub eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
-    /// `None` is VAD-only barge-in: every burst past `min_interruption_duration`, a "mm-hm"
+    /// `None` is VAD-only interruption: every burst past `min_interruption_duration`, a "mm-hm"
     /// included, stops the agent.
     pub interruption: Option<Arc<dyn crate::agent_activity::pause::InterruptionPort>>,
     /// `None` forwards **every** frame the host pushes.
@@ -295,8 +295,8 @@ impl DriverBuilder {
             let (sink, audio_enabled) = sink_facts(self.audio_out.as_deref());
             PausedSpeech::new(&config.effective, sink, audio_enabled)
         };
-        let scheduling_task =
-            SchedulingTask::new(config.effective.speech.min_consecutive_speech_delay);
+        let speech_scheduler =
+            SpeechScheduler::new(config.effective.speech.min_consecutive_speech_delay);
 
         // `_adaptive_interruption_active` is "a detector was supplied"; without it the sentinels
         // are unreachable.
@@ -346,7 +346,7 @@ impl DriverBuilder {
             instructions: self.instructions,
             toolset: self.toolset,
             audio_recognition,
-            scheduling_task,
+            speech_scheduler,
             paused_speech,
             hook_bound: self.hook_bound,
             rt_session: realtime_session,
@@ -442,7 +442,7 @@ impl DriverBuilder {
 }
 
 /// Ends on `Closed` (forwarded first), when the loop is gone, or at `Closing`. None is an error:
-/// the session goes on with VAD-only barge-in.
+/// the session goes on with VAD-only interruption.
 pub(super) fn spawn_leg_pump<L>(
     spawner: &Arc<dyn Spawner>,
     leg: Arc<L>,

@@ -308,7 +308,7 @@ impl Driver {
             cycle.trace(HandoffStep::RunReleased { run, what: Owned::Speech(s) });
             suspended.push(Owned::Speech(s));
         }
-        for id in self.activity.callbacks.pending_of(HookKind::OnEnter) {
+        for id in self.activity.hooks.pending_of(HookKind::OnEnter) {
             if let Some(run) = self.session.runs.release(Owned::Hook(id), None) {
                 cycle.trace(HandoffStep::RunReleased { run, what: Owned::Hook(id) });
                 suspended.push(Owned::Hook(id));
@@ -327,8 +327,8 @@ impl Driver {
     pub(crate) fn run_resume_after_task(&mut self, suspended: Vec<Owned>, cycle: &mut Cycle) {
         for what in suspended {
             let live = match what {
-                Owned::Speech(s) => self.activity.scheduling_task.contains(s),
-                Owned::Hook(h) => self.activity.callbacks.is_pending(h),
+                Owned::Speech(s) => self.activity.speech_scheduler.contains(s),
+                Owned::Hook(h) => self.activity.hooks.is_pending(h),
                 Owned::Hold(h) => self.session.idle.live(h),
                 Owned::Handoff(_) => false,
             };

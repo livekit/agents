@@ -407,7 +407,7 @@ struct Case {
 }
 
 enum Action {
-    Call { id: CallId, operation: Operation },
+    Call { id: RequestId, operation: Operation },
     Deliver { request: RequestId, response: Response },
     Answer { callback: CallbackId, answer: CallbackAnswer },
     AdvanceTime { to: Ts },
@@ -537,7 +537,7 @@ it is reported as a gap, not equivalent to coverage.
 | Handle identity | Pending, active, completed, cancelled, and older retained handles; multiple waiters                             |
 | Lifecycle       | Startup, failed startup, agent/model replacement, drainage, close in flight, repeated closure                   |
 | Providers       | Per-attempt success/failure, partial output then silence, recovery then failure, late results                   |
-| Callbacks/tools | Reentrant supported operations, multiple distinct tool outcomes, callback release/cancellation order            |
+| Hooks/tools | Reentrant supported operations, multiple distinct tool outcomes, callback release/cancellation order            |
 | Media/output    | Chunk boundaries, incremental production, full queues, slow/disappearing consumers, partial text/audio delivery |
 | Timing          | Before/at/after configured deadlines; simultaneous events; bursts without settling; variable release order      |
 | Configuration   | Defaults/overrides, live updates, provider capabilities, pipeline/realtime transitions where supported          |

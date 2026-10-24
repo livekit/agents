@@ -1,7 +1,7 @@
 //! The driver's [`Cycle`]: the [`Effect`]s the components hand it, in order, the timers they arm,
 //! and its performer, which runs them under the frame that asked.
 
-use crate::agent_activity::pause::{BargeTrigger, TurnSettled};
+use crate::agent_activity::pause::{AudioInterruptTrigger, TurnSettled};
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::{Driver, HostEvent};
 use crate::audio::LegId;
@@ -241,7 +241,7 @@ pub enum TurnTimer {
     BackchannelBoundary,
     /// `_false_interruption_timer`.
     FalseInterruption,
-    /// Barge-in refused, STT hears silence.
+    /// InterruptByAudioActivity-in refused, STT hears silence.
     AecWarmup,
     /// Armed while both sides listen and no tool runs.
     UserAway,
@@ -347,7 +347,7 @@ pub enum GateOp {
 pub enum GateCause {
     /// The launch hold: `Pause` before the first frame, `Resume` when the user stopped.
     Launch,
-    BargeIn,
+    ByAudioActivity,
     FalseInterruptionResolved,
     Interrupted,
     /// A hold that no longer applies: the parked speech became uninterruptible.
@@ -371,9 +371,9 @@ pub enum Decision {
     /// `decide_commit`, tell the host, answer the machine, and maybe reply.
     EndOfTurn(EndOfTurnInfo),
     TurnSettled(TurnSettled),
-    BargeGuard(BargeGuard),
+    AudioInterruptGuard(AudioInterruptGuard),
     /// Still subject to `decide_interrupt`'s guards.
-    Barge(BargeTrigger),
+    InterruptByAudioActivity(AudioInterruptTrigger),
     /// Journal-only.
     EndpointingDelayUpdated {
         min_delay: std::time::Duration,
@@ -386,7 +386,7 @@ pub enum Decision {
 
 /// Guard 1 of `decide_interrupt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BargeGuard {
+pub enum AudioInterruptGuard {
     /// `false` while the detector classifies an overlap.
     Set(bool),
     /// The session's configured default: the option, not `true`.
@@ -488,7 +488,7 @@ impl Driver {
     /// `SessionEvent::FloorChanged` when `_current_speech` differs from the last announced one.
     /// Returns whether an emit was queued.
     pub(crate) fn publish_current_speech(&mut self, cycle: &mut Cycle) -> bool {
-        let current = self.activity.scheduling_task.current_speech();
+        let current = self.activity.speech_scheduler.current_speech();
         let Some(holder) = self.activity.announce_current_speech(current) else { return false };
         cycle.machine().emit(SessionEvent::FloorChanged { holder });
         true
@@ -501,7 +501,7 @@ impl Driver {
         cycle: &mut Cycle,
     ) {
         use crate::agent_session::cycle::{
-            AudioOp, BargeGuard, Decision, DetectorCall as D, Effect as E, GateOp,
+            AudioInterruptGuard, AudioOp, Decision, DetectorCall as D, Effect as E, GateOp,
             ProviderCall as P, TimerOp,
         };
         // Journalled already: `Cycle::absorb` recorded every effect when the machine produced it.
@@ -605,18 +605,19 @@ impl Driver {
             E::Decision(Decision::TurnSettled(settled)) => {
                 self.on_turn_settled(now, settled, cycle)
             }
-            E::Decision(Decision::BargeGuard(BargeGuard::Set(value))) => {
+            E::Decision(Decision::AudioInterruptGuard(AudioInterruptGuard::Set(value))) => {
                 self.session.by_audio_activity = value;
             }
-            E::Decision(Decision::BargeGuard(BargeGuard::Restore)) => {
+            E::Decision(Decision::AudioInterruptGuard(AudioInterruptGuard::Restore)) => {
                 self.restore_audio_activity_guard();
             }
             // Through `interrupt_by_audio_activity`, so all its guards still apply. The flush is
             // skipped when the pause already ran `on_end_of_agent_speech`: running it twice would
             // shrink the `min`-folded ignore window again.
-            E::Decision(Decision::Barge(trigger)) => {
+            E::Decision(Decision::InterruptByAudioActivity(trigger)) => {
                 self.interrupt_by_audio_activity(now, cycle, trigger);
-                if let BargeTrigger::DetectorVerdict { ignore_user_transcript_until } = trigger
+                if let AudioInterruptTrigger::DetectorVerdict { ignore_user_transcript_until } =
+                    trigger
                     && self.activity.paused_speech.paused_handle().is_none()
                 {
                     let eff = self

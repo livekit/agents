@@ -83,7 +83,10 @@ impl dyn RtcRoom + '_ {
 }
 
 /// The agent itself in the room.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io._core_rtc.LocalParticipant", live))]
+#[lk_agents_abi::host(proxy(
+    host = "livekit.agents.voice.room_io._core_rtc.LocalParticipant",
+    live
+))]
 #[async_trait]
 pub trait LocalParticipant: Send + Sync {
     /// Needed by three readers, all comparing against it: `_init_task` sets the agent transcript's
@@ -161,7 +164,7 @@ pub trait AudioSource: Send + Sync {
 
     /// Discard everything queued but not yet played.
     ///
-    /// **Synchronous, deliberately** (§1.5): this is the barge-in path and it must not await the
+    /// **Synchronous, deliberately** (§1.5): this is the interruption path and it must not await the
     /// host loop. It is also why the trait exists -- the queue being cleared belongs to one track.
     fn clear_queue(&self);
 
@@ -179,7 +182,7 @@ pub trait AudioSource: Send + Sync {
     /// without consuming it: `played` is what has passed the speaker so far (audio still queued
     /// is in neither figure), `discarded` what a `clear_queue` threw away.
     ///
-    /// Synchronous: the output pump reads it at a pause and at a barge-in, mid-segment, where
+    /// Synchronous: the output pump reads it at a pause and at a interruption, mid-segment, where
     /// `wait_for_playout` has not resolved and cannot. It is the one origin of a playback position
     /// -- nothing above the source reconstructs one from its own counters.
     ///
@@ -194,7 +197,10 @@ pub trait AudioSource: Send + Sync {
 }
 
 /// Someone else in the room.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io._core_rtc.RemoteParticipant", live))]
+#[lk_agents_abi::host(proxy(
+    host = "livekit.agents.voice.room_io._core_rtc.RemoteParticipant",
+    live
+))]
 pub trait RemoteParticipant: Send + Sync {
     fn identity(&self) -> &ParticipantIdentity;
 
@@ -215,7 +221,10 @@ pub trait RemoteParticipant: Send + Sync {
 /// where both derive from `TrackPublication`. The two side-specific methods default to
 /// [`RtcError::Unsupported`] so a shim implements only its own half; see that variant for why this
 /// is one trait and not two.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io._core_rtc.TrackPublication", live))]
+#[lk_agents_abi::host(proxy(
+    host = "livekit.agents.voice.room_io._core_rtc.TrackPublication",
+    live
+))]
 #[async_trait]
 pub trait TrackPublication: Send + Sync {
     fn sid(&self) -> &TrackSid;

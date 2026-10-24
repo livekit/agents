@@ -85,7 +85,7 @@ fn step_spoken(
     });
 }
 
-/// A tool reply is the same turn on the same handle, so a barge-in during a tool call stops what is
+/// A tool reply is the same turn on the same handle, so a interruption during a tool call stops what is
 /// still talking.
 async fn run(
     shared: &Arc<SessionShared>,

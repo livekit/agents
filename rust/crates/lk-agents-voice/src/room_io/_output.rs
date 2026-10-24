@@ -591,7 +591,7 @@ impl AudioOutput for ParticipantAudioOutput {
     fn clear_buffer(&self) {
         let src = {
             let mut st = self.shared.lock();
-            // Resets progressive sizing too, so the first frame after a barge-in is 20 ms again.
+            // Resets progressive sizing too, so the first frame after a interruption is 20 ms again.
             st.bstream.clear();
             st.pending = 0;
             if !matches!(st.phase, Phase::Capturing | Phase::Flushed) {

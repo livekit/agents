@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::oneshot;
 
-use super::{Answer, CallId, Rx};
+use super::{Answer, RequestId, Rx};
 
 type Settle = Box<dyn FnOnce(Answer) + Send>;
 
@@ -17,7 +17,7 @@ pub struct Calls(Arc<Mutex<Table>>);
 #[derive(Default)]
 struct Table {
     next: u64,
-    open: BTreeMap<CallId, Settle>,
+    open: BTreeMap<RequestId, Settle>,
     closed: bool,
 }
 
@@ -27,10 +27,10 @@ impl Calls {
     pub fn open<T: Send + 'static>(
         &self,
         pick: fn(Answer) -> Option<T>,
-    ) -> (CallId, oneshot::Receiver<T>) {
+    ) -> (RequestId, oneshot::Receiver<T>) {
         let (tx, rx) = oneshot::channel();
         let mut table = self.lock();
-        let call = CallId(table.next);
+        let call = RequestId(table.next);
         table.next += 1;
         if !table.closed {
             let settle = move |answer| {
@@ -44,7 +44,7 @@ impl Calls {
     }
 
     /// A late or unknown call's answer is dropped.
-    pub fn settle(&self, call: CallId, answer: Answer) {
+    pub fn settle(&self, call: RequestId, answer: Answer) {
         let settle = self.lock().open.remove(&call);
         if let Some(settle) = settle {
             settle(answer);
@@ -61,7 +61,7 @@ impl Calls {
     }
 
     /// Settles every answer until the session's stream ends, then closes what is left.
-    pub async fn pump(self, mut answers: Rx<(CallId, Answer)>) {
+    pub async fn pump(self, mut answers: Rx<(RequestId, Answer)>) {
         while let Some((call, answer)) = answers.recv().await {
             self.settle(call, answer);
         }

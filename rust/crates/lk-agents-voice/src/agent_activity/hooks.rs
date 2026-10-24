@@ -18,7 +18,7 @@ pub const HOOK_BOUND: Duration = crate::speech_handle::INTERRUPTION_TIMEOUT;
 
 /// The callbacks in flight, by id.
 #[derive(Default)]
-pub(crate) struct Callbacks {
+pub(crate) struct Hooks {
     pending: BTreeMap<HookId, Pending>,
     next: u64,
 }
@@ -32,7 +32,7 @@ struct Pending {
     describing: bool,
 }
 
-impl Callbacks {
+impl Hooks {
     pub(crate) fn mint(&mut self) -> HookId {
         self.next += 1;
         HookId(self.next)
@@ -114,7 +114,7 @@ impl Driver {
             return false;
         }
         let deadline = wait.map(|d| now.saturating_add(d));
-        self.activity.callbacks.wait_for(id, kind, deadline);
+        self.activity.hooks.wait_for(id, kind, deadline);
         // An open run owns the agent's `on_enter` and the describe a tool's handoff waits on.
         match kind {
             HookKind::OnEnter | HookKind::DescribeAgent => self.run_own(Owned::Hook(id), cycle),
@@ -133,7 +133,7 @@ impl Driver {
 
     /// Nothing waits on it.
     pub(crate) fn issue_on_enter(&mut self, now: Ts, cycle: &mut Cycle) {
-        let id = self.activity.callbacks.mint();
+        let id = self.activity.hooks.mint();
         let agent = self.activity.agent.clone();
         self.issue_hook(now, HookCall::OnEnter { id, agent }, None, cycle);
     }
@@ -146,7 +146,7 @@ impl Driver {
         bound: Duration,
         cycle: &mut Cycle,
     ) {
-        let id = self.activity.callbacks.mint();
+        let id = self.activity.hooks.mint();
         let call = HookCall::OnUserTurnCompleted {
             id,
             turn: info.turn_id,
@@ -188,7 +188,7 @@ impl Driver {
 
     /// The callback left `pending`, journalled and let go by the open run; `None` if not pending.
     fn finish_hook(&mut self, id: HookId, how: HookEnd, cycle: &mut Cycle) -> Option<HookKind> {
-        let kind = self.activity.callbacks.finish(id)?;
+        let kind = self.activity.hooks.finish(id)?;
         cycle.trace(HandoffStep::HookFinished { hook: id, kind, how });
         self.run_release(Owned::Hook(id), cycle);
         Some(kind)
@@ -300,7 +300,7 @@ impl Driver {
     /// Expired bounds: an unreturned `on_exit` lets the drain go on; an unanswered describe drops
     /// the handoff.
     pub(crate) fn expire_hooks(&mut self, now: Ts, cycle: &mut Cycle) {
-        let due: Vec<_> = (self.activity.callbacks.pending.iter())
+        let due: Vec<_> = (self.activity.hooks.pending.iter())
             .filter(|(_, h)| h.deadline.is_some_and(|d| d <= now))
             .map(|(id, _)| *id)
             .collect();

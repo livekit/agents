@@ -309,6 +309,19 @@ Each step keeps the fuzz gate green and lowers neither the survey's reach nor
 its distinct findings. The saved corpus is re-recorded when the boundary
 changes.
 
+Scheduler control comes first: after the boundary's resources by id, steps 1
+to 3 remove the spawned tasks, then the host view and validation finish step
+0, then steps 4 and 5. The data plane is one core per session; inference's
+fallback across providers is its own core in `lk-agents-inference`, so the
+voice core sees one model. Python switches to the Rust driver as its own
+project after step 5.
+
+Each step rewrites its area as small machines, each owning its state and
+answering `handle(event) -> Effects`; the driver only routes events and
+concatenates effects, with one effect type. Python is the behaviour reference
+through the fuzz rules, not the shape of the code; comments keep a Python name
+only where the behaviour would surprise without it.
+
 0. The boundary: `handle(event, now)` and `wake_at()` replace `Driver::run`'s
    loop, which becomes the runtime's queue owner; resources by id, call ids on
    every API call, answers by id instead of `oneshot`; the host view;
@@ -340,6 +353,3 @@ changes.
 
 - How long a production event log is kept and what it may contain: it holds
   the conversation's text.
-- Whether the data plane is one core per session or one per leg.
-- Whether inference's fallback across providers is a sub-machine of the
-  session core or its own core with its own queue.
