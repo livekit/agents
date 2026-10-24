@@ -1,7 +1,7 @@
 //! The activity's IO: the STT and VAD legs (reopened by a handoff or `update_models`), audio and
 //! video input, and output enablement.
 
-use crate::agent_session::cycle::{Cycle, LegKind};
+use crate::agent_session::effects::{LegKind, Out};
 use crate::agent_session::{Driver, IoLeg};
 use crate::audio::{LegEnd, LegId, LegOp, Ticket, on_leg_ended, spawn_drain, tagged};
 use crate::room_io::{LegIntent, LegOpened, Opened, PendingOpen};
@@ -12,12 +12,12 @@ use std::sync::Arc;
 
 impl Driver {
     /// The one door every leg mutation goes through; a new source is swapped by the performer.
-    pub(crate) fn apply_leg_op(&mut self, op: LegOp, cycle: &mut Cycle) -> Option<Ticket> {
+    pub(crate) fn apply_leg_op(&mut self, op: LegOp, out: &mut Out) -> Option<Ticket> {
         let source = matches!(op, LegOp::SetSource(_));
         let ticket = self.input.apply_leg_op(op);
         if source {
-            cycle.machine().push(crate::agent_session::cycle::Effect::Audio(
-                crate::agent_session::cycle::AudioOp::SetInput,
+            out.machine().push(crate::agent_session::effects::Effect::Audio(
+                crate::agent_session::effects::AudioOp::SetInput,
             ));
         }
         ticket
@@ -29,10 +29,10 @@ impl Driver {
         &mut self,
         stt: Maybe<Option<Arc<dyn lk_agents_abi::Stt>>>,
         vad: Maybe<Option<Arc<dyn lk_agents_abi::Vad>>>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) -> LegIntent {
         let given = stt.is_given() || vad.is_given();
-        // Presence facts are the configured providers (`self._stt`/`self._vad`), not the live
+        // AgentUserState facts are the configured providers (`self._stt`/`self._vad`), not the live
         // streams: a dead stream is still a recogniser.
         let mut intent =
             LegIntent { stt: self.session.stt.is_some(), vad: self.session.vad.is_some() };
@@ -44,7 +44,7 @@ impl Driver {
                         self.session.stt.as_ref().is_some_and(|old| Arc::ptr_eq(old, &stt));
                     self.session.stt = Some(Arc::clone(&stt));
                     self.input.set_stt_open_same(same_stt);
-                    let open = self.request_open(PendingOpen::Stt(stt), LegKind::Stt, cycle);
+                    let open = self.request_open(PendingOpen::Stt(stt), LegKind::Stt, out);
                     self.input.expect_open(LegKind::Stt, open);
                     intent.stt = true;
                 }
@@ -52,7 +52,7 @@ impl Driver {
                 None => {
                     self.session.stt = None;
                     self.input.expect_open(LegKind::Stt, 0);
-                    self.apply_leg_op(LegOp::Clear(LegId::Stt), cycle);
+                    self.apply_leg_op(LegOp::Clear(LegId::Stt), out);
                     intent.stt = false;
                 }
             }
@@ -61,14 +61,14 @@ impl Driver {
             match vad {
                 Some(vad) => {
                     self.session.vad = Some(Arc::clone(&vad));
-                    let open = self.request_open(PendingOpen::Vad(vad), LegKind::Vad, cycle);
+                    let open = self.request_open(PendingOpen::Vad(vad), LegKind::Vad, out);
                     self.input.expect_open(LegKind::Vad, open);
                     intent.vad = true;
                 }
                 None => {
                     self.session.vad = None;
                     self.input.expect_open(LegKind::Vad, 0);
-                    self.apply_leg_op(LegOp::Clear(LegId::Vad), cycle);
+                    self.apply_leg_op(LegOp::Clear(LegId::Vad), out);
                     intent.vad = false;
                 }
             }
@@ -81,28 +81,28 @@ impl Driver {
         intent
     }
 
-    fn request_open(&mut self, pending: PendingOpen, leg: LegKind, cycle: &mut Cycle) -> u64 {
+    fn request_open(&mut self, pending: PendingOpen, leg: LegKind, out: &mut Out) -> u64 {
         let open = self.input.request_open(pending);
-        let call = crate::agent_session::cycle::ProviderCall::OpenLeg { leg, open };
-        cycle.machine().push(crate::agent_session::cycle::Effect::Provider(call));
+        let call = crate::agent_session::effects::ProviderCall::OpenLeg { leg, open };
+        out.machine().push(crate::agent_session::effects::Effect::Provider(call));
         open
     }
 
     /// A superseded open is closed unused (`LegOpenDiscarded`); a refused one leaves the old row
     /// running.
-    pub(crate) fn on_leg_opened(&mut self, now: Ts, opened: LegOpened, cycle: &mut Cycle) {
+    pub(crate) fn on_leg_opened(&mut self, now: Ts, opened: LegOpened, out: &mut Out) {
         let LegOpened { open, leg, outcome } = opened;
         let wanted = self.input.expected_open(leg);
         let live = open == wanted && open != 0 && !self.session.closing_past_edge();
         match (outcome, live) {
             (Err(_), _) => {
-                cycle.trace(CoreStep::PortFailure(match leg {
+                out.trace(CoreStep::PortFailure(match leg {
                     LegKind::Stt => "the new agent's STT could not be opened",
                     LegKind::Vad => "the new agent's VAD could not be opened",
                 }));
             }
             (Ok(stream), false) => {
-                cycle.trace(InputStep::LegOpenDiscarded { leg: leg.label() });
+                out.trace(InputStep::LegOpenDiscarded { leg: leg.label() });
                 self.discard_open(stream);
             }
             (Ok(Opened::Stt(sink, source)), true) => {
@@ -111,12 +111,12 @@ impl Driver {
                 }
                 // A different recogniser is told the full list.
                 let same_stt = self.input.stt_open_same();
-                self.keyterms_on_stt_swap(now, same_stt, cycle);
+                self.keyterms_on_stt_swap(now, same_stt, out);
                 // A fresh detector per open; the replaced stream keeps its own for its remaining
                 // items.
                 let speaker = self.input.new_speaker_filter();
                 let ticket = self
-                    .apply_leg_op(LegOp::InstallStt { sink: Arc::from(sink), speaker }, cycle)
+                    .apply_leg_op(LegOp::InstallStt { sink: Arc::from(sink), speaker }, out)
                     .expect("InstallStt returns its ticket");
                 spawn_drain(
                     &self.shared.spawner,
@@ -128,11 +128,11 @@ impl Driver {
                     ticket,
                     self.input.leg_ended().clone(),
                 );
-                cycle.trace(InputStep::LegOpened { leg: LegId::Stt.label() });
+                out.trace(InputStep::LegOpened { leg: LegId::Stt.label() });
             }
             (Ok(Opened::Vad(sink, source)), true) => {
                 let ticket = self
-                    .apply_leg_op(LegOp::Install { leg: LegId::Vad, sink: Arc::from(sink) }, cycle)
+                    .apply_leg_op(LegOp::Install { leg: LegId::Vad, sink: Arc::from(sink) }, out)
                     .expect("Install returns its ticket");
                 spawn_drain(
                     &self.shared.spawner,
@@ -144,7 +144,7 @@ impl Driver {
                     ticket,
                     self.input.leg_ended().clone(),
                 );
-                cycle.trace(InputStep::LegOpened { leg: LegId::Vad.label() });
+                out.trace(InputStep::LegOpened { leg: LegId::Vad.label() });
             }
         }
     }
@@ -174,30 +174,30 @@ impl Driver {
         vad: Maybe<Option<Arc<dyn lk_agents_abi::Vad>>>,
         llm: Maybe<Option<Arc<dyn Llm>>>,
         tts: Maybe<Option<Arc<dyn lk_agents_abi::Tts>>>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         self.session.apply_providers(llm, tts);
         let (stt_given, vad_given) = (stt.is_given(), vad.is_given());
         let (stt_reopened, vad_reopened) =
             (matches!(stt, Maybe::Given(Some(_))), matches!(vad, Maybe::Given(Some(_))));
-        let _ = self.reopen_legs(stt, vad, cycle);
-        cycle.trace(InputStep::ModelsUpdated { stt_given, vad_given, stt_reopened, vad_reopened });
+        let _ = self.reopen_legs(stt, vad, out);
+        out.trace(InputStep::ModelsUpdated { stt_given, vad_given, stt_reopened, vad_reopened });
     }
 
     /// A leg's drain ended. A failed STT is terminal (`STTError{recoverable: False}`); a VAD
     /// failure is only journalled.
-    pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: LegEnd, cycle: &mut Cycle) {
+    pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: LegEnd, out: &mut Out) {
         let error = end.error.take();
         let leg = end.leg;
         // Every item the drain sent is ahead of its end in the queue.
         if leg == LegId::Stt.label() {
             self.input.legs().retire_speaker_filter(end.open);
         }
-        on_leg_ended(end, cycle);
+        on_leg_ended(end, out);
         if let Some(error) = error
             && leg == LegId::Stt.label()
         {
-            self.report_error(now, crate::events::ErrorSource::Stt, false, error, None, cycle);
+            self.report_error(now, crate::events::ErrorSource::Stt, false, error, None, out);
         }
     }
 
@@ -207,35 +207,35 @@ impl Driver {
         &mut self,
         now: Ts,
         input: Option<Arc<dyn AudioInput>>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let attached = input.is_some();
-        cycle.trace(InputStep::AudioInputSet { attached });
+        out.trace(InputStep::AudioInputSet { attached });
         self.input.replace_audio_in(input.clone());
-        self.apply_leg_op(LegOp::SetSource(input), cycle);
+        self.apply_leg_op(LegOp::SetSource(input), out);
         if attached {
             self.input.forget_first_input();
             self.activity.audio_recognition.input_started_at = None;
             if let Some(stt) = self.session.stt.as_ref().cloned() {
-                let _ = self.reopen_legs(Maybe::Given(Some(stt)), Maybe::NotGiven, cycle);
+                let _ = self.reopen_legs(Maybe::Given(Some(stt)), Maybe::NotGiven, out);
             }
         } else {
-            self.host_end_of_speech(now, cycle);
+            self.host_end_of_speech(now, out);
         }
     }
 
     /// The host ended the user's speech (mic detached or muted: `on_end_of_speech(None)`).
-    pub(crate) fn host_end_of_speech(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn host_end_of_speech(&mut self, now: Ts, out: &mut Out) {
         if !self.activity.audio_recognition.user_speaking() {
             return;
         }
         let eff = self.activity.audio_recognition.on_host_end_of_speech(now);
-        cycle.machine().append(eff);
-        self.start_false_interruption_timer(now, cycle);
+        out.machine().append(eff);
+        self.start_false_interruption_timer(now, out);
     }
 
     /// The leg stays installed; the host object is told.
-    pub(crate) fn set_io_enabled(&mut self, now: Ts, leg: IoLeg, enabled: bool, cycle: &mut Cycle) {
+    pub(crate) fn set_io_enabled(&mut self, now: Ts, leg: IoLeg, enabled: bool, out: &mut Out) {
         let changed = match leg {
             IoLeg::AudioInput => self.input.set_audio_enabled(enabled),
             IoLeg::AudioOutput => {
@@ -256,7 +256,7 @@ impl Driver {
         if !changed {
             return;
         }
-        cycle.trace(match leg {
+        out.trace(match leg {
             IoLeg::AudioInput => {
                 Step::Input(InputStep::InputEnabled { leg: InputLeg::Audio, enabled })
             }
@@ -269,10 +269,10 @@ impl Driver {
         });
         match leg {
             // "End user speaking state when audio is disabled" (`_on_audio_enabled_changed`).
-            IoLeg::AudioInput if !enabled => self.host_end_of_speech(now, cycle),
+            IoLeg::AudioInput if !enabled => self.host_end_of_speech(now, out),
             IoLeg::AudioInput => {}
             // The pause machine's "audio enabled" fact moved with the flag.
-            IoLeg::AudioOutput => self.refresh_pause_facts(now, cycle),
+            IoLeg::AudioOutput => self.refresh_pause_facts(now, out),
             IoLeg::Transcription => {}
         }
     }
@@ -292,7 +292,7 @@ impl Driver {
         &mut self,
         now: Ts,
         frame: lk_agents_rtc::VideoFrameRef,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         if self.session.closing_past_edge() {
             return;
@@ -308,17 +308,13 @@ impl Driver {
             inference_detail: lk_agents_abi::InferenceDetail::Auto,
             mime_type: None,
         };
-        let sent = self.push_video(image, cycle);
-        cycle.trace(InputStep::VideoFramePushed { sent });
+        let sent = self.push_video(image, out);
+        out.trace(InputStep::VideoFramePushed { sent });
     }
 
     /// `AgentActivity.push_video`. Dropping a `MediaRef` releases the host object. A pipeline
     /// session has no realtime session to push to, so it is said once and dropped.
-    pub(crate) fn push_video(
-        &mut self,
-        image: lk_agents_abi::ImageContent,
-        cycle: &mut Cycle,
-    ) -> bool {
+    pub(crate) fn push_video(&mut self, image: lk_agents_abi::ImageContent, out: &mut Out) -> bool {
         // `if not self._started: return`.
         if self.session.closing_past_edge() {
             return false;
@@ -326,7 +322,7 @@ impl Driver {
 
         if self.activity.rt_session.is_none() {
             if self.input.warn_video_sink_once() {
-                cycle.trace(CoreStep::PortFailure(
+                out.trace(CoreStep::PortFailure(
                     "push_video: no realtime session, so a sampled frame reaches no model",
                 ));
             }
@@ -345,7 +341,7 @@ impl Driver {
                 item: Box::new(lk_agents_abi::ChatItem::Message(item)),
                 reply_required: false,
             }),
-            cycle,
+            out,
         );
         true
     }

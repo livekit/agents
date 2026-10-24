@@ -3,7 +3,7 @@
 use crate::agent::Source;
 use crate::agent_activity::handoff::HandoffId;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::cycle::Cycle;
+use crate::agent_session::effects::Out;
 use crate::agent_session::{Driver, HoldId, HookId, HookKind, Origin};
 use crate::events::{RunFailure, RunId, RunOutcome, RunRefusal, SessionEvent};
 use crate::speech_handle::SpeechHandle;
@@ -197,19 +197,19 @@ impl Runs {
 /// The open run's ownership, as the driver records it while the run is open.
 impl Driver {
     /// `Command::Run`: `AgentSession.run()` / `start(capture_run=True)`.
-    pub(crate) fn on_run(&mut self, now: Ts, spec: RunSpec, cycle: &mut Cycle) {
+    pub(crate) fn on_run(&mut self, now: Ts, spec: RunSpec, out: &mut Out) {
         let closing = self.session.closing.is_some();
         let run = match self.session.runs.open(&spec, closing) {
             Ok(run) => run,
             Err(cause) => {
-                cycle.machine().emit(SessionEvent::RunRefused { cause });
+                out.machine().emit(SessionEvent::RunRefused { cause });
                 return;
             }
         };
         // Before the reply, so the run's start precedes its items on the host stream.
-        cycle.machine().emit(SessionEvent::RunStarted { run });
+        out.machine().emit(SessionEvent::RunStarted { run });
         if let Some(text) = spec.user_input {
-            self.run_reply(now, Some(text), None, cycle);
+            self.run_reply(now, Some(text), None, out);
         }
     }
 
@@ -219,10 +219,10 @@ impl Driver {
         now: Ts,
         user_input: Option<String>,
         instructions: Option<String>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         if self.activity.rt_session.is_some() {
-            self.realtime_reply(now, user_input, instructions, None, None, None, cycle);
+            self.realtime_reply(now, user_input, instructions, None, None, None, out);
             return;
         }
         let _ = self.generate_reply_speech(
@@ -234,38 +234,38 @@ impl Driver {
             None,
             None,
             false,
-            cycle,
+            out,
         );
     }
 
-    pub(crate) fn run_own(&mut self, what: Owned, cycle: &mut Cycle) {
+    pub(crate) fn run_own(&mut self, what: Owned, out: &mut Out) {
         if let Some(run) = self.session.runs.own(what) {
-            cycle.trace(HandoffStep::RunOwned { run, what });
+            out.trace(HandoffStep::RunOwned { run, what });
         }
     }
 
-    pub(crate) fn run_release(&mut self, what: Owned, cycle: &mut Cycle) {
+    pub(crate) fn run_release(&mut self, what: Owned, out: &mut Out) {
         if let Some(run) = self.session.runs.release(what, None) {
-            cycle.trace(HandoffStep::RunReleased { run, what });
+            out.trace(HandoffStep::RunReleased { run, what });
         }
     }
 
     /// A speech left the loop (`release_speech`): the run's verdict moves to it.
-    pub(crate) fn run_speech_ended(&mut self, handle: &Arc<SpeechHandle>, cycle: &mut Cycle) {
+    pub(crate) fn run_speech_ended(&mut self, handle: &Arc<SpeechHandle>, out: &mut Out) {
         let what = Owned::Speech(handle.id());
         match self.session.runs.release(what, Some(handle)) {
-            Some(run) => cycle.trace(HandoffStep::RunReleased { run, what }),
+            Some(run) => out.trace(HandoffStep::RunReleased { run, what }),
             None => self.session.runs.forget_speech(handle.id()),
         }
     }
 
     /// A `HoldFloor` from an owned speech's tool is the run's.
-    pub(crate) fn run_own_hold(&mut self, origin: &Origin, hold: HoldId, cycle: &mut Cycle) {
+    pub(crate) fn run_own_hold(&mut self, origin: &Origin, hold: HoldId, out: &mut Out) {
         let Origin::Tool { call_id } = origin else { return };
         if let Some(speech) = self.activity.tools.speech_of(call_id)
             && self.session.runs.owns(Owned::Speech(speech))
         {
-            self.run_own(Owned::Hold(hold), cycle);
+            self.run_own(Owned::Hold(hold), out);
         }
     }
 
@@ -299,24 +299,24 @@ impl Driver {
     pub(crate) fn run_suspend_for_task(
         &mut self,
         speech: Option<SpeechId>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) -> Vec<Owned> {
         let mut suspended = Vec::new();
         if let Some(s) = speech
             && let Some(run) = self.session.runs.release(Owned::Speech(s), None)
         {
-            cycle.trace(HandoffStep::RunReleased { run, what: Owned::Speech(s) });
+            out.trace(HandoffStep::RunReleased { run, what: Owned::Speech(s) });
             suspended.push(Owned::Speech(s));
         }
         for id in self.activity.hooks.pending_of(HookKind::OnEnter) {
             if let Some(run) = self.session.runs.release(Owned::Hook(id), None) {
-                cycle.trace(HandoffStep::RunReleased { run, what: Owned::Hook(id) });
+                out.trace(HandoffStep::RunReleased { run, what: Owned::Hook(id) });
                 suspended.push(Owned::Hook(id));
             }
         }
         for hold in self.session.runs.owned_holds() {
             if let Some(run) = self.session.runs.release(Owned::Hold(hold), None) {
-                cycle.trace(HandoffStep::RunReleased { run, what: Owned::Hold(hold) });
+                out.trace(HandoffStep::RunReleased { run, what: Owned::Hold(hold) });
                 suspended.push(Owned::Hold(hold));
             }
         }
@@ -324,7 +324,7 @@ impl Driver {
     }
 
     /// The task is over: what was suspended is the current run's again, if still live.
-    pub(crate) fn run_resume_after_task(&mut self, suspended: Vec<Owned>, cycle: &mut Cycle) {
+    pub(crate) fn run_resume_after_task(&mut self, suspended: Vec<Owned>, out: &mut Out) {
         for what in suspended {
             let live = match what {
                 Owned::Speech(s) => self.activity.speech_scheduler.contains(s),
@@ -333,31 +333,31 @@ impl Driver {
                 Owned::Handoff(_) => false,
             };
             if live {
-                self.run_own(what, cycle);
+                self.run_own(what, out);
             }
         }
     }
 
     /// The settle check after every wake; returns whether a re-prompt was created.
-    pub(crate) fn run_check(&mut self, now: Ts, cycle: &mut Cycle) -> bool {
+    pub(crate) fn run_check(&mut self, now: Ts, out: &mut Out) -> bool {
         match self.session.runs.decide() {
             Decided::Open => false,
             Decided::Retry { run, attempt, instructions } => {
-                cycle.trace(HandoffStep::RunRetried { run, attempt });
-                self.run_reply(now, None, Some(instructions), cycle);
+                out.trace(HandoffStep::RunRetried { run, attempt });
+                self.run_reply(now, None, Some(instructions), out);
                 true
             }
             Decided::Settled { run, outcome, speech } => {
-                cycle.machine().emit(SessionEvent::RunSettled { run, outcome, speech });
+                out.machine().emit(SessionEvent::RunSettled { run, outcome, speech });
                 false
             }
         }
     }
 
     /// The close's hard edge: an open run ends `Closed`, before `Close`.
-    pub(crate) fn run_close(&mut self, cycle: &mut Cycle) {
+    pub(crate) fn run_close(&mut self, out: &mut Out) {
         if let Some((run, speech)) = self.session.runs.close() {
-            cycle.machine().emit(SessionEvent::RunSettled {
+            out.machine().emit(SessionEvent::RunSettled {
                 run,
                 outcome: RunOutcome::Closed,
                 speech,

@@ -27,14 +27,14 @@ impl IdleWaiter {
 }
 
 #[derive(Default)]
-pub(crate) struct IdleGate {
+pub(crate) struct IdleHolds {
     waiters: Vec<IdleWaiter>,
     /// While non-empty, only a waiter naming one of them passes.
     holds: BTreeSet<HoldId>,
     next_hold: u64,
 }
 
-impl IdleGate {
+impl IdleHolds {
     /// A floor hold's id, minted at the ask.
     pub(crate) fn mint_hold(&mut self) -> HoldId {
         self.next_hold += 1;
@@ -99,7 +99,7 @@ impl IdleGate {
 mod tests {
     use super::*;
 
-    fn ask(gate: &mut IdleGate, hold: Option<HoldId>, grant: Option<HoldId>) {
+    fn ask(gate: &mut IdleHolds, hold: Option<HoldId>, grant: Option<HoldId>) {
         gate.ask(IdleWaiter { hold, speech: None, grant, call: None });
     }
 
@@ -107,7 +107,7 @@ mod tests {
     // `hold_floor()` slips past the hold granted in the same idle instant.
     #[test]
     fn a_hold_granted_in_a_pass_holds_off_the_asks_after_it() {
-        let mut gate = IdleGate::default();
+        let mut gate = IdleHolds::default();
         let floor = gate.mint_hold();
         ask(&mut gate, None, Some(floor));
         ask(&mut gate, None, None);

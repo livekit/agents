@@ -8,7 +8,7 @@ use super::{
     user_transcript,
 };
 use crate::agent_activity::pause::TurnSettled;
-use crate::agent_session::cycle::{
+use crate::agent_session::effects::{
     Decision, Effect, Effects, FlushReason, ProviderCall, TurnTimer,
 };
 use crate::events::{

@@ -1,7 +1,7 @@
 //! `_realtime_generation_task`: one step of a realtime reply, the generation's events played as
 //! segments, through the realtime audio node when the agent has one.
 
-use crate::agent_activity::realtime::{RealtimeWake, realtime_turns};
+use crate::agent_activity::realtime::{RealtimeWake, realtime_state};
 use crate::agent_session::{DriverError, SessionShared, Tx};
 use crate::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
 use crate::generation::playout::{Next, Segment, first_frame, perform_audio_forwarding};
@@ -178,7 +178,7 @@ impl Segment for Generation<'_> {
             let Some(ev) = self.events.recv().await else { return Ok(Next::End) };
             self.received = true;
             if self.response_id.is_none()
-                && let Some(id) = realtime_turns::response_id_of(&ev)
+                && let Some(id) = realtime_state::response_id_of(&ev)
             {
                 self.response_id = Some(id.to_owned());
             }

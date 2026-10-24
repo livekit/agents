@@ -19,7 +19,7 @@ use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_activity::options::{ConfigStack, LegSet, SessionConfig};
 use crate::agent_activity::pause::{InterruptOutcome, PausedSpeech};
 use crate::agent_activity::scheduling::{SpeechId, SpeechScheduler};
-use crate::agent_session::cycle::Cycle;
+use crate::agent_session::effects::Out;
 use crate::agent_session::{Driver, FrameCommand, HostAudio, HostAudioOut, HostTextOut, HostVideo};
 use crate::audio::{GateInputs, audio_gate};
 use crate::audio_recognition::AudioRecognition;
@@ -90,7 +90,7 @@ pub(crate) struct AgentActivity {
     pub(crate) preemptive_record_version: u64,
     /// `_rt_session`. Exclusive with a pipeline.
     pub(crate) rt_session: Option<Arc<dyn lk_agents_abi::RealtimeSession>>,
-    pub(crate) realtime_turns: crate::agent_activity::realtime::RealtimeTurns,
+    pub(crate) realtime_state: crate::agent_activity::realtime::RealtimeSessionState,
     /// Dropping a sender ends its generation.
     pub(crate) realtime_players:
         BTreeMap<SpeechId, tokio::sync::mpsc::UnboundedSender<lk_agents_abi::llm::realtime::Event>>,
@@ -162,7 +162,9 @@ impl AgentActivity {
             preemptive_turn: None,
             preemptive_record_version: 0,
             rt_session,
-            realtime_turns: crate::agent_activity::realtime::RealtimeTurns::new(realtime_caps),
+            realtime_state: crate::agent_activity::realtime::RealtimeSessionState::new(
+                realtime_caps,
+            ),
             realtime_players: BTreeMap::new(),
             realtime_turn_detection_disabled,
             realtime_resolved_mode,
@@ -369,15 +371,15 @@ impl GateSnapshot {
 }
 
 impl Driver {
-    pub(crate) fn on_frame(&mut self, now: Ts, cmd: FrameCommand, cycle: &mut Cycle) {
+    pub(crate) fn on_frame(&mut self, now: Ts, cmd: FrameCommand, out: &mut Out) {
         match cmd {
             // A sequence: `on_exit`, the drain, then the swap.
-            FrameCommand::Update(update) => self.begin_handoff(now, update, cycle),
+            FrameCommand::Update(update) => self.begin_handoff(now, update, out),
             FrameCommand::UpdateInstructions(next) => {
                 self.activity.instructions = next.clone();
                 // "Record the configuration change" (`AgentActivity.update_instructions`), on the
                 // driver's clock.
-                self.commit_config(Some(next.render(Some(Modality::Audio))), vec![], vec![], cycle);
+                self.commit_config(Some(next.render(Some(Modality::Audio))), vec![], vec![], out);
                 // Ungated: the reference tells any realtime session and lets the plugin refuse.
                 if self.activity.rt_session.is_some() {
                     self.rt_send(
@@ -386,7 +388,7 @@ impl Driver {
                                 instructions: next.render(Some(Modality::Audio)),
                             },
                         ),
-                        cycle,
+                        out,
                     );
                 }
                 self.publish_frame();
@@ -411,7 +413,7 @@ impl Driver {
                     .collect();
                 self.activity.toolset = Arc::new(toolset);
                 if !tools_added.is_empty() || !tools_removed.is_empty() {
-                    self.commit_config(None, tools_added, tools_removed, cycle);
+                    self.commit_config(None, tools_added, tools_removed, out);
                 }
                 // Ungated, like instructions: a `mutable_tools: false` server must still learn a
                 // handoff's new toolset.
@@ -420,14 +422,14 @@ impl Driver {
                         lk_agents_abi::RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools {
                             tools: self.activity.toolset.specs.clone(),
                         }),
-                        cycle,
+                        out,
                     );
                 }
-                cycle.trace(ToolStep::ToolsetUpdated { tools });
+                out.trace(ToolStep::ToolsetUpdated { tools });
             }
             // A re-attached microphone opens a fresh STT stream.
             FrameCommand::SetAudioInput(input) => {
-                self.set_audio_input(now, input.map(|HostAudio(input)| input), cycle)
+                self.set_audio_input(now, input.map(|HostAudio(input)| input), out)
             }
             FrameCommand::SetVideoInput(input) => {
                 let input = input.map(|HostVideo(input)| input);
@@ -436,22 +438,22 @@ impl Driver {
                 if !self.input.replace_video_in(input) {
                     return;
                 }
-                cycle.machine().push(crate::agent_session::cycle::Effect::Audio(
-                    crate::agent_session::cycle::AudioOp::SetVideoInput,
+                out.machine().push(crate::agent_session::effects::Effect::Audio(
+                    crate::agent_session::effects::AudioOp::SetVideoInput,
                 ));
-                cycle.trace(InputStep::VideoInputSet { attached });
+                out.trace(InputStep::VideoInputSet { attached });
             }
             FrameCommand::SetIoEnabled { leg, enabled } => {
-                self.set_io_enabled(now, leg, enabled, cycle)
+                self.set_io_enabled(now, leg, enabled, out)
             }
-            FrameCommand::Drain { call } => self.drain(now, call.into_iter().collect(), cycle),
-            FrameCommand::SetAudioOutput(out) => {
-                let audio = out.is_some();
+            FrameCommand::Drain { call } => self.drain(now, call.into_iter().collect(), out),
+            FrameCommand::SetAudioOutput(output) => {
+                let audio = output.is_some();
                 // Dropped here: a segment in flight holds its own `Arc`; an unstarted speech reads
                 // the new sink at its next segment.
-                let _previous = self.shared.output.set_audio(out.map(|HostAudioOut(out)| out));
+                let _previous = self.shared.output.set_audio(output.map(|HostAudioOut(sink)| sink));
                 let now = self.step.now;
-                let playing = self.session.presence.agent_state() == AgentState::Speaking;
+                let playing = self.session.states.agent_state() == AgentState::Speaking;
                 if !audio || playing {
                     // A segment playing into the old sink can't move: force-interrupt it (and the
                     // realtime socket, once), rather than report a playout nobody received.
@@ -463,7 +465,7 @@ impl Driver {
                                 speech,
                                 InterruptCause::Host,
                                 true,
-                                cycle,
+                                out,
                             ) {
                                 Ok(InterruptOutcome::Now { .. }) => realtime,
                                 Ok(InterruptOutcome::Already) | Err(_) => false,
@@ -472,13 +474,13 @@ impl Driver {
                         None => false,
                     };
                     if !socket_told {
-                        self.realtime_interrupt(cycle);
+                        self.realtime_interrupt(out);
                     }
                 }
                 // `can_pause` and "audio enabled" are the new sink's; release a pause it can't hold.
-                self.refresh_pause_facts(now, cycle);
+                self.refresh_pause_facts(now, out);
                 self.observe_recorder(_previous.as_deref());
-                cycle.trace(PlayoutStep::OutputReplaced {
+                out.trace(PlayoutStep::OutputReplaced {
                     audio,
                     transcription: self.shared.output.shows_transcription(),
                 });
@@ -487,17 +489,17 @@ impl Driver {
                 // The filter follows the STT the host named.
                 self.input.set_speaker_filter(config);
             }
-            FrameCommand::SetTranscriptionOutput(out) => {
-                let transcription = out.is_some();
+            FrameCommand::SetTranscriptionOutput(output) => {
+                let transcription = output.is_some();
                 let _previous =
-                    self.shared.output.set_transcription(out.map(|HostTextOut(out)| out));
-                cycle.trace(PlayoutStep::OutputReplaced {
+                    self.shared.output.set_transcription(output.map(|HostTextOut(sink)| sink));
+                out.trace(PlayoutStep::OutputReplaced {
                     audio: self.shared.output.plays_audio(),
                     transcription,
                 });
             }
             FrameCommand::UpdateModels { stt, vad, llm, tts } => {
-                self.update_models(stt, vad, llm, tts, cycle)
+                self.update_models(stt, vad, llm, tts, out)
             }
             FrameCommand::UpdateChatCtx(items) => {
                 let count = items.len();
@@ -514,11 +516,11 @@ impl Driver {
                                 chat_ctx: ctx,
                             },
                         ),
-                        cycle,
+                        out,
                     );
                 }
                 self.publish_frame();
-                cycle.trace(GenerationStep::ChatCtxUpdated { items: count });
+                out.trace(GenerationStep::ChatCtxUpdated { items: count });
             }
         }
     }
@@ -534,14 +536,14 @@ impl Driver {
 
     /// The history records a frame leaves when it takes over: `AgentHandoff`, then
     /// `AgentConfigUpdate` (skipped with neither instructions nor tools), in the reference's order.
-    pub(crate) fn record_frame(&mut self, previous_agent: Option<String>, cycle: &mut Cycle) {
+    pub(crate) fn record_frame(&mut self, previous_agent: Option<String>, out: &mut Out) {
         let handoff = lk_agents_abi::AgentHandoffItem {
             id: self.session.ids.mint("item"),
             old_agent_id: previous_agent,
             new_agent_id: self.activity.agent.clone(),
             created_at: self.step.wall(),
         };
-        self.commit_record(ChatItem::AgentHandoff(handoff), cycle);
+        self.commit_record(ChatItem::AgentHandoff(handoff), out);
         let rendered = self.activity.instructions.render(Some(Modality::Audio));
         let tools_added: Vec<String> =
             self.activity.toolset.specs.iter().map(|t| t.name.clone()).collect();
@@ -550,7 +552,7 @@ impl Driver {
                 (!rendered.is_empty()).then_some(rendered),
                 tools_added,
                 vec![],
-                cycle,
+                out,
             );
         }
     }
@@ -562,7 +564,7 @@ impl Driver {
         instructions: Option<String>,
         tools_added: Vec<String>,
         tools_removed: Vec<String>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let config = lk_agents_abi::AgentConfigUpdate {
             id: self.session.ids.mint("item"),
@@ -572,16 +574,12 @@ impl Driver {
             created_at: self.step.wall(),
             tools: None,
         };
-        self.commit_record(ChatItem::AgentConfigUpdate(config), cycle);
+        self.commit_record(ChatItem::AgentConfigUpdate(config), out);
     }
 
     /// Tell the realtime session which frame drives: instructions (audio rendering), conversation,
     /// tools, in the reference's order. No-op on a pipeline session.
-    pub(crate) fn push_frame(
-        &self,
-        chat_ctx: Option<lk_agents_abi::ChatContext>,
-        cycle: &mut Cycle,
-    ) {
+    pub(crate) fn push_frame(&self, chat_ctx: Option<lk_agents_abi::ChatContext>, out: &mut Out) {
         if self.activity.rt_session.is_none() {
             return;
         }
@@ -589,7 +587,7 @@ impl Driver {
             lk_agents_abi::RealtimeCommand::UpdateInstructions(lk_agents_abi::UpdateInstructions {
                 instructions: self.activity.instructions.render(Some(Modality::Audio)),
             }),
-            cycle,
+            out,
         );
         if let Some(chat_ctx) = chat_ctx {
             self.rt_send(
@@ -597,25 +595,25 @@ impl Driver {
                     req_id: self.shared.mint_item_id(),
                     chat_ctx,
                 }),
-                cycle,
+                out,
             );
         }
         self.rt_send(
             lk_agents_abi::RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools {
                 tools: self.activity.toolset.specs.clone(),
             }),
-            cycle,
+            out,
         );
     }
 
     /// Put a frame record on the record. `AgentHandoff` is history-only; `AgentConfigUpdate` goes to
     /// the frame's context and history (only the realtime view strips it).
-    pub(crate) fn commit_record(&mut self, item: ChatItem, cycle: &mut Cycle) {
+    pub(crate) fn commit_record(&mut self, item: ChatItem, out: &mut Out) {
         let (source, visibility) = match &item {
             ChatItem::AgentHandoff(_) => (Source::Handoff, Visibility::History),
             _ => (Source::ConfigUpdate, Visibility::Both),
         };
-        self.commit_item(item, source, visibility, cycle);
+        self.commit_item(item, source, visibility, out);
     }
 
     /// The one write to the record: inserted by its acoustic `created_at`, the speech told, the
@@ -625,7 +623,7 @@ impl Driver {
         item: ChatItem,
         source: Source,
         visibility: Visibility,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         // Attributed to the frame that created the speech, not the driving one (a task's tool
         // commits after the parent is back); an item with no speech is the driving frame's.
@@ -634,11 +632,11 @@ impl Driver {
             .and_then(|s| self.activity.speech_frame(s).map(str::to_owned))
             .unwrap_or_else(|| self.activity.agent.clone());
         let commit = self.session.record.commit(item, source, visibility, &agent);
-        self.perform_commit(commit, cycle);
+        self.perform_commit(commit, out);
     }
 
     /// The speech is told, the host learns of a new item, the frame is republished.
-    fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome), cycle: &mut Cycle) {
+    fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome), out: &mut Out) {
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
             entry.source.speech().filter(|_| !matches!(entry.source, Source::ToolCall { .. }));
@@ -648,7 +646,7 @@ impl Driver {
         match outcome {
             CommitOutcome::Added => {
                 let run = self.run_of_item(&entry.source);
-                cycle.machine().emit(crate::events::SessionEvent::ItemAdded {
+                out.machine().emit(crate::events::SessionEvent::ItemAdded {
                     item: Box::new(entry.item),
                     agent: entry.agent,
                     source: entry.source,

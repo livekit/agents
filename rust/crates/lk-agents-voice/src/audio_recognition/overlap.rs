@@ -2,7 +2,7 @@
 
 use super::{InterruptionSignal, OverlapVerdict};
 use crate::agent_activity::pause::AudioInterruptTrigger;
-use crate::agent_session::cycle::{AudioInterruptGuard, Decision, Effects};
+use crate::agent_session::effects::{AudioInterruptGuard, Decision, Effects};
 use crate::events::{OverlapInterruptionEvent, SessionEvent};
 use lk_agents_abi::Ts;
 use lk_agents_abi::turn::detector::ReqId;

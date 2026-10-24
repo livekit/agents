@@ -1,5 +1,5 @@
 use crate::agent_session::Driver;
-use crate::agent_session::cycle::{Cycle, TurnTimer};
+use crate::agent_session::effects::{Out, TurnTimer};
 use crate::io::{AudioOutput, PlaybackEvent, PlaybackObserver};
 use crate::room_io::RECORDER_FLUSH;
 use crate::trace::PlayoutStep;
@@ -65,20 +65,20 @@ impl Driver {
         &mut self,
         now: Ts,
         recorder: Arc<dyn lk_agents_media::recorder::AudioRecorder>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let tap = crate::recorder_io::RecorderTap::new(recorder, self.shared.time.clock());
         *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = Some(tap);
         self.observe_recorder(None);
-        cycle.machine().arm(TurnTimer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
+        out.machine().arm(TurnTimer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
     }
 
     /// One last flush, observer off, timer cancelled.
-    pub(crate) fn detach_recorder(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn detach_recorder(&mut self, now: Ts, out: &mut Out) {
         if self.shared.recorder_tap().is_none() {
             return;
         }
-        self.flush_recorder(now, false, cycle);
+        self.flush_recorder(now, false, out);
         if let Some(observer) =
             self.shared.recorder_observer.lock().unwrap_or_else(|p| p.into_inner()).take()
             && let Some(out) = self.shared.output.audio()
@@ -86,8 +86,8 @@ impl Driver {
             out.tracker().unobserve(&observer);
         }
         *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = None;
-        cycle.machine().cancel(TurnTimer::RecorderFlush);
-        cycle.trace(PlayoutStep::RecorderDetached);
+        out.machine().cancel(TurnTimer::RecorderFlush);
+        out.trace(PlayoutStep::RecorderDetached);
     }
 
     /// Off `previous` first.
@@ -107,12 +107,12 @@ impl Driver {
         }
     }
 
-    pub(crate) fn flush_recorder(&mut self, now: Ts, rearm: bool, cycle: &mut Cycle) {
+    pub(crate) fn flush_recorder(&mut self, now: Ts, rearm: bool, out: &mut Out) {
         let Some(tap) = self.shared.recorder_tap() else { return };
         let ok = tap.recorder.flush(tap.now()).is_ok();
-        cycle.trace(PlayoutStep::RecorderFlushed { ok });
+        out.trace(PlayoutStep::RecorderFlushed { ok });
         if rearm && !self.session.closing_past_edge() {
-            cycle.machine().arm(TurnTimer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
+            out.machine().arm(TurnTimer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
         }
     }
 }

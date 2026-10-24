@@ -10,7 +10,7 @@ use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{Command, Origin};
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::Timebase;
-use crate::audio::{AudioPumpParts, LegEnd, LegId, Legs, spawn_drain};
+use crate::audio::{AudioForwarderParts, LegEnd, LegId, Legs, spawn_drain};
 use crate::audio_recognition::AudioRecognition;
 use crate::generation::GenEvent;
 use crate::generation::Instructions;
@@ -238,7 +238,7 @@ impl DriverBuilder {
         let gate = GateSnapshot::new();
         // Held, so `SetAudioInput` can point a fresh pump at the same table.
         let recorder_cell = Arc::new(std::sync::RwLock::new(None));
-        let pump_parts = AudioPumpParts {
+        let pump_parts = AudioForwarderParts {
             last_input: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             first_input_at: Arc::new(std::sync::atomic::AtomicU64::new(crate::audio::NO_INPUT_YET)),
             input_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -250,17 +250,17 @@ impl DriverBuilder {
             closing: closing.subscribe(),
             ended: legs_tx.clone(),
         };
-        let audio_pump = self
+        let audio_forwarder = self
             .audio_in
             .clone()
             .map(|input| self.spawner.spawn_unboxed(pump_parts.clone().pump(input)));
         // The camera, the same way: one task per source, replaced whole by `SetVideoInput`.
-        let video_parts = crate::audio::VideoPumpParts {
+        let video_parts = crate::audio::VideoForwarderParts {
             closing: closing.subscribe(),
             ended: legs_tx.clone(),
             frames: video_tx,
         };
-        let video_pump = self
+        let video_forwarder = self
             .video_in
             .clone()
             .map(|input| self.spawner.spawn_unboxed(video_parts.clone().pump(input)));
@@ -312,7 +312,7 @@ impl DriverBuilder {
                 stt: self.stt,
                 vad: self.vad,
                 max_unrecoverable_errors: self.max_unrecoverable_errors,
-                opening: crate::agent_session::Opening {
+                start_options: crate::agent_session::StartOptions {
                     recorder: self.recorder,
                     run: self.capture_run,
                 },
@@ -356,8 +356,8 @@ impl DriverBuilder {
             realtime_requested_detection: session.config.effective.turn.detection,
         });
         let input = crate::io::AgentInput::new(
-            (pump_parts, audio_pump, self.audio_in),
-            (video_parts, video_pump, self.video_in),
+            (pump_parts, audio_forwarder, self.audio_in),
+            (video_parts, video_forwarder, self.video_in),
             self.video_sampler,
             gate,
             self.speaker_filter,
@@ -391,32 +391,29 @@ impl DriverBuilder {
         // nobody, the starting config), and the opening frame on the realtime socket.
         driver.publish_gate();
         {
-            let mut cycle = driver.cycle();
+            let mut out = driver.out();
             // `start(capture_run=True)`'s run exists before the opening handoff is recorded, so the
             // handoff and the opening `on_enter` are the run's.
-            if let Some(spec) = driver.session.opening.run.take() {
-                cycle.trace(CoreStep::CommandReceived {
-                    origin: Origin::Host,
-                    kind: "Command::Run",
-                });
-                driver.on_run(driver.step.now, spec, &mut cycle);
+            if let Some(spec) = driver.session.start_options.run.take() {
+                out.trace(CoreStep::CommandReceived { origin: Origin::Host, kind: "Command::Run" });
+                driver.on_run(driver.step.now, spec, &mut out);
             }
-            driver.record_frame(None, &mut cycle);
+            driver.record_frame(None, &mut out);
             if driver.activity.rt_session.is_some() {
                 let opening = driver.session.record.for_realtime();
-                driver.push_frame(Some(opening), &mut cycle);
+                driver.push_frame(Some(opening), &mut out);
             }
-            driver.execute(cycle);
+            driver.execute(out);
         }
         // `KeytermDetector.start`: the static terms reach the recogniser now.
         if let Some(setup) = keyterms {
-            let mut cycle = driver.cycle();
-            driver.keyterms_start(setup, &mut cycle);
-            driver.execute(cycle);
+            let mut out = driver.out();
+            driver.keyterms_start(setup, &mut out);
+            driver.execute(out);
         }
         // `ivr_detection=True` is the IVR system's to start; the core starts no system.
         let ivr_detection = driver.session.config.effective.turn.ivr_detection;
-        let peer = Peer {
+        let peer = PeerHandle {
             api: api_tx.clone(),
             events: ev_tx_for_peers,
             trace: Arc::clone(&trace),

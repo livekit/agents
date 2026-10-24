@@ -1,6 +1,6 @@
 use crate::agent::{Source, Visibility};
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::cycle::Cycle;
+use crate::agent_session::effects::Out;
 use crate::agent_session::{Driver, FillerSource, HookId, Origin};
 use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
@@ -941,14 +941,14 @@ pub(crate) fn commit_of(calls: &[FunctionCall], outputs: &[FunctionCallOutput]) 
 }
 
 pub(crate) fn emit_ended(
-    cycle: &mut Cycle,
+    out: &mut Out,
     id: String,
     call_id: String,
     message: Option<String>,
     status: ToolEndStatus,
 ) {
     let ended = ToolLifecycle::Ended { id, call_id, message, status };
-    cycle.machine().emit(SessionEvent::ToolExecutionUpdated(ended));
+    out.machine().emit(SessionEvent::ToolExecutionUpdated(ended));
 }
 
 fn quiet(next: NextStep) -> StepDecision {
@@ -1004,7 +1004,7 @@ impl Driver {
         &mut self,
         hook: crate::agent_session::HookId,
         left: Option<(Vec<bool>, bool)>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let Some(Handling { speech, step, mut event, warnings, verdict }) =
             self.activity.tools.executed_handled(hook)
@@ -1017,7 +1017,7 @@ impl Driver {
                     out.reply_required = required;
                 }
             } else {
-                cycle.trace(CoreStep::PortFailure(
+                out.trace(CoreStep::PortFailure(
                     "function_tools_executed answered for a different number of outputs",
                 ));
             }
@@ -1025,7 +1025,7 @@ impl Driver {
             event.handoff_required &= handoff_required;
         }
         let executed = Some(Box::new(event));
-        self.finish_tools(speech, step, Vec::new(), executed, warnings, Some(verdict), true, cycle);
+        self.finish_tools(speech, step, Vec::new(), executed, warnings, Some(verdict), true, out);
     }
 
     /// A step's tools are over and `function_tools_executed` handled: the results committed with
@@ -1041,7 +1041,7 @@ impl Driver {
         warnings: Vec<StepWarning>,
         verdict: Option<tokio::sync::oneshot::Sender<ToolsVerdict>>,
         hosted: bool,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         // What the handlers left is what is committed: calls, then outputs.
         let commit = match &executed {
@@ -1067,7 +1067,7 @@ impl Driver {
             {
                 h.item_added(&item);
             }
-            self.commit_item(item, source, Visibility::Both, cycle);
+            self.commit_item(item, source, Visibility::Both, out);
         }
         // `self.scheduling_paused`: the activity that made the speech
         // drains: paused, left behind by a handoff, or a task that has its result.
@@ -1084,9 +1084,9 @@ impl Driver {
             if matches!(w, StepWarning::MaxToolStepsReached) {
                 let d = DiagnosticEvent::warning(crate::events::diagnostics::MAX_TOOL_STEPS)
                     .with("speech_id", speech.0.to_string());
-                cycle.machine().emit(SessionEvent::Diagnostic(d));
+                out.machine().emit(SessionEvent::Diagnostic(d));
             }
-            cycle.trace(CoreStep::PortFailure(match w {
+            out.trace(CoreStep::PortFailure(match w {
                 StepWarning::MaxToolStepsReached => {
                     "max_tool_steps reached: the reply is forced to tool_choice=none"
                 }
@@ -1095,7 +1095,7 @@ impl Driver {
                 }
             }));
         }
-        cycle.trace(ToolStep::Finished {
+        out.trace(ToolStep::Finished {
             speech,
             committed: n,
             handoff: executed.as_ref().is_some_and(|e| e.handoff_required),
@@ -1103,7 +1103,7 @@ impl Driver {
         let Some(executed) = executed else { return };
         // Not the host's to emit: after the commit, as before any hook existed for it.
         if !hosted {
-            cycle.machine().emit(SessionEvent::ToolsExecuted(executed.clone()));
+            out.machine().emit(SessionEvent::ToolsExecuted(executed.clone()));
         }
         if let Some(verdict) = verdict {
             let _ = verdict.send(ToolsVerdict { executed: *executed });

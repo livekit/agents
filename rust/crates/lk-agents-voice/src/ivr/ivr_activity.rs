@@ -1,5 +1,5 @@
-use crate::agent_session::cycle::TurnTimer;
-use crate::agent_session::{IvrCommand, Origin, Peer, SpeechCommand, Watched};
+use crate::agent_session::effects::TurnTimer;
+use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap};
 use crate::events::SessionEvent;
 use crate::trace::{CoreStep, DetectorStep, IvrLifecycle, Step};
 use lk_agents_abi::voice::events::{AgentState, UserState};
@@ -194,7 +194,7 @@ struct Navigator {
 }
 
 pub struct IvrSystem {
-    peer: Peer,
+    peer: PeerHandle,
     nav: Option<Navigator>,
     /// The (agent, user) labels last seen (`IVRActivity._current_agent_state/_current_user_state`);
     /// `initializing` counts as quiet.
@@ -207,7 +207,7 @@ pub struct IvrSystem {
 
 impl IvrSystem {
     /// The system, subscribed to the feed and navigating now if `ivr_detection`.
-    pub fn spawn(peer: Peer, ivr_detection: bool) {
+    pub fn spawn(peer: PeerHandle, ivr_detection: bool) {
         let rx = peer.subscribe();
         let mut system = IvrSystem {
             peer,
@@ -224,7 +224,7 @@ impl IvrSystem {
     }
 
     /// The loop: a due deadline fires before same-instant feed items; ends at close.
-    async fn run(mut self, mut rx: tokio::sync::mpsc::UnboundedReceiver<Watched>) {
+    async fn run(mut self, mut rx: tokio::sync::mpsc::UnboundedReceiver<SystemTap>) {
         let time = self.peer.time.clone();
         let api = self.peer.api.clone();
         while !self.closed {
@@ -245,23 +245,23 @@ impl IvrSystem {
         }
     }
 
-    fn on_watched(&mut self, now: Ts, item: Watched) {
+    fn on_watched(&mut self, now: Ts, item: SystemTap) {
         match item {
             // `_on_user_input_transcribed`: finals only, while a navigator runs.
-            Watched::Session(SessionEvent::UserTranscript(t)) if t.is_final => {
+            SystemTap::Session(SessionEvent::UserTranscript(t)) if t.is_final => {
                 let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
                 self.on_final(&text);
             }
-            Watched::Session(SessionEvent::AgentStateChanged { new, .. }) => {
+            SystemTap::Session(SessionEvent::AgentStateChanged { new, .. }) => {
                 self.states.0 = new;
                 self.quiet_edge(now);
             }
-            Watched::Session(SessionEvent::UserStateChanged { new, .. }) => {
+            SystemTap::Session(SessionEvent::UserStateChanged { new, .. }) => {
                 self.states.1 = new;
                 self.quiet_edge(now);
             }
-            Watched::Session(_) | Watched::Vad(_) | Watched::Stt(_) => {}
-            Watched::Ivr(command) => match command {
+            SystemTap::Session(_) | SystemTap::Vad(_) | SystemTap::Stt(_) => {}
+            SystemTap::Ivr(command) => match command {
                 IvrCommand::Start { max_silence } => self.start(now, max_silence),
                 IvrCommand::SeedTranscript { text } => self.on_final(&text),
                 IvrCommand::Close => self.close(),
@@ -269,7 +269,7 @@ impl IvrSystem {
                 IvrCommand::AddTools(_) => {}
             },
             // `_ivr_activity.aclose()`: no nudge inside the close window.
-            Watched::CloseRequested => {
+            SystemTap::CloseRequested => {
                 self.close();
                 self.closed = true;
             }

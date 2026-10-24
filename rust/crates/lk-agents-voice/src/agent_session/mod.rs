@@ -4,7 +4,7 @@
 
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::cycle::{Effects, TurnTimer};
+use crate::agent_session::effects::{Effects, TurnTimer};
 use crate::audio::LaunchGate;
 use crate::generation::GenEvent;
 use crate::io::RealtimeAudioNode;
@@ -14,20 +14,21 @@ use lk_agents_voice::io::{AudioOutput, TextOutput};
 use std::sync::Arc;
 use std::time::Duration;
 
+pub(crate) mod agent_user_state;
 pub mod api;
 pub mod builder;
 pub mod calls;
 pub(crate) mod closing;
 pub mod commands;
-pub mod cycle;
 pub mod driver;
+pub mod effects;
 pub mod host_events;
 pub(crate) mod idle;
-pub(crate) mod presence;
 pub mod time;
 
 // The paths the activity files, the fuzz harness and the napi binding name the session's items by.
 pub use crate::filler_scheduler::FillerId;
+pub(crate) use agent_user_state::AgentUserState;
 pub use api::*;
 pub use builder::*;
 pub use calls::Calls;
@@ -35,9 +36,8 @@ pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use driver::*;
 pub use host_events::*;
-pub(crate) use idle::{IdleGate, IdleWaiter};
+pub(crate) use idle::{IdleHolds, IdleWaiter};
 pub use lk_agents_abi::voice::session_effects::{Span, SpanEnded, SpanStarted, StartPlan};
-pub(crate) use presence::Presence;
 pub use time::*;
 
 /// `_DEFAULT_AEC_WARMUP_DURATION`, as a `Duration`.
@@ -47,12 +47,12 @@ pub const DEFAULT_AEC_WARMUP: Duration = Duration::from_secs(3);
 /// `voice/agent_session.py`'s `AgentSession`. The `Driver` orchestrates it together with the
 /// [`AgentActivity`](crate::agent_activity::AgentActivity).
 pub(crate) struct AgentSession {
-    pub(crate) presence: Presence,
+    pub(crate) states: AgentUserState,
     pub(crate) aec: AecWarmup,
     /// Guard 1. Cleared when the adaptive detector takes interruption over.
     pub(crate) by_audio_activity: bool,
-    pub(crate) errors: ErrorBudget,
-    pub(crate) ids: Ids,
+    pub(crate) errors: ErrorCounts,
+    pub(crate) ids: IdMint,
     /// `_opts`, the layers and the leg facts they resolve against.
     pub(crate) config: DriverConfig,
     /// `_chat_ctx`: the one record of the session's items, each agent's view of them.
@@ -67,13 +67,13 @@ pub(crate) struct AgentSession {
     pub(crate) tools: crate::tool_executor::SessionTools,
     pub(crate) tool_hosts: Vec<lk_agents_abi::HostRef>,
     pub(crate) keyterms: Option<crate::keyterm_detection::KeytermSlot>,
-    pub(crate) opening: Opening,
+    pub(crate) start_options: StartOptions,
     pub(crate) room: crate::room_io::link::RoomLink,
     /// `_closing_task`: `_aclose_impl` in flight.
     pub(crate) closing: Option<Closing>,
     /// `_global_run_state`.
     pub(crate) runs: crate::run_result::Runs,
-    pub(crate) idle: IdleGate,
+    pub(crate) idle: IdleHolds,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening frame and
@@ -85,7 +85,7 @@ pub(crate) struct SessionParts {
     pub(crate) stt: Option<Arc<dyn Stt>>,
     pub(crate) vad: Option<Arc<dyn Vad>>,
     pub(crate) max_unrecoverable_errors: u32,
-    pub(crate) opening: Opening,
+    pub(crate) start_options: StartOptions,
     pub(crate) room_link: Option<crate::room_io::link::RoomLinkConfig>,
     /// The opening agent, whose view the constructor context becomes (not announced: the host
     /// has it).
@@ -95,7 +95,7 @@ pub(crate) struct SessionParts {
 
 /// What `start()` asked for, taken once by the opening.
 #[derive(Default)]
-pub(crate) struct Opening {
+pub(crate) struct StartOptions {
     /// `start(record=..)`.
     pub(crate) recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
     /// `start(capture_run=True)`.
@@ -110,7 +110,7 @@ impl AgentSession {
             stt,
             vad,
             max_unrecoverable_errors,
-            opening,
+            start_options,
             room_link,
             agent,
             chat_ctx,
@@ -122,11 +122,11 @@ impl AgentSession {
         }
         let cfg = &config.effective;
         AgentSession {
-            presence: Presence::new(cfg.timers.user_away),
+            states: AgentUserState::new(cfg.timers.user_away),
             aec: AecWarmup::new(cfg.timers.aec_warmup),
             by_audio_activity: cfg.turn.interruption.by_audio_activity,
-            errors: ErrorBudget { max: max_unrecoverable_errors, ..Default::default() },
-            ids: Ids { next: 1, user_item: None },
+            errors: ErrorCounts { max: max_unrecoverable_errors, ..Default::default() },
+            ids: IdMint { next: 1, user_item: None },
             config,
             record,
             llm,
@@ -136,11 +136,11 @@ impl AgentSession {
             tools: Default::default(),
             tool_hosts: Vec::new(),
             keyterms: None,
-            opening,
+            start_options,
             room: crate::room_io::link::RoomLink::new(room_link),
             closing: None,
             runs: Default::default(),
-            idle: IdleGate::default(),
+            idle: IdleHolds::default(),
         }
     }
 
@@ -153,7 +153,7 @@ impl AgentSession {
         audio_output_ready: bool,
     ) -> (Option<AgentState>, Effects) {
         let mut eff = Effects::new();
-        let old = self.presence.set_agent_state(next, &mut eff);
+        let old = self.states.set_agent_state(next, &mut eff);
         if old.is_some() && next == AgentState::Speaking {
             self.errors.on_speaking();
             self.aec.on_speaking(now, audio_output_ready, &mut eff);
@@ -163,7 +163,7 @@ impl AgentSession {
 
     /// The close's hard edge was performed (`closing_past_edge` holds from here on).
     pub(crate) fn on_close_edge(&mut self) {
-        self.presence.on_close_edge();
+        self.states.on_close_edge();
         // "always clear aec warmup when closing the session" (`AgentSession._aclose_impl`).
         self.aec.expire(true);
     }
@@ -275,14 +275,14 @@ impl AecWarmup {
 /// Consecutive unrecoverable errors per leg. STT resets on a non-empty transcript, LLM and TTS on
 /// the edge into `speaking`.
 #[derive(Default)]
-pub(crate) struct ErrorBudget {
+pub(crate) struct ErrorCounts {
     stt: u32,
     llm: u32,
     tts: u32,
     max: u32,
 }
 
-impl ErrorBudget {
+impl ErrorCounts {
     /// `AgentSession._on_error`, for an error the attempt loop gave up on: whether it closes the
     /// session. `<= max`: with `max_unrecoverable_errors = 3` the fourth closes. Realtime closes
     /// at once.
@@ -312,13 +312,13 @@ impl ErrorBudget {
 }
 
 /// The session's own ids: speeches and items share one counter.
-pub(crate) struct Ids {
+pub(crate) struct IdMint {
     next: u64,
     /// The user item an interim transcript opened, reused until its final.
     user_item: Option<String>,
 }
 
-impl Ids {
+impl IdMint {
     pub(crate) fn mint(&mut self, prefix: &str) -> String {
         format!("{prefix}_{:04}", self.next_speech_id().0)
     }
@@ -481,7 +481,7 @@ pub struct FrameView {
 #[cfg(test)]
 mod label_tests {
     use super::*;
-    use crate::agent_session::cycle::{Effect, TimerOp};
+    use crate::agent_session::effects::{Effect, TimerOp};
     use crate::events::SessionEvent;
     use lk_agents_abi::Ts;
 

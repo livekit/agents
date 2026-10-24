@@ -28,7 +28,7 @@ fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
     api.expect("a room-only session assembles")
 }
 
-// Catches: a `close` that waits for the host's drain while still holding a `Peer` sender on
+// Catches: a `close` that waits for the host's drain while still holding a `PeerHandle` sender on
 // the host stream, so the drain can never end.
 #[tokio::test(start_paused = true)]
 async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {

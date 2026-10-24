@@ -731,13 +731,13 @@ impl lk_agents_abi::python::FromHostErr for IoError {
 /// and VAD streams being reopened for a new agent.
 pub(crate) struct AgentInput {
     /// So `SetAudioInput` can stop the old source first.
-    audio_pump_parts: crate::audio::AudioPumpParts,
-    audio_pump: Option<lk_agents_abi::AbortHandle>,
+    audio_forwarder_parts: crate::audio::AudioForwarderParts,
+    audio_forwarder: Option<lk_agents_abi::AbortHandle>,
     /// Held until the performer runs.
     pending_audio_in: Option<Option<Arc<dyn AudioInput>>>,
     audio_in: Option<Arc<dyn AudioInput>>,
-    video_pump_parts: crate::audio::VideoPumpParts,
-    video_pump: Option<lk_agents_abi::AbortHandle>,
+    video_forwarder_parts: crate::audio::VideoForwarderParts,
+    video_forwarder: Option<lk_agents_abi::AbortHandle>,
     pending_video_in: Option<Option<Arc<dyn VideoInput>>>,
     /// So the same leg handed back is a no-op.
     video_in: Option<Arc<dyn VideoInput>>,
@@ -758,13 +758,13 @@ impl AgentInput {
     /// The legs as the session opened them: each source with its pump (if one was attached), nothing
     /// pending.
     pub(crate) fn new(
-        (audio_pump_parts, audio_pump, audio_in): (
-            crate::audio::AudioPumpParts,
+        (audio_forwarder_parts, audio_forwarder, audio_in): (
+            crate::audio::AudioForwarderParts,
             Option<lk_agents_abi::AbortHandle>,
             Option<Arc<dyn AudioInput>>,
         ),
-        (video_pump_parts, video_pump, video_in): (
-            crate::audio::VideoPumpParts,
+        (video_forwarder_parts, video_forwarder, video_in): (
+            crate::audio::VideoForwarderParts,
             Option<lk_agents_abi::AbortHandle>,
             Option<Arc<dyn VideoInput>>,
         ),
@@ -773,12 +773,12 @@ impl AgentInput {
         speaker_filter: Option<crate::audio::SpeakerFilterConfig>,
     ) -> Self {
         AgentInput {
-            audio_pump_parts,
-            audio_pump,
+            audio_forwarder_parts,
+            audio_forwarder,
             pending_audio_in: None,
             audio_in,
-            video_pump_parts,
-            video_pump,
+            video_forwarder_parts,
+            video_forwarder,
             pending_video_in: None,
             video_in,
             video_sampler,
@@ -798,12 +798,12 @@ impl AgentInput {
         &self,
         leg: crate::audio::LegId,
     ) -> Option<Arc<dyn lk_agents_abi::StreamSink<AudioFrame>>> {
-        self.audio_pump_parts.legs.get(leg)
+        self.audio_forwarder_parts.legs.get(leg)
     }
 
     /// The one leg table every source feeds.
     pub(crate) fn legs(&self) -> &Arc<crate::audio::Legs> {
-        &self.audio_pump_parts.legs
+        &self.audio_forwarder_parts.legs
     }
 
     /// Run the gate: whether the substituted legs now get silence, **only if that changed**.
@@ -813,13 +813,13 @@ impl AgentInput {
 
     /// Where a leg's drain reports its end.
     pub(crate) fn leg_ended(&self) -> &crate::agent_session::Tx<crate::audio::LegEnd> {
-        &self.audio_pump_parts.ended
+        &self.audio_forwarder_parts.ended
     }
 
     /// The speaker filter rides the STT row: a fresh detector per stream opened from now on, and
     /// the installed stream's replaced.
     pub(crate) fn set_speaker_filter(&mut self, config: Option<crate::audio::SpeakerFilterConfig>) {
-        self.audio_pump_parts
+        self.audio_forwarder_parts
             .legs
             .set_speaker_filter(config.as_ref().map(crate::audio::speaker_filter));
         self.speaker_filter = config;
@@ -832,7 +832,7 @@ impl AgentInput {
 
     /// Whether there is a local VAD (`self.vad is None` decides whether an interim is the onset).
     pub(crate) fn has_vad(&self) -> bool {
-        self.audio_pump_parts.legs.present(crate::audio::LegId::Vad)
+        self.audio_forwarder_parts.legs.present(crate::audio::LegId::Vad)
     }
 
     /// The one door every leg mutation goes through. A new source is parked until the performer
@@ -840,12 +840,14 @@ impl AgentInput {
     pub(crate) fn apply_leg_op(&mut self, op: crate::audio::LegOp) -> Option<crate::audio::Ticket> {
         use crate::audio::LegOp;
         match op {
-            LegOp::Install { leg, sink } => Some(self.audio_pump_parts.legs.install(leg, sink)),
+            LegOp::Install { leg, sink } => {
+                Some(self.audio_forwarder_parts.legs.install(leg, sink))
+            }
             LegOp::InstallStt { sink, speaker } => {
-                Some(self.audio_pump_parts.legs.install_stt(sink, speaker))
+                Some(self.audio_forwarder_parts.legs.install_stt(sink, speaker))
             }
             LegOp::Clear(leg) => {
-                self.audio_pump_parts.legs.clear(leg);
+                self.audio_forwarder_parts.legs.clear(leg);
                 None
             }
             // Abort the old pump first, so two sources never feed the same table.
@@ -858,29 +860,29 @@ impl AgentInput {
 
     /// The parked microphone replaces the pumped one: the old pump is aborted first (two sources
     /// on one table look like the user talking over themselves).
-    pub(crate) fn swap_audio_pump(&mut self, spawner: &dyn lk_agents_abi::Spawner) {
+    pub(crate) fn swap_audio_forwarder(&mut self, spawner: &dyn lk_agents_abi::Spawner) {
         let Some(input) = self.pending_audio_in.take() else { return };
-        if let Some(old) = self.audio_pump.take() {
+        if let Some(old) = self.audio_forwarder.take() {
             old.abort();
         }
-        self.audio_pump = input.map(|input| {
+        self.audio_forwarder = input.map(|input| {
             lk_agents_abi::SpawnerExt::spawn_unboxed(
                 spawner,
-                self.audio_pump_parts.clone().pump(input),
+                self.audio_forwarder_parts.clone().pump(input),
             )
         });
     }
 
     /// The parked camera replaces the pumped one, the old pump aborted first.
-    pub(crate) fn swap_video_pump(&mut self, spawner: &dyn lk_agents_abi::Spawner) {
+    pub(crate) fn swap_video_forwarder(&mut self, spawner: &dyn lk_agents_abi::Spawner) {
         let Some(input) = self.pending_video_in.take() else { return };
-        if let Some(old) = self.video_pump.take() {
+        if let Some(old) = self.video_forwarder.take() {
             old.abort();
         }
-        self.video_pump = input.map(|input| {
+        self.video_forwarder = input.map(|input| {
             lk_agents_abi::SpawnerExt::spawn_unboxed(
                 spawner,
-                self.video_pump_parts.clone().pump(input),
+                self.video_forwarder_parts.clone().pump(input),
             )
         });
     }
@@ -892,7 +894,7 @@ impl AgentInput {
             old.on_detached();
         }
         if let Some(new) = &input
-            && self.audio_pump_parts.input_enabled.load(std::sync::atomic::Ordering::Relaxed)
+            && self.audio_forwarder_parts.input_enabled.load(std::sync::atomic::Ordering::Relaxed)
         {
             new.on_attached();
         }
@@ -901,22 +903,25 @@ impl AgentInput {
 
     /// A re-attached source forgets when audio first flowed.
     pub(crate) fn forget_first_input(&self) {
-        self.audio_pump_parts
+        self.audio_forwarder_parts
             .first_input_at
             .store(crate::audio::NO_INPUT_YET, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// When audio started flowing from the current source, if it has.
     pub(crate) fn first_input_at(&self) -> Option<Ts> {
-        let first = self.audio_pump_parts.first_input_at.load(std::sync::atomic::Ordering::Relaxed);
+        let first =
+            self.audio_forwarder_parts.first_input_at.load(std::sync::atomic::Ordering::Relaxed);
         (first != crate::audio::NO_INPUT_YET).then(|| Ts::from_nanos(first))
     }
 
     /// `input.set_audio_enabled(..)`: whether it changed; the host object is told. The leg stays
     /// installed.
     pub(crate) fn set_audio_enabled(&self, enabled: bool) -> bool {
-        let was =
-            self.audio_pump_parts.input_enabled.swap(enabled, std::sync::atomic::Ordering::Relaxed);
+        let was = self
+            .audio_forwarder_parts
+            .input_enabled
+            .swap(enabled, std::sync::atomic::Ordering::Relaxed);
         if was != enabled
             && let Some(input) = &self.audio_in
         {
@@ -968,16 +973,16 @@ impl AgentInput {
 
     /// The open a leg's `LegOpened` must carry to land (0: none), and for the STT whether it
     /// reopens the same recogniser.
-    pub(crate) fn expect_open(&mut self, leg: crate::agent_session::cycle::LegKind, open: u64) {
-        use crate::agent_session::cycle::LegKind;
+    pub(crate) fn expect_open(&mut self, leg: crate::agent_session::effects::LegKind, open: u64) {
+        use crate::agent_session::effects::LegKind;
         match leg {
             LegKind::Stt => self.stt_open = open,
             LegKind::Vad => self.vad_open = open,
         }
     }
 
-    pub(crate) fn expected_open(&self, leg: crate::agent_session::cycle::LegKind) -> u64 {
-        use crate::agent_session::cycle::LegKind;
+    pub(crate) fn expected_open(&self, leg: crate::agent_session::effects::LegKind) -> u64 {
+        use crate::agent_session::effects::LegKind;
         match leg {
             LegKind::Stt => self.stt_open,
             LegKind::Vad => self.vad_open,
@@ -1002,7 +1007,7 @@ impl AgentInput {
         open: u32,
         ev: lk_agents_abi::SpeechEvent,
     ) -> crate::audio::SpeakerDecision {
-        match self.audio_pump_parts.legs.speaker_filter_for(open) {
+        match self.audio_forwarder_parts.legs.speaker_filter_for(open) {
             Some(filter) => filter.decide(ev),
             None => crate::audio::SpeakerDecision { kept: Some(ev), changed: None },
         }
@@ -1011,7 +1016,8 @@ impl AgentInput {
     /// `_commit_user_turn`'s "flush the stt by pushing silence", `ceil(duration / 0.2)` frames:
     /// the frames pushed, `None` before any audio or with no STT leg.
     pub(crate) fn push_stt_silence(&self, seconds: f64) -> Option<u32> {
-        let packed = self.audio_pump_parts.last_input.load(std::sync::atomic::Ordering::Relaxed);
+        let packed =
+            self.audio_forwarder_parts.last_input.load(std::sync::atomic::Ordering::Relaxed);
         if packed == 0 || !(seconds > 0.0) {
             return None;
         }

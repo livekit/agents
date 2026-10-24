@@ -7,7 +7,7 @@ use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{
     Answer, Close, Command, HostRecorder, IvrCommand, Origin, RequestId, Sent,
 };
-use crate::agent_session::cycle::{Cycle, TurnTimer};
+use crate::agent_session::effects::{Out, TurnTimer};
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::Now;
 use crate::audio::LegEnd;
@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 
 /// Only what a host could read, in loop order; never machine state.
 #[derive(Debug, Clone)]
-pub enum Watched {
+pub enum SystemTap {
     Session(SessionEvent),
     Vad(lk_agents_abi::VadEvent),
     /// After the speaker filter.
@@ -37,7 +37,7 @@ pub enum Watched {
 /// One unbounded channel per subscriber; a departed one is forgotten on publish.
 #[derive(Clone, Default)]
 pub struct WatchHub {
-    taps: Arc<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<Watched>>>>,
+    taps: Arc<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<SystemTap>>>>,
 }
 
 impl WatchHub {
@@ -45,14 +45,14 @@ impl WatchHub {
         Self::default()
     }
 
-    pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<Watched> {
+    pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.taps.lock().unwrap_or_else(|p| p.into_inner()).push(tx);
         rx
     }
 
     /// Cheap with none: the common session runs no system.
-    pub fn publish(&self, item: Watched) {
+    pub fn publish(&self, item: SystemTap) {
         let mut taps = self.taps.lock().unwrap_or_else(|p| p.into_inner());
         taps.retain(|tap| tap.send(item.clone()).is_ok());
     }
@@ -72,7 +72,7 @@ impl std::fmt::Debug for WatchHub {
 
 /// Everything a peer of the host may touch, and nothing else.
 #[derive(Clone)]
-pub struct Peer {
+pub struct PeerHandle {
     pub api: Tx<Command>,
     pub(super) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
     pub trace: Arc<Mutex<Trace>>,
@@ -84,8 +84,8 @@ pub struct Peer {
     pub closing: tokio::sync::watch::Receiver<bool>,
 }
 
-impl Peer {
-    pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<Watched> {
+impl PeerHandle {
+    pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
         self.watch.subscribe()
     }
 
@@ -120,9 +120,9 @@ impl Peer {
     }
 }
 
-impl std::fmt::Debug for Peer {
+impl std::fmt::Debug for PeerHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Peer").field("time", &self.time).field("watch", &self.watch).finish()
+        f.debug_struct("PeerHandle").field("time", &self.time).field("watch", &self.watch).finish()
     }
 }
 
@@ -134,7 +134,7 @@ pub struct SessionHandle {
     pub answers: Rx<(RequestId, Answer)>,
     pub trace: Arc<Mutex<Trace>>,
     /// What a system runs on; the host starts the systems it configures on this after `start()`.
-    pub peer: Peer,
+    pub peer: PeerHandle,
     pub ivr_detection: bool,
 }
 
@@ -231,7 +231,7 @@ pub struct Driver {
     pub(crate) session: AgentSession,
     pub(crate) activity: crate::agent_activity::AgentActivity,
     pub(crate) input: crate::io::AgentInput,
-    /// Machines never see it; [`Cycle`] carries it for them.
+    /// Machines never see it; [`Out`] carries it for them.
     pub(crate) current: FrameId,
     pub(crate) timers: TimerSet<TurnTimer>,
     /// What the spawned tasks share with the loop, the session clock among it.
@@ -267,8 +267,8 @@ impl Driver {
         let _ = self.events.send(HostEvent::Session(ev));
     }
 
-    pub(crate) fn cycle(&self) -> Cycle {
-        Cycle::new(self.current, Arc::clone(&self.trace))
+    pub(crate) fn out(&self) -> Out {
+        Out::new(self.current, Arc::clone(&self.trace))
     }
 
     /// Performed with its events on the host stream, so `start()` returns after them. Idempotent.
@@ -283,16 +283,16 @@ impl Driver {
         self.publish_gate();
         // The away deadline runs from start: both are silent until somebody speaks.
         {
-            let mut cycle = self.cycle();
+            let mut out = self.out();
             // `start()`'s `_update_agent_state("listening")`: the host's first state edge.
-            self.set_agent_state(now, AgentState::Listening, &mut cycle);
+            self.set_agent_state(now, AgentState::Listening, &mut out);
             let closing = self.session.closing_past_edge();
-            cycle.machine().append(self.session.presence.reconcile_away_timer(now, closing));
-            if let Some(recorder) = self.session.opening.recorder.take() {
-                self.attach_recorder(now, recorder, &mut cycle);
+            out.machine().append(self.session.states.reconcile_away_timer(now, closing));
+            if let Some(recorder) = self.session.start_options.recorder.take() {
+                self.attach_recorder(now, recorder, &mut out);
             }
-            self.issue_on_enter(now, &mut cycle);
-            self.execute(cycle);
+            self.issue_on_enter(now, &mut out);
+            self.execute(out);
         }
     }
 
@@ -360,22 +360,22 @@ impl Driver {
     /// event goes out, then every waiter and task the loop leaves is released: nothing settles
     /// after `close`.
     pub fn finish(&mut self, undelivered: Vec<Input>) {
-        let mut cycle = self.cycle();
+        let mut out = self.out();
         for input in undelivered {
             // Only a host command carries a promise somebody awaits.
             if let Input::Host(Sent { origin: _, command }) = input {
-                self.refuse_command(command, &mut cycle);
+                self.refuse_command(command, &mut out);
             }
         }
-        drop(cycle);
+        drop(out);
         self.run_close_at_end();
-        let mut cycle = self.cycle();
+        let mut out = self.out();
         if let Some((reason, error)) =
             self.session.closing.as_ref().map(|c| (c.reason, c.error.clone()))
         {
-            cycle.machine().emit(SessionEvent::Close { reason, error });
+            out.machine().emit(SessionEvent::Close { reason, error });
         }
-        self.execute(cycle);
+        self.execute(out);
         self.settle_waiters_at_end();
         self.release_tasks_at_end();
     }
@@ -415,20 +415,20 @@ impl Driver {
     pub fn handle(&mut self, event: Event, now: Now) {
         self.step.set(now);
         let now = now.at;
-        let mut cycle = self.cycle();
+        let mut out = self.out();
         match event {
             Event::Wake => {
                 if self.next_deadline().is_some_and(|at| at <= now) {
-                    self.on_timers(now, &mut cycle);
+                    self.on_timers(now, &mut out);
                 } else if let Some(task) = self.task_due() {
-                    self.on_task_wake(now, task, &mut cycle);
+                    self.on_task_wake(now, task, &mut out);
                 }
             }
-            Event::Input(Input::Stt(ev)) => self.on_stt(now, ev, &mut cycle),
-            Event::Input(Input::Vad(ev)) => self.on_vad(now, ev, &mut cycle),
-            Event::Input(Input::Room(ev)) => self.on_rtc(now, ev, &mut cycle),
+            Event::Input(Input::Stt(ev)) => self.on_stt(now, ev, &mut out),
+            Event::Input(Input::Vad(ev)) => self.on_vad(now, ev, &mut out),
+            Event::Input(Input::Room(ev)) => self.on_rtc(now, ev, &mut out),
             Event::Input(Input::Host(Sent { origin, command })) => {
-                cycle.trace(CoreStep::CommandReceived {
+                out.trace(CoreStep::CommandReceived {
                     origin: origin.clone(),
                     kind: command.kind(),
                 });
@@ -438,43 +438,43 @@ impl Driver {
                 let late = self.session.closing_past_edge()
                     && !matches!(command, Command::Close(_) | Command::HookDone { .. });
                 if late {
-                    self.refuse_command(command, &mut cycle);
-                    self.pump_schedule(now, &mut cycle);
-                    self.execute(cycle);
+                    self.refuse_command(command, &mut out);
+                    self.pump_schedule(now, &mut out);
+                    self.execute(out);
                     self.publish_gate();
                     return;
                 }
-                self.on_api(now, command, &mut cycle);
+                self.on_api(now, command, &mut out);
             }
-            Event::Input(Input::RoomIo(ev)) => self.on_room_io(now, ev, &mut cycle),
-            Event::Input(Input::Gen(ev)) => self.on_generation(now, ev, &mut cycle),
-            Event::Input(Input::Realtime(ev)) => self.on_realtime(now, ev, &mut cycle),
-            Event::Input(Input::Eot(req, p)) => self.on_eot(now, req, p, &mut cycle),
-            Event::Input(Input::Overlap(ev)) => self.on_overlap_verdict(now, ev, &mut cycle),
-            Event::Input(Input::LegEnded(end)) => self.on_leg_ended(now, end, &mut cycle),
-            Event::Input(Input::LegOpened(opened)) => self.on_leg_opened(now, opened, &mut cycle),
-            Event::Input(Input::Video(frame)) => self.on_video_frame(now, frame, &mut cycle),
+            Event::Input(Input::RoomIo(ev)) => self.on_room_io(now, ev, &mut out),
+            Event::Input(Input::Gen(ev)) => self.on_generation(now, ev, &mut out),
+            Event::Input(Input::Realtime(ev)) => self.on_realtime(now, ev, &mut out),
+            Event::Input(Input::Eot(req, p)) => self.on_eot(now, req, p, &mut out),
+            Event::Input(Input::Overlap(ev)) => self.on_overlap_verdict(now, ev, &mut out),
+            Event::Input(Input::LegEnded(end)) => self.on_leg_ended(now, end, &mut out),
+            Event::Input(Input::LegOpened(opened)) => self.on_leg_opened(now, opened, &mut out),
+            Event::Input(Input::Video(frame)) => self.on_video_frame(now, frame, &mut out),
         }
         // Scheduled in the same cycle as the wake that changed it.
-        self.pump_schedule(now, &mut cycle);
-        self.execute(cycle);
+        self.pump_schedule(now, &mut out);
+        self.execute(out);
         // The handoff's drain settled: the swap lands now, at the same instant. A loop: the swap
         // may begin another frame change whose drain settles at once.
-        let mut cycle = self.cycle();
-        while self.handoff_ready(&mut cycle) {
-            self.perform_handoff(now, &mut cycle);
-            self.pump_schedule(now, &mut cycle);
+        let mut out = self.out();
+        while self.handoff_ready(&mut out) {
+            self.perform_handoff(now, &mut out);
+            self.pump_schedule(now, &mut out);
         }
         // The run's settle check, after the wake's own effects; a re-prompt is scheduled in
         // this cycle.
-        if self.run_check(now, &mut cycle) {
-            self.pump_schedule(now, &mut cycle);
+        if self.run_check(now, &mut out) {
+            self.pump_schedule(now, &mut out);
         }
-        self.drain_ready(&mut cycle);
+        self.drain_ready(&mut out);
         // The close's drain settled in this wake: the hard edge lands now, in its own cycle.
-        self.close_ready(now, &mut cycle);
-        self.settle_waiters(now, &mut cycle);
-        self.execute(cycle);
+        self.close_ready(now, &mut out);
+        self.settle_waiters(now, &mut out);
+        self.execute(out);
         // The close's next phases, each in its own cycle (the socket's `aclose` awaited here).
         self.close_advance(now);
         self.publish_gate();
@@ -516,13 +516,13 @@ impl Driver {
         self.answer(call, Answer::Speech(handle));
     }
 
-    pub(super) fn on_rtc(&mut self, now: Ts, ev: RoomEvent, cycle: &mut Cycle) {
-        cycle.trace(RoomStep::Event(crate::trace::RoomEventKind::of(&ev)));
+    pub(super) fn on_rtc(&mut self, now: Ts, ev: RoomEvent, out: &mut Out) {
+        out.trace(RoomStep::Event(crate::trace::RoomEventKind::of(&ev)));
         match ev {
             // The room going away is the job ending (`CloseReason.JOB_SHUTDOWN`, no drain).
             RoomEvent::Close { .. } => {
                 let reason = lk_agents_abi::voice::events::CloseReason::JobShutdown;
-                self.begin_closing(now, Close { reason, drain: false, error: None }, cycle)
+                self.begin_closing(now, Close { reason, drain: false, error: None }, out)
             }
             // The departure arrives as the link's own edge (`ParticipantUnlinked`); the rest is
             // `RoomIo`'s.
@@ -536,27 +536,27 @@ impl Driver {
         }
     }
 
-    pub(super) fn on_api(&mut self, now: Ts, cmd: Command, cycle: &mut Cycle) {
+    pub(super) fn on_api(&mut self, now: Ts, cmd: Command, out: &mut Out) {
         match cmd {
-            Command::Speech(cmd) => self.on_speech(now, cmd, cycle),
-            Command::Frame(cmd) => self.on_frame(now, cmd, cycle),
-            Command::Turn(cmd) => self.on_turn(now, cmd, cycle),
+            Command::Speech(cmd) => self.on_speech(now, cmd, out),
+            Command::Frame(cmd) => self.on_frame(now, cmd, out),
+            Command::Turn(cmd) => self.on_turn(now, cmd, out),
             Command::Video(image) => {
-                self.push_video(image, cycle);
+                self.push_video(image, out);
             }
             Command::Recorder(crate::agent_session::RecorderCommand::Attach(HostRecorder(
                 recorder,
-            ))) => self.attach_recorder(now, recorder, cycle),
+            ))) => self.attach_recorder(now, recorder, out),
             Command::Recorder(crate::agent_session::RecorderCommand::Detach) => {
-                self.detach_recorder(now, cycle)
+                self.detach_recorder(now, out)
             }
-            Command::Close(close) => self.begin_closing(now, close, cycle),
-            Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome, cycle),
-            Command::Task(cmd) => self.on_task(now, cmd, cycle),
-            Command::Run(spec) => self.on_run(now, *spec, cycle),
-            Command::Dtmf(cmd) => self.on_dtmf(now, cmd, cycle),
+            Command::Close(close) => self.begin_closing(now, close, out),
+            Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome, out),
+            Command::Task(cmd) => self.on_task(now, cmd, out),
+            Command::Run(spec) => self.on_run(now, *spec, out),
+            Command::Dtmf(cmd) => self.on_dtmf(now, cmd, out),
             Command::HostMetrics(record) => {
-                cycle.machine().emit(crate::events::SessionEvent::MetricsCollected {
+                out.machine().emit(crate::events::SessionEvent::MetricsCollected {
                     metrics: record,
                     speech: None,
                 });
@@ -565,29 +565,29 @@ impl Driver {
                 self.keyterms_step(
                     now,
                     crate::keyterm_detection::KeytermIn::StaticTerms(terms),
-                    cycle,
+                    out,
                 );
             }
             // Addressed to the IVR navigator: journalled and relayed on the feed, acted on by
             // nobody: except `AddTools`, since the core owns what a request is offered.
             Command::Ivr(IvrCommand::AddTools(tools)) => {
                 let added = self.session.extend_tools(tools);
-                cycle.trace(crate::trace::ToolStep::SessionToolsExtended { added });
+                out.trace(crate::trace::ToolStep::SessionToolsExtended { added });
             }
             Command::Ivr(command) => {
-                self.watch.publish(Watched::Ivr(command));
+                self.watch.publish(SystemTap::Ivr(command));
             }
         }
     }
 
-    pub(super) fn on_timers(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(super) fn on_timers(&mut self, now: Ts, out: &mut Out) {
         // The close's drain bound. The edge cancels every timer, so none fires in its instant.
-        if self.close_tick(now, cycle) {
+        if self.close_tick(now, out) {
             return;
         }
         // `commit_user_turn`'s `transcript_timeout`: the commit promotes a held interim.
         if self.activity.audio_recognition.commit_deadline().is_some_and(|at| at <= now) {
-            self.perform_pending_commit(now, cycle);
+            self.perform_pending_commit(now, out);
         }
         // The end-of-turn hook's bound: the turn proceeds with no edits, once.
         if self.activity.pending_turn.as_ref().is_some_and(|p| p.deadline <= now)
@@ -595,28 +595,28 @@ impl Driver {
         {
             if let Some(hook) = pending.hook {
                 self.activity.hooks.finish(hook);
-                cycle.trace(HandoffStep::HookFinished {
+                out.trace(HandoffStep::HookFinished {
                     hook,
                     kind: crate::agent_session::HookKind::OnUserTurnCompleted,
                     how: crate::trace::HookEnd::TimedOut,
                 });
             }
-            self.finish_turn(now, pending.finished(now), Vec::new(), cycle);
-            self.pump_schedule(now, cycle);
+            self.finish_turn(now, pending.finished(now), Vec::new(), out);
+            self.pump_schedule(now, out);
         }
-        self.expire_hooks(now, cycle);
+        self.expire_hooks(now, out);
         loop {
             // Disarm deadlines an earlier fire of this pass cancelled or moved: the cancel effect
             // runs after the pass. asyncio's `_run_once` likewise skips a handle cancelled earlier
             // in the same tick.
-            for touched in cycle.timers_touched() {
+            for touched in out.timers_touched() {
                 self.timers.cancel(touched);
             }
             let Some(timer) = self.timers.pop_due(now) else { break };
-            cycle.trace(CoreStep::TimerFired(timer, now));
+            out.trace(CoreStep::TimerFired(timer, now));
             match timer {
                 // `PausedSpeech` owns this one; every other `TurnTimer` is the turn machine's.
-                TurnTimer::FalseInterruption => self.on_false_interruption_timeout(now, cycle),
+                TurnTimer::FalseInterruption => self.on_false_interruption_timeout(now, out),
                 // `_on_aec_warmup_expired`: the one place `aec_warmup_armed` goes back to `false`
                 // before close.
                 TurnTimer::AecWarmup => {
@@ -624,23 +624,23 @@ impl Driver {
                     self.session.aec.expire(closing);
                 }
                 TurnTimer::UserAway => {
-                    cycle.machine().append(self.session.presence.on_user_away(now));
+                    out.machine().append(self.session.states.on_user_away(now));
                 }
-                TurnTimer::RecorderFlush => self.flush_recorder(now, true, cycle),
+                TurnTimer::RecorderFlush => self.flush_recorder(now, true, out),
                 // A peer's deadlines, fired on the peer's own set. Never here.
                 TurnTimer::Amd(_) | TurnTimer::IvrSilence => {}
-                TurnTimer::KeytermTimeout => self.on_keyterm_timeout(now, cycle),
-                TurnTimer::DtmfDebounce => self.on_dtmf_debounce(now, cycle),
+                TurnTimer::KeytermTimeout => self.on_keyterm_timeout(now, out),
+                TurnTimer::DtmfDebounce => self.on_dtmf_debounce(now, out),
                 // A realtime request the server never answered: the machine settles it.
-                TurnTimer::RealtimeRequest(key) => self.realtime_request_timed_out(key, cycle),
-                TurnTimer::Filler(id) => self.on_filler_timer(now, id, cycle),
+                TurnTimer::RealtimeRequest(key) => self.realtime_request_timed_out(key, out),
+                TurnTimer::Filler(id) => self.on_filler_timer(now, id, out),
                 TurnTimer::EotPredictionTimeout
                 | TurnTimer::EndpointingDelay
                 | TurnTimer::TranscriptionTimeout
                 | TurnTimer::BackchannelBoundary
                 | TurnTimer::UserTurnDuration => {
                     let eff = self.activity.audio_recognition.on_timer(now, timer);
-                    cycle.machine().append(eff);
+                    out.machine().append(eff);
                 }
             }
         }
@@ -651,7 +651,7 @@ impl Driver {
         self.shared.launch.publish(self.launch_hold());
         let session = &self.session;
         let inputs = crate::audio::GateInputs {
-            agent_state: session.presence.agent_state(),
+            agent_state: session.states.agent_state(),
             aec_warmup_remaining: session.aec.remaining(),
             aec_warmup_armed: session.aec.armed(),
             uninterruptible_speech_active: self
@@ -713,7 +713,7 @@ pub enum DriverError {
 }
 
 /// The IVR navigator, when the session detects IVRs; the AMD is the host's to start.
-pub fn start_ivr(peer: &Peer, ivr_detection: bool) {
+pub fn start_ivr(peer: &PeerHandle, ivr_detection: bool) {
     crate::ivr::ivr_activity::IvrSystem::spawn(peer.clone(), ivr_detection);
 }
 

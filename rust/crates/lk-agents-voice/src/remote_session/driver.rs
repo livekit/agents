@@ -9,14 +9,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use lk_agents_abi::AbortHandle;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::{Clock, Spawner, SpawnerExt, Ts};
 use tokio::sync::{Notify, mpsc, oneshot};
-use lk_agents_abi::AbortHandle;
 
 use super::{
-    ClientSink, ConsoleSink, NonFiniteStamp, SessionHost, SessionPort, SessionTransport, WireEvent, proto,
-    request_name, stamp_event,
+    ClientSink, ConsoleSink, NonFiniteStamp, SessionHost, SessionPort, SessionTransport, WireEvent,
+    proto, request_name, stamp_event,
 };
 use proto::agent_session_message::Message;
 
@@ -26,7 +26,7 @@ const LOG: &str = "livekit.agents";
 /// Named tasks and a way to wait for them to be gone (`utils.aio.TaskSet`). Entries are inserted
 /// before spawning and removed by a guard the task owns.
 #[derive(Default)]
-struct TaskTable {
+struct TaskSet {
     inner: Mutex<TaskEntries>,
     changed: Notify,
 }
@@ -38,7 +38,7 @@ struct TaskEntries {
 }
 
 struct Leave {
-    table: Arc<TaskTable>,
+    table: Arc<TaskSet>,
     id: u64,
 }
 
@@ -49,7 +49,7 @@ impl Drop for Leave {
     }
 }
 
-impl TaskTable {
+impl TaskSet {
     fn spawn(
         self: &Arc<Self>,
         spawner: &dyn Spawner,
@@ -138,9 +138,9 @@ struct HostShared {
     events: Mutex<Option<mpsc::UnboundedSender<proto::AgentSessionMessage>>>,
     events_rx: Mutex<Option<mpsc::UnboundedReceiver<proto::AgentSessionMessage>>>,
     state: Mutex<HostState>,
-    handlers: Arc<TaskTable>,
-    recv: Arc<TaskTable>,
-    writer: Arc<TaskTable>,
+    handlers: Arc<TaskSet>,
+    recv: Arc<TaskSet>,
+    writer: Arc<TaskSet>,
 }
 
 #[derive(Default)]
@@ -154,7 +154,10 @@ struct HostState {
 #[lk_agents_abi::host(object(name = "RemoteSessionHost", cell = "arc"))]
 impl HostRuntime {
     #[host(new)]
-    pub fn new(#[host(ambient)] clock: Arc<dyn Clock>, #[host(ambient)] spawner: Arc<dyn Spawner>) -> Self {
+    pub fn new(
+        #[host(ambient)] clock: Arc<dyn Clock>,
+        #[host(ambient)] spawner: Arc<dyn Spawner>,
+    ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         HostRuntime {
             shared: Arc::new(HostShared {
@@ -220,8 +223,10 @@ impl HostRuntime {
     #[host(method(name = "send_encoded_event"))]
     pub fn send_encoded(&self, event: &[u8], created_at: Option<f64>) -> Result<(), String> {
         use prost::Message as _;
-        let event = proto::AgentSessionEvent::decode(event).map_err(|e| format!("not an AgentSessionEvent: {e}"))?;
-        self.send_event(event, created_at.unwrap_or_else(super::epoch_secs_now)).map_err(|e| e.to_string())
+        let event = proto::AgentSessionEvent::decode(event)
+            .map_err(|e| format!("not an AgentSessionEvent: {e}"))?;
+        self.send_event(event, created_at.unwrap_or_else(super::epoch_secs_now))
+            .map_err(|e| e.to_string())
     }
 
     /// `start()`: transport, then writer and receive loop. Idempotent; a failed start still counts
@@ -302,7 +307,11 @@ async fn write_loop(
     }
 }
 
-async fn recv_loop(sh: Arc<HostShared>, transport: Arc<dyn SessionTransport>, console: Option<Arc<dyn ConsoleSink>>) {
+async fn recv_loop(
+    sh: Arc<HostShared>,
+    transport: Arc<dyn SessionTransport>,
+    console: Option<Arc<dyn ConsoleSink>>,
+) {
     loop {
         let msg = match transport.recv().await {
             Ok(Some(msg)) => msg,
@@ -318,7 +327,11 @@ async fn recv_loop(sh: Arc<HostShared>, transport: Arc<dyn SessionTransport>, co
                 let host = sh.state.lock().expect("host state").host.clone();
                 if let Some(host) = host {
                     let name = req.request.as_ref().map(request_name).unwrap_or("unknown");
-                    sh.handlers.spawn(&*sh.spawner, name, handle_request(host, Arc::clone(&transport), req));
+                    sh.handlers.spawn(
+                        &*sh.spawner,
+                        name,
+                        handle_request(host, Arc::clone(&transport), req),
+                    );
                 }
             }
             (Some(Message::AudioInput(frame)), Some(console)) => console.push_input_frame(&frame),
@@ -396,7 +409,11 @@ pub enum ReadyError {
 
 /// Host seconds as a wait: negative is zero, and infinity (or past `Duration`'s range) is "never".
 fn secs(s: f64) -> Duration {
-    Duration::try_from_secs_f64(s.max(0.0)).unwrap_or(if s.is_nan() { Duration::ZERO } else { Duration::MAX / 4 })
+    Duration::try_from_secs_f64(s.max(0.0)).unwrap_or(if s.is_nan() {
+        Duration::ZERO
+    } else {
+        Duration::MAX / 4
+    })
 }
 
 /// `RemoteSession` (`remote_session.py:826`), running.
@@ -410,7 +427,7 @@ struct ClientShared {
     state: Mutex<ClientState>,
     /// `_pending_requests` (`remote_session.py:981`), by request id.
     pending: Mutex<HashMap<String, oneshot::Sender<proto::SessionResponse>>>,
-    recv: Arc<TaskTable>,
+    recv: Arc<TaskSet>,
     ids: IdMint,
 }
 
@@ -461,7 +478,10 @@ impl Drop for Unregister<'_> {
 #[lk_agents_abi::host(object(name = "RemoteSessionClient", cell = "arc"))]
 impl ClientRuntime {
     #[host(new)]
-    pub fn new(#[host(ambient)] clock: Arc<dyn Clock>, #[host(ambient)] spawner: Arc<dyn Spawner>) -> Self {
+    pub fn new(
+        #[host(ambient)] clock: Arc<dyn Clock>,
+        #[host(ambient)] spawner: Arc<dyn Spawner>,
+    ) -> Self {
         ClientRuntime {
             shared: Arc::new(ClientShared {
                 clock,
@@ -481,7 +501,11 @@ impl ClientRuntime {
 
     /// `start()`: start the transport and the receive loop; arriving events go to `sink`. Idempotent.
     #[host(method)]
-    pub async fn start(&self, transport: Arc<dyn SessionTransport>, sink: Arc<dyn ClientSink>) -> Result<(), HostError> {
+    pub async fn start(
+        &self,
+        transport: Arc<dyn SessionTransport>,
+        sink: Arc<dyn ClientSink>,
+    ) -> Result<(), HostError> {
         {
             let mut st = self.shared.state.lock().expect("client state");
             if st.started {
@@ -522,18 +546,28 @@ impl ClientRuntime {
     /// Send one encoded `SessionRequest` (its `request_id` is minted here and any given one is
     /// ignored) and return the encoded `SessionResponse`, waiting up to `timeout` seconds.
     #[host(method(name = "request"))]
-    pub async fn request_encoded(&self, request: Vec<u8>, timeout: f64) -> Result<Vec<u8>, RequestError> {
+    pub async fn request_encoded(
+        &self,
+        request: Vec<u8>,
+        timeout: f64,
+    ) -> Result<Vec<u8>, RequestError> {
         use prost::Message as _;
         let request = proto::SessionRequest::decode(request.as_slice())
             .map_err(|e| RequestError::Malformed(format!("not a SessionRequest: {e}")))?
             .request
-            .ok_or_else(|| RequestError::Malformed("the SessionRequest sets no request".to_owned()))?;
+            .ok_or_else(|| {
+                RequestError::Malformed("the SessionRequest sets no request".to_owned())
+            })?;
         Ok(self.request(request, secs(timeout)).await?.encode_to_vec())
     }
 
     /// `wait_for_ready` in host seconds.
     #[host(method(name = "wait_for_ready"))]
-    pub async fn wait_for_ready_secs(&self, timeout: f64, retry_interval: f64) -> Result<(), ReadyError> {
+    pub async fn wait_for_ready_secs(
+        &self,
+        timeout: f64,
+        retry_interval: f64,
+    ) -> Result<(), ReadyError> {
         self.wait_for_ready(secs(timeout), secs(retry_interval)).await
     }
 
@@ -561,7 +595,10 @@ impl ClientRuntime {
         }
         let _unregister = Unregister { shared: sh, id: id.clone() };
         let msg = proto::AgentSessionMessage {
-            message: Some(Message::Request(proto::SessionRequest { request_id: id.clone(), request: Some(request) })),
+            message: Some(Message::Request(proto::SessionRequest {
+                request_id: id.clone(),
+                request: Some(request),
+            })),
         };
         transport.send_message(&msg).await.map_err(RequestError::Transport)?;
         let resp = match lk_agents_abi::timeout(&*sh.clock, timeout, rx).await {
@@ -575,7 +612,9 @@ impl ClientRuntime {
         };
         // `if resp.error: raise` (`remote_session.py:1057`): `Some("")` is success.
         match resp.error.as_deref() {
-            Some(e) if !e.is_empty() => Err(RequestError::Failed(format!("session request {kind} failed: {e}"))),
+            Some(e) if !e.is_empty() => {
+                Err(RequestError::Failed(format!("session request {kind} failed: {e}")))
+            }
             _ => Ok(resp),
         }
     }
@@ -611,7 +650,9 @@ impl ClientRuntime {
                 Err(RequestError::Cancelled) => return Err(ReadyError::Cancelled),
                 Err(RequestError::Transport(e)) => e,
                 Err(RequestError::Failed(m)) => HostError::new(m),
-                Err(e @ (RequestError::NotStarted | RequestError::Malformed(_))) => HostError::new(e.to_string()),
+                Err(e @ (RequestError::NotStarted | RequestError::Malformed(_))) => {
+                    HostError::new(e.to_string())
+                }
             };
             // The ping could not be sent: latch the error and sleep (nothing else paces the loop).
             now = clock.now();
@@ -626,7 +667,11 @@ impl ClientRuntime {
     }
 }
 
-async fn client_recv_loop(sh: Arc<ClientShared>, transport: Arc<dyn SessionTransport>, sink: Arc<dyn ClientSink>) {
+async fn client_recv_loop(
+    sh: Arc<ClientShared>,
+    transport: Arc<dyn SessionTransport>,
+    sink: Arc<dyn ClientSink>,
+) {
     loop {
         let msg = match transport.recv().await {
             Ok(Some(msg)) => msg,
@@ -661,9 +706,9 @@ mod tests {
         AgentInfo, ChatItem, IoUpdate, RtcStats, RunOutcome, SessionState, SimulationVerdict,
         VerdictOutcome,
     };
-    use lk_agents_abi::metrics::usage::ModelUsage;
     use super::*;
     use async_trait::async_trait;
+    use lk_agents_abi::metrics::usage::ModelUsage;
     use std::sync::atomic::AtomicBool;
     use tokio::sync::Mutex as AsyncMutex;
 
@@ -745,7 +790,10 @@ mod tests {
         async fn update_io(&self, _update: IoUpdate) -> Result<(), HostError> {
             Ok(())
         }
-        async fn finalize_simulation(&self, _p: SimulationVerdict) -> Result<VerdictOutcome, HostError> {
+        async fn finalize_simulation(
+            &self,
+            _p: SimulationVerdict,
+        ) -> Result<VerdictOutcome, HostError> {
             Ok((None, None))
         }
     }

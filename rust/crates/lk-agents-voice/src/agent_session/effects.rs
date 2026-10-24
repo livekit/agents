@@ -1,4 +1,4 @@
-//! The driver's [`Cycle`]: the [`Effect`]s the components hand it, in order, the timers they arm,
+//! The driver's [`Out`]: the [`Effect`]s the components hand it, in order, the timers they arm,
 //! and its performer, which runs them under the frame that asked.
 
 use crate::agent_activity::pause::{AudioInterruptTrigger, TurnSettled};
@@ -14,33 +14,33 @@ use lk_agents_abi::{FrameId, Ts};
 use lk_agents_voice::io::AudioOutputExt;
 use std::sync::{Arc, Mutex};
 
-pub struct Cycle {
+pub struct Out {
     frame: FrameId,
     /// What the machines asked for, not yet performed.
     todo: Vec<Effect>,
-    /// What a machine writes into. Drained into `todo` by [`Cycle::absorb`].
+    /// What a machine writes into. Drained into `todo` by [`Out::absorb`].
     machine: Effects,
     trace: Arc<Mutex<Trace>>,
 }
 
-impl std::fmt::Debug for Cycle {
+impl std::fmt::Debug for Out {
     /// Without the trace, which would bury the fields a failing test's reader wants.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Cycle").field("frame", &self.frame).field("todo", &self.todo).finish()
+        f.debug_struct("Out").field("frame", &self.frame).field("todo", &self.todo).finish()
     }
 }
 
-impl Cycle {
+impl Out {
     /// `frame` is the driver's `current` at the moment the event was dequeued.
     pub fn new(frame: FrameId, trace: Arc<Mutex<Trace>>) -> Self {
-        Cycle { frame, todo: Vec::new(), machine: Effects::new(), trace }
+        Out { frame, todo: Vec::new(), machine: Effects::new(), trace }
     }
 
     pub fn frame(&self) -> FrameId {
         self.frame
     }
 
-    /// Where this cycle's effects are written; [`Cycle::take`] and [`Cycle::peek`] read them.
+    /// Where this cycle's effects are written; [`Out::take`] and [`Out::peek`] read them.
     pub fn machine(&mut self) -> &mut Effects {
         &mut self.machine
     }
@@ -49,7 +49,7 @@ impl Cycle {
     /// instant it was decided. Called after every transition, so the journal reads in causal
     /// order; `perform` records nothing.
     pub fn absorb(&mut self) {
-        use crate::agent_session::cycle::TimerOp;
+        use crate::agent_session::effects::TimerOp;
         for effect in self.machine.take() {
             match &effect {
                 // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
@@ -66,17 +66,19 @@ impl Cycle {
                 Effect::Detector(call) => {
                     self.record(Step::Input(InputStep::DetectorCalled(*call)))
                 }
-                Effect::Audio(crate::agent_session::cycle::AudioOp::Gate { speech, op, cause }) => {
-                    self.record(Step::Interrupt(InterruptStep::PlayoutGate {
-                        speech: *speech,
-                        op: *op,
-                        cause: *cause,
-                    }))
-                }
+                Effect::Audio(crate::agent_session::effects::AudioOp::Gate {
+                    speech,
+                    op,
+                    cause,
+                }) => self.record(Step::Interrupt(InterruptStep::PlayoutGate {
+                    speech: *speech,
+                    op: *op,
+                    cause: *cause,
+                })),
                 // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
                 Effect::Audio(
-                    crate::agent_session::cycle::AudioOp::SetInput
-                    | crate::agent_session::cycle::AudioOp::SetVideoInput,
+                    crate::agent_session::effects::AudioOp::SetInput
+                    | crate::agent_session::effects::AudioOp::SetVideoInput,
                 ) => {}
                 Effect::Decision(d) => self.record(Step::Decided(d.clone())),
                 Effect::Realtime(send) => self.record(Step::Realtime(RealtimeStep::Sent {
@@ -112,8 +114,8 @@ impl Cycle {
     /// The timers a pending `Arm` or `Cancel` of this cycle touches, in order. Timer effects run
     /// after the loop's timer pass, so without this a deadline cancelled by an earlier fire in the
     /// same instant would still be popped (`Driver::on_timers`).
-    pub fn timers_touched(&mut self) -> Vec<crate::agent_session::cycle::TurnTimer> {
-        use crate::agent_session::cycle::TimerOp;
+    pub fn timers_touched(&mut self) -> Vec<crate::agent_session::effects::TurnTimer> {
+        use crate::agent_session::effects::TimerOp;
         self.absorb();
         self.todo
             .iter()
@@ -153,7 +155,7 @@ impl Effect {
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-#[must_use = "effects a transition asked for must reach the driver's cycle"]
+#[must_use = "effects a transition asked for must reach the driver's out"]
 pub struct Effects {
     effects: Vec<Effect>,
 }
@@ -395,43 +397,41 @@ pub enum AudioInterruptGuard {
 
 impl Driver {
     /// Perform the buffered port calls, under the frame that produced them.
-    pub(crate) fn execute(&mut self, mut cycle: Cycle) {
+    pub(crate) fn execute(&mut self, mut out: Out) {
         let frames = Arc::clone(&self.shared.frames);
-        let _scope = frames.enter(cycle.frame());
+        let _scope = frames.enter(out.frame());
         let now = self.step.now;
 
         // A performed decision may ask for more, so drain until nothing is left, in order.
         loop {
-            let effects = cycle.take();
+            let effects = out.take();
             if effects.is_empty() {
                 // The current speech is read last, so `FloorChanged` is the cycle's last emit;
                 // announcing it may itself be an effect to perform, hence the `continue`.
-                if self.publish_current_speech(&mut cycle) {
+                if self.publish_current_speech(&mut out) {
                     continue;
                 }
                 break;
             }
             for effect in effects {
-                self.perform(now, effect, &mut cycle);
+                self.perform(now, effect, &mut out);
             }
         }
     }
 
     /// Speech boundaries move the user state, dated to the boundary's instant; a final transcript
     /// restores `away` or pushes the deadline out; every state edge reconciles the away timer.
-    pub(crate) fn on_session_edge(&mut self, now: Ts, ev: &SessionEvent, cycle: &mut Cycle) {
+    pub(crate) fn on_session_edge(&mut self, now: Ts, ev: &SessionEvent, out: &mut Out) {
         // A DTMF collection reads the same edges (and its read-back's end) off the same events.
-        self.dtmf_on_event(now, ev, cycle);
+        self.dtmf_on_event(now, ev, out);
         match ev {
             SessionEvent::StartOfSpeech(e) => {
-                cycle
-                    .machine()
-                    .append(self.session.presence.update_user_state(e.at, UserState::Speaking));
+                out.machine()
+                    .append(self.session.states.update_user_state(e.at, UserState::Speaking));
             }
             SessionEvent::EndOfSpeech(e) => {
-                cycle
-                    .machine()
-                    .append(self.session.presence.update_user_state(e.at, UserState::Listening));
+                out.machine()
+                    .append(self.session.states.update_user_state(e.at, UserState::Listening));
             }
             SessionEvent::UserTranscript(t) => {
                 // Any non-empty transcript is the STT recovering
@@ -441,13 +441,13 @@ impl Driver {
                 }
                 if t.is_final {
                     let closing = self.session.closing_past_edge();
-                    cycle.machine().append(self.session.presence.on_final_transcript(now, closing));
+                    out.machine().append(self.session.states.on_final_transcript(now, closing));
                 }
             }
             // The IVR navigator reads the two state edges off the feed, as `IVRActivity` does.
             SessionEvent::AgentStateChanged { .. } | SessionEvent::UserStateChanged { .. } => {
                 let closing = self.session.closing_past_edge();
-                cycle.machine().append(self.session.presence.reconcile_away_timer(now, closing));
+                out.machine().append(self.session.states.reconcile_away_timer(now, closing));
             }
             SessionEvent::MetricsCollected { .. }
             | SessionEvent::SpanStarted(_)
@@ -479,7 +479,7 @@ impl Driver {
             SessionEvent::ItemAdded { item, .. } => {
                 if self.session.keyterms.is_some() {
                     let item = (**item).clone();
-                    self.keyterms_on_item(now, &item, cycle);
+                    self.keyterms_on_item(now, &item, out);
                 }
             }
         }
@@ -487,24 +487,24 @@ impl Driver {
 
     /// `SessionEvent::FloorChanged` when `_current_speech` differs from the last announced one.
     /// Returns whether an emit was queued.
-    pub(crate) fn publish_current_speech(&mut self, cycle: &mut Cycle) -> bool {
+    pub(crate) fn publish_current_speech(&mut self, out: &mut Out) -> bool {
         let current = self.activity.speech_scheduler.current_speech();
         let Some(holder) = self.activity.announce_current_speech(current) else { return false };
-        cycle.machine().emit(SessionEvent::FloorChanged { holder });
+        out.machine().emit(SessionEvent::FloorChanged { holder });
         true
     }
 
     pub(crate) fn perform(
         &mut self,
         now: Ts,
-        effect: crate::agent_session::cycle::Effect,
-        cycle: &mut Cycle,
+        effect: crate::agent_session::effects::Effect,
+        out: &mut Out,
     ) {
-        use crate::agent_session::cycle::{
+        use crate::agent_session::effects::{
             AudioInterruptGuard, AudioOp, Decision, DetectorCall as D, Effect as E, GateOp,
             ProviderCall as P, TimerOp,
         };
-        // Journalled already: `Cycle::absorb` recorded every effect when the machine produced it.
+        // Journalled already: `Out::absorb` recorded every effect when the machine produced it.
         match effect {
             E::Timer(TimerOp::Arm(t, at)) => {
                 self.timers.arm(t, at);
@@ -512,7 +512,7 @@ impl Driver {
             E::Timer(TimerOp::Cancel(t)) => {
                 self.timers.cancel(t);
             }
-            // Not traced here: `Cycle::absorb` journalled it where it was decided.
+            // Not traced here: `Out::absorb` journalled it where it was decided.
             E::Emit(mut ev) => {
                 // `on_backchannel_confirmed`: clear the realtime model's buffered audio so a
                 // "mm-hm" cannot prefix the next turn. The reference's `turn_detection not in
@@ -525,7 +525,7 @@ impl Driver {
                         lk_agents_abi::RealtimeCommand::ClearAudio(
                             lk_agents_abi::llm::realtime::ClearAudio {},
                         ),
-                        cycle,
+                        out,
                     );
                 }
                 // The turn machine cannot mint ids (pure tier), so the utterance's shared item id
@@ -541,11 +541,11 @@ impl Driver {
                     t.item_id = Some(id);
                 }
                 // The user state and away deadline are decided on the way to the host.
-                self.on_session_edge(now, &ev, cycle);
+                self.on_session_edge(now, &ev, out);
                 let closed = matches!(ev, SessionEvent::Close { .. });
-                // The peers read what the host reads (`Watched::Session`), in the same order.
+                // The peers read what the host reads (`SystemTap::Session`), in the same order.
                 if !self.watch.is_empty() {
-                    self.watch.publish(crate::agent_session::Watched::Session(ev.clone()));
+                    self.watch.publish(crate::agent_session::SystemTap::Session(ev.clone()));
                 }
                 let _ = self.events.send(HostEvent::Session(ev));
                 // `delete_room_on_close`: asked of the host on the `close` event, after it.
@@ -596,15 +596,13 @@ impl Driver {
             }
             // The turn -> reply hop, in order with everything else the transition asked for.
             E::Decision(Decision::EndOfTurn(info)) => {
-                self.on_end_of_turn(now, info, cycle);
+                self.on_end_of_turn(now, info, out);
                 // Scheduled in the same cycle: a reply created here is authorised now.
-                self.pump_schedule(now, cycle);
+                self.pump_schedule(now, out);
             }
             // `_on_turn_settled`: a pause left in `AwaitingTurn` resolves the way the
             // false-interruption timer would have.
-            E::Decision(Decision::TurnSettled(settled)) => {
-                self.on_turn_settled(now, settled, cycle)
-            }
+            E::Decision(Decision::TurnSettled(settled)) => self.on_turn_settled(now, settled, out),
             E::Decision(Decision::AudioInterruptGuard(AudioInterruptGuard::Set(value))) => {
                 self.session.by_audio_activity = value;
             }
@@ -615,7 +613,7 @@ impl Driver {
             // skipped when the pause already ran `on_end_of_agent_speech`: running it twice would
             // shrink the `min`-folded ignore window again.
             E::Decision(Decision::InterruptByAudioActivity(trigger)) => {
-                self.interrupt_by_audio_activity(now, cycle, trigger);
+                self.interrupt_by_audio_activity(now, out, trigger);
                 if let AudioInterruptTrigger::DetectorVerdict { ignore_user_transcript_until } =
                     trigger
                     && self.activity.paused_speech.paused_handle().is_none()
@@ -624,7 +622,7 @@ impl Driver {
                         .activity
                         .audio_recognition
                         .on_end_of_agent_speech(now, ignore_user_transcript_until);
-                    cycle.machine().append(eff);
+                    out.machine().append(eff);
                 }
             }
             // Journal-only: the learn is the machine's. The open runs off the loop (the provider
@@ -669,9 +667,11 @@ impl Driver {
             }
             // Abort the old pump first: two sources on one table look like the user talking over
             // themselves.
-            E::Audio(AudioOp::SetInput) => self.input.swap_audio_pump(&*self.shared.spawner),
-            E::Audio(AudioOp::SetVideoInput) => self.input.swap_video_pump(&*self.shared.spawner),
-            E::Realtime(crate::agent_session::cycle::RealtimeSend(cmd)) => {
+            E::Audio(AudioOp::SetInput) => self.input.swap_audio_forwarder(&*self.shared.spawner),
+            E::Audio(AudioOp::SetVideoInput) => {
+                self.input.swap_video_forwarder(&*self.shared.spawner)
+            }
+            E::Realtime(crate::agent_session::effects::RealtimeSend(cmd)) => {
                 if let Some(session) = self.activity.rt_session.as_ref() {
                     session.send(cmd);
                 }

@@ -5,7 +5,7 @@ use crate::agent_activity::ConfigDiff;
 use crate::agent_activity::pause::{AudioInterruptTrigger, InterruptOutcome, InterruptRefusal};
 use crate::agent_activity::scheduling::{PreemptiveDiscard, PreemptiveRefusal, SpeechKind, Status};
 use crate::agent_activity::speech::SpeechSpec;
-use crate::agent_session::cycle::Cycle;
+use crate::agent_session::effects::Out;
 use crate::agent_session::{Answer, CommitSuperseded, Driver, RequestId, TurnCommand};
 use crate::audio::{LegId, Tagged};
 use crate::audio_recognition::{
@@ -41,7 +41,7 @@ impl Driver {
         }
     }
 
-    pub(crate) fn on_stt(&mut self, now: Ts, ev: Tagged<SpeechEvent>, cycle: &mut Cycle) {
+    pub(crate) fn on_stt(&mut self, now: Ts, ev: Tagged<SpeechEvent>, out: &mut Out) {
         let Tagged { open, item: ev } = ev;
         self.anchor_stt_stream(now);
         // `RecognizeStream._metrics_monitor_task`: one `STTMetrics` per usage report.
@@ -61,7 +61,7 @@ impl Driver {
                 connection_reused: false,
                 metadata: Some(id.metadata()),
             };
-            cycle.machine().emit(crate::events::SessionEvent::MetricsCollected {
+            out.machine().emit(crate::events::SessionEvent::MetricsCollected {
                 metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Stt(record)),
                 speech: None,
             });
@@ -71,21 +71,21 @@ impl Driver {
         // the old consumer, so a swapped-out recogniser's final reaches nothing. Until the new
         // stream lands the old row is the installed one.
         if self.input.legs().installed_open(LegId::Stt) != Some(open) {
-            cycle.trace(InputStep::LegItemDiscarded { leg: LegId::Stt.label(), open });
+            out.trace(InputStep::LegItemDiscarded { leg: LegId::Stt.label(), open });
             return;
         }
-        let Some(ev) = self.speaker_filter(open, ev, cycle) else { return };
+        let Some(ev) = self.speaker_filter(open, ev, out) else { return };
         // The recogniser's item for the peers (the AMD reads the finals).
         if !self.watch.is_empty() {
-            self.watch.publish(crate::agent_session::Watched::Stt(ev.clone()));
+            self.watch.publish(crate::agent_session::SystemTap::Stt(ev.clone()));
         }
         let eff = self.activity.audio_recognition.on_stt_event(now, &ev);
-        cycle.machine().append(eff);
+        out.machine().append(eff);
         // `_commit_user_turn` waits on `_final_transcript_received`; the commit follows this final.
         if ev.kind == SpeechEventType::FinalTranscript
             && self.activity.audio_recognition.commit_pending()
         {
-            self.perform_pending_commit(now, cycle);
+            self.perform_pending_commit(now, out);
         }
 
         // A final is the interruption failsafe if VAD failed (`on_final_transcript`); with no VAD a
@@ -98,14 +98,14 @@ impl Driver {
             SpeechEventType::FinalTranscript => {
                 self.interrupt_by_audio_activity(
                     now,
-                    cycle,
+                    out,
                     AudioInterruptTrigger::SttFinal { words },
                 );
             }
             SpeechEventType::InterimTranscript if !has_vad => {
                 self.interrupt_by_audio_activity(
                     now,
-                    cycle,
+                    out,
                     AudioInterruptTrigger::SttInterim { words },
                 );
             }
@@ -119,33 +119,33 @@ impl Driver {
 
     /// `StartOfSpeech` pauses playout at once; only `InferenceDone` may stop the agent, gated on
     /// `interruption.min_duration` (`on_vad_inference_done`), so a cough doesn't cut the agent off.
-    pub(crate) fn on_vad(&mut self, now: Ts, ev: VadEvent, cycle: &mut Cycle) {
+    pub(crate) fn on_vad(&mut self, now: Ts, ev: VadEvent, out: &mut Out) {
         self.anchor_stt_stream(now);
         // The VAD's edges for the peers (the AMD).
         if !self.watch.is_empty() {
-            self.watch.publish(crate::agent_session::Watched::Vad(ev.clone()));
+            self.watch.publish(crate::agent_session::SystemTap::Vad(ev.clone()));
         }
         let eff = self.activity.audio_recognition.on_vad_event(now, &ev);
-        cycle.machine().append(eff);
+        out.machine().append(eff);
 
         match ev.kind {
             VadEventType::StartOfSpeech => {
                 // Cancel the resume timer (the pause survives), then pause if not already paused.
-                self.on_start_of_speech(cycle);
+                self.on_start_of_speech(out);
             }
             VadEventType::InferenceDone => {
                 // A negative or NaN measurement clamps to zero, which `decide_interrupt` refuses.
                 let secs = |x: f64| Duration::try_from_secs_f64(x).unwrap_or(Duration::ZERO);
                 self.interrupt_by_audio_activity(
                     now,
-                    cycle,
+                    out,
                     AudioInterruptTrigger::VadThreshold {
                         duration: secs(ev.speech_duration),
                         raw_silence: secs(ev.raw_accumulated_silence),
                     },
                 );
             }
-            VadEventType::EndOfSpeech => self.start_false_interruption_timer(now, cycle),
+            VadEventType::EndOfSpeech => self.start_false_interruption_timer(now, out),
         }
     }
 
@@ -154,46 +154,46 @@ impl Driver {
         &mut self,
         open: u32,
         ev: lk_agents_abi::SpeechEvent,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) -> Option<lk_agents_abi::SpeechEvent> {
         let decision = self.input.filter_speaker(open, ev);
         if let Some((speaker, class)) = decision.changed {
-            cycle.trace(InputStep::SpeakerVerdict { speaker, class });
+            out.trace(InputStep::SpeakerVerdict { speaker, class });
         }
         decision.kept
     }
 
-    pub(crate) fn on_turn(&mut self, now: Ts, cmd: TurnCommand, cycle: &mut Cycle) {
+    pub(crate) fn on_turn(&mut self, now: Ts, cmd: TurnCommand, out: &mut Out) {
         match cmd {
             TurnCommand::Commit { skip_reply } => {
-                cycle.trace(TurnStep::CommitRequested { skip_reply });
+                out.trace(TurnStep::CommitRequested { skip_reply });
                 if self.activity.rt_session.is_some() {
                     // Nothing is pushed: the commit means "commit whatever STT already has";
                     // pushing a blank re-sent the whole context with a blank user turn.
                     if !skip_reply {
-                        self.realtime_user_turn(now, cycle);
+                        self.realtime_user_turn(now, out);
                     }
                     return;
                 }
                 // `_commit_user_turn`'s tail. The commit decides the turn in this cycle, so no
                 // preemptive generation may start for it (it would be a parked speech with no
                 // owner).
-                cycle.trace(TurnStep::PreemptiveRefused(
+                out.trace(TurnStep::PreemptiveRefused(
                     crate::agent_activity::scheduling::PreemptiveRefusal::ManualTurn,
                 ));
                 let eff = self.activity.audio_recognition.commit_user_turn(now, None, skip_reply);
-                cycle.machine().append(eff);
+                out.machine().append(eff);
                 // A preemptive generation the commit did not adopt has no turn left to wait for.
-                self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, cycle);
+                self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
             }
             TurnCommand::Clear => {
                 // The reference's `_clear_user_turn` empties a pending end-of-turn task too, so a
                 // turn parked for a handoff goes with the preemptive generation.
-                self.activity.handoff.parked_turn = None;
-                self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, cycle);
+                self.activity.handoff.held_user_turn = None;
+                self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
                 // Clearing only unwinds, a running countdown included.
                 let eff = self.activity.audio_recognition.clear_user_turn(now);
-                cycle.machine().append(eff);
+                out.machine().append(eff);
                 // The server holds its own input buffer; the reference calls
                 // `_rt_session.clear_audio()`.
                 if self.activity.rt_session.is_some() {
@@ -201,7 +201,7 @@ impl Driver {
                         lk_agents_abi::RealtimeCommand::ClearAudio(
                             lk_agents_abi::llm::realtime::ClearAudio {},
                         ),
-                        cycle,
+                        out,
                     );
                 }
             }
@@ -211,7 +211,7 @@ impl Driver {
                     now,
                     crate::agent_activity::options::ConfigLayer::Session,
                     diff,
-                    cycle,
+                    out,
                 );
             }
         }
@@ -224,15 +224,15 @@ impl Driver {
         now: Ts,
         layer: crate::agent_activity::options::ConfigLayer,
         diff: ConfigDiff,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let ConfigDiff { endpointing, turn_detection_mode: mode, aec_warmup } = diff;
         // Refine the mode first: the journalled config carries the machine's mode.
         let mode = match self.activity.rt_session.as_ref().map(|s| s.capabilities()) {
-            Some(caps) => self.reconcile_realtime_turn_detection(&caps, cycle),
+            Some(caps) => self.reconcile_realtime_turn_detection(&caps, out),
             None => mode,
         };
-        cycle.trace(CoreStep::ConfigApplied {
+        out.trace(CoreStep::ConfigApplied {
             layer,
             effective: Box::new(self.session.config.effective),
         });
@@ -241,18 +241,18 @@ impl Driver {
         }
         if let Some(mode) = mode {
             let eff = self.activity.audio_recognition.set_turn_detection_mode(now, mode);
-            cycle.machine().append(eff);
+            out.machine().append(eff);
         }
         if let Some(duration) = aec_warmup {
-            cycle.machine().append(self.session.aec.set(duration));
+            out.machine().append(self.session.aec.set(duration));
         }
     }
 
-    pub(crate) fn on_end_of_turn(&mut self, now: Ts, info: EndOfTurnInfo, cycle: &mut Cycle) {
+    pub(crate) fn on_end_of_turn(&mut self, now: Ts, info: EndOfTurnInfo, out: &mut Out) {
         // Inside the transition window the leaving agent takes no new turn; it is kept for the
         // arriving one. Diverges from the reference, which drops it (`on_end_of_turn`).
         if self.in_window() {
-            self.park_turn(now, info, None, cycle);
+            self.hold_user_turn(now, info, None, out);
             return;
         }
         let guard = self.current_handle().map(|h| CommitSpeech {
@@ -290,14 +290,14 @@ impl Driver {
             late: info.late,
         });
 
-        cycle.trace(TurnStep::EndOfTurn {
+        out.trace(TurnStep::EndOfTurn {
             transcript: info.new_transcript.clone(),
             verdict: decision.verdict,
             committed: decision.committed,
         });
         // Told to the host before the verdict and unconditionally, where the reference calls
         // `on_end_of_turn`: AMD's release gate waits on it. It cannot veto the reply.
-        cycle.machine().emit(crate::events::SessionEvent::UserTurnCompleted(
+        out.machine().emit(crate::events::SessionEvent::UserTurnCompleted(
             crate::events::UserTurnCompletedEvent {
                 turn: info.turn_id,
                 new_transcript: info.new_transcript.clone(),
@@ -306,15 +306,15 @@ impl Driver {
         ));
 
         let eff = self.activity.audio_recognition.on_commit_verdict(now, &info, &decision);
-        cycle.machine().append(eff);
+        out.machine().append(eff);
 
         if decision.cancel_false_interruption {
-            self.cancel_speech_pause(now, cycle);
+            self.cancel_speech_pause(now, out);
         }
         if !decision.verdict.replies() {
             // Only the paused arm logs in the reference; the others stay silent.
             if matches!(decision.verdict, CommitVerdict::Dropped { .. }) {
-                cycle.machine().emit(crate::events::SessionEvent::Diagnostic(
+                out.machine().emit(crate::events::SessionEvent::Diagnostic(
                     crate::events::DiagnosticEvent::warning(
                         crate::events::diagnostics::SCHEDULING_PAUSED,
                     )
@@ -328,11 +328,11 @@ impl Driver {
                     ChatItem::Message(user),
                     crate::agent::Source::UserTurn { turn: info.turn_id },
                     crate::agent::Visibility::Both,
-                    cycle,
+                    out,
                 );
             }
             // A turn decided without a reply: a preemptive generation made for it has no owner.
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, cycle);
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
             return;
         }
         // The hook's seam: the user item is committed and the reply planned only once the host
@@ -340,17 +340,17 @@ impl Driver {
         if let Some(previous) = self.activity.pending_turn.take() {
             if let Some(hook) = previous.hook {
                 self.activity.hooks.finish(hook);
-                cycle.trace(HandoffStep::HookFinished {
+                out.trace(HandoffStep::HookFinished {
                     hook,
                     kind: crate::agent_session::HookKind::OnUserTurnCompleted,
                     how: crate::trace::HookEnd::TimedOut,
                 });
             }
-            self.finish_turn(now, previous.finished(now), Vec::new(), cycle);
+            self.finish_turn(now, previous.finished(now), Vec::new(), out);
         }
         match self.activity.hook_bound {
-            Some(bound) => self.issue_turn_hook(now, info, bound, cycle),
-            None => self.finish_turn(now, info, Vec::new(), cycle),
+            Some(bound) => self.issue_turn_hook(now, info, bound, out),
+            None => self.finish_turn(now, info, Vec::new(), out),
         }
     }
 
@@ -361,12 +361,12 @@ impl Driver {
         now: Ts,
         info: EndOfTurnInfo,
         edits: Vec<crate::agent::TurnEdit>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         // The reference drops the reply here (`_new_turns_blocked`); the port keeps the turn for
         // the arriving frame.
         if self.in_window() {
-            self.park_turn(now, info, Some(edits), cycle);
+            self.hold_user_turn(now, info, Some(edits), out);
             return;
         }
         let mut applied = TurnEdits::default();
@@ -381,20 +381,20 @@ impl Driver {
                 crate::agent::TurnEdit::UpdateUserMessage(text) => applied.user_text = Some(text),
                 crate::agent::TurnEdit::StopResponse => {
                     self.activity.last_turn = Some(info.turn_id);
-                    self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, cycle);
+                    self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
                     return;
                 }
             }
         }
         if info.skip_reply {
             self.activity.last_turn = Some(info.turn_id);
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, cycle);
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
             let user = self.user_turn_item(&info, applied.user_text.as_deref());
             self.commit_item(
                 ChatItem::Message(user),
                 crate::agent::Source::UserTurn { turn: info.turn_id },
                 crate::agent::Visibility::Both,
-                cycle,
+                out,
             );
             return;
         }
@@ -402,30 +402,30 @@ impl Driver {
         // speech if it allows it. A realtime session interrupts in `generate_reply`.
         if self.activity.rt_session.is_none() {
             if info.late {
-                self.supersede_unheard_reply(now, cycle);
+                self.supersede_unheard_reply(now, out);
             }
-            self.interrupt_for_user_turn(now, cycle);
+            self.interrupt_for_user_turn(now, out);
         }
-        self.reply_to_turn(now, &info, applied, cycle);
+        self.reply_to_turn(now, &info, applied, out);
     }
 
     /// Stops the current speech if it allows it; otherwise the reply queues behind it.
-    pub(crate) fn interrupt_for_user_turn(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn interrupt_for_user_turn(&mut self, now: Ts, out: &mut Out) {
         let Some(current) = self.current_handle().filter(|h| h.interruptible()) else { return };
-        match self.interrupt_speech(now, current.id(), InterruptCause::UserTurn, false, cycle) {
+        match self.interrupt_speech(now, current.id(), InterruptCause::UserTurn, false, out) {
             Ok(InterruptOutcome::Now { .. } | InterruptOutcome::Already) => {}
             // A hold taken since the guard was read: the handle's to keep, said by name.
             Err(_) => {
-                cycle.trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed))
+                out.trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed))
             }
         }
     }
 
     /// A late final re-committed a turn whose reply is still unheard: that reply is superseded so
     /// one utterance never gets two replies. A reply already heard stays.
-    pub(crate) fn supersede_unheard_reply(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn supersede_unheard_reply(&mut self, now: Ts, out: &mut Out) {
         let paused = self.activity.paused_speech.paused_handle();
-        let speaking = self.session.presence.agent_state() == AgentState::Speaking;
+        let speaking = self.session.states.agent_state() == AgentState::Speaking;
         // The newest reply first: it is the one the turn being re-committed created.
         let unheard = self.activity.speech_scheduler.handles().rev().find_map(|(id, handle)| {
             if handle.interrupted() || handle.done() {
@@ -444,10 +444,10 @@ impl Driver {
             (reply && unheard).then_some(id)
         });
         let Some(speech) = unheard else { return };
-        match self.interrupt_speech(now, speech, InterruptCause::Superseded, true, cycle) {
+        match self.interrupt_speech(now, speech, InterruptCause::Superseded, true, out) {
             Ok(InterruptOutcome::Now { .. } | InterruptOutcome::Already) => {}
             // Unreachable: `force` overrides the hold. Said rather than swallowed.
-            Err(_) => cycle.trace(CoreStep::PortFailure("a forced supersede was refused")),
+            Err(_) => out.trace(CoreStep::PortFailure("a forced supersede was refused")),
         }
     }
 
@@ -473,16 +473,16 @@ impl Driver {
         now: Ts,
         req: lk_agents_abi::turn::detector::ReqId,
         p: Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         use crate::trace::DetectorLeg;
-        cycle.trace(InputStep::LegVerdict { leg: DetectorLeg::Eot, req: req.0 });
+        out.trace(InputStep::LegVerdict { leg: DetectorLeg::Eot, req: req.0 });
         // Recoverable: the next pause asks again. The machine serves `min_delay`.
         let result = p.map_err(|_| {
-            cycle.trace(InputStep::LegFailed { leg: DetectorLeg::Eot, recoverable: true });
+            out.trace(InputStep::LegFailed { leg: DetectorLeg::Eot, recoverable: true });
         });
         let eff = self.activity.audio_recognition.on_prediction(now, req, result);
-        cycle.machine().append(eff);
+        out.machine().append(eff);
     }
 
     pub(crate) fn commit_user_turn(
@@ -492,7 +492,7 @@ impl Driver {
         stt_flush_duration: Duration,
         mut skip_reply: bool,
         call: Option<RequestId>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         // A realtime session commits its server buffer itself, and only when the server does not
         // segment audio (a client commit of a server-segmented buffer is refused).
@@ -505,18 +505,18 @@ impl Driver {
                         lk_agents_abi::RealtimeCommand::CommitAudio(
                             lk_agents_abi::llm::realtime::CommitAudio {},
                         ),
-                        cycle,
+                        out,
                     );
                 }
             } else {
-                self.realtime_user_turn(now, cycle);
+                self.realtime_user_turn(now, out);
             }
             skip_reply = true;
         }
         // "if not self._stt or self._closing.is_set(): fut.set_result('')". `_stt` is the
         // configured recogniser, so a dead stream still waits the timeout, as in the reference.
         if !self.activity.audio_recognition.stt_enabled() || self.session.closing.is_some() {
-            cycle.trace(TurnStep::CommitAnswered { transcript: String::new() });
+            out.trace(TurnStep::CommitAnswered { transcript: String::new() });
             self.answer(call, Answer::Commit(Ok(String::new())));
             return;
         }
@@ -527,7 +527,7 @@ impl Driver {
             skip_reply,
             false,
             call,
-            cycle,
+            out,
         );
     }
 
@@ -539,11 +539,11 @@ impl Driver {
         skip_reply: bool,
         close: bool,
         call: Option<RequestId>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         // A newer commit cancels the waiting one (`_commit_user_turn_atask`).
         if let Some(previous) = self.activity.audio_recognition.take_pending_commit() {
-            cycle.trace(TurnStep::CommitSuperseded);
+            out.trace(TurnStep::CommitSuperseded);
             self.answer(previous.call, Answer::Commit(Err(CommitSuperseded)));
         }
         // A final within the last 0.5 s is fresh: commit at once, no flush, no wait.
@@ -555,7 +555,7 @@ impl Driver {
             close,
         });
         if fresh || transcript_timeout.is_zero() {
-            self.perform_pending_commit(now, cycle);
+            self.perform_pending_commit(now, out);
             return;
         }
         // The reference flushes only when the mic is detached; that fact doesn't reach the driver,
@@ -563,21 +563,21 @@ impl Driver {
         self.flush_stt_with_silence(stt_flush_duration.as_secs_f64());
     }
 
-    pub(crate) fn perform_pending_commit(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn perform_pending_commit(&mut self, now: Ts, out: &mut Out) {
         let Some(pending) = self.activity.audio_recognition.take_pending_commit() else {
             return;
         };
         let transcript = self.activity.audio_recognition.current_transcript();
         // The final that ended the wait may have decided the turn already; don't commit twice.
         if !matches!(self.activity.audio_recognition.phase(), Phase::Committed { .. }) {
-            self.on_turn(now, TurnCommand::Commit { skip_reply: pending.skip_reply }, cycle);
+            self.on_turn(now, TurnCommand::Commit { skip_reply: pending.skip_reply }, out);
         }
         if pending.close {
-            cycle.trace(CloseStep::Performed(CloseAct::TranscriptWaitEnded {
+            out.trace(CloseStep::Performed(CloseAct::TranscriptWaitEnded {
                 transcript: transcript.clone(),
             }));
         } else {
-            cycle.trace(TurnStep::CommitAnswered { transcript: transcript.clone() });
+            out.trace(TurnStep::CommitAnswered { transcript: transcript.clone() });
         }
         self.answer(pending.call, Answer::Commit(Ok(transcript)));
     }
@@ -589,7 +589,7 @@ impl Driver {
         now: Ts,
         transcript: String,
         started_speaking_at: Option<Ts>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let policy = self.session.config.effective.turn.preemptive;
         let s = &self.activity.speech_scheduler;
@@ -621,18 +621,18 @@ impl Driver {
             None
         };
         if let Some(refusal) = refusal {
-            return cycle.trace(TurnStep::PreemptiveRefused(refusal));
+            return out.trace(TurnStep::PreemptiveRefused(refusal));
         }
         self.activity.speech_scheduler.preflight = Some(transcript.clone());
         // The preemptive generation belongs to the turn after the last commit; `generate_reply`
         // checks it.
         self.activity.key_preemptive_generation(self.session.record.version());
-        self.start_preemptive_generation(now, transcript, cycle);
+        self.start_preemptive_generation(now, transcript, out);
     }
 
     /// Create the preemptive generation: planned against the preflight words, not queued and not
     /// committed.
-    fn start_preemptive_generation(&mut self, now: Ts, transcript: String, cycle: &mut Cycle) {
+    fn start_preemptive_generation(&mut self, now: Ts, transcript: String, out: &mut Out) {
         let wall = self.step.wall();
         let user = ChatMessage::text(self.session.ids.mint("item"), Role::User, &transcript, wall);
         // Announced by `start_speech` when the handle exists, as the reference's is.
@@ -646,7 +646,7 @@ impl Driver {
                     self.session.config.effective.turn.interruption.enabled,
                 )
             },
-            cycle,
+            out,
         );
     }
 }

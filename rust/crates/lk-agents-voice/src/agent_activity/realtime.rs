@@ -1,4 +1,4 @@
-//! `AgentActivity`'s realtime side: [`RealtimeTurns`] (the session's requests and its open
+//! `AgentActivity`'s realtime side: [`RealtimeSessionState`] (the session's requests and its open
 //! generations), the driver's handling of the model's events, and the turn detection it agrees on.
 
 use crate::agent::{Source, Visibility};
@@ -6,7 +6,7 @@ use crate::agent_activity::options::TurnDetection;
 use crate::agent_activity::pause::AudioInterruptTrigger;
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
-use crate::agent_session::cycle::{Cycle, TurnTimer};
+use crate::agent_session::effects::{Out, TurnTimer};
 use crate::agent_session::{Answer, Close, ClosePhase, Closing, Driver, RequestId, Tx};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
@@ -27,18 +27,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use realtime_turns::{Pending, Reuse, Route, bare_reply, response_id_of};
-pub use realtime_turns::{RealtimeTurns, Request, RequestKey, Settled};
+use realtime_state::{Pending, Reuse, Route, bare_reply, response_id_of};
+pub use realtime_state::{RealtimeSessionState, Request, RequestKey, Settled};
 
 /// The realtime requests' state, behind its methods.
-pub(crate) mod realtime_turns {
+pub(crate) mod realtime_state {
     use super::*;
 
     /// The realtime session's requests and its one open generation. The loop owns it; the `Driver`
     /// methods below decide and act. State is updated before any action that can re-enter (a fatal
     /// error closes the session, and the close interrupts this machine).
     #[derive(Default)]
-    pub struct RealtimeTurns {
+    pub struct RealtimeSessionState {
         pub(super) caps: RealtimeCapabilities,
         next_key: u64,
         pub(super) pending: BTreeMap<String, Pending>,
@@ -66,9 +66,9 @@ pub(crate) mod realtime_turns {
         ended: bool,
     }
 
-    impl RealtimeTurns {
+    impl RealtimeSessionState {
         pub fn new(caps: RealtimeCapabilities) -> Self {
-            RealtimeTurns { caps, ..RealtimeTurns::default() }
+            RealtimeSessionState { caps, ..RealtimeSessionState::default() }
         }
     }
 
@@ -158,7 +158,7 @@ pub(crate) mod realtime_turns {
         To(SpeechId),
     }
 
-    impl RealtimeTurns {
+    impl RealtimeSessionState {
         pub fn ended(&self) -> bool {
             self.ended
         }
@@ -405,20 +405,20 @@ pub(crate) fn spawn_event_pump(
 impl Driver {
     /// A command for the realtime socket, as an effect; none without a session. Per-frame
     /// `PushAudio` never comes through here.
-    pub(crate) fn rt_send(&self, cmd: lk_agents_abi::RealtimeCommand, cycle: &mut Cycle) {
+    pub(crate) fn rt_send(&self, cmd: lk_agents_abi::RealtimeCommand, out: &mut Out) {
         if self.activity.rt_session.is_none() {
             return;
         }
-        let send = crate::agent_session::cycle::RealtimeSend(cmd);
-        cycle.machine().push(crate::agent_session::cycle::Effect::Realtime(send));
+        let send = crate::agent_session::effects::RealtimeSend(cmd);
+        out.machine().push(crate::agent_session::effects::Effect::Realtime(send));
     }
 
-    pub(crate) fn on_realtime(&mut self, now: Ts, wake: RealtimeWake, cycle: &mut Cycle) {
+    pub(crate) fn on_realtime(&mut self, now: Ts, wake: RealtimeWake, out: &mut Out) {
         match wake {
-            RealtimeWake::Event(ev) => self.on_realtime_event(now, ev, cycle),
+            RealtimeWake::Event(ev) => self.on_realtime_event(now, ev, out),
             RealtimeWake::Ended => {
-                self.activity.realtime_turns.end();
-                self.settle_all(Settled::Ended, false, cycle);
+                self.activity.realtime_state.end();
+                self.settle_all(Settled::Ended, false, out);
                 // Every player's channel closes, finishing with the words the user heard.
                 self.activity.realtime_players.clear();
             }
@@ -432,30 +432,30 @@ impl Driver {
             RealtimeWake::ToolsDone { speech, step, outputs, ask } => {
                 // Minted here whether asked or not: the id sequence does not depend on the answer.
                 let req_id = self.shared.mint_item_id();
-                self.realtime_tools_done(now, speech, step, outputs, ask, req_id, cycle);
+                self.realtime_tools_done(now, speech, step, outputs, ask, req_id, out);
             }
         }
     }
 
-    fn on_realtime_event(&mut self, now: Ts, ev: Event, cycle: &mut Cycle) {
+    fn on_realtime_event(&mut self, now: Ts, ev: Event, out: &mut Out) {
         match ev {
             Event::InputSpeechStarted(_) => {
                 // Server-side VAD in the local `StartOfSpeech`'s position: the turn learns the
                 // onset, the resume timer is cancelled, then the guarded interruption.
                 let eff = self.activity.audio_recognition.on_server(now, ServerSpeech::Started);
-                cycle.machine().append(eff);
-                self.on_start_of_speech(cycle);
-                self.interrupt_by_audio_activity(now, cycle, AudioInterruptTrigger::ServerOnset);
+                out.machine().append(eff);
+                self.on_start_of_speech(out);
+                self.interrupt_by_audio_activity(now, out, AudioInterruptTrigger::ServerOnset);
             }
             Event::InputSpeechStopped(_) => {
                 let eff = self.activity.audio_recognition.on_server(now, ServerSpeech::Stopped);
-                cycle.machine().append(eff);
-                self.start_false_interruption_timer(now, cycle)
+                out.machine().append(eff);
+                self.start_false_interruption_timer(now, out)
             }
             Event::InputTranscription(t) => {
                 // A native session's onset is on the session clock.
                 let started_at = t.turn_started_at.map(|at| self.step.wall_secs_at(at));
-                self.on_input_transcription(now, t, started_at, cycle);
+                self.on_input_transcription(now, t, started_at, out);
             }
             // A host session's onset is the host's `time.time()`, which the session's clock may
             // never have shown (`turn_started_at` precedes the session): it is used as given.
@@ -464,31 +464,31 @@ impl Driver {
                 turn_started_at,
             }) => {
                 let started_at = turn_started_at.filter(|at| at.is_finite());
-                self.on_input_transcription(now, transcription, started_at, cycle);
+                self.on_input_transcription(now, transcription, started_at, out);
             }
             Event::GenerationCreated(rt::GenerationCreated { response_id, req_id }) => {
-                self.on_generation_created(now, response_id, req_id, cycle)
+                self.on_generation_created(now, response_id, req_id, out)
             }
             Event::GenerateReplyFailed(rt::GenerateReplyFailed { req_id, error }) => {
-                self.fail_request(&req_id, error, cycle)
+                self.fail_request(&req_id, error, out)
             }
             Event::MessageStarted(m) => {
-                let t = &mut self.activity.realtime_turns;
+                let t = &mut self.activity.realtime_state;
                 t.message_started(m.response_id.as_deref(), &m.message_id);
-                self.deliver(Event::MessageStarted(m), cycle);
+                self.deliver(Event::MessageStarted(m), out);
             }
             Event::MessageDone(m) => {
-                let t = &mut self.activity.realtime_turns;
+                let t = &mut self.activity.realtime_state;
                 t.message_done(m.response_id.as_deref(), &m.message_id);
-                self.deliver(Event::MessageDone(m), cycle);
+                self.deliver(Event::MessageDone(m), out);
             }
             ev @ (Event::TextDelta(_)
             | Event::AudioDelta(_)
             | Event::MessageModalities(_)
-            | Event::FunctionCall(_)) => self.deliver(ev, cycle),
-            Event::GenerationDone(done) => self.on_generation_done(done, cycle),
+            | Event::FunctionCall(_)) => self.deliver(ev, out),
+            Event::GenerationDone(done) => self.on_generation_done(done, out),
             Event::RemoteItemAdded(rt::RemoteItemAdded { previous_item_id, item }) => {
-                self.mirror_remote_item(previous_item_id, *item, cycle)
+                self.mirror_remote_item(previous_item_id, *item, out)
             }
             // The native session's `UpdateChatCtx` ack, and the connection: nothing to route. A host
             // error's stamp is placed by the host leg before it gets here.
@@ -496,27 +496,27 @@ impl Driver {
             | Event::ConnectionAcquired { .. }
             | Event::HostError(_) => {}
             Event::Disconnected { .. } => {
-                if self.activity.realtime_turns.begin_closing() {
-                    self.close_on_realtime_failure(now, cycle);
+                if self.activity.realtime_state.begin_closing() {
+                    self.close_on_realtime_failure(now, out);
                 }
             }
             Event::SessionReconnected(_) => {
                 // The socket was recycled: the frame is replayed once onto the new connection.
                 let ctx = self.session.record.for_realtime();
-                self.push_frame(Some(ctx), cycle);
+                self.push_frame(Some(ctx), out);
             }
-            Event::Error(err) => self.on_realtime_error(now, err, cycle),
+            Event::Error(err) => self.on_realtime_error(now, err, out),
         }
     }
 
     /// Commits the input buffer when the server did not segment, and asks for the reply: one
     /// request, both or neither.
-    pub(crate) fn realtime_user_turn(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn realtime_user_turn(&mut self, now: Ts, out: &mut Out) {
         let Some(rt) = self.activity.rt_session.as_ref() else { return };
         let server_segments =
             rt.capabilities().turn_detection && !self.activity.realtime_turn_detection_disabled;
         let request = Request::UserTurn { commit_audio: !server_segments };
-        self.realtime_request(now, request, None, None, cycle);
+        self.realtime_request(now, request, None, None, out);
     }
 
     pub(crate) fn realtime_request(
@@ -525,10 +525,10 @@ impl Driver {
         request: Request,
         call: Option<RequestId>,
         allow_interruptions: Option<bool>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let req_id = self.shared.mint_item_id();
-        self.send_request(now, req_id, request, call, allow_interruptions, cycle);
+        self.send_request(now, req_id, request, call, allow_interruptions, out);
     }
 
     fn send_request(
@@ -538,9 +538,9 @@ impl Driver {
         request: Request,
         call: Option<RequestId>,
         allow_interruptions: Option<bool>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
-        let t = &self.activity.realtime_turns;
+        let t = &self.activity.realtime_state;
         if t.ended() {
             return self.settle(request, call, Settled::Ended);
         }
@@ -549,9 +549,9 @@ impl Driver {
             // `Say`/`GenerateReply` is refused (its handle would never finish).
             if let Request::UserTurn { commit_audio } = &request {
                 if *commit_audio {
-                    self.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}), cycle);
+                    self.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}), out);
                 }
-                self.rt_send(bare_reply(&req_id), cycle);
+                self.rt_send(bare_reply(&req_id), out);
             }
             return self.settle(request, call, Settled::Closing);
         }
@@ -575,21 +575,21 @@ impl Driver {
             }
             Request::UserTurn { commit_audio } => {
                 if *commit_audio {
-                    self.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}), cycle);
+                    self.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}), out);
                 }
                 bare_reply(&req_id)
             }
             Request::ToolFollowUp { .. } => bare_reply(&req_id),
         };
-        let key = self.activity.realtime_turns.register(req_id, request, call, allow_interruptions);
-        self.rt_send(cmd, cycle);
-        cycle.machine().arm(TurnTimer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
+        let key = self.activity.realtime_state.register(req_id, request, call, allow_interruptions);
+        self.rt_send(cmd, out);
+        out.machine().arm(TurnTimer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
     }
 
     /// Its timer goes with it.
-    fn take_pending(&mut self, req_id: &str, cycle: &mut Cycle) -> Option<Pending> {
-        let pending = self.activity.realtime_turns.pending.remove(req_id)?;
-        cycle.machine().cancel(TurnTimer::RealtimeRequest(pending.key));
+    fn take_pending(&mut self, req_id: &str, out: &mut Out) -> Option<Pending> {
+        let pending = self.activity.realtime_state.pending.remove(req_id)?;
+        out.machine().cancel(TurnTimer::RealtimeRequest(pending.key));
         Some(pending)
     }
 
@@ -603,34 +603,34 @@ impl Driver {
 
     /// Every pending request leaves through exactly one settlement; `cancel` also sends
     /// `CancelReply`.
-    fn settle_all(&mut self, how: Settled, cancel: bool, cycle: &mut Cycle) {
+    fn settle_all(&mut self, how: Settled, cancel: bool, out: &mut Out) {
         for (req_id, Pending { key, request, call, .. }) in
-            std::mem::take(&mut self.activity.realtime_turns.pending)
+            std::mem::take(&mut self.activity.realtime_state.pending)
         {
-            cycle.machine().cancel(TurnTimer::RealtimeRequest(key));
-            if cancel && !self.activity.realtime_turns.ended() {
-                self.activity.realtime_turns.cancelled_requests.insert(req_id.clone());
-                self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), cycle);
+            out.machine().cancel(TurnTimer::RealtimeRequest(key));
+            if cancel && !self.activity.realtime_state.ended() {
+                self.activity.realtime_state.cancelled_requests.insert(req_id.clone());
+                self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
             }
             self.settle(request, call, how.clone());
         }
     }
 
     /// The request timed out: the server is told not to answer, the caller learns the timeout.
-    pub(crate) fn realtime_request_timed_out(&mut self, key: RequestKey, cycle: &mut Cycle) {
+    pub(crate) fn realtime_request_timed_out(&mut self, key: RequestKey, out: &mut Out) {
         // The server never generated the reply its tools asked for: the speech ends on what it
         // spoke (5 s wait).
-        if let Some(speech) = self.activity.realtime_turns.auto_follow_up_timed_out(key) {
-            diagnose(cycle, DiagnosticEvent::warning(AUTO_TOOL_REPLY_TIMED_OUT));
+        if let Some(speech) = self.activity.realtime_state.auto_follow_up_timed_out(key) {
+            diagnose(out, DiagnosticEvent::warning(AUTO_TOOL_REPLY_TIMED_OUT));
             self.activity.realtime_players.remove(&speech);
             return;
         }
-        let t = &mut self.activity.realtime_turns;
+        let t = &mut self.activity.realtime_state;
         // Answered in the same instant the timer fired: nothing owed.
         let Some((req_id, Pending { request, call, .. })) = t.take_by_key(key) else { return };
         if !t.ended() && !t.closing {
             t.cancelled_requests.insert(req_id.clone());
-            self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), cycle);
+            self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
         }
         let error = RealtimeError::new(format!(
             "generate_reply timed out: no generation was created within {REQUEST_TIMEOUT:?}"
@@ -638,11 +638,11 @@ impl Driver {
         self.settle(request, call, Settled::TimedOut(error));
     }
 
-    fn fail_request(&mut self, req_id: &str, error: RealtimeError, cycle: &mut Cycle) {
+    fn fail_request(&mut self, req_id: &str, error: RealtimeError, out: &mut Out) {
         // A cancelled request that will not generate is forgotten.
-        let _ = self.activity.realtime_turns.cancelled_requests.remove(req_id);
+        let _ = self.activity.realtime_state.cancelled_requests.remove(req_id);
         // Unknown: already claimed by a `GenerationCreated`, or cancelled by the driver.
-        if let Some(Pending { request, call, .. }) = self.take_pending(req_id, cycle) {
+        if let Some(Pending { request, call, .. }) = self.take_pending(req_id, out) {
             self.settle(request, call, Settled::Failed(error));
         }
     }
@@ -653,27 +653,27 @@ impl Driver {
         now: Ts,
         response_id: String,
         req_id: Option<String>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
-        let pending = req_id.as_deref().map(|id| self.take_pending(id, cycle));
+        let pending = req_id.as_deref().map(|id| self.take_pending(id, out));
         // Settled before the server answered (interrupted, closed, timed out), or closing.
-        if matches!(pending, Some(None)) || self.activity.realtime_turns.closing {
-            let t = &mut self.activity.realtime_turns;
+        if matches!(pending, Some(None)) || self.activity.realtime_state.closing {
+            let t = &mut self.activity.realtime_state;
             // Cancelled while the request was in flight: the response landed anyway, and only an
             // interrupt reaches it now.
             let cancelled = req_id.as_deref().is_some_and(|id| t.cancelled_requests.remove(id));
             t.discarded = Some(response_id.clone());
             if cancelled && !t.ended() {
                 let response_id = Some(response_id.clone());
-                self.rt_send(RealtimeCommand::Interrupt(rt::Interrupt { response_id }), cycle);
+                self.rt_send(RealtimeCommand::Interrupt(rt::Interrupt { response_id }), out);
             }
             let message = "realtime server answered a request the driver had already settled; the generation is discarded";
             return diagnose(
-                cycle,
+                out,
                 DiagnosticEvent::warning(message).with("response_id", response_id),
             );
         }
-        let t = &mut self.activity.realtime_turns;
+        let t = &mut self.activity.realtime_state;
         let (asked, allow_interruptions, add_to_chat_ctx, reuse) = match pending.flatten() {
             Some(Pending { request, call, allow_interruptions, .. }) => match request {
                 Request::Say { add_to_chat_ctx, .. } => {
@@ -689,7 +689,7 @@ impl Driver {
             None => {
                 let follow_up = t.auto_follow_up.take();
                 if let Some((_, key)) = follow_up {
-                    cycle.machine().cancel(TurnTimer::RealtimeRequest(key));
+                    out.machine().cancel(TurnTimer::RealtimeRequest(key));
                 }
                 (None, None, true, follow_up.map(|(reuse, _)| reuse))
             }
@@ -698,17 +698,17 @@ impl Driver {
         // The server is answering, so a parked speech was interrupted for real: the pause ends by
         // interrupting, never by resuming under the answer.
         if self.activity.paused_speech.paused_handle().is_some() {
-            self.cancel_speech_pause(now, cycle);
+            self.cancel_speech_pause(now, out);
         }
         // A tool follow-up continues its speech; if that player is gone, a fresh speech.
         let speech = match reuse.filter(|r| self.activity.realtime_players.contains_key(&r.speech))
         {
             Some(r) => r.speech,
             None => {
-                self.start_realtime_speech(now, asked, allow_interruptions, add_to_chat_ctx, cycle)
+                self.start_realtime_speech(now, asked, allow_interruptions, add_to_chat_ctx, out)
             }
         };
-        self.activity.realtime_turns.set_open_speech(&response_id, speech);
+        self.activity.realtime_state.set_open_speech(&response_id, speech);
     }
 
     /// `asked`: the speech is a host command's (`say`, `generate_reply`), with its call.
@@ -718,7 +718,7 @@ impl Driver {
         asked: Option<Option<RequestId>>,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) -> SpeechId {
         // `allow_interruptions=false` holds only when the client owns replies; a self-replying
         // server interrupts on onset, so the caller is told once.
@@ -732,7 +732,7 @@ impl Driver {
         if !allow && server_replies {
             allow = true;
             diagnose(
-                cycle,
+                out,
                 DiagnosticEvent::warning(
                     "allow_interruptions=False is ignored on a realtime model whose server replies on its own",
                 ),
@@ -747,11 +747,11 @@ impl Driver {
             host_asked: asked.is_some(),
             ..SpeechSpec::new(SpeechKind::Realtime, source, allow)
         };
-        let handle = self.start_speech(now, spec, cycle);
+        let handle = self.start_speech(now, spec, out);
         self.activity.realtime_players.insert(handle.id(), tx);
         if let Some(call) = asked {
             // Asked for by the host, so an open run owns it.
-            self.run_own(crate::run_result::Owned::Speech(handle.id()), cycle);
+            self.run_own(crate::run_result::Owned::Speech(handle.id()), out);
             self.answer(call, Answer::Speech(Arc::clone(&handle)));
         }
         handle.id()
@@ -759,13 +759,13 @@ impl Driver {
 
     /// Route a generation's event to its speech. With a `response_id` the routing is exact and a
     /// foreign delta is dropped (warned once); without one the open slot is the only routing.
-    fn deliver(&mut self, ev: Event, cycle: &mut Cycle) {
-        let speech = match self.activity.realtime_turns.route(response_id_of(&ev)) {
+    fn deliver(&mut self, ev: Event, out: &mut Out) {
+        let speech = match self.activity.realtime_state.route(response_id_of(&ev)) {
             Route::Dropped => return,
             Route::Foreign { id, open } => {
                 let message = "realtime server streamed a generation that is not the open one; its deltas are dropped";
                 let d = DiagnosticEvent::warning(message).with("response_id", id);
-                return diagnose(cycle, d.with("open", open));
+                return diagnose(out, d.with("open", open));
             }
             Route::To(speech) => speech,
         };
@@ -773,22 +773,22 @@ impl Driver {
         self.activity.play_realtime(speech, ev);
     }
 
-    fn on_generation_done(&mut self, done: rt::GenerationDone, cycle: &mut Cycle) {
+    fn on_generation_done(&mut self, done: rt::GenerationDone, out: &mut Out) {
         // Refused, discarded, or another generation's end while this one is open: nothing to end.
-        let Some(speech) = self.activity.realtime_turns.generation_done(&done.response_id) else {
+        let Some(speech) = self.activity.realtime_state.generation_done(&done.response_id) else {
             return;
         };
         if let Some(speech) = speech {
             let status = format!("{:?}", done.status);
             self.activity.play_realtime(speech, Event::GenerationDone(done));
             // The generation ended on the server; the speech finishes by its own playout.
-            cycle.trace(RealtimeStep::GenerationStatus { speech, status });
+            out.trace(RealtimeStep::GenerationStatus { speech, status });
         }
     }
 
     /// `RealtimeModelError` reaches `_on_error`, which has no counter for it and closes on the
     /// first unrecoverable one.
-    fn on_realtime_error(&mut self, now: Ts, err: rt::RealtimeModelError, cycle: &mut Cycle) {
+    fn on_realtime_error(&mut self, now: Ts, err: rt::RealtimeModelError, out: &mut Out) {
         let error = RealtimeError::with_code(err.message.clone(), err.code.clone());
         let recoverable = err.recoverable;
         let reported = ProviderError::Local(ApiError::new(err.message).with_retryable(recoverable));
@@ -797,43 +797,43 @@ impl Driver {
             let pending = err
                 .req_id
                 .as_deref()
-                .and_then(|id| self.activity.realtime_turns.pending.remove(id));
-            self.report_error(now, source, true, reported, None, cycle);
+                .and_then(|id| self.activity.realtime_state.pending.remove(id));
+            self.report_error(now, source, true, reported, None, out);
             if let Some(Pending { key, request, call, .. }) = pending {
-                cycle.machine().cancel(TurnTimer::RealtimeRequest(key));
+                out.machine().cancel(TurnTimer::RealtimeRequest(key));
                 self.settle(request, call, Settled::Failed(error));
             }
             return;
         }
         // Fatal: pending callers learn the code, the generation is cancelled, the session closes.
         // The state moves first, so the close this error may start finds everything settled.
-        let t = &mut self.activity.realtime_turns;
+        let t = &mut self.activity.realtime_state;
         let interrupts = t.cancel_where(|_| true);
         let pending = std::mem::take(&mut t.pending);
         let close = t.begin_closing();
-        self.report_error(now, source, false, reported, None, cycle);
+        self.report_error(now, source, false, reported, None, out);
         for (cmd, ..) in interrupts {
-            self.rt_send(cmd, cycle);
+            self.rt_send(cmd, out);
         }
         for (_, Pending { key, request, call, .. }) in pending {
-            cycle.machine().cancel(TurnTimer::RealtimeRequest(key));
+            out.machine().cancel(TurnTimer::RealtimeRequest(key));
             self.settle(request, call, Settled::Failed(error.clone()));
         }
         if close {
-            self.close_on_realtime_failure(now, cycle);
+            self.close_on_realtime_failure(now, out);
         }
     }
 
     /// The leg is dead (a realtime session is the LLM): the session closes with
     /// `CloseReason::Error`.
-    fn close_on_realtime_failure(&mut self, now: Ts, cycle: &mut Cycle) {
+    fn close_on_realtime_failure(&mut self, now: Ts, out: &mut Out) {
         let error = ApiError::new("the realtime session ended with an unrecoverable error");
         let close = Close {
             reason: lk_agents_abi::voice::events::CloseReason::Error,
             drain: false,
             error: Some(ProviderError::Local(error)),
         };
-        self.begin_closing(now, close, cycle);
+        self.begin_closing(now, close, out);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -845,30 +845,29 @@ impl Driver {
         outputs: Vec<ChatItem>,
         ask: bool,
         req_id: String,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
-        let auto = self.activity.realtime_turns.caps.auto_tool_reply_generation;
+        let auto = self.activity.realtime_state.caps.auto_tool_reply_generation;
         for item in outputs {
             // Pushed while closing too (the server holds the call open until answered); only an
             // ended socket takes nothing.
-            if !self.activity.realtime_turns.ended() {
+            if !self.activity.realtime_state.ended() {
                 let reply_required = ask && !auto;
                 let push = rt::PushItem { item: Box::new(item), reply_required };
-                self.rt_send(RealtimeCommand::PushItem(push), cycle);
+                self.rt_send(RealtimeCommand::PushItem(push), out);
             }
         }
-        let t = &mut self.activity.realtime_turns;
+        let t = &mut self.activity.realtime_state;
         if !ask || t.ended() || t.closing {
             self.activity.realtime_players.remove(&speech);
         } else if auto {
             // The server replies on its own; it is given 5 s to start.
             let key = t.follow_up_with(speech, step);
-            cycle
-                .machine()
+            out.machine()
                 .arm(TurnTimer::RealtimeRequest(key), now.saturating_add(AUTO_TOOL_REPLY_TIMEOUT));
         } else {
             let request = Request::ToolFollowUp { speech, step };
-            self.send_request(now, req_id, request, None, None, cycle);
+            self.send_request(now, req_id, request, None, None, out);
         }
     }
 
@@ -905,7 +904,7 @@ impl Driver {
     pub(crate) fn reconcile_realtime_turn_detection(
         &mut self,
         caps: &lk_agents_abi::llm::realtime::RealtimeCapabilities,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) -> Option<crate::audio_recognition::TurnDetectionMode> {
         let resolved = self.session.config.effective.turn.owner;
         let requested = self
@@ -941,7 +940,7 @@ impl Driver {
                 REALTIME_TURN_DETECTION_STAYS_DISABLED
             };
             let d = DiagnosticEvent::warning(message).with("requested", format!("{resolved:?}"));
-            diagnose(cycle, d.with("owner", format!("{mode:?}")));
+            diagnose(out, d.with("owner", format!("{mode:?}")));
         }
         honoured.then_some(mode)
     }
@@ -955,7 +954,7 @@ impl Driver {
         allow_interruptions: Option<bool>,
         tool_choice: Option<lk_agents_abi::ToolChoice>,
         call: Option<RequestId>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         if self.activity.rt_session.is_none() {
             return;
@@ -964,11 +963,11 @@ impl Driver {
             let wall = self.step.wall();
             let item = ChatMessage::text(self.session.ids.mint("item"), Role::User, &text, wall);
             let push = rt::PushItem { item: Box::new(item.clone().into()), reply_required: true };
-            self.rt_send(RealtimeCommand::PushItem(push), cycle);
-            self.commit_item(item.into(), Source::UserTyped, Visibility::Both, cycle);
+            self.rt_send(RealtimeCommand::PushItem(push), out);
+            self.commit_item(item.into(), Source::UserTyped, Visibility::Both, out);
         }
         let request = Request::GenerateReply { instructions, tool_choice };
-        self.realtime_request(now, request, call, allow_interruptions, cycle);
+        self.realtime_request(now, request, call, allow_interruptions, out);
     }
 
     fn on_input_transcription(
@@ -976,14 +975,14 @@ impl Driver {
         now: Ts,
         t: lk_agents_abi::llm::realtime::InputTranscription,
         started_at: Option<f64>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let speech =
             ServerSpeech::Transcription { text: t.transcript.clone(), is_final: t.is_final };
         let eff = self.activity.audio_recognition.on_server(now, speech);
-        cycle.machine().append(eff);
+        out.machine().append(eff);
         if t.is_final {
-            self.upsert_user_transcript(t, started_at, cycle);
+            self.upsert_user_transcript(t, started_at, out);
         }
     }
 
@@ -994,7 +993,7 @@ impl Driver {
         &mut self,
         t: lk_agents_abi::llm::realtime::InputTranscription,
         started_at: Option<f64>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let started = started_at.and_then(|at| {
             let since_epoch = Duration::try_from_secs_f64(at).ok()?;
@@ -1004,7 +1003,7 @@ impl Driver {
         let mut item = ChatMessage::text(t.item_id.clone(), Role::User, &t.transcript, created_at);
         item.metrics.started_speaking_at = started.map(|(at, _)| at);
         let source = Source::Remote { item_id: t.item_id };
-        self.commit_item(item.into(), source, Visibility::Both, cycle);
+        self.commit_item(item.into(), source, Visibility::Both, out);
     }
 
     /// An item the server added to its mirror, recorded once (duplicate ids ignored).
@@ -1012,7 +1011,7 @@ impl Driver {
         &mut self,
         previous_item_id: Option<String>,
         item: lk_agents_abi::ChatItem,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let id = item.id().to_owned();
         if self.session.record.contains(&id) {
@@ -1022,26 +1021,26 @@ impl Driver {
             && !self.session.record.contains(anchor)
         {
             let message = "realtime server anchored an item to one this session does not hold; placed by its stamp";
-            diagnose(cycle, DiagnosticEvent::warning(message).with("item_id", id.clone()));
+            diagnose(out, DiagnosticEvent::warning(message).with("item_id", id.clone()));
         }
-        self.commit_item(item, Source::Remote { item_id: id }, Visibility::Both, cycle);
+        self.commit_item(item, Source::Remote { item_id: id }, Visibility::Both, out);
     }
 
     /// The open generation cancelled and truncated to what was heard. The interruption decision is
     /// `decide_interrupt`'s; this only actuates it.
-    pub(crate) fn realtime_interrupt(&mut self, cycle: &mut Cycle) {
+    pub(crate) fn realtime_interrupt(&mut self, out: &mut Out) {
         if self.activity.rt_session.is_none() {
             return;
         }
         if self.session.closing_past_edge() {
-            return self.realtime_on_close(cycle);
+            return self.realtime_on_close(out);
         }
-        if self.activity.realtime_turns.ended() {
-            return self.settle_all(Settled::Ended, false, cycle);
+        if self.activity.realtime_state.ended() {
+            return self.settle_all(Settled::Ended, false, out);
         }
         // What the user heard, only while speaking: otherwise the tracker holds the previous
         // speech's mark.
-        let played = (self.session.presence.agent_state() == AgentState::Speaking)
+        let played = (self.session.states.agent_state() == AgentState::Speaking)
             .then(|| self.shared.output.audio().map(|out| out.tracker().position()))
             .flatten();
         // Only a generation whose speech stopped: the cancel is session-wide, and a speech that
@@ -1049,18 +1048,18 @@ impl Driver {
         let current = self.activity.speech_scheduler.current_speech();
         let playing_on: BTreeSet<SpeechId> = {
             let tasks = &self.activity.speech_scheduler;
-            let open = self.activity.realtime_turns.open_speeches();
+            let open = self.activity.realtime_state.open_speeches();
             open.into_iter()
                 .filter(|s| tasks.handle(*s).is_some_and(|h| !h.interrupted()))
                 .collect()
         };
         let interrupts = self
             .activity
-            .realtime_turns
+            .realtime_state
             .cancel_where(|speech| speech.is_none_or(|s| !playing_on.contains(&s)));
-        let truncation = self.activity.realtime_turns.caps.message_truncation;
+        let truncation = self.activity.realtime_state.caps.message_truncation;
         for (cmd, speech, message_id) in interrupts {
-            self.rt_send(cmd, cycle);
+            self.rt_send(cmd, out);
             // Only what was heard, and only when something was: the playing speech's message.
             if let Some(message_id) = message_id.filter(|_| speech.is_some() && speech == current)
                 && let Some(played) = played.filter(|p| !p.is_zero() && truncation)
@@ -1071,25 +1070,25 @@ impl Driver {
                     audio_end_ms: u64::try_from(played.as_millis()).unwrap_or(u64::MAX),
                     audio_transcript: None,
                 };
-                self.rt_send(RealtimeCommand::Truncate(truncate), cycle);
+                self.rt_send(RealtimeCommand::Truncate(truncate), out);
             }
         }
-        self.settle_all(Settled::Interrupted, true, cycle);
+        self.settle_all(Settled::Interrupted, true, out);
     }
 
     /// The session closes: every pending request settles `Closing`; every open generation is
     /// cancelled.
-    pub(crate) fn realtime_on_close(&mut self, cycle: &mut Cycle) {
-        self.activity.realtime_turns.closing = true;
-        for (cmd, ..) in self.activity.realtime_turns.cancel_where(|_| true) {
-            self.rt_send(cmd, cycle);
+    pub(crate) fn realtime_on_close(&mut self, out: &mut Out) {
+        self.activity.realtime_state.closing = true;
+        for (cmd, ..) in self.activity.realtime_state.cancel_where(|_| true) {
+            self.rt_send(cmd, out);
         }
-        self.settle_all(Settled::Closing, true, cycle);
+        self.settle_all(Settled::Closing, true, out);
     }
 }
 
-fn diagnose(cycle: &mut Cycle, d: DiagnosticEvent) {
-    cycle.machine().emit(SessionEvent::Diagnostic(d));
+fn diagnose(out: &mut Out, d: DiagnosticEvent) {
+    out.machine().emit(SessionEvent::Diagnostic(d));
 }
 
 /// The client-side turn inputs `_resolve_rt_turn_detection_enabled` reads beside the capabilities.

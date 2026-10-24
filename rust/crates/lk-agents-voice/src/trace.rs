@@ -1,7 +1,7 @@
 use crate::agent_activity::pause::InterruptRefusal;
 use crate::agent_activity::scheduling::{PreemptiveVerdict, SpeechId};
-use crate::agent_session::cycle::TurnTimer;
-pub use crate::agent_session::cycle::{GateCause, GateOp};
+use crate::agent_session::effects::TurnTimer;
+pub use crate::agent_session::effects::{GateCause, GateOp};
 use crate::audio_recognition::CommitVerdict;
 use crate::events::SessionEvent;
 use lk_agents_abi::Ts;
@@ -13,7 +13,7 @@ pub enum Step {
     /// Selected for publication; not an acknowledgement of host delivery.
     Emitted(SessionEvent),
     /// Journalled where decided (before `decide_commit` rules on an `EndOfTurn`).
-    Decided(crate::agent_session::cycle::Decision),
+    Decided(crate::agent_session::effects::Decision),
 
     Core(CoreStep),
     Turn(TurnStep),
@@ -63,10 +63,10 @@ pub enum CoreStep {
         kind: &'static str,
     },
     TimerArmed {
-        timer: crate::agent_session::cycle::TurnTimer,
+        timer: crate::agent_session::effects::TurnTimer,
         at: lk_agents_abi::Ts,
     },
-    TimerCancelled(crate::agent_session::cycle::TurnTimer),
+    TimerCancelled(crate::agent_session::effects::TurnTimer),
     /// Recorded as the cycle that performs it begins.
     TimerFired(TurnTimer, Ts),
     /// The whole configuration in effect after a layer of the option stack was applied. What a
@@ -504,9 +504,9 @@ pub enum InputStep {
         stt_reopened: bool,
         vad_reopened: bool,
     },
-    ProviderCalled(crate::agent_session::cycle::ProviderCall),
+    ProviderCalled(crate::agent_session::effects::ProviderCall),
     /// A detector call the machine asked for, recorded where it was decided.
-    DetectorCalled(crate::agent_session::cycle::DetectorCall),
+    DetectorCalled(crate::agent_session::effects::DetectorCall),
     /// A host stream was closed by the driver, and how the close went (bounded on the session clock).
     HostStreamClosed {
         label: &'static str,
@@ -913,7 +913,7 @@ pub fn step_names() -> Vec<String> {
         Close => close_step_vocabulary::NAMES;
         Detector => detector_step_vocabulary::NAMES;
         Room => room_step_vocabulary::NAMES;
-        Decided => crate::agent_session::cycle::decision_vocabulary::NAMES;
+        Decided => crate::agent_session::effects::decision_vocabulary::NAMES;
     }
     assert_step_is_covered::<Names, &'static [&'static str]>();
 

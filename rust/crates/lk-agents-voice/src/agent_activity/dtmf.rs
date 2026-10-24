@@ -2,7 +2,7 @@
 //! optional read-back to confirm them.
 
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::cycle::{Cycle, TurnTimer};
+use crate::agent_session::effects::{Out, TurnTimer};
 use crate::agent_session::{Answer, Driver, DtmfCommand, RequestId};
 use crate::events::SessionEvent;
 use crate::trace::{InterruptCause, InterruptStep};
@@ -41,78 +41,78 @@ impl DtmfCollection {
 }
 
 impl Driver {
-    pub(crate) fn on_dtmf(&mut self, now: Ts, cmd: DtmfCommand, cycle: &mut Cycle) {
+    pub(crate) fn on_dtmf(&mut self, now: Ts, cmd: DtmfCommand, out: &mut Out) {
         match cmd {
             DtmfCommand::Start { collector, call } => {
-                self.dtmf_stop(cycle);
+                self.dtmf_stop(out);
                 self.activity.dtmf =
                     Some(DtmfCollection { collector, call, armed: false, confirm: None });
             }
             DtmfCommand::Digit { digit } => {
                 let Some(dtmf) = &mut self.activity.dtmf else { return };
                 let action = dtmf.collector.on_sip_dtmf(&digit, now);
-                self.dtmf_perform(now, action, cycle);
+                self.dtmf_perform(now, action, out);
             }
-            DtmfCommand::Stop => self.dtmf_stop(cycle),
+            DtmfCommand::Stop => self.dtmf_stop(out),
         }
     }
 
     /// The collection stops: its guard released (the host reading `dtmf_reply_running()` must not
     /// see a guard nobody will release), its debounce cancelled, an owed answer `Stopped`.
-    pub(crate) fn dtmf_stop(&mut self, cycle: &mut Cycle) {
+    pub(crate) fn dtmf_stop(&mut self, out: &mut Out) {
         let Some(mut dtmf) = self.activity.dtmf.take() else { return };
         dtmf.collector.finish_reply();
         if dtmf.armed {
-            cycle.machine().cancel(TurnTimer::DtmfDebounce);
+            out.machine().cancel(TurnTimer::DtmfDebounce);
         }
         self.answer(dtmf.call, Answer::Dtmf(DtmfOutcome::Stopped));
     }
 
     /// A state edge on its way to the host: a speaker cancels the debounce, both quiet restarts
     /// it, and the read-back's end releases the guard.
-    pub(crate) fn dtmf_on_event(&mut self, now: Ts, ev: &SessionEvent, cycle: &mut Cycle) {
+    pub(crate) fn dtmf_on_event(&mut self, now: Ts, ev: &SessionEvent, out: &mut Out) {
         let Some(action) = self.activity.dtmf.as_mut().and_then(|d| d.on_event(ev, now)) else {
             return;
         };
-        self.dtmf_perform(now, action, cycle);
+        self.dtmf_perform(now, action, out);
     }
 
-    fn dtmf_perform(&mut self, now: Ts, action: DtmfAction, cycle: &mut Cycle) {
+    fn dtmf_perform(&mut self, now: Ts, action: DtmfAction, out: &mut Out) {
         let Some(dtmf) = &mut self.activity.dtmf else { return };
         match action {
             DtmfAction::Idle | DtmfAction::Ignored => {}
             // `schedule()` replaces a pending timer: one arm, which the timer set replaces.
             DtmfAction::Schedule { at } => {
                 dtmf.armed = true;
-                cycle.machine().arm(TurnTimer::DtmfDebounce, at);
+                out.machine().arm(TurnTimer::DtmfDebounce, at);
             }
             // `Debounced.run()`: the pending timer cancelled, the body now.
             DtmfAction::Cancel | DtmfAction::RunNow => {
                 if std::mem::take(&mut dtmf.armed) {
-                    cycle.machine().cancel(TurnTimer::DtmfDebounce);
+                    out.machine().cancel(TurnTimer::DtmfDebounce);
                 }
                 if matches!(action, DtmfAction::RunNow) {
-                    self.dtmf_reply(now, cycle);
+                    self.dtmf_reply(now, out);
                 }
             }
         }
     }
 
-    pub(crate) fn on_dtmf_debounce(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn on_dtmf_debounce(&mut self, now: Ts, out: &mut Out) {
         let Some(dtmf) = &mut self.activity.dtmf else { return };
         dtmf.armed = false;
-        self.dtmf_reply(now, cycle);
+        self.dtmf_reply(now, out);
     }
 
     /// `_generate_dtmf_reply`: interrupt, then the collector's decision; the confirm arm holds the
     /// guard until the read-back is done.
-    fn dtmf_reply(&mut self, now: Ts, cycle: &mut Cycle) {
+    fn dtmf_reply(&mut self, now: Ts, out: &mut Out) {
         if self.activity.dtmf.is_none() {
             return;
         }
         // `self.session.interrupt()`: the host's non-forced interrupt, from the task's code.
-        cycle.trace(InterruptStep::HostInterrupt { speech: None, force: false });
-        if let Ok(speeches) = self.interrupt_all(now, false, InterruptCause::Host, cycle) {
+        out.trace(InterruptStep::HostInterrupt { speech: None, force: false });
+        if let Ok(speeches) = self.interrupt_all(now, false, InterruptCause::Host, out) {
             let waiter = crate::agent_activity::pause::InterruptWaiter { speeches, call: None };
             self.activity.interrupt_waiters.push(waiter);
         }
@@ -120,7 +120,7 @@ impl Driver {
         let outcome = match dtmf.collector.generate_reply() {
             DtmfReply::Incomplete(error) => DtmfOutcome::Incomplete { message: error.message },
             DtmfReply::Complete(result) => DtmfOutcome::Complete(result),
-            DtmfReply::Confirm { user_input } => return self.dtmf_confirm(now, user_input, cycle),
+            DtmfReply::Confirm { user_input } => return self.dtmf_confirm(now, user_input, out),
         };
         // The guard released; the call answered once (`if not self.done()`: a task already
         // completed takes no second result).
@@ -131,7 +131,7 @@ impl Driver {
 
     /// The confirm arm's read-back, which holds the collector's guard until it is done; one
     /// refused at creation (a draining or closing queue) releases it now.
-    fn dtmf_confirm(&mut self, now: Ts, user_input: String, cycle: &mut Cycle) {
+    fn dtmf_confirm(&mut self, now: Ts, user_input: String, out: &mut Out) {
         let h = self.generate_reply_speech(
             now,
             Some(user_input),
@@ -141,7 +141,7 @@ impl Driver {
             None,
             None,
             false,
-            cycle,
+            out,
         );
         let queued = self.activity.speech_scheduler.contains(h.id());
         let Some(dtmf) = &mut self.activity.dtmf else { return };

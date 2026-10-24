@@ -436,7 +436,7 @@ user state.
   drain close and a hard close could be two columns from that step alone.
 - **Not checked**: the session closes with `error` at exactly `max_unrecoverable_errors + 1`
   consecutive unrecoverable errors on one leg, and the count resets when the agent speaks or a
-  transcript arrives (`ErrorBudget`); a close that is not an error waits for
+  transcript arrives (`ErrorCounts`); a close that is not an error waits for
   the trailing transcript; a second close joins the first.
 - **Never sent**: close reasons other than `user_initiated`, a close carrying an error
   (`apply.rs:439`).

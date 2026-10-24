@@ -3,7 +3,7 @@
 
 use crate::agent_activity::pause::InterruptOutcome;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::cycle::Cycle;
+use crate::agent_session::effects::Out;
 use crate::agent_session::{
     AgentUpdate, Driver, NewActivity, PreviousActivity, TaskCommand, TaskEntry,
 };
@@ -363,7 +363,7 @@ fn back_if<A, T: Clone>(entering: &Maybe<A>, current: &T) -> Maybe<T> {
 impl Driver {
     /// `await task` up to the slot: the re-entrancy check, the speech's interruption check and
     /// hold, the block, then the slot, taken now or queued for.
-    pub(crate) fn on_task(&mut self, now: Ts, cmd: TaskCommand, cycle: &mut Cycle) {
+    pub(crate) fn on_task(&mut self, now: Ts, cmd: TaskCommand, out: &mut Out) {
         let TaskCommand::Enter(entry) = cmd;
         let entry = *entry;
         if entry.handle.begin().is_err() {
@@ -372,7 +372,7 @@ impl Driver {
         // Closing: refused before the speech is held or blocked, so the close's drain cannot cut
         // the speech before its outputs commit.
         if self.session.closing.is_some() {
-            return self.refuse_closing(&entry.handle, None, cycle);
+            return self.refuse_closing(&entry.handle, None, out);
         }
         if let Some(speech) = entry.speech {
             // An interrupted speech cannot anchor a task; a live one is held so a interruption cannot
@@ -384,42 +384,42 @@ impl Driver {
                 .is_some_and(|h| !h.interrupted() && h.hold_interruptions().is_ok());
             if !held {
                 let _ = entry.handle.fail(ToolError::plain(SPEECH_INTERRUPTED));
-                return self.release_awaiter(&entry.handle, None, cycle);
+                return self.release_awaiter(&entry.handle, None, out);
             }
             // The host swapped the agent under the speech's tool: the reference would refuse the
             // hand-back ("Ignoring handoff to the previous agent"), so the entry is refused as an
             // orphan and the speech cut whole.
             if self.speech_frame_left(speech) {
-                return self.refuse_orphan(now, &entry.handle, speech, cycle);
+                return self.refuse_orphan(now, &entry.handle, speech, out);
             }
             // Block before queueing: otherwise a pause waits for a speech waiting for the pause.
             // Counted per speech; the scheduling task hears the first block only.
             if self.activity.drain_blocked.block(speech) {
-                cycle.trace(SpeechStep::Blocked { speech, blocked: true });
-                self.set_drain_blocked(speech, true, cycle);
+                out.trace(SpeechStep::Blocked { speech, blocked: true });
+                self.set_drain_blocked(speech, true, out);
             }
         }
         let agent = self.activity.agent.clone();
         if let Some(entry) = self.activity.tasks.enqueue(entry, &agent) {
-            self.take_slot(now, entry, cycle);
+            self.take_slot(now, entry, out);
         }
     }
 
     /// Past the queue: `enter_task`'s closing and swapped-frame checks again now that the entry
     /// starts, then the entry handoff (parent paused, drained but for blocked speeches, the task's
     /// frame installed with its `on_enter`).
-    fn take_slot(&mut self, now: Ts, entry: TaskEntry, cycle: &mut Cycle) {
+    fn take_slot(&mut self, now: Ts, entry: TaskEntry, out: &mut Out) {
         let TaskEntry { handle, mut frame, speech, preserve_function_call_history, parent: _ } =
             entry;
         if self.session.closing.is_some() {
-            self.refuse_closing(&handle, speech, cycle);
-            return self.next_queued(now, cycle);
+            self.refuse_closing(&handle, speech, out);
+            return self.next_queued(now, out);
         }
         if let Some(speech) = speech
             && self.speech_frame_left(speech)
         {
-            self.refuse_orphan(now, &handle, speech, cycle);
-            return self.next_queued(now, cycle);
+            self.refuse_orphan(now, &handle, speech, out);
+            return self.next_queued(now, out);
         }
         handle.advance(TaskPhase::Entering);
         let agent = frame.agent.clone();
@@ -429,7 +429,7 @@ impl Driver {
         frame.task = Some(handle.id());
         let merge = ContextMerge::for_task(preserve_function_call_history);
         self.activity.tasks.enter(handle, speech, agent, merge);
-        self.begin_handoff(now, Box::new(frame), cycle);
+        self.begin_handoff(now, Box::new(frame), out);
     }
 
     /// The entry handoff is starting: capture the parent now, since the entry may have queued
@@ -457,11 +457,11 @@ impl Driver {
 
     /// The task's frame landed: push the parent's slot. A settle seen while entering begins the
     /// exit at once.
-    pub(crate) fn on_task_frame_installed(&mut self, now: Ts, task: TaskId, cycle: &mut Cycle) {
+    pub(crate) fn on_task_frame_installed(&mut self, now: Ts, task: TaskId, out: &mut Out) {
         let (speech, exit_now) = match self.activity.tasks.frame_installed(&task) {
             FrameInstalled::NoTask => return,
             FrameInstalled::NotEntering => {
-                cycle.trace(CoreStep::PortFailure(
+                out.trace(CoreStep::PortFailure(
                     "a task frame landed for a task that is not the frame's entering one",
                 ));
                 return;
@@ -469,25 +469,25 @@ impl Driver {
             FrameInstalled::Running { speech, exit_now } => (speech, exit_now),
         };
         // The watching run lets the awaiting speech and parent's `on_enter` go while the task runs.
-        let suspended = self.run_suspend_for_task(speech, cycle);
+        let suspended = self.run_suspend_for_task(speech, out);
         self.activity.tasks.set_suspended(suspended);
         if exit_now {
-            self.begin_task_exit(now, cycle);
+            self.begin_task_exit(now, out);
         }
     }
 
     /// The parent's frame is back: the task's slot is discarded (its queue refused), the parent's
     /// restored, the awaiter released; then the next queued task takes the slot.
-    pub(crate) fn on_task_frame_popped(&mut self, now: Ts, task: TaskId, cycle: &mut Cycle) {
+    pub(crate) fn on_task_frame_popped(&mut self, now: Ts, task: TaskId, out: &mut Out) {
         let (live, task_slot) = match self.activity.tasks.pop_frame() {
             FramePopped::NoFrame => {
-                cycle.trace(CoreStep::PortFailure(
+                out.trace(CoreStep::PortFailure(
                     "a task exit landed with no pushed frame beneath it",
                 ));
                 return;
             }
             FramePopped::NoTask => {
-                cycle.trace(CoreStep::PortFailure(
+                out.trace(CoreStep::PortFailure(
                     "a task exit landed for a frame that holds no task",
                 ));
                 return;
@@ -495,13 +495,13 @@ impl Driver {
             FramePopped::Popped { live, task_slot } => (live, task_slot),
         };
         if live.handle().id() != task {
-            cycle.trace(CoreStep::PortFailure(
+            out.trace(CoreStep::PortFailure(
                 "a task exit landed for a task that is not the frame's",
             ));
         }
-        self.refuse_slot(task_slot, cycle);
-        self.finish_task(live, cycle);
-        self.after_task_exit(now, cycle);
+        self.refuse_slot(task_slot, out);
+        self.finish_task(live, out);
+        self.after_task_exit(now, out);
     }
 
     /// A task's handoff was refused. Entry: the task never ran (`ToolError("activity doesn't start
@@ -512,7 +512,7 @@ impl Driver {
         now: Ts,
         task: TaskId,
         next: NewActivity,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         match next {
             NewActivity::Start => {
@@ -523,18 +523,18 @@ impl Driver {
                         live.agent()
                     )));
                 }
-                self.release_awaiter(live.handle(), live.speech(), cycle);
-                self.next_queued(now, cycle);
+                self.release_awaiter(live.handle(), live.speech(), out);
+                self.next_queued(now, out);
             }
             NewActivity::Resume => {
                 if !self.activity.tasks.drives(&task) {
                     return;
                 }
                 // The task's frame stays; a close abandons the rest, the parent's queue with it.
-                return self.leave_parent_slot(now, cycle);
+                return self.leave_parent_slot(now, out);
             }
         }
-        self.after_task_exit(now, cycle);
+        self.after_task_exit(now, out);
     }
 
     /// Before the exit's carry folds the task's turns into the parent: the task's calls and
@@ -547,16 +547,16 @@ impl Driver {
 
     /// A wake for the innermost task: its handle settled, or its awaiting speech ended under it.
     /// A task still entering begins its exit when its frame lands (`on_task_frame_installed`).
-    pub(crate) fn on_task_wake(&mut self, now: Ts, task: TaskId, cycle: &mut Cycle) {
+    pub(crate) fn on_task_wake(&mut self, now: Ts, task: TaskId, out: &mut Out) {
         // `agent._handle_task_done`: the awaiter is gone; the task is terminated.
         if self.activity.tasks.settle(&task) {
-            self.begin_task_exit(now, cycle);
+            self.begin_task_exit(now, out);
         }
     }
 
     /// The `finally` of `AgentTask.__await_impl`: interrupt the task's speeches, the agent-changed
     /// check, the merge, the exit handoff.
-    fn begin_task_exit(&mut self, now: Ts, cycle: &mut Cycle) {
+    fn begin_task_exit(&mut self, now: Ts, out: &mut Out) {
         let Some(TaskExit { task, agent, awaiting, cancel, merge }) =
             self.activity.tasks.begin_exit()
         else {
@@ -569,9 +569,9 @@ impl Driver {
                 .filter(|s| !blocked.contains(*s))
                 .collect();
             for speech in open {
-                match self.interrupt_speech(now, speech, InterruptCause::Host, true, cycle) {
+                match self.interrupt_speech(now, speech, InterruptCause::Host, true, out) {
                     Ok(InterruptOutcome::Now { .. } | InterruptOutcome::Already) => {}
-                    Err(_) => cycle.trace(CoreStep::PortFailure(
+                    Err(_) => out.trace(CoreStep::PortFailure(
                         "a cancelled task's forced interrupt was refused",
                     )),
                 }
@@ -583,9 +583,9 @@ impl Driver {
             // to the previous agent"). The parent's slot goes with it, its queued tasks refused;
             // the awaiting speech is cut whole, its outputs still commit.
             if let Some(speech) = awaiting {
-                self.cut_orphaned(now, speech, cycle);
+                self.cut_orphaned(now, speech, out);
             }
-            return self.leave_parent_slot(now, cycle);
+            return self.leave_parent_slot(now, out);
         }
         // `old_agent.chat_ctx.merge(self.chat_ctx, exclude_function_call=..)`.
         if merge.exclude_function_call {
@@ -594,19 +594,19 @@ impl Driver {
         }
         let Some(restore) = self.activity.tasks.take_restore() else { return };
         let Some(restore) = restore else {
-            cycle.trace(CoreStep::PortFailure("a task exit with no captured parent frame"));
-            return self.leave_parent_slot(now, cycle);
+            out.trace(CoreStep::PortFailure("a task exit with no captured parent frame"));
+            return self.leave_parent_slot(now, out);
         };
         debug_assert_eq!(restore.task, Some(task));
-        self.begin_handoff(now, Box::new(restore), cycle);
+        self.begin_handoff(now, Box::new(restore), out);
     }
 
     /// An orphaned task's awaiting speech, cut whole (its outputs still commit).
-    fn cut_orphaned(&mut self, now: Ts, speech: SpeechId, cycle: &mut Cycle) {
+    fn cut_orphaned(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
         if self.activity.speech_scheduler.contains(speech)
-            && self.interrupt_speech(now, speech, InterruptCause::Handoff, true, cycle).is_err()
+            && self.interrupt_speech(now, speech, InterruptCause::Handoff, true, out).is_err()
         {
-            cycle.trace(CoreStep::PortFailure(
+            out.trace(CoreStep::PortFailure(
                 "an orphaned task's awaiting speech refused its forced cut",
             ));
         }
@@ -619,29 +619,29 @@ impl Driver {
         now: Ts,
         handle: &TaskHandle<HostRef>,
         speech: SpeechId,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let _ = handle.fail(ToolError::plain(AGENT_CHANGED));
-        self.cut_orphaned(now, speech, cycle);
-        self.release_awaiter(handle, Some(speech), cycle);
+        self.cut_orphaned(now, speech, out);
+        self.release_awaiter(handle, Some(speech), out);
     }
 
     /// A parent frame that is not coming back: its slot leaves the chain, every queued task
     /// refused as closing, its running task finished, then what follows a task's exit.
-    fn leave_parent_slot(&mut self, now: Ts, cycle: &mut Cycle) {
+    fn leave_parent_slot(&mut self, now: Ts, out: &mut Out) {
         let Some(slot) = self.activity.tasks.pop_parent() else { return };
         let (current, queue) = slot.into_parts();
-        self.refuse_queue(queue, cycle);
+        self.refuse_queue(queue, out);
         let Some(live) = current else { return };
-        self.finish_task(live, cycle);
-        self.after_task_exit(now, cycle);
+        self.finish_task(live, out);
+        self.after_task_exit(now, out);
     }
 
     /// The task is over for its awaiter: speech unblocked and released, handle `Exited`; what the
     /// task suspended is the current run's again (`agent.AgentTask.__await_impl`).
-    fn finish_task(&mut self, live: LiveTask, cycle: &mut Cycle) {
-        self.release_awaiter(live.handle(), live.speech(), cycle);
-        self.run_resume_after_task(live.into_suspended(), cycle);
+    fn finish_task(&mut self, live: LiveTask, out: &mut Out) {
+        self.release_awaiter(live.handle(), live.speech(), out);
+        self.run_resume_after_task(live.into_suspended(), out);
     }
 
     /// Unblock and release the speech, then wake the awaiter (`Exited` last, so it never sees a
@@ -650,13 +650,13 @@ impl Driver {
         &mut self,
         handle: &TaskHandle<HostRef>,
         speech: Option<SpeechId>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         if let Some(speech) = speech {
             // The last release puts the parked speech back as the current speech.
             if self.activity.drain_blocked.unblock(speech) {
-                cycle.trace(SpeechStep::Blocked { speech, blocked: false });
-                self.set_drain_blocked(speech, false, cycle);
+                out.trace(SpeechStep::Blocked { speech, blocked: false });
+                self.set_drain_blocked(speech, false, out);
             }
             if let Some(h) = self.activity.speech_scheduler.handle(speech) {
                 h.release_interruptions();
@@ -669,29 +669,29 @@ impl Driver {
     }
 
     /// After a task left the chain: the next queued task takes the slot; an unwinding close moves on.
-    fn after_task_exit(&mut self, now: Ts, cycle: &mut Cycle) {
-        self.next_queued(now, cycle);
-        self.close_unwind_step(now, cycle);
+    fn after_task_exit(&mut self, now: Ts, out: &mut Out) {
+        self.next_queued(now, out);
+        self.close_unwind_step(now, out);
     }
 
-    fn next_queued(&mut self, now: Ts, cycle: &mut Cycle) {
+    fn next_queued(&mut self, now: Ts, out: &mut Out) {
         if let Some(entry) = self.activity.tasks.next_entry() {
-            self.take_slot(now, entry, cycle);
+            self.take_slot(now, entry, out);
         }
     }
 
     /// A slot whose frame is gone: every task queued on it is refused as closing.
-    fn refuse_slot(&mut self, slot: TaskSlot, cycle: &mut Cycle) {
+    fn refuse_slot(&mut self, slot: TaskSlot, out: &mut Out) {
         let (current, queue) = slot.into_parts();
         if let Some(live) = current {
-            self.refuse_closing(live.handle(), live.speech(), cycle);
+            self.refuse_closing(live.handle(), live.speech(), out);
         }
-        self.refuse_queue(queue, cycle);
+        self.refuse_queue(queue, out);
     }
 
-    fn refuse_queue(&mut self, queue: VecDeque<TaskEntry>, cycle: &mut Cycle) {
+    fn refuse_queue(&mut self, queue: VecDeque<TaskEntry>, out: &mut Out) {
         for entry in queue {
-            self.refuse_closing(&entry.handle, entry.speech, cycle);
+            self.refuse_closing(&entry.handle, entry.speech, out);
         }
     }
 
@@ -701,18 +701,18 @@ impl Driver {
         &mut self,
         handle: &TaskHandle<HostRef>,
         speech: Option<SpeechId>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let _ = handle.fail(ToolError::plain(ACTIVITY_CLOSING));
-        self.release_awaiter(handle, speech, cycle);
+        self.release_awaiter(handle, speech, out);
     }
 
     /// The close with a task live: cancel the innermost (`ToolError("AgentTask {id} is
     /// cancelled")`); `on_task_frame_popped` cancels the next. `false` when nothing is live.
-    pub(crate) fn cancel_innermost_task(&mut self, now: Ts, cycle: &mut Cycle) -> bool {
+    pub(crate) fn cancel_innermost_task(&mut self, now: Ts, out: &mut Out) -> bool {
         // Queued tasks never run: refused now, so their awaiters are released within the close.
         let queued = self.activity.tasks.take_queue();
-        self.refuse_queue(queued, cycle);
+        self.refuse_queue(queued, out);
         match self.activity.tasks.cancel_innermost() {
             None => false,
             // Already handing back (or entering with its settle seen): the unwind waits for it.
@@ -720,7 +720,7 @@ impl Driver {
             // Entering: the close's `plan_exit` refuses the entry handoff; the wake handles the
             // settle.
             Some(Some(task)) => {
-                self.on_task_wake(now, task, cycle);
+                self.on_task_wake(now, task, out);
                 true
             }
         }
@@ -728,32 +728,32 @@ impl Driver {
 
     /// The unwind's bound passed: every pushed frame popped without a handoff, awaiters released
     /// with the closing error. The driving frame stays for the close's `on_exit`.
-    pub(crate) fn abandon_tasks(&mut self, cycle: &mut Cycle) {
+    pub(crate) fn abandon_tasks(&mut self, out: &mut Out) {
         let slot = self.activity.tasks.take_driving_slot();
-        self.refuse_slot(slot, cycle);
+        self.refuse_slot(slot, out);
         while let Some(slot) = self.activity.tasks.pop_parent() {
             let (current, queue) = slot.into_parts();
             if let Some(live) = current {
                 let _ = live.handle().fail(ToolError::plain(ACTIVITY_CLOSING));
-                self.finish_task(live, cycle);
+                self.finish_task(live, out);
             }
-            self.refuse_queue(queue, cycle);
+            self.refuse_queue(queue, out);
         }
     }
 
     /// The loop is ending: no awaiter may be left parked on a handle that will never move.
     pub(crate) fn release_tasks_at_end(&mut self) {
-        let mut cycle = self.cycle();
-        self.abandon_tasks(&mut cycle);
+        let mut out = self.out();
+        self.abandon_tasks(&mut out);
     }
 
     /// A `TaskCommand` the loop will not perform: the awaiter is released with the closing error.
-    pub(crate) fn refuse_task_command(&mut self, cmd: TaskCommand, cycle: &mut Cycle) {
+    pub(crate) fn refuse_task_command(&mut self, cmd: TaskCommand, out: &mut Out) {
         match cmd {
             TaskCommand::Enter(entry) => {
                 let _ = entry.handle.begin();
                 // Never held or blocked: the command was refused before either.
-                self.refuse_closing(&entry.handle, None, cycle);
+                self.refuse_closing(&entry.handle, None, out);
             }
         }
     }

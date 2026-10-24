@@ -1,6 +1,6 @@
-use crate::agent_session::cycle::Cycle;
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_activity::GateSnapshot;
+use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::effects::Out;
 use crate::agent_session::{DriverError, Timebase, Tx};
 use crate::trace::{InputStep, LegEndCause};
 use lk_agents_abi::voice::events::AgentState;
@@ -140,9 +140,7 @@ fn mono(frame: &AudioFrame) -> AudioFrame {
 /// | `Eot`          | `Converted` | `Substituted` | `self._turn_detector_stream.push_audio` |
 /// | `Interruption` | `Converted` | `Real`        | `self._interruption_ch` (hears the user while the agent speaks) |
 /// | `Amd`          | `Raw`       | `Real`        | `self._session.amd.push_audio`        |
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, lk_agents_abi::Vocabulary,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, lk_agents_abi::Vocabulary)]
 pub enum LegId {
     Stt,
     Vad,
@@ -489,7 +487,8 @@ pub struct SpeakerFilter {
 
 struct SpeakerFilterState {
     detector: crate::audio_recognition::primary_speaker::PrimarySpeakerDetector,
-    journalled: std::collections::BTreeMap<String, crate::audio_recognition::primary_speaker::SpeakerClass>,
+    journalled:
+        std::collections::BTreeMap<String, crate::audio_recognition::primary_speaker::SpeakerClass>,
 }
 
 /// A fresh [`SpeakerFilter`] is built from it on every STT open.
@@ -513,7 +512,9 @@ pub struct SpeakerDecision {
 }
 
 impl SpeakerFilter {
-    pub fn new(detector: crate::audio_recognition::primary_speaker::PrimarySpeakerDetector) -> Arc<Self> {
+    pub fn new(
+        detector: crate::audio_recognition::primary_speaker::PrimarySpeakerDetector,
+    ) -> Arc<Self> {
         Arc::new(SpeakerFilter {
             inner: Mutex::new(SpeakerFilterState {
                 detector,
@@ -556,8 +557,14 @@ impl SpeakerFilter {
 
 /// How the loop changes the table, applied by `Driver::apply_leg_op`.
 pub enum LegOp {
-    Install { leg: LegId, sink: Arc<dyn StreamSink<AudioFrame>> },
-    InstallStt { sink: Arc<dyn StreamSink<AudioFrame>>, speaker: Option<Arc<SpeakerFilter>> },
+    Install {
+        leg: LegId,
+        sink: Arc<dyn StreamSink<AudioFrame>>,
+    },
+    InstallStt {
+        sink: Arc<dyn StreamSink<AudioFrame>>,
+        speaker: Option<Arc<SpeakerFilter>>,
+    },
     Clear(LegId),
     /// Point the pump at a new source, or stop it; the legs stay.
     SetSource(Option<Arc<dyn AudioInput>>),
@@ -632,7 +639,7 @@ impl LaunchGate {
 }
 
 #[derive(Clone)]
-pub(super) struct AudioPumpParts {
+pub(super) struct AudioForwarderParts {
     /// `(sample_rate, num_channels)` of the last mic frame (`AudioRecognition._sample_rate`), for
     /// the close's silence flush. Zero before any audio.
     pub(super) last_input: Arc<std::sync::atomic::AtomicU64>,
@@ -651,7 +658,7 @@ pub(super) struct AudioPumpParts {
     pub(super) time: Timebase,
 }
 
-impl AudioPumpParts {
+impl AudioForwarderParts {
     pub(super) async fn pump(self, input: Arc<dyn AudioInput>) {
         let mut p = self;
         let mut fan = AudioFanOut::new(p.rate);
@@ -699,25 +706,20 @@ impl AudioPumpParts {
             }
         };
         // The input is the host's, not a `HostStream`: nothing to close here, so no `Closed`.
-        let _ = p.ended.send(LegEnd {
-            leg: AUDIO_IN_LEG,
-            open: 0,
-            cause,
-            closed: None,
-            error: None,
-        });
+        let _ =
+            p.ended.send(LegEnd { leg: AUDIO_IN_LEG, open: 0, cause, closed: None, error: None });
     }
 }
 
 #[derive(Clone)]
-pub(super) struct VideoPumpParts {
+pub(super) struct VideoForwarderParts {
     pub(super) closing: tokio::sync::watch::Receiver<bool>,
     pub(super) ended: Tx<LegEnd>,
     /// The loop's queue; the sampler runs in the loop, on the session clock.
     pub(super) frames: Tx<lk_agents_rtc::VideoFrameRef>,
 }
 
-impl VideoPumpParts {
+impl VideoForwarderParts {
     pub(super) async fn pump(self, input: Arc<dyn lk_agents_voice::io::VideoInput>) {
         let mut p = self;
         let cause = loop {
@@ -734,13 +736,8 @@ impl VideoPumpParts {
                 return;
             }
         };
-        let _ = p.ended.send(LegEnd {
-            leg: VIDEO_IN_LEG,
-            open: 0,
-            cause,
-            closed: None,
-            error: None,
-        });
+        let _ =
+            p.ended.send(LegEnd { leg: VIDEO_IN_LEG, open: 0, cause, closed: None, error: None });
     }
 }
 
@@ -757,10 +754,10 @@ pub struct LegEnd {
 }
 
 /// Journal a [`LegEnd`]; the drain already cleared the row ([`Legs::ended`]).
-pub(super) fn on_leg_ended(end: LegEnd, cycle: &mut Cycle) {
-    cycle.trace(InputStep::LegEnded { leg: end.leg, cause: end.cause });
+pub(super) fn on_leg_ended(end: LegEnd, out: &mut Out) {
+    out.trace(InputStep::LegEnded { leg: end.leg, cause: end.cause });
     if let Some(how) = end.closed {
-        cycle.trace(InputStep::HostStreamClosed { label: end.leg, how });
+        out.trace(InputStep::HostStreamClosed { label: end.leg, how });
     }
 }
 

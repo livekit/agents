@@ -4,7 +4,7 @@
 
 use crate::agent::TurnEdit;
 use crate::agent_activity::handoff::FrameExit;
-use crate::agent_session::cycle::Cycle;
+use crate::agent_session::effects::Out;
 use crate::agent_session::{Driver, HookCall, HookId, HookKind, HookOutcome, HostEvent};
 use crate::audio_recognition::PendingTurn;
 use crate::run_result::Owned;
@@ -86,7 +86,7 @@ impl Driver {
         now: Ts,
         call: HookCall,
         wait: Option<Duration>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) -> bool {
         let id = call.id();
         let kind = call.kind();
@@ -100,7 +100,7 @@ impl Driver {
             HookCall::FillerSource { .. } => (None, None, None, None),
             HookCall::ToolsExecuted { speech, .. } => (None, Some(*speech), None, None),
         };
-        cycle.trace(HandoffStep::HookIssued { hook: id, kind, agent, speech, turn, at_tail });
+        out.trace(HandoffStep::HookIssued { hook: id, kind, agent, speech, turn, at_tail });
         let hosted =
             self.activity.hook_bound.is_some() && self.events.send(HostEvent::Hook(call)).is_ok();
         // Every `OnExit` is the driving agent's: its exit now runs while a host answers it, else
@@ -110,14 +110,14 @@ impl Driver {
                 if hosted { FrameExit::Exiting(id) } else { FrameExit::Exited };
         }
         if !hosted {
-            cycle.trace(HandoffStep::HookFinished { hook: id, kind, how: HookEnd::NoHost });
+            out.trace(HandoffStep::HookFinished { hook: id, kind, how: HookEnd::NoHost });
             return false;
         }
         let deadline = wait.map(|d| now.saturating_add(d));
         self.activity.hooks.wait_for(id, kind, deadline);
         // An open run owns the agent's `on_enter` and the describe a tool's handoff waits on.
         match kind {
-            HookKind::OnEnter | HookKind::DescribeAgent => self.run_own(Owned::Hook(id), cycle),
+            HookKind::OnEnter | HookKind::DescribeAgent => self.run_own(Owned::Hook(id), out),
             HookKind::OnExit
             | HookKind::OnUserTurnCompleted
             | HookKind::RenderToolReply
@@ -132,10 +132,10 @@ impl Driver {
     }
 
     /// Nothing waits on it.
-    pub(crate) fn issue_on_enter(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn issue_on_enter(&mut self, now: Ts, out: &mut Out) {
         let id = self.activity.hooks.mint();
         let agent = self.activity.agent.clone();
-        self.issue_hook(now, HookCall::OnEnter { id, agent }, None, cycle);
+        self.issue_hook(now, HookCall::OnEnter { id, agent }, None, out);
     }
 
     /// The turn parks on it until answer or bound.
@@ -144,7 +144,7 @@ impl Driver {
         now: Ts,
         info: crate::audio_recognition::EndOfTurnInfo,
         bound: Duration,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let id = self.activity.hooks.mint();
         let call = HookCall::OnUserTurnCompleted {
@@ -153,7 +153,7 @@ impl Driver {
             new_transcript: info.new_transcript.clone(),
             transcript_confidence: info.transcript_confidence,
         };
-        if self.issue_hook(now, call, None, cycle) {
+        if self.issue_hook(now, call, None, out) {
             self.activity.pending_turn = Some(PendingTurn {
                 info,
                 issued_at: now,
@@ -161,7 +161,7 @@ impl Driver {
                 hook: Some(id),
             });
         } else {
-            self.finish_turn(now, info, Vec::new(), cycle);
+            self.finish_turn(now, info, Vec::new(), out);
         }
     }
 
@@ -170,7 +170,7 @@ impl Driver {
         now: Ts,
         id: HookId,
         outcome: HookOutcome,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let how = match &outcome {
             HookOutcome::Failed => HookEnd::Failed,
@@ -182,15 +182,15 @@ impl Driver {
             | HookOutcome::ToolsExecuted { .. } => HookEnd::Returned { edits: 0 },
         };
         // An id nobody waits on (a late answer) is dropped.
-        let Some(kind) = self.finish_hook(id, how, cycle) else { return };
-        self.hook_ended(now, kind, id, outcome, cycle);
+        let Some(kind) = self.finish_hook(id, how, out) else { return };
+        self.hook_ended(now, kind, id, outcome, out);
     }
 
     /// The callback left `pending`, journalled and let go by the open run; `None` if not pending.
-    fn finish_hook(&mut self, id: HookId, how: HookEnd, cycle: &mut Cycle) -> Option<HookKind> {
+    fn finish_hook(&mut self, id: HookId, how: HookEnd, out: &mut Out) -> Option<HookKind> {
         let kind = self.activity.hooks.finish(id)?;
-        cycle.trace(HandoffStep::HookFinished { hook: id, kind, how });
-        self.run_release(Owned::Hook(id), cycle);
+        out.trace(HandoffStep::HookFinished { hook: id, kind, how });
+        self.run_release(Owned::Hook(id), out);
         Some(kind)
     }
 
@@ -204,7 +204,7 @@ impl Driver {
         kind: HookKind,
         id: HookId,
         outcome: HookOutcome,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         use HookOutcome::{Described, Failed, Filler, Rendered, Returned, ToolsExecuted, Turn};
         let fits = matches!(
@@ -218,26 +218,26 @@ impl Driver {
         );
         // The sequence must not hang on a malformed answer: it goes on as if unanswered.
         if !fits {
-            cycle.trace(CoreStep::PortFailure("hook outcome does not match the call it answers"));
+            out.trace(CoreStep::PortFailure("hook outcome does not match the call it answers"));
         }
         match kind {
             // In this order: the handoff waiting on it drains, a host drain pauses, the close
             // moves on.
             HookKind::OnExit => {
-                self.handoff_exit_done(now, id, cycle);
+                self.handoff_exit_done(now, id, out);
                 self.activity.handoff.exit_ended(id);
-                self.drain_exit_done(now, id, cycle);
-                self.close_exit_done(now, id, cycle);
+                self.drain_exit_done(now, id, out);
+                self.close_exit_done(now, id, out);
             }
             HookKind::OnEnter => {}
             HookKind::DescribeAgent => match outcome {
-                Described(update) => self.describe_answered(now, id, update, cycle),
+                Described(update) => self.describe_answered(now, id, update, out),
                 Failed
                 | Returned
                 | Turn(_)
                 | Rendered(_)
                 | Filler { .. }
-                | ToolsExecuted { .. } => self.drop_describe(now, id, cycle),
+                | ToolsExecuted { .. } => self.drop_describe(now, id, out),
             },
             // "error occurred during on_user_turn_completed": return, no reply.
             HookKind::OnUserTurnCompleted => {
@@ -253,7 +253,7 @@ impl Driver {
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
-                    self.finish_turn(now, pending.finished(now), edits, cycle)
+                    self.finish_turn(now, pending.finished(now), edits, out)
                 }
             }
             // The deferred tool reply's instructions, or the defaults when rendering failed.
@@ -267,7 +267,7 @@ impl Driver {
                     | Filler { .. }
                     | ToolsExecuted { .. } => None,
                 };
-                self.on_tool_reply_rendered(now, id, text, cycle)
+                self.on_tool_reply_rendered(now, id, text, out)
             }
             // The filler's callable: text, a speech it made itself, or nothing; raising skips.
             HookKind::FillerSource => {
@@ -280,7 +280,7 @@ impl Driver {
                     | Rendered(_)
                     | ToolsExecuted { .. } => (None, false),
                 };
-                self.on_filler_source(now, id, text, spoke, cycle)
+                self.on_filler_source(now, id, text, spoke, out)
             }
             // What the handlers left; unanswered, the event stands as issued.
             HookKind::ToolsExecuted => {
@@ -292,21 +292,21 @@ impl Driver {
                         None
                     }
                 };
-                self.on_tools_executed_handled(id, left, cycle)
+                self.on_tools_executed_handled(id, left, out)
             }
         }
     }
 
     /// Expired bounds: an unreturned `on_exit` lets the drain go on; an unanswered describe drops
     /// the handoff.
-    pub(crate) fn expire_hooks(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn expire_hooks(&mut self, now: Ts, out: &mut Out) {
         let due: Vec<_> = (self.activity.hooks.pending.iter())
             .filter(|(_, h)| h.deadline.is_some_and(|d| d <= now))
             .map(|(id, _)| *id)
             .collect();
         for id in due {
-            if let Some(kind) = self.finish_hook(id, HookEnd::TimedOut, cycle) {
-                self.hook_ended(now, kind, id, HookOutcome::Failed, cycle);
+            if let Some(kind) = self.finish_hook(id, HookEnd::TimedOut, out) {
+                self.hook_ended(now, kind, id, HookOutcome::Failed, out);
             }
         }
     }

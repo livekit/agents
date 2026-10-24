@@ -5,7 +5,7 @@ use crate::agent::{Source, Visibility};
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::closing::SESSION_CLOSING;
-use crate::agent_session::cycle::{Cycle, TurnTimer};
+use crate::agent_session::effects::{Out, TurnTimer};
 use crate::agent_session::{Driver, FillerSource, HookCall, HookId, ToolUpdate};
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
@@ -29,9 +29,9 @@ impl Driver {
         step: u32,
         call: FunctionCall,
         hosted: bool,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
-        cycle.trace(TraceToolStep::CallStarted {
+        out.trace(TraceToolStep::CallStarted {
             speech,
             call_id: call.call_id.clone(),
             name: call.name.clone(),
@@ -41,16 +41,16 @@ impl Driver {
             return;
         }
         let closing = self.session.closing_past_edge();
-        cycle.machine().append(self.session.presence.on_tool_call_started(now, closing));
+        out.machine().append(self.session.states.on_tool_call_started(now, closing));
         // The call is the run's once it runs, whichever run is open when it is committed.
         if let Some(run) = self.session.runs.id()
             && self.session.runs.owns(crate::run_result::Owned::Speech(speech))
         {
             let item = Box::new(lk_agents_abi::ChatItem::FunctionCall(call.clone()));
-            cycle.machine().emit(SessionEvent::RunItemAdded { run, item });
+            out.machine().emit(SessionEvent::RunItemAdded { run, item });
         }
         let output_id = self.session.ids.mint("item");
-        cycle.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
+        out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
             call: call.clone(),
         }));
         self.activity.tools.start(call, output_id, speech, step);
@@ -64,9 +64,9 @@ impl Driver {
         call_id: String,
         end: ToolEnd,
         message: Option<String>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
-        cycle.trace(TraceToolStep::CallEnded { speech, call_id: call_id.clone(), end });
+        out.trace(TraceToolStep::CallEnded { speech, call_id: call_id.clone(), end });
         // Ending the wrong call leaves one the close would answer twice.
         if !self.activity.tools.end(speech, &call_id, end == ToolEnd::Detached) {
             return;
@@ -76,8 +76,8 @@ impl Driver {
             ToolEnd::Error => ToolEndStatus::Error,
             ToolEnd::Cancelled => ToolEndStatus::Cancelled,
             ToolEnd::Detached => {
-                self.fillers_reset_dwell(now, &call_id, cycle);
-                cycle.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Updated {
+                self.fillers_reset_dwell(now, &call_id, out);
+                out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Updated {
                     id: call_id.clone(),
                     call_id,
                     message: message.unwrap_or_default(),
@@ -87,8 +87,8 @@ impl Driver {
         };
         // The last tool to land under two listening participants restarts the away window (#6883).
         let closing = self.session.closing_past_edge();
-        cycle.machine().append(self.session.presence.on_tool_call_ended(now, closing));
-        cycle.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
+        out.machine().append(self.session.states.on_tool_call_ended(now, closing));
+        out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
             id: call_id.clone(),
             call_id,
             message,
@@ -98,7 +98,7 @@ impl Driver {
 
     /// Settle blocking calls whose reply task was forcefully stopped (closing or the watchdog),
     /// each end before its pair, in start order.
-    pub(crate) fn end_live_tools(&mut self, now: Ts, speech: SpeechId, cycle: &mut Cycle) {
+    pub(crate) fn end_live_tools(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
         let live = self.activity.tools.live(speech);
         if live.is_empty() {
             return;
@@ -118,7 +118,7 @@ impl Driver {
                 r.call().call_id.clone(),
                 execution.end,
                 (!execution.output.output.is_empty()).then(|| execution.output.output.clone()),
-                cycle,
+                out,
             );
             pairs.push((r.step(), execution.call, execution.output));
         }
@@ -127,13 +127,13 @@ impl Driver {
                 ChatItem::FunctionCall(call),
                 Source::ToolCall { speech, step },
                 Visibility::Both,
-                cycle,
+                out,
             );
             self.commit_item(
                 ChatItem::FunctionCallOutput(output),
                 Source::ToolOutput { speech, step },
                 Visibility::Both,
-                cycle,
+                out,
             );
         }
         self.publish_frame();
@@ -146,15 +146,15 @@ impl Driver {
         now: Ts,
         call_id: String,
         update: ToolUpdate,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         if !self.activity.tools.is_detached(&call_id) {
-            cycle.trace(TraceToolStep::UpdateRefused { call_id });
+            out.trace(TraceToolStep::UpdateRefused { call_id });
             return;
         }
         let wall = self.step.wall();
         // `update()` restarts a pending filler dwell so it can't race the update (`reset_dwell`).
-        self.fillers_reset_dwell(now, &call_id, cycle);
+        self.fillers_reset_dwell(now, &call_id, out);
         match update {
             ToolUpdate::Progress { message, raw } => {
                 let (n, running) =
@@ -163,57 +163,57 @@ impl Driver {
                 let pair = pair_for(&running, &id, ToolOutcome::Reply(message), wall, || {
                     self.session.ids.mint("item")
                 });
-                cycle.trace(TraceToolStep::Updated {
+                out.trace(TraceToolStep::Updated {
                     call_id: call_id.clone(),
                     id: id.clone(),
                     is_final: false,
                 });
-                cycle.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Updated {
+                out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Updated {
                     id: id.clone(),
                     call_id,
                     message: raw,
                 }));
-                self.commit_pair(&running, id, pair, cycle);
+                self.commit_pair(&running, id, pair, out);
             }
             ToolUpdate::Final { answer: raw } => {
                 let id = format!("{call_id}_final");
                 let running = self.activity.tools.take(&call_id).expect("detached, checked above");
                 // The end is journalled before the away window moves (#6883).
-                cycle.trace(TraceToolStep::Updated {
+                out.trace(TraceToolStep::Updated {
                     call_id: call_id.clone(),
                     id: id.clone(),
                     is_final: true,
                 });
                 let closing = self.session.closing_past_edge();
-                cycle.machine().append(self.session.presence.on_tool_call_ended(now, closing));
+                out.machine().append(self.session.states.on_tool_call_ended(now, closing));
                 // Silent returns voice nothing; an `Agent` or cancellation is refused.
                 let outcome = match raw {
                     ToolAnswer::Returned { value: None, agents } if agents.is_empty() => None,
                     ToolAnswer::Raised(crate::tool_executor::ToolRaise::StopResponse) => None,
                     ToolAnswer::Returned { agents, .. } if !agents.is_empty() => {
-                        cycle.trace(CoreStep::PortFailure(HANDOFF_AFTER_UPDATE));
+                        out.trace(CoreStep::PortFailure(HANDOFF_AFTER_UPDATE));
                         let message = Some(HANDOFF_AFTER_UPDATE.to_owned());
-                        emit_ended(cycle, id, call_id, message, ToolEndStatus::Error);
+                        emit_ended(out, id, call_id, message, ToolEndStatus::Error);
                         return;
                     }
                     ToolAnswer::Cancelled => {
-                        emit_ended(cycle, id, call_id, None, ToolEndStatus::Cancelled);
+                        emit_ended(out, id, call_id, None, ToolEndStatus::Cancelled);
                         return;
                     }
                     other => Some(decide(other)),
                 };
                 let Some(outcome) = outcome else {
-                    emit_ended(cycle, id, call_id, None, ToolEndStatus::Done);
+                    emit_ended(out, id, call_id, None, ToolEndStatus::Done);
                     return;
                 };
                 let pair = pair_for(&running, &id, outcome, wall, || self.session.ids.mint("item"));
                 let status =
                     if pair.1.is_error { ToolEndStatus::Error } else { ToolEndStatus::Done };
-                emit_ended(cycle, id.clone(), call_id, Some(pair.1.output.clone()), status);
-                self.commit_pair(&running, id, pair, cycle);
+                emit_ended(out, id.clone(), call_id, Some(pair.1.output.clone()), status);
+                self.commit_pair(&running, id, pair, out);
             }
         }
-        self.try_deliver_tool_reply(now, cycle);
+        self.try_deliver_tool_reply(now, out);
     }
 
     /// Commit the pair to the record at once, so an earlier reply still sees it, and batch it.
@@ -222,13 +222,13 @@ impl Driver {
         running: &Running,
         id: String,
         pair: (FunctionCall, FunctionCallOutput),
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let (call, output) = pair;
         let source = Source::ToolUpdate { speech: running.speech(), step: running.step() };
         let items = vec![ChatItem::FunctionCall(call), ChatItem::FunctionCallOutput(output)];
         for item in &items {
-            self.commit_item(item.clone(), source.clone(), Visibility::Both, cycle);
+            self.commit_item(item.clone(), source.clone(), Visibility::Both, out);
         }
         self.publish_frame();
         let agent = self.activity.agent.clone();
@@ -239,7 +239,7 @@ impl Driver {
 
     /// One reply for every pending update, at the first idle instant with no current speech. Runs
     /// before idle waiters are answered, so a `foreground()` waits behind it.
-    pub(crate) fn try_deliver_tool_reply(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn try_deliver_tool_reply(&mut self, now: Ts, out: &mut Out) {
         if !self.activity.tools.reply_due() {
             return;
         }
@@ -261,11 +261,11 @@ impl Driver {
             at_tail,
         };
         let wait = self.hook_wait();
-        if self.issue_hook(now, call, Some(wait), cycle) {
+        if self.issue_hook(now, call, Some(wait), out) {
             self.activity.tools.rendering(id, batch, at_tail);
         } else {
             let text = default_reply_instructions(&call_ids, at_tail);
-            self.schedule_tool_reply(now, batch, at_tail, text, cycle);
+            self.schedule_tool_reply(now, batch, at_tail, text, out);
         }
     }
 
@@ -274,12 +274,12 @@ impl Driver {
         now: Ts,
         hook: HookId,
         text: Option<String>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let Some((batch, at_tail)) = self.activity.tools.rendered(hook) else { return };
         let call_ids = batch.update_ids();
         let text = text.unwrap_or_else(|| default_reply_instructions(&call_ids, at_tail));
-        self.schedule_tool_reply(now, batch, at_tail, text, cycle);
+        self.schedule_tool_reply(now, batch, at_tail, text, out);
     }
 
     fn schedule_tool_reply(
@@ -288,7 +288,7 @@ impl Driver {
         batch: Batch,
         at_tail: bool,
         text: String,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let update_ids = batch.update_ids();
         // A previous frame's updates are re-inserted for this request only.
@@ -319,15 +319,15 @@ impl Driver {
                     self.session.config.effective.turn.interruption.enabled,
                 )
             },
-            cycle,
+            out,
         );
         let speech = handle.id();
-        cycle.trace(TraceToolStep::ReplyScheduled {
+        out.trace(TraceToolStep::ReplyScheduled {
             speech,
             update_ids: update_ids.clone(),
             at_tail,
         });
-        cycle.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Reply {
+        out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Reply {
             update_ids: update_ids.clone(),
             status: ToolReplyStatus::Scheduled,
             speech,
@@ -336,7 +336,7 @@ impl Driver {
     }
 
     /// A speech ended: if it was the deferred reply, its fate is reported and the next batch may go.
-    pub(crate) fn tool_reply_done(&mut self, now: Ts, speech: SpeechId, cycle: &mut Cycle) {
+    pub(crate) fn tool_reply_done(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
         let Some(update_ids) = self.activity.tools.reply_done(speech) else { return };
         let status = match self.activity.speech_scheduler.handle(speech) {
             Some(h) if h.interrupted() => ToolReplyStatus::Interrupted,
@@ -344,13 +344,13 @@ impl Driver {
             Some(h) if h.chat_items().is_empty() => ToolReplyStatus::Skipped,
             Some(_) | None => ToolReplyStatus::Completed,
         };
-        cycle.trace(TraceToolStep::ReplyDone { speech, status });
-        cycle.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Reply {
+        out.trace(TraceToolStep::ReplyDone { speech, status });
+        out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Reply {
             update_ids,
             status,
             speech,
         }));
-        self.try_deliver_tool_reply(now, cycle);
+        self.try_deliver_tool_reply(now, out);
     }
 
     /// `SpeechCommand::FillerStart`: the scope opened. The dwell begins at the first idle instant.
@@ -364,7 +364,7 @@ impl Driver {
         interval: Option<Duration>,
         max_steps: Option<u32>,
         source: FillerSource,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let fresh =
             !self.activity.tools.has_filler(id) && self.activity.speech_scheduler.contains(speech);
@@ -372,61 +372,61 @@ impl Driver {
             FillerScheduler::new(delay.as_secs_f64(), interval.map(|d| d.as_secs_f64()), max_steps)
         });
         let Some(Ok(sched)) = sched else {
-            cycle.trace(GenerationStep::FillerStopped { filler: id, cause: FillerEnd::Refused });
+            out.trace(GenerationStep::FillerStopped { filler: id, cause: FillerEnd::Refused });
             return;
         };
-        cycle.trace(GenerationStep::FillerStarted { filler: id, speech });
+        out.trace(GenerationStep::FillerStarted { filler: id, speech });
         self.activity.tools.open_filler(id, sched, call_id, speech, source);
-        self.pump_fillers(now, cycle);
+        self.pump_fillers(now, out);
     }
 
-    pub(crate) fn end_filler(&mut self, id: FillerId, cause: FillerEnd, cycle: &mut Cycle) {
+    pub(crate) fn end_filler(&mut self, id: FillerId, cause: FillerEnd, out: &mut Out) {
         let Some((armed, asking)) = self.activity.tools.close_filler(id) else { return };
         if armed {
-            cycle.machine().cancel(TurnTimer::Filler(id));
+            out.machine().cancel(TurnTimer::Filler(id));
         }
         if let Some(hook) = asking {
             self.activity.hooks.finish(hook);
         }
-        cycle.trace(GenerationStep::FillerStopped { filler: id, cause });
+        out.trace(GenerationStep::FillerStopped { filler: id, cause });
     }
 
     /// A speech ended or was interrupted: its tools' fillers go with it.
-    pub(crate) fn fillers_speech_ended(&mut self, speech: SpeechId, cycle: &mut Cycle) {
+    pub(crate) fn fillers_speech_ended(&mut self, speech: SpeechId, out: &mut Out) {
         for id in self.activity.tools.fillers_of_speech(speech) {
-            self.end_filler(id, FillerEnd::SpeechEnded, cycle);
+            self.end_filler(id, FillerEnd::SpeechEnded, out);
         }
     }
 
     /// `ctx.update()` on `call_id`: a dwell in flight restarts (`reset_dwell`).
-    fn fillers_reset_dwell(&mut self, now: Ts, call_id: &str, cycle: &mut Cycle) {
+    fn fillers_reset_dwell(&mut self, now: Ts, call_id: &str, out: &mut Out) {
         for id in self.activity.tools.fillers_of_call(call_id) {
             if let Some(action) = self.activity.tools.filler_busy(id, now) {
-                self.perform_filler(now, id, action, cycle);
+                self.perform_filler(now, id, action, out);
             }
         }
     }
 
     /// The dwell waits for idle and restarts when the agent or user starts speaking (the
     /// reference's `wait_for_idle()` then race). Once per wake.
-    pub(crate) fn pump_fillers(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn pump_fillers(&mut self, now: Ts, out: &mut Out) {
         if !self.activity.tools.has_fillers() {
             return;
         }
         let idle = self.is_idle();
-        let busy = self.session.presence.someone_speaking();
+        let busy = self.session.states.someone_speaking();
         for id in self.activity.tools.filler_ids() {
             if let Some(action) = self.activity.tools.filler_wake(id, idle, busy, now) {
-                self.perform_filler(now, id, action, cycle);
+                self.perform_filler(now, id, action, out);
             }
         }
     }
 
     /// The dwell or cooldown is over. A deadline in the same wake as a speaking edge counts as busy.
-    pub(crate) fn on_filler_timer(&mut self, now: Ts, id: FillerId, cycle: &mut Cycle) {
-        let busy = self.session.presence.someone_speaking();
+    pub(crate) fn on_filler_timer(&mut self, now: Ts, id: FillerId, out: &mut Out) {
+        let busy = self.session.states.someone_speaking();
         let Some(action) = self.activity.tools.filler_timer(id, busy, now) else { return };
-        self.perform_filler(now, id, action, cycle);
+        self.perform_filler(now, id, action, out);
     }
 
     pub(crate) fn on_filler_source(
@@ -435,10 +435,10 @@ impl Driver {
         hook: HookId,
         text: Option<String>,
         spoke: bool,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let Some((id, step)) = self.activity.tools.filler_answered(hook) else { return };
-        self.fire_filler(now, id, step, text, spoke, cycle);
+        self.fire_filler(now, id, step, text, spoke, out);
     }
 
     fn fire_filler(
@@ -448,7 +448,7 @@ impl Driver {
         step: u32,
         text: Option<String>,
         spoke: bool,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let speech = text.map(|text| {
             let handle = self.start_speech(
@@ -458,20 +458,20 @@ impl Driver {
                     ReplySource::Text(text),
                     self.session.config.effective.turn.interruption.enabled,
                 ),
-                cycle,
+                out,
             );
             handle.id()
         });
         let produced = spoke || speech.is_some();
-        cycle.trace(GenerationStep::FillerFired { filler: id, step, spoke: produced, speech });
+        out.trace(GenerationStep::FillerFired { filler: id, step, spoke: produced, speech });
         let Some(action) = self.activity.tools.filler_fired(id, now, produced) else {
             return;
         };
-        self.perform_filler(now, id, action, cycle);
+        self.perform_filler(now, id, action, out);
     }
 
     /// Perform one machine action: a wait is a timer, a fire a say or hook, done the end.
-    fn perform_filler(&mut self, now: Ts, id: FillerId, action: FillerAction, cycle: &mut Cycle) {
+    fn perform_filler(&mut self, now: Ts, id: FillerId, action: FillerAction, out: &mut Out) {
         if !self.activity.tools.has_filler(id) {
             return;
         }
@@ -485,29 +485,29 @@ impl Driver {
                 };
                 let Some(timer) = self.activity.tools.filler_wait(id, until) else { return };
                 if timer.cancel {
-                    cycle.machine().cancel(TurnTimer::Filler(id));
+                    out.machine().cancel(TurnTimer::Filler(id));
                 }
                 if let Some(at) = timer.arm {
-                    cycle.machine().arm(TurnTimer::Filler(id), at);
+                    out.machine().arm(TurnTimer::Filler(id), at);
                 }
             }
             FillerAction::Fire { step } => match self.activity.tools.filler_source(id) {
                 Some(FillerSource::Text(text)) => {
-                    self.fire_filler(now, id, step, Some(text), false, cycle)
+                    self.fire_filler(now, id, step, Some(text), false, out)
                 }
                 Some(FillerSource::Host) => {
                     let hook = self.activity.hooks.mint();
                     let wait = self.hook_wait();
                     let call = HookCall::FillerSource { id: hook, filler: id, step };
-                    if !self.issue_hook(now, call, Some(wait), cycle) {
-                        self.fire_filler(now, id, step, None, false, cycle)
+                    if !self.issue_hook(now, call, Some(wait), out) {
+                        self.fire_filler(now, id, step, None, false, out)
                     } else {
                         self.activity.tools.filler_asking(id, hook);
                     }
                 }
                 None => {}
             },
-            FillerAction::Done => self.end_filler(id, FillerEnd::Done, cycle),
+            FillerAction::Done => self.end_filler(id, FillerEnd::Done, out),
         }
     }
 }

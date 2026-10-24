@@ -6,15 +6,15 @@ use std::time::Duration;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
 
-use super::cycle::{Effects, TurnTimer};
+use super::effects::{Effects, TurnTimer};
 use super::{Span, SpanEnded, SpanStarted};
 use crate::events::SessionEvent;
 
-pub(crate) struct Presence {
-    /// Moved only by [`Presence::set_agent_state`].
+pub(crate) struct AgentUserState {
+    /// Moved only by [`AgentUserState::set_agent_state`].
     agent: AgentState,
     speaking_span_open: bool,
-    /// Moved only by [`Presence::update_user_state`].
+    /// Moved only by [`AgentUserState::update_user_state`].
     user: UserState,
     /// `timers.user_away`: `None` is no away timer at all.
     away_timeout: Option<Duration>,
@@ -26,9 +26,9 @@ pub(crate) struct Presence {
     claims: u32,
 }
 
-impl Presence {
+impl AgentUserState {
     pub(crate) fn new(away_timeout: Option<Duration>) -> Self {
-        Presence {
+        AgentUserState {
             agent: AgentState::Initializing,
             speaking_span_open: false,
             user: UserState::Listening,

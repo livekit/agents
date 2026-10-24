@@ -11,7 +11,7 @@ use crate::agent_session::commands::{
     AgentUpdate, Answer, Close, Command, HostRecorder, NewActivity, Origin, PreviousActivity,
     RecorderCommand, RequestId, SayText, SpeechCommand,
 };
-use crate::agent_session::driver::{DriverError, Peer, Rx, SessionHandle, Tx, start_ivr};
+use crate::agent_session::driver::{DriverError, PeerHandle, Rx, SessionHandle, Tx, start_ivr};
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::Timebase;
 use crate::events::SessionEvent;
@@ -279,7 +279,7 @@ impl SessionApi {
             } else {
                 let _ = time.timeout(CLOSE_WATCHDOG, api.closed()).await;
             }
-            // `Closed` **before** awaiting the drain: `Running` holds the `Peer`, a sender on the
+            // `Closed` **before** awaiting the drain: `Running` holds the `PeerHandle`, a sender on the
             // host stream, and the drain only ends when every sender is gone.
             *stage.lock().unwrap_or_else(|p| p.into_inner()) = Stage::Closed;
             // Then the drain: the host's `close` is queued before this future completes.
@@ -525,7 +525,7 @@ struct Running {
     api: Tx<Command>,
     calls: Calls,
     trace: Arc<Mutex<Trace>>,
-    peer: Peer,
+    peer: PeerHandle,
     /// One per session.
     amd: Option<crate::amd::detector::AmdHandle>,
     tasks: Vec<lk_agents_abi::AbortHandle>,

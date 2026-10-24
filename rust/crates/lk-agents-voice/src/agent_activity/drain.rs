@@ -3,7 +3,7 @@
 
 use crate::agent_activity::handoff::FrameExit;
 use crate::agent_activity::scheduling::PauseCause;
-use crate::agent_session::cycle::Cycle;
+use crate::agent_session::effects::Out;
 use crate::agent_session::{Answer, DrainRefused, Driver, HookId, PreviousActivity, RequestId};
 use crate::trace::HandoffStep;
 use lk_agents_abi::Ts;
@@ -110,9 +110,9 @@ impl Driver {
     /// `AgentActivity.drain()`, for `waiters` (one request, or the ones a handoff handed on).
     /// Never refused while running; it waits where the reference's `_lock` would: on the close's
     /// drain, a handoff's swap, or the agent's `on_exit` then the pause.
-    pub(crate) fn drain(&mut self, now: Ts, waiters: Vec<RequestId>, cycle: &mut Cycle) {
+    pub(crate) fn drain(&mut self, now: Ts, waiters: Vec<RequestId>, out: &mut Out) {
         if self.session.closing.is_some() {
-            return self.join_close_drain(waiters, cycle);
+            return self.join_close_drain(waiters, out);
         }
         let quiet = self.activity.speech_scheduler.is_empty();
         let switching = self.activity.handoff.switching();
@@ -121,16 +121,16 @@ impl Driver {
             if switching {
                 let exit_hook = self.activity.handoff.exit.exiting();
                 self.activity.drain.current = Some(AgentDrain { phase: Phase::Joined, waiters });
-                cycle.trace(HandoffStep::DrainStarted { exit_hook });
+                out.trace(HandoffStep::DrainStarted { exit_hook });
                 return;
             }
             // Resumed after its `on_exit` ran (`Exited`): only the pause is left.
             let exit = self.frame_exit();
             let phase = Phase::Exiting { hook: exit.hook() };
             self.activity.drain.current = Some(AgentDrain { phase, waiters });
-            cycle.trace(HandoffStep::DrainStarted { exit_hook: exit.hook() });
-            if self.issue_exit(now, exit, cycle) {
-                self.drain_pause(now, cycle);
+            out.trace(HandoffStep::DrainStarted { exit_hook: exit.hook() });
+            if self.issue_exit(now, exit, out) {
+                self.drain_pause(now, out);
             }
             return;
         };
@@ -139,7 +139,7 @@ impl Driver {
             // under a handoff, at the swap.
             Phase::Drained if !switching && quiet => {
                 for call in waiters {
-                    self.answer_drain(Some(call), None, cycle);
+                    self.answer_drain(Some(call), None, out);
                 }
             }
             Phase::Drained if !switching => {
@@ -157,7 +157,7 @@ impl Driver {
         &mut self,
         now: Ts,
         previous: PreviousActivity,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let Some(drain) = self.activity.drain.current.take() else { return };
         if drain.waiters.is_empty() {
@@ -169,16 +169,16 @@ impl Driver {
             (PreviousActivity::Pause, FrameExit::Exiting(hook)) => Some(hook),
             (PreviousActivity::Pause, FrameExit::Running) => {
                 let hook = self.activity.hooks.mint();
-                cycle.trace(HandoffStep::DrainStarted { exit_hook: Some(hook) });
-                (!self.issue_on_exit(now, hook, cycle)).then_some(hook)
+                out.trace(HandoffStep::DrainStarted { exit_hook: Some(hook) });
+                (!self.issue_on_exit(now, hook, out)).then_some(hook)
             }
         };
         self.activity.drain.left.extend(drain.waiters.into_iter().map(|w| (waiting_on, w)));
-        self.left_drains_ready(cycle);
+        self.left_drains_ready(out);
     }
 
     /// A joined handoff ended without a swap: the callers' drain runs on this agent now.
-    pub(crate) fn rebind_joined_drain(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn rebind_joined_drain(&mut self, now: Ts, out: &mut Out) {
         if self.activity.handoff.switching()
             || !matches!(self.activity.drain.current, Some(AgentDrain { phase: Phase::Joined, .. }))
         {
@@ -186,12 +186,12 @@ impl Driver {
         }
         let Some(drain) = self.activity.drain.current.take() else { return };
         if !drain.waiters.is_empty() {
-            self.drain(now, drain.waiters, cycle);
+            self.drain(now, drain.waiters, out);
         }
     }
 
     /// Callers whose agent was left for good, answered `Ok` once no speech is open.
-    fn left_drains_ready(&mut self, cycle: &mut Cycle) {
+    fn left_drains_ready(&mut self, out: &mut Out) {
         if !self.activity.speech_scheduler.is_empty() {
             return;
         }
@@ -199,7 +199,7 @@ impl Driver {
         if ready.is_empty() {
             return;
         }
-        cycle.trace(HandoffStep::Drained { refused: None });
+        out.trace(HandoffStep::Drained { refused: None });
         for call in ready {
             self.answer(Some(call), Answer::Drain(Ok(())));
         }
@@ -207,35 +207,35 @@ impl Driver {
 
     /// The `on_exit` `hook` ended: a drain waiting on it pauses scheduling, and callers bound to
     /// the paused agent wait only for nothing to be open.
-    pub(crate) fn drain_exit_done(&mut self, now: Ts, hook: HookId, cycle: &mut Cycle) {
+    pub(crate) fn drain_exit_done(&mut self, now: Ts, hook: HookId, out: &mut Out) {
         if let Some(AgentDrain { phase: Phase::Exiting { hook: Some(h) }, .. }) =
             self.activity.drain.current
             && h == hook
         {
-            self.drain_pause(now, cycle);
+            self.drain_pause(now, out);
         }
         for (waits_on, _) in &mut self.activity.drain.left {
             if *waits_on == Some(hook) {
                 *waits_on = None;
             }
         }
-        self.left_drains_ready(cycle);
+        self.left_drains_ready(out);
     }
 
     /// `_pause_scheduling_task()`, after `on_exit`, so a goodbye it scheduled is waited for.
-    fn drain_pause(&mut self, now: Ts, cycle: &mut Cycle) {
+    fn drain_pause(&mut self, now: Ts, out: &mut Out) {
         let Some(drain) = &mut self.activity.drain.current else { return };
         let (done, settled) = tokio::sync::oneshot::channel();
         drain.phase = Phase::Pausing { settled };
-        self.pause_scheduling(now, PauseCause::Drain, done, cycle);
+        self.pause_scheduling(now, PauseCause::Drain, done, out);
     }
 
     /// Has the drain's pause settled? Settled: waiters answered `Ok`; refused: with the reason.
-    pub(crate) fn drain_ready(&mut self, cycle: &mut Cycle) {
-        self.left_drains_ready(cycle);
+    pub(crate) fn drain_ready(&mut self, out: &mut Out) {
+        self.left_drains_ready(out);
         let quiet = self.activity.speech_scheduler.is_empty();
         match self.activity.drain.poll(quiet) {
-            Poll::Settled => self.finish_drain(None, cycle),
+            Poll::Settled => self.finish_drain(None, out),
             Poll::Waiting => {}
             Poll::Refused => {
                 let refused = if self.session.closing.is_some() {
@@ -243,15 +243,15 @@ impl Driver {
                 } else {
                     DrainRefused::FrameChanging
                 };
-                self.finish_drain(Some(refused), cycle);
+                self.finish_drain(Some(refused), out);
             }
         }
     }
 
     /// Answer every waiter. `None` leaves the agent `Drained`; a refusal forgets the drain.
-    pub(crate) fn finish_drain(&mut self, refused: Option<DrainRefused>, cycle: &mut Cycle) {
+    pub(crate) fn finish_drain(&mut self, refused: Option<DrainRefused>, out: &mut Out) {
         let Some(waiters) = self.activity.drain.finish(refused) else { return };
-        cycle.trace(HandoffStep::Drained { refused });
+        out.trace(HandoffStep::Drained { refused });
         for call in waiters {
             self.answer(Some(call), Answer::Drain(refused.map_or(Ok(()), Err)));
         }
@@ -262,9 +262,9 @@ impl Driver {
         &mut self,
         call: Option<RequestId>,
         refused: Option<DrainRefused>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
-        cycle.trace(HandoffStep::Drained { refused });
+        out.trace(HandoffStep::Drained { refused });
         self.answer(call, Answer::Drain(refused.map_or(Ok(()), Err)));
     }
 }

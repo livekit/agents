@@ -3,7 +3,7 @@
 
 use crate::agent_activity::options::{DetectorKind, LegSet, SessionConfig};
 use crate::agent_activity::pause::count_min_words;
-use crate::agent_session::cycle::{Effects, TurnTimer};
+use crate::agent_session::effects::{Effects, TurnTimer};
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
 use crate::events::{AgentBackchannelOpportunityEvent, SessionEvent, UserTranscriptEvent};

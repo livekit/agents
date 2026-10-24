@@ -1,4 +1,4 @@
-use crate::agent_session::cycle::{Cycle, TurnTimer};
+use crate::agent_session::effects::{Out, TurnTimer};
 use crate::agent_session::{Driver, SessionShared};
 use crate::generation::GenEvent;
 use crate::trace::{DetectorLeg, DetectorStep, InputStep};
@@ -771,22 +771,22 @@ impl Pass {
 impl Driver {
     /// `KeytermDetector.start(session, stt)`: the state survives handoffs, and static terms reach
     /// the recogniser at once.
-    pub(crate) fn keyterms_start(&mut self, setup: KeytermSetup, cycle: &mut Cycle) {
+    pub(crate) fn keyterms_start(&mut self, setup: KeytermSetup, out: &mut Out) {
         let (slot, initial) = KeytermSlot::start(setup);
         self.session.keyterms = Some(slot);
         if !initial.is_empty() {
-            self.push_keyterms(initial, cycle);
+            self.push_keyterms(initial, out);
         }
     }
 
-    pub(crate) fn keyterms_step(&mut self, now: Ts, input: KeytermIn, cycle: &mut Cycle) {
+    pub(crate) fn keyterms_step(&mut self, now: Ts, input: KeytermIn, out: &mut Out) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
-        let out = slot.step(input);
-        self.perform_keyterms(now, out, cycle);
+        let effects = slot.step(input);
+        self.perform_keyterms(now, effects, out);
     }
 
     /// `_on_conversation_item_added`; fed only while a pass could run, as the reference subscribes.
-    pub(crate) fn keyterms_on_item(&mut self, now: Ts, item: &ChatItem, cycle: &mut Cycle) {
+    pub(crate) fn keyterms_on_item(&mut self, now: Ts, item: &ChatItem, out: &mut Out) {
         let detecting = self.session.keyterms.as_ref().is_some_and(KeytermSlot::detecting)
             && self.session.stt.as_ref().is_some_and(|stt| stt.capabilities().keyterms);
         if !detecting {
@@ -794,16 +794,16 @@ impl Driver {
         }
         let ChatItem::Message(m) = item else { return };
         let text = m.raw_text_content().unwrap_or_default();
-        self.keyterms_step(now, KeytermIn::Item { role: m.role, text }, cycle);
+        self.keyterms_step(now, KeytermIn::Item { role: m.role, text }, out);
     }
 
     /// The STT leg changed under a handoff: a different recogniser gets the full list.
-    pub(crate) fn keyterms_on_stt_swap(&mut self, now: Ts, same_stt: bool, cycle: &mut Cycle) {
+    pub(crate) fn keyterms_on_stt_swap(&mut self, now: Ts, same_stt: bool, out: &mut Out) {
         if self.session.keyterms.is_none() {
             return;
         }
-        cycle.trace(DetectorStep::KeytermsRebound { same_stt });
-        self.keyterms_step(now, KeytermIn::AgentUpdated { same_stt }, cycle);
+        out.trace(DetectorStep::KeytermsRebound { same_stt });
+        self.keyterms_step(now, KeytermIn::AgentUpdated { same_stt }, out);
     }
 
     pub(crate) fn on_keyterm_answer(
@@ -813,76 +813,76 @@ impl Driver {
         arguments: Option<String>,
         failed: bool,
         metrics: Option<Box<LlmMetrics>>,
-        cycle: &mut Cycle,
+        out: &mut Out,
     ) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
         if slot.answered(req) {
-            cycle.machine().cancel(TurnTimer::KeytermTimeout);
+            out.machine().cancel(TurnTimer::KeytermTimeout);
         }
         // Rides the session stream like the reply LLM's metrics, with no speech.
         if let Some(m) = metrics {
-            cycle.machine().emit(crate::events::SessionEvent::MetricsCollected {
+            out.machine().emit(crate::events::SessionEvent::MetricsCollected {
                 metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Llm(*m)),
                 speech: None,
             });
         }
         if failed {
-            return self.keyterms_failed(now, req, cycle);
+            return self.keyterms_failed(now, req, out);
         }
-        cycle.trace(InputStep::LegVerdict { leg: DetectorLeg::Keyterms, req });
+        out.trace(InputStep::LegVerdict { leg: DetectorLeg::Keyterms, req });
         // Strict JSON; a malformed document is an empty update.
         let parsed =
             arguments.as_deref().and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok());
         let update = parse_record_keyterms(parsed.as_ref());
-        self.keyterms_step(now, KeytermIn::Answer { req, update }, cycle);
+        self.keyterms_step(now, KeytermIn::Answer { req, update }, out);
     }
 
     /// `asyncio.wait_for(.., timeout)` expired: no change, the slot frees.
-    pub(crate) fn on_keyterm_timeout(&mut self, now: Ts, cycle: &mut Cycle) {
+    pub(crate) fn on_keyterm_timeout(&mut self, now: Ts, out: &mut Out) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
         let Some(req) = slot.time_out() else { return };
-        self.keyterms_failed(now, req, cycle);
+        self.keyterms_failed(now, req, out);
     }
 
-    fn keyterms_failed(&mut self, now: Ts, req: u64, cycle: &mut Cycle) {
-        cycle.trace(InputStep::LegFailed { leg: DetectorLeg::Keyterms, recoverable: true });
-        self.keyterms_step(now, KeytermIn::Failed { req }, cycle);
+    fn keyterms_failed(&mut self, now: Ts, req: u64, out: &mut Out) {
+        out.trace(InputStep::LegFailed { leg: DetectorLeg::Keyterms, recoverable: true });
+        self.keyterms_step(now, KeytermIn::Failed { req }, out);
     }
 
-    fn perform_keyterms(&mut self, now: Ts, out: Vec<KeytermEffect>, cycle: &mut Cycle) {
-        for effect in out {
+    fn perform_keyterms(&mut self, now: Ts, effects: Vec<KeytermEffect>, out: &mut Out) {
+        for effect in effects {
             match effect {
                 KeytermEffect::Request { req, prompt } => {
-                    self.request_keyterms(now, req, prompt, cycle)
+                    self.request_keyterms(now, req, prompt, out)
                 }
-                KeytermEffect::Push(terms) => self.push_keyterms(terms, cycle),
+                KeytermEffect::Push(terms) => self.push_keyterms(terms, out),
                 KeytermEffect::Cancel { req } => {
                     if let Some(slot) = self.session.keyterms.as_mut() {
                         slot.cancel(req);
                     }
-                    cycle.machine().cancel(TurnTimer::KeytermTimeout);
+                    out.machine().cancel(TurnTimer::KeytermTimeout);
                 }
             }
         }
     }
 
-    fn push_keyterms(&mut self, terms: Vec<String>, cycle: &mut Cycle) {
+    fn push_keyterms(&mut self, terms: Vec<String>, out: &mut Out) {
         if let Some(stt) = self.session.stt.as_ref() {
             stt.update_keyterms(&terms);
         }
-        cycle.trace(DetectorStep::KeytermsPushed { terms });
+        out.trace(DetectorStep::KeytermsPushed { terms });
     }
 
     /// One request, bounded by the pass's timeout, run off the loop.
-    fn request_keyterms(&mut self, now: Ts, req: u64, prompt: String, cycle: &mut Cycle) {
+    fn request_keyterms(&mut self, now: Ts, req: u64, prompt: String, out: &mut Out) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
         let Some(llm) = slot.llm() else {
             // The machine asked with no model to ask: fed back as a failure so the slot frees.
-            self.keyterms_step(now, KeytermIn::Failed { req }, cycle);
+            self.keyterms_step(now, KeytermIn::Failed { req }, out);
             return;
         };
-        cycle.trace(InputStep::LegRequested { leg: DetectorLeg::Keyterms, req });
-        cycle.machine().arm(TurnTimer::KeytermTimeout, now.saturating_add(slot.timeout()));
+        out.trace(InputStep::LegRequested { leg: DetectorLeg::Keyterms, req });
+        out.machine().arm(TurnTimer::KeytermTimeout, now.saturating_add(slot.timeout()));
         let request = slot.request(prompt, self.step.wall());
         let shared = Arc::clone(&self.shared);
         let handle =

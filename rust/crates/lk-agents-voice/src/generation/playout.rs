@@ -187,8 +187,8 @@ async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool
     }
     shared.trace(crate::trace::InterruptStep::PlayoutGate {
         speech,
-        op: crate::agent_session::cycle::GateOp::Pause,
-        cause: crate::agent_session::cycle::GateCause::Launch,
+        op: crate::agent_session::effects::GateOp::Pause,
+        cause: crate::agent_session::effects::GateCause::Launch,
     });
     loop {
         tokio::select! {

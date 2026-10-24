@@ -1,7 +1,7 @@
 //! The session's link to its room (`RoomOptions`): whether the linked participant leaving closes
 //! the session, and the room's deletion when it closes.
 
-use crate::agent_session::cycle::Cycle;
+use crate::agent_session::effects::Out;
 use crate::agent_session::{Close, Driver, HostEvent};
 use crate::room_io::{DeleteRoomRequested, RoomIoEvent};
 use crate::trace::{RoomLinkStep, RoomStep, Step};
@@ -52,20 +52,20 @@ impl RoomLink {
 }
 
 impl Driver {
-    pub(crate) fn on_room_io(&mut self, now: Ts, ev: RoomIoEvent, cycle: &mut Cycle) {
+    pub(crate) fn on_room_io(&mut self, now: Ts, ev: RoomIoEvent, out: &mut Out) {
         match &ev {
             RoomIoEvent::ParticipantUnlinked(unlinked) => {
                 let reason = unlinked.reason;
                 // A deletion in flight is the end of the call already (`not self._delete_room_task`).
                 let closes = self.session.room.disconnect_closes(reason);
-                cycle.trace(RoomStep::Link(RoomLinkStep::Unlinked { reason, closes }));
+                out.trace(RoomStep::Link(RoomLinkStep::Unlinked { reason, closes }));
                 if closes {
                     let reason = CloseReason::ParticipantDisconnected;
-                    self.begin_closing(now, Close { reason, drain: false, error: None }, cycle);
+                    self.begin_closing(now, Close { reason, drain: false, error: None }, out);
                 }
             }
             // Journalled so a re-link is a step the rules can read; no driver state changes.
-            RoomIoEvent::ParticipantLinked(_) => cycle.trace(RoomStep::Link(RoomLinkStep::Linked)),
+            RoomIoEvent::ParticipantLinked(_) => out.trace(RoomStep::Link(RoomLinkStep::Linked)),
             RoomIoEvent::TextInput(_) | RoomIoEvent::DeleteRoomRequested(_) => {}
         }
         let _ = self.events.send(HostEvent::Room(ev));

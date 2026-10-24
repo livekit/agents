@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use fastrand::Rng;
 use lk_agents_abi::Ts;
 use lk_agents_voice::{
-    agent_session::cycle::TurnTimer,
+    agent_session::effects::TurnTimer,
     trace::{CoreStep, Step},
 };
 
@@ -61,7 +61,10 @@ pub fn sample_next(record: &Recording, rng: &mut Rng) -> Option<Input> {
     let sendable: Vec<Input> = Input::available(&mut sampler)
         .into_iter()
         .filter(|i| {
-            !matches!(i, Input::Close { .. } | Input::Room { event: RoomIn::Closed | RoomIn::Unlinked })
+            !matches!(
+                i,
+                Input::Close { .. } | Input::Room { event: RoomIn::Closed | RoomIn::Unlinked }
+            )
         })
         .collect();
     if sendable.is_empty() {

@@ -7,7 +7,7 @@ use super::{
     MIN_SILENCE_DURATION, NON_SPECIFIC_LANGUAGE_CODES, OverlapVerdict, Phase, Prediction,
     ServerSpeech, Start, TurnDetectionMode, user_transcript,
 };
-use crate::agent_session::cycle::{Decision, Effect, Effects, ProviderCall, TurnTimer};
+use crate::agent_session::effects::{Decision, Effect, Effects, ProviderCall, TurnTimer};
 use crate::events::{
     EndOfSpeechEvent, PreemptiveGenerationEvent, SessionEvent, StartOfSpeechEvent,
 };

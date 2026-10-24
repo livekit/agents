@@ -1,5 +1,5 @@
-use crate::agent_session::cycle::TurnTimer;
-use crate::agent_session::{IvrCommand, Origin, Peer, SpeechCommand, SystemGone, Watched};
+use crate::agent_session::effects::TurnTimer;
+use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemGone, SystemTap};
 use crate::amd::classifier::{
     Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out,
     TranscriptSource, Verdict,
@@ -174,7 +174,7 @@ impl StreamSink<AudioFrame> for GatedSink {
 }
 
 pub struct AmdSystem {
-    peer: Peer,
+    peer: PeerHandle,
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     machine: Option<Amd>,
     timers: TimerSet<AmdTimer>,
@@ -191,7 +191,7 @@ pub struct AmdSystem {
 impl AmdSystem {
     /// `AMD._run`: holding authorization from now, subscribed to the feed, the tap opening off the
     /// loop. Past the close request nothing is attached and the handle answers `SystemGone`.
-    pub fn spawn(peer: Peer, setup: AmdSetup) -> AmdHandle {
+    pub fn spawn(peer: PeerHandle, setup: AmdSetup) -> AmdHandle {
         if *peer.closing.borrow() {
             peer.journal(Step::Core(CoreStep::PortFailure("amd: attached after the close")));
             return AmdHandle::detached();
@@ -207,7 +207,7 @@ impl AmdSystem {
         AmdHandle { tx }
     }
 
-    fn new(peer: Peer, setup: AmdSetup, tx: tokio::sync::mpsc::UnboundedSender<Msg>) -> Self {
+    fn new(peer: PeerHandle, setup: AmdSetup, tx: tokio::sync::mpsc::UnboundedSender<Msg>) -> Self {
         let stt = setup.stt.clone();
         // The machine holds the authorization from the attach.
         let (machine, out) = Amd::attached(setup.config);
@@ -237,7 +237,7 @@ impl AmdSystem {
     /// session's queue is gone.
     async fn run(
         mut self,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<Watched>,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<SystemTap>,
         mut msgs: tokio::sync::mpsc::UnboundedReceiver<Msg>,
     ) {
         let time = self.peer.time.clone();
@@ -267,9 +267,9 @@ impl AmdSystem {
     }
 
     /// One item off the feed: what the reference's `AudioRecognition` hands the classifier.
-    pub fn on_watched(&mut self, now: Ts, item: Watched) {
+    pub fn on_watched(&mut self, now: Ts, item: SystemTap) {
         match item {
-            Watched::Vad(ev) => match ev.kind {
+            SystemTap::Vad(ev) => match ev.kind {
                 lk_agents_abi::VadEventType::StartOfSpeech => {
                     self.step(now, In::Human(Human::SpeechStarted))
                 }
@@ -281,7 +281,7 @@ impl AmdSystem {
                 lk_agents_abi::VadEventType::InferenceDone => {}
             },
             // The session's finals once each; the empty clearing final is no words.
-            Watched::Stt(ev) => {
+            SystemTap::Stt(ev) => {
                 if ev.kind == SpeechEventType::FinalTranscript
                     && let Some(text) = ev.best_alternative().map(|a| a.text.clone())
                     && !text.trim().is_empty()
@@ -293,12 +293,12 @@ impl AmdSystem {
                 }
             }
             // `amd._on_end_of_turn`, before the commit verdict.
-            Watched::Session(SessionEvent::UserTurnCompleted(_)) => {
+            SystemTap::Session(SessionEvent::UserTurnCompleted(_)) => {
                 self.step(now, In::Human(Human::EndOfTurn))
             }
-            Watched::Session(_) | Watched::Ivr(_) => {}
+            SystemTap::Session(_) | SystemTap::Ivr(_) => {}
             // `self._amd.aclose()`; a verdict still owed is never released.
-            Watched::CloseRequested => {
+            SystemTap::CloseRequested => {
                 self.step(now, In::Close);
                 self.closed = true;
             }
@@ -583,7 +583,7 @@ impl AmdSystem {
 
 /// The tap's drain onto the system's channel: source closed once, row forgotten if still installed.
 fn spawn_tap_drain(
-    peer: Peer,
+    peer: PeerHandle,
     mut source: SttSource,
     ticket: crate::audio::Ticket,
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
