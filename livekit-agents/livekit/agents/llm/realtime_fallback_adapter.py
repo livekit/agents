@@ -330,15 +330,15 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         If the agent was speaking, its reply is interrupted first (committing the heard content to
         the agent chat context) and re-issued on the new session afterwards.
         """
-        async with self._swap_lock:
-            # interrupt through the AgentSession so playout/state stay coordinated and the heard
-            # content is committed (best-effort: the provider may already be dead)
-            if self._agent_session is not None:
-                try:
-                    await self._agent_session.interrupt(force=True)
-                except Exception:
-                    logger.debug("failed to interrupt the agent before swap", exc_info=True)
+        # interrupt through the AgentSession so playout/state stay coordinated and the heard
+        # content is committed (best-effort: the provider may already be dead)
+        if self._agent_session is not None:
+            try:
+                await self._agent_session.interrupt(force=True)
+            except Exception:
+                logger.debug("failed to interrupt the agent before swap", exc_info=True)
 
+        async with self._swap_lock:
             # replay the agent chat context (what the user heard); fall back to the child's when unbound
             if self._agent_session is not None:
                 chat_ctx = self._agent_session.current_agent.chat_ctx
@@ -590,10 +590,28 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         await self._update_settings(instructions=instructions)
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        if self._swapping:
-            # dropped; the swap replays the agent chat context afterwards
-            return
-        await self._active.update_chat_ctx(chat_ctx)
+        if self._closed:
+            raise RuntimeError("Realtime fallback session is closed")
+        target = chat_ctx.copy()
+
+        async def apply() -> None:
+            async with self._swap_lock:
+                if self._closed:
+                    raise RuntimeError("Realtime fallback session is closed")
+                await self._active.update_chat_ctx(target)
+
+        task = asyncio.create_task(apply())
+        self._settings_tasks.add(task)
+        task.add_done_callback(self._settings_tasks.discard)
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def update_tools(self, tools: list[Tool]) -> None:
         await self._update_settings(tools=list(tools))

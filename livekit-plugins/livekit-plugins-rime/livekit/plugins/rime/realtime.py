@@ -25,6 +25,9 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.generation import remove_instructions
+
+from ._realtime_history import HistoryUpdateError, PrismHistory
 
 
 class PrismUnsupported(llm.RealtimeError):
@@ -67,6 +70,7 @@ class RealtimeModel(
         client: Rime | None = None,
         voice: str | None = None,
         turn_detection: r.TurnDetection | None = None,
+        truncation: r.Truncation | None = None,
         timeouts: r.RealtimeTimeouts | None = None,
         interrupt_on_speech: bool = True,
         request_id: str | None = None,
@@ -87,6 +91,7 @@ class RealtimeModel(
                 auto_tool_reply_generation=False,
                 audio_output=True,
                 manual_function_calls=False,
+                mutable_chat_context=True,
                 mutable_instructions=True,
                 mutable_tools=True,
             )
@@ -95,6 +100,7 @@ class RealtimeModel(
         self._endpoint = endpoint
         self._voice = voice
         self._turn_detection = turn_detection
+        self._truncation = truncation
         self._timeouts = timeouts or r.RealtimeTimeouts()
         self._interrupt_on_speech = interrupt_on_speech
         self._request_id = request_id
@@ -120,6 +126,7 @@ class RealtimeModel(
         interrupt_on_speech: NotGivenOr[bool] = NOT_GIVEN,
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
+        truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
     ) -> None:
         """Update provider settings on the live session; return after acknowledgment."""
         if self._session is None:
@@ -129,7 +136,14 @@ class RealtimeModel(
             interrupt_on_speech=interrupt_on_speech,
             response_metadata=response_metadata,
             tool_fillers=tool_fillers,
+            truncation=truncation,
         )
+
+    async def get_history(self) -> tuple[r.HistoryItem, ...]:
+        """Read completed server history. Running replies are not included."""
+        if self._session is None:
+            raise llm.RealtimeError("Prism session is not open")
+        return await self._session.get_history()
 
     @property
     def model(self) -> str:
@@ -220,6 +234,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._tool_fillers = dict(model._tool_fillers)
         self._interruption_policies: OrderedDict[int, bool] = OrderedDict()
         self._transcript_deltas: dict[str, str] = {}
+        self._history: PrismHistory | None = None
+        self._history_lock = asyncio.Lock()
+        self._typed_item_id: str | None = None
 
     def _sdk_tools(
         self, tools: list[llm.Tool], fillers: Mapping[str, r.PrismFiller]
@@ -268,12 +285,13 @@ class RealtimeSession(llm.RealtimeSession):
         # LiveKit filters tools absent from the receiving agent. Keep Prism's
         # original call references, including a tool awaiting an inline task.
         def visible(ctx: llm.ChatContext) -> llm.ChatContext:
-            return ctx.copy(
-                exclude_instructions=True,
+            projected = ctx.copy(
                 exclude_handoff=True,
                 exclude_config_update=True,
                 exclude_function_call=True,
             )
+            remove_instructions(projected)
+            return projected
 
         return visible(self._chat).is_equivalent(visible(chat_ctx))
 
@@ -296,6 +314,16 @@ class RealtimeSession(llm.RealtimeSession):
             raise self._failure
         if self._started:
             if is_given(chat_ctx):
+                if self.can_reuse(chat_ctx):
+                    # Handoff filters tools absent from the next agent. Keep their records.
+                    preserved = [
+                        i
+                        for i in self._chat.items
+                        if isinstance(i, (llm.FunctionCall, llm.FunctionCallOutput))
+                    ]
+                    chat_ctx = chat_ctx.copy()
+                    ids = {i.id for i in chat_ctx.items}
+                    chat_ctx.insert([i for i in preserved if i.id not in ids])
                 await self.update_chat_ctx(chat_ctx)
             await self._apply_settings(instructions=instructions, tools=tools)
             return
@@ -303,7 +331,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._instructions = instructions if is_given(instructions) else self._instructions
         self._tool_list = list(tools) if is_given(tools) else self._tool_list
         try:
-            seed = _history(chat_ctx) if is_given(chat_ctx) else []
+            seed = chat_ctx if is_given(chat_ctx) else llm.ChatContext.empty()
+            PrismHistory.validate(seed)
             self._connection = self._model._client.realtime.connect(
                 endpoint=self._model._endpoint,
                 voice=self._model._voice,
@@ -314,6 +343,7 @@ class RealtimeSession(llm.RealtimeSession):
                 else None,
                 tools=self._sdk_tools(self._tool_list, self._tool_fillers),
                 turn_detection=self._model._turn_detection,
+                truncation=self._model._truncation,
                 timeouts=self._model._timeouts,
                 interrupt_on_speech=self._model._interrupt_on_speech,
                 request_id=self._model._request_id,
@@ -322,13 +352,13 @@ class RealtimeSession(llm.RealtimeSession):
             self._sdk = await self._connection.__aenter__()
             self._record_settings()
             self._spawn(self._read_events())
-            for message in seed:
-                await self._sdk.add_message(
-                    cast(Literal["user", "assistant"], message.role), message.text_content or ""
-                )
-                self._chat.items.append(message.model_copy())
+            self._history = PrismHistory(self._sdk, self._chat, self._calls)
+            await self._history.sync(seed)
             self._initialized.set_result(None)
             self._spawn(self._send_audio())
+        except asyncio.CancelledError:
+            await self.aclose()
+            raise
         except Exception as error:
             self._fatal(error)
             await self.aclose()
@@ -353,12 +383,14 @@ class RealtimeSession(llm.RealtimeSession):
         interrupt_on_speech: NotGivenOr[bool] = NOT_GIVEN,
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
+        truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
     ) -> None:
         await self._apply_settings(
             voice=voice,
             interrupt_on_speech=interrupt_on_speech,
             response_metadata=response_metadata,
             tool_fillers=tool_fillers,
+            truncation=truncation,
         )
 
     async def _apply_settings(
@@ -370,6 +402,7 @@ class RealtimeSession(llm.RealtimeSession):
         interrupt_on_speech: NotGivenOr[bool] = NOT_GIVEN,
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
+        truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
     ) -> None:
         # A cancelled caller still waits for acknowledgment so local settings cannot
         # contradict an update the server accepted. No update is replayed.
@@ -385,9 +418,19 @@ class RealtimeSession(llm.RealtimeSession):
                 try:
                     if any(
                         is_given(v)
-                        for v in (instructions, tools, voice, interrupt_on_speech, tool_fillers)
+                        for v in (
+                            instructions,
+                            tools,
+                            voice,
+                            interrupt_on_speech,
+                            tool_fillers,
+                            truncation,
+                        )
                     ):
                         await sdk.update(
+                            truncation=cast(r.Truncation, truncation)
+                            if is_given(truncation)
+                            else None,
                             instructions=instructions if is_given(instructions) else None,
                             tools=definitions
                             if is_given(tools) or is_given(tool_fillers)
@@ -406,6 +449,8 @@ class RealtimeSession(llm.RealtimeSession):
                             self._model._voice = voice
                         if is_given(interrupt_on_speech):
                             self._model._interrupt_on_speech = interrupt_on_speech
+                        if is_given(truncation):
+                            self._model._truncation = cast(r.Truncation, truncation)
                         self._record_settings()
                     if is_given(response_metadata):
                         await sdk.set_response_metadata(dict(response_metadata))
@@ -417,11 +462,17 @@ class RealtimeSession(llm.RealtimeSession):
         task = asyncio.create_task(apply())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            await asyncio.shield(task)
-            raise
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if self._closed:
+                    raise
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         if is_given(tool_choice) and tool_choice not in (None, "auto"):
@@ -437,81 +488,55 @@ class RealtimeSession(llm.RealtimeSession):
             raise self._unsupported("Typed input must be nonblank and at most 4000 characters")
         self._typed = text
         message = self._chat.add_message(role="user", content=text, id=message_id)
+        self._typed_item_id = message.id
         return message.model_copy()
 
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
-        sdk = self._require()
-        known = {item.id: item for item in self._chat.items}
-        supplied = {item.id: item for item in chat_ctx.items}
-        # Assistant playback may replace the local transcript. The wire update is
-        # reported separately with playback_finished; it is not a history edit.
-        for key, old in known.items():
-            if key not in supplied:
-                raise self._unsupported("Prism history items cannot be removed")
-            new = supplied[key]
-            if old.type == "message" and old.role == "user" and new != old:
-                raise self._unsupported("Prism user history cannot be edited")
-        additions: list[
-            tuple[llm.ChatMessage | llm.FunctionCallOutput, r.ToolCallRef | None, str]
-        ] = []
-        # Check the complete update before sending any part of it. A later
-        # unsupported item must not leave earlier additions on the server.
-        for item in chat_ctx.items:
-            if item.id in known:
-                continue
-            if isinstance(item, llm.FunctionCallOutput):
-                entry = self._calls.get(item.call_id)
-                if entry is None or entry[1].extra.get("__livekit_agents_tool_non_blocking"):
-                    raise self._unsupported(
-                        "Unknown tool call or progress tool; Prism needs a final result"
-                    )
-                ref, _ = entry
-                text = item.output
-                if item.is_error:
-                    text = json.dumps(
-                        {
-                            "status": "failed",
-                            "reason": "tool_error",
-                            "retryable": False,
-                            "message": text,
-                            "result": None,
-                        }
-                    )
-                additions.append((item.model_copy(), ref, text))
-            elif (
-                isinstance(item, llm.ChatMessage)
-                and item.role in ("user", "assistant")
-                and all(isinstance(c, str) for c in item.content)
-            ):
-                text = item.text_content or ""
-                # The SDK validates each add_message call separately. Validate
-                # its text limit here so invalid batches send no history.
-                if not text.strip() or len(text) > 4000:
-                    raise RimeInputError("Text must be nonblank and at most 4000 characters")
-                additions.append((item.model_copy(), None, text))
-            else:
-                raise self._unsupported(
-                    "Prism accepts only text history and results of its own tool calls"
-                )
+    async def get_history(self) -> tuple[r.HistoryItem, ...]:
+        """Read Prism's completed history without changing LiveKit's conversation record."""
+        async with self._history_lock:
+            try:
+                return await self._require().get_history()
+            except r.RimeRealtimeError as error:
+                raise PrismError(error.fault) from error
 
-        for addition, tool_ref, text in additions:
-            if isinstance(addition, llm.FunctionCallOutput):
-                assert tool_ref is not None
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        async def apply() -> None:
+            async with self._history_lock:
+                self._require()
+                assert self._history is not None
                 try:
-                    await sdk.submit_tool_result(tool_ref, text)
-                except Exception as error:
-                    self._fatal(error)
+                    submitted = await self._history.sync(chat_ctx)
+                    for ref, output in submitted:
+                        if output.reply_required:
+                            if self._latest and ref.response_id == self._latest.response_id:
+                                self._parent = self._latest
+                            else:
+                                self._report = ref
+                except HistoryUpdateError as error:
+                    if error.partial:
+                        self._fatal(error)
                     raise
-                self._chat.items.append(addition)
-                if addition.reply_required:
-                    if self._latest and tool_ref.response_id == self._latest.response_id:
-                        self._parent = self._latest
-                    else:
-                        self._report = tool_ref
-            else:
-                await sdk.add_message(cast(Literal["user", "assistant"], addition.role), text)
-                self._chat.items.append(addition)
+                except r.RimeRealtimeError as error:
+                    raise PrismError(error.fault) from error
+                except Exception as error:
+                    if not isinstance(error, RimeInputError):
+                        self._fatal(error)
+                    raise
+
+        task = asyncio.create_task(apply())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if self._closed:
+                    raise
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._require()
@@ -596,6 +621,20 @@ class RealtimeSession(llm.RealtimeSession):
         return self._spawn(self._reply(typed, instruction, parent, report), request=True)
 
     async def _reply(
+        self,
+        typed: str | None,
+        instruction: str | None,
+        parent: r.ResponseRef | None,
+        report: r.ToolCallRef | None,
+    ) -> llm.GenerationCreatedEvent:
+        await asyncio.shield(self._initialized)
+        # Wait for an edit already in progress, then release the lock before
+        # admission. Readiness can depend on tool results submitted through history.
+        async with self._history_lock:
+            self._require()
+        return await self._reply_unlocked(typed, instruction, parent, report)
+
+    async def _reply_unlocked(
         self,
         typed: str | None,
         instruction: str | None,
@@ -784,6 +823,10 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _on_event(self, event: r.SessionEvent) -> None:
         payload = event.payload
+        if self._history is not None:
+            self._history.observe(payload, typed_item_id=self._typed_item_id)
+        if isinstance(payload, r.ResponseStarted) and payload.cause == "text":
+            self._typed_item_id = None
         if isinstance(payload, r.SpeechHint):
             if self._playback_interrupts():
                 hint = llm.InputSpeechHintEvent(
@@ -1074,24 +1117,3 @@ def _tool(tool: llm.Tool, fillers: Mapping[str, r.PrismFiller] | None = None) ->
         parameters=function.get("parameters") or {"type": "object", "properties": {}},
         prism_filler=(fillers or {}).get(function["name"]),
     )
-
-
-def _history(ctx: llm.ChatContext) -> list[llm.ChatMessage]:
-    messages = []
-    for item in ctx.copy(exclude_handoff=True, exclude_config_update=True).items:
-        if isinstance(item, llm.AgentConfigUpdate):
-            # Framework bookkeeping is not conversation history. initialize()
-            # supplies the current instructions and tools for the new session.
-            continue
-        if (
-            isinstance(item, llm.ChatMessage)
-            and item.role in ("user", "assistant")
-            and all(isinstance(c, str) for c in item.content)
-            and item.text_content
-        ):
-            messages.append(item)
-        else:
-            raise PrismUnsupported(
-                "Initial Prism history must contain user and assistant text only"
-            )
-    return messages

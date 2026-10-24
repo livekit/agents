@@ -39,18 +39,54 @@ class Peer:
         self.receipts = asyncio.Queue()
         self.truncations = asyncio.Queue()
         self.items = []
+        self.server_items = []
+        self.history_operations = []
+        self.history_started = asyncio.Event()
+        self.history_release = asyncio.Event()
+        self.history_release.set()
+        self.fail_history_at = None
+        self.running = {}
+        self.history_serial = 0
         self.refusals = {}
         self.cancel_received = asyncio.Event()
         self.cancel_release = asyncio.Event()
         self.cancel_release.set()
 
     async def emit(self, kind, **body):
+        if kind == "response.created":
+            response = body["response"]
+            self.running[response["id"]] = set(response.get("prism_input_item_ids", []))
+        elif kind == "response.function_call_arguments.done":
+            self.server_items.append(
+                {
+                    "id": body["item_id"],
+                    "type": "function_call",
+                    "call_id": body["call_id"],
+                    "name": body["name"],
+                    "arguments": body["arguments"],
+                }
+            )
+            self.running.setdefault(body["response_id"], set()).add(body["item_id"])
+        elif kind == "response.text.done":
+            self.server_items.append(
+                {
+                    "id": body["item_id"],
+                    "type": "message",
+                    "role": "assistant",
+                    "text": body["text"],
+                }
+            )
+            self.running.setdefault(body["response_id"], set()).add(body["item_id"])
+        elif kind == "response.done":
+            self.running.pop(body["response"]["id"], None)
         await self.socket.send(json.dumps({"type": kind, "event_id": "server", **body}))
 
     async def handler(self, socket):
         self.socket = socket
         self.connections += 1
         self.settings = None
+        self.server_items = []
+        self.running = {}
         self.request_id = socket.request.headers.get("x-request-id", "peer-request")
         await self.emit("session.created", session={"id": "session-1"})
         async for raw in socket:
@@ -91,12 +127,52 @@ class Peer:
                     },
                 )
                 await self.emit("prism.typed_input.ready")
-            elif kind == "conversation.item.create":
-                self.items.append(event["item"])
+            elif kind in ("conversation.item.create", "conversation.item.delete"):
+                self.history_operations.append(event)
+                self.history_started.set()
+                await self.history_release.wait()
+                if self.fail_history_at == len(self.history_operations):
+                    await self.emit(
+                        "error",
+                        error={
+                            "code": "invalid_request",
+                            "message": "History refused",
+                            "scope": "event",
+                            "owner": {"kind": "event", "event_id": event["event_id"]},
+                        },
+                    )
+                    continue
+                if kind == "conversation.item.create":
+                    self.history_serial += 1
+                    item = {"id": f"history-{self.history_serial}", **event["item"]}
+                    self.items.append(event["item"])
+                    self.server_items.append(item)
+                    await self.emit(
+                        "conversation.item.created",
+                        prism_request_event_id=event["event_id"],
+                        item=item,
+                    )
+                else:
+                    item = next((i for i in self.server_items if i["id"] == event["item_id"]), None)
+                    if item is not None:
+                        call_id = item.get("call_id")
+                        self.server_items[:] = [
+                            i
+                            for i in self.server_items
+                            if i["id"] != item["id"]
+                            and (not call_id or i.get("call_id") != call_id)
+                        ]
+                    await self.emit(
+                        "conversation.item.deleted",
+                        prism_request_event_id=event["event_id"],
+                        item_id=event["item_id"],
+                    )
+            elif kind == "prism.conversation.get":
+                active_ids = {i for ids in self.running.values() for i in ids}
                 await self.emit(
-                    "conversation.item.created",
+                    "prism.conversation",
                     prism_request_event_id=event["event_id"],
-                    item={"id": f"history-{len(self.items)}", **event["item"]},
+                    items=[i for i in self.server_items if i["id"] not in active_ids],
                 )
             elif kind == "response.cancel":
                 self.cancel_received.set()
@@ -134,6 +210,17 @@ class Peer:
                 else {"prism_cause": "user_audio"},
             }
         }
+        if request and "prism_input_text" in request["response"]:
+            input_id = f"typed-{self.serial}"
+            body["response"]["prism_input_item_ids"] = [input_id]
+            self.server_items.append(
+                {
+                    "id": input_id,
+                    "type": "message",
+                    "role": "user",
+                    "text": request["response"]["prism_input_text"],
+                }
+            )
         if request:
             body["prism_request_event_id"] = request["event_id"]
         await self.emit("response.created", **body)
@@ -220,15 +307,15 @@ async def test_startup_seeds_history_before_first_request():
         assert peer.settings["instructions"] == "Different"
 
 
-@pytest.mark.parametrize("invalid_item", ["system", "image", "tool", "blank", "long"])
+@pytest.mark.parametrize("invalid_item", ["developer", "image", "tool", "long"])
 async def test_history_update_validates_all_new_items_before_sending(invalid_item):
     async with peer_model() as (peer, model, _):
         session = model.session()
         await session.initialize(instructions="test")
         ctx = session.chat_ctx
         ctx.add_message(role="user", content="Valid new history")
-        if invalid_item == "system":
-            ctx.add_message(role="system", content="Unsupported role")
+        if invalid_item == "developer":
+            ctx.add_message(role="developer", content="Unsupported role")
         elif invalid_item == "image":
             ctx.add_message(role="user", content=[llm.ImageContent(image="https://test/image")])
         elif invalid_item == "tool":
@@ -237,7 +324,7 @@ async def test_history_update_validates_all_new_items_before_sending(invalid_ite
             )
         else:
             ctx.add_message(role="user", content=" \t" if invalid_item == "blank" else "x" * 4001)
-        with pytest.raises((PrismUnsupported, RimeInputError)):
+        with pytest.raises((llm.RealtimeError, RimeInputError)):
             await session.update_chat_ctx(ctx)
         assert peer.items == []
         assert session.chat_ctx.items == []

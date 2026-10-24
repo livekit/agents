@@ -134,7 +134,7 @@ Use Python 3.11 or later for this feature. Existing TTS use still supports 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra installs `rimelabs-sdk>=0.1.0a21` from PyPI. For source
+The realtime extra installs `rimelabs-sdk>=0.1.0a22` from PyPI. For source
 development, install this plugin with its realtime extra from the repository root:
 
 ```sh
@@ -169,9 +169,9 @@ The endpoint must accept the SDK's Bearer API-key handshake. Local development
 also accepts `ws://localhost/...`. You can pass `client=Rime(...)` to reuse credentials; the
 plugin does not close an injected client. Create one model per AgentSession.
 
-The adapter initializes instructions, tools, and text history before it sends
-input. `set_input_text` identifies a typed turn; `update_chat_ctx` appends history
-or tool results. No timer determines whether text is a history note or a turn.
+The adapter initializes instructions, tools, and supported history before it sends
+input. `set_input_text` identifies a typed turn; `update_chat_ctx` synchronizes history
+or submits live tool results. No timer determines whether text is a history note or a turn.
 LiveKit's `playback_finished` hook reports the response ID, playback position,
 and stop cause, including skipped audio. Caller speech sends a truncate.
 Application stops send a playback receipt. Late transcripts keep the user's
@@ -194,9 +194,57 @@ replace a supplied `request_id`.
 
 Handoff and AgentTask entry/return can reuse the conversation when both agents
 use the same model and preserve equivalent conversation history. Instructions
-and tools can change. Arbitrary history replacement and resuming tool calls in a
-fresh conversation remain unsupported. The SDK keeps the settings revision that
+and tools can change. Completed tool history can be loaded into a fresh
+conversation. Resuming a pending tool call in a fresh conversation remains unsupported. The SDK keeps the settings revision that
 each response started with, including its interruption policy.
+
+### History and context limits
+
+Use `await agent.update_chat_ctx(context)` to append or remove history and to
+replace or reorder completed history. Supported items are user, assistant, and
+system text messages, plus completed tool calls and results. History text can
+contain at most 4000 characters per message. Imported tool calls require results;
+imported results must immediately follow their calls. Importing history never
+starts a reply or executes a tool. Images, video, developer messages, and tool
+progress remain unsupported. LiveKit configuration records stay local.
+
+`await model.get_history()` returns the SDK's immutable tuple of completed server
+history items. These items carry server IDs. LiveKit retains its own item IDs and
+conversation record. Running replies and their inputs can be absent from the
+server snapshot; their absence does not delete local history.
+
+Removing either half of a completed tool pair requires removing both from the
+requested context. An active call must still receive its result through LiveKit.
+Append and deletion updates preserve retained turns. A change to content or order
+rebuilds completed history with fresh server IDs, so it requires no active replies
+or pending tool calls and costs requests proportional to the history size.
+
+History operations require deployment support. A rejected update before any
+change leaves the conversation usable. If an update fails after an earlier
+operation committed, the adapter reports a fatal error; an explicit fallback can
+restore the prior context in a new conversation. The adapter does not replay
+requests with unknown outcomes. A cancelled update waits for acknowledgment and
+keeps accepted changes. Agent context is committed only after acceptance, while
+preserving conversation items received during the update.
+
+Prism does not provide atomic history replacement. An existing reply keeps its
+original context, and a reply that starts between separate operations can see an
+intermediate context. A new reply during a rebuild stops that update; if any
+changes committed, the conversation requires recovery.
+
+For long conversations, pass `truncation="auto"`, `truncation="disabled"`, or
+`truncation=RetentionRatio(0.9)` to the constructor. Import `RetentionRatio` from
+`rimelabs_sdk.realtime`. Use `await model.update_session(truncation="auto")` to
+change the policy during a session. `auto` keeps 0.8 of the available history
+capacity when truncation is needed. `disabled` reports `context_length_exceeded`
+when context no longer fits. A retention ratio must be above zero and at most one.
+Instructions and tools remain. Truncation does not erase the conversation record.
+
+The plugin omits this setting unless supplied, preserving existing requests for
+older servers. The deployment must support the setting before it is enabled.
+`model.session_info.truncation` reports the acknowledged policy, or `None` if the
+server does not publish it. Accepted policies survive explicit restarts. This
+context setting is separate from reporting interrupted audio playback.
 
 ### Tool fillers
 
@@ -222,8 +270,8 @@ and `retryable`. The model error event exposes the same retry classification.
 `retryable` describes whether an unchanged request may succeed again;
 `recoverable` describes whether the current LiveKit session can continue.
 Neither flag starts an automatic retry. Do not replay accepted typed turns or
-tool execution. A context-length error requires a new conversation with shorter
-history. An unknown request outcome still closes the SDK conversation.
+tool execution. A context-length error requires shorter context. Configure history truncation,
+remove supported history items, or start a new conversation with shorter history. An unknown request outcome still closes the SDK conversation.
 
 A speech hint may be a false alarm. LiveKit lowers playback, without cancellation,
 on outputs that support gain control. `speech_hint_gain=0.25` and
@@ -248,8 +296,8 @@ the session. LiveKit drains unused audio when audio output is absent or disabled
 There is no automatic reconnect or tool replay in the SDK or Prism adapter.
 An application can opt into LiveKit's realtime fallback adapter. It forwards
 initialization, typed turns, and playback reports. An explicit restart opens a
-new conversation with supported user/assistant text history; it cannot restore
-a pending tool round or replay tool history. Local configuration records are
+new conversation with supported text and completed tool history; it cannot restore
+a pending tool round or rerun tools from that history. Local configuration records are
 excluded from that history. Concurrent use of one Prism model remains unsupported.
 
 Each fallback generation carries its playback session. Reports reach that
