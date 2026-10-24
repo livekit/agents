@@ -360,3 +360,37 @@ async def test_reply_waiting_for_readiness_does_not_block_live_tool_results():
         finally:
             waiting.cancel()
             await asyncio.gather(waiting, return_exceptions=True)
+
+
+@pytest.mark.parametrize("ended", [False, True])
+async def test_reply_started_during_final_rebuild_acknowledgment_requires_recovery(ended):
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.initialize(chat_ctx=messages("old"))
+        peer.block_history_at = len(peer.history_operations) + 2
+        peer.history_release.clear()
+        change = asyncio.create_task(session.update_chat_ctx(messages("replacement")))
+        errors = asyncio.Queue()
+        session.on("error", errors.put_nowait)
+        try:
+            await wait_until(lambda: len(peer.history_operations) == peer.block_history_at)
+            await peer.emit(
+                "response.created",
+                response={"id": "racing-reply", "metadata": {"prism_cause": "user_audio"}},
+            )
+            if ended:
+                await peer.end("racing-reply")
+                await wait_until(
+                    lambda: (
+                        session._generations.get("racing-reply")
+                        and session._generations["racing-reply"].ended
+                    )
+                )
+            else:
+                await wait_until(lambda: "racing-reply" in session._generations)
+        finally:
+            peer.history_release.set()
+        with pytest.raises(llm.RealtimeError, match="partially applied"):
+            await change
+        event = await asyncio.wait_for(errors.get(), 3)
+        assert not event.recoverable
