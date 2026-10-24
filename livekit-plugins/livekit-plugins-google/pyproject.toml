@@ -31,7 +31,7 @@ dependencies = [
     # LiveServerContent.interim_input_transcription landed in 2.9 and
     # AudioTranscriptionConfig.custom_vocabulary in 2.13.
     "google-genai >= 2.30.1; python_version >= '3.10'",
-    "livekit-agents>=1.8.8",
+    "livekit-agents>=1.8.9",
     # Vertex AI uses an httpx2 client (OpenAI SDK 3). google-genai still depends on httpx v1.
     "httpx2>=2.12,<3",
 ]
