@@ -5,12 +5,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import MutableMapping
-from dataclasses import replace
 from typing import cast
 
 from rimelabs_sdk import realtime as r
 
-from livekit.agents import llm, utils
+from livekit.agents import llm
 from livekit.agents.voice.generation import remove_instructions
 
 
@@ -243,9 +242,9 @@ class PrismHistory:
                 else:
                     if rebuild and self._response_revision != response_revision:
                         raise HistoryUpdateError("A new reply started during history replacement")
-                    # New IDs avoid reusing identities retained in Prism's record.
-                    wire_item = replace(_wire(item), id=utils.shortuuid("lk_"))
-                    ref_item = await self._sdk.create_item(wire_item)
+                    # Let Prism assign a fresh ID. Omitting optional client IDs
+                    # also preserves the existing text-history request shape.
+                    ref_item = await self._sdk.create_item(_wire(item))
                     self._ids[item.id] = ref_item.item_id
                 committed = True
                 if rebuild and self._response_revision != response_revision:

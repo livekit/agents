@@ -417,3 +417,41 @@ async def test_partial_update_recovers_prior_context_on_a_backup_model():
                 await backup_peer.end(response)
                 await asyncio.wait_for(speech.wait_for_playout(), 3)
                 assert speech.exception() is None
+
+
+async def test_omitted_new_options_preserve_existing_text_history_requests():
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        original = messages("seed")
+        await session.initialize(chat_ctx=original)
+        target = session.chat_ctx
+        target.add_message(role="assistant", content="appended history")
+        await session.update_chat_ctx(target)
+        assert "truncation" not in peer.settings
+        assert [event["item"] for event in peer.history_operations] == [
+            {"type": "message", "role": "user", "text": "seed"},
+            {"type": "message", "role": "assistant", "text": "appended history"},
+        ]
+
+
+async def test_truncation_updates_do_not_evict_an_older_response_interruption_policy():
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.initialize()
+        original_revision = model.session_info.settings_revision
+        for _ in range(129):
+            await model.update_session(truncation="auto")
+        await model.update_session(interrupt_on_speech=False)
+        speech = asyncio.Queue()
+        session.on("input_speech_started", speech.put_nowait)
+        await peer.emit(
+            "response.created",
+            response={
+                "id": "prepared-before-updates",
+                "metadata": {"prism_cause": "user_audio"},
+                "prism_settings_revision": original_revision,
+            },
+        )
+        await peer.emit("input_audio_buffer.speech_started", item_id="caller", audio_start_ms=0)
+        event = await asyncio.wait_for(speech.get(), 3)
+        assert event.interrupt_response is True
