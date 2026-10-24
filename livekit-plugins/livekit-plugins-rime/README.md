@@ -309,7 +309,10 @@ before wrapper cancellation, the wrapper interrupts its owning session and
 reports skipped playback.
 
 An SDK `RealtimeAdmissionTimeout` fails only the reply request. It does not close
-the conversation. Unknown request outcomes still fail the session.
+the conversation. A typed turn refused before acceptance remains staged for a
+later explicit `generate_reply()` call; the adapter does not retry it automatically.
+A new explicit typed input can replace that unsent turn. Accepted or cancelled
+requests are not restaged. Unknown request outcomes still fail the session.
 An SDK `ResponseAbandoned` notice identifies a late accepted reply whose caller
 was cancelled. The adapter discards its unused output and reports zero playback
 once the terminal response supplies a drain token.
