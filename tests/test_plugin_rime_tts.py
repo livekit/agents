@@ -1173,7 +1173,9 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
         "Hello from LiveKit today. ",
         "Next sentence. ",
     ]
-    start = server.requests[0]["start"]
+    start = dict(server.requests[0]["start"])
+    # Newer rime-api schemas include an empty repeated field in default JSON output.
+    assert start.pop("customLexicon", []) == []
     assert start == {
         "speaker": "lyra",
         "language": "eng",
@@ -2711,7 +2713,8 @@ async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> No
             assert json.loads(websocket.send_str.call_args.args[0]) == expected
         assert json_format.MessageToDict(proto.WebSocketRequest.FromString(binary)) == expected
         if request.HasField("start"):
-            assert not request.start.HasField("arcana_parameters")
+            if "arcana_parameters" in request.start.DESCRIPTOR.fields_by_name:
+                assert not request.start.HasField("arcana_parameters")
     else:
         message = aiohttp.WSMessage(
             aiohttp.WSMsgType.BINARY if protocol == "binary" else aiohttp.WSMsgType.TEXT,

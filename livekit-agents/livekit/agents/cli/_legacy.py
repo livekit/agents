@@ -154,7 +154,7 @@ class ConsoleAudioOutput(io.AudioOutput):
             label="Console",
             next_in_chain=None,
             sample_rate=SAMPLE_RATE,
-            capabilities=io.AudioOutputCapabilities(pause=True),
+            capabilities=io.AudioOutputCapabilities(pause=True, gain=True),
         )
         self._loop = loop
 
@@ -292,10 +292,13 @@ class ConsoleAudioOutput(io.AudioOutput):
                     available_bytes = len(self._output_buf)
                     if available_bytes > 0:
                         self._maybe_mark_playback_started()
-                    outdata[: available_bytes // 2, 0] = np.frombuffer(
-                        self._output_buf,
-                        dtype=np.int16,
-                        count=available_bytes // 2,
+                    outdata[: available_bytes // 2, 0] = (
+                        np.frombuffer(
+                            self._output_buf,
+                            dtype=np.int16,
+                            count=available_bytes // 2,
+                        )
+                        * self._playback_gain
                     )
                     outdata[available_bytes // 2 :, 0] = 0
                     del self._output_buf[:available_bytes]  # TODO: optimize
@@ -303,7 +306,9 @@ class ConsoleAudioOutput(io.AudioOutput):
                 else:
                     self._maybe_mark_playback_started()
                     chunk = self._output_buf[:bytes_needed]
-                    outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
+                    outdata[:, 0] = (
+                        np.frombuffer(chunk, dtype=np.int16, count=frames) * self._playback_gain
+                    )
                     del self._output_buf[:bytes_needed]
 
     def _maybe_mark_playback_started(self) -> None:
