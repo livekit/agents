@@ -91,6 +91,9 @@ class RealtimeCapabilities:
     When used through a RealtimeModel, add_to_chat_ctx=False is ignored and the
     message is still added to the chat context.
     """
+    supports_uninterruptible_say: bool = False
+    """Whether say(allow_interruptions=False) is enforced by the server, even with
+    server-side turn detection enabled. Only applies to native realtime say()."""
 
 
 class RealtimeError(Exception):
@@ -334,7 +337,13 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def say(
         self,
         text: str | AsyncIterable[str],
+        *,
+        allow_interruptions: bool = True,
     ) -> asyncio.Future[GenerationCreatedEvent]:
+        """Speak scripted text, optionally preventing server-side interruptions.
+
+        ``allow_interruptions=False`` requires ``supports_uninterruptible_say``.
+        """
         raise NotImplementedError(
             f"{type(self).__name__} does not implement say(). use a TTS model instead"
         )

@@ -125,6 +125,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         self._capabilities.can_disable_turn_detection = False
         # xAI force_message drives scripted TTS without a follow-up response.create
         self._capabilities.supports_say = True
+        self._capabilities.supports_uninterruptible_say = True
         self._provider_label = "xAI Realtime API"
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
@@ -278,13 +279,21 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super().interrupt()
         self._discard_abandoned_response()
 
-    def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        """Speak scripted text via xAI ``force_message`` (no ``response.create``)."""
+    def say(
+        self, text: str | AsyncIterable[str], *, allow_interruptions: bool = True
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        """Speak scripted text via xAI ``force_message`` (no ``response.create``).
+
+        With ``allow_interruptions=False``, xAI drops caller audio until playback completes.
+        """
         event_id = utils.shortuuid("say_")
         fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
         self._response_created_futures[event_id] = fut
 
-        task = asyncio.create_task(self._say_task(event_id, text, fut), name="xai-say")
+        task = asyncio.create_task(
+            self._say_task(event_id, text, fut, allow_interruptions=allow_interruptions),
+            name="xai-say",
+        )
         self._say_tasks.add(task)
         task.add_done_callback(self._say_tasks.discard)
         return fut
@@ -294,6 +303,8 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         event_id: str,
         text: str | AsyncIterable[str],
         fut: asyncio.Future[llm.GenerationCreatedEvent],
+        *,
+        allow_interruptions: bool,
     ) -> None:
         """Collect text, send force_message, then wait for response.created (or timeout/cancel)."""
         force_message_sent = False
@@ -310,6 +321,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                     "item": {
                         "type": "force_message",
                         "role": "assistant",
+                        "interruptible": allow_interruptions,
                         "content": [{"type": "output_text", "text": full_text}],
                     },
                 }
