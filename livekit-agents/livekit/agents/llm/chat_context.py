@@ -161,6 +161,8 @@ class Instructions:
         return f"Instructions({self.common!r}, dynamic={self.dynamic!r})"
 
     def __hash__(self) -> int:
+        if not self.audio and not self.text and not self.dynamic:
+            return hash(self.common)
         return hash((self.common, self.audio, self.text, self.dynamic))
 
     def __eq__(self, other: object) -> bool:
