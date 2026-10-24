@@ -91,7 +91,10 @@ class SpeakingRateStream:
                         dtype=np.float32,
                     )
 
-                    sr = self._compute_speaking_rate(frame_f32_data, _inference_sample_rate)
+                    # Offload CPU-heavy STFT work so a flush doesn't block the event loop.
+                    sr = await asyncio.to_thread(
+                        self._compute_speaking_rate, frame_f32_data, _inference_sample_rate
+                    )
                     pub_timestamp += frame.duration
                     self._event_ch.send_nowait(
                         SpeakingRateEvent(
@@ -157,8 +160,15 @@ class SpeakingRateStream:
                     dtype=np.float32,
                 )
 
-                # run the inference
-                sr = self._compute_speaking_rate(inference_f32_data, _inference_sample_rate)
+                # Offload CPU-heavy STFT/spectral-flux work. TTS can deliver audio faster
+                # than real time; without this, draining a backlog of windows blocks the
+                # event loop for 100–200ms per window (see #7921).
+                # Copy because inference_f32_data is reused on the next iteration.
+                sr = await asyncio.to_thread(
+                    self._compute_speaking_rate,
+                    inference_f32_data.copy(),
+                    _inference_sample_rate,
+                )
                 self._event_ch.send_nowait(
                     SpeakingRateEvent(
                         timestamp=pub_timestamp,
@@ -166,6 +176,9 @@ class SpeakingRateStream:
                         speaking_rate=sr,
                     )
                 )
+
+                # Yield between windows so other tasks can run while catching up.
+                await asyncio.sleep(0)
 
                 # move the window forward by the hop size
                 pub_timestamp += self._opts.step_size
