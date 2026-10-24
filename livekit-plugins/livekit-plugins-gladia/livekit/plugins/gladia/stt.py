@@ -589,6 +589,21 @@ class STT(stt.STT):
         pre_processing_audio_enhancer: bool | None = None,
         pre_processing_speech_threshold: float | None = None,
     ) -> None:
+        new_translation_enabled = (
+            translation_enabled
+            if translation_enabled is not None
+            else self._opts.translation_config.enabled
+        )
+        new_translation_target_languages = (
+            translation_target_languages
+            if translation_target_languages is not None
+            else self._opts.translation_config.target_languages
+        )
+        if new_translation_enabled and not new_translation_target_languages:
+            raise ValueError(
+                "translation_target_languages is required when translation_enabled is True"
+            )
+
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
                 self._opts.language_config,
