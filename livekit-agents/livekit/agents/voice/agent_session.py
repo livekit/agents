@@ -88,7 +88,8 @@ from .keyterm_detection import (
     _resolve_stt_context_options,
     _stt_context_from_keyterms_options,
 )
-from .recorder_io.recorder_io import MAX_BIT_RATE, MIN_BIT_RATE, RecorderIO
+from .recorder_io import RecorderIO
+from .recorder_io.recorder_io import _validate_bit_rate
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
@@ -181,6 +182,7 @@ def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOpti
     if isinstance(record, bool):
         defaults = _RECORDING_ALL_ON if record else _RECORDING_ALL_OFF
         return RecordingOptions(**defaults)
+    _validate_bit_rate(record.get("bit_rate"))
     return RecordingOptions(**{**_RECORDING_ALL_ON, **record})
 
 
@@ -958,18 +960,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._text_only:
                 self._opts.recording_options["audio"] = False
 
-            c = cli.AgentsConsole.get_instance()
-            bit_rate = self._opts.recording_options.get("bit_rate")
-            recorder_may_start = self._opts.recording_options["audio"] or (c.enabled and c.record)
-            invalid_bit_rate = not isinstance(bit_rate, int) or (
-                bit_rate < MIN_BIT_RATE or bit_rate > MAX_BIT_RATE
-            )
-            if recorder_may_start and bit_rate is not None and invalid_bit_rate:
-                # Validate before claiming the primary session or starting RoomIO.
-                raise ValueError(
-                    f"bit_rate must be between {MIN_BIT_RATE} and {MAX_BIT_RATE}; got {bit_rate!r}"
-                )
-
             is_primary = True
             if job_ctx:
                 # set the primary session
@@ -1039,6 +1029,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             tasks: list[asyncio.Task[None]] = []
 
+            c = cli.AgentsConsole.get_instance()
             if c.enabled and not c.io_acquired:
                 if self.input.audio is not None or self.output.audio is not None:
                     logger.warning(

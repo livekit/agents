@@ -1788,27 +1788,16 @@ async def test_recorder_io_defaults() -> None:
         await _cleanup(session)
 
 
-async def test_invalid_recorder_bit_rate_rejected() -> None:
+@pytest.mark.parametrize("audio", [True, False])
+async def test_invalid_recorder_bit_rate_rejected(audio: bool) -> None:
     """Invalid recorder options must fail before session startup creates room tasks."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx()
 
     with _patch_job_ctx(mock_ctx):
         with pytest.raises(ValueError, match="bit_rate"):
-            await session.start(SimpleAgent(), record={"audio": True, "bit_rate": 1_000_000})
+            await session.start(SimpleAgent(), record={"audio": audio, "bit_rate": 1_000_000})
 
     assert mock_ctx._primary_agent_session is None
     assert session._room_io is None
     assert not session._started
-
-
-async def test_invalid_bit_rate_ignored_without_audio() -> None:
-    """An unused bit rate must not block a session that does not record audio."""
-    session = _create_simple_session()
-    mock_ctx = _make_mock_job_ctx()
-
-    with _patch_job_ctx(mock_ctx, patch_recorder=True) as mock_cls:
-        assert mock_cls is not None
-        await session.start(SimpleAgent(), record={"audio": False, "bit_rate": 1_000_000})
-        mock_cls.assert_not_called()
-        await _cleanup(session)

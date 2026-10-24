@@ -33,6 +33,15 @@ MIN_BIT_RATE = 500
 MAX_BIT_RATE = 512_000
 
 
+def _validate_bit_rate(bit_rate: int | None) -> None:
+    if bit_rate is not None and not (
+        isinstance(bit_rate, int) and MIN_BIT_RATE <= bit_rate <= MAX_BIT_RATE
+    ):
+        raise ValueError(
+            f"bit_rate must be an int between {MIN_BIT_RATE} and {MAX_BIT_RATE}, got {bit_rate!r}"
+        )
+
+
 # how long the writer waits on a source that stopped delivering before taking the silence as real
 INPUT_STALL_TIMEOUT = 1.0
 
@@ -180,13 +189,7 @@ class RecorderIO:
             loop: Event loop the recorder runs on. Defaults to the current one.
         """
         # the encoder opens on its own thread, where a rejected bit rate would only be logged
-        if bit_rate is not None and not (
-            isinstance(bit_rate, int) and MIN_BIT_RATE <= bit_rate <= MAX_BIT_RATE
-        ):
-            raise ValueError(
-                f"bit_rate must be an int between {MIN_BIT_RATE} and {MAX_BIT_RATE}, "
-                f"got {bit_rate!r}"
-            )
+        _validate_bit_rate(bit_rate)
 
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
