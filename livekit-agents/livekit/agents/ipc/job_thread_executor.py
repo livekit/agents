@@ -12,6 +12,7 @@ from typing import Any
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
+from ..telemetry import metrics
 from ..utils.aio import duplex_unix
 from . import channel, job_proc_lazy_main, proto
 from .inference_executor import InferenceExecutor
@@ -268,12 +269,19 @@ class ThreadJobExecutor:
         if not self._initialize_fut.done():
             raise RuntimeError("executor not initialized")
 
+        metrics.job_started()
         self._running_job = info
         self._job_status = JobStatus.RUNNING
 
         start_req = proto.StartJobRequest()
         start_req.running_job = info
-        await channel.asend_message(self._pch, start_req)
+        try:
+            await channel.asend_message(self._pch, start_req)
+        except Exception:
+            self._running_job = None
+            self._job_status = None
+            metrics.job_ended()
+            raise
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -288,6 +296,11 @@ class ThreadJobExecutor:
         monitor_task = asyncio.create_task(self._monitor_task())
 
         await self._join_fut
+
+        # the runner thread has exited, so the job is over (same accounting as
+        # ProcJobExecutor._supervise_task)
+        if self._running_job is not None:
+            metrics.job_ended()
 
         # the thread closes its end of the duplex before signaling the join, so the monitor
         # task ends on its own once it has read what the thread sent last (ShutdownRequestAck

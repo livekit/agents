@@ -6,6 +6,7 @@ import io
 import logging
 import multiprocessing as mp
 import socket
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -776,6 +777,46 @@ async def test_thread_job_loop_is_closed_after_the_runner_exits():
     assert proc.status == ipc.job_executor.JobStatus.SUCCESS
     assert len(_job_loops) == 1
     assert _job_loops[0].is_closed()
+
+
+@pytest.mark.no_concurrent  # monkeypatches the process-global telemetry functions
+async def test_thread_executor_updates_active_job_metric(monkeypatch: pytest.MonkeyPatch):
+    """Thread-executed jobs must update the active-job gauge like process jobs do,
+    otherwise lk_agents_active_job_count has no writer under JobExecutorType.THREAD."""
+    from livekit.agents.telemetry import metrics as telemetry_metrics
+
+    calls: list[str] = []
+    monkeypatch.setattr(telemetry_metrics, "job_started", lambda: calls.append("started"))
+    monkeypatch.setattr(telemetry_metrics, "job_ended", lambda: calls.append("ended"))
+
+    # the entrypoint runs on the runner thread's own loop; a threading.Event keeps it
+    # parked until the test has observed the running state, so `ended` can't race ahead
+    release_entrypoint = threading.Event()
+
+    async def _blocked_entrypoint(job_ctx: JobContext) -> None:
+        start_args: _StartArgs = job_ctx.proc.user_arguments
+        with start_args.entrypoint_counter.get_lock():
+            start_args.entrypoint_counter.value += 1
+
+        await asyncio.get_running_loop().run_in_executor(None, release_entrypoint.wait)
+        job_ctx.shutdown("test released the entrypoint")
+
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0, job_entrypoint_fnc=_blocked_entrypoint
+    )
+    await proc.start()
+    await proc.initialize()
+    try:
+        await proc.launch_job(_generate_fake_job())
+        await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+        # the entrypoint is parked, so the job can't end before this assertion
+        assert calls == ["started"], "job_started must be called while a job is running"
+        release_entrypoint.set()
+    finally:
+        release_entrypoint.set()  # never leave the runner parked if the assertion failed
+        await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert calls == ["started", "ended"], "job_ended must be called when the job ends"
 
 
 def test_log_queue_drains_before_stop():
