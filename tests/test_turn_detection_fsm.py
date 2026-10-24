@@ -13,6 +13,7 @@ turn commits) lives in ``AudioRecognition`` and is covered by
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -51,8 +52,8 @@ class _FakeTransport:
     def push_frame(self, frame: Any) -> None:
         self.audio_events.append(("push_frame", frame.samples_per_channel))
 
-    def mark_speech_start(self, lookback: float) -> None:
-        self.audio_events.append(("mark_speech_start", lookback))
+    def on_start_of_turn(self, turn_duration: float) -> None:
+        self.audio_events.append(("on_start_of_turn", turn_duration))
 
     def flush(self) -> None:
         self.audio_events.append(("flush", None))
@@ -93,28 +94,31 @@ def _make_stream(thresholds: dict[str, float] | None = None) -> _FakeBackend:
 class TestAudioTurnDetectionRequests:
     """Request lifecycle and hook dispatch for ``_BaseStreamingTurnDetectorStream``."""
 
-    async def test_speech_start_reaches_transport_in_audio_order(self) -> None:
-        """The local transport measures the turn from the mark, so it must land between the
-        frames pushed before and after it, not ahead of frames still in the channel."""
+    async def test_start_of_turn_reaches_transport_in_audio_order(self) -> None:
+        """The local transport measures the turn against the frames pushed before the call,
+        so the start must land between those and later frames, as a duration taken at
+        call time rather than when the transport drains it."""
         s = _make_stream()
         try:
             frame = rtc.AudioFrame(
                 data=bytes(320), sample_rate=16000, num_channels=1, samples_per_channel=160
             )
             s.push_audio(frame)
-            s.mark_speech_start(0.3)
+            s.on_start_of_turn(time.time() - 0.3)
             s.push_audio(frame)
             s.flush()
             for _ in range(20):
                 if len(s._fake_transport.audio_events) == 4:
                     break
                 await asyncio.sleep(0)
-            assert s._fake_transport.audio_events == [
-                ("push_frame", 160),
-                ("mark_speech_start", 0.3),
-                ("push_frame", 160),
-                ("flush", None),
+            events = s._fake_transport.audio_events
+            assert [name for name, _ in events] == [
+                "push_frame",
+                "on_start_of_turn",
+                "push_frame",
+                "flush",
             ]
+            assert events[1][1] == pytest.approx(0.3, abs=0.05)
         finally:
             await s.aclose()
 

@@ -121,7 +121,7 @@ class _CloudTransport:
             )
         )
 
-    def mark_speech_start(self, lookback: float) -> None:
+    def on_start_of_turn(self, turn_duration: float) -> None:
         pass
 
     def flush(self) -> None:
@@ -388,7 +388,7 @@ class _LocalTransport:
         self._buf = utils.AudioArrayBuffer(
             buffer_size=EOT_MAX_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
         )
-        # samples pushed since the last flush, and where in them the user started speaking;
+        # samples pushed since the last flush, and where in them the user turn started;
         # the model takes the turn length as a feature, beyond the window it reads
         self._num_samples = 0
         self._turn_start: int | None = None
@@ -428,9 +428,8 @@ class _LocalTransport:
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         self._num_samples += self._buf.push_frame(frame)
 
-    def mark_speech_start(self, lookback: float) -> None:
-        if self._turn_start is None:
-            self._turn_start = max(0, self._num_samples - int(lookback * DEFAULT_SAMPLE_RATE))
+    def on_start_of_turn(self, turn_duration: float) -> None:
+        self._turn_start = max(0, self._num_samples - int(turn_duration * DEFAULT_SAMPLE_RATE))
 
     def flush(self) -> None:
         if len(self._buf) > 0:

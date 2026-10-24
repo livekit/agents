@@ -52,7 +52,7 @@ class _StreamingTurnDetectionTransport(Protocol):
 
     def run_inference(self, request_id: str) -> None: ...
     def push_frame(self, frame: rtc.AudioFrame) -> None: ...
-    def mark_speech_start(self, lookback: float) -> None: ...
+    def on_start_of_turn(self, turn_duration: float) -> None: ...
     def flush(self) -> None: ...
 
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None: ...
@@ -95,8 +95,8 @@ class _BaseStreamingTurnDetectorStream:
         reason: str | None = None
 
     @dataclass
-    class _SpeechStartSentinel:
-        lookback: float
+    class _TurnStartedSentinel:
+        turn_duration: float
 
     def __init__(
         self,
@@ -127,7 +127,7 @@ class _BaseStreamingTurnDetectorStream:
         self._audio_ch = aio.Chan[
             rtc.AudioFrame
             | _BaseStreamingTurnDetectorStream._FlushSentinel
-            | _BaseStreamingTurnDetectorStream._SpeechStartSentinel
+            | _BaseStreamingTurnDetectorStream._TurnStartedSentinel
         ]()
 
         self._request_id: str | None = None
@@ -238,13 +238,14 @@ class _BaseStreamingTurnDetectorStream:
         for resampled_frame in self._resample_audio_frame(frame):
             self._audio_ch.send_nowait(resampled_frame)
 
-    def mark_speech_start(self, lookback: float) -> None:
-        """Mark that the user started speaking ``lookback`` seconds before the end of the
-        audio pushed so far. Only the first mark after a flush starts the turn."""
+    def on_start_of_turn(self, started_at: float) -> None:
+        """The user turn started at ``started_at``; it lasts until the next flush."""
         if self._audio_ch.closed:
             return
+        # measured now, against the audio pushed so far, so queueing can't stretch it
+        turn_duration = max(0.0, time.time() - started_at)
         self._audio_ch.send_nowait(
-            _BaseStreamingTurnDetectorStream._SpeechStartSentinel(lookback=lookback)
+            _BaseStreamingTurnDetectorStream._TurnStartedSentinel(turn_duration=turn_duration)
         )
 
     def end_input(self) -> None:
@@ -344,8 +345,8 @@ class _BaseStreamingTurnDetectorStream:
         async for item in self._audio_ch:
             if isinstance(item, _BaseStreamingTurnDetectorStream._FlushSentinel):
                 self._transport.flush()
-            elif isinstance(item, _BaseStreamingTurnDetectorStream._SpeechStartSentinel):
-                self._transport.mark_speech_start(item.lookback)
+            elif isinstance(item, _BaseStreamingTurnDetectorStream._TurnStartedSentinel):
+                self._transport.on_start_of_turn(item.turn_duration)
             else:
                 self._transport.push_frame(item)
 

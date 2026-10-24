@@ -109,8 +109,8 @@ class _ScriptedTransport:
     def push_frame(self, frame: Any) -> None:
         self.events.append(("push_frame", frame))
 
-    def mark_speech_start(self, lookback: float) -> None:
-        self.events.append(("mark_speech_start", lookback))
+    def on_start_of_turn(self, turn_duration: float) -> None:
+        self.events.append(("on_start_of_turn", turn_duration))
 
     def flush(self) -> None:
         self.events.append(("flush", None))

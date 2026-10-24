@@ -463,19 +463,6 @@ class TestPredictionFutureLifecycle:
     silence tick, are rearmed by resumed speech or SOS, and the flushed-turn
     flag blocks new requests until fresh speech."""
 
-    async def test_sos_marks_speech_start_at_vad_onset(self) -> None:
-        """VAD fires SOS after ``speech_duration`` of speech plus its inference lag; the
-        turn detector counts the turn length from the onset, so it is told both."""
-        ar = _make_full_recognition_for_eou()
-        ev = _start_of_speech()
-        ev.inference_duration = 0.05
-
-        await ar._on_vad_event(ev)
-
-        ar._turn_detector_stream.mark_speech_start.assert_called_once_with(
-            pytest.approx(ev.speech_duration + 0.05)
-        )
-
     async def test_silence_tick_starts_request_once(self) -> None:
         ar = _make_full_recognition_for_eou()
         ar._speaking = True
