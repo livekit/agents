@@ -346,6 +346,43 @@ async def test_streamed_word_tokenizer_releases_cjk_before_end_of_input():
     assert [ev.token async for ev in stream] == ["我可以"]
 
 
+# the transcript synchronizer's tokenizer, and the one TTS plugins pace words with
+CJK_LATIN_TEXT = "好的，我可以帮您。Please hold. 会議は１０：３０から。OK?"
+
+
+@pytest.mark.parametrize(
+    "tokenizer",
+    [
+        basic.WordTokenizer(ignore_punctuation=False, split_character=True),
+        basic.WordTokenizer(ignore_punctuation=False, split_character=True, retain_format=True),
+    ],
+)
+async def test_streamed_word_tokenizer_matches_tokenize_after_cjk_clause_mark(
+    tokenizer: tokenize.WordTokenizer,
+):
+    # with split_character the stream emits each CJK character as soon as it is complete,
+    # so when a clause mark arrives the text it follows is gone from the buffer. The mark
+    # used to be glued to the Latin word after it ("。Please") instead of ending a word
+    # like it does in tokenize()
+    expected = tokenizer.tokenize(text=CJK_LATIN_TEXT)
+    assert "。" in expected and "Please" in [t.strip() for t in expected]
+
+    for chunk_size in (1, 2, 3, 5):
+        stream = tokenizer.stream()
+        for i in range(0, len(CJK_LATIN_TEXT), chunk_size):
+            stream.push_text(CJK_LATIN_TEXT[i : i + chunk_size])
+        stream.end_input()
+        assert [ev.token async for ev in stream] == expected, f"chunk_size={chunk_size}"
+
+
+def test_word_tokenizer_cjk_clause_mark_at_start_of_text():
+    # a stray mark at the very start is a word of its own, like one after CJK text; a mark
+    # inside Latin text or a full-width number still isn't
+    tokenizer = basic.WordTokenizer(ignore_punctuation=False)
+    assert tokenizer.tokenize(text="。Please hold") == ["。", "Please", "hold"]
+    assert tokenizer.tokenize(text='ph="ni，hao" １，０００') == ['ph="ni，hao"', "１，０００"]
+
+
 HYPHENATOR_TEXT = [
     "Segment",
     "expected",
