@@ -109,6 +109,9 @@ class _ScriptedTransport:
     def push_frame(self, frame: Any) -> None:
         self.events.append(("push_frame", frame))
 
+    def on_start_of_turn(self, started_at: float) -> None:
+        self.events.append(("on_start_of_turn", started_at))
+
     def flush(self) -> None:
         self.events.append(("flush", None))
 

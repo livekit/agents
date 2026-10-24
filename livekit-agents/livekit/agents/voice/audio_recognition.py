@@ -2091,6 +2091,8 @@ class AudioRecognition:
 
         if self._user_turn_start is None:
             self._user_turn_start = start_time
+            if self._turn_detector_stream is not None:
+                self._turn_detector_stream.on_start_of_turn(start_time)
 
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)

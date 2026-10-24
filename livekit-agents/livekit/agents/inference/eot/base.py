@@ -52,6 +52,7 @@ class _StreamingTurnDetectionTransport(Protocol):
 
     def run_inference(self, request_id: str) -> None: ...
     def push_frame(self, frame: rtc.AudioFrame) -> None: ...
+    def on_start_of_turn(self, started_at: float) -> None: ...
     def flush(self) -> None: ...
 
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None: ...
@@ -93,6 +94,10 @@ class _BaseStreamingTurnDetectorStream:
     class _FlushSentinel:
         reason: str | None = None
 
+    @dataclass
+    class _StartOfTurnSentinel:
+        started_at: float
+
     def __init__(
         self,
         *,
@@ -120,7 +125,9 @@ class _BaseStreamingTurnDetectorStream:
         self._audio_input_num_channels: int | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._audio_ch = aio.Chan[
-            rtc.AudioFrame | _BaseStreamingTurnDetectorStream._FlushSentinel
+            rtc.AudioFrame
+            | _BaseStreamingTurnDetectorStream._FlushSentinel
+            | _BaseStreamingTurnDetectorStream._StartOfTurnSentinel
         ]()
 
         self._request_id: str | None = None
@@ -231,6 +238,14 @@ class _BaseStreamingTurnDetectorStream:
         for resampled_frame in self._resample_audio_frame(frame):
             self._audio_ch.send_nowait(resampled_frame)
 
+    def on_start_of_turn(self, started_at: float) -> None:
+        """The user turn started at ``started_at``; it lasts until the next flush."""
+        if self._audio_ch.closed:
+            return
+        self._audio_ch.send_nowait(
+            _BaseStreamingTurnDetectorStream._StartOfTurnSentinel(started_at=started_at)
+        )
+
     def end_input(self) -> None:
         self.flush()
         self._audio_ch.close()
@@ -328,6 +343,8 @@ class _BaseStreamingTurnDetectorStream:
         async for item in self._audio_ch:
             if isinstance(item, _BaseStreamingTurnDetectorStream._FlushSentinel):
                 self._transport.flush()
+            elif isinstance(item, _BaseStreamingTurnDetectorStream._StartOfTurnSentinel):
+                self._transport.on_start_of_turn(item.started_at)
             else:
                 self._transport.push_frame(item)
 

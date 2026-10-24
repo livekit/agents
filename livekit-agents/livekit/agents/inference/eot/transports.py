@@ -13,7 +13,7 @@ import numpy as np
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
-from livekit.local_inference import EOT as _EOT
+from livekit.local_inference import EOT as _EOT, EOT_MAX_SAMPLES
 from livekit.protocol.agent_pb.agent_inference import (
     AUDIO_ENCODING_PCM_S16LE,
     ClientMessage,
@@ -72,10 +72,6 @@ class _CloudTransportOptions:
     conn_options: APIConnectOptions
 
 
-_CLIENT_BUFFER_SECONDS = 1.2
-_CLIENT_BUFFER_SAMPLES = int(_CLIENT_BUFFER_SECONDS * DEFAULT_SAMPLE_RATE)
-
-
 class _CloudTransport:
     """WebSocket transport for `turn-detector-v1`."""
 
@@ -124,6 +120,9 @@ class _CloudTransport:
                 )
             )
         )
+
+    def on_start_of_turn(self, started_at: float) -> None:
+        pass
 
     def flush(self) -> None:
         self._send_message(ClientMessage(session_flush=SessionFlush()))
@@ -387,8 +386,12 @@ class _LocalTransport:
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         self._opts = opts
         self._buf = utils.AudioArrayBuffer(
-            buffer_size=_CLIENT_BUFFER_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
+            buffer_size=EOT_MAX_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
         )
+        # samples pushed since the last flush, and where in them the user turn started;
+        # the model takes the turn length as a feature, beyond the window it reads
+        self._num_samples = 0
+        self._turn_start: int | None = None
         self._eot = _EOT()
         self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -401,15 +404,18 @@ class _LocalTransport:
         self._stream_ref = weakref.ref(stream)
 
     def run_inference(self, request_id: str) -> None:
-        task = asyncio.create_task(self._predict(request_id, self._buf.read()))
+        turn_samples = self._num_samples - (self._turn_start or 0)
+        task = asyncio.create_task(self._predict(request_id, self._buf.read(), turn_samples))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _predict(self, request_id: str, pcm_snapshot: np.ndarray) -> None:
+    async def _predict(self, request_id: str, pcm_snapshot: np.ndarray, turn_samples: int) -> None:
         prob = 0.0
         t0 = time.monotonic()
         try:
-            prob = float(await asyncio.to_thread(self._eot.predict, pcm_snapshot))
+            prob = float(
+                await asyncio.to_thread(self._eot.predict, pcm_snapshot, turn_samples=turn_samples)
+            )
         except Exception:
             logger.exception("local audio EOT prediction failed")
         inference_duration = time.monotonic() - t0
@@ -420,11 +426,17 @@ class _LocalTransport:
         stream._resolve_prediction(request_id, prob, inference_duration=inference_duration)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        self._buf.push_frame(frame)
+        self._num_samples += self._buf.push_frame(frame)
+
+    def on_start_of_turn(self, started_at: float) -> None:
+        turn_duration = max(0.0, time.time() - started_at)
+        self._turn_start = max(0, self._num_samples - int(turn_duration * DEFAULT_SAMPLE_RATE))
 
     def flush(self) -> None:
         if len(self._buf) > 0:
             self._buf.shift(len(self._buf))
+        self._num_samples = 0
+        self._turn_start = None
 
     def detach(self) -> None:
         for task in list(self._tasks):

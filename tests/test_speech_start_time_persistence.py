@@ -161,6 +161,26 @@ class TestUserTurnStartPersistence:
         )
 
     @pytest.mark.asyncio
+    async def test_turn_detector_hears_the_user_turn_start_once(self):
+        """The audio turn detector counts the turn length from `_user_turn_start`, so it
+        gets that value on the first SOS and nothing on later bursts of the same turn."""
+        audio_recognition = self._create_audio_recognition()
+        stream = MagicMock()
+        audio_recognition._turn_detector_stream = stream
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=5.0)
+        )
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.END_OF_SPEECH, speech_duration=5.0, silence_duration=0.6)
+        )
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.0)
+        )
+
+        stream.on_start_of_turn.assert_called_once_with(audio_recognition._user_turn_start)
+
+    @pytest.mark.asyncio
     async def test_speech_start_time_updates_per_burst(self):
         """
         `_speech_start_time` is per-burst by design (used as the start of OTEL
