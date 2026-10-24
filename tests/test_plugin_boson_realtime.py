@@ -699,6 +699,27 @@ async def test_boson_realtime_reconnect_config_carries_every_partial_update(monk
 
 
 @pytest.mark.asyncio
+async def test_boson_realtime_model_options_replace_dicts_for_new_sessions(monkeypatch):
+    # Only an open session's server holds a config to merge into. The model's
+    # options seed sessions that start from nothing, so a dict there replaces
+    # the old one instead of inheriting its keys.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    model.update_options(turn_detection={"type": "semantic_vad", "eagerness": "low"})
+    session = model.session()
+    try:
+        event = await session._msg_ch.recv()
+        assert event["session"]["audio"]["input"]["turn_detection"] == {
+            "type": "semantic_vad",
+            "eagerness": "low",
+        }
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_boson_realtime_session_updates_clear_with_explicit_empties(monkeypatch):
     # Under merge, an omitted field keeps its old value; turning something off
     # has to send the empty value itself.

@@ -407,17 +407,12 @@ class RealtimeModel(openai_rt.RealtimeModel):
         if is_given(speed):
             self._boson_opts.speed = speed
             self._opts.speed = speed
-        # Merged rather than replaced, as the open sessions' servers do with
-        # the same update, so a session started later gets the same config.
         if is_given(turn_detection):
-            self._boson_opts.turn_detection = _merge_session_value(
-                self._boson_opts.turn_detection, _copy_dict_or_none(turn_detection)
-            )
+            self._boson_opts.turn_detection = _copy_dict_or_none(turn_detection)
             self._capabilities.turn_detection = self._boson_opts.turn_detection is not None
         if is_given(input_audio_transcription):
-            self._boson_opts.input_audio_transcription = _merge_session_value(
-                self._boson_opts.input_audio_transcription,
-                _normalize_input_audio_transcription(input_audio_transcription),
+            self._boson_opts.input_audio_transcription = _normalize_input_audio_transcription(
+                input_audio_transcription
             )
             self._capabilities.user_transcription = _input_audio_transcription_enabled(
                 self._boson_opts.input_audio_transcription
@@ -1064,7 +1059,8 @@ class RealtimeSession(openai_rt.RealtimeSession):
             self._opts.speed = speed
             audio_output["speed"] = speed
         # The server merges a dict into the one it holds, so the local copy
-        # does too: it is what a reconnect sends to a server holding nothing.
+        # is merged the same way: a reconnect sends it whole to a server that
+        # holds nothing, and it should carry what the merge left in place.
         # A field left out of a merge keeps its old value, so switching one of
         # these off has to send an explicit `null`.
         if is_given(turn_detection):
@@ -1083,7 +1079,10 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 else None
             )
         if is_given(input_audio_noise_reduction):
-            self._boson_opts.noise_reduction = _build_noise_reduction(input_audio_noise_reduction)
+            self._boson_opts.noise_reduction = _merge_session_value(
+                self._boson_opts.noise_reduction,
+                _build_noise_reduction(input_audio_noise_reduction),
+            )
             audio_input["noise_reduction"] = self._boson_opts.noise_reduction
         # Unlike turn_detection/noise_reduction, `truncation` does not accept
         # `null` on the wire: sending one is rejected hard enough to end the
