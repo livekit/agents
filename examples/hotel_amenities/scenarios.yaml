@@ -1,0 +1,708 @@
+# The amenities share of hotel_receptionist's 100-scenario suite: the
+# restaurant, spa, business centre, florist, tours, and the hotel car.
+# Scenarios with `userdata.expected_state` are graded on the final DB diff in
+# addition to agent_expectations; the rest are graded on agent_expectations alone.
+#
+# Assumptions:
+#   - Seed date is pinned: HOTEL_TODAY=2026-06-08 (Mon). All dates are literals.
+#   - Customer instructions use a structured point-form template (PERSONA /
+#     OPENING LINE / FACTS / DO, IN ORDER / REACTIONS / HIDDEN TRUTH) so the
+#     persona model follows direction reliably. FACTS are revealed only when
+#     asked, one per turn; DO steps run in order; REACTIONS are conditional.
+#   - expected_state asserts only at the granularity the diff compares (room
+#     *type*, followup *kind*, booking *status*). Pinned guest facts
+#     (email/phone/card) in `instructions` are repeated verbatim in the SQL so
+#     the multiset diff matches.
+
+name: LiveKit Hotel — amenities
+
+scenarios:
+  # --- 16: Concierge — restaurant (in scope) + tour (capability pending) ---
+- label: Book a dinner table and a sightseeing tour
+  instructions: |
+    PERSONA: Olivia Carter, a guest calling to plan your evening and next day.
+    OPENING LINE: "can you help me book a nice dinner tonight and a sightseeing tour tomorrow?"
+    FACTS (reveal each only when asked):
+    - dinner: for two, 7:30 p.m. tonight if available, no dietary restrictions
+    - tour: tomorrow, a half-day of city sights with an English-speaking guide; fine to join a group; the same two of you
+    - your name: Olivia Carter
+    - your phone: 415-555-0419
+    DO, IN ORDER:
+    1. Get the dinner table booked.
+    2. Get the tour arranged.
+    3. Ask: "what time will the tour pick us up, and how much?"
+    4. Don't hang up until you have a confirmation or reference number for BOTH the dinner and the tour - if the tour wasn't given one, ask: "and what's the reference for the tour booking?"
+  agent_expectations: >
+    Gathers the specifics before booking anything (party size and time for dinner; group vs
+    private and half vs full day for the tour). Confirms the dinner table back to the
+    caller, and answers the tour curveball with concrete confirmed details — pickup at 9:00
+    AM at the hotel lobby, sixty-five dollars per person (one hundred thirty total), entry
+    fees included — rather than leaving the tour as an open question or a handoff. Actually
+    places both bookings rather than promising to pass them along, and confirms both back
+    clearly with their reference numbers.
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO restaurant_reservations
+        (code, table_id, first_name, last_name, phone, party_size, date, time, notes)
+      VALUES ('IGNORED', 1, 'Olivia', 'Carter', '4155550419', 2,
+              '2026-06-08', '19:30:00', NULL)
+    - |
+      INSERT INTO tour_bookings
+        (code, tour_id, guest_name, guest_phone, date, party_size, total)
+      VALUES ('IGNORED', 'half_day_city', 'Olivia Carter', '4155550419',
+              '2026-06-09', 2, 13000)
+  tags:
+    feature: concierge_dinner_and_tour
+    channel: phone
+    difficulty: "2"
+  # --- 16b: Cancel a dinner reservation (deterministic) --------------------
+- label: Cancel a dinner reservation
+  instructions: |
+    PERSONA: Hannah Kowalski, a polite guest whose evening plans fell through. You booked a table and now need to cancel it.
+    OPENING LINE: "Hi - I need to cancel a dinner reservation I have with you tonight."
+    FACTS (reveal each only when asked):
+    - last name: Kowalski. Spell it K-O-W-A-L-S-K-I only if asked.
+    - the reservation confirmation code: "RES-L-M-1-2" (the code printed when the table was booked - give the whole thing including the RES)
+    - the table was for two, tonight (reveal only if asked)
+    DO, IN ORDER:
+    1. Ask to cancel the table; give your last name and the confirmation code when the agent asks to verify you.
+    2. Once it's looked up, ask: "there's no cancellation fee for the table, is there?"
+    3. Don't hang up until the agent confirms the reservation is actually cancelled.
+  agent_expectations: >
+    Recognizes this as a restaurant-table cancellation, not a room booking, and verifies the
+    caller the way the restaurant does — last name plus the printed RES confirmation code,
+    no card or email — then actually cancels the reservation rather than leaving it as a
+    vague "I'll pass it on," and confirms the cancellation back to the caller. Answers the
+    fee question honestly without inventing a charge or a refund: cancelling a dinner table
+    carries no fee. Does not confuse the request with the caller's (nonexistent) room
+    booking.
+  userdata:
+    expected_state:
+    - |
+      UPDATE restaurant_reservations SET status = 'cancelled' WHERE code = 'RES-LM12'
+  tags:
+    feature: restaurant_cancellation
+    channel: phone
+    difficulty: "2"
+  # --- 17: Concierge flight + transport (capability pending) ---------------
+- label: Flight reconfirmation and airport car
+  instructions: |
+    PERSONA: Sofía García, an in-house guest flying home this week, a bit anxious about logistics.
+    OPENING LINE: "I fly home Thursday. Can you reconfirm my flight and sort out a car to the airport?"
+    FACTS (reveal each only when asked):
+    - your name: Sofía García, staying in room 401
+    - the flight: Iberia flight IB 6174, Thursday June 11th at 5:40 p.m., booking reference Q-X-4-R-7-T
+    - you want the car at 2:30 p.m. - about three hours before departure
+    - two passengers, with luggage
+    DO, IN ORDER:
+    1. Hand over the flight details as the agent asks for them.
+    2. Ask: "hotel car or a taxi - what's the difference in cost?"
+    3. Ask: "can you double-check my seat is okay too?"
+    4. Don't hang up until the car is booked and the reconfirmation is in motion.
+  agent_expectations: >
+    Captures the full travel details — airline, flight number, date, booking reference — and
+    reads the booking reference back, since it's useless if misheard. Handles the
+    reconfirmation honestly: logs it with the concierge, who calls the carrier and rings the
+    room with the result; never claims the flight is already confirmed. For the transport,
+    explains hotel car (flat eighty-five dollars, bookable, front entrance) vs taxi (metered
+    roughly fifty-five to seventy, hailed at the door, not reservable). Sanity-checks the
+    2:30 p.m. pickup against the 5:40 p.m. departure (about three hours before) and confirms
+    the time, pickup spot, and cost back to the guest. Answers the seat-check curveball
+    honestly: it rides along in the same carrier call, no fabricated seat confirmation.
+    Closes by confirming the whole plan.
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO flight_reconfirmations
+        (code, room_id, airline, flight_number, flight_date, booking_reference, seat_check)
+      VALUES ('IGNORED', 'RM_401', 'Iberia', 'IB6174', '2026-06-11', 'QX4R7T', 1)
+    - |
+      INSERT INTO airport_cars
+        (code, room_id, pickup_date, pickup_time, passengers)
+      VALUES ('IGNORED', 'RM_401', '2026-06-11', '14:30:00', 2)
+  tags:
+    feature: concierge_travel
+    channel: phone
+    difficulty: "3"
+  # --- 28: Modify an existing restaurant reservation (deterministic: time shift)
+- label: Move a dinner reservation - caller first names a past date
+  instructions: |
+    PERSONA: Marcus Bennett, an easygoing guest who needs to push his dinner reservation to a different night. You're glancing at a calendar and at first you read off the wrong week, landing on a date that has already passed - you don't realize it's in the past until the agent points it out.
+    OPENING LINE: "Hi - I've got a dinner reservation and I need to move it to a different night."
+    FACTS (reveal each only when asked, one per turn):
+    - last name: Bennett. Spell it B-E-N-N-E-T-T only if asked.
+    - the reservation confirmation code: "RES-J-K-9-0" (give the whole thing including the RES)
+    - the new date you THINK you want, at first: "the thirtieth of May" (this is in the past)
+    - the time you want: seven o'clock in the evening (7:00 PM)
+    - it's still the same party of four (reveal only if asked)
+    REACTIONS:
+    - If the agent says the 30th of May is in the past / already happened / can't be booked: react naturally - "oh, you're right, I'm looking at the wrong month - sorry." Then give the date you actually meant: "next Monday, the fifteenth of June."
+    - If the agent simply books the past date without flagging it: you are mildly confused but go along with it ("uh, sure") - do NOT correct them. (This is the failure case the agent must avoid.)
+    DO, IN ORDER:
+    1. Ask to move the reservation to a different night; give your last name and the confirmation code when the agent asks to verify you.
+    2. When the agent asks for the new date, give the past date first (the 30th of May).
+    3. Only after the agent flags it as being in the past, correct yourself and give the real date (Monday the 15th of June) and the time (7:00 PM).
+    4. Don't hang up until the agent confirms the reservation has actually been moved to June 15th and reads the new date and time back to you with a reference.
+  agent_expectations: |
+    Recognizes this as a change to an existing restaurant table, not a new booking or a cancellation, and verifies the caller the way the restaurant does - last name plus the printed RES confirmation code, no card or email. Critically, when the caller first gives a date that has already passed (May 30th, before today), the agent does NOT accept or book it: it points out that the date is in the past and asks for a valid future date, rather than silently moving the reservation backward in time. Once the caller corrects to June 15th, completes the move and confirms the change back to the caller, citing the reservation reference and the new date and time. Does not leave the request as something to "pass on," and does not narrate a confirmation it did not actually make. Keeps the existing reservation under its confirmation code rather than creating a second one or cancelling the table outright.
+  userdata:
+    expected_state:
+    - |
+      UPDATE restaurant_reservations SET date = '2026-06-15', time = '19:00:00'
+      WHERE code = 'RES-JK90' AND status = 'confirmed'
+  tags:
+    feature: restaurant_modification
+    channel: phone
+    difficulty: '2'
+  # --- 32: Spa / health-club booking (deterministic: spa_bookings row)
+- label: Book a spa massage for two
+  instructions: |
+    PERSONA: Daniel Foster, a relaxed guest planning a treat with his partner. You're easygoing and a little chatty, happy to slow down for the agent.
+    OPENING LINE: "Hi - I'd like to book a couples massage at your spa while we're here."
+    FACTS (reveal each only when asked, one per turn):
+    - your name: Daniel Foster
+    - a callback number: 415-555-0182
+    - the day you want: this Thursday, June 11th
+    - the time you want: 3 in the afternoon
+    - it's for the two of you
+    DO, IN ORDER:
+    1. Ask for a couples deep-tissue massage for the two of you; let the agent walk you through the spa's options and pricing.
+    2. Curveball (a question, not a change): ask "is there a limit on how many people can book the deep-tissue massage together?" - you just want to know the policy; you're still booking for the two of you.
+    3. Give your details one at a time as the agent asks.
+    4. Don't hang up until the agent gives you a reference number for the booking.
+    GROUND TRUTH (never spoken): this Thursday is 2026-06-11; 3 in the afternoon is 15:00.
+  agent_expectations: >
+    Treats this as a spa booking and looks the spa catalog up rather than answering from
+    memory, presenting the service's price, duration, and party limit before booking.
+    Answers the party-limit question from the catalog (the deep-tissue massage is for up to
+    two) rather than guessing. Reads the key details back to the caller, and only confirms
+    once it has actually booked the appointment, producing one real reference number (not
+    two bookings, not a promise to set it up). Quotes the duration and price as concrete
+    facts from the catalog.
+  tags:
+    feature: spa_booking
+    channel: phone
+    difficulty: "2"
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO spa_bookings
+        (code, service_id, guest_name, guest_phone, date, time, party_size, total)
+      VALUES ('IGNORED', 'deep_tissue_massage', 'Daniel Foster', '4155550182',
+              '2026-06-11', '15:00:00', 2, 0)
+  # --- 33: Business-centre booking (deterministic: business_center_bookings row)
+- label: Book a business-centre meeting room
+  instructions: |
+    PERSONA: Marcus Bell, a guest who needs space to run a working session and is in a hurry.
+    OPENING LINE: "I need to book a meeting room in your business centre for tomorrow."
+    FACTS (reveal each only when asked, one per turn):
+    - tomorrow, starting at 2 in the afternoon
+    - you need the room for three hours
+    - your name: Marcus Bell
+    - your phone: 415-555-0288
+    DO, IN ORDER:
+    1. Ask to book a meeting room for tomorrow afternoon; give the start time and the three hours when asked.
+    2. Curveball: ask "what is that going to cost me?" - you want the concrete figure, not "the centre will tell you".
+    3. Do not hang up until you have a reference number - if you do not get one, ask: "and what is the booking reference?"
+    GROUND TRUTH (never spoken): tomorrow is Tuesday, 2026-06-09; 2 in the afternoon is 14:00.
+  agent_expectations: >
+    Looks up the business-centre catalog before quoting anything and narrows the request
+    with the caller: which service, the date and start time, and how long. Answers the cost
+    question with the concrete figure from the catalog (forty dollars per hour, so one
+    hundred twenty dollars for three hours) rather than leaving it open or handing it off.
+    Reads back a real reference number that only exists because the booking tool actually
+    ran; never narrates a confirmation it did not make.
+  tags:
+    feature: business_center_booking
+    channel: phone
+    difficulty: "2"
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO business_center_bookings
+        (code, service_id, guest_name, guest_phone, date, time, duration_hours, total)
+      VALUES ('IGNORED', 'meeting_room', 'Marcus Bell', '4155550288',
+              '2026-06-09', '14:00:00', 3, 12000)
+  # --- 34: Florist order (deterministic: florist_orders row; card message denylisted)
+- label: Order flowers to a room with a gift-card message
+  instructions: |
+    PERSONA: Marcus Webb, warm and a little rushed, arranging a surprise for his wife.
+    OPENING LINE: "Hi - I'd like to send some flowers up to a room at your hotel."
+    FACTS (reveal each only when asked, one per turn):
+    - your name: Marcus Webb
+    - your callback number: 415-555-0182
+    - which arrangement: the dozen long-stem roses
+    - where it goes: room 412
+    - the delivery day: this Friday, June 12th
+    - the gift-card message: "Happy ten years, my love. Yours always, Marcus."
+    DO, IN ORDER:
+    1. Ask what flower options they have and let them walk you through it; then pick the roses.
+    2. Curveball: ask "can you guarantee it's there before noon, while she's still in the room?"
+       - you want a real answer about the delivery window, not a vague "sure".
+    3. Give the room, the day, and the card message as the agent asks; let them read the message back.
+    4. Don't hang up until the agent confirms the order is placed and gives you a reference number.
+    GROUND TRUTH (never spoken): this Friday is 2026-06-12.
+  agent_expectations: >
+    Looks up the florist catalog and presents the arrangements with their prices, letting
+    the caller choose rather than choosing for them. Reads the gift-card message back so
+    it's exactly right, and confirms the caller's name and the destination. Answers the
+    delivery-window question with the real policy (the florist delivers between 10 AM and 6
+    PM, and same-day delivery needs the order placed before the 2 PM cutoff) rather than
+    promising a guaranteed before-noon slot it can't commit to. Actually places the order
+    (not a vague "I'll get that arranged") and confirms it with a reference number, reading
+    back the arrangement, where it's going, the date, and the total.
+  tags:
+    feature: florist_order
+    channel: phone
+    difficulty: "2"
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO florist_orders
+        (code, arrangement_id, guest_name, guest_phone, deliver_to, date, message, total, status)
+      VALUES ('IGNORED', 'roses', 'Marcus Webb', '4155550182', '412', '2026-06-12',
+              'IGNORED', 'IGNORED', 'confirmed')
+- label: Transfer to restaurant for a large private dinner
+  instructions: |
+    PERSONA: Greg Holloway, organising a milestone birthday dinner for his extended family. Warm, a bit chatty, knows what he wants but assumes the front desk can just "sort it out".
+    OPENING LINE: "Hi - I want to organise a big family dinner at your restaurant, can you help me set that up?"
+    FACTS (reveal each only when asked, one per turn):
+    - it's for fourteen people, possibly sixteen
+    - you'd want a Saturday evening, a few weeks out
+    - you're hoping for a private or semi-private space, and maybe a set menu
+    - you'd want to talk through wine and any cake/dessert arrangements
+    DO, IN ORDER:
+    1. Explain you want to arrange the big dinner and answer questions one at a time.
+    2. When it becomes clear this is beyond a normal table booking (party of 14+, private room, set menu, wine), ask: "is that something you can actually arrange, or should I be talking to the restaurant?"
+    3. Before you let them move you on, ask: "and they'll have all this - the numbers, the private room idea - they won't make me start over?"
+    REACTIONS:
+    - If the agent offers to connect you to the restaurant, agree once they've explained they'll put you on hold to do it.
+    - If the agent just transfers you with no warning, react with mild surprise ("oh - okay, you're putting me through now?").
+
+    If the agent transfers you to the restaurant, your interaction is complete.
+  # NOTE: that a transfer to the restaurant (and not a guest's room) actually
+  # happened is graded deterministically by expected_state - these expectations
+  # cover ONLY the conversation: warning the caller before the transfer and not
+  # over-promising, neither of which the DB can see.
+  agent_expectations: |
+    Recognises that a large private-dining request (set menu, wine, private room, party of 14+) belongs with the restaurant directly rather than being booked at the desk as an ordinary table, and doesn't promise to arrange it itself. Before transferring, tells the caller it will place them on hold and connect them to the restaurant and waits for their okay - rather than transferring with no warning.
+  tags:
+    feature: department_transfer
+    channel: phone
+    difficulty: '2'
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO transfer_calls (code, destination, summary, status)
+      VALUES ('IGNORED', 'restaurant', 'IGNORED', 'transferred')
+  # --- 39: VIP pre-arrival -> flowers via order_flowers (deterministic florist_orders row)
+- label: VIP pre-arrival flowers and welcome card in the suite
+  instructions: |
+    PERSONA: Renata Cole, executive assistant to an arriving guest. Poised, efficient,
+      a little exacting about details - she's arranged things like this many times and
+      wants it right, but she's gracious, not combative.
+    OPENING LINE: "Hello - I'm calling ahead of a guest's arrival to have a flower
+      arrangement and a welcome card waiting in the suite before she checks in."
+    FACTS (reveal each only when asked, one per turn):
+    - your name (the assistant placing the order): Renata Cole
+    - the guest arriving: Diane Okafor (she's the one staying; the room is the Penthouse Suite)
+    - your callback number, in case the florist needs it: 415-555-0193
+    - which arrangement: the table centerpiece
+    - where it goes: the Penthouse Suite
+    - the delivery day: this Wednesday, June 10th - she lands midday
+    - the gift-card message: "Welcome, Ms. Okafor. We are honored to have you. -- The Concierge Team"
+    DO, IN ORDER:
+    1. Ask what arrangements are available and their prices; let the agent walk you
+       through them, then choose the centerpiece.
+    2. Curveball: "She arrives around noon - can you guarantee it's in the suite before
+       she gets there?" You want a real answer about the delivery window, not a vague yes.
+    3. Give the suite, the day, and the card message as the agent asks; let them read
+       the card message back to you.
+    4. Don't hang up until the agent confirms the order is actually placed and gives you
+       a reference number.
+    GROUND TRUTH (never spoken): this Wednesday is 2026-06-10.
+  agent_expectations: >
+    Recognizes this as an arranging-ahead request and handles it graciously. Looks up the
+    florist catalog and presents the arrangements with their prices, letting the caller pick
+    rather than picking for them. Reads the gift-card message back, and confirms the
+    caller's name and the destination suite. Answers the timing question with the real
+    policy (the florist delivers between 10 AM and 6 PM, same-day delivery needs the order
+    placed before the 2 PM cutoff) rather than promising a guaranteed before-noon slot it
+    cannot commit to. Actually places the order with the florist tool (not a vague "I'll get
+    that arranged") and confirms it back with a reference number, the arrangement, where it
+    is going, and the date.
+  tags:
+    feature: vip_prearrival
+    channel: phone
+    difficulty: "3"
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO florist_orders
+        (code, arrangement_id, guest_name, guest_phone, deliver_to, date, message, total, status)
+      VALUES ('IGNORED', 'centerpiece', 'Renata Cole', '4155550193', 'Penthouse Suite',
+              '2026-06-10', 'IGNORED', 'IGNORED', 'confirmed')
+  # --- 41: VIP pre-arrival -> flowers (deterministic) + dietary note (NL); holds two needs
+- label: VIP pre-arrival flowers plus a noted dietary preference
+  instructions: |
+    PERSONA: Theodore Lansing, a returning VIP guest arranging his own arrival. Warm,
+      decisive, knows what he wants; appreciative but expects details handled correctly.
+    OPENING LINE: "I'm coming back to stay with you this week and I'd like to set up a
+      couple of things before I arrive."
+    FACTS (reveal each only when asked, one per turn):
+    - first thing: flowers waiting for you on arrival
+    - second thing: you have a serious shellfish allergy and want the kitchen and any
+      welcome amenity to know, so nothing with shellfish comes to the room
+    - your callback number: 628-555-0147
+    - which arrangement: the dozen long-stem roses
+    - where the flowers go: to you, Theodore Lansing (you'll have whatever room they assign)
+    - the delivery day: this Thursday, June 11th
+    - the gift-card message: "So glad you are joining us, Mr. Lansing. Welcome back."
+    DO, IN ORDER:
+    1. Lead with wanting "a couple of things"; let the agent take them one at a time.
+    2. Arrange the flowers: choose the roses, give the delivery day, where they go, and
+       the card message; let the agent read the card message back.
+    3. Raise the shellfish-allergy note and make clear you want it on record for the
+       kitchen and housekeeping, not just acknowledged verbally.
+    4. Don't hang up until the agent has confirmed BOTH: the flower order with a
+       reference number, and that the allergy note is actually logged for the staff.
+    GROUND TRUTH (never spoken): this Thursday is 2026-06-11.
+  agent_expectations: >
+    Holds both needs in one call and acts on each without dropping either. For the flowers:
+    looks up the catalog, lets the caller pick the arrangement, reads the gift-card message
+    back, and actually places the order (not a vague "I'll get that arranged"), confirming
+    with a reference number and reading back the arrangement, where it is going, and the
+    date. For the allergy: does not just say "noted" but records it so the kitchen and
+    housekeeping are alerted ahead of arrival, confirming it was logged with a reference.
+    Surfaces the second need on its own rather than ending after the first, and is gracious
+    about a returning guest's requests throughout.
+  tags:
+    feature: vip_prearrival
+    channel: phone
+    difficulty: "4"
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO florist_orders
+        (code, arrangement_id, guest_name, guest_phone, deliver_to, date, message, total, status)
+      VALUES ('IGNORED', 'roses', 'Theodore Lansing', '6285550147', 'Theodore Lansing',
+              '2026-06-11', 'IGNORED', 'IGNORED', 'confirmed')
+    - |
+      INSERT INTO hotel_followups (code, kind, caller_name, caller_phone, summary)
+      VALUES ('IGNORED', 'other', 'Theodore Lansing', '6285550147', 'IGNORED')
+  # --- 73: Wedding reception inquiry -> sales lead (capability S1; deterministic)
+- label: Wants to host a wedding reception at the hotel
+  instructions: |
+    PERSONA: Patricia Vance, planning her daughter's wedding RECEPTION at the hotel -
+    function space and catering for a party, NOT guest rooms. Warm, excited, a planner.
+    OPENING LINE: "Hi - I'd love to host my daughter's wedding reception at your hotel
+    next spring, around eighty guests for the evening. Can we set that up?"
+    FACTS (reveal each only when asked, one per turn):
+    - it's a reception/party - function space, dinner and dancing - not hotel rooms
+    - roughly eighty guests, a Saturday evening next spring (flexible on the exact date)
+    - your name: Patricia Vance
+    - your callback number: 415-555-0173
+    DO, IN ORDER:
+    1. Explain what you want; answer questions one at a time.
+    2. Push once to lock it in now: "can't you just pencil us in for a Saturday?"
+    3. Give your name and number when asked; don't hang up until you're sure your
+       inquiry is actually recorded for the events/sales team to follow up.
+    REACTIONS:
+    - If the agent explains events aren't booked on this line but takes your details as
+      a lead for the sales/events team, that's fine - "great, have them call me."
+    - If the agent tries to confirm or "pencil in" the event itself, that's wrong - you
+      expect it to go to the events team.
+  agent_expectations: >
+    Recognizes a wedding/event-space inquiry as something the sales/events team handles,
+    not bookable on this line, and captures it as a sales lead (name + callback number +
+    a one-line summary) - NOT as a guest-room group block (that's for 15+ rooms) and NOT
+    a restaurant table. It does not confirm or "pencil in" the event itself, and sets the
+    expectation that the sales/events team follows up. A pass is a recorded sales-lead
+    follow-up with the caller's name and number; confirming the event, or only verbally
+    promising a callback with no record, is a fail.
+  tags:
+    feature: sales_lead_event
+    channel: phone
+    difficulty: "2"
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO hotel_followups (code, kind, caller_name, caller_phone, summary)
+      VALUES ('IGNORED', 'sales_lead', 'Patricia Vance', '4155550173', 'IGNORED')
+  # --- 03: Full-day sightseeing tour (covers: tour booking control) -----------
+- label: Full-day city tour for three
+  instructions: |
+    PERSONA: Colin Mercer, a guest planning a day out with friends - upbeat, easygoing about details.
+    OPENING LINE: "Hey - do you do sightseeing tours? I'd like to book one for a few of us."
+    FACTS (reveal each only when asked, one per turn):
+    - you want the full-day tour, not the half-day
+    - the day: this Saturday, June 13th
+    - there are three of you
+    - your name: Colin Mercer
+    - your phone: 415-555-0207
+    DO, IN ORDER:
+    1. Ask what tours they offer and let the agent walk you through the options.
+    2. Pick the full-day city tour.
+    3. Curveball (a question, not a change): ask "what time does the full-day one leave?" - you want the real pickup time.
+    4. Give your details one at a time as asked.
+    5. Don't hang up until the agent gives you a booking reference.
+    GROUND TRUTH (never spoken): this Saturday is 2026-06-13.
+  agent_expectations: >
+    Looks up the tour catalog rather than answering from memory, presents the options, and
+    answers the pickup-time question from the catalog (the full-day city tour leaves at 8:30
+    AM) rather than guessing. Books the full-day city tour for three on June 13th and confirms
+    it with a real reference number that only exists because the booking tool ran. Quotes the
+    per-person price as a concrete fact. A pass is one confirmed full-day tour for three on the
+    right date; inventing a price/time or a confirmation without booking is a fail.
+  tags:
+    feature: tour_booking
+    channel: phone
+    difficulty: "2"
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO tour_bookings
+        (code, tour_id, guest_name, guest_phone, date, party_size, total, status)
+      VALUES ('IGNORED', 'full_day_city', 'Colin Mercer', '4155550207',
+              '2026-06-13', 3, 0, 'confirmed')
+  # --- 04: Spa facial (covers: spa booking control, non-massage service) ------
+- label: A facial the afternoon before a gala
+  instructions: |
+    PERSONA: Renee Coleman, a guest with an event that evening - warm, a touch in a hurry.
+    OPENING LINE: "Hi - I'd love to book a facial at your spa for tomorrow afternoon."
+    FACTS (reveal each only when asked, one per turn):
+    - which service: your signature facial
+    - the day: tomorrow, Wednesday
+    - the time: 2 in the afternoon
+    - just you, one person
+    - your name: Renee Coleman
+    - your phone: 415-555-0214
+    DO, IN ORDER:
+    1. Ask for the signature facial tomorrow afternoon; let the agent present the spa options and pricing.
+    2. Curveball: ask "how long does it take? I've got to be ready by six." - you want the real duration.
+    3. Give your details as asked.
+    4. Don't hang up until you have a reference number.
+    GROUND TRUTH (never spoken): tomorrow is Wednesday, 2026-06-10; 2 in the afternoon is 14:00.
+  agent_expectations: >
+    Looks the spa catalog up and presents the signature facial with its price and duration,
+    answering the timing question from the catalog (the facial runs about fifty minutes)
+    rather than guessing. Books the signature facial for one on June 10th at 2 PM and confirms
+    a real reference number. A pass is one confirmed facial appointment at the right date/time;
+    a fabricated confirmation or wrong service is a fail.
+  tags:
+    feature: spa_booking
+    channel: phone
+    difficulty: "2"
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO spa_bookings
+        (code, service_id, guest_name, guest_phone, date, time, party_size, total, status)
+      VALUES ('IGNORED', 'signature_facial', 'Renee Coleman', '4155550214',
+              '2026-06-10', '14:00:00', 1, 0, 'confirmed')
+- label: Local-area question - getting downtown and the nearest pharmacy
+  instructions: |
+    PERSONA: Marcus Bell, a guest arriving this evening, easygoing and chatty - it's his first time in the city.
+    OPENING LINE: "Once I drop my bags, what's the easiest way to get downtown from there?"
+    FACTS (reveal each only when asked, one per turn):
+    - your name: Marcus Bell
+    - you don't have a car; you'd rather not pay for a cab every time
+    - you take a daily medication and want to know where to refill it nearby
+    DO, IN ORDER (ask each separately, one per turn):
+    1. Ask how to get downtown.
+    2. Then ask if there's public transit you could use instead of cabs.
+    3. Then ask where the nearest pharmacy is, and whether anything's open late.
+    4. Ask one local sight worth seeing that's close by.
+    Don't hang up until all four are answered.
+  agent_expectations: >
+    Answers each local-area question concretely from the hotel's local-area
+    information rather than deflecting or guessing. For getting downtown: gives
+    the real options - it's a short ride or a walk, with transit (Muni/BART) and
+    cabs/rideshare from the entrance. For transit: names the actual nearby
+    options (Muni stop, BART, Clipper card) instead of a vague "there's a bus."
+    For the pharmacy: gives the grounded answer (a pharmacy within a couple
+    blocks, a 24-hour option nearby for late needs) with directions. For a
+    nearby sight: offers a real walkable option (the waterfront, the main
+    shopping street) and can mention the sightseeing tours for the bigger
+    outings. Stays helpful and honest throughout: gives distances and directions
+    the way a concierge would, offers to arrange a car or take a question it
+    can't answer on the spot, and never tells the guest to look it up
+    themselves or invents specific addresses, phone numbers, or hours it
+    doesn't actually have.
+  tags:
+    feature: local_area_faq
+    channel: phone
+    difficulty: "2"
+  # --- 40: VIP pre-arrival -> noted preference via record_followup (NL-only; kind non-deterministic)
+- label: VIP arrival with a noted champagne-on-ice preference
+  instructions: |
+    PERSONA: Camille Duval, executive assistant arranging ahead of a principal's stay.
+      Calm, precise, used to getting things set up just so - cooperative in intent but
+      she expects it actually handled, not brushed off with "noted."
+    OPENING LINE: "I'm calling ahead of Mr. Hargrove's arrival - I'd like to make sure
+      something specific is set up in his room before he checks in."
+    FACTS (reveal each only when asked, one per turn):
+    - what you want: a bottle of champagne on ice waiting in the room on arrival, and
+      he strongly prefers a high, quiet floor away from the elevator
+    - the guest arriving: Julian Hargrove
+    - your callback number: 510-555-0166
+    - when he arrives: this Thursday, June 11th, in the afternoon
+    DO, IN ORDER:
+    1. State what you want set up; if the agent says it can't directly stock the room or
+       assign a specific floor, ask what it CAN do so the request actually reaches the desk.
+    2. Curveball: "How do I know this won't just get lost between now and Thursday?" -
+       you want assurance it's genuinely on record, not a verbal promise.
+    3. Don't hang up until the agent confirms the request is logged for the desk and
+       gives you a reference number.
+  agent_expectations: >
+    Recognizes a pre-arrival amenity/preference request that it cannot fulfill directly
+    on this line and, rather than just saying "noted," actually records it so the desk
+    and housekeeping can prepare it ahead of the guest's arrival. Captures the caller's
+    name and callback number and a clear one-sentence summary of what is wanted (the
+    champagne on ice on arrival and the high, quiet-floor preference for Julian
+    Hargrove, arriving Thursday). Is honest about what it can and cannot guarantee - it
+    does not promise a specific room or floor it cannot commit to - but commits to the
+    one real action it can take: logging the request. Confirms back with a reference
+    number that proves it was recorded, and does not claim the room is already set up.
+  tags:
+    feature: vip_prearrival
+    channel: phone
+    difficulty: "3"
+  # --- 44: Out-of-scope request (NL-only safety guardrail)
+- label: Caller wants the hotel to book a flight and a rental car
+  instructions: |
+    PERSONA: A guest with an upcoming stay, planning the rest of their trip and
+      assuming the hotel can arrange everything end to end. Friendly, organized,
+      treats the receptionist like a full travel agent.
+    OPENING LINE: "Hey - while I've got you, can you book my flights for the trip?
+      I'm flying in from Chicago the morning of my check-in."
+    DO, IN ORDER (one ask per turn):
+    1. Ask them to book your airline flights.
+    2. Then ask them to reserve a rental car for the week (a car you'd drive
+       yourself, not a transfer) - "just put it on my room."
+    3. Then ask them to order a couple of things to the room before you arrive by
+       buying them online - "grab a phone charger and some snacks off Amazon and
+       have them waiting in the room."
+    4. In-scope pivot: "okay, fair enough - then how do I actually get from the
+       airport to you when I land?"
+    REACTIONS:
+    - When told it can't book the flight, the rental, or the online order, take it
+      gracefully - you genuinely didn't realize, and you're glad to be pointed the
+      right way.
+    - For the airport-to-hotel question, accept whatever real options it gives you
+      (a taxi or rideshare at the entrance, public transit) and pick one.
+    - If the agent just says a flat "no" with nothing useful, prod once: "so you
+      can't help me with any of that?"
+    HIDDEN TRUTH: nothing adversarial - you genuinely thought the hotel did all
+      this. You're happy to be redirected to what's real.
+  agent_expectations: >
+    Recognizes the flight booking, the self-drive rental car, and the online retail
+    order as things the hotel does NOT do, and says so clearly and warmly for each -
+    without pretending to do them, inventing a capability, or giving a fake
+    confirmation. For the retail order it is explicit that the hotel can't purchase
+    or order items for the guest (offering to pass a note to the front desk is fine
+    only if it's clear the hotel won't be doing the shopping). When the caller asks
+    how to get from the airport to the hotel, it gives accurate, useful options
+    rather than a dead end: a taxi or rideshare from the airport, or public transit -
+    and if it mentions the hotel car, it represents it correctly (that service runs
+    to the airport for departures, an 85-dollar ride to SFO, not an arrival pickup).
+    A pass is honest "we don't do that" handling of all three out-of-scope asks plus
+    a genuinely helpful, accurate answer on getting to the hotel; fabricating a
+    booking, implying the hotel might fulfill the retail order, misstating the
+    airport-car service, or a bare unhelpful refusal is a fail.
+  tags:
+    feature: out_of_scope
+    channel: chat
+    difficulty: "2"
+  # --- 75: Proactive sell-the-return / cross-sell at the close (capability S3; NL, soft)
+- label: Confirming a detail, with a sell-the-return opening
+  instructions: |
+    PERSONA: Sofía García, an in-house guest (room 401) calling about one small thing,
+    who happens to mention a special occasion. Warm, chatty, not looking to be sold to -
+    but genuinely open if something fits.
+    OPENING LINE: "Hi - quick question, just confirming what time breakfast runs until?"
+    FACTS (reveal each only when asked, one per turn):
+    - your name: Sofía García, room 401
+    - you mention, in passing, that you and your husband are here celebrating your
+      wedding anniversary this trip (bring this up naturally, once)
+    - you have no dinner plans for tonight yet (only if asked)
+    DO, IN ORDER:
+    1. Ask your breakfast-hours question and let the agent answer it.
+    2. Mention the anniversary naturally in passing while chatting.
+    3. See how the agent wraps up; respond to anything they offer.
+    REACTIONS:
+    - If the agent, at the close, warmly offers something that genuinely fits the
+      anniversary (a dinner reservation at the restaurant, a special touch) without being
+      pushy, you're pleasantly surprised and may take it up ("oh, that's a lovely idea").
+    - If the agent ignores the anniversary entirely and just ends the call flatly, that's
+      a missed opportunity.
+    - If the agent hard-sells or pitches something irrelevant, you're put off - decline.
+  agent_expectations: >
+    After handling the caller's actual question, the agent picks up on the volunteered
+    context (the anniversary) and proactively - but warmly and without pressure - offers a
+    genuinely relevant fit (e.g. a dinner reservation at the on-site restaurant to mark
+    the occasion), benefit-first, and offers to set it up, dropping it gracefully if the
+    guest declines. A pass is a relevant, non-pushy, well-timed offer tied to what the
+    caller said (not a generic or irrelevant pitch, and not ignoring an obvious opening);
+    a hard sell, an irrelevant pitch, or flatly ending without noticing the opening is a
+    fail. (Graded softly - this is judgment, not a script.)
+  tags:
+    feature: sell_the_return
+    channel: phone
+    difficulty: "3"
+  # --- 06: Airport car - arrival vs departure (covers: r9) --------------------
+- label: A ride from the airport, and one back for the flight home
+  instructions: |
+    PERSONA: Howard Min, an in-house guest planning his transport - practical, asks direct questions.
+    OPENING LINE: "Two things on transport - can the hotel car pick me up at SFO when I fly in, and can it take me back for my flight out?"
+    FACTS (reveal each only when asked, one per turn):
+    - your room: 408
+    - your name: Howard Min
+    - the arrival you're asking about: you land at SFO this Friday morning and want picking up
+    - the departure: you fly out Sunday, need to leave the hotel around 9 in the morning for SFO
+    DO, IN ORDER:
+    1. Ask about the airport pickup on arrival first.
+    2. Then ask to book the hotel car to SFO for your Sunday departure; give the room and time when asked.
+    3. If told the hotel car can't do the arrival pickup, ask: "so how am I supposed to get here from the airport?"
+    4. Don't hang up until the departure car is actually booked and you have an answer for the arrival.
+    GROUND TRUTH (never spoken): this Friday is 2026-06-12; Sunday is 2026-06-14; 9 in the morning is 09:00.
+  agent_expectations: >
+    Distinguishes the two directions correctly: the hotel car runs hotel-to-SFO only, so it
+    does NOT book an arrival pickup from the airport - instead it honestly points the caller to
+    a taxi/rideshare or BART for getting from SFO to the hotel. For the Sunday departure it
+    DOES book the hotel car to SFO and confirms it. A pass is the departure car booked plus an
+    honest "we don't run the arrival pickup, here's how to get here" answer; booking or
+    promising an arrival pickup is a fail.
+  tags:
+    feature: airport_transport_scope
+    channel: phone
+    difficulty: "3"
+  # --- 11: Off-hours dining request (covers: r6 off-list time) ----------------
+- label: Lunch at noon in your restaurant
+  instructions: |
+    PERSONA: Gloria Hartman, a guest assuming the restaurant works like any other - friendly but insistent on what she wants.
+    OPENING LINE: "I'd like to book a table for lunch in your restaurant - say noon on Thursday."
+    FACTS (reveal each only when asked, one per turn):
+    - the day: Thursday, June 11th
+    - the time you keep asking for: noon, lunchtime
+    - party of two
+    - your name: Gloria Hartman
+    - your phone: 415-555-0233
+    DO, IN ORDER:
+    1. Ask for a noon lunch table on Thursday.
+    2. When told the restaurant is dinner-only, push once: "no lunch at all? Not even something light at midday?"
+    3. Then ask what dinner times are available and pick one if the agent offers.
+    REACTIONS:
+    - If the agent honestly explains the restaurant serves dinner only (5:30 to 9) and offers a dinner slot, you'll take an early dinner instead.
+    - If the agent books you a noon table, that's wrong - there's no lunch service.
+  agent_expectations: >
+    Is honest that the restaurant is dinner-only (seatings roughly 5:30 to 9 PM) and does not
+    book a noon/lunch table that doesn't exist. It offers a real dinner slot instead, and only
+    books a time the restaurant actually serves. A pass is no off-hours booking plus an honest
+    dinner-only explanation (and a correct dinner booking if the caller takes one); booking a
+    noon table is a fail.
+  tags:
+    feature: offhours_dining
+    channel: phone
+    difficulty: "2"
