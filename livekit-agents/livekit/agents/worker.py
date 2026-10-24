@@ -661,6 +661,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     if self._connection_failed:
                         return web.Response(status=503, text="failed to connect to livekit")
 
+                    if self._connecting:
+                        return web.Response(status=503, text="not connected to livekit")
+
                     return web.Response(text="OK")
 
                 async def worker(_: Any) -> web.Response:
