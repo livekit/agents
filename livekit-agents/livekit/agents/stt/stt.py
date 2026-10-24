@@ -140,6 +140,16 @@ class STTCapabilities:
     """Whether the STT supports keyterm prompting"""
     chat_context: bool = False
     """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
+    manual_flush: bool = False
+    """Whether the STT supports flushing the stream to finalize a segment.
+
+    When enabled, manual turn commits request a flush. With a turn detector, automatic
+    flushing occurs immediately for positive or unavailable EOT predictions, or halfway
+    through the maximum endpointing delay for negative predictions. Without a turn
+    detector, VAD end-of-speech requests the flush. Text-based EOT uses final transcripts
+    only, so flushing precedes its first prediction if no final transcript is available.
+    Disable this for custom STT nodes that buffer audio and manage flushing themselves.
+    """
 
 
 class STTError(BaseModel):
@@ -245,7 +255,7 @@ class STT(
 
             except APIError as e:
                 retry_interval = conn_options._interval_for_retry(i)
-                if conn_options.max_retry == 0:
+                if conn_options.max_retry == 0 or not e.retryable:
                     self._emit_error(e, recoverable=False)
                     raise
                 elif i == conn_options.max_retry:
@@ -475,6 +485,11 @@ class RecognizeStream(ABC):
                 last_start_time = time.time()
                 return await self._run()
             except APIError as e:
+                # an attempt that outlived the connect timeout had connected, so this failure
+                # is not consecutive with the previous one and the budget starts over
+                if time.time() - last_start_time > self._conn_options.timeout:
+                    self._num_retries = 0
+
                 if not e.retryable or max_retries == 0:
                     self._emit_error(e, recoverable=False)
                     raise

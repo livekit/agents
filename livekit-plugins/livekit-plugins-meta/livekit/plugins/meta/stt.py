@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -49,6 +50,7 @@ _SAMPLE_WIDTH_BYTES = 2
 _CHUNK_DURATION = 0.08
 _CHUNK_BYTES = int(_SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH_BYTES * _CHUNK_DURATION)
 _MAX_MESSAGE_BYTES = 1024 * 1024
+_WS_HEARTBEAT = 30.0
 _MAX_COMPLETED_TURNS = 128
 _SUPPORTED_LANGUAGES = (
     "Arabic",
@@ -410,6 +412,15 @@ class SpeechStream(stt.RecognizeStream):
         self._end_stream_sent = False
         self._last_audio_processed_ms = 0.0
         self._pending_usage_seconds = 0.0
+        self._first_frame_at: float | None = None
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        # Audio keeps queueing in the input channel while the websocket connects. Pace from the
+        # first frame so that backlog is sent right away, without letting idle time before the
+        # first frame turn into a faster-than-realtime burst.
+        if self._first_frame_at is None:
+            self._first_frame_at = asyncio.get_running_loop().time()
+        super().push_frame(frame)
 
     async def _run(self) -> None:
         self._end_stream_sent = False
@@ -451,6 +462,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._session.ws_connect(
                     self._url,
                     max_msg_size=_MAX_MESSAGE_BYTES,
+                    heartbeat=_WS_HEARTBEAT,
                 ),
                 timeout=self._conn_options.timeout,
             )
@@ -554,7 +566,10 @@ class SpeechStream(stt.RecognizeStream):
             if not packet:
                 return
             if pacing_origin is None:
-                pacing_origin = loop.time()
+                # the first frame may be pushed after this task started
+                pacing_origin = self._first_frame_at
+                if pacing_origin is None:
+                    pacing_origin = loop.time()
             deadline = pacing_origin + sent_duration
             delay = deadline - loop.time()
             if delay > 0:

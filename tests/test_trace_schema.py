@@ -152,6 +152,14 @@ def test_bounds_are_checked_except_where_deliberately_allowed() -> None:
     assert check_trace(spans) == []
 
 
+def test_negative_duration_is_reported() -> None:
+    # #7307: user_speaking starts on the STT anchor and ends on a backdated VAD one
+    spans = _sound_trace()
+    spans.append(_span("user_speaking", "sp", "u", 6.0, 5.8))
+    [v] = check_trace(spans)
+    assert v.startswith("user_speaking: ends 200.0 ms before it starts")
+
+
 def test_turn_invariants_are_checked() -> None:
     spans = _sound_trace()
     spans.append(
@@ -266,8 +274,8 @@ async def test_full_fake_session_is_well_formed(span_exporter: InMemorySpanExpor
 
 
 async def test_adapter_request_shapes_are_allowed(span_exporter: InMemorySpanExporter) -> None:
-    """Each fallback or stream adapter attempt opens the wrapped stream inside its
-    ``*_request_run``, so the provider's request span nests under the attempt."""
+    """Each fallback or stream adapter opens the wrapped request directly under its own span,
+    with no attempt span of its own in between."""
     from livekit.agents import APIConnectOptions
     from livekit.agents.llm import ChatContext, FallbackAdapter as LLMFallbackAdapter
     from livekit.agents.tts import FallbackAdapter as TTSFallbackAdapter, StreamAdapter

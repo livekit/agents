@@ -20,6 +20,7 @@ from livekit.agents.voice.recorder_io import recorder_io as recorder_module
 from livekit.agents.voice.recorder_io.recorder_io import (
     RecorderAudioOutput,
     RecorderIO,
+    _Captured,
     _Track,
 )
 
@@ -590,3 +591,64 @@ async def test_the_writer_waits_on_the_agent_but_not_on_a_quiet_source() -> None
             assert flushed[-1] == pytest.approx(segment_began)
 
             task.cancel()
+
+
+async def _start_unwritable(
+    tmp_path: Path,
+) -> tuple[RecorderIO, io.AudioInput, _Source, RecorderAudioOutput]:
+    """A recorder whose output directory cannot be created, so its encode thread fails."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+
+    source = _Source()
+    recorder = RecorderIO(agent_session=MagicMock(), sample_rate=RATE)
+    audio_in = recorder.record_input(source)
+    audio_out = recorder.record_output(_Sink())
+    await recorder.start(output_path=blocker / "audio.ogg")
+    return recorder, audio_in, source, audio_out
+
+
+async def test_a_failed_encoder_setup_does_not_hang_close(tmp_path: Path) -> None:
+    """The thread that would have resolved the close is the one that failed."""
+    recorder, _, _, _ = await _start_unwritable(tmp_path)
+    await asyncio.wait_for(recorder.aclose(), timeout=5)
+
+
+async def test_a_failed_encoder_stops_buffering_audio(tmp_path: Path) -> None:
+    """Nothing drains the queue once the encode thread has exited."""
+    recorder, audio_in, source, audio_out = await _start_unwritable(tmp_path)
+    await asyncio.wait_for(asyncio.shield(recorder._close_fut), timeout=5)
+
+    queued = recorder._q.qsize()
+    for _ in range(10):
+        source.frames.append(_tone(0.1))
+        await audio_in.__anext__()
+    assert recorder._q.qsize() == queued
+
+    # the agent's side holds a segment's audio until playback finishes; it must not start one
+    await audio_out.capture_frame(_tone(1.0))
+    assert audio_out.pending_since is None
+    await recorder.aclose()
+
+
+async def test_a_restart_does_not_record_audio_left_over_from_a_failed_run(
+    tmp_path: Path,
+) -> None:
+    """Audio queued before an encoder failed must not land on the next run's timeline."""
+    now = 1000.0
+    path = tmp_path / "retry.ogg"
+
+    with patch(_CLOCK, side_effect=lambda: now):
+        recorder, _, _, _ = await _start_unwritable(tmp_path)
+        await asyncio.wait_for(asyncio.shield(recorder._close_fut), timeout=5)
+        # a frame that reached the queue just before the encoder failed
+        leftover = _Captured(channel=0, started_at=now + 0.5, frame=_tone(0.5, level=8000))
+        recorder._q.put_nowait(leftover)
+        await recorder.aclose()
+
+        await recorder.start(output_path=path)
+        now += 2.0
+        await recorder.aclose()
+
+    pcm, rate = _decode(path)
+    assert not any(_energy_bins(pcm[0], rate))
