@@ -15,7 +15,7 @@ def test_default_initialization() -> None:
     tts = TTS()
     assert tts._opts.voice.language_code == "en-US"
     assert tts._opts.voice.name == "Charon"
-    assert tts._opts.voice.ssml_gender == texttospeech.SsmlVoiceGender.NEUTRAL
+    assert tts._opts.voice.ssml_gender == texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED
     assert tts._opts.voice.model_name == "gemini-2.5-flash-tts"
     assert "model_name" in tts._opts.voice
     assert tts.model == "gemini-2.5-flash-tts"
@@ -40,7 +40,10 @@ def test_update_options_preserves_attributes_on_language_change() -> None:
     tts_default.update_options(language="es-ES")
     assert tts_default._opts.voice.language_code == "es-ES"
     assert tts_default._opts.voice.name == "Charon"
-    assert tts_default._opts.voice.ssml_gender == texttospeech.SsmlVoiceGender.NEUTRAL
+    assert (
+        tts_default._opts.voice.ssml_gender
+        == texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED
+    )
     assert tts_default._opts.voice.model_name == "gemini-2.5-flash-tts"
     assert tts_default.model == "gemini-2.5-flash-tts"
 
