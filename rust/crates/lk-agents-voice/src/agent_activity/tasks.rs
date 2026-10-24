@@ -1,7 +1,7 @@
 //! Inline `AgentTask`s: [`Tasks`], the entry and exit handoffs, and the awaiting speech's
 //! block.
 
-use crate::agent_activity::pause::InterruptOutcome;
+use crate::agent_activity::false_interruption::InterruptOutcome;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Out;
 use crate::agent_session::{
@@ -25,7 +25,7 @@ pub const AWAITER_FINISHED: &str = "The asyncio.Task finished before the AgentTa
 /// `AgentTask.__await_impl`'s warning, as the awaiter's error when the entry is refused as orphaned.
 pub const AGENT_CHANGED: &str = "the agent changed before the inline task could start, likely due to `AgentSession.update_agent` being invoked";
 
-pub(crate) use tasks::{FrameInstalled, FramePopped, LiveTask, TaskExit, TaskSlot, Tasks};
+pub(crate) use tasks::{ActivityInstalled, ActivityPopped, LiveTask, TaskExit, TaskSlot, Tasks};
 
 /// The inline tasks' state, behind its methods.
 mod tasks {
@@ -86,7 +86,7 @@ mod tasks {
     }
 
     /// The task's frame landed.
-    pub(crate) enum FrameInstalled {
+    pub(crate) enum ActivityInstalled {
         NoTask,
         /// The driving frame's slot holds another task.
         NotEntering,
@@ -97,7 +97,7 @@ mod tasks {
     }
 
     /// The parent's frame came back.
-    pub(crate) enum FramePopped {
+    pub(crate) enum ActivityPopped {
         NoFrame,
         /// The pushed slot held no task.
         NoTask,
@@ -146,7 +146,7 @@ mod tasks {
         }
 
         /// A frame beneath the driving one is `agent`'s (a task serves it).
-        pub(crate) fn serves_frame(&self, agent: &str) -> bool {
+        pub(crate) fn serves_agent(&self, agent: &str) -> bool {
             self.stack.iter().any(|s| s.agent.as_deref() == Some(agent))
         }
 
@@ -214,10 +214,10 @@ mod tasks {
         }
 
         /// The task's frame landed: it runs, and the parent's slot is pushed beneath its own.
-        pub(crate) fn frame_installed(&mut self, task: &TaskId) -> FrameInstalled {
-            let Some(live) = self.slot.current.as_mut() else { return FrameInstalled::NoTask };
+        pub(crate) fn frame_installed(&mut self, task: &TaskId) -> ActivityInstalled {
+            let Some(live) = self.slot.current.as_mut() else { return ActivityInstalled::NoTask };
             if live.handle.id() != *task {
-                return FrameInstalled::NotEntering;
+                return ActivityInstalled::NotEntering;
             }
             live.phase = LivePhase::Running;
             live.handle.advance(TaskPhase::Running);
@@ -227,7 +227,7 @@ mod tasks {
             let parent_slot = std::mem::take(&mut self.slot);
             self.stack.push(parent_slot);
             self.slot.agent = Some(agent);
-            FrameInstalled::Running { speech, exit_now }
+            ActivityInstalled::Running { speech, exit_now }
         }
 
         /// What the open run let go of while the driving task runs.
@@ -238,14 +238,14 @@ mod tasks {
         }
 
         /// The parent's frame is back: its slot restored, the task's own slot and the task taken.
-        pub(crate) fn pop_frame(&mut self) -> FramePopped {
-            let Some(mut parent_slot) = self.stack.pop() else { return FramePopped::NoFrame };
+        pub(crate) fn pop_activity(&mut self) -> ActivityPopped {
+            let Some(mut parent_slot) = self.stack.pop() else { return ActivityPopped::NoFrame };
             let Some(live) = parent_slot.current.take() else {
                 self.slot = parent_slot;
-                return FramePopped::NoTask;
+                return ActivityPopped::NoTask;
             };
             let task_slot = std::mem::replace(&mut self.slot, parent_slot);
-            FramePopped::Popped { live, task_slot }
+            ActivityPopped::Popped { live, task_slot }
         }
 
         /// The entering task `task`, taken (its entry was refused).
@@ -389,7 +389,7 @@ impl Driver {
             // The host swapped the agent under the speech's tool: the reference would refuse the
             // hand-back ("Ignoring handoff to the previous agent"), so the entry is refused as an
             // orphan and the speech cut whole.
-            if self.speech_frame_left(speech) {
+            if self.speech_agent_left(speech) {
                 return self.refuse_orphan(now, &entry.handle, speech, out);
             }
             // Block before queueing: otherwise a pause waits for a speech waiting for the pause.
@@ -416,7 +416,7 @@ impl Driver {
             return self.next_queued(now, out);
         }
         if let Some(speech) = speech
-            && self.speech_frame_left(speech)
+            && self.speech_agent_left(speech)
         {
             self.refuse_orphan(now, &handle, speech, out);
             return self.next_queued(now, out);
@@ -459,14 +459,14 @@ impl Driver {
     /// exit at once.
     pub(crate) fn on_task_frame_installed(&mut self, now: Ts, task: TaskId, out: &mut Out) {
         let (speech, exit_now) = match self.activity.tasks.frame_installed(&task) {
-            FrameInstalled::NoTask => return,
-            FrameInstalled::NotEntering => {
+            ActivityInstalled::NoTask => return,
+            ActivityInstalled::NotEntering => {
                 out.trace(CoreStep::PortFailure(
                     "a task frame landed for a task that is not the frame's entering one",
                 ));
                 return;
             }
-            FrameInstalled::Running { speech, exit_now } => (speech, exit_now),
+            ActivityInstalled::Running { speech, exit_now } => (speech, exit_now),
         };
         // The watching run lets the awaiting speech and parent's `on_enter` go while the task runs.
         let suspended = self.run_suspend_for_task(speech, out);
@@ -479,20 +479,20 @@ impl Driver {
     /// The parent's frame is back: the task's slot is discarded (its queue refused), the parent's
     /// restored, the awaiter released; then the next queued task takes the slot.
     pub(crate) fn on_task_frame_popped(&mut self, now: Ts, task: TaskId, out: &mut Out) {
-        let (live, task_slot) = match self.activity.tasks.pop_frame() {
-            FramePopped::NoFrame => {
+        let (live, task_slot) = match self.activity.tasks.pop_activity() {
+            ActivityPopped::NoFrame => {
                 out.trace(CoreStep::PortFailure(
                     "a task exit landed with no pushed frame beneath it",
                 ));
                 return;
             }
-            FramePopped::NoTask => {
+            ActivityPopped::NoTask => {
                 out.trace(CoreStep::PortFailure(
                     "a task exit landed for a frame that holds no task",
                 ));
                 return;
             }
-            FramePopped::Popped { live, task_slot } => (live, task_slot),
+            ActivityPopped::Popped { live, task_slot } => (live, task_slot),
         };
         if live.handle().id() != task {
             out.trace(CoreStep::PortFailure(
@@ -542,7 +542,7 @@ impl Driver {
     /// during the exit's drain.
     pub(crate) fn exclude_exiting_task_calls(&mut self) {
         let Some(agent) = self.activity.tasks.exiting_excluded_agent() else { return };
-        self.session.record.exclude_task_calls(&agent);
+        self.session.chat_ctx.exclude_task_calls(&agent);
     }
 
     /// A wake for the innermost task: its handle settled, or its awaiting speech ended under it.
@@ -589,8 +589,8 @@ impl Driver {
         }
         // `old_agent.chat_ctx.merge(self.chat_ctx, exclude_function_call=..)`.
         if merge.exclude_function_call {
-            self.session.record.exclude_task_calls(&agent);
-            self.publish_frame();
+            self.session.chat_ctx.exclude_task_calls(&agent);
+            self.publish_activity();
         }
         let Some(restore) = self.activity.tasks.take_restore() else { return };
         let Some(restore) = restore else {
@@ -760,12 +760,12 @@ impl Driver {
 
     /// Whether `speech`'s frame is one `session.current_agent` no longer names: a host change in
     /// flight or landed. A same-agent update is not a change of agent.
-    pub(crate) fn speech_frame_left(&self, speech: SpeechId) -> bool {
-        let Some(frame) = self.activity.speech_frame(speech) else { return false };
+    pub(crate) fn speech_agent_left(&self, speech: SpeechId) -> bool {
+        let Some(frame) = self.activity.speech_agent(speech) else { return false };
         if let Some(agent) = self.activity.handoff.host_agent() {
             return agent != frame;
         }
-        *frame != self.activity.agent && !self.activity.tasks.serves_frame(frame)
+        *frame != self.activity.agent && !self.activity.tasks.serves_agent(frame)
     }
 }
 

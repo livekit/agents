@@ -56,7 +56,7 @@ pub(crate) struct LiveSession {
     /// `_opts`, the layers and the leg facts they resolve against.
     pub(crate) config: DriverConfig,
     /// `_chat_ctx`: the one record of the session's items, each agent's view of them.
-    pub(crate) record: crate::agent::SessionChatCtx,
+    pub(crate) chat_ctx: crate::agent::SessionChatCtx,
     /// Snapshotted into every reply at creation.
     pub(crate) llm: Option<Arc<dyn Llm>>,
     pub(crate) tts: Option<Arc<dyn Tts>>,
@@ -113,12 +113,12 @@ impl LiveSession {
             start_options,
             room_link,
             agent,
-            chat_ctx,
+            chat_ctx: opening_items,
         } = parts;
-        let mut record = crate::agent::SessionChatCtx::new();
-        record.set_frame(&agent, false);
-        if let Some(items) = chat_ctx {
-            record.update_agent_chat_ctx(items, &agent);
+        let mut chat_ctx = crate::agent::SessionChatCtx::new();
+        chat_ctx.set_agent(&agent, false);
+        if let Some(items) = opening_items {
+            chat_ctx.update_agent_chat_ctx(items, &agent);
         }
         let cfg = &config.effective;
         LiveSession {
@@ -128,7 +128,7 @@ impl LiveSession {
             errors: ErrorCounts { max: max_unrecoverable_errors, ..Default::default() },
             ids: IdMint { next: 1, user_item: None },
             config,
-            record,
+            chat_ctx,
             llm,
             tts,
             stt,
@@ -369,7 +369,7 @@ pub struct SessionShared {
     pub frames: Arc<lk_agents_abi::utils::frame::FrameTable>,
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
     pub gen_ids: std::sync::atomic::AtomicU64,
-    pub frame: tokio::sync::watch::Sender<FrameView>,
+    pub activity: tokio::sync::watch::Sender<ActivitySnapshot>,
 }
 
 impl SessionShared {
@@ -469,8 +469,8 @@ impl AgentOutput {
 /// **As they stand now**, published after every commit and instruction change (a tool may run an
 /// inline task or call `update_instructions`).
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct FrameView {
-    pub record: lk_agents_abi::ChatContext,
+pub struct ActivitySnapshot {
+    pub chat_ctx: lk_agents_abi::ChatContext,
     pub instructions: crate::generation::Instructions,
     pub finished: std::collections::BTreeSet<SpeechId>,
     /// What a step's follow-up waits for, and whether the activity that made the speech drains

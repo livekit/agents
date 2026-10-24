@@ -28,7 +28,7 @@ const CORE: &[&str] = &[
     "generation",
     "turn",
     "agent_session::SessionShared",
-    "agent_session::FrameView",
+    "agent_session::ActivitySnapshot",
     "io::RealtimeAudioNode",
     "tool_executor::Toolset",
     "tool_executor::SessionTools",
@@ -254,9 +254,10 @@ impl Scan<'_> {
         let previous = self.aliases.clone();
         for item in items {
             if let syn::Item::Use(v) = item
-                && !test_only(&v.attrs) {
-                    imports(&v.tree, "", &mut self.aliases);
-                }
+                && !test_only(&v.attrs)
+            {
+                imports(&v.tree, "", &mut self.aliases);
+            }
         }
         for item in items {
             let outer = std::mem::replace(&mut self.item, subject(item));
@@ -332,10 +333,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 
 fn source(file: &str, text: &str) -> Result<Vec<String>, String> {
     let parsed = syn::parse_file(text).map_err(|e| format!("{file}: {e}"))?;
-    let module = file
-        .trim_end_matches(".rs")
-        .trim_end_matches("/mod")
-        .replace('/', "::");
+    let module = file.trim_end_matches(".rs").trim_end_matches("/mod").replace('/', "::");
     let mut scan = Scan {
         file,
         module,
@@ -462,26 +460,22 @@ mod tests {
 
     #[test]
     fn renamed_clocks_and_relative_module_paths_are_checked() {
-        let errors = source(
-            "endpointing.rs",
-            "use std::time::Instant as Clock; fn f() { Clock::now(); }",
-        )
-        .unwrap();
+        let errors =
+            source("endpointing.rs", "use std::time::Instant as Clock; fn f() { Clock::now(); }")
+                .unwrap();
         assert_eq!(errors.len(), 1);
         assert!(
-            !source("agent_activity/events.rs", "use super::super::amd::detector;").unwrap().is_empty()
+            !source("agent_activity/events.rs", "use super::super::amd::detector;")
+                .unwrap()
+                .is_empty()
         );
         assert!(
             !source("amd/detector.rs", "use crate::agent_activity::scheduling::Scheduler;")
                 .unwrap()
                 .is_empty()
         );
-        assert!(
-            source("speech_handle.rs", "async fn f() { cell.await; }").unwrap().is_empty()
-        );
-        assert!(
-            !source("endpointing.rs", "async fn f() { cell.await; }").unwrap().is_empty()
-        );
+        assert!(source("speech_handle.rs", "async fn f() { cell.await; }").unwrap().is_empty());
+        assert!(!source("endpointing.rs", "async fn f() { cell.await; }").unwrap().is_empty());
     }
 
     #[test]

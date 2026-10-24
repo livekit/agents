@@ -113,7 +113,8 @@ impl Driver {
         // `self.session.interrupt()`: the host's non-forced interrupt, from the task's code.
         out.trace(InterruptStep::HostInterrupt { speech: None, force: false });
         if let Ok(speeches) = self.interrupt_all(now, false, InterruptCause::Host, out) {
-            let waiter = crate::agent_activity::pause::InterruptWaiter { speeches, call: None };
+            let waiter =
+                crate::agent_activity::false_interruption::InterruptWaiter { speeches, call: None };
             self.activity.interrupt_waiters.push(waiter);
         }
         let Some(dtmf) = &mut self.activity.dtmf else { return };

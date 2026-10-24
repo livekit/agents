@@ -3,11 +3,11 @@
 
 pub mod drain;
 pub mod dtmf;
+pub mod false_interruption;
 pub mod handoff;
 pub mod hooks;
 pub mod io;
 pub mod options;
-pub mod pause;
 pub mod realtime;
 pub mod recognition;
 pub mod scheduling;
@@ -16,11 +16,13 @@ pub mod tasks;
 pub mod tools;
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
+use crate::agent_activity::false_interruption::{InterruptOutcome, PausedSpeech};
 use crate::agent_activity::options::{ConfigStack, LegSet, SessionConfig};
-use crate::agent_activity::pause::{InterruptOutcome, PausedSpeech};
 use crate::agent_activity::scheduling::{SpeechId, SpeechScheduler};
 use crate::agent_session::effects::Out;
-use crate::agent_session::{Driver, FrameCommand, HostAudio, HostAudioOut, HostTextOut, HostVideo};
+use crate::agent_session::{
+    ActivityCommand, Driver, HostAudio, HostAudioOut, HostTextOut, HostVideo,
+};
 use crate::audio::{GateInputs, audio_gate};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, InterruptCause, PlayoutStep, ToolStep};
@@ -54,7 +56,7 @@ pub(crate) struct AgentActivity {
     /// `_paused_speech` and the false-interruption timer.
     pub(crate) paused_speech: PausedSpeech,
     /// The frame each speech was created in: late tool items belong to it.
-    speech_frames: BTreeMap<SpeechId, String>,
+    speech_agents: BTreeMap<SpeechId, String>,
     pub(crate) finished: BTreeSet<SpeechId>,
     /// Per tool step: whether the activity that made the speech drains, so the step's reply
     /// offers no tools.
@@ -66,7 +68,7 @@ pub(crate) struct AgentActivity {
     /// `_current_speech` as last announced (`FloorChanged`); compared at the end of every cycle.
     announced_current_speech: Option<SpeechId>,
     /// `interrupt()`s waiting for their speeches' release.
-    pub(crate) interrupt_waiters: Vec<crate::agent_activity::pause::InterruptWaiter>,
+    pub(crate) interrupt_waiters: Vec<crate::agent_activity::false_interruption::InterruptWaiter>,
     /// How long a hook whose answer is needed is waited on; `None` when no host runs hooks.
     pub(crate) hook_bound: Option<Duration>,
     /// The developer's callbacks in flight.
@@ -143,7 +145,7 @@ impl AgentActivity {
             audio_recognition,
             speech_scheduler,
             paused_speech,
-            speech_frames: BTreeMap::new(),
+            speech_agents: BTreeMap::new(),
             finished: BTreeSet::new(),
             tools_committed: BTreeMap::new(),
             tools_in_flight: BTreeSet::new(),
@@ -173,7 +175,7 @@ impl AgentActivity {
     }
 
     /// A frame change lands: the new agent, prompt and tools. The previous agent's id.
-    pub(crate) fn set_frame(
+    pub(crate) fn set_agent(
         &mut self,
         agent: String,
         instructions: crate::generation::Instructions,
@@ -205,13 +207,13 @@ impl AgentActivity {
     }
 
     /// The speech is the running frame's: its late items are attributed to it.
-    pub(crate) fn note_speech_frame(&mut self, speech: SpeechId) {
-        self.speech_frames.insert(speech, self.agent.clone());
+    pub(crate) fn note_speech_agent(&mut self, speech: SpeechId) {
+        self.speech_agents.insert(speech, self.agent.clone());
     }
 
     /// The frame `speech` was created in.
-    pub(crate) fn speech_frame(&self, speech: SpeechId) -> Option<&str> {
-        self.speech_frames.get(&speech).map(String::as_str)
+    pub(crate) fn speech_agent(&self, speech: SpeechId) -> Option<&str> {
+        self.speech_agents.get(&speech).map(String::as_str)
     }
 
     pub(crate) fn set_tools_in_flight(&mut self, speech: SpeechId, running: bool) {
@@ -371,11 +373,11 @@ impl GateSnapshot {
 }
 
 impl Driver {
-    pub(crate) fn on_frame(&mut self, now: Ts, cmd: FrameCommand, out: &mut Out) {
+    pub(crate) fn on_frame(&mut self, now: Ts, cmd: ActivityCommand, out: &mut Out) {
         match cmd {
             // A sequence: `on_exit`, the drain, then the swap.
-            FrameCommand::Update(update) => self.begin_handoff(now, update, out),
-            FrameCommand::UpdateInstructions(next) => {
+            ActivityCommand::Update(update) => self.begin_handoff(now, update, out),
+            ActivityCommand::UpdateInstructions(next) => {
                 self.activity.instructions = next.clone();
                 // "Record the configuration change" (`AgentActivity.update_instructions`), on the
                 // driver's clock.
@@ -391,9 +393,9 @@ impl Driver {
                         out,
                     );
                 }
-                self.publish_frame();
+                self.publish_activity();
             }
-            FrameCommand::UpdateTools(toolset) => {
+            ActivityCommand::UpdateTools(toolset) => {
                 let tools = toolset.specs.len();
                 // "Record the configuration change (skip if no visible diff)", in spec order so
                 // the record is deterministic.
@@ -428,10 +430,10 @@ impl Driver {
                 out.trace(ToolStep::ToolsetUpdated { tools });
             }
             // A re-attached microphone opens a fresh STT stream.
-            FrameCommand::SetAudioInput(input) => {
+            ActivityCommand::SetAudioInput(input) => {
                 self.set_audio_input(now, input.map(|HostAudio(input)| input), out)
             }
-            FrameCommand::SetVideoInput(input) => {
+            ActivityCommand::SetVideoInput(input) => {
                 let input = input.map(|HostVideo(input)| input);
                 let attached = input.is_some();
                 // The leg already read, handed back: nothing to swap.
@@ -443,11 +445,11 @@ impl Driver {
                 ));
                 out.trace(InputStep::VideoInputSet { attached });
             }
-            FrameCommand::SetIoEnabled { leg, enabled } => {
+            ActivityCommand::SetIoEnabled { leg, enabled } => {
                 self.set_io_enabled(now, leg, enabled, out)
             }
-            FrameCommand::Drain { call } => self.drain(now, call.into_iter().collect(), out),
-            FrameCommand::SetAudioOutput(output) => {
+            ActivityCommand::Drain { call } => self.drain(now, call.into_iter().collect(), out),
+            ActivityCommand::SetAudioOutput(output) => {
                 let audio = output.is_some();
                 // Dropped here: a segment in flight holds its own `Arc`; an unstarted speech reads
                 // the new sink at its next segment.
@@ -485,11 +487,11 @@ impl Driver {
                     transcription: self.shared.output.shows_transcription(),
                 });
             }
-            FrameCommand::SetSpeakerFilter(config) => {
+            ActivityCommand::SetSpeakerFilter(config) => {
                 // The filter follows the STT the host named.
                 self.input.set_speaker_filter(config);
             }
-            FrameCommand::SetTranscriptionOutput(output) => {
+            ActivityCommand::SetTranscriptionOutput(output) => {
                 let transcription = output.is_some();
                 let _previous =
                     self.shared.output.set_transcription(output.map(|HostTextOut(sink)| sink));
@@ -498,17 +500,17 @@ impl Driver {
                     transcription,
                 });
             }
-            FrameCommand::UpdateModels { stt, vad, llm, tts } => {
+            ActivityCommand::UpdateModels { stt, vad, llm, tts } => {
                 self.update_models(stt, vad, llm, tts, out)
             }
-            FrameCommand::UpdateChatCtx(items) => {
+            ActivityCommand::UpdateChatCtx(items) => {
                 let count = items.len();
                 // Host-supplied, so not announced: the host already holds these items.
                 let agent = self.activity.agent.clone();
-                self.session.record.update_agent_chat_ctx(items, &agent);
+                self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
                 // Ungated: the reference guards only on there being a session.
                 if self.activity.rt_session.is_some() {
-                    let ctx = self.session.record.for_realtime();
+                    let ctx = self.session.chat_ctx.for_realtime();
                     self.rt_send(
                         lk_agents_abi::RealtimeCommand::UpdateChatCtx(
                             lk_agents_abi::UpdateChatCtx {
@@ -519,15 +521,15 @@ impl Driver {
                         out,
                     );
                 }
-                self.publish_frame();
+                self.publish_activity();
                 out.trace(GenerationStep::ChatCtxUpdated { items: count });
             }
         }
     }
 
-    pub(crate) fn publish_frame(&self) {
-        self.shared.frame.send_replace(crate::agent_session::FrameView {
-            record: self.session.record.agent_chat_ctx(),
+    pub(crate) fn publish_activity(&self) {
+        self.shared.activity.send_replace(crate::agent_session::ActivitySnapshot {
+            chat_ctx: self.session.chat_ctx.agent_chat_ctx(),
             instructions: self.activity.instructions.clone(),
             finished: self.activity.finished.clone(),
             tools_committed: self.activity.tools_committed.clone(),
@@ -536,7 +538,7 @@ impl Driver {
 
     /// The history records a frame leaves when it takes over: `AgentHandoff`, then
     /// `AgentConfigUpdate` (skipped with neither instructions nor tools), in the reference's order.
-    pub(crate) fn record_frame(&mut self, previous_agent: Option<String>, out: &mut Out) {
+    pub(crate) fn record_handoff(&mut self, previous_agent: Option<String>, out: &mut Out) {
         let handoff = lk_agents_abi::AgentHandoffItem {
             id: self.session.ids.mint("item"),
             old_agent_id: previous_agent,
@@ -579,7 +581,11 @@ impl Driver {
 
     /// Tell the realtime session which frame drives: instructions (audio rendering), conversation,
     /// tools, in the reference's order. No-op on a pipeline session.
-    pub(crate) fn push_frame(&self, chat_ctx: Option<lk_agents_abi::ChatContext>, out: &mut Out) {
+    pub(crate) fn push_activity(
+        &self,
+        chat_ctx: Option<lk_agents_abi::ChatContext>,
+        out: &mut Out,
+    ) {
         if self.activity.rt_session.is_none() {
             return;
         }
@@ -629,9 +635,9 @@ impl Driver {
         // commits after the parent is back); an item with no speech is the driving frame's.
         let agent = source
             .speech()
-            .and_then(|s| self.activity.speech_frame(s).map(str::to_owned))
+            .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))
             .unwrap_or_else(|| self.activity.agent.clone());
-        let commit = self.session.record.commit(item, source, visibility, &agent);
+        let commit = self.session.chat_ctx.commit(item, source, visibility, &agent);
         self.perform_commit(commit, out);
     }
 
@@ -656,6 +662,6 @@ impl Driver {
             }
             CommitOutcome::Replaced | CommitOutcome::Filtered => {}
         }
-        self.publish_frame();
+        self.publish_activity();
     }
 }

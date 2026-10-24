@@ -2,8 +2,8 @@
 //! generations), the driver's handling of the model's events, and the turn detection it agrees on.
 
 use crate::agent::{Source, Visibility};
+use crate::agent_activity::false_interruption::AudioInterruptTrigger;
 use crate::agent_activity::options::TurnDetection;
-use crate::agent_activity::pause::AudioInterruptTrigger;
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::effects::{Out, TurnTimer};
@@ -423,7 +423,7 @@ impl Driver {
                 self.activity.realtime_players.clear();
             }
             RealtimeWake::Closed => {
-                if let Some(Closing { phase: ClosePhase::ClosingLegs { closed, .. }, .. }) =
+                if let Some(Closing { phase: ClosePhase::ClosingActivity { closed, .. }, .. }) =
                     &mut self.session.closing
                 {
                     *closed = true;
@@ -502,8 +502,8 @@ impl Driver {
             }
             Event::SessionReconnected(_) => {
                 // The socket was recycled: the frame is replayed once onto the new connection.
-                let ctx = self.session.record.for_realtime();
-                self.push_frame(Some(ctx), out);
+                let ctx = self.session.chat_ctx.for_realtime();
+                self.push_activity(Some(ctx), out);
             }
             Event::Error(err) => self.on_realtime_error(now, err, out),
         }
@@ -1014,11 +1014,11 @@ impl Driver {
         out: &mut Out,
     ) {
         let id = item.id().to_owned();
-        if self.session.record.contains(&id) {
+        if self.session.chat_ctx.contains(&id) {
             return;
         }
         if let Some(anchor) = &previous_item_id
-            && !self.session.record.contains(anchor)
+            && !self.session.chat_ctx.contains(anchor)
         {
             let message = "realtime server anchored an item to one this session does not hold; placed by its stamp";
             diagnose(out, DiagnosticEvent::warning(message).with("item_id", id.clone()));

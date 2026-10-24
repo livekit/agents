@@ -1,7 +1,7 @@
 use crate::agent_session::effects::{Out, TurnTimer};
 use crate::agent_session::{Driver, SessionShared};
 use crate::generation::GenEvent;
-use crate::trace::{DetectorLeg, DetectorStep, InputStep};
+use crate::trace::{DetectorName, DetectorStep, InputStep};
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::metrics::base::LlmMetrics;
 pub use lk_agents_abi::turn::keyterms::{
@@ -829,7 +829,7 @@ impl Driver {
         if failed {
             return self.keyterms_failed(now, req, out);
         }
-        out.trace(InputStep::LegVerdict { leg: DetectorLeg::Keyterms, req });
+        out.trace(InputStep::LegVerdict { leg: DetectorName::Keyterms, req });
         // Strict JSON; a malformed document is an empty update.
         let parsed =
             arguments.as_deref().and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok());
@@ -845,7 +845,7 @@ impl Driver {
     }
 
     fn keyterms_failed(&mut self, now: Ts, req: u64, out: &mut Out) {
-        out.trace(InputStep::LegFailed { leg: DetectorLeg::Keyterms, recoverable: true });
+        out.trace(InputStep::LegFailed { leg: DetectorName::Keyterms, recoverable: true });
         self.keyterms_step(now, KeytermIn::Failed { req }, out);
     }
 
@@ -881,7 +881,7 @@ impl Driver {
             self.keyterms_step(now, KeytermIn::Failed { req }, out);
             return;
         };
-        out.trace(InputStep::LegRequested { leg: DetectorLeg::Keyterms, req });
+        out.trace(InputStep::LegRequested { leg: DetectorName::Keyterms, req });
         out.machine().arm(TurnTimer::KeytermTimeout, now.saturating_add(slot.timeout()));
         let request = slot.request(prompt, self.step.wall());
         let shared = Arc::clone(&self.shared);

@@ -10,7 +10,7 @@ use crate::agent_session::commands::{
 use crate::agent_session::effects::{Out, TurnTimer};
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::Now;
-use crate::audio::LegEnd;
+use crate::audio::ChannelEnd;
 use crate::events::SessionEvent;
 use crate::generation::GenEvent;
 use crate::speech_handle::{InputDetails, SpeechHandle};
@@ -79,7 +79,7 @@ pub struct PeerHandle {
     pub time: crate::agent_session::Timebase,
     pub spawner: Arc<dyn lk_agents_abi::Spawner>,
     pub(super) watch: WatchHub,
-    pub(super) legs: Arc<crate::audio::Legs>,
+    pub(super) legs: Arc<crate::audio::AudioChannels>,
     /// Flips at `begin_closing`: a system's own drain ends on it like the driver's do.
     pub closing: tokio::sync::watch::Receiver<bool>,
 }
@@ -107,11 +107,11 @@ impl PeerHandle {
         &self,
         sink: Arc<dyn lk_agents_abi::StreamSink<lk_agents_abi::AudioFrame>>,
     ) -> crate::audio::Ticket {
-        self.legs.install(crate::audio::LegId::Amd, sink)
+        self.legs.install(crate::audio::AudioChannel::Amd, sink)
     }
 
     pub fn clear_audio_tap(&self) {
-        self.legs.clear(crate::audio::LegId::Amd);
+        self.legs.clear(crate::audio::AudioChannel::Amd);
     }
 
     /// Forgets the row only if this install is still the one in place.
@@ -211,8 +211,8 @@ pub enum Input {
         Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
     ),
     Overlap(lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict>),
-    LegEnded(LegEnd),
-    LegOpened(crate::room_io::LegOpened),
+    ChannelEnded(ChannelEnd),
+    StreamOpened(crate::room_io::StreamOpened),
     Video(lk_agents_rtc::VideoFrameRef),
 }
 
@@ -246,7 +246,7 @@ pub struct Driver {
     pub(crate) realtime_tx: Tx<crate::agent_activity::realtime::RealtimeWake>,
     pub(crate) stt_tx: Tx<crate::audio::Tagged<SpeechEvent>>,
     pub(crate) vad_tx: Tx<VadEvent>,
-    pub(crate) leg_opens: Tx<crate::room_io::LegOpened>,
+    pub(crate) leg_opens: Tx<crate::room_io::StreamOpened>,
     /// Decides ownership (a tool's hold is its run's).
     pub(crate) command_origin: Origin,
     /// The time of the step being handled, or of the last one.
@@ -451,8 +451,8 @@ impl Driver {
             Event::Input(Input::Realtime(ev)) => self.on_realtime(now, ev, &mut out),
             Event::Input(Input::Eot(req, p)) => self.on_eot(now, req, p, &mut out),
             Event::Input(Input::Overlap(ev)) => self.on_overlap_verdict(now, ev, &mut out),
-            Event::Input(Input::LegEnded(end)) => self.on_leg_ended(now, end, &mut out),
-            Event::Input(Input::LegOpened(opened)) => self.on_leg_opened(now, opened, &mut out),
+            Event::Input(Input::ChannelEnded(end)) => self.on_leg_ended(now, end, &mut out),
+            Event::Input(Input::StreamOpened(opened)) => self.on_leg_opened(now, opened, &mut out),
             Event::Input(Input::Video(frame)) => self.on_video_frame(now, frame, &mut out),
         }
         // Scheduled in the same cycle as the wake that changed it.
@@ -539,7 +539,7 @@ impl Driver {
     pub(super) fn on_api(&mut self, now: Ts, cmd: Command, out: &mut Out) {
         match cmd {
             Command::Speech(cmd) => self.on_speech(now, cmd, out),
-            Command::Frame(cmd) => self.on_frame(now, cmd, out),
+            Command::Activity(cmd) => self.on_frame(now, cmd, out),
             Command::Turn(cmd) => self.on_turn(now, cmd, out),
             Command::Video(image) => {
                 self.push_video(image, out);

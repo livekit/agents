@@ -3,7 +3,7 @@
 //! `function_tools_executed` handlers), and how long each is waited on.
 
 use crate::agent::TurnEdit;
-use crate::agent_activity::handoff::FrameExit;
+use crate::agent_activity::handoff::OnExitState;
 use crate::agent_session::effects::Out;
 use crate::agent_session::{Driver, HookCall, HookId, HookKind, HookOutcome, HostEvent};
 use crate::audio_recognition::PendingTurn;
@@ -107,7 +107,7 @@ impl Driver {
         // it is over.
         if kind == HookKind::OnExit {
             self.activity.handoff.exit =
-                if hosted { FrameExit::Exiting(id) } else { FrameExit::Exited };
+                if hosted { OnExitState::Exiting(id) } else { OnExitState::Exited };
         }
         if !hosted {
             out.trace(HandoffStep::HookFinished { hook: id, kind, how: HookEnd::NoHost });
@@ -206,7 +206,9 @@ impl Driver {
         outcome: HookOutcome,
         out: &mut Out,
     ) {
-        use HookOutcome::{Described, Failed, Filler, Rendered, Returned, FunctionToolsExecuted, Turn};
+        use HookOutcome::{
+            Described, Failed, Filler, FunctionToolsExecuted, Rendered, Returned, Turn,
+        };
         let fits = matches!(
             (kind, &outcome),
             (HookKind::OnExit | HookKind::OnEnter, Returned | Failed)
@@ -214,7 +216,10 @@ impl Driver {
                 | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed)
                 | (HookKind::RenderToolReply, Rendered(_) | Returned | Failed)
                 | (HookKind::FillerSource, Filler { .. } | Returned | Failed)
-                | (HookKind::FunctionToolsExecuted, FunctionToolsExecuted { .. } | Returned | Failed)
+                | (
+                    HookKind::FunctionToolsExecuted,
+                    FunctionToolsExecuted { .. } | Returned | Failed
+                )
         );
         // The sequence must not hang on a malformed answer: it goes on as if unanswered.
         if !fits {

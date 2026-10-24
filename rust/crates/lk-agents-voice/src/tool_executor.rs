@@ -1072,12 +1072,12 @@ impl Driver {
         // `self.scheduling_paused`: the activity that made the speech
         // drains: paused, left behind by a handoff, or a task that has its result.
         let draining = self.activity.speech_scheduler.is_paused()
-            || self.activity.speech_frame(speech).is_some_and(|f| *f != self.activity.agent)
+            || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent)
             || self.activity.tasks.driving_settled();
         // The step's follow-up plans against the frame once this is published.
         self.activity.tools_committed.insert((speech, step), draining);
         self.activity.set_tools_in_flight(speech, false);
-        self.publish_frame();
+        self.publish_activity();
         for w in &warnings {
             // A core crate has no logger, so the host says these (and the trace records them).
             // Only the spent step budget has a sentence in the reference.

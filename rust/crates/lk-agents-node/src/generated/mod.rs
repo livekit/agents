@@ -67,9 +67,9 @@
 //! - `lk_agents_voice::agent_session::SessionApi::transcription_output`: return: not yet: `Arc<RoomTranscriptionLeg>` (a shared handle to an exposed class)
 //! - `lk_agents_voice::agent_session::SessionApi::host_attach_recorder`: parameter `recorder`: not yet: `Arc<dyn AudioRecorder>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::update_models`: parameter `llm`: not yet: `Arc<dyn Llm>` (a host object behind a proxy)
-//! - `lk_agents_voice::agent_session::SessionApi::hook_described`: parameter `frame`: not yet: `HostFrame` is a keyword record (spread into keywords in Python; an options object in Node)
-//! - `lk_agents_voice::agent_session::SessionApi::update_agent`: parameter `frame`: not yet: `HostFrame` is a keyword record (spread into keywords in Python; an options object in Node)
-//! - `lk_agents_voice::agent_session::SessionApi::enter_task`: parameter `frame`: not yet: `HostFrame` is a keyword record (spread into keywords in Python; an options object in Node)
+//! - `lk_agents_voice::agent_session::SessionApi::hook_described`: parameter `frame`: not yet: `UpdateAgentArgs` is a keyword record (spread into keywords in Python; an options object in Node)
+//! - `lk_agents_voice::agent_session::SessionApi::update_agent`: parameter `frame`: not yet: `UpdateAgentArgs` is a keyword record (spread into keywords in Python; an options object in Node)
+//! - `lk_agents_voice::agent_session::SessionApi::enter_task`: parameter `frame`: not yet: `UpdateAgentArgs` is a keyword record (spread into keywords in Python; an options object in Node)
 //! - `lk_agents_voice::agent_session::SessionApi::set_audio_input`: parameter `source`: not yet: `Arc<dyn AudioInput>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::set_video_input`: parameter `source`: not yet: `Arc<dyn VideoInput>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::set_audio_output`: parameter `sink`: not yet: `Arc<dyn AudioOutput>` (a host object behind a proxy)
@@ -207,9 +207,9 @@
 //! - `TextInput (record TextInputEvent)`: field `participant`: `ParticipantIdentity` has no Node shape (not a declared record, enum or JSON)
 //! - `GetDOBResult (record GetDOBResult)`: field `date_of_birth`: `Date` has no Node shape (not a declared record, enum or JSON)
 
-pub mod records;
+pub mod errors;
 pub mod functions;
 pub mod objects;
-pub mod errors;
 pub mod proxies;
+pub mod records;
 pub mod streams;

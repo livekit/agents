@@ -717,7 +717,7 @@ pub enum GenEvent {
     /// `recoverable` when the budget retries it. Then the close policy.
     ProviderFailed {
         speech: SpeechId,
-        leg: crate::trace::ProviderLeg,
+        leg: crate::trace::ProviderKind,
         recoverable: bool,
         error: Box<ProviderError>,
     },

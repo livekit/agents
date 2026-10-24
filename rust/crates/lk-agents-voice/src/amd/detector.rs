@@ -5,7 +5,7 @@ use crate::amd::classifier::{
     TranscriptSource, Verdict,
 };
 use crate::events::SessionEvent;
-use crate::trace::{CoreStep, DetectorLeg, DetectorStep, InputStep, LegEndCause, Step};
+use crate::trace::{ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::amd::{AMD_PROMPT, AmdCategory};
 use lk_agents_abi::{
@@ -22,7 +22,7 @@ pub const SAVE_PREDICTION_TOOL: &str = "save_prediction";
 /// `classifier.postpone_termination`, offered while extensions remain.
 pub const POSTPONE_TERMINATION_TOOL: &str = "postpone_termination";
 
-/// The leg table's peer row and the journal's name for it (`LegOpened{"amd"}`, `LegEnded{"amd"}`).
+/// The leg table's peer row and the journal's name for it (`StreamOpened{"amd"}`, `ChannelEnded{"amd"}`).
 const TAP: &str = "amd";
 
 fn save_prediction_spec() -> lk_agents_abi::ToolSpec {
@@ -393,7 +393,7 @@ impl AmdSystem {
         self.cancel_classification();
         self.requests += 1;
         let n = self.requests;
-        self.peer.journal(Step::Input(InputStep::LegRequested { leg: DetectorLeg::Amd, req: n }));
+        self.peer.journal(Step::Input(InputStep::LegRequested { leg: DetectorName::Amd, req: n }));
         let wall = self.peer.time.wall();
         let chat_ctx = ChatContext::new(vec![
             ChatItem::Message(ChatMessage::text(
@@ -459,12 +459,12 @@ impl AmdSystem {
         }
         if failed {
             self.peer.journal(Step::Input(InputStep::LegFailed {
-                leg: DetectorLeg::Amd,
+                leg: DetectorName::Amd,
                 recoverable: true,
             }));
             return;
         }
-        self.peer.journal(Step::Input(InputStep::LegVerdict { leg: DetectorLeg::Amd, req }));
+        self.peer.journal(Step::Input(InputStep::LegVerdict { leg: DetectorName::Amd, req }));
         for call in calls {
             let args: Option<serde_json::Value> = serde_json::from_str(&call.arguments).ok();
             match call.name.as_str() {
@@ -536,7 +536,7 @@ impl AmdSystem {
             Arc::new(GatedSink { inner: Arc::from(sink), open: Arc::clone(&gate) });
         self.stt = SttLeg::Installed { gate, sink: Arc::clone(&sink) };
         let ticket = self.peer.install_audio_tap(sink);
-        self.peer.journal(Step::Input(InputStep::LegOpened { leg: TAP }));
+        self.peer.journal(Step::Input(InputStep::StreamOpened { leg: TAP }));
         spawn_tap_drain(self.peer.clone(), source, ticket, self.tx.clone());
     }
 
@@ -600,18 +600,18 @@ fn spawn_tap_drain(
             match next {
                 Some(Ok(Some(ev))) => {
                     if tx.send(Msg::Transcript(ev)).is_err() {
-                        break LegEndCause::Closing;
+                        break ChannelEndCause::Closing;
                     }
                 }
-                Some(Ok(None)) => break LegEndCause::SourceEnded,
-                Some(Err(_)) => break LegEndCause::Error,
-                None => break LegEndCause::Closing,
+                Some(Ok(None)) => break ChannelEndCause::SourceEnded,
+                Some(Err(_)) => break ChannelEndCause::Error,
+                None => break ChannelEndCause::Closing,
             }
         };
         peer.audio_tap_ended(ticket);
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let closed = source.close(deadline).await;
-        peer.journal(Step::Input(InputStep::LegEnded { leg: TAP, cause }));
+        peer.journal(Step::Input(InputStep::ChannelEnded { leg: TAP, cause }));
         peer.journal(Step::Input(InputStep::HostStreamClosed { label: TAP, how: closed }));
     });
 }

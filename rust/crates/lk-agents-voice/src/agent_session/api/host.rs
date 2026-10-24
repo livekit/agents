@@ -2,18 +2,18 @@
 //! `AgentSession` call, each assembling, opening, closing or sending one command.
 
 use super::{
-    CLOSE_TIMEOUT, CommandRefused, FramePusher, HostFrame, HostMetricsRecord, HostParts,
+    CLOSE_TIMEOUT, CommandRefused, FramePusher, HostMetricsRecord, HostParts,
     InterruptionPortFactory, NodeFactory, NotAnImage, NotInterruptible, OpenRefused, Ready, Reply,
     SessionApi, SessionBuildError, SessionEvents, SessionRefused, SessionRoom, SessionRunner,
-    Stage, StartFailed, TextPusher, UnknownCloseReason, host_toolset, llm_leg, origin_of,
-    session_tools, stt_leg, tts_leg,
+    Stage, StartFailed, TextPusher, UnknownCloseReason, UpdateAgentArgs, host_toolset, llm_leg,
+    origin_of, session_tools, stt_leg, tts_leg,
 };
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::DriverBuilder;
 use crate::agent_session::commands::{
-    Command, DrainRefused, DtmfCommand, FillerSource, FrameCommand, HoldId, HookId, HookOutcome,
-    HostAudio, HostAudioOut, HostTextOut, HostVideo, IdleRefused, IoLeg, IvrCommand, Origin,
+    ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId, HookId, HookOutcome,
+    HostAudio, HostAudioOut, HostTextOut, HostVideo, IdleRefused, IoKind, IvrCommand, Origin,
     SayText, SpeechCommand, TaskCommand, TaskEntry, ToolUpdate, TurnCommand,
 };
 use crate::agent_session::time::Timebase;
@@ -420,9 +420,9 @@ impl SessionApi {
         speaker_filter: Maybe<Option<crate::audio::SpeakerFilterConfig>>,
     ) -> Result<(), SessionRefused> {
         let (llm, tts, stt, filter) = self.swap(llm, tts, stt, &vad, speaker_filter);
-        self.send(FrameCommand::UpdateModels { stt, vad, llm, tts })?;
+        self.send(ActivityCommand::UpdateModels { stt, vad, llm, tts })?;
         if let Some(config) = filter {
-            self.send(FrameCommand::SetSpeakerFilter(config))?;
+            self.send(ActivityCommand::SetSpeakerFilter(config))?;
         }
         Ok(())
     }
@@ -433,7 +433,7 @@ impl SessionApi {
     pub fn hook_described(
         &self,
         id: u64,
-        #[host(kwargs)] frame: HostFrame,
+        #[host(kwargs)] frame: UpdateAgentArgs,
     ) -> Result<(), SessionRefused> {
         let (update, filter) = self.frame(frame);
         self.send(Command::HookDone {
@@ -441,7 +441,7 @@ impl SessionApi {
             outcome: HookOutcome::Described(Box::new(update)),
         })?;
         if let Some(config) = filter {
-            self.send(FrameCommand::SetSpeakerFilter(config))?;
+            self.send(ActivityCommand::SetSpeakerFilter(config))?;
         }
         Ok(())
     }
@@ -454,17 +454,17 @@ impl SessionApi {
     #[host(method(kw_only))]
     pub fn update_agent(
         &self,
-        #[host(kwargs)] frame: HostFrame,
+        #[host(kwargs)] frame: UpdateAgentArgs,
     ) -> Result<Reply<bool>, SessionRefused> {
         // Always `_update_activity(previous_activity="close", new_activity="start")`; the
         // pause/resume pair is an inline task's (`enter_task`).
         let (mut update, filter) = self.frame(frame);
         let (call, rx) = self.call(Answer::handoff)?;
         update.call = Some(call);
-        self.send(FrameCommand::Update(Box::new(update)))?;
+        self.send(ActivityCommand::Update(Box::new(update)))?;
         // The driver rebuilds the detector on the reopened leg when the swap lands.
         if let Some(config) = filter {
-            self.send(FrameCommand::SetSpeakerFilter(config))?;
+            self.send(ActivityCommand::SetSpeakerFilter(config))?;
         }
         Ok(Reply::new(async move { matches!(rx.await, Ok(Ok(()))) }))
     }
@@ -479,7 +479,7 @@ impl SessionApi {
     pub fn enter_task(
         &self,
         handle: &crate::workflows::HostTaskHandle,
-        #[host(kwargs)] frame: HostFrame,
+        #[host(kwargs)] frame: UpdateAgentArgs,
         speech_id: Option<u64>,
         preserve_function_call_history: bool,
         parent: Option<String>,
@@ -499,7 +499,7 @@ impl SessionApi {
 
     /// `session.input.audio = ..` after `start()`; `None` detaches. The reference delivers audio
     /// from a source attached after start, so this must reach the driver.
-    #[host(method(send = FrameCommand::SetAudioInput(source.map(HostAudio))))]
+    #[host(method(send = ActivityCommand::SetAudioInput(source.map(HostAudio))))]
     pub fn set_audio_input(
         &self,
         #[host(required)] source: Option<Arc<dyn AudioInput>>,
@@ -507,7 +507,7 @@ impl SessionApi {
 
     /// `session.input.video = ..` after `start()`: the driver's video pump reads the new source (the
     /// room's own leg is a no-op, a host `io.VideoInput` is wrapped), or stops on `None`.
-    #[host(method(send = FrameCommand::SetVideoInput(source.map(HostVideo))))]
+    #[host(method(send = ActivityCommand::SetVideoInput(source.map(HostVideo))))]
     pub fn set_video_input(
         &self,
         #[host(required)] source: Option<Arc<dyn lk_agents_voice::io::VideoInput>>,
@@ -527,12 +527,12 @@ impl SessionApi {
             }
             sink.tracker().anchor_to(self.anchor);
         }
-        self.send(FrameCommand::SetAudioOutput(sink.map(HostAudioOut)))
+        self.send(ActivityCommand::SetAudioOutput(sink.map(HostAudioOut)))
     }
 
     /// `session.output.transcription = ..` after `start()`: the next reply forwards into the new
     /// leg; one in flight keeps the leg it started with.
-    #[host(method(send = FrameCommand::SetTranscriptionOutput(sink.map(HostTextOut))))]
+    #[host(method(send = ActivityCommand::SetTranscriptionOutput(sink.map(HostTextOut))))]
     pub fn set_transcription_output(
         &self,
         #[host(required)] sink: Option<Arc<dyn TextOutput>>,
@@ -541,7 +541,7 @@ impl SessionApi {
     /// `Agent.update_tools()` on a running agent. All three parts go together: the runner is
     /// per-agent. The reference's follow-up `update_chat_ctx(chat_ctx.copy(tools=tools))` stays on
     /// the host side.
-    #[host(method(kw_only = "tools_host", send = FrameCommand::UpdateTools(host_toolset(tools, tools_host, tool_runner))))]
+    #[host(method(kw_only = "tools_host", send = ActivityCommand::UpdateTools(host_toolset(tools, tools_host, tool_runner))))]
     pub fn update_tools(
         &self,
         tools: Option<Vec<lk_agents_abi::ToolSpec>>,
@@ -909,7 +909,7 @@ impl SessionApi {
 
     /// `Agent.update_instructions()` on the agent that is already driving. Changes only the
     /// prompt; `update_agent` would replace the whole frame.
-    #[host(method(send = FrameCommand::UpdateInstructions(instructions)))]
+    #[host(method(send = ActivityCommand::UpdateInstructions(instructions)))]
     pub fn update_instructions(&self, instructions: Instructions) -> Result<(), SessionRefused>;
 
     /// `input.set_audio_enabled` / `output.set_audio_enabled` / `output.set_transcription_enabled`.
@@ -917,12 +917,12 @@ impl SessionApi {
     #[host(method)]
     pub fn set_io_enabled(&self, leg: &str, enabled: bool) -> Result<(), CommandRefused> {
         let leg = match leg {
-            "audio_input" => IoLeg::AudioInput,
-            "audio_output" => IoLeg::AudioOutput,
-            "transcription" => IoLeg::Transcription,
+            "audio_input" => IoKind::AudioInput,
+            "audio_output" => IoKind::AudioOutput,
+            "transcription" => IoKind::Transcription,
             other => return Err(CommandRefused::Invalid(format!("unknown io leg {other:?}"))),
         };
-        Ok(self.send(FrameCommand::SetIoEnabled { leg, enabled })?)
+        Ok(self.send(ActivityCommand::SetIoEnabled { leg, enabled })?)
     }
 
     /// `RunContext.update()` after the first, or a detached tool's return. `kind` is `"progress"`
@@ -957,7 +957,7 @@ impl SessionApi {
 
     /// `Agent.update_chat_ctx()` on a running agent: replace the context.
     /// `exclude_invalid_function_calls` is applied host-side before the items arrive.
-    #[host(method(send = FrameCommand::UpdateChatCtx(items)))]
+    #[host(method(send = ActivityCommand::UpdateChatCtx(items)))]
     pub fn update_chat_ctx(
         &self,
         items: Vec<lk_agents_abi::ChatItem>,
@@ -983,11 +983,11 @@ impl SessionApi {
     }
 
     /// `AgentSession.drain()`: the driving frame's `on_exit`, then scheduling paused until no
-    /// speech is left; the session stays open. Answers `None`, `"frame_changing"` or `"closing"`.
+    /// speech is left; the session stays open. Answers `None`, `"activity_changing"` or `"closing"`.
     #[host(method)]
     pub fn drain(&self) -> Result<Reply<Option<String>>, SessionRefused> {
         let (call, rx) = self.call(Answer::drain)?;
-        self.send(FrameCommand::Drain { call: Some(call) })?;
+        self.send(ActivityCommand::Drain { call: Some(call) })?;
         Ok(Reply::new(async move {
             match rx.await {
                 Ok(Ok(())) => None,

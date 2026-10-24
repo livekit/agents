@@ -2,7 +2,7 @@ use crate::agent_activity::GateSnapshot;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Out;
 use crate::agent_session::{DriverError, Timebase, Tx};
-use crate::trace::{InputStep, LegEndCause};
+use crate::trace::{ChannelEndCause, InputStep};
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
     AudioByteStream, AudioFrame, Closed, Spawner, SpawnerExt, StreamSink, StreamSource,
@@ -39,7 +39,7 @@ pub struct GateInputs {
 }
 
 /// `AgentActivity.push_audio`'s decision half, pure: whether the substituted legs (see
-/// [`LegId::substituted`]) get silence for this frame.
+/// [`AudioChannel::substituted`]) get silence for this frame.
 pub fn audio_gate(i: &GateInputs) -> bool {
     // Warmup only contaminates while the agent is actually speaking.
     let aec_warmup_active = i.agent_state == AgentState::Speaking
@@ -141,7 +141,7 @@ fn mono(frame: &AudioFrame) -> AudioFrame {
 /// | `Interruption` | `Converted` | `Real`        | `self._interruption_ch` (hears the user while the agent speaks) |
 /// | `Amd`          | `Raw`       | `Real`        | `self._session.amd.push_audio`        |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, lk_agents_abi::Vocabulary)]
-pub enum LegId {
+pub enum AudioChannel {
     Stt,
     Vad,
     Realtime,
@@ -158,14 +158,22 @@ pub enum Feed {
     Converted,
 }
 
-impl LegId {
-    pub const ALL: [LegId; 6] =
-        [LegId::Stt, LegId::Vad, LegId::Realtime, LegId::Eot, LegId::Interruption, LegId::Amd];
+impl AudioChannel {
+    pub const ALL: [AudioChannel; 6] = [
+        AudioChannel::Stt,
+        AudioChannel::Vad,
+        AudioChannel::Realtime,
+        AudioChannel::Eot,
+        AudioChannel::Interruption,
+        AudioChannel::Amd,
+    ];
 
     pub const fn feed(self) -> Feed {
         match self {
-            LegId::Stt | LegId::Vad | LegId::Realtime | LegId::Amd => Feed::Raw,
-            LegId::Eot | LegId::Interruption => Feed::Converted,
+            AudioChannel::Stt | AudioChannel::Vad | AudioChannel::Realtime | AudioChannel::Amd => {
+                Feed::Raw
+            }
+            AudioChannel::Eot | AudioChannel::Interruption => Feed::Converted,
         }
     }
 
@@ -173,17 +181,17 @@ impl LegId {
     /// discards, or it would answer the agent's own voice; the others always hear the user.
     /// **The only place the substitution is decided.**
     pub const fn substituted(self) -> bool {
-        matches!(self, LegId::Stt | LegId::Realtime | LegId::Eot)
+        matches!(self, AudioChannel::Stt | AudioChannel::Realtime | AudioChannel::Eot)
     }
 
     pub const fn label(self) -> &'static str {
         match self {
-            LegId::Stt => "stt",
-            LegId::Vad => "vad",
-            LegId::Realtime => "realtime",
-            LegId::Eot => "eot",
-            LegId::Interruption => "interruption",
-            LegId::Amd => "amd",
+            AudioChannel::Stt => "stt",
+            AudioChannel::Vad => "vad",
+            AudioChannel::Realtime => "realtime",
+            AudioChannel::Eot => "eot",
+            AudioChannel::Interruption => "interruption",
+            AudioChannel::Amd => "amd",
         }
     }
 
@@ -214,20 +222,20 @@ pub struct LegSlot {
     sink: Option<Arc<dyn StreamSink<AudioFrame>>>,
     /// The shape of the last frame pushed here; journalled at `Closing`.
     shape: Option<FrameShape>,
-    /// Sinks installed here. Each install's drain gets it as a [`Ticket`]; [`Legs::ended`] clears
+    /// Sinks installed here. Each install's drain gets it as a [`Ticket`]; [`AudioChannels::ended`] clears
     /// the row only if that install is still in place.
     opens: u32,
     /// The open whose items the loop still consumes; a drain's own end leaves it.
     live: Option<u32>,
     frames: u64,
     silent: u64,
-    /// `silent` as of the last [`Legs::take_silenced`]: the journal reports the delta.
+    /// `silent` as of the last [`AudioChannels::take_silenced`]: the journal reports the delta.
     silent_reported: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ticket {
-    pub(super) leg: LegId,
+    pub(super) leg: AudioChannel,
     opens: u32,
 }
 
@@ -239,7 +247,7 @@ impl Ticket {
 }
 
 /// One item a drain delivered, tagged with its stream's open so the loop uses that stream's
-/// speaker filter ([`Legs::speaker_filter_for`]).
+/// speaker filter ([`AudioChannels::speaker_filter_for`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tagged<T> {
     pub open: u32,
@@ -271,8 +279,8 @@ pub(super) fn tagged<T: Send + 'static>(
     Box::new(TaggedSource { open: ticket.open(), inner: source })
 }
 
-/// The one table of legs, held by the pump; the loop mutates it through [`LegOp`].
-pub struct Legs {
+/// The one table of legs, held by the pump; the loop mutates it through [`ChannelOp`].
+pub struct AudioChannels {
     slots: Mutex<[LegSlot; 6]>,
     /// The STT row's speaker filters, one per open, oldest first. The installed open's hears the
     /// row's frames; an older one stays until its drain ends, so each event is decided by the filter
@@ -281,9 +289,9 @@ pub struct Legs {
     input: Mutex<Option<(FrameShape, FrameShape)>>,
 }
 
-impl Default for Legs {
+impl Default for AudioChannels {
     fn default() -> Self {
-        Legs {
+        AudioChannels {
             slots: Mutex::new(std::array::from_fn(|_| LegSlot::default())),
             speaker: Mutex::new(Vec::new()),
             input: Mutex::new(None),
@@ -291,14 +299,14 @@ impl Default for Legs {
     }
 }
 
-impl Legs {
-    pub fn new() -> Arc<Legs> {
-        Arc::new(Legs::default())
+impl AudioChannels {
+    pub fn new() -> Arc<AudioChannels> {
+        Arc::new(AudioChannels::default())
     }
 
     /// Put `sink` in `leg`, then end the one it replaced. Installing first means the pump never
     /// sees an empty row; ending (not dropping) because dropping a host stream doesn't close it.
-    pub fn install(&self, leg: LegId, sink: Arc<dyn StreamSink<AudioFrame>>) -> Ticket {
+    pub fn install(&self, leg: AudioChannel, sink: Arc<dyn StreamSink<AudioFrame>>) -> Ticket {
         self.install_with(leg, sink, None)
     }
 
@@ -309,12 +317,12 @@ impl Legs {
         sink: Arc<dyn StreamSink<AudioFrame>>,
         speaker: Option<Arc<SpeakerFilter>>,
     ) -> Ticket {
-        self.install_with(LegId::Stt, sink, speaker)
+        self.install_with(AudioChannel::Stt, sink, speaker)
     }
 
     fn install_with(
         &self,
-        leg: LegId,
+        leg: AudioChannel,
         sink: Arc<dyn StreamSink<AudioFrame>>,
         speaker: Option<Arc<SpeakerFilter>>,
     ) -> Ticket {
@@ -323,7 +331,7 @@ impl Legs {
             let slot = &mut slots[leg.index()];
             slot.opens += 1;
             slot.live = Some(slot.opens);
-            if leg == LegId::Stt {
+            if leg == AudioChannel::Stt {
                 self.bind_speaker_filter(slot.opens, speaker);
             }
             (std::mem::replace(&mut slot.sink, Some(sink)), slot.opens)
@@ -335,7 +343,7 @@ impl Legs {
     }
 
     /// Empty `leg` and end what it held. `Agent(stt=None)`: this agent does not listen.
-    pub fn clear(&self, leg: LegId) {
+    pub fn clear(&self, leg: AudioChannel) {
         let previous = {
             let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
             let slot = &mut slots[leg.index()];
@@ -349,7 +357,7 @@ impl Legs {
 
     /// The open whose items the loop still consumes on `leg`; `None` once cleared. A drain's own
     /// end does not retire it.
-    pub fn installed_open(&self, leg: LegId) -> Option<u32> {
+    pub fn installed_open(&self, leg: AudioChannel) -> Option<u32> {
         self.slots.lock().unwrap_or_else(|p| p.into_inner())[leg.index()].live
     }
 
@@ -367,17 +375,17 @@ impl Legs {
     }
 
     /// The sink `leg` currently holds. Read rather than borrowed: a handoff can replace it.
-    pub fn get(&self, leg: LegId) -> Option<Arc<dyn StreamSink<AudioFrame>>> {
+    pub fn get(&self, leg: AudioChannel) -> Option<Arc<dyn StreamSink<AudioFrame>>> {
         self.slots.lock().unwrap_or_else(|p| p.into_inner())[leg.index()].sink.clone()
     }
 
-    pub fn present(&self, leg: LegId) -> bool {
+    pub fn present(&self, leg: AudioChannel) -> bool {
         self.slots.lock().unwrap_or_else(|p| p.into_inner())[leg.index()].sink.is_some()
     }
 
-    pub fn take_silenced(&self) -> [(LegId, u64); 6] {
+    pub fn take_silenced(&self) -> [(AudioChannel, u64); 6] {
         let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
-        LegId::ALL.map(|id| {
+        AudioChannel::ALL.map(|id| {
             let slot = &mut slots[id.index()];
             let delta = slot.silent - slot.silent_reported;
             slot.silent_reported = slot.silent;
@@ -385,7 +393,7 @@ impl Legs {
         })
     }
 
-    pub fn shape(&self, leg: LegId) -> Option<FrameShape> {
+    pub fn shape(&self, leg: AudioChannel) -> Option<FrameShape> {
         self.slots.lock().unwrap_or_else(|p| p.into_inner())[leg.index()].shape
     }
 
@@ -397,7 +405,7 @@ impl Legs {
         *self.input.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    pub fn counters(&self, leg: LegId) -> (u64, u64) {
+    pub fn counters(&self, leg: AudioChannel) -> (u64, u64) {
         let slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
         (slots[leg.index()].frames, slots[leg.index()].silent)
     }
@@ -412,7 +420,7 @@ impl Legs {
         let mut stt_open = 0u32;
         {
             let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
-            for id in LegId::ALL {
+            for id in AudioChannel::ALL {
                 if id.feed() != feed {
                     continue;
                 }
@@ -425,7 +433,7 @@ impl Legs {
                     }
                     _ => frame,
                 };
-                if id == LegId::Stt {
+                if id == AudioChannel::Stt {
                     stt_open = slot.opens;
                 }
                 slot.frames += 1;
@@ -436,7 +444,7 @@ impl Legs {
         // The speaker filter hears exactly what the STT hears, substitute included, so its audio
         // clock matches the recogniser's timestamps (`_forward_input` pushes both).
         if feed == Feed::Raw
-            && let Some((_, heard)) = &targets[LegId::Stt.index()]
+            && let Some((_, heard)) = &targets[AudioChannel::Stt.index()]
             && let Some(filter) = self.speaker_filter_for(stt_open)
         {
             filter.push_audio(heard);
@@ -448,11 +456,12 @@ impl Legs {
     }
 }
 
-impl Legs {
+impl AudioChannels {
     /// Set the speaker filter on the STT row's installed stream; an opening stream gets its own
     /// from [`install_stt`](Self::install_stt).
     pub fn set_speaker_filter(&self, filter: Option<Arc<SpeakerFilter>>) {
-        let open = self.slots.lock().unwrap_or_else(|p| p.into_inner())[LegId::Stt.index()].opens;
+        let open =
+            self.slots.lock().unwrap_or_else(|p| p.into_inner())[AudioChannel::Stt.index()].opens;
         self.bind_speaker_filter(open, filter);
     }
 
@@ -479,7 +488,7 @@ impl Legs {
     }
 }
 
-/// `MultiSpeakerAdapter`'s decision half, hosted on the STT leg. Frames come from `Legs::push`;
+/// `MultiSpeakerAdapter`'s decision half, hosted on the STT leg. Frames come from `AudioChannels::push`;
 /// every STT event passes [`decide`](Self::decide), and the class is journalled once per change.
 pub struct SpeakerFilter {
     inner: Mutex<SpeakerFilterState>,
@@ -556,29 +565,33 @@ impl SpeakerFilter {
 }
 
 /// How the loop changes the table, applied by `Driver::apply_leg_op`.
-pub enum LegOp {
+pub enum ChannelOp {
     Install {
-        leg: LegId,
+        leg: AudioChannel,
         sink: Arc<dyn StreamSink<AudioFrame>>,
     },
     InstallStt {
         sink: Arc<dyn StreamSink<AudioFrame>>,
         speaker: Option<Arc<SpeakerFilter>>,
     },
-    Clear(LegId),
+    Clear(AudioChannel),
     /// Point the pump at a new source, or stop it; the legs stay.
     SetSource(Option<Arc<dyn AudioInput>>),
 }
 
-impl std::fmt::Debug for LegOp {
+impl std::fmt::Debug for ChannelOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LegOp::Install { leg, sink: _ } => f.debug_struct("Install").field("leg", leg).finish(),
-            LegOp::InstallStt { sink: _, speaker } => {
+            ChannelOp::Install { leg, sink: _ } => {
+                f.debug_struct("Install").field("leg", leg).finish()
+            }
+            ChannelOp::InstallStt { sink: _, speaker } => {
                 f.debug_struct("InstallStt").field("speaker", &speaker.is_some()).finish()
             }
-            LegOp::Clear(leg) => f.debug_tuple("Clear").field(leg).finish(),
-            LegOp::SetSource(input) => f.debug_tuple("SetSource").field(&input.is_some()).finish(),
+            ChannelOp::Clear(leg) => f.debug_tuple("Clear").field(leg).finish(),
+            ChannelOp::SetSource(input) => {
+                f.debug_tuple("SetSource").field(&input.is_some()).finish()
+            }
         }
     }
 }
@@ -651,10 +664,10 @@ pub(super) struct AudioForwarderParts {
     /// The session recorder's tap: every frame the pump hears is the user's channel.
     pub(super) recorder: Arc<std::sync::RwLock<Option<crate::recorder_io::RecorderTap>>>,
     pub(super) gate: Arc<GateSnapshot>,
-    pub(super) legs: Arc<Legs>,
+    pub(super) legs: Arc<AudioChannels>,
     pub(super) rate: u32,
     pub(super) closing: tokio::sync::watch::Receiver<bool>,
-    pub(super) ended: Tx<LegEnd>,
+    pub(super) ended: Tx<ChannelEnd>,
     pub(super) time: Timebase,
 }
 
@@ -668,9 +681,9 @@ impl AudioForwarderParts {
                 biased;
                 frame = input.next_frame() => match frame {
                     Some(frame) => frame,
-                    None => break LegEndCause::SourceEnded,
+                    None => break ChannelEndCause::SourceEnded,
                 },
-                _ = p.closing.wait_for(|c| *c) => break LegEndCause::Closing,
+                _ = p.closing.wait_for(|c| *c) => break ChannelEndCause::Closing,
             };
             // For the close-time STT flush's frame shape.
             p.last_input.store(
@@ -706,15 +719,20 @@ impl AudioForwarderParts {
             }
         };
         // The input is the host's, not a `HostStream`: nothing to close here, so no `Closed`.
-        let _ =
-            p.ended.send(LegEnd { leg: AUDIO_IN_LEG, open: 0, cause, closed: None, error: None });
+        let _ = p.ended.send(ChannelEnd {
+            leg: AUDIO_IN_LEG,
+            open: 0,
+            cause,
+            closed: None,
+            error: None,
+        });
     }
 }
 
 #[derive(Clone)]
 pub(super) struct VideoForwarderParts {
     pub(super) closing: tokio::sync::watch::Receiver<bool>,
-    pub(super) ended: Tx<LegEnd>,
+    pub(super) ended: Tx<ChannelEnd>,
     /// The loop's queue; the sampler runs in the loop, on the session clock.
     pub(super) frames: Tx<lk_agents_rtc::VideoFrameRef>,
 }
@@ -727,35 +745,40 @@ impl VideoForwarderParts {
                 biased;
                 frame = input.next_frame() => match frame {
                     Some(frame) => frame,
-                    None => break LegEndCause::SourceEnded,
+                    None => break ChannelEndCause::SourceEnded,
                 },
-                _ = p.closing.wait_for(|c| *c) => break LegEndCause::Closing,
+                _ = p.closing.wait_for(|c| *c) => break ChannelEndCause::Closing,
             };
             // A queue that is gone is a loop that has returned: nothing to report to.
             if p.frames.send(frame).is_err() {
                 return;
             }
         };
-        let _ =
-            p.ended.send(LegEnd { leg: VIDEO_IN_LEG, open: 0, cause, closed: None, error: None });
+        let _ = p.ended.send(ChannelEnd {
+            leg: VIDEO_IN_LEG,
+            open: 0,
+            cause,
+            closed: None,
+            error: None,
+        });
     }
 }
 
 /// A drain or the pump exited, sent to the loop so it is journalled there.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LegEnd {
+pub struct ChannelEnd {
     pub(super) leg: &'static str,
     /// The drain's open (`Ticket::open`); `0` for the pumps, which own no install.
     pub(super) open: u32,
-    pub(super) cause: LegEndCause,
+    pub(super) cause: ChannelEndCause,
     /// How the host stream's close went, for a drain; `None` for the pump, which owns no source.
     pub(super) closed: Option<Closed>,
     pub(super) error: Option<lk_agents_abi::errors::ProviderError>,
 }
 
-/// Journal a [`LegEnd`]; the drain already cleared the row ([`Legs::ended`]).
-pub(super) fn on_leg_ended(end: LegEnd, out: &mut Out) {
-    out.trace(InputStep::LegEnded { leg: end.leg, cause: end.cause });
+/// Journal a [`ChannelEnd`]; the drain already cleared the row ([`AudioChannels::ended`]).
+pub(super) fn on_leg_ended(end: ChannelEnd, out: &mut Out) {
+    out.trace(InputStep::ChannelEnded { leg: end.leg, cause: end.cause });
     if let Some(how) = end.closed {
         out.trace(InputStep::HostStreamClosed { label: end.leg, how });
     }
@@ -763,16 +786,16 @@ pub(super) fn on_leg_ended(end: LegEnd, out: &mut Out) {
 
 /// Drain a provider source into the loop, close it once, then forget its row. A row holding a
 /// closed sink would raise on every frame for the rest of the call. The ticket makes the forget
-/// conditional ([`Legs::ended`]), since the replacement is installed before the old drain exits.
+/// conditional ([`AudioChannels::ended`]), since the replacement is installed before the old drain exits.
 pub(super) fn spawn_drain<T: Send + 'static>(
     spawner: &Arc<dyn Spawner>,
     time: Timebase,
     mut closing: tokio::sync::watch::Receiver<bool>,
     mut source: Box<dyn StreamSource<T>>,
     tx: Tx<T>,
-    legs: Arc<Legs>,
+    legs: Arc<AudioChannels>,
     ticket: Ticket,
-    ended: Tx<LegEnd>,
+    ended: Tx<ChannelEnd>,
 ) {
     spawner.spawn_unboxed(async move {
         let mut error = None;
@@ -786,22 +809,22 @@ pub(super) fn spawn_drain<T: Send + 'static>(
             match next {
                 Some(Ok(Some(item))) => {
                     if tx.send(item).is_err() {
-                        break LegEndCause::Closing; // the loop is gone
+                        break ChannelEndCause::Closing; // the loop is gone
                     }
                 }
-                Some(Ok(None)) => break LegEndCause::SourceEnded,
+                Some(Ok(None)) => break ChannelEndCause::SourceEnded,
                 Some(Err(e)) => {
                     error = Some(e);
-                    break LegEndCause::Error;
+                    break ChannelEndCause::Error;
                 }
-                None => break LegEndCause::Closing,
+                None => break ChannelEndCause::Closing,
             }
         };
         legs.ended(ticket);
         // Always, bounded on the session clock (dropping doesn't cancel a host stream).
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let closed = source.close(deadline).await;
-        let _ = ended.send(LegEnd {
+        let _ = ended.send(ChannelEnd {
             leg: ticket.leg.label(),
             open: ticket.open(),
             cause,

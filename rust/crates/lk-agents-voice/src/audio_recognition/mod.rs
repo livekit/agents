@@ -1,8 +1,8 @@
 //! `voice/audio_recognition.py`: `AudioRecognition`, the user's turn folded from the STT and VAD
 //! streams, and the types it decides with.
 
+use crate::agent_activity::false_interruption::count_min_words;
 use crate::agent_activity::options::{DetectorKind, LegSet, SessionConfig};
-use crate::agent_activity::pause::count_min_words;
 use crate::agent_session::effects::{Effects, TurnTimer};
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
@@ -37,7 +37,8 @@ pub struct AudioRecognition {
     /// `_turn_detector`; `None` commits turns on silence alone.
     eot: Option<std::sync::Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
     /// The interruption detector's port; `None` is VAD-only interruption.
-    interruption: Option<std::sync::Arc<dyn crate::agent_activity::pause::InterruptionPort>>,
+    interruption:
+        Option<std::sync::Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
     /// `_commit_user_turn_atask` waiting for the final transcript.
     pending_commit: Option<PendingCommit>,
     cfg: TurnConfig,
@@ -183,7 +184,8 @@ impl AudioRecognition {
     /// The interruption detector's port.
     pub(crate) fn interruption(
         &self,
-    ) -> Option<&std::sync::Arc<dyn crate::agent_activity::pause::InterruptionPort>> {
+    ) -> Option<&std::sync::Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>
+    {
         self.interruption.as_ref()
     }
 
@@ -282,7 +284,9 @@ impl AudioRecognition {
     pub(crate) fn set_detectors(
         &mut self,
         eot: Option<std::sync::Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
-        interruption: Option<std::sync::Arc<dyn crate::agent_activity::pause::InterruptionPort>>,
+        interruption: Option<
+            std::sync::Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>,
+        >,
     ) {
         self.eot = eot;
         self.interruption = interruption;

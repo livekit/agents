@@ -2,12 +2,14 @@
 //! generation.
 
 use crate::agent_activity::ConfigDiff;
-use crate::agent_activity::pause::{AudioInterruptTrigger, InterruptOutcome, InterruptRefusal};
+use crate::agent_activity::false_interruption::{
+    AudioInterruptTrigger, InterruptOutcome, InterruptRefusal,
+};
 use crate::agent_activity::scheduling::{PreemptiveDiscard, PreemptiveRefusal, SpeechKind, Status};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::effects::Out;
 use crate::agent_session::{Answer, CommitSuperseded, Driver, RequestId, TurnCommand};
-use crate::audio::{LegId, Tagged};
+use crate::audio::{AudioChannel, Tagged};
 use crate::audio_recognition::{
     CommitInputs, CommitSpeech, CommitVerdict, EndOfTurnInfo, PendingCommit, Phase, TurnEdits,
     decide_commit,
@@ -70,8 +72,8 @@ impl Driver {
         // An item from a stream the row retired is dropped: the reference's `_update_stt` cancels
         // the old consumer, so a swapped-out recogniser's final reaches nothing. Until the new
         // stream lands the old row is the installed one.
-        if self.input.legs().installed_open(LegId::Stt) != Some(open) {
-            out.trace(InputStep::LegItemDiscarded { leg: LegId::Stt.label(), open });
+        if self.input.legs().installed_open(AudioChannel::Stt) != Some(open) {
+            out.trace(InputStep::LegItemDiscarded { leg: AudioChannel::Stt.label(), open });
             return;
         }
         let Some(ev) = self.speaker_filter(open, ev, out) else { return };
@@ -92,7 +94,7 @@ impl Driver {
         // non-empty interim is the onset (`on_interim_transcript`). The gates are `decide_interrupt`'s.
         let words = ev
             .best_alternative()
-            .map_or(0, |a| crate::agent_activity::pause::count_min_words(&a.text));
+            .map_or(0, |a| crate::agent_activity::false_interruption::count_min_words(&a.text));
         let has_vad = self.input.has_vad();
         match ev.kind {
             SpeechEventType::FinalTranscript => {
@@ -456,11 +458,11 @@ impl Driver {
     pub(crate) fn request_eot_prediction(&mut self, req: lk_agents_abi::turn::detector::ReqId) {
         // Unreachable: the machine asks only when a detector was configured.
         let Some(leg) = self.activity.audio_recognition.eot() else { return };
-        let chat_ctx = self.session.record.agent_chat_ctx();
+        let chat_ctx = self.session.chat_ctx.agent_chat_ctx();
         let timeout = self.activity.audio_recognition.prediction_timeout();
         // Any outstanding request is superseded; its late answer is dropped.
         self.journal(Step::Input(InputStep::LegRequested {
-            leg: crate::trace::DetectorLeg::Eot,
+            leg: crate::trace::DetectorName::Eot,
             req: req.0,
         }));
         leg.signal(Some(req), lk_agents_abi::EotRequest { chat_ctx, timeout });
@@ -475,11 +477,11 @@ impl Driver {
         p: Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
         out: &mut Out,
     ) {
-        use crate::trace::DetectorLeg;
-        out.trace(InputStep::LegVerdict { leg: DetectorLeg::Eot, req: req.0 });
+        use crate::trace::DetectorName;
+        out.trace(InputStep::LegVerdict { leg: DetectorName::Eot, req: req.0 });
         // Recoverable: the next pause asks again. The machine serves `min_delay`.
         let result = p.map_err(|_| {
-            out.trace(InputStep::LegFailed { leg: DetectorLeg::Eot, recoverable: true });
+            out.trace(InputStep::LegFailed { leg: DetectorName::Eot, recoverable: true });
         });
         let eff = self.activity.audio_recognition.on_prediction(now, req, result);
         out.machine().append(eff);
@@ -626,7 +628,7 @@ impl Driver {
         self.activity.speech_scheduler.preflight = Some(transcript.clone());
         // The preemptive generation belongs to the turn after the last commit; `generate_reply`
         // checks it.
-        self.activity.key_preemptive_generation(self.session.record.version());
+        self.activity.key_preemptive_generation(self.session.chat_ctx.version());
         self.start_preemptive_generation(now, transcript, out);
     }
 

@@ -1,7 +1,7 @@
 //! `drain()`: the host waits for the driving agent to say its goodbye (`on_exit`) and for
 //! scheduling to pause with nothing left to say; the session stays open.
 
-use crate::agent_activity::handoff::FrameExit;
+use crate::agent_activity::handoff::OnExitState;
 use crate::agent_activity::scheduling::PauseCause;
 use crate::agent_session::effects::Out;
 use crate::agent_session::{Answer, DrainRefused, Driver, HookId, PreviousActivity, RequestId};
@@ -165,9 +165,9 @@ impl Driver {
         }
         // The `on_exit` the callers still wait for, if any.
         let waiting_on = match (previous, self.activity.handoff.exit) {
-            (PreviousActivity::Close, _) | (PreviousActivity::Pause, FrameExit::Exited) => None,
-            (PreviousActivity::Pause, FrameExit::Exiting(hook)) => Some(hook),
-            (PreviousActivity::Pause, FrameExit::Running) => {
+            (PreviousActivity::Close, _) | (PreviousActivity::Pause, OnExitState::Exited) => None,
+            (PreviousActivity::Pause, OnExitState::Exiting(hook)) => Some(hook),
+            (PreviousActivity::Pause, OnExitState::Running) => {
                 let hook = self.activity.hooks.mint();
                 out.trace(HandoffStep::DrainStarted { exit_hook: Some(hook) });
                 (!self.issue_on_exit(now, hook, out)).then_some(hook)
@@ -241,7 +241,7 @@ impl Driver {
                 let refused = if self.session.closing.is_some() {
                     DrainRefused::Closing
                 } else {
-                    DrainRefused::FrameChanging
+                    DrainRefused::ActivityChanging
                 };
                 self.finish_drain(Some(refused), out);
             }

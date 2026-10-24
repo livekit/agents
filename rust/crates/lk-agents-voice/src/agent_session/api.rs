@@ -361,9 +361,9 @@ impl SessionApi {
     /// itself.
     fn frame(
         &self,
-        frame: HostFrame,
+        frame: UpdateAgentArgs,
     ) -> (AgentUpdate, Option<Option<crate::audio::SpeakerFilterConfig>>) {
-        let HostFrame {
+        let UpdateAgentArgs {
             instructions,
             agent,
             tools,
@@ -474,7 +474,9 @@ pub fn plan_session_start(
 
 /// Decided before assembly but *opened* at [`SessionApi::open`], on the runtime (opening spawns).
 pub type InterruptionPortFactory = Box<
-    dyn FnOnce(lk_agents_abi::WallAnchor) -> Arc<dyn crate::agent_activity::pause::InterruptionPort>
+    dyn FnOnce(
+            lk_agents_abi::WallAnchor,
+        ) -> Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>
         + Send,
 >;
 
@@ -789,7 +791,7 @@ pub trait NodeFactory: Send + Sync {
 /// `None` removes it, an object replaces it. `chat_ctx` replaces when present. The tools are one
 /// toolset, replaced together because the runner is per-agent. `turn_handling` is the agent layer.
 #[lk_agents_abi::host(kwargs)]
-pub struct HostFrame {
+pub struct UpdateAgentArgs {
     pub instructions: Instructions,
     /// The new frame's agent id.
     pub agent: String,
@@ -939,7 +941,7 @@ impl FramePusher {
     }
 }
 
-// After `HostFrame`, whose kwargs macro the host methods expand against.
+// After `UpdateAgentArgs`, whose kwargs macro the host methods expand against.
 mod host;
 #[cfg(test)]
 mod tests;

@@ -2,7 +2,9 @@
 //! `start_speech`, the generation's reports, the agent state, and `wait_for_idle`.
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::pause::{InterruptOutcome, InterruptRefusal, InterruptWaiter};
+use crate::agent_activity::false_interruption::{
+    InterruptOutcome, InterruptRefusal, InterruptWaiter,
+};
 use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechId, SpeechKind, Status};
 use crate::agent_session::effects::Out;
 use crate::agent_session::effects::{GateCause, GateOp};
@@ -428,7 +430,7 @@ impl Driver {
         // request the hook edited, answers a question this turn is not asking.
         let edited =
             edits.instructions.is_some() || edits.chat_ctx.is_some() || edits.user_text.is_some();
-        let stale = self.activity.preemptive_record_version != self.session.record.version();
+        let stale = self.activity.preemptive_record_version != self.session.chat_ctx.version();
         if let Some(preemptive_turn) = self.activity.preemptive_turn.take()
             && (preemptive_turn != info.turn_id || edited || stale)
             && self.activity.speech_scheduler.preemptive_generation().is_some()
@@ -534,7 +536,8 @@ impl Driver {
 
         // `chat_ctx=` and `ReplaceItems` replace what this request is planned against; the record
         // is not written.
-        let record = spec.chat_ctx.clone().unwrap_or_else(|| self.session.record.agent_chat_ctx());
+        let record =
+            spec.chat_ctx.clone().unwrap_or_else(|| self.session.chat_ctx.agent_chat_ctx());
         // The frame's prompt for the modality, or a hook's edit for this turn.
         let instructions = spec
             .instructions_override
@@ -613,7 +616,7 @@ impl Driver {
             spec.allow_interruptions,
             InputDetails::default(),
         ));
-        self.activity.note_speech_frame(id);
+        self.activity.note_speech_agent(id);
 
         let message_id = self.session.ids.mint("item");
         let ctx = ReplyContext {
@@ -708,8 +711,8 @@ impl Driver {
             GenEvent::Trace(step) => out.trace(step),
             GenEvent::ProviderFailed { speech, leg, recoverable, error } => {
                 let source = match leg {
-                    crate::trace::ProviderLeg::Llm => crate::events::ErrorSource::Llm,
-                    crate::trace::ProviderLeg::Tts => crate::events::ErrorSource::Tts,
+                    crate::trace::ProviderKind::Llm => crate::events::ErrorSource::Llm,
+                    crate::trace::ProviderKind::Tts => crate::events::ErrorSource::Tts,
                 };
                 self.report_error(now, source, recoverable, *error, Some(speech), out);
             }
@@ -725,8 +728,11 @@ impl Driver {
                 // waits for what the handlers leave.
                 if let (Some(event), Some(verdict)) = (&executed, verdict) {
                     let id = self.activity.hooks.mint();
-                    let call =
-                        HookCall::FunctionToolsExecuted { id, speech, event: Box::new((**event).clone()) };
+                    let call = HookCall::FunctionToolsExecuted {
+                        id,
+                        speech,
+                        event: Box::new((**event).clone()),
+                    };
                     let wait = self.hook_wait();
                     if self.activity.hook_bound.is_some()
                         && self.issue_hook(now, call, Some(wait), out)
@@ -981,7 +987,7 @@ impl Driver {
         // The handle leaves with the queue's entry (`speech_finished`, below); `speech_frames`
         // keeps its entry: a call and output can land after the speech is done.
         self.activity.finished.insert(speech);
-        self.publish_frame();
+        self.publish_activity();
         self.speech_finished(now, speech, out);
     }
 

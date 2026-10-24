@@ -1,10 +1,10 @@
 //! The driver's [`Out`]: the [`Effect`]s the components hand it, in order, the timers they arm,
 //! and its performer, which runs them under the frame that asked.
 
-use crate::agent_activity::pause::{AudioInterruptTrigger, TurnSettled};
+use crate::agent_activity::false_interruption::{AudioInterruptTrigger, TurnSettled};
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::{Driver, HostEvent};
-use crate::audio::LegId;
+use crate::audio::AudioChannel;
 use crate::audio_recognition::{EndOfTurnInfo, InterruptionSignal, TurnDetectionMode};
 use crate::events::SessionEvent;
 use crate::trace::{CoreStep, InputStep, InterruptStep, RealtimeStep, Step, Trace, TurnStep};
@@ -269,24 +269,24 @@ pub enum TurnTimer {
 pub enum ProviderCall {
     FlushVad,
     FlushStt,
-    /// Comes back as `Input::LegOpened{open}`: the loop never awaits `stream()`.
+    /// Comes back as `Input::StreamOpened{open}`: the loop never awaits `stream()`.
     OpenLeg {
-        leg: LegKind,
+        leg: StreamKind,
         open: u64,
     },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LegKind {
+pub enum StreamKind {
     Stt,
     Vad,
 }
 
-impl LegKind {
+impl StreamKind {
     pub fn label(self) -> &'static str {
         match self {
-            LegKind::Stt => "stt",
-            LegKind::Vad => "vad",
+            StreamKind::Stt => "stt",
+            StreamKind::Vad => "vad",
         }
     }
 }
@@ -554,7 +554,8 @@ impl Driver {
                 }
             }
             E::Provider(call @ (P::FlushStt | P::FlushVad)) => {
-                let leg = if matches!(call, P::FlushStt) { LegId::Stt } else { LegId::Vad };
+                let leg =
+                    if matches!(call, P::FlushStt) { AudioChannel::Stt } else { AudioChannel::Vad };
                 if let Some(s) = self.input.leg(leg) {
                     let _ = s.flush();
                 }
@@ -626,14 +627,14 @@ impl Driver {
                 }
             }
             // Journal-only: the learn is the machine's. The open runs off the loop (the provider
-            // awaits a connection); the stream comes back as `Input::LegOpened`.
+            // awaits a connection); the stream comes back as `Input::StreamOpened`.
             E::Provider(P::OpenLeg { leg, open }) => {
                 let Some(pending) = self.input.take_pending_open(open) else { return };
                 let tx = self.leg_opens.clone();
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
-                    use crate::room_io::LegOpened;
                     use crate::room_io::Opened;
                     use crate::room_io::PendingOpen;
+                    use crate::room_io::StreamOpened;
                     let outcome = match pending {
                         PendingOpen::Stt(stt) => match stt.stream(None, None).await {
                             Some(Ok((sink, source))) => Ok(Opened::Stt(sink, source)),
@@ -648,7 +649,7 @@ impl Driver {
                             vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
                         }
                     };
-                    let _ = tx.send(LegOpened { open, leg, outcome });
+                    let _ = tx.send(StreamOpened { open, leg, outcome });
                 });
             }
             E::Detector(D::Close) => {

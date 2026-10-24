@@ -160,7 +160,7 @@ takes one `Input` at a time with a merge rule ("a due timer fires before any
 same-instant input"), and asks every subsystem for its next deadline. Hooks
 cross as an effect and an answer (`HostEvent::Hook`, then
 `Command::HookDone`), a leg opens the same way (`ProviderCall::OpenLeg`, then
-`Input::LegOpened`), and realtime already has `send` and `next_event`. What
+`Input::StreamOpened`), and realtime already has `send` and `next_event`. What
 breaks the model:
 
 - the tasks the loop spawns decide on their own: the generation pipeline with
@@ -194,7 +194,7 @@ the core never holds the object.
 | Source         | Events                                                                                                         | Today                                                   |
 | -------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | the host       | every API call with its call id and raw arguments, validated by the core; hook and tool results with theirs   | `Command`, `Input::Host`, `api/host.rs`                 |
-| hearing        | VAD ticks, STT interims and finals, end-of-turn predictions, overlap verdicts, leg opened, failed or ended      | `Input::{Stt, Vad, Eot, Overlap, LegOpened, LegEnded}`  |
+| hearing        | VAD ticks, STT interims and finals, end-of-turn predictions, overlap verdicts, leg opened, failed or ended      | `Input::{Stt, Vad, Eot, Overlap, StreamOpened, ChannelEnded}`  |
 | models         | an LLM's tokens, tool calls, end and failure; TTS audio produced, ended, failed; realtime server events        | inside the generation tasks; `Input::Realtime`          |
 | the data plane | playout started, progressed, finished, reset; the position a cut stopped at; frames forwarded per leg          | `GenEvent::{FirstFrame, PlaybackStarted}`, sink reports |
 | the room       | participant linked, unlinked, track changes, closed                                                            | `Input::{Room, RoomIo}`                                 |

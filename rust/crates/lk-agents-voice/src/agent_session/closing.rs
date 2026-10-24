@@ -8,15 +8,15 @@ use lk_agents_abi::voice::events::CloseReason;
 
 use super::{HookId, RequestId};
 
+use crate::agent_activity::false_interruption::InterruptOutcome;
 use crate::agent_activity::handoff::Exit;
-use crate::agent_activity::pause::InterruptOutcome;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
 use crate::agent_session::effects::{Effect, Out, TimerOp, TurnTimer};
 use crate::agent_session::{
-    Answer, Close, Command, DrainRefused, Driver, DtmfCommand, FrameCommand, HandoffRefused,
+    ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
     IdleRefused, SpeechCommand,
 };
-use crate::audio::{LegId, LegOp};
+use crate::audio::{AudioChannel, ChannelOp};
 use crate::events::SessionEvent;
 use crate::trace::{
     CloseAct, CloseStep, CoreStep, HandoffStep, InputStep, InterruptCause, InterruptStep,
@@ -73,7 +73,7 @@ pub(crate) enum ClosePhase {
         until: Ts,
     },
     /// The realtime socket's `aclose` was asked for; `until` bounds it, `closed` is its answer.
-    ClosingLegs {
+    ClosingActivity {
         until: Ts,
         closed: bool,
     },
@@ -87,7 +87,7 @@ impl ClosePhase {
             ClosePhase::Draining { deadline } => Some(deadline),
             ClosePhase::Edge { until }
             | ClosePhase::Committing { until }
-            | ClosePhase::ClosingLegs { until, .. } => Some(until),
+            | ClosePhase::ClosingActivity { until, .. } => Some(until),
             ClosePhase::Exiting { .. } | ClosePhase::Closed => None,
         }
     }
@@ -322,7 +322,9 @@ impl Driver {
                 {
                     self.close_legs_begin(now, &mut out);
                 }
-                Some((ClosePhase::ClosingLegs { until, closed }, _)) if closed || until <= now => {
+                Some((ClosePhase::ClosingActivity { until, closed }, _))
+                    if closed || until <= now =>
+                {
                     self.close_legs(&mut out);
                 }
                 Some((
@@ -331,7 +333,7 @@ impl Driver {
                     | ClosePhase::Draining { .. }
                     | ClosePhase::Edge { .. }
                     | ClosePhase::Committing { .. }
-                    | ClosePhase::ClosingLegs { .. }
+                    | ClosePhase::ClosingActivity { .. }
                     | ClosePhase::Closed,
                     _,
                 ))
@@ -359,7 +361,7 @@ impl Driver {
         let rt = self.activity.rt_session.clone();
         let until = now.saturating_add(TEARDOWN_BOUND);
         if let Some(closing) = &mut self.session.closing {
-            closing.phase = ClosePhase::ClosingLegs { until, closed: rt.is_none() };
+            closing.phase = ClosePhase::ClosingActivity { until, closed: rt.is_none() };
         }
         self.answer_close_drains(out);
         let _ = self.shared.closing.send(true);
@@ -406,7 +408,7 @@ impl Driver {
             }
             ClosePhase::Exiting { .. }
             | ClosePhase::Committing { .. }
-            | ClosePhase::ClosingLegs { .. }
+            | ClosePhase::ClosingActivity { .. }
             | ClosePhase::Closed => false,
         }
     }
@@ -424,7 +426,7 @@ impl Driver {
     /// Whether the recogniser may still owe the last final: the user is speaking, words are held
     /// uncommitted, or speech ended within the last second. Only with an STT leg.
     fn transcript_pending(&self, now: Ts) -> bool {
-        if self.input.leg(LegId::Stt).is_none() {
+        if self.input.leg(AudioChannel::Stt).is_none() {
             return false;
         }
         let turn = &self.activity.audio_recognition;
@@ -452,7 +454,7 @@ impl Driver {
                 call,
             ),
             // A handoff somebody awaits: refused as closing, explicitly.
-            Command::Frame(FrameCommand::Update(update)) => {
+            Command::Activity(ActivityCommand::Update(update)) => {
                 self.refuse_handoff(None, update, HandoffRefused::Closing, out);
                 return;
             }
@@ -467,7 +469,7 @@ impl Driver {
                 return;
             }
             // A drain somebody awaits: the close's drain is the one it waits on.
-            Command::Frame(FrameCommand::Drain { call }) => {
+            Command::Activity(ActivityCommand::Drain { call }) => {
                 self.join_close_drain(call.into_iter().collect(), out);
                 return;
             }
@@ -511,17 +513,17 @@ impl Driver {
                 | SpeechCommand::FillerStart { .. }
                 | SpeechCommand::FillerStop { .. },
             )
-            | Command::Frame(
-                FrameCommand::UpdateInstructions(_)
-                | FrameCommand::UpdateTools(_)
-                | FrameCommand::SetAudioInput(_)
-                | FrameCommand::SetVideoInput(_)
-                | FrameCommand::SetIoEnabled { .. }
-                | FrameCommand::UpdateChatCtx(_)
-                | FrameCommand::SetAudioOutput(_)
-                | FrameCommand::SetTranscriptionOutput(_)
-                | FrameCommand::UpdateModels { .. }
-                | FrameCommand::SetSpeakerFilter(_),
+            | Command::Activity(
+                ActivityCommand::UpdateInstructions(_)
+                | ActivityCommand::UpdateTools(_)
+                | ActivityCommand::SetAudioInput(_)
+                | ActivityCommand::SetVideoInput(_)
+                | ActivityCommand::SetIoEnabled { .. }
+                | ActivityCommand::UpdateChatCtx(_)
+                | ActivityCommand::SetAudioOutput(_)
+                | ActivityCommand::SetTranscriptionOutput(_)
+                | ActivityCommand::UpdateModels { .. }
+                | ActivityCommand::SetSpeakerFilter(_),
             )
             | Command::Turn(_)
             | Command::Video(_)
@@ -554,7 +556,7 @@ impl Driver {
         // A run still open ends here, `Closed`, before the close's own last event.
         self.run_close(out);
         // Detach the microphone: the recogniser hears only the commit's silence flush.
-        self.apply_leg_op(LegOp::SetSource(None), out);
+        self.apply_leg_op(ChannelOp::SetSource(None), out);
         // And the recorder: its last flush, its timer cancelled at the edge.
         self.detach_recorder(now, out);
         // `wait_for_idle` raises `ActivityClosedError` on a closing session; the trailing-turn
@@ -566,7 +568,7 @@ impl Driver {
         // Refuse a handoff in flight; a running hook is left to the host and its wait abandoned.
         self.abandon_handoffs(out);
         // The per-leg frame census, read off the one table.
-        for leg in LegId::ALL {
+        for leg in AudioChannel::ALL {
             let (frames, silent) = self.input.legs().counters(leg);
             if frames > 0 {
                 out.trace(InputStep::LegFrames { leg, frames, silent });
@@ -581,7 +583,7 @@ impl Driver {
                 converted_rate: converted.sample_rate,
                 converted_samples_per_channel: converted.samples_per_channel,
             });
-            for leg in LegId::ALL {
+            for leg in AudioChannel::ALL {
                 if let Some(shape) = self.input.legs().shape(leg) {
                     out.trace(InputStep::LegShape {
                         leg,

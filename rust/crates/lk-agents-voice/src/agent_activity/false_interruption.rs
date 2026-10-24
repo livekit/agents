@@ -378,12 +378,12 @@ impl Driver {
         ev: lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict>,
         out: &mut Out,
     ) {
-        use crate::trace::DetectorLeg;
+        use crate::trace::DetectorName;
         use lk_agents_abi::turn::detector::LegEvent;
         let (req, v) = match ev {
             LegEvent::Verdict { req, verdict } => (req, verdict),
             LegEvent::Error { recoverable, .. } => {
-                out.trace(InputStep::LegFailed { leg: DetectorLeg::Interruption, recoverable });
+                out.trace(InputStep::LegFailed { leg: DetectorName::Interruption, recoverable });
                 self.restore_audio_activity_guard();
                 if !recoverable {
                     self.activity.audio_recognition.set_interruption_active(false);
@@ -391,9 +391,9 @@ impl Driver {
                 return;
             }
             LegEvent::Closed => {
-                out.trace(InputStep::LegEnded {
+                out.trace(InputStep::ChannelEnded {
                     leg: "interruption",
-                    cause: crate::trace::LegEndCause::SourceEnded,
+                    cause: crate::trace::ChannelEndCause::SourceEnded,
                 });
                 self.restore_audio_activity_guard();
                 self.activity.audio_recognition.set_interruption_active(false);
@@ -401,7 +401,7 @@ impl Driver {
             }
         };
         out.trace(InputStep::LegVerdict {
-            leg: DetectorLeg::Interruption,
+            leg: DetectorName::Interruption,
             req: req.map_or(0, |r| r.0),
         });
         out.trace(InterruptStep::OverlapVerdict {

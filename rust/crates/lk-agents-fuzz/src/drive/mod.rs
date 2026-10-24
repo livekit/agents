@@ -36,16 +36,16 @@ use lk_agents_voice::{
     DriverBuilder, SessionHandle,
     agent::TurnEdit,
     agent_activity::DriverConfig,
+    agent_activity::false_interruption::InterruptRefusal,
     agent_activity::options::{ConfigStack, LegSet, SessionPatch, TurnDetection},
     agent_activity::options::{
         Deployment, InterruptionGate, InterruptionGateInputs, RealtimeGate, SttGate,
         resolve_interruption_detector,
     },
-    agent_activity::pause::InterruptRefusal,
     agent_activity::scheduling::SpeechId,
     agent_session::{
-        AgentUpdate, Answer as DriverAnswer, Close, Command, CommitSuperseded, DrainRefused,
-        Driver, DtmfCommand, Event, FillerSource, FrameCommand, HandoffRefused, HoldId, HookId,
+        ActivityCommand, AgentUpdate, Answer as DriverAnswer, Close, Command, CommitSuperseded,
+        DrainRefused, Driver, DtmfCommand, Event, FillerSource, HandoffRefused, HoldId, HookId,
         HookOutcome, HostAudio, HostAudioOut, HostEvent, HostRecorder, HostTextOut, HostVideo,
         IdleRefused, IvrCommand, NewActivity, PreviousActivity, RecorderCommand, SayText,
         SpeechCommand, TaskCommand, TaskEntry, Timebase, ToolUpdate, TurnCommand,
@@ -82,8 +82,8 @@ use crate::{
     check::{Failure, Subject, check_all},
     fakes::{self, Control, Record, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot},
     input::{
-        AgentText, Confidence, Count, DtmfInput, HookAnswer, Input, IvrInput, Knob, Legs, Millis,
-        Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
+        AgentText, AudioChannels, Confidence, Count, DtmfInput, HookAnswer, Input, IvrInput, Knob,
+        Millis, Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
     },
     record::step_name,
     record::{

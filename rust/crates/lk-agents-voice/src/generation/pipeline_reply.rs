@@ -306,7 +306,7 @@ async fn follow_up(
     }
     let instructions = frame.instructions.render(Some(lk_agents_abi::Modality::Audio));
     let planned = plan_request(RequestInputs {
-        record: &frame.record,
+        record: &frame.chat_ctx,
         pending: &pending,
         new_message: None,
         instructions: &instructions,
@@ -349,7 +349,7 @@ async fn replan_after(
     let bound = crate::speech_handle::INTERRUPTION_TIMEOUT + Duration::from_secs(1);
     let frame = wait_frame(shared, handle, bound, |f| f.finished.contains(&after)).await;
     let instructions = frame.instructions.render(Some(lk_agents_abi::Modality::Audio));
-    spec.plan(&frame.record, &instructions, shared.time.wall())
+    spec.plan(&frame.chat_ctx, &instructions, shared.time.wall())
 }
 
 /// Cut short by interruption or closing, and by `bound` on the clock.
@@ -357,9 +357,9 @@ async fn wait_frame(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     bound: Duration,
-    ready: impl Fn(&crate::agent_session::FrameView) -> bool,
-) -> crate::agent_session::FrameView {
-    let mut rx = shared.frame.subscribe();
+    ready: impl Fn(&crate::agent_session::ActivitySnapshot) -> bool,
+) -> crate::agent_session::ActivitySnapshot {
+    let mut rx = shared.activity.subscribe();
     let mut closing = shared.closing.subscribe();
     let published = async {
         while !ready(&rx.borrow_and_update()) {
@@ -374,7 +374,7 @@ async fn wait_frame(
         _ = closing.wait_for(|c| *c) => {}
         _ = shared.time.timeout(bound, published) => {}
     }
-    shared.frame.borrow().clone()
+    shared.activity.borrow().clone()
 }
 
 pub(super) fn empty_outcome(

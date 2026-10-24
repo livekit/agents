@@ -2,7 +2,7 @@
 //! spawns the pumps that feed it.
 
 use super::driver::*;
-use crate::agent_activity::pause::{PausedSpeech, sink_facts};
+use crate::agent_activity::false_interruption::{PausedSpeech, sink_facts};
 use crate::agent_activity::scheduling::SpeechScheduler;
 use crate::agent_activity::{ActivityParts, DriverConfig, GateSnapshot, PIPELINE_SAMPLE_RATE};
 use crate::agent_session::LiveSession;
@@ -10,7 +10,7 @@ use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{Command, Origin};
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::Timebase;
-use crate::audio::{AudioForwarderParts, LegEnd, LegId, Legs, spawn_drain};
+use crate::audio::{AudioChannel, AudioChannels, AudioForwarderParts, ChannelEnd, spawn_drain};
 use crate::audio_recognition::AudioRecognition;
 use crate::generation::GenEvent;
 use crate::generation::Instructions;
@@ -65,7 +65,7 @@ pub struct DriverBuilder {
     pub eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     /// `None` is VAD-only interruption: every burst past `min_interruption_duration`, a "mm-hm"
     /// included, stops the agent.
-    pub interruption: Option<Arc<dyn crate::agent_activity::pause::InterruptionPort>>,
+    pub interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
     /// `None` forwards **every** frame the host pushes.
     pub video_sampler: Option<Arc<lk_agents_voice::room_io::_input::VideoSampler>>,
     /// Instead of an LLM+TTS pair: `llm`/`tts` are ignored while it is set.
@@ -95,8 +95,9 @@ impl DriverBuilder {
         let vad_tx: Tx<VadEvent> = Tx::new(queue_tx.clone(), Input::Vad);
         let api_tx: Tx<Command> = Tx::new(queue_tx.clone(), host_input);
         let gen_tx: Tx<GenEvent> = Tx::new(queue_tx.clone(), Input::Gen);
-        let legs_tx: Tx<LegEnd> = Tx::new(queue_tx.clone(), Input::LegEnded);
-        let leg_opens: Tx<crate::room_io::LegOpened> = Tx::new(queue_tx.clone(), Input::LegOpened);
+        let legs_tx: Tx<ChannelEnd> = Tx::new(queue_tx.clone(), Input::ChannelEnded);
+        let leg_opens: Tx<crate::room_io::StreamOpened> =
+            Tx::new(queue_tx.clone(), Input::StreamOpened);
         let video_tx: Tx<lk_agents_rtc::VideoFrameRef> = Tx::new(queue_tx.clone(), Input::Video);
         let eot_events: Tx<lk_agents_abi::turn::detector::LegEvent<lk_agents_abi::EotPrediction>> =
             Tx::new(queue_tx.clone(), eot_input);
@@ -122,7 +123,7 @@ impl DriverBuilder {
         }
 
         // --- the one leg table: presence is read off it and nowhere else ---
-        let legs = Legs::new();
+        let legs = AudioChannels::new();
         if let Some(stt) = &self.stt {
             let (sink, source) =
                 stt.stream(None, None).await.ok_or(DriverError::Missing("a streaming STT"))??;
@@ -145,7 +146,7 @@ impl DriverBuilder {
 
         if let Some(vad) = &self.vad {
             let (sink, source) = vad.stream().await?;
-            let ticket = legs.install(LegId::Vad, Arc::from(sink));
+            let ticket = legs.install(AudioChannel::Vad, Arc::from(sink));
             spawn_drain(
                 &self.spawner,
                 self.time.clone(),
@@ -179,14 +180,14 @@ impl DriverBuilder {
             .map(|d| Arc::new(lk_agents_abi::EotLeg::new(d, Arc::clone(&self.spawner))));
         if let Some(leg) = &eot {
             if let Some(audio) = leg.audio() {
-                legs.install(LegId::Eot, audio);
+                legs.install(AudioChannel::Eot, audio);
             }
             spawn_leg_pump(&self.spawner, Arc::clone(leg), eot_events, closing.subscribe());
         }
         // The interruption detector's verdicts and audio leg come off one object, so neither
         // exists without the other.
         if let Some(detector) = self.interruption.clone() {
-            legs.install(LegId::Interruption, detector.audio());
+            legs.install(AudioChannel::Interruption, detector.audio());
             spawn_leg_pump(&self.spawner, detector, verdict_tx, closing.subscribe());
         }
 
@@ -219,7 +220,7 @@ impl DriverBuilder {
             let session = model.session(disabled).await?;
             realtime_caps = Some(caps);
             legs.install(
-                LegId::Realtime,
+                AudioChannel::Realtime,
                 Arc::new(crate::agent_activity::realtime::RealtimeAudioSink::new(Arc::clone(
                     &session,
                 ))),
@@ -283,7 +284,8 @@ impl DriverBuilder {
             spawner: Arc::clone(&self.spawner),
             frames: Arc::new(FrameTable::new()),
             gen_ids: std::sync::atomic::AtomicU64::new(0),
-            frame: tokio::sync::watch::channel(crate::agent_session::FrameView::default()).0,
+            activity:
+                tokio::sync::watch::channel(crate::agent_session::ActivitySnapshot::default()).0,
         });
         let tts = self.tts.clone();
 
@@ -385,7 +387,7 @@ impl DriverBuilder {
         };
         // The opening cycles run at the instant the session is built.
         driver.step.set(self.time.read());
-        driver.publish_frame();
+        driver.publish_activity();
 
         // The first facts, in order: the gate, then the opening frame's records (the handoff from
         // nobody, the starting config), and the opening frame on the realtime socket.
@@ -398,10 +400,10 @@ impl DriverBuilder {
                 out.trace(CoreStep::CommandReceived { origin: Origin::Host, kind: "Command::Run" });
                 driver.on_run(driver.step.now, spec, &mut out);
             }
-            driver.record_frame(None, &mut out);
+            driver.record_handoff(None, &mut out);
             if driver.activity.rt_session.is_some() {
-                let opening = driver.session.record.for_realtime();
-                driver.push_frame(Some(opening), &mut out);
+                let opening = driver.session.chat_ctx.for_realtime();
+                driver.push_activity(Some(opening), &mut out);
             }
             driver.execute(out);
         }
@@ -492,10 +494,10 @@ fn eot_input(ev: lk_agents_abi::turn::detector::LegEvent<lk_agents_abi::EotPredi
         LegEvent::Error { req, recoverable: _, err } => {
             Input::Eot(req.unwrap_or(ReqId(0)), Err(err))
         }
-        LegEvent::Closed => Input::LegEnded(LegEnd {
+        LegEvent::Closed => Input::ChannelEnded(ChannelEnd {
             leg: "eot",
             open: 0,
-            cause: crate::trace::LegEndCause::SourceEnded,
+            cause: crate::trace::ChannelEndCause::SourceEnded,
             closed: None,
             error: None,
         }),

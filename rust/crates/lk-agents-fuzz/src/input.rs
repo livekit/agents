@@ -17,8 +17,8 @@ use lk_agents_abi::{
     utils::vocabulary::{Coverage, Covers},
 };
 use lk_agents_voice::agent_session::{
-    IoLeg, assert_command_is_covered, command_vocabulary as command,
-    frame_command_vocabulary as frame, speech_command_vocabulary as speech,
+    IoKind, activity_command_vocabulary as activity, assert_command_is_covered,
+    command_vocabulary as command, speech_command_vocabulary as speech,
     turn_command_vocabulary as turn,
 };
 
@@ -361,9 +361,9 @@ impl Make for String {
         Some(s.pick(NAMES).to_string())
     }
 }
-impl Make for IoLeg {
+impl Make for IoKind {
     fn make(s: &mut Sampler<'_>) -> Option<Self> {
-        Some(*s.pick(&[IoLeg::AudioInput, IoLeg::AudioOutput, IoLeg::Transcription]))
+        Some(*s.pick(&[IoKind::AudioInput, IoKind::AudioOutput, IoKind::Transcription]))
     }
 }
 
@@ -445,7 +445,7 @@ impl DtmfKey {
 
 plain_enum! {
     /// Which provider legs a model swap replaces.
-    Legs { Stt, Llm, Tts, LlmAndTts, All }
+    AudioChannels { Stt, Llm, Tts, LlmAndTts, All }
 }
 plain_enum! {
     /// Who is speaking in a history item the host supplies.
@@ -469,9 +469,28 @@ macro_rules! unreferenced {
 }
 
 unreferenced!(
-    bool, AgentText, UserText, Millis, Count, String, IoLeg, SayInput, ToolAnswer, HookAnswer,
-    Knob, TurnMode, IvrInput, Legs, Role, RoomIn, Confidence, ToolArgs, Speaker, RtEvent,
-    DtmfInput, DtmfKey
+    bool,
+    AgentText,
+    UserText,
+    Millis,
+    Count,
+    String,
+    IoKind,
+    SayInput,
+    ToolAnswer,
+    HookAnswer,
+    Knob,
+    TurnMode,
+    IvrInput,
+    AudioChannels,
+    Role,
+    RoomIn,
+    Confidence,
+    ToolArgs,
+    Speaker,
+    RtEvent,
+    DtmfInput,
+    DtmfKey
 );
 
 impl<K: Resource> Referenced for Ref<K> {
@@ -614,20 +633,20 @@ inputs! {
     Configure { knob: Knob, mode: TurnMode, ms: Millis, on: bool, words: Count } leaf turn::Configure;
     /// A handoff to another agent, with the same fakes behind it.
     Handoff { agent: String, instructions: AgentText, tools: Vec<String>, pause_previous: bool, resume: bool }
-        opens [Answer] leaf frame::Update;
-    SetSpeakerFilter { enabled: bool } leaf frame::SetSpeakerFilter;
-    UpdateInstructions { text: AgentText } leaf frame::UpdateInstructions;
-    UpdateTools { tools: Vec<String> } leaf frame::UpdateTools;
-    SetAudioInput { attach: bool } leaf frame::SetAudioInput;
-    SetVideoInput { attach: bool } leaf frame::SetVideoInput;
-    SetIoEnabled { leg: IoLeg, enabled: bool } leaf frame::SetIoEnabled;
-    UpdateChatCtx { items: Vec<Role>, text: AgentText } leaf frame::UpdateChatCtx;
-    SetAudioOutput { attach: bool } opens [Output] leaf frame::SetAudioOutput;
-    SetTranscriptionOutput { attach: bool } opens [Output] leaf frame::SetTranscriptionOutput;
-    UpdateModels { legs: Legs } leaf frame::UpdateModels;
+        opens [Answer] leaf activity::Update;
+    SetSpeakerFilter { enabled: bool } leaf activity::SetSpeakerFilter;
+    UpdateInstructions { text: AgentText } leaf activity::UpdateInstructions;
+    UpdateTools { tools: Vec<String> } leaf activity::UpdateTools;
+    SetAudioInput { attach: bool } leaf activity::SetAudioInput;
+    SetVideoInput { attach: bool } leaf activity::SetVideoInput;
+    SetIoEnabled { leg: IoKind, enabled: bool } leaf activity::SetIoEnabled;
+    UpdateChatCtx { items: Vec<Role>, text: AgentText } leaf activity::UpdateChatCtx;
+    SetAudioOutput { attach: bool } opens [Output] leaf activity::SetAudioOutput;
+    SetTranscriptionOutput { attach: bool } opens [Output] leaf activity::SetTranscriptionOutput;
+    UpdateModels { legs: AudioChannels } leaf activity::UpdateModels;
     /// `drain()`: the frame's `on_exit`, then scheduling pauses and the session stays open, idle.
     /// `wait` asks for the answer.
-    Drain { wait: bool } opens [Answer] leaf frame::Drain;
+    Drain { wait: bool } opens [Answer] leaf activity::Drain;
     /// One camera frame, as the host-minted key the driver moves without inspecting.
     PushVideo { } leaf command::Video;
     Close { drain: bool } leaf command::Close;
@@ -746,7 +765,7 @@ macro_rules! not_sent {
 not_sent! {
     command::Speech => "a family, not a leaf: its leaves are in the table";
     command::Turn => "a family, not a leaf: its leaves are in the table";
-    command::Frame => "a family, not a leaf: its leaves are in the table";
+    command::Activity => "a family, not a leaf: its leaves are in the table";
 }
 
 /// Compiles only while every production command leaf is either in the table or excused above.

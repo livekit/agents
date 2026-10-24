@@ -1,7 +1,7 @@
 //! `OverlapJudge`: the adaptive interruption channel's verdicts on speech over the agent.
 
 use super::{InterruptionSignal, OverlapVerdict};
-use crate::agent_activity::pause::AudioInterruptTrigger;
+use crate::agent_activity::false_interruption::AudioInterruptTrigger;
 use crate::agent_session::effects::{AudioInterruptGuard, Decision, Effects};
 use crate::events::{OverlapInterruptionEvent, SessionEvent};
 use lk_agents_abi::Ts;

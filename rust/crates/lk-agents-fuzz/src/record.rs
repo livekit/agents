@@ -20,7 +20,7 @@ use std::{
 
 use lk_agents_abi::Ts;
 use lk_agents_voice::{
-    agent_activity::pause::InterruptRefusal,
+    agent_activity::false_interruption::InterruptRefusal,
     agent_activity::scheduling::{SpeechId, SpeechKind},
     agent_session::{HandoffRefused, HoldId, HookCall, HookId, IdleRefused, Timebase},
     events::{SessionEvent, ToolLifecycle},

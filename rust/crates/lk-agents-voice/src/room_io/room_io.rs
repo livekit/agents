@@ -1,4 +1,4 @@
-use crate::agent_session::effects::LegKind;
+use crate::agent_session::effects::StreamKind;
 use crate::io::{
     AudioInput as IoRoom_IoAudioInput, AudioOutput as IoRoom_IoAudioOutput, Result, TextOutput,
 };
@@ -33,9 +33,9 @@ pub(crate) enum PendingOpen {
     Vad(Arc<dyn lk_agents_abi::Vad>),
 }
 
-pub struct LegOpened {
+pub struct StreamOpened {
     pub open: u64,
-    pub leg: LegKind,
+    pub leg: StreamKind,
     pub outcome: std::result::Result<Opened, lk_agents_abi::errors::ProviderError>,
 }
 
@@ -46,7 +46,7 @@ pub enum Opened {
 
 /// The legs a frame has after `reopen_legs`: given, or the table's row where none was given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LegIntent {
+pub(crate) struct InputProviders {
     pub(crate) stt: bool,
     pub(crate) vad: bool,
 }

@@ -8,7 +8,7 @@ use crate::agent_session::DriverError;
 use crate::agent_session::SessionShared;
 use crate::generation::{Attempt, TurnAccumulator};
 use crate::speech_handle::SpeechHandle;
-use crate::trace::{GenerationStep, ProviderLeg};
+use crate::trace::{GenerationStep, ProviderKind};
 use crate::transcription::Heard;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
@@ -93,7 +93,7 @@ pub(super) async fn perform_tts_inference(
         if produced {
             attempt.produced_output();
         }
-        match retry(shared, handle, &mut attempt, ProviderLeg::Tts, &error).await {
+        match retry(shared, handle, &mut attempt, ProviderKind::Tts, &error).await {
             Retried::Again => {}
             Retried::Interrupted => return Err(Lost { lost: false, opening: text }),
             Retried::GiveUp => return Err(Lost { lost: true, opening: text }),

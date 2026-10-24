@@ -5,6 +5,7 @@ use crate::room_io::_pre_connect_audio::PreConnectAudioHandler;
 use crate::room_io::decide_track;
 use crate::room_io::types::{AUDIO_INPUT_SOURCES, AudioInputConfig};
 use async_trait::async_trait;
+use lk_agents_abi::AbortHandle;
 use lk_agents_abi::{AudioFrame, BoundedLossy, LossyTx, Pushed, Spawner, SpawnerExt, Ts};
 use lk_agents_media::{AudioFormat, FrameResampler, Quality};
 use lk_agents_rtc::{
@@ -15,7 +16,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
-use lk_agents_abi::AbortHandle;
 
 const VIDEO_INPUT_SOURCES: &[TrackSource] = &[TrackSource::Camera, TrackSource::Screenshare];
 
@@ -131,7 +131,7 @@ impl ParticipantVideoInput {
     }
 }
 
-/// The room's camera as the driver's video source (`FrameCommand::SetVideoInput`, the pump).
+/// The room's camera as the driver's video source (`ActivityCommand::SetVideoInput`, the pump).
 #[async_trait::async_trait]
 impl crate::io::VideoInput for ParticipantVideoInput {
     fn label(&self) -> &str {
@@ -314,7 +314,12 @@ impl<T> TrackReader<T> {
 
     /// [`link`](Self::link), then pick up what the participant already published (possibly before
     /// the core reported the link).
-    fn link_and_read(&self, room: &dyn RtcRoom, identity: Option<ParticipantIdentity>, try_read: impl TryRead) {
+    fn link_and_read(
+        &self,
+        room: &dyn RtcRoom,
+        identity: Option<ParticipantIdentity>,
+        try_read: impl TryRead,
+    ) {
         if !self.link(identity.clone()) {
             return;
         }

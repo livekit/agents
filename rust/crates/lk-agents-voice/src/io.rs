@@ -747,7 +747,7 @@ pub(crate) struct AgentInput {
     gate: Arc<crate::agent_activity::GateSnapshot>,
     pending_opens: std::collections::BTreeMap<u64, crate::room_io::PendingOpen>,
     next_open: u64,
-    /// A `LegOpened` for any other open is discarded (0: none).
+    /// A `StreamOpened` for any other open is discarded (0: none).
     stt_open: u64,
     vad_open: u64,
     stt_open_same: bool,
@@ -796,13 +796,13 @@ impl AgentInput {
     /// Read rather than borrowed: a handoff can replace it.
     pub(crate) fn leg(
         &self,
-        leg: crate::audio::LegId,
+        leg: crate::audio::AudioChannel,
     ) -> Option<Arc<dyn lk_agents_abi::StreamSink<AudioFrame>>> {
         self.audio_forwarder_parts.legs.get(leg)
     }
 
     /// The one leg table every source feeds.
-    pub(crate) fn legs(&self) -> &Arc<crate::audio::Legs> {
+    pub(crate) fn legs(&self) -> &Arc<crate::audio::AudioChannels> {
         &self.audio_forwarder_parts.legs
     }
 
@@ -812,7 +812,7 @@ impl AgentInput {
     }
 
     /// Where a leg's drain reports its end.
-    pub(crate) fn leg_ended(&self) -> &crate::agent_session::Tx<crate::audio::LegEnd> {
+    pub(crate) fn leg_ended(&self) -> &crate::agent_session::Tx<crate::audio::ChannelEnd> {
         &self.audio_forwarder_parts.ended
     }
 
@@ -832,26 +832,29 @@ impl AgentInput {
 
     /// Whether there is a local VAD (`self.vad is None` decides whether an interim is the onset).
     pub(crate) fn has_vad(&self) -> bool {
-        self.audio_forwarder_parts.legs.present(crate::audio::LegId::Vad)
+        self.audio_forwarder_parts.legs.present(crate::audio::AudioChannel::Vad)
     }
 
     /// The one door every leg mutation goes through. A new source is parked until the performer
     /// swaps the pump (`AudioOp::SetInput`).
-    pub(crate) fn apply_leg_op(&mut self, op: crate::audio::LegOp) -> Option<crate::audio::Ticket> {
-        use crate::audio::LegOp;
+    pub(crate) fn apply_leg_op(
+        &mut self,
+        op: crate::audio::ChannelOp,
+    ) -> Option<crate::audio::Ticket> {
+        use crate::audio::ChannelOp;
         match op {
-            LegOp::Install { leg, sink } => {
+            ChannelOp::Install { leg, sink } => {
                 Some(self.audio_forwarder_parts.legs.install(leg, sink))
             }
-            LegOp::InstallStt { sink, speaker } => {
+            ChannelOp::InstallStt { sink, speaker } => {
                 Some(self.audio_forwarder_parts.legs.install_stt(sink, speaker))
             }
-            LegOp::Clear(leg) => {
+            ChannelOp::Clear(leg) => {
                 self.audio_forwarder_parts.legs.clear(leg);
                 None
             }
             // Abort the old pump first, so two sources never feed the same table.
-            LegOp::SetSource(input) => {
+            ChannelOp::SetSource(input) => {
                 self.pending_audio_in = Some(input);
                 None
             }
@@ -971,21 +974,25 @@ impl AgentInput {
         open
     }
 
-    /// The open a leg's `LegOpened` must carry to land (0: none), and for the STT whether it
+    /// The open a leg's `StreamOpened` must carry to land (0: none), and for the STT whether it
     /// reopens the same recogniser.
-    pub(crate) fn expect_open(&mut self, leg: crate::agent_session::effects::LegKind, open: u64) {
-        use crate::agent_session::effects::LegKind;
+    pub(crate) fn expect_open(
+        &mut self,
+        leg: crate::agent_session::effects::StreamKind,
+        open: u64,
+    ) {
+        use crate::agent_session::effects::StreamKind;
         match leg {
-            LegKind::Stt => self.stt_open = open,
-            LegKind::Vad => self.vad_open = open,
+            StreamKind::Stt => self.stt_open = open,
+            StreamKind::Vad => self.vad_open = open,
         }
     }
 
-    pub(crate) fn expected_open(&self, leg: crate::agent_session::effects::LegKind) -> u64 {
-        use crate::agent_session::effects::LegKind;
+    pub(crate) fn expected_open(&self, leg: crate::agent_session::effects::StreamKind) -> u64 {
+        use crate::agent_session::effects::StreamKind;
         match leg {
-            LegKind::Stt => self.stt_open,
-            LegKind::Vad => self.vad_open,
+            StreamKind::Stt => self.stt_open,
+            StreamKind::Vad => self.vad_open,
         }
     }
 
@@ -1023,7 +1030,7 @@ impl AgentInput {
         }
         let rate = (packed >> 32) as u32;
         let channels = (packed & 0xffff_ffff) as u32;
-        let stt = self.leg(crate::audio::LegId::Stt)?;
+        let stt = self.leg(crate::audio::AudioChannel::Stt)?;
         // `ceil`, so at least the asked duration is flushed.
         let per_frame = (f64::from(rate) * 0.2) as u32;
         if per_frame == 0 {

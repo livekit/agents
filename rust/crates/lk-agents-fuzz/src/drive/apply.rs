@@ -357,16 +357,16 @@ impl Run {
                     if *pause_previous { PreviousActivity::Pause } else { PreviousActivity::Close };
                 frame.next = if *resume { NewActivity::Resume } else { NewActivity::Start };
                 frame.call = Some(call);
-                FrameCommand::Update(Box::new(frame)).into()
+                ActivityCommand::Update(Box::new(frame)).into()
             }
             Input::SetSpeakerFilter { enabled } => {
-                FrameCommand::SetSpeakerFilter(enabled.then(speaker_filter)).into()
+                ActivityCommand::SetSpeakerFilter(enabled.then(speaker_filter)).into()
             }
             Input::UpdateInstructions { text: AgentText(text) } => {
-                FrameCommand::UpdateInstructions(instructions(text)).into()
+                ActivityCommand::UpdateInstructions(instructions(text)).into()
             }
             Input::UpdateTools { tools } => {
-                FrameCommand::UpdateTools(toolset(&registry, tools)).into()
+                ActivityCommand::UpdateTools(toolset(&registry, tools)).into()
             }
             Input::SetAudioInput { attach } => {
                 let source = attach.then(|| {
@@ -380,40 +380,40 @@ impl Run {
                         self.record.close(at, Kind::Mic, nth);
                     }
                 }
-                FrameCommand::SetAudioInput(source).into()
+                ActivityCommand::SetAudioInput(source).into()
             }
             Input::SetVideoInput { attach } => {
                 let source = attach.then(|| {
                     HostVideo(fakes::FakeVideoInput::new(&registry, self.refs.clone()) as _)
                 });
-                FrameCommand::SetVideoInput(source).into()
+                ActivityCommand::SetVideoInput(source).into()
             }
             Input::SetIoEnabled { leg, enabled } => {
-                FrameCommand::SetIoEnabled { leg: *leg, enabled: *enabled }.into()
+                ActivityCommand::SetIoEnabled { leg: *leg, enabled: *enabled }.into()
             }
             Input::UpdateChatCtx { items, text: AgentText(text) } => {
-                FrameCommand::UpdateChatCtx(history(items, text)).into()
+                ActivityCommand::UpdateChatCtx(history(items, text)).into()
             }
             Input::SetAudioOutput { attach } => {
                 let out = attach.then(|| {
                     let pausable = self.setup.pausable_output;
                     HostAudioOut(fakes::FakeAudioOutput::new(registry.clone(), pausable))
                 });
-                FrameCommand::SetAudioOutput(out).into()
+                ActivityCommand::SetAudioOutput(out).into()
             }
             Input::SetTranscriptionOutput { attach } => {
                 let out = attach.then(|| HostTextOut(fakes::FakeTextOutput::new(registry.clone())));
-                FrameCommand::SetTranscriptionOutput(out).into()
+                ActivityCommand::SetTranscriptionOutput(out).into()
             }
             Input::UpdateModels { legs } => {
                 let (stt, llm, tts) = match legs {
-                    Legs::Stt => (true, false, false),
-                    Legs::Llm => (false, true, false),
-                    Legs::Tts => (false, false, true),
-                    Legs::LlmAndTts => (false, true, true),
-                    Legs::All => (true, true, true),
+                    AudioChannels::Stt => (true, false, false),
+                    AudioChannels::Llm => (false, true, false),
+                    AudioChannels::Tts => (false, false, true),
+                    AudioChannels::LlmAndTts => (false, true, true),
+                    AudioChannels::All => (true, true, true),
                 };
-                FrameCommand::UpdateModels {
+                ActivityCommand::UpdateModels {
                     stt: given(stt.then(|| {
                         let connect = Duration::from_millis(self.setup.connect_ms.unwrap_or(0));
                         fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>
@@ -431,7 +431,7 @@ impl Run {
                     waiting = Some(Pending::Drain(rx));
                     call
                 });
-                FrameCommand::Drain { call }.into()
+                ActivityCommand::Drain { call }.into()
             }
             Input::PushVideo {} => Command::Video(ImageContent {
                 id: "img_case".into(),

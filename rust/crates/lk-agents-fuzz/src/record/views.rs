@@ -124,7 +124,7 @@ impl<'a> InputsView<'a> {
     pub fn audio_input(&self) -> Switch {
         self.switch(|input| match input {
             Input::SetIoEnabled {
-                leg: lk_agents_voice::agent_session::IoLeg::AudioInput,
+                leg: lk_agents_voice::agent_session::IoKind::AudioInput,
                 enabled,
             } => Some(*enabled),
             Input::SetAudioInput { attach } => Some(*attach),
@@ -136,7 +136,7 @@ impl<'a> InputsView<'a> {
     pub fn transcription_output(&self) -> Switch {
         self.switch(|input| match input {
             Input::SetIoEnabled {
-                leg: lk_agents_voice::agent_session::IoLeg::Transcription,
+                leg: lk_agents_voice::agent_session::IoKind::Transcription,
                 enabled,
             } => Some(*enabled),
             Input::SetTranscriptionOutput { attach } => Some(*attach),

@@ -1,7 +1,7 @@
 //! `SessionApi` over a fake room: the host's `start()` / `aclose()` pair without a host.
 
 use super::*;
-use crate::agent_session::commands::{FrameCommand, HookId, HookOutcome, TurnCommand};
+use crate::agent_session::commands::{ActivityCommand, HookId, HookOutcome, TurnCommand};
 use crate::agent_session::host_events::{HookCall, HookKind};
 use lk_agents_abi::voice::events::CloseReason;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -175,11 +175,11 @@ async fn a_drain_during_a_handoff_joins_it_and_is_answered_at_the_swap() {
     let (call, swap) = api.call(Answer::handoff).expect("the loop runs");
     let mut update = AgentUpdate::frame("next", Instructions::plain("You are next."));
     update.call = Some(call);
-    api.send(FrameCommand::Update(Box::new(update))).expect("the loop runs");
+    api.send(ActivityCommand::Update(Box::new(update))).expect("the loop runs");
     let exit = exits.recv().await.expect("the handoff issues the frame's on_exit");
 
     let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
-    api.send(FrameCommand::Drain { call: Some(call) }).expect("the loop runs");
+    api.send(ActivityCommand::Drain { call: Some(call) }).expect("the loop runs");
     settle().await;
     assert!(
         matches!(drain.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
@@ -212,10 +212,10 @@ async fn a_drain_during_an_inline_tasks_entry_exits_the_paused_parent_not_the_ta
     let mut update = AgentUpdate::frame("task", Instructions::plain("You are the task."));
     update.previous = PreviousActivity::Pause;
     update.call = Some(call);
-    api.send(FrameCommand::Update(Box::new(update))).expect("the loop runs");
+    api.send(ActivityCommand::Update(Box::new(update))).expect("the loop runs");
     settle().await;
     let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
-    api.send(FrameCommand::Drain { call: Some(call) }).expect("the loop runs");
+    api.send(ActivityCommand::Drain { call: Some(call) }).expect("the loop runs");
     settle().await;
     assert!(
         matches!(entry.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
@@ -252,7 +252,7 @@ async fn a_drain_during_an_inline_tasks_entry_exits_the_paused_parent_not_the_ta
     let mut back = AgentUpdate::frame("agent", Instructions::plain(String::new()));
     back.next = NewActivity::Resume;
     back.call = Some(call);
-    api.send(FrameCommand::Update(Box::new(back))).expect("the loop runs");
+    api.send(ActivityCommand::Update(Box::new(back))).expect("the loop runs");
     let task_exit = exits.recv().await.expect("leaving the task runs its own on_exit");
     answer_exit(&api, task_exit);
     assert_eq!(resume.await.expect("answered"), Ok(()), "the parent resumes");
@@ -281,7 +281,7 @@ async fn a_drain_during_the_close_is_answered_by_the_closes_drain() {
     let exit = exits.recv().await.expect("the close issues the frame's on_exit");
 
     let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
-    api.send(FrameCommand::Drain { call: Some(call) }).expect("the loop runs");
+    api.send(ActivityCommand::Drain { call: Some(call) }).expect("the loop runs");
     settle().await;
     assert!(
         matches!(drain.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),

@@ -1,4 +1,4 @@
-use crate::agent_activity::pause::InterruptRefusal;
+use crate::agent_activity::false_interruption::InterruptRefusal;
 use crate::agent_activity::scheduling::{PreemptiveVerdict, SpeechId};
 use crate::agent_session::effects::TurnTimer;
 pub use crate::agent_session::effects::{GateCause, GateOp};
@@ -212,7 +212,7 @@ pub enum SpeechStep {
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum InterruptStep {
-    ByAudioActivity(Box<crate::agent_activity::pause::InterruptReport>),
+    ByAudioActivity(Box<crate::agent_activity::false_interruption::InterruptReport>),
     /// A interruption check refused before any effect ran.
     ByAudioActivityRefused(InterruptRefusal),
     /// Only produced by [`folded`](crate::trace::folded): the barge step above repeated `count` times.
@@ -287,7 +287,7 @@ pub enum GenerationStep {
     /// A provider attempt failed before output; `attempt` (from one) is the failed one.
     RetryArmed {
         speech: SpeechId,
-        leg: ProviderLeg,
+        leg: ProviderKind,
         attempt: u32,
         at: Ts,
     },
@@ -409,7 +409,7 @@ pub enum PlayoutStep {
     /// Silence frames the pump substituted on `leg`, journalled at the gate publish that changes the
     /// verdict.
     GateSilenced {
-        leg: crate::audio::LegId,
+        leg: crate::audio::AudioChannel,
         frames: u64,
     },
     TranscriptForwarded {
@@ -428,19 +428,19 @@ pub enum PlayoutStep {
 pub enum InputStep {
     /// A detector leg was asked (`req` correlates the answer).
     LegRequested {
-        leg: DetectorLeg,
+        leg: DetectorName,
         req: u64,
     },
     LegVerdict {
-        leg: DetectorLeg,
+        leg: DetectorName,
         req: u64,
     },
     LegFailed {
-        leg: DetectorLeg,
+        leg: DetectorName,
         recoverable: bool,
     },
     /// An audio leg was reopened on a host-given provider (the open at `start()` is not journalled).
-    LegOpened {
+    StreamOpened {
         leg: &'static str,
     },
     /// A leg's stream came back for an open no longer waited for: closed unused.
@@ -453,18 +453,18 @@ pub enum InputStep {
         leg: &'static str,
         open: u32,
     },
-    LegEnded {
+    ChannelEnded {
         leg: &'static str,
-        cause: LegEndCause,
+        cause: ChannelEndCause,
     },
     /// A leg's frame counters at `Closing`: frames pushed, and how many were silence.
     LegFrames {
-        leg: crate::audio::LegId,
+        leg: crate::audio::AudioChannel,
         frames: u64,
         silent: u64,
     },
     LegShape {
-        leg: crate::audio::LegId,
+        leg: crate::audio::AudioChannel,
         sample_rate: u32,
         num_channels: u16,
         samples_per_channel: u32,
@@ -491,11 +491,11 @@ pub enum InputStep {
     },
     /// The microphone's enable flag flipped; the leg stays installed.
     InputEnabled {
-        leg: InputLeg,
+        leg: InputKind,
         enabled: bool,
     },
     OutputEnabled {
-        leg: OutputLeg,
+        leg: OutputKind,
         enabled: bool,
     },
     ModelsUpdated {
@@ -543,7 +543,7 @@ pub enum HandoffStep {
     Drained { refused: Option<crate::agent_session::DrainRefused> },
 
     /// The agent was replaced; `reopened` names the audio legs whose provider differed.
-    AgentUpdated { tools: usize, chat_ctx: bool, reopened: &'static str, legs: LegPresence },
+    AgentUpdated { tools: usize, chat_ctx: bool, reopened: &'static str, legs: ProviderPresence },
     /// One call into user code issued, by kind. `OnExit` precedes the handoff's pause, `OnEnter`
     /// follows `AgentUpdated`. `HookFinished` closes it.
     HookIssued {
@@ -611,7 +611,7 @@ pub enum IvrLifecycle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ProviderLeg {
+pub enum ProviderKind {
     Llm,
     Tts,
 }
@@ -685,7 +685,7 @@ pub enum InterruptCause {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DetectorLeg {
+pub enum DetectorName {
     Eot,
     Interruption,
     Amd,
@@ -694,7 +694,7 @@ pub enum DetectorLeg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct LegPresence {
+pub struct ProviderPresence {
     pub stt: bool,
     pub vad: bool,
     pub llm: bool,
@@ -742,7 +742,7 @@ impl RoomEventKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LegEndCause {
+pub enum ChannelEndCause {
     SourceEnded,
     Error,
     Closing,
@@ -750,14 +750,14 @@ pub enum LegEndCause {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub enum InputLeg {
+pub enum InputKind {
     Audio,
     Video,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub enum OutputLeg {
+pub enum OutputKind {
     Audio,
     Transcription,
 }

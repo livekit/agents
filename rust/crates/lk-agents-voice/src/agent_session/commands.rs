@@ -1,7 +1,7 @@
 //! The session's command vocabulary: everything a host or a system may ask of the driver, each
 //! answered (when it is) through the channel it carries.
 
-use crate::agent_activity::pause::InterruptRefusal;
+use crate::agent_activity::false_interruption::InterruptRefusal;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum Command {
     Speech(SpeechCommand),
-    Frame(FrameCommand),
+    Activity(ActivityCommand),
     Turn(TurnCommand),
     /// The pixels stay in the binding's side table (an `ImageSource::Frame` key); the host mints
     /// the `img_` id.
@@ -212,7 +212,7 @@ impl Command {
                 InterruptSpeech, CommitUserTurn, WaitForIdle, WaitForIdleAndHold, ReleaseIdleHold, ClaimUserTurn,
                 ReleaseUserTurn, SetAllowInterruptions, SetRunOutput, ToolUpdate, FillerStart,
                 FillerStop, PauseAuthorization, ResumeAuthorization),
-            Command::Frame(c) => leaf!(c; FrameCommand: Update, SetSpeakerFilter,
+            Command::Activity(c) => leaf!(c; ActivityCommand: Update, SetSpeakerFilter,
                 UpdateInstructions, UpdateTools, SetAudioInput, SetVideoInput, SetIoEnabled,
                 UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
             Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure),
@@ -267,9 +267,9 @@ impl From<IvrCommand> for Command {
     }
 }
 
-impl From<FrameCommand> for Command {
-    fn from(c: FrameCommand) -> Command {
-        Command::Frame(c)
+impl From<ActivityCommand> for Command {
+    fn from(c: ActivityCommand) -> Command {
+        Command::Activity(c)
     }
 }
 
@@ -488,7 +488,7 @@ pub struct HostVideo(pub Arc<dyn lk_agents_voice::io::VideoInput>);
 /// Video input is handled at the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub enum IoLeg {
+pub enum IoKind {
     AudioInput,
     AudioOutput,
     Transcription,
@@ -500,7 +500,7 @@ pub struct HostTextOut(pub Arc<dyn lk_agents_voice::io::TextOutput>);
 
 /// Scheduling pauses are the driver's own, never a command.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
-pub enum FrameCommand {
+pub enum ActivityCommand {
     /// No stream is torn down, so no word is dropped. Order (`_update_activity`): refuse when
     /// closing; `on_exit` before the pause; drain; closing re-check; swap; `on_enter` not awaited.
     /// A second queues.
@@ -518,7 +518,7 @@ pub enum FrameCommand {
     /// The leg stays: a muted mic stops feeding STT; a disabled output plans speech without a
     /// voice.
     SetIoEnabled {
-        leg: IoLeg,
+        leg: IoKind,
         enabled: bool,
     },
     /// **Replaces** the running frame's context (already filtered host-side).
@@ -549,14 +549,14 @@ pub enum DrainRefused {
     /// The loop ended with no close to answer the drain.
     Closing,
     /// Scheduling was resumed under the drain's pause: the frame runs again.
-    FrameChanging,
+    ActivityChanging,
 }
 
 impl DrainRefused {
     pub fn as_str(self) -> &'static str {
         match self {
             DrainRefused::Closing => "closing",
-            DrainRefused::FrameChanging => "frame_changing",
+            DrainRefused::ActivityChanging => "activity_changing",
         }
     }
 }

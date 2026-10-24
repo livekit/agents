@@ -30,9 +30,9 @@ pub(crate) struct Handoff {
     pub(crate) held_user_turn: Option<HeldUserTurn>,
     /// The driving agent's `on_exit`, created once by whichever of `drain()`, a handoff or the
     /// close gets there first.
-    pub(crate) exit: FrameExit,
+    pub(crate) exit: OnExitState,
     /// The exits of agents paused under an inline task, innermost last.
-    paused_exits: Vec<FrameExit>,
+    paused_exits: Vec<OnExitState>,
 }
 
 struct InProgress {
@@ -65,19 +65,19 @@ pub(crate) struct HeldUserTurn {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum FrameExit {
+pub(crate) enum OnExitState {
     #[default]
     Running,
     Exiting(HookId),
     Exited,
 }
 
-impl FrameExit {
+impl OnExitState {
     /// The `on_exit` running now.
     pub(crate) fn exiting(self) -> Option<HookId> {
         match self {
-            FrameExit::Exiting(hook) => Some(hook),
-            FrameExit::Running | FrameExit::Exited => None,
+            OnExitState::Exiting(hook) => Some(hook),
+            OnExitState::Running | OnExitState::Exited => None,
         }
     }
 }
@@ -170,8 +170,8 @@ impl Handoff {
     /// The `on_exit` `hook` ended: every agent's exit it was is over.
     pub(crate) fn exit_ended(&mut self, hook: HookId) {
         for exit in std::iter::once(&mut self.exit).chain(self.paused_exits.iter_mut()) {
-            if *exit == FrameExit::Exiting(hook) {
-                *exit = FrameExit::Exited;
+            if *exit == OnExitState::Exiting(hook) {
+                *exit = OnExitState::Exited;
             }
         }
     }
@@ -184,7 +184,7 @@ impl Handoff {
                 let paused = std::mem::take(&mut self.exit);
                 self.paused_exits.push(paused);
             }
-            (PreviousActivity::Close, NewActivity::Start) => self.exit = FrameExit::Running,
+            (PreviousActivity::Close, NewActivity::Start) => self.exit = OnExitState::Running,
             (_, NewActivity::Resume) => self.exit = self.paused_exits.pop().unwrap_or_default(),
         }
     }
@@ -328,9 +328,9 @@ impl Driver {
     /// waited for while it exits, none once it ran.
     pub(crate) fn frame_exit(&mut self) -> Exit {
         match self.activity.handoff.exit {
-            FrameExit::Running => Exit::Issue(self.activity.hooks.mint()),
-            FrameExit::Exiting(hook) if self.activity.hooks.is_pending(hook) => Exit::Wait(hook),
-            FrameExit::Exiting(_) | FrameExit::Exited => Exit::Done,
+            OnExitState::Running => Exit::Issue(self.activity.hooks.mint()),
+            OnExitState::Exiting(hook) if self.activity.hooks.is_pending(hook) => Exit::Wait(hook),
+            OnExitState::Exiting(_) | OnExitState::Exited => Exit::Done,
         }
     }
 
@@ -543,7 +543,7 @@ impl Driver {
         } = update;
         // A reply in flight keeps the instructions and tools it snapshotted.
         let count = toolset.specs.len();
-        let previous_agent = self.activity.set_frame(agent, instructions, toolset);
+        let previous_agent = self.activity.set_agent(agent, instructions, toolset);
         self.session.apply_providers(llm, tts);
 
         // The new agent's view: the context it brought, or the conversation carried forward.
@@ -551,14 +551,14 @@ impl Driver {
         let agent = self.activity.agent.clone();
         match chat_ctx {
             Some(items) => {
-                self.session.record.update_agent_chat_ctx(items, &agent);
+                self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
             }
             None => {
                 // The resume's carry: the task's calls leave the view first, then the host is told
                 // which of the task's items are now the parent's.
                 self.exclude_exiting_task_calls();
-                let from = self.session.record.frame().to_owned();
-                let items = self.session.record.set_frame(&agent, true);
+                let from = self.session.chat_ctx.agent().to_owned();
+                let items = self.session.chat_ctx.set_agent(&agent, true);
                 if from != agent {
                     out.machine().emit(crate::events::SessionEvent::ContextCarried {
                         from,
@@ -568,12 +568,12 @@ impl Driver {
                 }
             }
         }
-        self.publish_frame();
+        self.publish_activity();
 
         // The handoff's two records, minted here only: the `AgentHandoff` item
         // (`record_handoff_item`) and the history-only `AgentConfigUpdate` (`_start_session`),
         // stamped on the session clock. Empty without an agent id (test harness): `None`.
-        self.record_frame((!previous_agent.is_empty()).then_some(previous_agent), out);
+        self.record_handoff((!previous_agent.is_empty()).then_some(previous_agent), out);
 
         let legs = self.reopen_legs(stt, vad, out);
 
@@ -588,13 +588,13 @@ impl Driver {
         // A realtime handoff is three commands on the same socket, not a reconnect. Ungated by the
         // `mutable_*` capabilities: a refusal on the wire is visible, a skipped push is not. The
         // chat context only when the agent brought one, through `for_realtime`.
-        let ctx = replaced_ctx.then(|| self.session.record.for_realtime());
-        self.push_frame(ctx, out);
+        let ctx = replaced_ctx.then(|| self.session.chat_ctx.for_realtime());
+        self.push_activity(ctx, out);
 
         // A handoff lifts the pause the switch caused; a preemptive generation about the old turn
         // goes too.
         self.resume_scheduling_task(now, out);
-        let legs = crate::trace::LegPresence {
+        let legs = crate::trace::ProviderPresence {
             stt: legs.stt,
             vad: legs.vad,
             llm: self.session.llm.is_some(),

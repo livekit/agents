@@ -1,19 +1,21 @@
 //! The activity's IO: the STT and VAD legs (reopened by a handoff or `update_models`), audio and
 //! video input, and output enablement.
 
-use crate::agent_session::effects::{LegKind, Out};
-use crate::agent_session::{Driver, IoLeg};
-use crate::audio::{LegEnd, LegId, LegOp, Ticket, on_leg_ended, spawn_drain, tagged};
-use crate::room_io::{LegIntent, LegOpened, Opened, PendingOpen};
-use crate::trace::{CoreStep, InputLeg, InputStep, OutputLeg, Step, TurnStep};
+use crate::agent_session::effects::{Out, StreamKind};
+use crate::agent_session::{Driver, IoKind};
+use crate::audio::{
+    AudioChannel, ChannelEnd, ChannelOp, Ticket, on_leg_ended, spawn_drain, tagged,
+};
+use crate::room_io::{InputProviders, Opened, PendingOpen, StreamOpened};
+use crate::trace::{CoreStep, InputKind, InputStep, OutputKind, Step, TurnStep};
 use lk_agents_abi::{ChatMessage, Llm, Maybe, Role, Ts};
 use lk_agents_voice::io::AudioInput;
 use std::sync::Arc;
 
 impl Driver {
     /// The one door every leg mutation goes through; a new source is swapped by the performer.
-    pub(crate) fn apply_leg_op(&mut self, op: LegOp, out: &mut Out) -> Option<Ticket> {
-        let source = matches!(op, LegOp::SetSource(_));
+    pub(crate) fn apply_leg_op(&mut self, op: ChannelOp, out: &mut Out) -> Option<Ticket> {
+        let source = matches!(op, ChannelOp::SetSource(_));
         let ticket = self.input.apply_leg_op(op);
         if source {
             out.machine().push(crate::agent_session::effects::Effect::Audio(
@@ -30,12 +32,12 @@ impl Driver {
         stt: Maybe<Option<Arc<dyn lk_agents_abi::Stt>>>,
         vad: Maybe<Option<Arc<dyn lk_agents_abi::Vad>>>,
         out: &mut Out,
-    ) -> LegIntent {
+    ) -> InputProviders {
         let given = stt.is_given() || vad.is_given();
         // AgentUserState facts are the configured providers (`self._stt`/`self._vad`), not the live
         // streams: a dead stream is still a recogniser.
         let mut intent =
-            LegIntent { stt: self.session.stt.is_some(), vad: self.session.vad.is_some() };
+            InputProviders { stt: self.session.stt.is_some(), vad: self.session.vad.is_some() };
         if let Maybe::Given(stt) = stt {
             match stt {
                 // A different STT: reopened; the row follows when the stream lands.
@@ -44,15 +46,15 @@ impl Driver {
                         self.session.stt.as_ref().is_some_and(|old| Arc::ptr_eq(old, &stt));
                     self.session.stt = Some(Arc::clone(&stt));
                     self.input.set_stt_open_same(same_stt);
-                    let open = self.request_open(PendingOpen::Stt(stt), LegKind::Stt, out);
-                    self.input.expect_open(LegKind::Stt, open);
+                    let open = self.request_open(PendingOpen::Stt(stt), StreamKind::Stt, out);
+                    self.input.expect_open(StreamKind::Stt, open);
                     intent.stt = true;
                 }
                 // `Agent(stt=None)`: the leg closes and `stt_enabled` follows via `set_legs`.
                 None => {
                     self.session.stt = None;
-                    self.input.expect_open(LegKind::Stt, 0);
-                    self.apply_leg_op(LegOp::Clear(LegId::Stt), out);
+                    self.input.expect_open(StreamKind::Stt, 0);
+                    self.apply_leg_op(ChannelOp::Clear(AudioChannel::Stt), out);
                     intent.stt = false;
                 }
             }
@@ -61,14 +63,14 @@ impl Driver {
             match vad {
                 Some(vad) => {
                     self.session.vad = Some(Arc::clone(&vad));
-                    let open = self.request_open(PendingOpen::Vad(vad), LegKind::Vad, out);
-                    self.input.expect_open(LegKind::Vad, open);
+                    let open = self.request_open(PendingOpen::Vad(vad), StreamKind::Vad, out);
+                    self.input.expect_open(StreamKind::Vad, open);
                     intent.vad = true;
                 }
                 None => {
                     self.session.vad = None;
-                    self.input.expect_open(LegKind::Vad, 0);
-                    self.apply_leg_op(LegOp::Clear(LegId::Vad), out);
+                    self.input.expect_open(StreamKind::Vad, 0);
+                    self.apply_leg_op(ChannelOp::Clear(AudioChannel::Vad), out);
                     intent.vad = false;
                 }
             }
@@ -81,7 +83,7 @@ impl Driver {
         intent
     }
 
-    fn request_open(&mut self, pending: PendingOpen, leg: LegKind, out: &mut Out) -> u64 {
+    fn request_open(&mut self, pending: PendingOpen, leg: StreamKind, out: &mut Out) -> u64 {
         let open = self.input.request_open(pending);
         let call = crate::agent_session::effects::ProviderCall::OpenLeg { leg, open };
         out.machine().push(crate::agent_session::effects::Effect::Provider(call));
@@ -90,15 +92,15 @@ impl Driver {
 
     /// A superseded open is closed unused (`LegOpenDiscarded`); a refused one leaves the old row
     /// running.
-    pub(crate) fn on_leg_opened(&mut self, now: Ts, opened: LegOpened, out: &mut Out) {
-        let LegOpened { open, leg, outcome } = opened;
+    pub(crate) fn on_leg_opened(&mut self, now: Ts, opened: StreamOpened, out: &mut Out) {
+        let StreamOpened { open, leg, outcome } = opened;
         let wanted = self.input.expected_open(leg);
         let live = open == wanted && open != 0 && !self.session.closing_past_edge();
         match (outcome, live) {
             (Err(_), _) => {
                 out.trace(CoreStep::PortFailure(match leg {
-                    LegKind::Stt => "the new agent's STT could not be opened",
-                    LegKind::Vad => "the new agent's VAD could not be opened",
+                    StreamKind::Stt => "the new agent's STT could not be opened",
+                    StreamKind::Vad => "the new agent's VAD could not be opened",
                 }));
             }
             (Ok(stream), false) => {
@@ -116,7 +118,7 @@ impl Driver {
                 // items.
                 let speaker = self.input.new_speaker_filter();
                 let ticket = self
-                    .apply_leg_op(LegOp::InstallStt { sink: Arc::from(sink), speaker }, out)
+                    .apply_leg_op(ChannelOp::InstallStt { sink: Arc::from(sink), speaker }, out)
                     .expect("InstallStt returns its ticket");
                 spawn_drain(
                     &self.shared.spawner,
@@ -128,11 +130,14 @@ impl Driver {
                     ticket,
                     self.input.leg_ended().clone(),
                 );
-                out.trace(InputStep::LegOpened { leg: LegId::Stt.label() });
+                out.trace(InputStep::StreamOpened { leg: AudioChannel::Stt.label() });
             }
             (Ok(Opened::Vad(sink, source)), true) => {
                 let ticket = self
-                    .apply_leg_op(LegOp::Install { leg: LegId::Vad, sink: Arc::from(sink) }, out)
+                    .apply_leg_op(
+                        ChannelOp::Install { leg: AudioChannel::Vad, sink: Arc::from(sink) },
+                        out,
+                    )
                     .expect("Install returns its ticket");
                 spawn_drain(
                     &self.shared.spawner,
@@ -144,7 +149,7 @@ impl Driver {
                     ticket,
                     self.input.leg_ended().clone(),
                 );
-                out.trace(InputStep::LegOpened { leg: LegId::Vad.label() });
+                out.trace(InputStep::StreamOpened { leg: AudioChannel::Vad.label() });
             }
         }
     }
@@ -186,16 +191,16 @@ impl Driver {
 
     /// A leg's drain ended. A failed STT is terminal (`STTError{recoverable: False}`); a VAD
     /// failure is only journalled.
-    pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: LegEnd, out: &mut Out) {
+    pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: ChannelEnd, out: &mut Out) {
         let error = end.error.take();
         let leg = end.leg;
         // Every item the drain sent is ahead of its end in the queue.
-        if leg == LegId::Stt.label() {
+        if leg == AudioChannel::Stt.label() {
             self.input.legs().retire_speaker_filter(end.open);
         }
         on_leg_ended(end, out);
         if let Some(error) = error
-            && leg == LegId::Stt.label()
+            && leg == AudioChannel::Stt.label()
         {
             self.report_error(now, crate::events::ErrorSource::Stt, false, error, None, out);
         }
@@ -212,7 +217,7 @@ impl Driver {
         let attached = input.is_some();
         out.trace(InputStep::AudioInputSet { attached });
         self.input.replace_audio_in(input.clone());
-        self.apply_leg_op(LegOp::SetSource(input), out);
+        self.apply_leg_op(ChannelOp::SetSource(input), out);
         if attached {
             self.input.forget_first_input();
             self.activity.audio_recognition.input_started_at = None;
@@ -235,17 +240,17 @@ impl Driver {
     }
 
     /// The leg stays installed; the host object is told.
-    pub(crate) fn set_io_enabled(&mut self, now: Ts, leg: IoLeg, enabled: bool, out: &mut Out) {
+    pub(crate) fn set_io_enabled(&mut self, now: Ts, leg: IoKind, enabled: bool, out: &mut Out) {
         let changed = match leg {
-            IoLeg::AudioInput => self.input.set_audio_enabled(enabled),
-            IoLeg::AudioOutput => {
+            IoKind::AudioInput => self.input.set_audio_enabled(enabled),
+            IoKind::AudioOutput => {
                 let changed = self.shared.output.set_audio_enabled(enabled);
                 if changed && let Some(out) = self.shared.output.audio() {
                     if enabled { out.on_attached() } else { out.on_detached() }
                 }
                 changed
             }
-            IoLeg::Transcription => {
+            IoKind::Transcription => {
                 let changed = self.shared.output.set_transcription_enabled(enabled);
                 if changed && let Some(out) = self.shared.output.transcription() {
                     if enabled { out.on_attached() } else { out.on_detached() }
@@ -257,23 +262,23 @@ impl Driver {
             return;
         }
         out.trace(match leg {
-            IoLeg::AudioInput => {
-                Step::Input(InputStep::InputEnabled { leg: InputLeg::Audio, enabled })
+            IoKind::AudioInput => {
+                Step::Input(InputStep::InputEnabled { leg: InputKind::Audio, enabled })
             }
-            IoLeg::AudioOutput => {
-                Step::Input(InputStep::OutputEnabled { leg: OutputLeg::Audio, enabled })
+            IoKind::AudioOutput => {
+                Step::Input(InputStep::OutputEnabled { leg: OutputKind::Audio, enabled })
             }
-            IoLeg::Transcription => {
-                Step::Input(InputStep::OutputEnabled { leg: OutputLeg::Transcription, enabled })
+            IoKind::Transcription => {
+                Step::Input(InputStep::OutputEnabled { leg: OutputKind::Transcription, enabled })
             }
         });
         match leg {
             // "End user speaking state when audio is disabled" (`_on_audio_enabled_changed`).
-            IoLeg::AudioInput if !enabled => self.host_end_of_speech(now, out),
-            IoLeg::AudioInput => {}
+            IoKind::AudioInput if !enabled => self.host_end_of_speech(now, out),
+            IoKind::AudioInput => {}
             // The pause machine's "audio enabled" fact moved with the flag.
-            IoLeg::AudioOutput => self.refresh_pause_facts(now, out),
-            IoLeg::Transcription => {}
+            IoKind::AudioOutput => self.refresh_pause_facts(now, out),
+            IoKind::Transcription => {}
         }
     }
 

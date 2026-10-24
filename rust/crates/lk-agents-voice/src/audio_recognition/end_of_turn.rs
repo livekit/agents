@@ -7,7 +7,7 @@ use super::{
     Run, Start, TurnId, TurnSnapshot, UserTurnTracker, compute_end_of_turn_metrics,
     user_transcript,
 };
-use crate::agent_activity::pause::TurnSettled;
+use crate::agent_activity::false_interruption::TurnSettled;
 use crate::agent_session::effects::{
     Decision, Effect, Effects, FlushReason, ProviderCall, TurnTimer,
 };

@@ -136,7 +136,7 @@ impl Driver {
                 out,
             );
         }
-        self.publish_frame();
+        self.publish_activity();
     }
 
     // ------------------------------------------------------------------ background updates
@@ -230,7 +230,7 @@ impl Driver {
         for item in &items {
             self.commit_item(item.clone(), source.clone(), Visibility::Both, out);
         }
-        self.publish_frame();
+        self.publish_activity();
         let agent = self.activity.agent.clone();
         self.activity.tools.queue_update(agent, items, id);
     }
@@ -250,7 +250,7 @@ impl Driver {
         // "if the update is still the tail, the agent hasn't spoken since".
         let last_pending = batch.last_item_id();
         let last_record =
-            self.session.record.agent_chat_ctx().items.last().map(|i| i.id().to_owned());
+            self.session.chat_ctx.agent_chat_ctx().items.last().map(|i| i.id().to_owned());
         let at_tail = last_pending.is_some() && last_pending == last_record;
         let call_ids = batch.update_ids();
         let id = self.activity.hooks.mint();
@@ -294,7 +294,7 @@ impl Driver {
         // A previous frame's updates are re-inserted for this request only.
         let foreign = batch.foreign_items(&self.activity.agent);
         let chat_ctx = (!foreign.is_empty()).then(|| {
-            let mut ctx = self.session.record.agent_chat_ctx();
+            let mut ctx = self.session.chat_ctx.agent_chat_ctx();
             for item in foreign {
                 if !ctx.items.iter().any(|i| i.id() == item.id()) {
                     ctx.items.push(item);
