@@ -1,0 +1,241 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator, Callable
+from typing import Any
+
+import pytest
+from google.genai import types
+
+from livekit import rtc
+from livekit.agents import APIConnectOptions
+from livekit.agents.beta.translation import (
+    InputTranscript,
+    OutputSpeechStopped,
+    OutputTranscript,
+    TranslatedAudioFrame,
+    TranslationModelError,
+)
+from livekit.plugins.google.beta import GeminiTranslationModel, GeminiTranslationSession
+
+pytestmark = pytest.mark.unit
+
+
+class _FakeLiveSession:
+    def __init__(self, config: types.LiveConnectConfig) -> None:
+        self.config = config
+        self.sent: list[types.Blob] = []
+        self._incoming: asyncio.Queue[types.LiveServerMessage | Exception] = asyncio.Queue()
+
+    def emit(self, **server_content: Any) -> None:
+        self._incoming.put_nowait(
+            types.LiveServerMessage(server_content=types.LiveServerContent(**server_content))
+        )
+
+    def go_away(self) -> None:
+        self._incoming.put_nowait(types.LiveServerMessage(go_away=types.LiveServerGoAway()))
+
+    def drop(self) -> None:
+        self._incoming.put_nowait(ConnectionError("connection lost"))
+
+    async def send_realtime_input(self, *, audio: types.Blob) -> None:
+        self.sent.append(audio)
+
+    async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+        msg = await self._incoming.get()
+        if isinstance(msg, Exception):
+            raise msg
+        yield msg
+
+
+def _connect_hook(monkeypatch: pytest.MonkeyPatch) -> list[_FakeLiveSession]:
+    conns: list[_FakeLiveSession] = []
+
+    @contextlib.asynccontextmanager
+    async def _connect(
+        self: GeminiTranslationSession, config: types.LiveConnectConfig
+    ) -> AsyncIterator[_FakeLiveSession]:
+        conn = _FakeLiveSession(config)
+        conns.append(conn)
+        yield conn
+
+    monkeypatch.setattr(GeminiTranslationSession, "_connect", _connect)
+    return conns
+
+
+def _model(**kwargs: Any) -> GeminiTranslationModel:
+    return GeminiTranslationModel(target_language="es", api_key="test", vertexai=False, **kwargs)
+
+
+async def _wait_for(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+    async def _poll() -> None:
+        while not pred():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout)
+
+
+async def test_the_session_connects_with_its_translation_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(echo_target_language=True).session()
+    try:
+        await _wait_for(lambda: bool(conns))
+        config = conns[0].config
+        assert config.translation_config == types.TranslationConfig(
+            target_language_code="es", echo_target_language=True
+        )
+        assert config.input_audio_transcription is not None
+        assert config.output_audio_transcription is not None
+    finally:
+        await session.aclose()
+
+
+def test_transcription_can_be_turned_off() -> None:
+    model = _model(input_audio_transcription=None)
+    assert not model.capabilities.input_transcription
+    assert model.capabilities.output_transcription
+
+
+async def test_input_audio_is_resampled_and_chunked(monkeypatch: pytest.MonkeyPatch) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model().session()
+    try:
+        # 200ms at 48kHz: two 100ms blobs at 16kHz once resampled
+        session.push_audio(
+            rtc.AudioFrame(
+                data=b"\x01\x00" * 9600,
+                sample_rate=48000,
+                num_channels=1,
+                samples_per_channel=9600,
+            )
+        )
+        session.push_audio(
+            rtc.AudioFrame(
+                data=b"\x01\x00" * 9600,
+                sample_rate=48000,
+                num_channels=1,
+                samples_per_channel=9600,
+            )
+        )
+        await _wait_for(lambda: bool(conns) and len(conns[0].sent) >= 2)
+        assert all(b.mime_type == "audio/pcm;rate=16000" for b in conns[0].sent)
+        assert all(len(b.data or b"") == 1600 * 2 for b in conns[0].sent)
+    finally:
+        await session.aclose()
+
+
+async def test_translated_audio_ends_with_a_mark_on_generation_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model().session()
+    try:
+        await _wait_for(lambda: bool(conns))
+        conns[0].emit(
+            model_turn=types.Content(
+                parts=[
+                    types.Part(
+                        inline_data=types.Blob(data=b"\x02\x00" * 480, mime_type="audio/pcm")
+                    )
+                ]
+            )
+        )
+        conns[0].emit(generation_complete=True)
+
+        stream = aiter(session.audio_stream)
+        ev = await asyncio.wait_for(anext(stream), 2)
+        assert isinstance(ev, TranslatedAudioFrame)
+        assert ev.frame.samples_per_channel == 480
+        assert ev.frame.sample_rate == 24000
+        assert ev.language == "es"
+        assert isinstance(await asyncio.wait_for(anext(stream), 2), OutputSpeechStopped)
+    finally:
+        await session.aclose()
+
+
+async def test_transcripts_end_when_finished_or_quiet(monkeypatch: pytest.MonkeyPatch) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(transcript_segment_timeout=0.05).session()
+    heard: list[InputTranscript] = []
+    spoken: list[OutputTranscript] = []
+    session.on("input_transcript", heard.append)
+    session.on("output_transcript", spoken.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        conns[0].emit(input_transcription=types.Transcription(text=" hello", language_code="en"))
+        conns[0].emit(
+            input_transcription=types.Transcription(text=" there", finished=True),
+            output_transcription=types.Transcription(text="hola"),
+        )
+
+        await _wait_for(lambda: len(heard) == 3 and len(spoken) == 2)
+        # the leading space gemini opens with is dropped, the language carries to the end
+        assert [(t.text, t.is_final, t.language) for t in heard] == [
+            ("hello", False, "en"),
+            (" there", False, "en"),
+            ("", True, "en"),
+        ]
+        # the server never marked this one finished, so the quiet ended it
+        assert [(t.text, t.is_final, t.language) for t in spoken] == [
+            ("hola", False, "es"),
+            ("", True, "es"),
+        ]
+    finally:
+        await session.aclose()
+
+
+async def test_retargeting_reconnects_with_the_new_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    model = _model()
+    assert model.capabilities.retargetable
+    session = model.session()
+    try:
+        await _wait_for(lambda: bool(conns))
+        session.update_options(target_language="fr")
+        await _wait_for(lambda: len(conns) == 2)
+        assert conns[1].config.translation_config is not None
+        assert conns[1].config.translation_config.target_language_code == "fr"
+    finally:
+        await session.aclose()
+
+
+async def test_go_away_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model().session()
+    errors: list[TranslationModelError] = []
+    session.on("error", errors.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        conns[0].go_away()
+        await _wait_for(lambda: len(conns) == 2)
+        assert not errors
+    finally:
+        await session.aclose()
+
+
+async def test_a_dropped_connection_retries_then_gives_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(conn_options=APIConnectOptions(max_retry=1, retry_interval=0)).session()
+    errors: list[TranslationModelError] = []
+    session.on("error", errors.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        conns[0].drop()
+        await _wait_for(lambda: len(conns) == 2)
+        assert errors[0].recoverable
+
+        conns[1].drop()
+        await _wait_for(lambda: len(errors) == 2)
+        assert not errors[1].recoverable
+        # the stream ends rather than waiting on a session that will not reconnect
+        async for _ in session.audio_stream:
+            pass
+    finally:
+        await session.aclose()
