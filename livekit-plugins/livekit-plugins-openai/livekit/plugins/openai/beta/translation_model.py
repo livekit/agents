@@ -259,6 +259,11 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
+        # the language the server is translating into, which trails a queued retarget until
+        # session.updated confirms it; what arrives before then is still in the old language
+        self._output_language = self._opts.target_language
+        # an event whose send failed, sent first on the next connection so no speech is lost
+        self._unsent_event: dict[str, Any] | None = None
 
         self._input_segmenter = _TranscriptSegmenter(
             self._opts.transcript_segment_timeout,
@@ -272,11 +277,11 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
             self._opts.transcript_segment_timeout,
             on_text=lambda text: self.emit(
                 "output_transcript",
-                OutputTranscript(text=text, is_final=False, language=self._opts.target_language),
+                OutputTranscript(text=text, is_final=False, language=self._output_language),
             ),
             on_final=lambda: self.emit(
                 "output_transcript",
-                OutputTranscript(text="", is_final=True, language=self._opts.target_language),
+                OutputTranscript(text="", is_final=True, language=self._output_language),
             ),
             loop=self._loop,
         )
@@ -296,13 +301,25 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
-            for nf in self._bstream.write(f.data.tobytes()):
-                self.send_event(
-                    {
-                        "type": "session.input_audio_buffer.append",
-                        "audio": base64.b64encode(nf.data).decode("utf-8"),
-                    }
-                )
+            self._append_audio(self._bstream.write(f.data.tobytes()))
+
+    def _append_audio(self, frames: list[rtc.AudioFrame]) -> None:
+        for nf in frames:
+            self.send_event(
+                {
+                    "type": "session.input_audio_buffer.append",
+                    "audio": base64.b64encode(nf.data).decode("utf-8"),
+                }
+            )
+
+    def _flush_input_audio(self) -> None:
+        """Send the tail of the input still held short of a full chunk."""
+        if self._input_resampler is not None:
+            for f in self._input_resampler.flush():
+                self._append_audio(self._bstream.write(f.data.tobytes()))
+            self._input_resampler = None
+
+        self._append_audio(self._bstream.flush())
 
     def clear_audio(self) -> None:
         # what the server sent is already here; drop what the consumer has not read yet
@@ -314,8 +331,7 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
         if target_language == self._opts.target_language:
             return
 
-        # the transcript so far was in the old language
-        self._output_segmenter.flush()
+        # labelled with the new language only once the server confirms it, see session.updated
         self._opts.target_language = target_language
         self.send_event(
             {
@@ -330,6 +346,7 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
             self._closing = True
             self._input_segmenter.flush()
             self._output_segmenter.flush()
+            self._flush_input_audio()
             # sent last, so the server ends the session after the audio already queued
             self.send_event({"type": "session.close"})
             self._msg_ch.close()
@@ -387,9 +404,16 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
                     if reconnecting:
                         # a new connection starts from defaults; the options go first, before
                         # any audio still queued behind them
-                        await self._send(ws_conn, self._create_session_update_event())
+                        try:
+                            await self._send(ws_conn, self._create_session_update_event())
+                        except Exception as e:
+                            raise APIConnectionError(
+                                message="OpenAI Realtime translation failed to restore the "
+                                "session options"
+                            ) from e
                         self._input_segmenter.flush()
                         self._output_segmenter.flush()
+                        self._output_language = self._opts.target_language
                         logger.debug("reconnected to OpenAI Realtime translation")
                     num_retries = 0
                     # a failed first handshake leaves the startup update queued, with nothing
@@ -454,17 +478,31 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
         if lk_oai_debug and msg["type"] != "session.input_audio_buffer.append":
             logger.debug(">>>", extra={"lk.pii.event": msg})
 
+    async def _send_or_keep(
+        self, ws_conn: aiohttp.ClientWebSocketResponse, msg: dict[str, Any]
+    ) -> None:
+        try:
+            await self._send(ws_conn, msg)
+        except Exception as e:
+            # a failed send means the connection is going; keep the event for the next one
+            # rather than drop the speech it carries
+            self._unsent_event = msg
+            raise APIConnectionError(
+                message="OpenAI Realtime translation failed to send an event"
+            ) from e
+
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
 
         @utils.log_exceptions(logger=logger)
         async def _send_task() -> None:
             nonlocal closing
+            if (msg := self._unsent_event) is not None:
+                self._unsent_event = None
+                await self._send_or_keep(ws_conn, msg)
+
             async for msg in self._msg_ch:
-                try:
-                    await self._send(ws_conn, msg)
-                except Exception:
-                    logger.exception("failed to send event")
+                await self._send_or_keep(ws_conn, msg)
 
             closing = True
             await ws_conn.close()
@@ -542,6 +580,8 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
             self._output_segmenter.push(event.get("delta") or "")
         elif event_type == "session.input_transcript.delta":
             self._input_segmenter.push(event.get("delta") or "")
+        elif event_type == "session.updated":
+            self._handle_session_updated(event)
         elif event_type == "error":
             self._handle_error(event)
         elif lk_oai_debug:
@@ -563,14 +603,29 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
         )
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._audio_ch.send_nowait(
-                TranslatedAudioFrame(frame=frame, language=self._opts.target_language)
+                TranslatedAudioFrame(frame=frame, language=self._output_language)
             )
+
+    def _handle_session_updated(self, event: dict[str, Any]) -> None:
+        output = ((event.get("session") or {}).get("audio") or {}).get("output") or {}
+        language = output.get("language")
+        if not language or language == self._output_language:
+            return
+
+        # the transcript so far was in the old language
+        self._output_segmenter.flush()
+        self._output_language = language
 
     def _handle_error(self, event: dict[str, Any]) -> None:
         error_body = event.get("error") or {}
+        # the message can quote what was said, so only its code goes in the clear
         logger.error(
-            f"OpenAI Realtime translation returned an error: {error_body}",
-            extra={"error": error_body},
+            "OpenAI Realtime translation returned an error",
+            extra={
+                "code": error_body.get("code"),
+                "type": error_body.get("type"),
+                "lk.pii.error": error_body,
+            },
         )
         recoverable = not _is_fatal_error(
             SimpleNamespace(code=error_body.get("code"), type=error_body.get("type"))
