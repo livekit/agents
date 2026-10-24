@@ -590,7 +590,13 @@ class STT(stt.STT):
         session = self._ensure_session()
         # the config is sent once the stream acquires the connection, since the pool also
         # hands back sockets it opened earlier
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        # without heartbeat, a silently dropped socket (a half-open TCP
+        # connection, no FIN/RST) is never noticed: recv_task parks on
+        # ws.receive() forever and the reconnect loop, which is exception-driven,
+        # never runs.
+        return await asyncio.wait_for(
+            session.ws_connect(url, headers=headers, heartbeat=30.0), timeout
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -843,6 +849,17 @@ class SpeechStream(stt.SpeechStream):
                         status_code=ws.close_code or -1,
                         body=f"{msg.data=} {msg.extra=}",
                     )
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws:
+                        return
+
+                    # the heartbeat closes the socket when a ping goes unanswered,
+                    # and that surfaces here rather than as a close frame.
+                    # ws.exception() is the only place the reason survives.
+                    raise APIConnectionError(
+                        "OpenAI Realtime STT connection lost"
+                    ) from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected OpenAI message type %s", msg.type)

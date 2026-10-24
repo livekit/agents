@@ -655,6 +655,15 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws or self._session.closed:
+                        return
+
+                    # the heartbeat closes the socket when a ping goes unanswered,
+                    # and that surfaces here rather than as a close frame.
+                    # ws.exception() is the only place the reason survives.
+                    raise APIConnectionError("ElevenLabs STT connection lost") from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected ElevenLabs STT message type %s", msg.type)
                     continue
@@ -772,6 +781,11 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     ws_url,
                     headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                    # without heartbeat, a silently dropped socket (a half-open TCP
+                    # connection, no FIN/RST) is never noticed: recv_task parks on
+                    # ws.receive() forever and the reconnect loop, which is
+                    # exception-driven, never runs.
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )
