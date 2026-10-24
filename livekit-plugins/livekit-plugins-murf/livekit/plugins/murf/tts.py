@@ -349,7 +349,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             current_segment_id: str | None = None
             await input_sent_event.wait()
             while True:
-                msg = await ws.receive()
+                # the deadline starts only once the text has gone out, so a slow first
+                # token cannot expire it; a half-open socket after that point is a
+                # failure rather than a quiet stream.
+                msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,

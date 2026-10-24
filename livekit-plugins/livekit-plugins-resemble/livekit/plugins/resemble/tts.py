@@ -337,7 +337,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
-                msg = await ws.receive()
+                # bound the wait for audio with the timeout the caller asked for.
+                # Read per receive rather than set on the socket, so a pooled
+                # connection cannot keep an earlier request's value.
+                msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,

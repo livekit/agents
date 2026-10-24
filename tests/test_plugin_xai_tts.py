@@ -48,7 +48,8 @@ class _FakeWebSocket:
                 )
             )
 
-    async def receive(self) -> Any:
+    async def receive(self, timeout: float | None = None) -> Any:
+        # mirrors aiohttp's signature; the plugin now passes conn_options.timeout
         return await self._messages.get()
 
     async def close(self) -> None:

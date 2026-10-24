@@ -161,7 +161,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps({"text": ""}))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async for msg in ws:
+            while True:
+                # `wait_for` above bounds only the handshake. Bound the wait for audio
+                # too, read per receive so a reused connection cannot keep an earlier
+                # request's value. The loop already breaks on close and error below.
+                msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
