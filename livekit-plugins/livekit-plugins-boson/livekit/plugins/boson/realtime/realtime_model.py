@@ -1277,7 +1277,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
             # no separate bookkeeping needed.
             active = self._current_generation
             super()._handle_response_created(event)
-            if isinstance(active, openai_rt._ResponseGeneration):
+            if active is not None and not isinstance(active, openai_rt._DiscardedGeneration):
                 self._current_generation = active
             return
 
