@@ -808,16 +808,40 @@ class AgentActivity(RecognitionHooks):
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
     ) -> None:
         chat_ctx = chat_ctx.copy(tools=self.tools if exclude_invalid_function_calls else NOT_GIVEN)
-        self._agent._chat_ctx = chat_ctx
-
-        if self._rt_session is not None:
-            remove_instructions(chat_ctx)
-            async with self._rt_chat_ctx_lock:
-                await self._rt_session.update_chat_ctx(chat_ctx)
-        else:
+        if self._rt_session is None:
             update_instructions(
                 chat_ctx, instructions=self._agent.instructions, add_if_missing=True
             )
+            self._agent._chat_ctx = chat_ctx
+            return
+
+        remove_instructions(chat_ctx)
+        previous_ids = {item.id for item in self._agent._chat_ctx.items}
+
+        async def apply() -> None:
+            async with self._rt_chat_ctx_lock:
+                assert self._rt_session is not None
+                await self._rt_session.update_chat_ctx(chat_ctx)
+                # Provider acknowledgments can wait while speech adds conversation
+                # items. Commit the requested edit without losing those new items.
+                target_ids = {item.id for item in chat_ctx.items}
+                arrived = [
+                    item
+                    for item in self._agent._chat_ctx.items
+                    if item.id not in previous_ids and item.id not in target_ids
+                ]
+                self._agent._chat_ctx = llm.ChatContext([*chat_ctx.items, *arrived])
+
+        task = asyncio.create_task(apply())
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     def update_options(
         self,

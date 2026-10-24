@@ -36,6 +36,8 @@ async def entrypoint(ctx: JobContext) -> None:
         voice=os.getenv("PRISM_VOICE"),
         turn_detection=TurnDetection(eagerness="low", end_of_turn_timeout_ms=5000),
         response_metadata={"example": "livekit-prism"},
+        # Optional on deployments that support history truncation.
+        truncation="auto",
         tool_fillers={"lookup_order": PrismFiller(type="text", text="Checking that order.")},
     )
     session = AgentSession(llm=model)
