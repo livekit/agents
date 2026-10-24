@@ -394,3 +394,26 @@ async def test_reply_started_during_final_rebuild_acknowledgment_requires_recove
             await change
         event = await asyncio.wait_for(errors.get(), 3)
         assert not event.recoverable
+
+
+async def test_partial_update_recovers_prior_context_on_a_backup_model():
+    async with peer_model() as (primary_peer, primary, _):
+        async with peer_model() as (backup_peer, backup, _):
+            fallback = llm.RealtimeModelFallbackAdapter([primary, backup], regenerate_on_swap=False)
+            async with AgentSession(llm=fallback) as session:
+                agent = Agent(instructions="Help", chat_ctx=messages("keep prior context"))
+                await session.start(agent)
+                primary_peer.fail_history_at = len(primary_peer.history_operations) + 2
+                with pytest.raises(llm.RealtimeError, match="partially applied"):
+                    await agent.update_chat_ctx(messages("partially applied replacement"))
+                await wait_until(lambda: backup_peer.settings is not None and backup_peer.items)
+                assert [i.text for i in await backup.get_history()] == ["keep prior context"]
+                assert [i.text_content for i in agent.chat_ctx.items if i.type == "message"] == [
+                    "keep prior context"
+                ]
+                speech = session.generate_reply(user_input="continue on backup")
+                response = await backup_peer.start(await backup_peer.next())
+                await backup_peer.message(response)
+                await backup_peer.end(response)
+                await asyncio.wait_for(speech.wait_for_playout(), 3)
+                assert speech.exception() is None

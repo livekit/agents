@@ -174,6 +174,13 @@ class RealtimeModel(
             await self._client.close()
 
 
+@dataclass(frozen=True)
+class _TypedTurn:
+    text: str
+    item_id: str
+    revision: int
+
+
 @dataclass
 class _Message:
     output: r.OutputRef
@@ -216,7 +223,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._instructions: str | None = None
         self._tool_list: list[llm.Tool] = []
         self._chat = llm.ChatContext.empty()
-        self._typed: str | None = None
+        self._typed: _TypedTurn | None = None
+        self._typed_revision = 0
+        self._typed_retry = False
         self._generations: OrderedDict[str, _Generation] = OrderedDict()
         self._generation_ready = asyncio.Condition()
         self._calls: OrderedDict[str, tuple[r.ToolCallRef, llm.FunctionCall]] = OrderedDict()
@@ -236,7 +245,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._transcript_deltas: dict[str, str] = {}
         self._history: PrismHistory | None = None
         self._history_lock = asyncio.Lock()
-        self._typed_item_id: str | None = None
 
     def _sdk_tools(
         self, tools: list[llm.Tool], fillers: Mapping[str, r.PrismFiller]
@@ -482,14 +490,31 @@ class RealtimeSession(llm.RealtimeSession):
         self, text: str, *, message_id: NotGivenOr[str] = NOT_GIVEN
     ) -> llm.ChatMessage:
         self._require()
-        if self._typed is not None:
+        if self._typed is not None and not self._typed_retry:
             raise self._unsupported("A typed turn is already staged")
         if not text.strip() or len(text) > 4000:
             raise self._unsupported("Typed input must be nonblank and at most 4000 characters")
-        self._typed = text
+        if self._typed is not None:
+            self._forget_unsent_turn(self._typed)
         message = self._chat.add_message(role="user", content=text, id=message_id)
-        self._typed_item_id = message.id
+        self._typed_revision += 1
+        self._typed = _TypedTurn(text, message.id, self._typed_revision)
+        self._typed_retry = False
         return message.model_copy()
+
+    def _forget_unsent_turn(self, turn: _TypedTurn) -> None:
+        self._chat.items[:] = [item for item in self._chat.items if item.id != turn.item_id]
+
+    def _restore_unsent_turn(self, turn: _TypedTurn | None) -> None:
+        if turn is None or self._closed or self._failure is not None:
+            return
+        if self._typed_revision == turn.revision and self._typed is None:
+            # No automatic retry. Only a later explicit generate_reply can use it.
+            self._typed = turn
+            self._typed_retry = True
+        elif self._typed_revision != turn.revision:
+            # A newer explicit user turn supersedes this known-unsent question.
+            self._forget_unsent_turn(turn)
 
     async def get_history(self) -> tuple[r.HistoryItem, ...]:
         """Read Prism's completed history without changing LiveKit's conversation record."""
@@ -613,6 +638,7 @@ class RealtimeSession(llm.RealtimeSession):
         if is_given(tools):
             raise self._unsupported("Prism does not support per-reply tools")
         typed, self._typed = self._typed, None
+        self._typed_retry = False
         instruction = instructions if is_given(instructions) and instructions else None
         if typed is not None and instruction is not None:
             raise self._unsupported("Prism cannot combine typed input with a reply instruction")
@@ -622,7 +648,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def _reply(
         self,
-        typed: str | None,
+        typed: _TypedTurn | None,
         instruction: str | None,
         parent: r.ResponseRef | None,
         report: r.ToolCallRef | None,
@@ -636,7 +662,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def _reply_unlocked(
         self,
-        typed: str | None,
+        typed: _TypedTurn | None,
         instruction: str | None,
         parent: r.ResponseRef | None,
         report: r.ToolCallRef | None,
@@ -646,7 +672,7 @@ class RealtimeSession(llm.RealtimeSession):
         ref: r.ResponseRef | None = None
         try:
             if typed is not None:
-                ref = await sdk.send_text(typed)
+                ref = await sdk.send_text(typed.text)
             elif instruction is not None:
                 ref = await sdk.request_reply(instruction=instruction)
             elif parent is not None:
@@ -679,15 +705,29 @@ class RealtimeSession(llm.RealtimeSession):
                     lambda: ref.response_id in self._generations or self._failure is not None
                 )
             self._require()
-            return self._generations[ref.response_id].event
+            generation = self._generations[ref.response_id].event
+            if typed is not None and self._history is not None:
+                self._history.bind_typed(typed.item_id, generation.input_item_ids)
+            return generation
         except asyncio.CancelledError:
             if ref is not None and not self._closed:
                 self._spawn(self._abandon_reply(ref))
             raise
         except r.RealtimeAdmissionTimeout as error:
+            if ref is None:
+                self._restore_unsent_turn(typed)
             raise llm.RealtimeError(str(error), code="admission_timeout") from error
         except r.RimeRealtimeError as error:
-            raise PrismError(error.fault) from error
+            fault = error.fault
+            if (
+                ref is None
+                and fault.scope == "event"
+                and fault.item_id is None
+                and fault.response_id is None
+                and fault.code not in ("typed_turn_superseded", "response_superseded")
+            ):
+                self._restore_unsent_turn(typed)
+            raise PrismError(fault) from error
 
     async def _abandon_reply(self, response: r.ResponseRef) -> None:
         async with self._generation_ready:
@@ -824,9 +864,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _on_event(self, event: r.SessionEvent) -> None:
         payload = event.payload
         if self._history is not None:
-            self._history.observe(payload, typed_item_id=self._typed_item_id)
-        if isinstance(payload, r.ResponseStarted) and payload.cause == "text":
-            self._typed_item_id = None
+            self._history.observe(payload)
         if isinstance(payload, r.SpeechHint):
             if self._playback_interrupts():
                 hint = llm.InputSpeechHintEvent(

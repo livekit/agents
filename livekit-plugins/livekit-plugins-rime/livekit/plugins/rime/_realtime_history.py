@@ -118,17 +118,18 @@ class PrismHistory:
         ):
             raise HistoryUpdateError("Imported tool calls require completed results")
 
-    def observe(
-        self, payload: r.InputEvent | r.ResponseEvent | r.FaultEvent, *, typed_item_id: str | None
-    ) -> None:
+    def bind_typed(self, local_id: str, server_ids: tuple[str, ...]) -> None:
+        """Bind only the input of this accepted typed request, never a staged successor."""
+        if len(server_ids) == 1:
+            self._ids[local_id] = server_ids[0]
+
+    def observe(self, payload: r.InputEvent | r.ResponseEvent | r.FaultEvent) -> None:
         # This method never awaits: event consumption must not wait on a history lock.
         if isinstance(payload, r.ResponseStarted):
             self._response_revision += 1
             ids = set(payload.input_item_ids)
             if payload.input_item_id:
                 ids.add(payload.input_item_id)
-            if payload.cause == "text" and typed_item_id and ids:
-                self._ids[typed_item_id] = next(iter(ids))
             self._active[payload.response.response_id] = ids
         elif isinstance(payload, r.InputCommitted):
             self._ids.setdefault(payload.item_id, payload.item_id)
