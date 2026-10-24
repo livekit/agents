@@ -121,6 +121,7 @@ from .voice.amd import (
     AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.fax import FaxDetectedEvent, FaxDetector
 from .voice.keyterm_detection import (
     KeytermDetectionOptions,
     KeytermsOptions,
@@ -282,6 +283,8 @@ __all__ = [
     "AMD",
     "AMDCategory",
     "AMDPredictionEvent",
+    "FaxDetector",
+    "FaxDetectedEvent",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",
