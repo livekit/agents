@@ -61,6 +61,7 @@ _MODELS_REJECTING_SAMPLING_PARAMS = (
 # this model.'). Matched the same way as the list above.
 _MODELS_REJECTING_FORCED_TOOL_CHOICE = (
     "claude-opus-5-5",
+    "claude-sonnet-5-5",
     "claude-fable-5-1",
 )
 
