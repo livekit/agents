@@ -1144,6 +1144,125 @@ class TestEmptySchemaStripping:
             )
 
 
+class _ContactWithMetadata(BaseModel):
+    name: str
+    metadata: dict[str, str]
+
+
+def _open_object_paths(node: Any, path: str = "") -> list[str]:
+    """Paths of object schemas whose `additionalProperties` is anything but false."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        if "additionalProperties" in node and node["additionalProperties"] is not False:
+            found.append(path or "/")
+        for key, value in node.items():
+            found += _open_object_paths(value, f"{path}/{key}")
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            found += _open_object_paths(value, f"{path}/{i}")
+    return found
+
+
+class TestStrictFreeFormObjects:
+    """OpenAI and Anthropic strict mode reject the whole request when any object in a tool's
+    parameters has `additionalProperties` other than false, which a free-form mapping
+    (`dict[str, T]`, `dict`) needs. Such tools must be sent non-strict instead."""
+
+    @staticmethod
+    def _tools() -> list[Any]:
+        @function_tool
+        async def get_weather(location: str, unit: Literal["c", "f"] = "c") -> str:
+            """Get the weather."""
+            return location
+
+        @function_tool
+        async def save_contact(name: str, fields: dict[str, str]) -> str:
+            """Save a contact with arbitrary fields."""
+            return name
+
+        @function_tool
+        async def set_flags(flags: dict) -> str:  # type: ignore[type-arg]
+            """Set flags."""
+            return str(flags)
+
+        @function_tool
+        async def record_readings(readings: list[dict[str, float]]) -> str:
+            """Record sensor readings."""
+            return str(readings)
+
+        @function_tool
+        async def add_contact(contact: _ContactWithMetadata) -> str:
+            """Add a contact."""
+            return contact.name
+
+        return [get_weather, save_contact, set_flags, record_readings, add_contact]
+
+    def test_openai_strict_tools_have_no_open_objects(self):
+        from livekit.agents.llm._provider_format import openai as openai_format
+
+        tools = self._tools()
+        schemas = openai_format.to_fnc_ctx(ToolContext(tools), strict=True)
+        by_name = {s["function"]["name"]: s["function"] for s in schemas}
+
+        for name, fnc in by_name.items():
+            if fnc.get("strict"):
+                assert _open_object_paths(fnc["parameters"]) == [], name
+
+        # compatible tools stay strict and unchanged
+        assert by_name["get_weather"] == build_strict_openai_schema(tools[0])["function"]
+        assert by_name["get_weather"]["strict"] is True
+
+        # free-form tools fall back to the non-strict schema, so their mappings still
+        # accept values instead of collapsing to `{}`
+        for tool in tools[1:]:
+            fnc = by_name[tool.info.name]
+            assert "strict" not in fnc
+            assert fnc == build_legacy_openai_schema(tool)["function"]
+            assert _open_object_paths(fnc["parameters"]) != []
+
+    def test_anthropic_strict_tools_have_no_open_objects(self):
+        from livekit.agents.llm._provider_format import anthropic as anthropic_format
+
+        tools = self._tools()
+        schemas = anthropic_format.to_fnc_ctx(ToolContext(tools), strict=True)
+        by_name = {s["name"]: s for s in schemas}
+
+        for name, schema in by_name.items():
+            if schema.get("strict"):
+                assert _open_object_paths(schema["input_schema"]) == [], name
+
+        assert by_name["get_weather"]["strict"] is True
+        assert (
+            by_name["get_weather"]["input_schema"]
+            == build_strict_openai_schema(tools[0])["function"]["parameters"]
+        )
+        for tool in tools[1:]:
+            schema = by_name[tool.info.name]
+            assert "strict" not in schema
+            assert (
+                schema["input_schema"] == build_legacy_openai_schema(tool)["function"]["parameters"]
+            )
+
+    def test_property_named_additional_properties_is_not_an_open_object(self):
+        from livekit.agents.llm._strict import has_open_object
+
+        class _Model(BaseModel):
+            additionalProperties: str
+
+        schema = to_strict_json_schema(_Model)
+        assert schema["properties"]["additionalProperties"] == {"type": "string"}
+        assert not has_open_object(schema)
+        assert has_open_object(to_strict_json_schema(_ContactWithMetadata))
+
+    def test_free_form_arguments_still_validate(self):
+        save_contact = self._tools()[1]
+        args, _ = prepare_function_arguments(
+            fnc=save_contact,
+            json_arguments=json.dumps({"name": "Ada", "fields": {"phone": "123"}}),
+        )
+        assert args == ("Ada", {"phone": "123"})
+
+
 class TestExecuteFunctionCallToolResult:
     @pytest.mark.parametrize("reply_required", [True, False])
     @pytest.mark.parametrize(
