@@ -253,10 +253,23 @@ def test_update_chat_ctx_deletes_empty_remote_items() -> None:
 
 def test_is_fatal_error_matches_known_codes() -> None:
     assert _is_fatal_error(SimpleNamespace(code="insufficient_quota"))
+    assert _is_fatal_error(
+        SimpleNamespace(code="credit_balance_exhausted", type="insufficient_quota")
+    )
     assert _is_fatal_error(SimpleNamespace(code=None, type="invalid_api_key"))
     assert not _is_fatal_error(SimpleNamespace(code="server_error"))
     assert not _is_fatal_error(SimpleNamespace())
     assert not _is_fatal_error(None)
+
+
+def test_is_fatal_error_matches_either_code_or_type() -> None:
+    # a fatal type is fatal even when the code is one we don't list (#7805)
+    assert _is_fatal_error(SimpleNamespace(code="some_new_code", type="insufficient_quota"))
+    assert _is_fatal_error(SimpleNamespace(code="insufficient_quota", type="some_new_type"))
+    assert _is_fatal_error(SimpleNamespace(code="", type="insufficient_quota"))
+    assert not _is_fatal_error(SimpleNamespace(code="server_error", type="server_error"))
+    assert not _is_fatal_error(SimpleNamespace(code="", type=""))
+    assert not _is_fatal_error(SimpleNamespace(code=None, type=None))
 
 
 def _handle_error_session(
@@ -444,7 +457,8 @@ async def test_an_error_outliving_its_update_is_still_reported() -> None:
     chat_ctx.add_message(role="user", content="hello", id="item_1")
     update = asyncio.create_task(session.update_chat_ctx(chat_ctx))
     await asyncio.sleep(0)  # let it send the create and start waiting on it
-    assert (waiter := session._item_create_future.get("item_1")) is not None
+    waiter = session._item_create_future.get("item_1")
+    assert waiter is not None
     waiter.set_result(None)  # what conversation.item.added does
     await update
 
@@ -677,6 +691,7 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
     )
     assert report.to_dict()["usage"] == [
         {
+            "type": "stt_usage",
             "provider": "api.openai.com",
             "model": "whisper-1",
             "input_tokens": 10,

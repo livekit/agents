@@ -90,7 +90,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 from livekit.agents.voice.generation import remove_instructions
 
 from .openai_types import RealtimeModels
@@ -127,7 +127,7 @@ NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VOICE = "marin"
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 # Azure OpenAI Realtime API uses old-style (beta) event names.
 # This mapping normalizes them to the current OpenAI GA event names
@@ -292,6 +292,7 @@ class _DiscardedGeneration:
 _FATAL_ERROR_CODES = frozenset(
     {
         "insufficient_quota",
+        "credit_balance_exhausted",
         "invalid_api_key",
         "account_deactivated",
         "billing_hard_limit_reached",
@@ -300,8 +301,12 @@ _FATAL_ERROR_CODES = frozenset(
 
 
 def _is_fatal_error(error: object | None) -> bool:
-    code = getattr(error, "code", None) or getattr(error, "type", None)
-    return isinstance(code, str) and code in _FATAL_ERROR_CODES
+    # match either field: OpenAI has changed the code while keeping the type (#7805)
+    code = getattr(error, "code", None)
+    type_ = getattr(error, "type", None)
+    return (isinstance(code, str) and code in _FATAL_ERROR_CODES) or (
+        isinstance(type_, str) and type_ in _FATAL_ERROR_CODES
+    )
 
 
 _TranscriptionUsage = UsageTranscriptTextUsageTokens | UsageTranscriptTextUsageDuration
@@ -1954,8 +1959,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "message":
             item_generation = _MessageGeneration(
@@ -1982,8 +1989,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item_id) is not None, "item_id is None"
-        assert (item_type := event.part.type) is not None, "part.type is None"
+        item_id = event.item_id
+        assert item_id is not None, "item_id is None"
+        item_type = event.part.type
+        assert item_type is not None, "part.type is None"
 
         if item_type == "text" and self._realtime_model.capabilities.audio_output:
             logger.warning(
@@ -2001,8 +2010,8 @@ class RealtimeSession(
         if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
             # the server can anchor to an item it just deleted; the item belongs at the tail
             logger.warning(
-                f"{self._realtime_model._provider_label} anchored an item to one it is no longer "
-                "tracking, appending it instead",
+                f"{self._realtime_model._provider_label} placed a chat history item after an "
+                "unknown item; appended it instead",
                 extra={"item_id": event.item.id, "previous_item_id": event.previous_item_id},
             )
             event.previous_item_id = self._remote_chat_ctx.tail_id
@@ -2243,8 +2252,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "function_call" and isinstance(
             event.item, RealtimeConversationItemFunctionCall
