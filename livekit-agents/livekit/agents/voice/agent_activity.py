@@ -344,6 +344,7 @@ class AgentActivity(RecognitionHooks):
         self._speech_hint_timer: asyncio.TimerHandle | None = None
         self._speech_hint_output: AudioOutput | None = None
         self._speech_hint_previous_gain = 1.0
+        self._speech_hint_gain_revision: object | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._realtime_user_input_answered_at: float = 0.0
         self._audio_recognition: AudioRecognition | None = None
@@ -2283,20 +2284,26 @@ class AgentActivity(RecognitionHooks):
             self._speech_hint_timer.cancel()
             self._speech_hint_timer = None
         if self._speech_hint_output is not None:
-            self._speech_hint_output.set_gain(self._speech_hint_previous_gain)
+            if self._speech_hint_output._gain_revision is self._speech_hint_gain_revision:
+                self._speech_hint_output.set_gain(self._speech_hint_previous_gain)
             self._speech_hint_output = None
+            self._speech_hint_gain_revision = None
 
     def _on_input_speech_hint(self, ev: llm.InputSpeechHintEvent) -> None:
         output = self._session.output.audio
         if output is None or not self._session.output.audio_enabled:
             return
-        if self._speech_hint_output is not output:
+        if (
+            self._speech_hint_output is not output
+            or output._gain_revision is not self._speech_hint_gain_revision
+        ):
             self._restore_speech_hint()
             previous = output.gain
             if not output.set_gain(previous * ev.gain):
                 return
             self._speech_hint_output = output
             self._speech_hint_previous_gain = previous
+            self._speech_hint_gain_revision = output._gain_revision
         elif self._speech_hint_timer is not None:
             self._speech_hint_timer.cancel()
         self._speech_hint_timer = asyncio.get_running_loop().call_later(

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import numpy as np
-from rimelabs_sdk import Rime, RimeInputError, realtime as r
+from rimelabs_sdk import Rime, RimeInputError, RimeResourceLimitError, realtime as r
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -1021,6 +1021,15 @@ class RealtimeSession(llm.RealtimeSession):
             self._transcript_deltas.pop(payload.item_id, None)
             self._turn_started.pop(payload.item_id, None)
         elif isinstance(payload, r.ResponseStarted):
+            if len(self._generations) >= 128:
+                oldest = next(iter(self._generations.values()))
+                if not oldest.playback_done:
+                    # The SDK also expires old response references at this limit.
+                    # Retaining the record cannot make its eventual receipt valid.
+                    raise RimeResourceLimitError(
+                        "Prism generation limit reached with unresolved playback"
+                    )
+                self._generations.popitem(last=False)
             messages = utils.aio.Chan[llm.MessageGeneration](maxsize=128)
             functions = utils.aio.Chan[llm.FunctionCall](maxsize=128)
             created = llm.GenerationCreatedEvent(
@@ -1040,8 +1049,6 @@ class RealtimeSession(llm.RealtimeSession):
                 functions,
                 interrupt_on_speech=self._response_policy(payload.settings_revision),
             )
-            while len(self._generations) > 128:
-                self._generations.popitem(last=False)
             self._latest = self._active = payload.response
             self._parent = self._report = None
             self._model.emit("generation_created", created)
