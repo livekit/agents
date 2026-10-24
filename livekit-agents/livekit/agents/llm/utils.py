@@ -553,7 +553,15 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
             continue
 
         default_value = param.default if param.default is not param.empty else ...
-        field_info = FieldInfo.from_annotation(type_hint)
+        if isinstance(default_value, FieldInfo):
+            # `param: T = Field(...)`: the Field carries the default/description.
+            # pydantic<2.11 mutates the passed Field in place, so hand it a copy.
+            user_field = copy.copy(default_value)
+            user_field.metadata = list(user_field.metadata)
+            field_info = FieldInfo.from_annotated_attribute(type_hint, user_field)
+            default_value = ...
+        else:
+            field_info = FieldInfo.from_annotation(type_hint)
 
         if default_value is not ... and field_info.default is PydanticUndefined:
             field_info.default = default_value
