@@ -95,7 +95,7 @@ class _BaseStreamingTurnDetectorStream:
         reason: str | None = None
 
     @dataclass
-    class _TurnStartedSentinel:
+    class _StartOfTurnSentinel:
         turn_duration: float
 
     def __init__(
@@ -127,7 +127,7 @@ class _BaseStreamingTurnDetectorStream:
         self._audio_ch = aio.Chan[
             rtc.AudioFrame
             | _BaseStreamingTurnDetectorStream._FlushSentinel
-            | _BaseStreamingTurnDetectorStream._TurnStartedSentinel
+            | _BaseStreamingTurnDetectorStream._StartOfTurnSentinel
         ]()
 
         self._request_id: str | None = None
@@ -245,7 +245,7 @@ class _BaseStreamingTurnDetectorStream:
         # measured now, against the audio pushed so far, so queueing can't stretch it
         turn_duration = max(0.0, time.time() - started_at)
         self._audio_ch.send_nowait(
-            _BaseStreamingTurnDetectorStream._TurnStartedSentinel(turn_duration=turn_duration)
+            _BaseStreamingTurnDetectorStream._StartOfTurnSentinel(turn_duration=turn_duration)
         )
 
     def end_input(self) -> None:
@@ -345,7 +345,7 @@ class _BaseStreamingTurnDetectorStream:
         async for item in self._audio_ch:
             if isinstance(item, _BaseStreamingTurnDetectorStream._FlushSentinel):
                 self._transport.flush()
-            elif isinstance(item, _BaseStreamingTurnDetectorStream._TurnStartedSentinel):
+            elif isinstance(item, _BaseStreamingTurnDetectorStream._StartOfTurnSentinel):
                 self._transport.on_start_of_turn(item.turn_duration)
             else:
                 self._transport.push_frame(item)
