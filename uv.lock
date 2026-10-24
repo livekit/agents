@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12.0, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -53,6 +53,7 @@ members = [
     "livekit-plugins-fal",
     "livekit-plugins-fireworksai",
     "livekit-plugins-fishaudio",
+    "livekit-plugins-giggy",
     "livekit-plugins-gladia",
     "livekit-plugins-gnani",
     "livekit-plugins-google",
@@ -110,6 +111,7 @@ members = [
     "livekit-plugins-vakyam",
     "livekit-plugins-xai",
 ]
+default-groups = ["dev", "typing"]
 constraints = [{ name = "onnxruntime", marker = "python_full_version < '3.11'", specifier = "<1.24" }]
 
 [manifest.dependency-groups]
@@ -3092,6 +3094,22 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "msgpack", specifier = ">=1.0" },
+]
+
+[[package]]
+name = "livekit-plugins-giggy"
+source = { editable = "livekit-plugins/livekit-plugins-giggy" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-agents" },
+    { name = "livekit-plugins-silero" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10,<4" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-plugins-silero", editable = "livekit-plugins/livekit-plugins-silero" },
 ]
 
 [[package]]
