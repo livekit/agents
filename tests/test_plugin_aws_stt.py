@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -36,13 +37,16 @@ class _FakeAudioStream:
 
 
 class _FakeOutputStream:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(self, error: Exception | None = None, events: list[Any] | None = None) -> None:
         self._error = error
+        self._events = list(events or [])
 
     def __aiter__(self) -> _FakeOutputStream:
         return self
 
     async def __anext__(self) -> Any:
+        if self._events:
+            return SimpleNamespace(value=self._events.pop(0))
         if self._error is not None:
             error, self._error = self._error, None
             raise error
@@ -51,16 +55,23 @@ class _FakeOutputStream:
 
 
 class _FakeTranscribeStream:
-    def __init__(self, output_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        output_error: Exception | None = None,
+        output_events: list[list[Any]] | None = None,
+    ) -> None:
         self.input_stream = _FakeAudioStream()
         self.configs: list[Any] = []
         self.restarted = asyncio.Event()
         self._output_error = output_error
+        # transcript events each attempt yields, in attempt order
+        self._output_events = list(output_events or [])
 
     async def await_output(self) -> tuple[None, _FakeOutputStream]:
         # the error is one-shot, so only the first attempt fails
         error, self._output_error = self._output_error, None
-        return None, _FakeOutputStream(error)
+        events = self._output_events.pop(0) if self._output_events else None
+        return None, _FakeOutputStream(error, events)
 
 
 def _frame(duration_ms: int, sample_rate: int = 16000) -> rtc.AudioFrame:
@@ -77,8 +88,9 @@ def _make_stream(
     monkeypatch: pytest.MonkeyPatch,
     *,
     output_error: Exception | None = None,
+    output_events: list[list[Any]] | None = None,
 ) -> tuple[aws_stt.STT, aws_stt.SpeechStream, _FakeTranscribeStream]:
-    transcribe_stream = _FakeTranscribeStream(output_error)
+    transcribe_stream = _FakeTranscribeStream(output_error, output_events)
 
     class _FakeTranscribeClient:
         def __init__(self, *, config: Any) -> None:
@@ -243,3 +255,108 @@ async def test_aws_stream_gives_each_attempt_its_own_crt_transport(
         await provider.aclose()
 
     assert closed == [first.transport, second.transport]
+
+
+def _transcript_event(text: str, start: float, end: float, *, partial: bool) -> Any:
+    from aws_sdk_transcribe_streaming.models import (
+        Alternative,
+        Item,
+        Result,
+        Transcript,
+        TranscriptEvent,
+    )
+
+    item = Item(content=text, start_time=start, end_time=end, confidence=0.9)
+    result = Result(
+        result_id=f"result-{start}",
+        start_time=start,
+        end_time=end,
+        is_partial=partial,
+        alternatives=[Alternative(transcript=text, items=[item])],
+    )
+    return TranscriptEvent(transcript=Transcript(results=[result]))
+
+
+async def test_aws_stream_opens_one_speech_segment_per_utterance(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    provider, stream, _ = _make_stream(monkeypatch)
+
+    try:
+        # result times are offsets from the start of the stream, which stays open across
+        # utterances, so only the first utterance starts at 0.0
+        for event in (
+            _transcript_event("hel", 0.0, 0.4, partial=True),
+            _transcript_event("hello", 0.0, 0.7, partial=True),
+            _transcript_event("hello.", 0.0, 0.8, partial=False),
+            _transcript_event("how", 3.2, 3.5, partial=True),
+            _transcript_event("How are you?", 3.2, 4.2, partial=False),
+        ):
+            stream._process_transcript_event(event)
+
+        events = [await asyncio.wait_for(anext(stream), timeout=1.0) for _ in range(9)]
+
+        assert [e.type for e in events] == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ]
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+async def test_aws_stream_ignores_final_without_transcript(monkeypatch: pytest.MonkeyPatch):
+    provider, stream, _ = _make_stream(monkeypatch)
+
+    try:
+        stream._process_transcript_event(_transcript_event("", 0.0, 0.0, partial=False))
+        stream._process_transcript_event(_transcript_event("hi.", 1.0, 1.3, partial=False))
+
+        events = [await asyncio.wait_for(anext(stream), timeout=1.0) for _ in range(3)]
+
+        # no END_OF_SPEECH for the empty result, since no segment was open
+        assert [e.type for e in events] == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ]
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+async def test_aws_stream_closes_open_segment_when_attempt_restarts(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # the first attempt times out after a partial result, before its final result
+    provider, stream, _ = _make_stream(
+        monkeypatch,
+        output_error=aws_stt.BadRequestException(
+            "Your request timed out because no new audio was received for 15 seconds."
+        ),
+        output_events=[
+            [_transcript_event("hel", 0.0, 0.4, partial=True)],
+            [_transcript_event("bye", 0.0, 0.3, partial=True)],
+        ],
+    )
+
+    try:
+        events = [await asyncio.wait_for(anext(stream), timeout=1.0) for _ in range(5)]
+
+        assert [e.type for e in events] == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        ]
+    finally:
+        await stream.aclose()
+        await provider.aclose()
