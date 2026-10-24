@@ -3,14 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
-from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseIncompleteEvent,
+    ResponseOutputItemDoneEvent,
+)
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
 from livekit.plugins.openai.responses.llm import (
@@ -651,3 +656,284 @@ async def test_completed_response_without_cache_write_reports_zero() -> None:
     )
 
     assert usage.cache_creation_tokens == 0
+
+
+def _chained_frames(n: int, output: list[dict]) -> list[dict]:
+    """Events of a response `resp_{n}` that completes with ``output``."""
+    response = {**_RESPONSE_CREATED["response"], "id": f"resp_{n}", "status": "completed"}
+    return [
+        {**_RESPONSE_CREATED, "response": {**response, "output": []}},
+        *(
+            {
+                "type": "response.output_item.done",
+                "sequence_number": i + 1,
+                "output_index": i,
+                "item": item,
+            }
+            for i, item in enumerate(output)
+        ),
+        {
+            "type": "response.completed",
+            "sequence_number": 99,
+            "response": {**response, "output": output},
+        },
+    ]
+
+
+class _ChainedResponsesWS:
+    """WebSocket transport that records each request and completes it with the next
+    scripted output, so consecutive turns can chain via previous_response_id."""
+
+    _base_url = "https://api.openai.com/v1"
+
+    def __init__(self, outputs: list[list[dict]]) -> None:
+        self._outputs = outputs
+        self.requests: list[dict] = []
+
+    def generate_response(self, payload: dict):  # noqa: ANN201
+        self.requests.append(payload)
+        n = len(self.requests)
+        frames = _chained_frames(n, self._outputs[n - 1])
+
+        async def _replay():  # noqa: ANN202
+            for frame in frames:
+                yield frame
+
+        return _replay()
+
+    async def aclose(self) -> None:
+        pass
+
+
+class _ChainedResponsesHTTP:
+    """The HTTP counterpart of `_ChainedResponsesWS`, as an OpenAI client stand-in."""
+
+    _EVENT_TYPES = {
+        "response.created": ResponseCreatedEvent,
+        "response.output_item.done": ResponseOutputItemDoneEvent,
+        "response.completed": ResponseCompletedEvent,
+    }
+
+    def __init__(self, outputs: list[list[dict]]) -> None:
+        self._outputs = outputs
+        self.requests: list[dict] = []
+        self.client = MagicMock()
+        self.client._base_url = httpx.URL("https://api.openai.com/v1")
+        self.client.responses.create = AsyncMock(side_effect=self._create)
+        self.client.close = AsyncMock()
+
+    def _create(self, **kwargs: Any) -> _ReplayHTTPStream:
+        self.requests.append(kwargs)
+        n = len(self.requests)
+        frames = _chained_frames(n, self._outputs[n - 1])
+        return _ReplayHTTPStream(
+            [self._EVENT_TYPES[frame["type"]].model_validate(frame) for frame in frames]  # type: ignore[misc]
+        )
+
+
+def _fnc_call_output(call_id: str) -> dict:
+    return {
+        "type": "function_call",
+        "id": f"fc_{call_id}",
+        "call_id": call_id,
+        "name": "get_weather",
+        # compact, as the API sends it
+        "arguments": '{"city":"Paris"}',
+        "status": "completed",
+    }
+
+
+def _message_output(text: str) -> dict:
+    return {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+
+
+_REASONING_OUTPUT = {"type": "reasoning", "id": "rs_1", "summary": []}
+
+
+async def _run_turn(llm_model: ResponsesLLM, chat_ctx: agents_llm.ChatContext) -> None:
+    async with llm_model.chat(
+        chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0, timeout=5.0)
+    ) as stream:
+        async for _ in stream:
+            pass
+
+
+def _add_tool_turn(
+    chat_ctx: agents_llm.ChatContext, *call_ids: str, arguments: str = '{"city": "Paris"}'
+) -> None:
+    """Record executed calls the way AgentSession does: each call, with its arguments
+    rewritten as canonical JSON, then its output."""
+    for call_id in call_ids:
+        chat_ctx.insert(
+            agents_llm.FunctionCall(call_id=call_id, name="get_weather", arguments=arguments)
+        )
+    for call_id in call_ids:
+        chat_ctx.insert(
+            agents_llm.FunctionCallOutput(
+                call_id=call_id, name="get_weather", output="sunny", is_error=False
+            )
+        )
+
+
+@pytest.fixture
+async def chained_llm():  # noqa: ANN201
+    made: list[ResponsesLLM] = []
+
+    def make(
+        outputs: list[list[dict]], transport: str = "websocket"
+    ) -> tuple[ResponsesLLM, _ChainedResponsesWS | _ChainedResponsesHTTP]:
+        recorder: _ChainedResponsesWS | _ChainedResponsesHTTP
+        if transport == "websocket":
+            llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+            recorder = _ChainedResponsesWS(outputs)
+            llm_model._ws = recorder  # type: ignore[assignment]
+        else:
+            recorder = _ChainedResponsesHTTP(outputs)
+            llm_model = ResponsesLLM(model="gpt-4.1", client=recorder.client, use_websocket=False)
+        made.append(llm_model)
+        return llm_model, recorder
+
+    yield make
+    for llm_model in made:
+        await llm_model.aclose()
+
+
+@pytest.mark.parametrize("transport", ["websocket", "http"])
+async def test_chained_tool_turn_does_not_resend_the_function_call(
+    chained_llm,  # noqa: ANN001
+    transport: str,
+) -> None:
+    """The server holds the function_call it produced, so only its output is sent (#5136)."""
+    llm_model, ws = chained_llm(
+        [[_REASONING_OUTPUT, _fnc_call_output("call_1")], []], transport=transport
+    )
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="weather?")
+
+    await _run_turn(llm_model, chat_ctx)
+    _add_tool_turn(chat_ctx, "call_1")
+    await _run_turn(llm_model, chat_ctx)
+
+    assert ws.requests[1]["previous_response_id"] == "resp_1"
+    assert ws.requests[1]["input"] == [
+        {"type": "function_call_output", "call_id": "call_1", "output": "sunny"}
+    ]
+
+
+async def test_chained_parallel_tool_calls_send_only_their_outputs(chained_llm) -> None:  # noqa: ANN001
+    llm_model, ws = chained_llm([[_fnc_call_output("call_1"), _fnc_call_output("call_2")], []])
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="weather?")
+
+    await _run_turn(llm_model, chat_ctx)
+    _add_tool_turn(chat_ctx, "call_1", "call_2")
+    await _run_turn(llm_model, chat_ctx)
+
+    assert ws.requests[1]["previous_response_id"] == "resp_1"
+    assert [item["type"] for item in ws.requests[1]["input"]] == ["function_call_output"] * 2
+
+
+async def test_chained_text_turn_does_not_resend_the_assistant_reply(chained_llm) -> None:  # noqa: ANN001
+    llm_model, ws = chained_llm([[_message_output("It's sunny.")], []])
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="weather?")
+
+    await _run_turn(llm_model, chat_ctx)
+    chat_ctx.add_message(role="assistant", content="It's sunny.")
+    chat_ctx.add_message(role="user", content="thanks")
+    await _run_turn(llm_model, chat_ctx)
+
+    assert ws.requests[1]["previous_response_id"] == "resp_1"
+    assert ws.requests[1]["input"] == [{"role": "user", "content": "thanks"}]
+
+
+async def test_truncated_reply_resends_the_full_context(chained_llm) -> None:  # noqa: ANN001
+    """An interrupted reply is stored as the text the user heard. The server holds the
+    full reply, so chaining would show the model text that was never played."""
+    llm_model, ws = chained_llm([[_message_output("It's sunny and warm today.")], []])
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="weather?")
+
+    await _run_turn(llm_model, chat_ctx)
+    chat_ctx.add_message(role="assistant", content="It's sunny", interrupted=True)
+    chat_ctx.add_message(role="user", content="wait")
+    await _run_turn(llm_model, chat_ctx)
+
+    assert "previous_response_id" not in ws.requests[1]
+    assert ws.requests[1]["input"] == [
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "It's sunny"},
+        {"role": "user", "content": "wait"},
+    ]
+
+
+async def test_reply_split_into_phases_still_chains(chained_llm) -> None:  # noqa: ANN001
+    """Models like gpt-5.3-codex split a reply into `commentary` and `final_answer`
+    messages, which the agent stores as one assistant message."""
+    llm_model, ws = chained_llm(
+        [[_message_output("Let me check. "), _message_output("It's sunny.")], []]
+    )
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="weather?")
+
+    await _run_turn(llm_model, chat_ctx)
+    chat_ctx.add_message(role="assistant", content="Let me check. It's sunny.")
+    chat_ctx.add_message(role="user", content="thanks")
+    await _run_turn(llm_model, chat_ctx)
+
+    assert ws.requests[1]["previous_response_id"] == "resp_1"
+    assert ws.requests[1]["input"] == [{"role": "user", "content": "thanks"}]
+
+
+async def test_function_call_not_from_the_response_is_still_sent(chained_llm) -> None:  # noqa: ANN001
+    """Only the previous response's own calls are left out: a call the app adds itself
+    is new to the server."""
+    llm_model, ws = chained_llm([[_fnc_call_output("call_1")], []])
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="weather?")
+
+    await _run_turn(llm_model, chat_ctx)
+    _add_tool_turn(chat_ctx, "call_1", "call_app")
+    await _run_turn(llm_model, chat_ctx)
+
+    assert ws.requests[1]["previous_response_id"] == "resp_1"
+    sent = [(item["type"], item["call_id"]) for item in ws.requests[1]["input"]]
+    assert sent == [
+        ("function_call_output", "call_1"),
+        ("function_call", "call_app"),
+        ("function_call_output", "call_app"),
+    ]
+
+
+async def test_tool_call_without_arguments_still_chains(chained_llm) -> None:  # noqa: ANN001
+    """The agent stores a call sent with empty arguments as `{}`."""
+    llm_model, ws = chained_llm([[{**_fnc_call_output("call_1"), "arguments": ""}], []])
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="weather?")
+
+    await _run_turn(llm_model, chat_ctx)
+    _add_tool_turn(chat_ctx, "call_1", arguments="{}")
+    await _run_turn(llm_model, chat_ctx)
+
+    assert ws.requests[1]["previous_response_id"] == "resp_1"
+    assert [item["type"] for item in ws.requests[1]["input"]] == ["function_call_output"]
+
+
+async def test_edited_tool_arguments_resend_the_full_context(chained_llm) -> None:  # noqa: ANN001
+    """The server holds the call as generated, so a call edited since must be sent whole."""
+    llm_model, ws = chained_llm([[_fnc_call_output("call_1")], []])
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="weather?")
+
+    await _run_turn(llm_model, chat_ctx)
+    _add_tool_turn(chat_ctx, "call_1", arguments='{"city": "Lyon"}')
+    await _run_turn(llm_model, chat_ctx)
+
+    assert "previous_response_id" not in ws.requests[1]
+    assert ws.requests[1]["input"][1]["arguments"] == '{"city": "Lyon"}'
