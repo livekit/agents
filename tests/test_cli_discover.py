@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sys
 import textwrap
 from pathlib import Path
@@ -27,6 +28,8 @@ from livekit.agents import AgentServer
 def _write(path: Path, content: str = "") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(textwrap.dedent(content))
+    # a FileFinder cached for this directory may not see the new file otherwise
+    importlib.invalidate_caches()
     return path
 
 
@@ -35,13 +38,17 @@ def _server_module(path: Path, *names: str) -> Path:
 
 
 @pytest.fixture
-def isolated_imports(monkeypatch: pytest.MonkeyPatch):
+def isolated_imports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Restore sys.path / sys.modules so modules written under tmp_path don't leak."""
     monkeypatch.setattr(sys, "path", list(sys.path))
     before = set(sys.modules)
     yield
+    root = tmp_path.resolve()
     for name in set(sys.modules) - before:
-        del sys.modules[name]
+        # only drop the modules this test wrote, other lazy imports must stay cached
+        file = getattr(sys.modules[name], "__file__", None)
+        if file and Path(file).resolve().is_relative_to(root):
+            del sys.modules[name]
 
 
 class TestGetDefaultPath:
@@ -112,6 +119,11 @@ class TestGetModuleDataFromPath:
 
         assert data.module_import_str == "outer.inner.agent"
         assert data.extra_sys_path == tmp_path.resolve()
+        assert data.module_paths == [
+            (tmp_path / "outer").resolve(),
+            (tmp_path / "outer" / "inner").resolve(),
+            agent.resolve(),
+        ]
 
     def test_stops_at_first_directory_without_init(self, tmp_path: Path):
         # "top" has no __init__.py, so it must not become part of the import path
@@ -139,6 +151,7 @@ class TestGetModuleDataFromPath:
 
         assert data.module_import_str == "pkg"
         assert data.extra_sys_path == tmp_path.resolve()
+        assert data.module_paths == [(tmp_path / "pkg").resolve()]
 
 
 class TestGetAppName:
@@ -222,6 +235,11 @@ class TestGetAppName:
         with pytest.raises(ImportError):
             get_app_name(mod_data=self._mod_data("disc_does_not_exist", tmp_path))
 
+    def test_reraises_value_errors(self, tmp_path: Path, isolated_imports):
+        # importlib rejects an empty module name with ValueError, not ImportError
+        with pytest.raises(ValueError):
+            get_app_name(mod_data=self._mod_data("", tmp_path))
+
 
 class TestGetImportData:
     def test_raises_for_missing_path(self, tmp_path: Path):
@@ -242,9 +260,9 @@ class TestGetImportData:
     def test_adds_extra_sys_path_first(self, tmp_path: Path, isolated_imports):
         agent = _server_module(tmp_path / "disc_syspath.py", "server")
 
-        data = get_import_data(path=agent)
+        get_import_data(path=agent)
 
-        assert sys.path[0] == str(data.module_data.extra_sys_path)
+        assert sys.path[0] == str(tmp_path.resolve())
 
     def test_package_module_import_string(self, tmp_path: Path, isolated_imports):
         _write(tmp_path / "disc_pkg" / "__init__.py")
@@ -258,11 +276,39 @@ class TestGetImportData:
         self, tmp_path: Path, isolated_imports, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.chdir(tmp_path)
+        # "agent" is a common module name, a cached one would shadow tmp_path/agent.py
+        monkeypatch.delitem(sys.modules, "agent", raising=False)
         _server_module(tmp_path / "agent.py", "server")
 
         data = get_import_data()
 
         assert data.import_string == "agent:server"
+
+    def test_default_app_dir_without_init(
+        self, tmp_path: Path, isolated_imports, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delitem(sys.modules, "main", raising=False)
+        _server_module(tmp_path / "app" / "main.py", "server")
+
+        data = get_import_data()
+
+        assert data.import_string == "main:server"
+        assert sys.path[0] == str((tmp_path / "app").resolve())
+
+    def test_default_app_dir_as_package(
+        self, tmp_path: Path, isolated_imports, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delitem(sys.modules, "app", raising=False)
+        monkeypatch.delitem(sys.modules, "app.main", raising=False)
+        _write(tmp_path / "app" / "__init__.py")
+        _server_module(tmp_path / "app" / "main.py", "server")
+
+        data = get_import_data()
+
+        assert data.import_string == "app.main:server"
+        assert sys.path[0] == str(tmp_path.resolve())
 
     def test_no_default_file_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
