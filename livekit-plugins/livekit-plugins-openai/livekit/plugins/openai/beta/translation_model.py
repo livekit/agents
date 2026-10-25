@@ -398,7 +398,11 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
         max_retries = self._opts.conn_options.max_retry
         reconnecting = False
         try:
-            while not self._msg_ch.closed:
+            while (
+                not self._msg_ch.closed
+                or not self._msg_ch.empty()
+                or self._unsent_event is not None
+            ):
                 try:
                     ws_conn = await self._create_ws_conn()
                     if reconnecting:
@@ -407,6 +411,7 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
                         try:
                             await self._send(ws_conn, self._create_session_update_event())
                         except Exception as e:
+                            await ws_conn.close()
                             raise APIConnectionError(
                                 message="OpenAI Realtime translation failed to restore the "
                                 "session options"

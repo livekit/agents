@@ -28,6 +28,8 @@ class _FakeWS:
         self.sent: list[dict[str, Any]] = []
         self.incoming: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
         self.fail_appends = False
+        self.fail_updates = False
+        self.closed = False
 
     def emit(self, event: dict[str, Any]) -> None:
         self.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(event), ""))
@@ -39,12 +41,15 @@ class _FakeWS:
         event = json.loads(data)
         if self.fail_appends and event["type"] == "session.input_audio_buffer.append":
             raise ConnectionResetError("connection reset")
+        if self.fail_updates and event["type"] == "session.update":
+            raise ConnectionResetError("connection reset")
         self.sent.append(event)
 
     async def receive(self) -> aiohttp.WSMessage:
         return await self.incoming.get()
 
     async def close(self) -> None:
+        self.closed = True
         self.drop()
 
 
@@ -291,6 +296,46 @@ async def test_closing_sends_the_tail_short_of_a_chunk(monkeypatch: pytest.Monke
     assert _appends(conns[0]) == [pcm]
     # and ahead of the close, so the server still translates it
     assert conns[0].sent[-1] == {"type": "session.close"}
+
+
+async def test_closing_resends_what_a_failed_send_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(conn_options=APIConnectOptions(max_retry=3, retry_interval=0)).session()
+    await _wait_for(lambda: bool(conns) and bool(conns[0].sent))
+    conns[0].fail_appends = True
+    pcm = b"\x05\x00" * 1920
+    session.push_audio(
+        rtc.AudioFrame(data=pcm, sample_rate=24000, num_channels=1, samples_per_channel=1920)
+    )
+    await asyncio.wait_for(session.aclose(), 2.0)
+
+    assert len(conns) == 2
+    assert _appends(conns[1]) == [pcm]
+    assert conns[1].sent[-1] == {"type": "session.close"}
+
+
+async def test_a_connection_that_fails_its_restore_is_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns: list[_FakeWS] = []
+
+    async def _create_ws_conn(self: RealtimeTranslationSession) -> _FakeWS:
+        ws = _FakeWS()
+        # every connection after the first fails to restore the session options
+        ws.fail_updates = bool(conns)
+        conns.append(ws)
+        return ws
+
+    monkeypatch.setattr(RealtimeTranslationSession, "_create_ws_conn", _create_ws_conn)
+    session = _model(conn_options=APIConnectOptions(max_retry=2, retry_interval=0)).session()
+    session.on("error", lambda _: None)
+    try:
+        await _wait_for(lambda: bool(conns) and bool(conns[0].sent))
+        conns[0].drop()
+        await _wait_for(lambda: len(conns) == 3)
+        await _wait_for(lambda: all(c.closed for c in conns))
+    finally:
+        await session.aclose()
 
 
 async def test_a_retarget_relabels_only_once_the_server_applies_it(
