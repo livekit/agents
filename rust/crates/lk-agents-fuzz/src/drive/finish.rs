@@ -311,13 +311,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome, started: Instant) -> Out
         }
     }
 
-    if let Err(stuck) = run.join_tasks().await {
-        outcome.failures.push(Failure {
-            contract: "driver_exits_only_on_close".into(),
-            subject: Subject::Session,
-            detail: stuck,
-        });
-    }
+    run.join_tasks().await;
     // What the tasks did on their way out is part of the run.
     run.collect();
     record_outcome(&run, &mut outcome);
@@ -452,6 +446,24 @@ fn opened_by_input(record: &Recording) -> BTreeMap<&'static str, BTreeSet<Kind>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A joined task names the product line that spawned it, not the spawner's: without
+    /// `#[track_caller]` through `Spawner::spawn` every stuck task would point at the harness.
+    #[test]
+    fn a_task_names_the_line_that_spawned_it() {
+        let sites = simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Policy::default()).await;
+            for input in [Input::Close { drain: false }, Input::AwaitExit {}] {
+                run.apply(&input).await;
+            }
+            run.join_tasks().await;
+            run.record.tasks().iter().map(|t| t.site.file().to_owned()).collect::<Vec<_>>()
+        });
+        assert!(!sites.is_empty(), "the session spawned no task to check");
+        for site in sites {
+            assert!(site.contains("lk-agents-voice/src/"), "a task is placed at {site}");
+        }
+    }
 
     /// Every contract's probe reaches its prerequisite: the run passes, and the contract made at
     /// least one expectation on it. Without this a probe can rot into a case that runs fine and

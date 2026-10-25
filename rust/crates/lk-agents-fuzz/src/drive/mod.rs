@@ -322,25 +322,33 @@ pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T
 }
 
 /// Retains real Tokio joins, so a task the driver detached cannot disappear from the test, each
-/// with when it was spawned so a task that never finishes can be placed in the run.
+/// with when and from which line it was spawned, so a task that never finishes can be placed in
+/// the run and in the source.
 struct Tasks {
     stamps: Stamps,
-    spawned: Mutex<Vec<(Observed, JoinHandle<()>)>>,
+    spawned: Mutex<Vec<Spawned>>,
+}
+
+struct Spawned {
+    at: Observed,
+    site: &'static std::panic::Location<'static>,
+    task: JoinHandle<()>,
 }
 
 impl Spawner for Tasks {
     fn spawn(&self, future: BoxFuture<'static, ()>) -> lk_agents_abi::AbortHandle {
+        let site = std::panic::Location::caller();
         let task = tokio::spawn(future);
         let abort = task.abort_handle().into();
-        self.spawned.lock().unwrap().push((self.stamps.now(), task));
+        self.spawned.lock().unwrap().push(Spawned { at: self.stamps.now(), site, task });
         abort
     }
 }
 
 impl Drop for Tasks {
     fn drop(&mut self) {
-        for (_, task) in self.spawned.get_mut().unwrap().drain(..) {
-            task.abort();
+        for spawned in self.spawned.get_mut().unwrap().drain(..) {
+            spawned.task.abort();
         }
     }
 }

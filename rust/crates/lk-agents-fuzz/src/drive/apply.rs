@@ -9,6 +9,7 @@ use super::start::{
     Llm, Stt, Tts, frame, given, history, instructions, patch, toolset, vad_metrics,
 };
 use super::*;
+use crate::record::{Task, TaskEnd};
 
 impl Run {
     /// Apply one input, then write down everything that became true because of it.
@@ -872,12 +873,7 @@ impl Run {
         let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(runtime)));
         self.settle_answers();
         if let Err(panic) = called {
-            let message = panic
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-                .unwrap_or_default();
-            self.record.set_driver_panic(message);
+            self.record.set_driver_panic(panic_message(&*panic));
             self.drop_runtime();
         }
     }
@@ -895,7 +891,7 @@ impl Run {
         self.registry.calls().close();
     }
 
-    /// Await every retained task, and record whether each finished.
+    /// Await every retained task, and record how each ended.
     ///
     /// A task may spawn another before finishing, so this loops -- and because the work is the
     /// product's, the loop can fail to terminate. It is bounded for the same reason the release
@@ -905,31 +901,45 @@ impl Run {
     /// Each batch is raced against a deadline a budget away. The clock is paused and moves only
     /// when nothing can run, so the deadline passes exactly when the tasks still pending can never
     /// finish: those are recorded as stuck and aborted, and the run completes.
-    pub async fn join_tasks(&mut self) -> Result<(), String> {
+    pub async fn join_tasks(&mut self) {
         for _ in 0..MAX_JOIN_ROUNDS {
-            let tasks = std::mem::take(&mut *self.tasks.spawned.lock().unwrap());
-            if tasks.is_empty() {
-                return Ok(());
+            let batch = std::mem::take(&mut *self.tasks.spawned.lock().unwrap());
+            if batch.is_empty() {
+                return;
             }
             let deadline = self.budget();
-            for (spawned, mut task) in tasks {
-                let finished = tokio::select! {
+            for Spawned { at, site, mut task } in batch {
+                let end = tokio::select! {
                     joined = &mut task => match joined {
-                        Err(error) if !error.is_cancelled() => {
-                            return Err(format!("child task panicked: {error}"));
+                        Err(error) if error.is_panic() => {
+                            TaskEnd::Panicked(panic_message(&*error.into_panic()))
                         }
-                        _ => true,
+                        _ => TaskEnd::Finished,
                     },
                     () = self.time.wait_until(deadline) => {
                         task.abort();
-                        false
+                        TaskEnd::Stuck
                     }
                 };
-                self.record.record_task(spawned, finished);
+                self.record.record_task(Task { spawned: at, site, end });
             }
         }
-        Err(format!("still spawning tasks after {MAX_JOIN_ROUNDS} rounds of joining"))
+        // Still spawning after every round: what is left is not going to finish either.
+        for Spawned { at, site, task } in std::mem::take(&mut *self.tasks.spawned.lock().unwrap()) {
+            let end = if task.is_finished() { TaskEnd::Finished } else { TaskEnd::Stuck };
+            task.abort();
+            self.record.record_task(Task { spawned: at, site, end });
+        }
     }
+}
+
+/// What a panic said, when it said it with a string.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_default()
 }
 
 /// Let the runtime poll one task, then come back: the run's future wakes itself and, with an event

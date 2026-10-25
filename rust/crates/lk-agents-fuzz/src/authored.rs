@@ -20,7 +20,10 @@ use lk_agents_voice::{
 
 use crate::{
     input::Input,
-    record::{Answer, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Tag},
+    record::{
+        Answer, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Tag, Task,
+        TaskEnd,
+    },
 };
 
 /// Builds a `Recording` fact by fact, as if a driver had produced it.
@@ -277,10 +280,12 @@ impl Authored {
         self.driver_finished()
     }
 
-    /// The session spawned a task, which the run joined to its end or found stuck.
-    pub fn task(mut self, finished: bool) -> Self {
-        let at = self.next();
-        self.recording.record_task(at, finished);
+    /// The session spawned a task here, which the run's join found ended this way.
+    #[track_caller]
+    pub fn task(mut self, end: TaskEnd) -> Self {
+        let spawned = self.next();
+        let site = std::panic::Location::caller();
+        self.recording.record_task(Task { spawned, site, end });
         self
     }
 

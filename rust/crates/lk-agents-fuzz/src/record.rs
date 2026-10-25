@@ -477,6 +477,24 @@ pub enum Phase {
     Closed,
 }
 
+/// A task the session spawned: when, from which line of the product, and how the end-of-run join
+/// found it.
+#[derive(Clone, Debug)]
+pub struct Task {
+    pub spawned: Observed,
+    pub site: &'static std::panic::Location<'static>,
+    pub end: TaskEnd,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TaskEnd {
+    Finished,
+    /// The task panicked, with this message.
+    Panicked(String),
+    /// Still pending when nothing else could run: aborted by the join.
+    Stuck,
+}
+
 #[derive(Debug, Default)]
 pub struct Recording {
     now: Observed,
@@ -497,8 +515,8 @@ pub struct Recording {
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
     driver_panic: Option<String>,
-    /// Every task the session spawned, by when, and whether it finished once the run joined it.
-    tasks: Vec<(Observed, bool)>,
+    /// Every task the session spawned, and how the end-of-run join found it.
+    tasks: Vec<Task>,
     live: Live,
     index: Index,
 }
@@ -558,7 +576,7 @@ impl Recording {
         self.driver_panic.as_deref()
     }
 
-    pub fn tasks(&self) -> &[(Observed, bool)] {
+    pub fn tasks(&self) -> &[Task] {
         &self.tasks
     }
 
@@ -746,8 +764,8 @@ impl Recording {
         self.driver_panic = Some(panic);
     }
 
-    pub fn record_task(&mut self, spawned: Observed, finished: bool) {
-        self.tasks.push((spawned, finished));
+    pub fn record_task(&mut self, task: Task) {
+        self.tasks.push(task);
     }
 
     pub fn set_now(&mut self, now: Observed) {
