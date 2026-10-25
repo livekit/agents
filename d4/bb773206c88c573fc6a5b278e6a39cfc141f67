@@ -1,0 +1,25 @@
+livekit-agents/livekit/agents/stt/stt.py
+  s_1dda5a69e136fb::t_af650ef1ab7577 147-150
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_1dda5a69e136fb::t_258ce1b711aa6e 1554-1555,1564,1588,1652,1759
+tests/test_agent_stt_node.py
+  s_1dda5a69e136fb::t_5451d245996f4e 232-237,239,245-253,279-284,295,303-307,310-313
+tests/test_audio_recognition_turn_detection.py
+  s_1dda5a69e136fb::t_31c2e152d129ee 36,777,787,791-792,795-796,798-801,837-885
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d4bb773206c88c573fc6a5b278e6a39cfc141f67",
+  "prompts": {},
+  "sessions": {
+    "s_1dda5a69e136fb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a4e8-4e98-7c11-bf05-2ae7db533ee9",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

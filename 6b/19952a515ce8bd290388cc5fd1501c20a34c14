@@ -1,0 +1,34 @@
+examples/telephony/amd.md
+  s_802638091a4432::t_97dd9dadb4b6d2 124-160,277-278
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_802638091a4432::t_c87b1ae437291b 1817-1818,2854,2859,2863-2864,2920,4200,4224,4238,4251,4288,4790-4791
+  s_802638091a4432::t_97dd9dadb4b6d2 1972-1973
+livekit-agents/livekit/agents/voice/_turn_hooks.py
+  s_802638091a4432::t_c87b1ae437291b 20-24
+tests/test_amd_realtime.py
+  s_802638091a4432::t_46b08b1e9a6558 1-208,212-216,219,222-228,230-232,235,243-250,254-258,265-313
+  s_802638091a4432::t_f57f4474a69e24 209-211,251-253,259-264
+  s_802638091a4432::t_97dd9dadb4b6d2 217-218,220-221,229,233-234,236-242
+tests/fake_realtime.py
+  s_802638091a4432::t_46b08b1e9a6558 61-62,114-115
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_802638091a4432::t_c87b1ae437291b 116,137-138,154-156,334-343,821,825-829,833
+tests/test_amd_detector.py
+  s_802638091a4432::t_46b08b1e9a6558 330-331
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6b19952a515ce8bd290388cc5fd1501c20a34c14",
+  "prompts": {},
+  "sessions": {
+    "s_802638091a4432": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0afb9-edd0-7ea2-b4c8-d42cccfc53dc",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

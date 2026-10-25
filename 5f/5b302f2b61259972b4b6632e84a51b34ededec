@@ -1,0 +1,123 @@
+livekit-agents/livekit/agents/inference/stt.py
+  s_bcd3e70328118e::t_c686554b4bde60 324-332,1456-1477
+livekit-agents/livekit/agents/stt/multi_speaker_adapter.py
+  s_bcd3e70328118e::t_69025e4928ac9b 284-290
+livekit-plugins/livekit-plugins-assemblyai/livekit/plugins/assemblyai/stt.py
+  s_bcd3e70328118e::t_7a98f6c8d8be57 1116-1123
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py
+  s_bcd3e70328118e::t_2e360ed3574916 450,457,462,470,475-480
+livekit-plugins/livekit-plugins-azure/livekit/plugins/azure/stt.py
+  s_bcd3e70328118e::t_ea2074c4ee80c1 285-286,429,438-449
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/qwen3_stt.py
+  s_bcd3e70328118e::t_096669c02c8a07 381-386
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/stt.py
+  s_bcd3e70328118e::t_53ef1f97e5fe9a 598
+livekit-plugins/livekit-plugins-cartesia/livekit/plugins/cartesia/_recognize_streams/legacy_recognize_stream.py
+  s_bcd3e70328118e::t_a03f99f97e6236 266,369,385-388,415-418
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt.py
+  s_bcd3e70328118e::t_11096421cde713 461,485,589,707-708,881-882,902-908,914-916,919-932
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt_v2.py
+  s_bcd3e70328118e::t_a0bc9c5e48d021 22,566,682-684,693,739-751
+livekit-plugins/livekit-plugins-fireworksai/livekit/plugins/fireworksai/stt.py
+  s_bcd3e70328118e::t_c5859433e468a0 389
+livekit-plugins/livekit-plugins-gladia/livekit/plugins/gladia/stt.py
+  s_bcd3e70328118e::t_657ecf25440e83 880,1085-1087,1163,1166-1176
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/stt.py
+  s_bcd3e70328118e::t_72ee933ade7d3e 985-990,1002-1006,1008-1019,1044
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/stt.py
+  s_bcd3e70328118e::t_c2b03a5e98651f 277,311,359-361,369-374,376,383-384,396
+livekit-plugins/livekit-plugins-inworld/livekit/plugins/inworld/stt.py
+  s_bcd3e70328118e::t_0aff414cf97291 251,292,428-429,457-461,473-481
+livekit-plugins/livekit-plugins-microsoft-ai/livekit/plugins/microsoft_ai/stt.py
+  s_bcd3e70328118e::t_a0d1b88a6753e8 24,263,415-421,428,435,542,564,681-685
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/stt.py
+  s_bcd3e70328118e::t_6e3594f76e7b91 5,337,343-346,429
+livekit-plugins/livekit-plugins-nvidia/livekit/plugins/nvidia/stt.py
+  s_bcd3e70328118e::t_ee6c6c1eb85927 282,285-290
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/stt.py
+  s_bcd3e70328118e::t_3314c0606b3cd0 67,323-325,701,758-760,764-778,783,814-816,836-840,897-907,1014-1015
+livekit-plugins/livekit-plugins-palabra/livekit/plugins/palabra/stt.py
+  s_bcd3e70328118e::t_d21beda95395c3 313,315-321
+livekit-plugins/livekit-plugins-rtzr/livekit/plugins/rtzr/stt.py
+  s_bcd3e70328118e::t_5ae9d74dc417da 191,198-200,203-205,207-211,237-247,250-252,254,256-257,260-262,264-270,357-362
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_bcd3e70328118e::t_139fff2864c841 48,927,999,1031,1062,1066
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_bcd3e70328118e::t_f04b6ee89f4f68 521,819,1092-1097,1236-1237,1242-1250,1305-1306
+livekit-plugins/livekit-plugins-sarvam/tests/test_speech_timing.py
+  s_bcd3e70328118e::t_3ac3eb8c66d702 34,79,120-138,254
+livekit-plugins/livekit-plugins-simplismart/livekit/plugins/simplismart/stt.py
+  s_bcd3e70328118e::t_1d8b57e0455532 413
+livekit-plugins/livekit-plugins-slng/livekit/plugins/slng/stt.py
+  s_bcd3e70328118e::t_c441ba9c6a57f6 571-573,715,723,796-799,853-860,887,1127-1128,1140-1143,1161,1166-1170
+livekit-plugins/livekit-plugins-smallestai/livekit/plugins/smallestai/stt.py
+  s_bcd3e70328118e::t_ca3ea7bc6f0039 61,457,632,750,753,756-768,781,801-803
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/stt.py
+  s_bcd3e70328118e::t_4cd9695a4cda4e 341,509-510,514-516
+livekit-plugins/livekit-plugins-speechmatics/livekit/plugins/speechmatics/stt.py
+  s_bcd3e70328118e::t_b45dccfba85fc5 35,561,586,849-850,856,862-867
+livekit-plugins/livekit-plugins-telnyx/livekit/plugins/telnyx/stt.py
+  s_bcd3e70328118e::t_c92af9154d5ee3 293-294,308-311,323-328
+livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/stt.py
+  s_bcd3e70328118e::t_96227bf6af3d62 38,280,403-404,510-520,525,528-532,534,552-561,566,570,578-588,591-596,606-609,613-616
+tests/test_inference_stt_start_of_speech.py
+  s_bcd3e70328118e::t_96a97688666f0f 16,21-24,37,124-249
+tests/test_meta_stt.py
+  s_bcd3e70328118e::t_420eea9442e5c3 552,577-580
+tests/test_microsoft_ai_stt.py
+  s_bcd3e70328118e::t_7e3c95a705786f 333-369
+tests/test_multi_speaker_adapter.py
+  s_bcd3e70328118e::t_9f9fbf189b66a2 30,37-38,187-252
+tests/test_multi_speaker_primary_speaker.py
+  s_bcd3e70328118e::t_74dc71176a62c7 4,52-85
+tests/test_plugin_assemblyai_stt.py
+  s_bcd3e70328118e::t_43cefcf1c20d96 1640-1661
+tests/test_plugin_aws_stt.py
+  s_bcd3e70328118e::t_c78e375f91e77a 6,25-52
+tests/test_plugin_azure_stt.py
+  s_bcd3e70328118e::t_f72de708844611 12-31,111-146
+tests/test_plugin_deepgram_stt.py
+  s_bcd3e70328118e::t_503d95fa828b9d 9-11,249-380,664-702
+tests/test_plugin_gladia_stt.py
+  s_bcd3e70328118e::t_67c93603063ece 3-4,7-9,20-76
+tests/test_plugin_gnani_stt.py
+  s_bcd3e70328118e::t_b55d9e0c7ee8b0 12-42
+tests/test_plugin_google_stt.py
+  s_bcd3e70328118e::t_cedc2a04ae67b3 4,110-204,802-881
+tests/test_plugin_gradium_stt.py
+  s_bcd3e70328118e::t_e38f83c2f1cf23 13-60,137-153
+tests/test_plugin_nabrah_stt.py
+  s_bcd3e70328118e::t_623bb85a60aecb 181-197
+tests/test_plugin_openai_stt_context.py
+  s_bcd3e70328118e::t_c2471717864114 501-502,511-672
+tests/test_plugin_palabra.py
+  s_bcd3e70328118e::t_7cf1d702616cb9 536-537,553-556,575-580,587-588,598-601,622-627
+tests/test_plugin_sarvam_stt_streaming.py
+  s_bcd3e70328118e::t_59b4bcf9dfc575 59-60,1705,1723-1751
+tests/test_plugin_simplismart_stt.py
+  s_bcd3e70328118e::t_a1755b0c310636 235-257
+tests/test_plugin_soniox_stt.py
+  s_bcd3e70328118e::t_4e72dc45801a4e 357-413,882-898
+tests/test_plugin_speechmatics_stt.py
+  s_bcd3e70328118e::t_c4d3e748253123 126-158
+tests/test_plugin_telnyx_stt.py
+  s_bcd3e70328118e::t_1448e32acfd6c4 142-165
+tests/test_plugin_xai_stt.py
+  s_bcd3e70328118e::t_cf45ee70358bea 142-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5f5b302f2b61259972b4b6632e84a51b34ededec",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

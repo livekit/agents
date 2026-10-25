@@ -1,0 +1,40 @@
+tests/test_amd_stt.py
+  s_aaf78334cb7322::t_045512dc56d60a 1,14-15,23,25-27,39-44,46-48,50-55,57-60,64-91,94-106,108-110,114,119,121,125,127-128,130-133,147,149,151,153-155,163,165-169,174,176,181-183,188-189,191-194,197-202,207-208,210-211,216-221,228-230
+  s_aaf78334cb7322::t_12b9089f61a50a 232
+examples/telephony/amd.md
+  s_aaf78334cb7322::t_17e44737c6afa2 118,142-147,149-150,158-159,165,189-190
+livekit-agents/livekit/agents/voice/amd/_chat_context.py
+  s_aaf78334cb7322::t_6a8e432e9c1406 5,19-37,67-68
+livekit-agents/livekit/agents/voice/amd/_inference.py
+  s_aaf78334cb7322::t_c3c53934209b24 20-22
+livekit-agents/livekit/agents/voice/amd/_stt.py
+  s_aaf78334cb7322::t_184ec025fcabbd 1,17,20,22-23,34-40,47,51-52,63,91,96-99,102,122,128
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_aaf78334cb7322::t_ed0290c93dcf75 23,109,183-184,229,295,385,388,760,1001,1004-1009
+livekit-agents/livekit/agents/voice/amd/events.py
+  s_aaf78334cb7322::t_8f56fa57410632 32,37-38
+tests/test_amd_detector.py
+  s_aaf78334cb7322::t_65247062012d2b 489,510-513,1827-1828,1841,1843,1849-1851,1858,1868-1891,1901,1916,1938,1963,2073-2074,2629-2631,2829-2830
+tests/test_amd_models.py
+  s_aaf78334cb7322::t_20cacadcf3a66f 84,432,456,572,598
+tests/test_amd_realtime.py
+  s_aaf78334cb7322::t_9fa659e8f56fde 367,372-378,381-382,519,538-542
+tests/test_amd_silence.py
+  s_aaf78334cb7322::t_2b81cd6e7baf13 166-167,169,352,519
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5dc6f4496220b424cb3161614b48ca4c8129369",
+  "prompts": {},
+  "sessions": {
+    "s_aaf78334cb7322": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d2193486-0057-4a50-bb24-44082ff248d9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

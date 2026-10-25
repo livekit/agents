@@ -1,0 +1,51 @@
+livekit-agents/livekit/agents/voice/amd/_inference.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 1-118
+livekit-agents/livekit/agents/voice/amd/events.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 1-33
+tests/test_amd_detector.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 4-6,8-9,13-41,44-79,81,83-86,90-102,104,106-108,111-118,120-121,123-163,165-167,169-278,280-305,307-315,317-321,325-431,434-459,461-506,508-643,645-740,742-743,745-796
+tests/test_amd_local_inference.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 1-462
+livekit-agents/livekit/agents/voice/amd/_transcription.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 1-144
+examples/telephony/amd.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 1-10,17,24-25,30,32,40-43,52,54-55,57-62,64,70,73-85,97-98,103-104
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 114,1673-1674,1799-1800,2709,2712-2713,2718,2838-2844,2915-2916
+livekit-agents/livekit/agents/voice/remote_session.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 307-308
+livekit-agents/livekit/agents/voice/amd/classifier.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 31,44-54,63
+livekit-agents/livekit/agents/beta/tools/send_dtmf.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 27,32-33
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 83,755-756,759-760,771
+livekit-agents/livekit/agents/voice/amd/__init__.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 3,5-12
+livekit-agents/livekit/agents/__init__.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 120-121,284-285
+tests/test_audio_recognition_push_audio.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 33,50,57,60,83-97
+examples/telephony/amd.md
+  s_a55799479f59b9::t_7c93d0d3dc7d68 1-149
+tests/test_session_host.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 26,503-524
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_a55799479f59b9::t_7c93d0d3dc7d68 4-9,11,15,19-23,28-68,70-81,84-103,110-111,113-121,124-139,141-182,186,190,194,196-198,200-209,211-233,235-239,241-245,247-250,255-256,260-261,263-265,267-303,305-323,325-327,329,332-339,341-342,344-351,353-355,357-362,364-367,369,371-373,375-406,408-409,411-427,429,431-432,434-467,470-472,474-478,480-490,492-539,541-544,546-549,551,553-556,560-580,582-594,596-650,652-654,656-658,660-662,664-672,674-675,677-722,724-735,737-738,741-817
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8917f15a59e122df744e6ad05773b2c16735f911",
+  "prompts": {},
+  "sessions": {
+    "s_a55799479f59b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abfd-bcaa-7371-b8ab-7bcfd804d2ea",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

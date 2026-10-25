@@ -1,0 +1,19 @@
+tests/test_telemetry_metadata.py
+  s_069eea97a36d42::t_4c86e9d90ce09e 85,111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1c0483e3c5372a06ceeed3dc0f00806950e59723",
+  "prompts": {},
+  "sessions": {
+    "s_069eea97a36d42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ecbe-c8b1-77c2-958b-09e716f1786b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,49 @@
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_6d6e5558bb3060::t_b7d6b28ca1a008 502,511,531,540,565-566
+  s_6d6e5558bb3060::t_4dd89fefdab67b 567
+tests/test_agent_session.py
+  s_6d6e5558bb3060::t_8a05c4b8cfbee9 343,349
+livekit-agents/livekit/agents/voice/endpointing.py
+  s_6d6e5558bb3060::t_810b90f5cb1d4e 57
+  s_6d6e5558bb3060::t_7f392df133db55 1-2
+  s_6d6e5558bb3060::t_b7d6b28ca1a008 12-17,50-53,56,98-99,146-150,152,174,178-180,185-189,191,193-196,199-206,226-232,263-264,297-323
+  s_6d6e5558bb3060::t_4d66587da140bf 100,151,190,192,197-198,213-220,273,283-296
+  s_6d6e5558bb3060::t_99be6812b97504 207,324
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_6d6e5558bb3060::t_b7d6b28ca1a008 2225,2227,2391,4996,5099-5100,5106-5109
+  s_6d6e5558bb3060::t_8a05c4b8cfbee9 4965-4966,5008-5009,5025-5026
+  s_6d6e5558bb3060::t_7d3952945889cc 5027
+tests/test_realtime_adaptive_interruption.py
+  s_6d6e5558bb3060::t_8a05c4b8cfbee9 190,192
+tests/test_false_interruption_resume.py
+  s_6d6e5558bb3060::t_8a05c4b8cfbee9 358-360,383,427-430,469-470
+  s_6d6e5558bb3060::t_10a7606f938f52 25-26,34,381-382,384-426,431-468,471-475
+  s_8d187fff961e33::t_31a68633fd8274 476-477
+tests/test_endpointing.py
+  s_6d6e5558bb3060::t_4d66587da140bf 521-553
+  s_6d6e5558bb3060::t_54f0b905f032d8 467-520
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5f3931f77a2b78854b608a9c31519663cf3a985",
+  "prompts": {},
+  "sessions": {
+    "s_6d6e5558bb3060": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13cc6-3181-7e50-ae91-447bc8fc1d6e",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_8d187fff961e33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60a82482-0fe9-4fea-bde2-bbc6ef33e1ae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

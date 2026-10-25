@@ -1,0 +1,19 @@
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py
+  s_995d41eb514baf::t_0a89d3136437d9 194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c8ce204f527ec28c8b5d8d82d5ac79732dc6a0d9",
+  "prompts": {},
+  "sessions": {
+    "s_995d41eb514baf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11ab7-fefb-7cf1-afdb-fcb71fe9d657",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

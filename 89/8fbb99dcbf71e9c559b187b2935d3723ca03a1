@@ -1,0 +1,27 @@
+livekit-agents/livekit/agents/inference/stt.py
+  s_995d41eb514baf::t_1898383f99f8ef 419-421,744
+livekit-agents/livekit/agents/inference/realtime/openai.py
+  s_995d41eb514baf::t_1898383f99f8ef 35,56-57,150
+livekit-agents/livekit/agents/inference/tts.py
+  s_995d41eb514baf::t_1898383f99f8ef 23,220-222,528
+tests/test_llm_models_report.py
+  s_995d41eb514baf::t_1898383f99f8ef 31,50,187-191,209-212
+livekit-agents/livekit/agents/inference/llm.py
+  s_995d41eb514baf::t_1898383f99f8ef 254-256,342
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "898fbb99dcbf71e9c559b187b2935d3723ca03a1",
+  "prompts": {},
+  "sessions": {
+    "s_995d41eb514baf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11ab7-fefb-7cf1-afdb-fcb71fe9d657",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

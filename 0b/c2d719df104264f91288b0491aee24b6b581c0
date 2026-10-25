@@ -1,0 +1,26 @@
+tests/test_amd_example.py
+  s_b3b9ec510ba3d5::t_b1c60f9a81f711 12-13,16-24,31-34,37-43,65,68-69,72-73,127-129,138-150,154-163,170-178,183-184,198-242
+  s_b3b9ec510ba3d5::t_a5aaee71747658 15,164-169,179-182
+  s_b3b9ec510ba3d5::t_92e496dd7f6483 35-36,60-64,66-67,70-71,118-124,126,151-153,185-197
+  s_b3b9ec510ba3d5::t_22595f1392a4c1 14
+examples/telephony/amd.md
+  s_b3b9ec510ba3d5::t_a5aaee71747658 23-28
+examples/telephony/amd.py
+  s_b3b9ec510ba3d5::t_a5aaee71747658 4,15,18,20,23,41-42,47,52-61,109,146-148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0bc2d719df104264f91288b0491aee24b6b581c0",
+  "prompts": {},
+  "sessions": {
+    "s_b3b9ec510ba3d5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0b524-0476-7f43-95a8-784921147d41",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+livekit-agents/livekit/agents/stt/stt.py
+  s_5804d43a97d8ab::t_bcb9fe7b8232ba 652-653,663,665-679
+  s_5804d43a97d8ab::t_a4c5ffe4d1825a 641-642
+  s_5804d43a97d8ab::t_97d392546aa6e4 404-406
+tests/test_stt_base.py
+  s_5804d43a97d8ab::t_1564ccc35888fa 444,447-449,451,458-461,463-466
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2cdf6bc9afbdc96cafae2443c8d692489b3975a5",
+  "prompts": {},
+  "sessions": {
+    "s_5804d43a97d8ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5865c939-a099-49cb-b810-a3a86e4d9575",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

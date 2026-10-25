@@ -1,0 +1,22 @@
+tests/test_plugin_elevenlabs_stt.py
+  s_8181383bce6a72::t_212582730102cb 504-532,534-543
+  s_8181383bce6a72::t_96470ed8c94956 533
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_8181383bce6a72::t_2858f6611f4049 742
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bca6de83e743c3b10ebe7319834793c34d2e5929",
+  "prompts": {},
+  "sessions": {
+    "s_8181383bce6a72": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a9ac-d57b-7a21-99d9-72d8e5d3817b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

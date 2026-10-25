@@ -1,0 +1,19 @@
+livekit-agents/livekit/agents/voice/amd/_inference.py
+  s_537610c4f1c4c2::t_3d6a7f3bbfab44 27,30,45,53-61,66-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d21b08eecdb86b4417db876ce9ba21b97462217d",
+  "prompts": {},
+  "sessions": {
+    "s_537610c4f1c4c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "facb5b5b-e70d-48c2-a084-6889130faaae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

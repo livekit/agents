@@ -1,0 +1,37 @@
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_5804d43a97d8ab::t_3a5597c94c767c 183-184
+  s_5804d43a97d8ab::t_a61c81c355c6f3 774-776
+  s_5804d43a97d8ab::t_4302bb3982e7f4 418
+livekit-agents/livekit/agents/stt/stt.py
+  s_5804d43a97d8ab::t_a057195f9c7418 360-375
+  s_5804d43a97d8ab::t_cbec85bc04359b 6-7
+  s_5804d43a97d8ab::t_085b9f291fd129 636,640,643
+  s_5804d43a97d8ab::t_a7e197f6d85f59 653,656
+  s_5804d43a97d8ab::t_d9ba023f193d6b 399-403
+  s_5804d43a97d8ab::t_b4c94af26559b0 421-426
+  s_5804d43a97d8ab::t_04967099e085af 450-455,466-473,475-491
+livekit-agents/livekit/agents/stt/fallback_adapter.py
+  s_5804d43a97d8ab::t_a6f3383b367cc6 405-407
+tests/test_stt_base.py
+  s_5804d43a97d8ab::t_17c359d742ba4d 290-294,296,299,305-306,375-379,381-417
+  s_5804d43a97d8ab::t_015f89661e7ace 295,380
+tests/test_stt_timestamps.py
+  s_5804d43a97d8ab::t_17c359d742ba4d 157-158,172-224
+  s_5804d43a97d8ab::t_9f2a580c2b9f88 225-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe33192603749189e74e16a647da80db3e1de87c",
+  "prompts": {},
+  "sessions": {
+    "s_5804d43a97d8ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5865c939-a099-49cb-b810-a3a86e4d9575",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

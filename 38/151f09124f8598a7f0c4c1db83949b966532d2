@@ -1,0 +1,30 @@
+examples/telephony/amd.md
+  s_b11cfac01a2bf1::t_2477ca8a55553c 387-389
+tests/test_amd_realtime.py
+  s_b11cfac01a2bf1::t_50fcd9dfc929b4 549-573
+tests/test_amd_detector.py
+  s_b11cfac01a2bf1::t_5782201cd6059f 1235-1236,1244-1251,1253-1266,1299-1303,1311-1326,1328-1337
+  s_b11cfac01a2bf1::t_56934922f589d9 1237-1243,1252,1304-1310,1327,1338-1339
+  s_b11cfac01a2bf1::t_ba004c4d2ed1cc 1234,1267-1298
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_b11cfac01a2bf1::t_e72f1881394e6d 341-342
+  s_b11cfac01a2bf1::t_2477ca8a55553c 512-514
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_b11cfac01a2bf1::t_2477ca8a55553c 1724-1725,1819-1820
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38151f09124f8598a7f0c4c1db83949b966532d2",
+  "prompts": {},
+  "sessions": {
+    "s_b11cfac01a2bf1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c0a7-8605-7b12-8f74-1fcac014922e",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+tests/test_stt_fallback.py
+  s_785c98d77eb66c::t_593bf79dba0cb8 226-227,238-240
+livekit-agents/livekit/agents/stt/fallback_adapter.py
+  s_785c98d77eb66c::t_432e2fc591a52b 362-364,367-372,387-388,414
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8161e252bfe4161a284797f851590f428c100e7c",
+  "prompts": {},
+  "sessions": {
+    "s_785c98d77eb66c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d9be1781-d4cf-43d1-92a4-5a1fabe06929",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

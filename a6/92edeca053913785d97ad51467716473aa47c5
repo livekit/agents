@@ -1,0 +1,24 @@
+tests/test_manual_turn_vad.py
+  s_27ee508056ce77::t_32aa1e0dfcf9e7 1-63,67-79,83-84,88-96,98-103,105-111,118,121-122,124-127,130-142,144-148
+  s_27ee508056ce77::t_bd88a3fbce678e 64-66,80-82,85-87,97,104,112-117,119-120,123,128-129,143
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_27ee508056ce77::t_330fd08b9a6916 1445-1447,1970
+tests/test_transcription_delay_anchor.py
+  s_27ee508056ce77::t_7e25dcf159d864 179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a692edeca053913785d97ad51467716473aa47c5",
+  "prompts": {},
+  "sessions": {
+    "s_27ee508056ce77": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a139cd-f9b0-77a0-8013-a12b12fc1f7a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

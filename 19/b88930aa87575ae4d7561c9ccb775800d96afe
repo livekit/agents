@@ -1,0 +1,24 @@
+livekit-agents/livekit/agents/voice/avatar/_datastream_io.py
+  s_a28f90a0f9e822::t_6b597d7c63149d 185,188-190,204,216-219,221-224
+tests/test_datastream_audio_output.py
+  s_a28f90a0f9e822::t_edd8262530d617 58-60
+  s_a28f90a0f9e822::t_777c80189d5f38 84,86,106-107,110-111,115-130,132-135
+  s_a28f90a0f9e822::t_e2b4b174f725d3 82-83,85,87-105,108-109,112-114,131,136-162
+  s_a28f90a0f9e822::t_0fe3de301a4546 1-57,61-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19b88930aa87575ae4d7561c9ccb775800d96afe",
+  "prompts": {},
+  "sessions": {
+    "s_a28f90a0f9e822": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a158bb-b8ce-7223-8451-b6a5c65e326c",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

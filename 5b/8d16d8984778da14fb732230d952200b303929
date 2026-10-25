@@ -1,0 +1,20 @@
+tests/test_telemetry_conversation_id.py
+  s_78b2c3d9bc92b6::t_ddcc05fe24e172 3,5,12,78-104,106-121
+  s_78b2c3d9bc92b6::t_b8326e08b1fa24 4,105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5b8d16d8984778da14fb732230d952200b303929",
+  "prompts": {},
+  "sessions": {
+    "s_78b2c3d9bc92b6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a10782-5578-7391-bd55-cfe507d5d6fd",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

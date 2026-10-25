@@ -1,0 +1,23 @@
+tests/test_stt_event_traces.py
+  s_069eea97a36d42::t_21b4d3346fd8ca 15,165-196
+livekit-agents/livekit/agents/telemetry/gen_ai.py
+  s_069eea97a36d42::t_65e9733a59a4ca 93-97
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_069eea97a36d42::t_65e9733a59a4ca 31,1786-1792,2015-2021
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f8c82eec480cf63ae2791334317bcb7cd36efc0c",
+  "prompts": {},
+  "sessions": {
+    "s_069eea97a36d42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ecbe-c8b1-77c2-958b-09e716f1786b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

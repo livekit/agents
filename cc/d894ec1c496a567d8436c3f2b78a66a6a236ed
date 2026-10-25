@@ -1,0 +1,20 @@
+livekit-agents/livekit/agents/voice/endpointing.py
+  s_6d6e5558bb3060::t_7693791b039278 21,185,196,206-207,220,234
+  s_6d6e5558bb3060::t_efd48c4196ed5e 235
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ccd894ec1c496a567d8436c3f2b78a66a6a236ed",
+  "prompts": {},
+  "sessions": {
+    "s_6d6e5558bb3060": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13cc6-3181-7e50-ae91-447bc8fc1d6e",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+livekit-agents/livekit/agents/voice/amd/_turns.py
+  s_a55799479f59b9::t_8351934c0bd8e9 48
+  s_a55799479f59b9::t_66ba21069f066e 49
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_a55799479f59b9::t_8351934c0bd8e9 23
+  s_a55799479f59b9::t_2f3b6a7475a5eb 274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7a757be9a625a2101058b51ac491b7489744dadd",
+  "prompts": {},
+  "sessions": {
+    "s_a55799479f59b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abfd-bcaa-7371-b8ab-7bcfd804d2ea",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

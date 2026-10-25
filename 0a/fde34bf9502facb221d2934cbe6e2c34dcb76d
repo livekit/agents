@@ -1,0 +1,34 @@
+tests/test_datastream_audio_output.py
+  s_a28f90a0f9e822::t_5e7a786cb3a3ae 13-15,236-288
+  s_a28f90a0f9e822::t_ada34a1595942a 16,189-190,192,194-209,212-235
+  s_a28f90a0f9e822::t_2b873e4dd867e3 191,193,210-211
+  s_a28f90a0f9e822::t_dce4d0819de2cf 87,108,110-111,114-116,147-171,174-188,289-301,303-311
+  s_a28f90a0f9e822::t_49d61450caa075 126,133,135,172-173,302
+  s_a28f90a0f9e822::t_2f32f9c82cde03 312-314
+  s_a28f90a0f9e822::t_c4d503bcb53a7e 315-316
+livekit-agents/livekit/agents/voice/avatar/_datastream_io.py
+  s_a28f90a0f9e822::t_2b873e4dd867e3 73,153-162,185-187,189-192
+  s_a28f90a0f9e822::t_49d61450caa075 151,213,228,240,243-245,249
+  s_a28f90a0f9e822::t_02aa86d32c66fd 188
+  s_a28f90a0f9e822::t_a7a875314de54d 74,152,163,210,214,250
+  s_a28f90a0f9e822::t_442fc97d711fae 193
+  s_a28f90a0f9e822::t_021da4961a9ef1 211
+livekit-agents/livekit/agents/voice/transcription/synchronizer.py
+  s_a28f90a0f9e822::t_e6821fca113642 712-715
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0afde34bf9502facb221d2934cbe6e2c34dcb76d",
+  "prompts": {},
+  "sessions": {
+    "s_a28f90a0f9e822": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a158bb-b8ce-7223-8451-b6a5c65e326c",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

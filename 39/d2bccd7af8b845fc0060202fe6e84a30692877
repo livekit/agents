@@ -1,0 +1,30 @@
+livekit-agents/livekit/agents/voice/remote_session.py
+  s_a55799479f59b9::t_e9edb908651e4c 506-508
+tests/test_amd_models.py
+  s_a55799479f59b9::t_4aec53ea45db52 6,12,224-282
+  s_a55799479f59b9::t_4a66610c2aae0b 283-285
+tests/test_session_host.py
+  s_a55799479f59b9::t_477b1a06ea3acd 373-382,390,401
+  s_a55799479f59b9::t_e9edb908651e4c 395
+tests/test_amd_inference.py
+  s_a55799479f59b9::t_4aec53ea45db52 9,58
+  s_a55799479f59b9::t_bdb668085e7045 46,123
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_a55799479f59b9::t_bdb668085e7045 253,291-314,319-323
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "39d2bccd7af8b845fc0060202fe6e84a30692877",
+  "prompts": {},
+  "sessions": {
+    "s_a55799479f59b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abfd-bcaa-7371-b8ab-7bcfd804d2ea",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

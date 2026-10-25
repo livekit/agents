@@ -1,0 +1,44 @@
+livekit-agents/livekit/agents/voice/amd/_chat_context.py
+  s_b11cfac01a2bf1::t_738e754297cfcc 37-38,64-70,75-76
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_b11cfac01a2bf1::t_dba15aac002fc8 2743-2744
+tests/test_amd_detector.py
+  s_b11cfac01a2bf1::t_b6b0ce4b2da3b9 2624
+  s_b11cfac01a2bf1::t_d30102f01cd614 113,2237-2239,2280-2287
+  s_b11cfac01a2bf1::t_2d220aeb4214d2 2608
+tests/test_amd_inference.py
+  s_b11cfac01a2bf1::t_d30102f01cd614 27-28,41-42,154,158,163-168,179-185,195-200,207-216
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_b11cfac01a2bf1::t_738e754297cfcc 577-578,627-628,635-636,660-661,710,712,735-740,744-748,766-769,772
+livekit-agents/livekit/agents/voice/amd/_inference.py
+  s_b11cfac01a2bf1::t_738e754297cfcc 38-49,73-75,90-101,159-163,165,173-176,181-186,188-189
+tests/test_amd_fsm.py
+  s_b11cfac01a2bf1::t_d30102f01cd614 102-121,125-132
+  s_b11cfac01a2bf1::t_64cfe76723d79a 122-124
+tests/test_amd_corrections.py
+  s_b11cfac01a2bf1::t_d30102f01cd614 1-190
+CONTEXT.md
+  s_b11cfac01a2bf1::t_ef4d260d9ba493 1-39
+livekit-agents/livekit/agents/voice/amd/events.py
+  s_b11cfac01a2bf1::t_738e754297cfcc 71-74
+livekit-agents/livekit/agents/voice/amd/_fsm.py
+  s_b11cfac01a2bf1::t_738e754297cfcc 4-5,50-57,70-74
+examples/telephony/amd.md
+  s_b11cfac01a2bf1::t_ef4d260d9ba493 231-275,298
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86d5d65dc16ec279117e3de5da772ceff5763efa",
+  "prompts": {},
+  "sessions": {
+    "s_b11cfac01a2bf1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c0a7-8605-7b12-8f74-1fcac014922e",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

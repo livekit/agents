@@ -1,0 +1,21 @@
+tests/test_llm_telemetry.py
+  s_069eea97a36d42::t_c401b11c3d65c0 173-178
+livekit-agents/livekit/agents/llm/llm.py
+  s_069eea97a36d42::t_c401b11c3d65c0 436-437
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d2be9aec503e2d48855a5eb421df7161ba3dfaeb",
+  "prompts": {},
+  "sessions": {
+    "s_069eea97a36d42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ecbe-c8b1-77c2-958b-09e716f1786b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

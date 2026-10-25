@@ -1,0 +1,23 @@
+tests/test_amd_silence.py
+  s_a55799479f59b9::t_427625ff1e60f3 871-873
+  s_a55799479f59b9::t_96105d174a3d32 864-867
+  s_a55799479f59b9::t_289c1c9f027cd9 847-863,868-870,874-875
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_a55799479f59b9::t_7029832142a13f 809-811,825,832-833,837,844,848,858-859,863-865,867,885,889
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "548503ce6e3d53f09829b3560901dcf80bee19e8",
+  "prompts": {},
+  "sessions": {
+    "s_a55799479f59b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abfd-bcaa-7371-b8ab-7bcfd804d2ea",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

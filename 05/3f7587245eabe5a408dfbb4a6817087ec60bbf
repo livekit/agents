@@ -1,0 +1,56 @@
+livekit-agents/livekit/agents/voice/amd/_transcription.py
+  s_a55799479f59b9::t_d6b145eb7f286a 4-6,16-17,19-20,22-42,44-62,69-70,74-78,81,85-87,90-91,94-95,99-100,105-112,114-115,118-139,141-156,159-163,168,171-172
+tests/test_agent_session.py
+  s_a55799479f59b9::t_d6b145eb7f286a 2353
+livekit-agents/livekit/agents/voice/events.py
+  s_a55799479f59b9::t_d6b145eb7f286a 295,319,340-351,602
+tests/test_audio_recognition_push_audio.py
+  s_a55799479f59b9::t_d6b145eb7f286a 3,9,50,82-92,95-103,105-128
+tests/test_amd_silence.py
+  s_a55799479f59b9::t_d6b145eb7f286a 16-25,36,67-68,95-96,99,112-113,117,130-132,135,138-139,141,164-165,169,171,175,178,192-193,196,199-200,219-220,223,225-226,229,249-250,255-257,274,276-278,281-282,284,295,301-302,305-307,311-313,318,346,350,364,374,379,385,392-393,405-407,436-460,478-479,528-529
+tests/test_amd_fsm.py
+  s_a55799479f59b9::t_d6b145eb7f286a 32-33,75-115,202-203,232-233,301-302,305-316
+examples/telephony/amd.py
+  s_a55799479f59b9::t_d6b145eb7f286a 42-44,69-73,81,85,112
+livekit-agents/livekit/agents/voice/__init__.py
+  s_a55799479f59b9::t_d6b145eb7f286a 33,74
+tests/test_false_interruption_resume.py
+  s_a55799479f59b9::t_d6b145eb7f286a 191,220,246,277,303,389
+tests/test_amd_local_inference.py
+  s_a55799479f59b9::t_d6b145eb7f286a 18-26,34,37,42-43,46-47,177,294,296,298,305,328,331-332,344-345,355,359-370,374,376,378-382,385-390,394,397,399-402,404-407,413,415,429-430,448,450,461,468,479,489,493,495,498-499,505-528,565,583,595-596,598-599
+examples/telephony/amd.md
+  s_a55799479f59b9::t_d6b145eb7f286a 8-12,79-83
+tests/test_amd_detector.py
+  s_a55799479f59b9::t_d6b145eb7f286a 5,35,190-211,256,258,272,291-296,298-301,319-350,410,413,448,450,563,601-607,687,701,735,747,760-762,765,772,894,898,901,912,957
+  s_a55799479f59b9::t_52d4b60baf2f74 13
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_a55799479f59b9::t_d6b145eb7f286a 81,697,2236,2240-2249
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_a55799479f59b9::t_d6b145eb7f286a 21-22,34-41,76,102-105,173-174,191,238-242,245,248-250,333-335,344,358-364,367-369,371-373,375,380-385,387,389-394,401,423,425,448,492,501,547,559,562,566,569,571,586,591,601-603
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_a55799479f59b9::t_d6b145eb7f286a 1655-1656,1682-1684,2427-2428,2701-2705,2719,2845,2923
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_a55799479f59b9::t_d6b145eb7f286a 79-80,153,752,1316-1320,1322,1348,1420,1422,1890
+livekit-agents/livekit/agents/voice/amd/_fsm.py
+  s_a55799479f59b9::t_d6b145eb7f286a 3,209,217-219,270-272,281,300,304,307,333-347,400,437,445-449,452-453,546
+livekit-agents/livekit/agents/voice/amd/_inference.py
+  s_a55799479f59b9::t_d6b145eb7f286a 11
+livekit-agents/livekit/agents/__init__.py
+  s_a55799479f59b9::t_d6b145eb7f286a 111,204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "053f7587245eabe5a408dfbb4a6817087ec60bbf",
+  "prompts": {},
+  "sessions": {
+    "s_a55799479f59b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abfd-bcaa-7371-b8ab-7bcfd804d2ea",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

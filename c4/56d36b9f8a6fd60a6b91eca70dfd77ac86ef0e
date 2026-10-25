@@ -1,0 +1,98 @@
+livekit-agents/livekit/agents/llm/duplex_adapter.py
+  s_995d41eb514baf::t_4634c7c379eff8 300-305
+  s_995d41eb514baf::t_9591be03102ac4 9,15,306
+livekit-agents/livekit/agents/llm/realtime_fallback_adapter.py
+  s_995d41eb514baf::t_4634c7c379eff8 137-143
+  s_995d41eb514baf::t_e328739daa1fa9 13,144
+livekit-agents/livekit/agents/_reporting.py
+  s_995d41eb514baf::t_b04a71f23ef6e0 22,119
+  s_995d41eb514baf::t_d24dd8f5512a47 120-121,129-131
+livekit-agents/livekit/agents/llm/llm.py
+  s_995d41eb514baf::t_a93b306efb7cea 149-151
+  s_995d41eb514baf::t_9492cd82f88caf 6,19,152
+livekit-plugins/livekit-plugins-langchain/livekit/plugins/langchain/langgraph.py
+  s_995d41eb514baf::t_4634c7c379eff8 69-74
+  s_995d41eb514baf::t_21b9e9b1bebef8 75
+livekit-agents/livekit/agents/inference/llm.py
+  s_995d41eb514baf::t_5641c7c51e4979 24
+  s_995d41eb514baf::t_41da701a23d138 191,195,199,201,204,207,212,214,217,222-224,315-325
+  s_995d41eb514baf::t_7d243cde89bfb4 326
+livekit-agents/livekit/agents/voice/report.py
+  s_995d41eb514baf::t_b04a71f23ef6e0 40,91-96
+livekit-agents/livekit/agents/llm/duplex.py
+  s_995d41eb514baf::t_a93b306efb7cea 91-93
+  s_995d41eb514baf::t_1b4371c6ca3c1e 6,9,13,94
+livekit-plugins/livekit-plugins-nvidia/livekit/plugins/nvidia/experimental/realtime/realtime_model.py
+  s_995d41eb514baf::t_4634c7c379eff8 151-158
+  s_995d41eb514baf::t_2c51e5909629b6 16,159
+livekit-agents/livekit/agents/llm/realtime.py
+  s_995d41eb514baf::t_a93b306efb7cea 125-127
+  s_995d41eb514baf::t_2b2b590bd09a10 6,9,15,128
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/gpt_live_model.py
+  s_995d41eb514baf::t_4634c7c379eff8 357-366
+  s_995d41eb514baf::t_41da701a23d138 89,91,93,95,102
+  s_995d41eb514baf::t_b4dd0acdcceaba 18,103-104,367-371
+livekit-plugins/livekit-plugins-azure/livekit/plugins/azure/realtime/realtime_model.py
+  s_995d41eb514baf::t_4634c7c379eff8 349-361
+  s_995d41eb514baf::t_6869eb9107be7c 12,362-388
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/llm.py
+  s_995d41eb514baf::t_4634c7c379eff8 119-123
+  s_995d41eb514baf::t_317011cce1cb43 124
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/responses/llm.py
+  s_995d41eb514baf::t_4634c7c379eff8 339-348,357
+  s_995d41eb514baf::t_dcc1d7e90e0788 349-356
+  s_995d41eb514baf::t_8720a5d9a7f66a 358
+livekit-plugins/livekit-plugins-phonic/livekit/plugins/phonic/realtime/realtime_model.py
+  s_995d41eb514baf::t_4634c7c379eff8 409-434
+  s_995d41eb514baf::t_c08b39acfc4e41 12,435
+tests/test_llm_component_report.py
+  s_995d41eb514baf::t_c26274d4f0b4da 1-103,116-168,172-201,205-215,220-246
+  s_995d41eb514baf::t_5bec02114e3151 104-115,169-171,202-204,216-219
+livekit-plugins/livekit-plugins-ultravox/livekit/plugins/ultravox/realtime/realtime_model.py
+  s_995d41eb514baf::t_4634c7c379eff8 239-251
+  s_995d41eb514baf::t_5dcec263190262 252
+tests/test_recording.py
+  s_995d41eb514baf::t_dcc1d7e90e0788 680-683,700
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/realtime/realtime_api.py
+  s_995d41eb514baf::t_4634c7c379eff8 455-480
+  s_995d41eb514baf::t_8cb4eeda4a2a04 11,481-529
+livekit-agents/livekit/agents/llm/fallback_adapter.py
+  s_995d41eb514baf::t_4634c7c379eff8 127-136
+  s_995d41eb514baf::t_0705fc4e311f05 13,137
+livekit-agents/livekit/agents/inference/realtime/openai.py
+  s_995d41eb514baf::t_c4eebcc4123044 146-152
+livekit-agents/livekit/agents/llm/_realtime/openai.py
+  s_995d41eb514baf::t_21d3fecb8d3789 581-635
+livekit-plugins/livekit-plugins-anthropic/livekit/plugins/anthropic/llm.py
+  s_995d41eb514baf::t_32ca84568ce70b 153-166
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/experimental/realtime/realtime_model.py
+  s_995d41eb514baf::t_967783a5c1eb49 532-547
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/llm.py
+  s_995d41eb514baf::t_1d0eb3ccbb9959 189-202
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/aiplatform_llm.py
+  s_995d41eb514baf::t_2e90874384433e 255-267
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/llm.py
+  s_995d41eb514baf::t_de48eda12f30cf 308-348
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/llm.py
+  s_995d41eb514baf::t_21262c9f9c67d9 161-175
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/llm.py
+  s_995d41eb514baf::t_e8f9f035f44451 205-221
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/llm/client.py
+  s_995d41eb514baf::t_b630452cce2a1c 264-284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c456d36b9f8a6fd60a6b91eca70dfd77ac86ef0e",
+  "prompts": {},
+  "sessions": {
+    "s_995d41eb514baf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11ab7-fefb-7cf1-afdb-fcb71fe9d657",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

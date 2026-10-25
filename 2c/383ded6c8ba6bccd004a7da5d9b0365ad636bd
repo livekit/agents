@@ -1,0 +1,49 @@
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_e3d8b05fbceaec::t_791dac379b1525 130-133,188-191,279-280,334,336,566-571,575-577,588,591,666-667,671-672,678-683,768,824-825,909
+  s_e3d8b05fbceaec::t_8da50d690e55fa 931,951-962,964
+livekit-agents/livekit/agents/voice/amd/events.py
+  s_e3d8b05fbceaec::t_89e93fc1c4c9cc 20-21
+  s_e3d8b05fbceaec::t_f48caacff65c28 4,30,62,67-70
+tests/test_amd_fsm.py
+  s_e3d8b05fbceaec::t_cbdd1d79a8059f 21-24,63-66,84,91,93-94
+tests/test_amd_detector.py
+  s_e3d8b05fbceaec::t_27a5dfc1d36a18 1851-1852,1857-1858,2418-2422,2479-2480
+  s_e3d8b05fbceaec::t_7b889465110b58 45,801-802,809-810,812,829,835-836,877,884-885,887,900,1181,1204,1235,1454,2289,2299
+  s_e3d8b05fbceaec::t_cbdd1d79a8059f 54,56-72,505,1827,1838,1843,1845-1849,1853-1854,1856,2122-2124,2424,2448,2458-2461,2464-2465,2476-2477,2481-2483,2485,2504-2506,2515,2518,2530-2548
+  s_e3d8b05fbceaec::t_c6342fe3affd80 48,270-274,280-286,1236-1257
+  s_e3d8b05fbceaec::t_a334323d866e56 2074-2075,2077,2079
+  s_e3d8b05fbceaec::t_6a671971166365 2549-2550
+tests/test_amd_silence.py
+  s_e3d8b05fbceaec::t_7b889465110b58 15,82,230-231,380,388,539-540,578,832,845
+  s_e3d8b05fbceaec::t_27a5dfc1d36a18 409
+  s_e3d8b05fbceaec::t_cbdd1d79a8059f 122,151,153-159,162,398,472-473,475,478,493,505,509-510
+livekit-agents/livekit/agents/voice/amd/_chat_context.py
+  s_e3d8b05fbceaec::t_612fbd33c3f8e2 42
+  s_e3d8b05fbceaec::t_89e93fc1c4c9cc 43
+livekit-agents/livekit/agents/voice/amd/_fsm.py
+  s_e3d8b05fbceaec::t_f48caacff65c28 1-5,12,69-70
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_e3d8b05fbceaec::t_791dac379b1525 2672,2675
+examples/telephony/amd.md
+  s_e3d8b05fbceaec::t_2bdff4233c2356 13,121-122,128-129,136-147,159-160,208,243
+  s_e3d8b05fbceaec::t_e96e8d3015f920 14-15
+tests/amd_test_utils.py
+  s_e3d8b05fbceaec::t_4e1fe0ecaae50a 9
+  s_e3d8b05fbceaec::t_7b889465110b58 19-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2c383ded6c8ba6bccd004a7da5d9b0365ad636bd",
+  "prompts": {},
+  "sessions": {
+    "s_e3d8b05fbceaec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc24d39b-b59b-4946-b2f1-b58858f9bb09",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

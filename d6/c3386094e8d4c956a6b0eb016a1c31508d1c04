@@ -1,0 +1,36 @@
+tests/test_audio_turn_detector_fallback.py
+  s_948d99d9bf9770::t_1dfa3a6da9f422 106
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_948d99d9bf9770::t_1dfa3a6da9f422 1452-1454
+tests/test_turn_detection_fsm.py
+  s_948d99d9bf9770::t_1dfa3a6da9f422 25,46
+livekit-agents/livekit/agents/inference/eot/transports.py
+  s_948d99d9bf9770::t_321d0f2cbd99a8 30-33
+  s_948d99d9bf9770::t_1dfa3a6da9f422 20,43,115-129,423
+livekit-agents/livekit/agents/inference/eot/base.py
+  s_948d99d9bf9770::t_1dfa3a6da9f422 20,54,174,188
+tests/test_turn_detection_cloud_stream.py
+  s_948d99d9bf9770::t_84c00490eef0d4 134-136
+  s_948d99d9bf9770::t_0ab4d714375973 18,20,93-95,97-98,108-133,137-185
+tests/test_audio_recognition_turn_detection.py
+  s_948d99d9bf9770::t_0ab4d714375973 36,466-468,473
+  s_948d99d9bf9770::t_1dfa3a6da9f422 83
+livekit-agents/livekit/agents/voice/turn.py
+  s_948d99d9bf9770::t_321d0f2cbd99a8 71-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d6c3386094e8d4c956a6b0eb016a1c31508d1c04",
+  "prompts": {},
+  "sessions": {
+    "s_948d99d9bf9770": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13539-ee92-7c42-9eec-a77c81012b50",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

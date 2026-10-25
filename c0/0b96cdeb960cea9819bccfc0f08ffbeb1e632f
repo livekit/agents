@@ -1,0 +1,42 @@
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_50888f2a9c6027::t_8b3eb3738ba5d6 113,1655,1675,1682,1803-1804,1880-1882,2700,2714,2717,2722-2725,2728,2733-2736,2848,2925-2926,3115-3116
+tests/test_amd_silence.py
+  s_50888f2a9c6027::t_814ab7ebc54d5d 99,117,135,178,196,223,295,305,318,346
+tests/test_amd_local_inference.py
+  s_50888f2a9c6027::t_7fd8861086d852 261
+  s_50888f2a9c6027::t_814ab7ebc54d5d 462,469,480,566
+livekit-agents/livekit/agents/voice/_reply_guard.py
+  s_50888f2a9c6027::t_8b3eb3738ba5d6 1-25
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_50888f2a9c6027::t_8b3eb3738ba5d6 235,246,454,491,529,572,610-612,615
+  s_50888f2a9c6027::t_e8824c1e7e50e2 521
+tests/test_amd_detector.py
+  s_50888f2a9c6027::t_7fd8861086d852 618,678,690
+  s_50888f2a9c6027::t_9299df1cef76e2 34-38,40,267-304,310-318,324-348
+  s_50888f2a9c6027::t_814ab7ebc54d5d 537,539,653,655,699,793,827,852,864
+  s_50888f2a9c6027::t_1cefaabcea05f2 305-309,319-323
+  s_50888f2a9c6027::t_b4833077e607b9 349-350
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_50888f2a9c6027::t_8b3eb3738ba5d6 64,68,749,756-774
+  s_50888f2a9c6027::t_1cefaabcea05f2 1376
+  s_50888f2a9c6027::t_c21efd316f6b3c 775
+tests/test_audio_recognition_push_audio.py
+  s_50888f2a9c6027::t_7fd8861086d852 9,86-88,115
+  s_50888f2a9c6027::t_9299df1cef76e2 122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c00b96cdeb960cea9819bccfc0f08ffbeb1e632f",
+  "prompts": {},
+  "sessions": {
+    "s_50888f2a9c6027": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a746-aa29-7001-bc9f-3b00c74e12b2",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+examples/telephony/amd.md
+  s_b3b9ec510ba3d5::t_a27a83af288cbd 27-36
+examples/telephony/amd.py
+  s_b3b9ec510ba3d5::t_a27a83af288cbd 19,22,67-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "027774c3d119ce7d280cde5105f53fb37c47b930",
+  "prompts": {},
+  "sessions": {
+    "s_b3b9ec510ba3d5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0b524-0476-7f43-95a8-784921147d41",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

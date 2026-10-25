@@ -1,0 +1,24 @@
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_e3d8b05fbceaec::t_11d02b470b35bf 587,593-610,643-644
+  s_e3d8b05fbceaec::t_ca7c347566a055 588-590
+tests/test_amd_silence.py
+  s_e3d8b05fbceaec::t_ca7c347566a055 472-474
+tests/test_amd_detector.py
+  s_e3d8b05fbceaec::t_ca7c347566a055 1797-1810
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "812165d917715d1a84a73ff4ac465fc90653eda0",
+  "prompts": {},
+  "sessions": {
+    "s_e3d8b05fbceaec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc24d39b-b59b-4946-b2f1-b58858f9bb09",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

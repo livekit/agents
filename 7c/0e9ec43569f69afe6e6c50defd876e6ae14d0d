@@ -1,0 +1,47 @@
+tests/test_trace_types_pii.py
+  s_069eea97a36d42::t_1fa6bad4c0c0c0 141
+  s_069eea97a36d42::t_89ed7fc9e0a792 140
+livekit-agents/livekit/agents/telemetry/gen_ai.py
+  s_069eea97a36d42::t_65c4b0186d2e4d 118,125-132,135,368,371-374,395,398-399,402
+  s_069eea97a36d42::t_8232ef46ffec79 42,53-55,100-102,119,122-124
+  s_069eea97a36d42::t_4a19bd5ab19e81 215-217
+  s_069eea97a36d42::t_159ff73ed49b41 8,12,176-192,227
+  s_069eea97a36d42::t_1fa6bad4c0c0c0 4,7,11,41,43-47,85-99,103-104,108-117,120-121,133-134,136-165,369-370,375
+  s_069eea97a36d42::t_be631430d8ce56 39-40,63-84,105-107,166-175,193-214,218-226,228-240,507,510
+livekit-agents/livekit/agents/voice/generation.py
+  s_069eea97a36d42::t_1fa6bad4c0c0c0 388
+  s_069eea97a36d42::t_a29afa9f2da7ad 203-211
+livekit-agents/livekit/agents/llm/llm.py
+  s_069eea97a36d42::t_1fa6bad4c0c0c0 295-297
+livekit-agents/livekit/agents/telemetry/trace_types.py
+  s_069eea97a36d42::t_be631430d8ce56 230
+  s_069eea97a36d42::t_1fa6bad4c0c0c0 231
+livekit-agents/livekit/agents/telemetry/traces.py
+  s_069eea97a36d42::t_be631430d8ce56 669
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_069eea97a36d42::t_1fa6bad4c0c0c0 980-982
+tests/test_telemetry_content_limits.py
+  s_069eea97a36d42::t_8232ef46ffec79 6,9,18,29,205,209-211,252,260,262,270-272,277-285,290-294,296,336-354
+  s_069eea97a36d42::t_943a152a99c206 1-2,4-5,7-8,10-12,14-17,20-27,30-53,55,57,59-61,63-75,77-83,85,88-89,91-106,108-119,121-122,125-130,132-148,150-155,157
+  s_069eea97a36d42::t_321460941c410a 54,56,58,62,90,107,131,149,156,158-184
+  s_069eea97a36d42::t_1fa6bad4c0c0c0 28
+  s_069eea97a36d42::t_f855c9eebabbfb 3,13,19,76,84,86-87,120,123-124,185-204,206-208,212-251,253-259,261,263-269,273-276,286-289,295,297-335
+tests/test_llm_telemetry.py
+  s_069eea97a36d42::t_89ed7fc9e0a792 231-233,515
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c0e9ec43569f69afe6e6c50defd876e6ae14d0d",
+  "prompts": {},
+  "sessions": {
+    "s_069eea97a36d42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ecbe-c8b1-77c2-958b-09e716f1786b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": null
+    }
+  }
+}

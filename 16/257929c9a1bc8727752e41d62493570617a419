@@ -1,0 +1,27 @@
+tests/test_coverage_spans.py
+  s_f50cdb7f85c15d::t_58036ced8474ac 245
+tests/test_llm_telemetry.py
+  s_f50cdb7f85c15d::t_58036ced8474ac 142,145,147-149,153-154,158-165
+livekit-agents/livekit/agents/llm/llm.py
+  s_f50cdb7f85c15d::t_8664c0118f7193 241,293
+livekit-agents/livekit/agents/telemetry/gen_ai.py
+  s_f50cdb7f85c15d::t_8664c0118f7193 303,309,313-315
+livekit-agents/livekit/agents/llm/fallback_adapter.py
+  s_f50cdb7f85c15d::t_8664c0118f7193 174-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16257929c9a1bc8727752e41d62493570617a419",
+  "prompts": {},
+  "sessions": {
+    "s_f50cdb7f85c15d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abca-c07b-78d0-bbbd-52575ebd6b3f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

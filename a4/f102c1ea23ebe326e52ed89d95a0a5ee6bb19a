@@ -1,0 +1,21 @@
+tests/test_audio_emitter.py
+  s_8dc869ff9f3b0c::t_8e30498bd26092 288-364
+livekit-agents/livekit/agents/tts/tts.py
+  s_8dc869ff9f3b0c::t_e5cd9c77a2d664 1046,1049-1050,1058-1070,1273,1287
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a4f102c1ea23ebe326e52ed89d95a0a5ee6bb19a",
+  "prompts": {},
+  "sessions": {
+    "s_8dc869ff9f3b0c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1123a-7b33-7940-a519-5a5054a321a7",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

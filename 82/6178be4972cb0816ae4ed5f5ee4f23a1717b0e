@@ -1,0 +1,53 @@
+tests/test_echo_cancellation.py
+  s_45d0ae4cf1a624::t_0bd659ebc6cb26 79-80,84,97
+  s_45d0ae4cf1a624::t_fb124e98710dff 85-88,90-91
+  s_45d0ae4cf1a624::t_d87e7add71608f 101-104,109,121-124,192-193
+  s_45d0ae4cf1a624::t_cd81cf2480f679 195-202
+  s_45d0ae4cf1a624::t_355c3515514090 89,158-160
+  s_45d0ae4cf1a624::t_2749b41eaee131 1-78,81-83,92-96,98-100,105-108,110-120,125-130,144-157,161-191,194
+  s_45d0ae4cf1a624::t_f42bace87bf83c 131-143
+livekit-agents/livekit/agents/voice/room_io/types.py
+  s_45d0ae4cf1a624::t_51e10d1ac4a483 77-78,82-84
+  s_45d0ae4cf1a624::t_5291a50560deff 79-81
+livekit-agents/livekit/agents/voice/room_io/_echo_cancellation.py
+  s_45d0ae4cf1a624::t_cd81cf2480f679 162,184,187-194
+  s_45d0ae4cf1a624::t_51e10d1ac4a483 1-20,23-32,36,40-53,62,64-77,80-161,163-183,185-186,195-222,224,226,230-251,255-260,264-307
+  s_45d0ae4cf1a624::t_5291a50560deff 33-35,37-39
+  s_45d0ae4cf1a624::t_355c3515514090 63,223,261-263
+  s_45d0ae4cf1a624::t_0bd659ebc6cb26 225,227-229
+  s_45d0ae4cf1a624::t_625ce2722c4e01 252-254,308-310
+  s_45d0ae4cf1a624::t_de8fce2cb084ef 21-22
+  s_45d0ae4cf1a624::t_ee00ec45d886ca 78-79
+  s_45d0ae4cf1a624::t_d87e7add71608f 54-61
+livekit-agents/livekit/agents/voice/room_io/_input.py
+  s_45d0ae4cf1a624::t_625ce2722c4e01 362,393,396,409-411,415-421
+  s_45d0ae4cf1a624::t_51e10d1ac4a483 19,345,361,387-392,394-395,397,407-408,412-414
+  s_45d0ae4cf1a624::t_dce6a18ce9c1bb 422
+livekit-agents/livekit/agents/voice/room_io/room_io.py
+  s_45d0ae4cf1a624::t_51e10d1ac4a483 32,114-128,156,171
+tests/test_room_io.py
+  s_45d0ae4cf1a624::t_7f559dd773ec6a 15,224,233,691-725,729-745,749-793
+  s_45d0ae4cf1a624::t_355c3515514090 726-728,746-748,1301-1305,1334-1338
+  s_45d0ae4cf1a624::t_7d98ab1a2f5347 4,796-830,1297-1300,1306-1333,1339-1362
+  s_45d0ae4cf1a624::t_719e35927f8e4e 794-795,1363-1364
+livekit-agents/livekit/agents/voice/room_io/_output.py
+  s_45d0ae4cf1a624::t_51e10d1ac4a483 34,46,55,123-124,269,299,321-327,332,337-340
+  s_45d0ae4cf1a624::t_f42bace87bf83c 328-331
+  s_45d0ae4cf1a624::t_b161d5e92fa78d 341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "826178be4972cb0816ae4ed5f5ee4f23a1717b0e",
+  "prompts": {},
+  "sessions": {
+    "s_45d0ae4cf1a624": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1378d-ce7c-7ab1-b321-858fe4d899cf",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

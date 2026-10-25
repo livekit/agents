@@ -1,0 +1,19 @@
+livekit-agents/livekit/agents/inference/interruption.py
+  s_8d187fff961e33::t_343f9b85a63d27 37,58-60,394
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f7575c1a679d7f05065a5af0582ebbed62da0d61",
+  "prompts": {},
+  "sessions": {
+    "s_8d187fff961e33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60a82482-0fe9-4fea-bde2-bbc6ef33e1ae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

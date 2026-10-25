@@ -1,0 +1,25 @@
+livekit-agents/livekit/agents/voice/amd/events.py
+  s_50888f2a9c6027::t_c8cb8935b61b8c 29
+  s_50888f2a9c6027::t_11faba17a5b9ae 20,22-25,27,30-32,34-37,39,41,43,45,47,49,51,53,55,57
+tests/test_amd_fsm.py
+  s_50888f2a9c6027::t_3c61cf22c3cd5f 183-227
+livekit-agents/livekit/agents/voice/amd/_fsm.py
+  s_50888f2a9c6027::t_11faba17a5b9ae 53,121,136,139,145-152,273,308,310-324,326-333,346-347,352,354,372-375,378,425,470-475,477,481-482,485-488,490,493-494,503
+  s_50888f2a9c6027::t_54ef878552d009 353
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "727e6dda6ce22ae9230e0f7085c740e4ba439b52",
+  "prompts": {},
+  "sessions": {
+    "s_50888f2a9c6027": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a746-aa29-7001-bc9f-3b00c74e12b2",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

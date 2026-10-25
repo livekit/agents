@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/metrics/usage.py
+  s_cb009245d7cc49::t_9623f6651fbf03 97
+livekit-agents/livekit/agents/metrics/base.py
+  s_cb009245d7cc49::t_9623f6651fbf03 62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6aef78b1063c941f0531c77caf9e310894d6ec70",
+  "prompts": {},
+  "sessions": {
+    "s_cb009245d7cc49": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a686-0bff-7d91-849c-50d5d6e0562f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_069eea97a36d42::t_5ee99f629c8dfe 289-291,3327,3453-3459,3854,4172,4196,4202-4209,4579
+livekit-agents/livekit/agents/voice/speech_handle.py
+  s_069eea97a36d42::t_5ee99f629c8dfe 14,67-68,400-408,427-436
+tests/test_coverage_spans.py
+  s_069eea97a36d42::t_40ca57363eab27 8,91-93
+tests/test_agent_turn_span.py
+  s_069eea97a36d42::t_40ca57363eab27 11,20,22,24,68-71,75,80-81,95-101,118-119,245-274,278-279,311,314,317
+  s_069eea97a36d42::t_0762c40a478ef5 275-277,280-310,312-313,315-316
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "edcdb5b7eb588542827f0f508412ad5e4d64a465",
+  "prompts": {},
+  "sessions": {
+    "s_069eea97a36d42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ecbe-c8b1-77c2-958b-09e716f1786b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

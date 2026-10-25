@@ -1,0 +1,24 @@
+tests/test_telemetry_metadata.py
+  s_393da991b84df6::t_aa796aa126c250 11,94
+  s_393da991b84df6::t_07dffe55ebfbe5 1-10,12-93,95-126
+livekit-agents/livekit/agents/telemetry/traces.py
+  s_393da991b84df6::t_aa796aa126c250 353-356,359-360,363,365,368,371-376
+tests/test_recording.py
+  s_393da991b84df6::t_31c3c915e43028 1032,1037,1262,1266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6ea2fa9330a0d7d910b8d95ebf97ce349e4bff8d",
+  "prompts": {},
+  "sessions": {
+    "s_393da991b84df6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0cf21-dc1b-7ce0-9dfd-8aff11be8dea",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

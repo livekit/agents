@@ -1,0 +1,25 @@
+examples/warm-transfer/README.md
+  s_c84637313b0ea6::t_819380112e33aa 57-61
+livekit-agents/livekit/agents/beta/workflows/warm_transfer.py
+  s_c84637313b0ea6::t_819380112e33aa 595-601
+examples/warm-transfer/twilio_connector_warm_transfer.py
+  s_c84637313b0ea6::t_819380112e33aa 24,26
+tests/test_twilio_connector_warm_transfer.py
+  s_c84637313b0ea6::t_15a3c8f60c45ff 298,364,462-463,467,469-489,499-521
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "95d692ca29d142bee80187f6f444871eabbd47f3",
+  "prompts": {},
+  "sessions": {
+    "s_c84637313b0ea6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d874-86e3-7642-8295-1ffa240fbd1a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

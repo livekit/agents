@@ -1,0 +1,79 @@
+livekit-agents/livekit/agents/stt/stt.py
+  s_995d41eb514baf::t_325a410a0480af 18,210
+livekit-agents/livekit/agents/telemetry/traces.py
+  s_995d41eb514baf::t_a8547ee58c0798 16,69,81
+  s_995d41eb514baf::t_ccf799a8be6cd4 13
+livekit-agents/livekit/agents/tts/stream_adapter.py
+  s_995d41eb514baf::t_a8547ee58c0798 95
+  s_995d41eb514baf::t_13dd1e04fe8dd5 8
+livekit-agents/livekit/agents/inference/_utils.py
+  s_995d41eb514baf::t_a8547ee58c0798 7
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/tts.py
+  s_995d41eb514baf::t_4822db90739e54 210-211
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/qwen3_tts.py
+  s_995d41eb514baf::t_4822db90739e54 219-230
+tests/test_session_options_report.py
+  s_995d41eb514baf::t_13dd1e04fe8dd5 15
+livekit-agents/livekit/agents/voice/report.py
+  s_995d41eb514baf::t_a8547ee58c0798 6,8,15-17,86-93
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/stt.py
+  s_995d41eb514baf::t_13dd1e04fe8dd5 344-351
+  s_995d41eb514baf::t_4822db90739e54 342-343,352-354
+livekit-agents/livekit/agents/tts/fallback_adapter.py
+  s_995d41eb514baf::t_13dd1e04fe8dd5 16
+  s_995d41eb514baf::t_a8547ee58c0798 168
+livekit-agents/livekit/agents/stt/stream_adapter.py
+  s_995d41eb514baf::t_13dd1e04fe8dd5 9
+  s_995d41eb514baf::t_a8547ee58c0798 55-56
+tests/test_session_component_report.py
+  s_995d41eb514baf::t_2b1fe5682b92b8 4,184-196,201-205,212-219,226-229,231-235,237-244,246-255,257-323
+  s_995d41eb514baf::t_a8547ee58c0798 12,14
+  s_995d41eb514baf::t_8b376f80ffc1fd 197-200,206-211,220-225,230,236,245,256
+  s_7637df1a67dbfb::t_021675b8cd9828 324-325
+livekit-agents/livekit/agents/vad.py
+  s_995d41eb514baf::t_325a410a0480af 14,97
+livekit-plugins/livekit-plugins-hume/livekit/plugins/hume/tts.py
+  s_995d41eb514baf::t_4822db90739e54 43-44,48-49,79-80,192-198
+  s_995d41eb514baf::t_13dd1e04fe8dd5 35
+livekit-agents/livekit/agents/tts/tts.py
+  s_995d41eb514baf::t_325a410a0480af 20,229
+livekit-agents/livekit/agents/inference/stt.py
+  s_995d41eb514baf::t_a8547ee58c0798 26
+livekit-agents/livekit/agents/job.py
+  s_995d41eb514baf::t_a8547ee58c0798 442
+livekit-agents/livekit/agents/stt/fallback_adapter.py
+  s_995d41eb514baf::t_13dd1e04fe8dd5 15
+  s_995d41eb514baf::t_a8547ee58c0798 154
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_995d41eb514baf::t_4822db90739e54 40,74,76,78,80,84-86,287-293
+livekit-agents/livekit/agents/inference/tts.py
+  s_995d41eb514baf::t_a8547ee58c0798 23
+livekit-agents/livekit/agents/_reporting.py
+  s_995d41eb514baf::t_8b376f80ffc1fd 115-122,126
+  s_995d41eb514baf::t_13dd1e04fe8dd5 6-16,30
+  s_995d41eb514baf::t_a8547ee58c0798 1-5,17-29,31-114,123-125,127-139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4e9be3a424dbbca460a40f95a997e5a736da9a39",
+  "prompts": {},
+  "sessions": {
+    "s_7637df1a67dbfb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78c26de3-ae29-46f2-b965-9e74f763e865",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_995d41eb514baf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11ab7-fefb-7cf1-afdb-fcb71fe9d657",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_27ee508056ce77::t_b12c965e8b185e 1218
+  s_27ee508056ce77::t_e467d3147a4da1 1122-1129,1156,1221,1571
+tests/test_manual_turn_clear.py
+  s_27ee508056ce77::t_7085f41a0ae80b 176-215,219-246
+  s_27ee508056ce77::t_b12c965e8b185e 216-218
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_27ee508056ce77::t_e467d3147a4da1 1969-1984,1988-1990
+tests/test_realtime_e2e_latency.py
+  s_27ee508056ce77::t_7085f41a0ae80b 9,16,31-44,46-49,332-349,353-359,361-365,367-394,398-407
+  s_27ee508056ce77::t_48d8e3bd718b46 45,350-352,360,366,395-397
+  s_27ee508056ce77::t_783365b0754547 408-409
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cd234b48a9e0dfa793446ed12a78c467be6eaff1",
+  "prompts": {},
+  "sessions": {
+    "s_27ee508056ce77": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a139cd-f9b0-77a0-8013-a12b12fc1f7a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+.github/workflows/tests.yml
+  s_c84637313b0ea6::t_4bad26a893e6b6 69-71
+tests/test_twilio_connector_warm_transfer.py
+  s_c84637313b0ea6::t_64773a99ac1f8f 69,354
+  s_c84637313b0ea6::t_576d89e8bd7c7f 410,419-423,429,444-445,468-470,511-513
+  s_c84637313b0ea6::t_60944be57bffc9 2-3,9,13,181,235,255,298,364,403-409,411-418,424-428,430-443,446-467,471-510,514-520
+livekit-agents/livekit/agents/beta/workflows/warm_transfer.py
+  s_c84637313b0ea6::t_576d89e8bd7c7f 556,606-610,612-614,622,624
+  s_c84637313b0ea6::t_839a58c463269d 6,341-354,360-364,546,554-555,580-585,587,589-598,600,602-605,611,615-616,618-621,623,625
+pyproject.toml
+  s_c84637313b0ea6::t_c606aa09f99ac1 104
+uv.lock
+  s_c84637313b0ea6::t_d99499232de94f 117,338-349,6092-6106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "be83cd26d1a58623f3c890fcbe5f8fa45c1160f8",
+  "prompts": {},
+  "sessions": {
+    "s_c84637313b0ea6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d874-86e3-7642-8295-1ffa240fbd1a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

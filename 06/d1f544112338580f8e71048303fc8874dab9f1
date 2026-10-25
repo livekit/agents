@@ -1,0 +1,19 @@
+examples/warm-transfer/README.md
+  s_c84637313b0ea6::t_0172183003ba30 69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "06d1f544112338580f8e71048303fc8874dab9f1",
+  "prompts": {},
+  "sessions": {
+    "s_c84637313b0ea6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d874-86e3-7642-8295-1ffa240fbd1a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

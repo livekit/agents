@@ -1,0 +1,56 @@
+tests/test_amd_inference.py
+  s_a55799479f59b9::t_02dba038d65295 24-29
+  s_a55799479f59b9::t_fd4b4afafbde27 14
+  s_a55799479f59b9::t_8781b06cd41f26 153
+tests/test_amd_silence.py
+  s_a55799479f59b9::t_9035604f5fe553 185
+livekit-agents/livekit/agents/voice/amd/_fsm.py
+  s_a55799479f59b9::t_b94136da81b37c 10,18,28,38
+tests/test_session_host.py
+  s_a55799479f59b9::t_9bac61b32eb126 514-522,529,531,539
+examples/telephony/amd.md
+  s_a55799479f59b9::t_b94136da81b37c 111,118-123
+  s_a55799479f59b9::t_d10ac4bc723f52 124
+livekit-agents/livekit/agents/voice/remote_session.py
+  s_a55799479f59b9::t_330fb0ad3f1a8f 312
+  s_a55799479f59b9::t_b94136da81b37c 307
+tests/test_amd_fsm.py
+  s_a55799479f59b9::t_1f94e362e248a2 26,33,41,49,78-81,85-88
+livekit-agents/livekit/agents/voice/amd/_inference.py
+  s_a55799479f59b9::t_d29935f41194ee 40-41,59-62
+  s_a55799479f59b9::t_9c6448839cc284 34
+tests/test_amd_detector.py
+  s_a55799479f59b9::t_9035604f5fe553 487,1513,1516,1558-1560,1575-1577,1579-1584,1613,1631,1634,1640-1642
+  s_a55799479f59b9::t_73ce26b4c53c37 2382-2387
+  s_a55799479f59b9::t_86c8079c3574bf 2401
+  s_a55799479f59b9::t_92de03dad4a021 1984,2127
+  s_a55799479f59b9::t_ec26780e221db8 1995,2034
+  s_a55799479f59b9::t_d10ac4bc723f52 2284-2290,2292-2305,2307-2312,2314-2315,2320-2322,2324-2329,2332-2333,2337-2348,2350-2354,2356-2370,2372-2381,2388-2394,2396-2400,2402
+  s_a55799479f59b9::t_1f94e362e248a2 2035,2291,2313,2316,2318-2319,2330-2331,2334-2336,2349,2355,2371,2395
+  s_a55799479f59b9::t_9bac61b32eb126 2168-2170,2219,2223,2227-2228,2238,2269-2270,2273,2279-2280,2283,2306,2317,2323
+livekit-agents/livekit/agents/voice/amd/events.py
+  s_a55799479f59b9::t_330fb0ad3f1a8f 20
+livekit-agents/livekit/agents/voice/amd/_turns.py
+  s_a55799479f59b9::t_86c8079c3574bf 30
+  s_a55799479f59b9::t_02dba038d65295 5,8,22-27,29,31,33-34,42-43,110-111
+  s_a55799479f59b9::t_391f569c742c7a 112-114
+  s_a55799479f59b9::t_39a9b60b389589 115-116,128-129
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_a55799479f59b9::t_9fe473d6d36ce4 128,693-694
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8e065e5fd689a3165e7464053027043fd2e23585",
+  "prompts": {},
+  "sessions": {
+    "s_a55799479f59b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abfd-bcaa-7371-b8ab-7bcfd804d2ea",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

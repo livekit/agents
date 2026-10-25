@@ -1,0 +1,19 @@
+examples/voice_agents/otel_trace.py
+  s_b2474bfbd1baef::t_1b369f01c028fe 6,51-57,60,160-161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "51fe6446c03b1a1dd550da3f2b85829ea5d496de",
+  "prompts": {},
+  "sessions": {
+    "s_b2474bfbd1baef": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07c1d-b2b3-7651-bab0-f1596f86cc8e",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

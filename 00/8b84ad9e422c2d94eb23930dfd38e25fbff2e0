@@ -1,0 +1,168 @@
+livekit-agents/livekit/agents/voice/agent.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 32,60,99,284,305
+tests/test_gpt_live_model.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 9-10,17,1431-1688
+livekit-agents/livekit/agents/tokenize/_basic_sent.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 17,28-30
+livekit-agents/livekit/agents/voice/generation.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1201-1203
+livekit-agents/livekit/agents/inference/stt.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 65,261,289
+tests/test_inference_model_string.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-76
+livekit-plugins/livekit-plugins-respeecher/livekit/plugins/respeecher/tts.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 204-208
+livekit-agents/livekit/agents/llm/chat_context.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 383-384,526-532,556-565
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/realtime_model.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1,3-5,7,9-14,18-19
+livekit-agents/livekit/agents/inference/realtime/__init__.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-6
+livekit-agents/livekit/agents/inference/__init__.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 3-9,17,24,37-40,55,64-70
+livekit-agents/livekit/agents/inference/llm.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 30,33,38,241,592-607
+livekit-agents/livekit/agents/voice/tool_executor.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 531-533
+tests/test_inference_stt_context.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 43-47
+tests/trace_schema.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 240-244
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/realtime/realtime_api.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 94-104,316,426-428,733-735,973
+tests/test_startup_spans.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 460-466,498-506
+livekit-plugins/livekit-plugins-gnani/README.md
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 4,293
+tests/test_user_speaking_span.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-61
+tests/test_realtime/test_openai_realtime_model.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 23,29,39-43
+  s_1dda5a69e136fb::t_a4ba83a32a078e 44-45
+livekit-agents/livekit/agents/voice/filler_scheduler.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 8,108-114
+AGENTS.md
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 91,96
+livekit-agents/livekit/agents/inference/_realtime_models.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-34
+livekit-agents/livekit/agents/llm/_realtime/openai_types.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-9
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/inference_realtime_model.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1,3-5,8
+examples/README.md
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 21
+livekit-agents/livekit/agents/__init__.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 59,218
+livekit-agents/livekit/agents/voice/turn.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 347,384-386
+livekit-agents/livekit/agents/ipc/job_thread_executor.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 292-299,310-335,338-350
+livekit-agents/livekit/agents/llm/_provider_format/google.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 136-140,142-144,146-158
+livekit-plugins/livekit-plugins-liveavatar/livekit/plugins/liveavatar/api.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 47
+tests/test_tokenize_sentence_spans.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 29-52
+tests/test_parallel_tool_handoff.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-75
+tests/test_trace_schema.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 155-162
+livekit-agents/livekit/agents/llm/_realtime/openai.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-2449
+tests/test_chat_ctx.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 967-1017
+tests/test_plugin_respeecher_tts.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-106
+livekit-agents/livekit/agents/llm/__init__.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 69,115
+tests/test_inference_utils.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 14,26-32
+  s_1dda5a69e136fb::t_49daf6073a9414 33-34
+tests/test_plugin_assemblyai_stt.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1681-1758
+livekit-agents/livekit/agents/llm/utils.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 883,930-935,949,960,962
+.github/workflows/test-realtime.yml
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 13-14
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/utils.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1,5-6,9-10
+tests/test_filler.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 4,444-474
+livekit-plugins/livekit-plugins-liveavatar/tests/test_api.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 3,46-52
+livekit-agents/pyproject.toml
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 52
+tests/test_ipc.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 613-685
+tests/test_realtime_cancel_tool_reply.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 13,20-21,28,31,44-74
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/models.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 4
+tests/test_schema_gemini.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 285-364
+tests/test_tools.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 15,1081-1130,2384-2453
+  s_1dda5a69e136fb::t_d8ddfd5b08c309 2454
+tests/test_realtime_tool_call_created_at.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 31,72-73,76-154
+tests/test_realtime/test_openai_inference_realtime_model.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 13-15,20-39,71,98,108,121,159,189,218,233,265,291,321,329,350,379
+tests/test_plugin_google_realtime.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 839-864
+livekit-agents/livekit/agents/llm/_realtime/__init__.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/gpt_live_model.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 86-87,142,146-147,165-166,170-171,180-183,187-189,202-214,216-246,252,254,257-258,264-335,562-571,1206-1216
+  s_1dda5a69e136fb::t_946845f4eddaa6 1217-1218
+tests/test_tool_output_per_call.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 15,38-40,49-51,112-207
+livekit-plugins/livekit-plugins-anam/livekit/plugins/anam/api.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 146,162-171,177
+livekit-agents/livekit/agents/llm/tool_context.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 23,122-139
+  s_1dda5a69e136fb::t_1b90c6dc62cdb8 140-141
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/__init__.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1
+livekit-agents/livekit/agents/inference/_utils.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 14-17,77-97
+  s_1dda5a69e136fb::t_ef5003d9de17b4 98-99
+livekit-agents/livekit/agents/inference/realtime/openai.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-193
+livekit-agents/livekit/agents/llm/_realtime/openai_utils.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-336
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 27,111,394,420,450-453,620,1298-1300,1314,1316,1318-1320,1322-1339,1341-1346,1351,2213-2223,2280-2282
+livekit-agents/livekit/agents/voice/transcription/synchronizer.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 583-588,590-592,615
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 3951-3952,4645-4647,4649-4651,4659-4660
+livekit-plugins/livekit-plugins-openai/pyproject.toml
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 25,27
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/utils.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 5,7-8,37-46,154-165,167-170
+livekit-plugins/livekit-plugins-assemblyai/livekit/plugins/assemblyai/stt.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 25,971,977-984,988-1000,1038,1075,1101
+tests/test_agent_session.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 2083-2101
+  s_1dda5a69e136fb::t_c6fc5085cadddd 2082
+tests/test_transcript_sync_cancellation.py
+  s_1dda5a69e136fb::t_d0d037c2c7b09c 1-89
+uv.lock
+  s_1dda5a69e136fb::t_6ebf99c54bed44 2270,3228,3240
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "008b84ad9e422c2d94eb23930dfd38e25fbff2e0",
+  "prompts": {},
+  "sessions": {
+    "s_1dda5a69e136fb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a4e8-4e98-7c11-bf05-2ae7db533ee9",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,38 @@
+tests/test_audio_recognition_aclose.py
+  s_86846401b34f2f::t_63b10457fff5f7 37
+tests/test_audio_recognition_turn_detection.py
+  s_86846401b34f2f::t_63b10457fff5f7 117
+tests/test_eou_wait_span.py
+  s_86846401b34f2f::t_63b10457fff5f7 99
+livekit-agents/livekit/agents/telemetry/trace_types.py
+  s_86846401b34f2f::t_63b10457fff5f7 148-151
+tests/test_trace_types_pii.py
+  s_86846401b34f2f::t_63b10457fff5f7 87
+tests/test_stt_event_traces.py
+  s_86846401b34f2f::t_e88edfc24e54f6 1-164
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_86846401b34f2f::t_63b10457fff5f7 349,1135-1147,1790,2023-2026,2033-2036
+  s_86846401b34f2f::t_757bbc4a3c156a 2037
+tests/test_false_interruption_resume.py
+  s_86846401b34f2f::t_63b10457fff5f7 107
+tests/test_interruption_hold_window.py
+  s_86846401b34f2f::t_63b10457fff5f7 32
+tests/test_transcription_delay_anchor.py
+  s_86846401b34f2f::t_63b10457fff5f7 68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0a49e61627c8c8efe1569e8c6635353a615bac11",
+  "prompts": {},
+  "sessions": {
+    "s_86846401b34f2f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d901-0094-76f2-a2d0-de030a268817",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
