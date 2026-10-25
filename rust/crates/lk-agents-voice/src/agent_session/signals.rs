@@ -34,6 +34,9 @@ pub(crate) enum Signal {
     /// Outside a switch, a held user turn reaches the agent.
     DeliverHeldTurn,
     NextHandoff,
+    /// What the close's phase waits for may be over: a phase began, the trailing commit ended,
+    /// the legs closed or their bound passed.
+    CloseProgress,
     InterruptForDtmf,
     /// The digits read back for the caller to confirm.
     ReadBackDtmf(String),
@@ -71,7 +74,11 @@ impl Driver {
                     self.close_edge(now, out);
                 }
             }
-            Signal::Quiet => self.drain_step(DrainEvent::Quiet, out),
+            Signal::Quiet => {
+                self.drain_step(DrainEvent::Quiet, out);
+                self.close_progress(now, out);
+            }
+            Signal::CloseProgress => self.close_progress(now, out),
             Signal::OnExitEnded(hook) => {
                 self.activity.on_exit.ended(hook);
                 self.handoff_step(HandoffEvent::OnExitEnded(hook), out);

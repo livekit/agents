@@ -469,8 +469,6 @@ impl Driver {
         }
         self.settle_waiters(now, &mut out);
         self.execute(out);
-        // The close's next phases, each in its own cycle (the socket's `aclose` awaited here).
-        self.close_advance(now);
         self.publish_gate();
     }
 

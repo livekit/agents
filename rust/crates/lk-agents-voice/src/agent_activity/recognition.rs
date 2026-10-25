@@ -578,6 +578,7 @@ impl Driver {
             out.trace(CloseStep::Performed(CloseAct::TranscriptWaitEnded {
                 transcript: transcript.clone(),
             }));
+            out.signal(crate::agent_session::signals::Signal::CloseProgress);
         } else {
             out.trace(TurnStep::CommitAnswered { transcript: transcript.clone() });
         }

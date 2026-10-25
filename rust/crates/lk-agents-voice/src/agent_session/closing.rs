@@ -13,6 +13,7 @@ use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
 use crate::agent_session::effects::{Effect, Out, TimerOp, TurnTimer};
+use crate::agent_session::signals::Signal;
 use crate::agent_session::{
     ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
     IdleRefused, SpeechCommand,
@@ -273,49 +274,40 @@ impl Driver {
         }
     }
 
-    /// After every cycle, advance the close one phase per cycle so the journal never shows a later
-    /// step before an earlier one's effects. Returns once waiting on something or stopped.
-    pub(crate) fn close_advance(&mut self, now: Ts) {
-        loop {
-            let mut out = self.out();
-            match self.session.close_phase().zip(self.session.closing.as_ref().map(|c| c.reason)) {
-                // Every speech the edge cut has reported (or the bound released it).
-                Some((ClosePhase::Edge { .. }, reason))
-                    if self.activity.speech_scheduler.is_empty() =>
-                {
-                    let timeout =
-                        self.session.config.effective.timers.session_close_transcript_timeout;
-                    if reason != CloseReason::Error && self.transcript_pending(now) {
-                        self.close_await_transcript(now, now.saturating_add(timeout), &mut out);
-                    } else {
-                        self.close_legs_begin(now, &mut out);
-                    }
+    /// The close moves on when what its phase waits for is over: every speech the edge cut has
+    /// reported (or the bound released it), the trailing commit, the legs. Raised on each of those
+    /// and on entering a phase, so each phase lands after the effects of the one before.
+    pub(crate) fn close_progress(&mut self, now: Ts, out: &mut Out) {
+        let Some(Closing { phase, reason, .. }) = &self.session.closing else { return };
+        match (*phase, *reason) {
+            (ClosePhase::Edge { .. }, reason) if self.activity.speech_scheduler.is_empty() => {
+                let timeout = self.session.config.effective.timers.session_close_transcript_timeout;
+                if reason != CloseReason::Error && self.transcript_pending(now) {
+                    self.close_await_transcript(now, now.saturating_add(timeout), out);
+                } else {
+                    self.close_legs_begin(now, out);
                 }
-                Some((ClosePhase::Committing { .. }, _))
-                    if !self.activity.audio_recognition.commit_pending() =>
-                {
-                    self.close_legs_begin(now, &mut out);
-                }
-                Some((ClosePhase::ClosingActivity { until, closed }, _))
-                    if closed || until <= now =>
-                {
-                    self.close_legs(&mut out);
-                }
-                Some((
-                    ClosePhase::Unwinding { .. }
-                    | ClosePhase::Exiting { .. }
-                    | ClosePhase::Draining { .. }
-                    | ClosePhase::Edge { .. }
-                    | ClosePhase::Committing { .. }
-                    | ClosePhase::ClosingActivity { .. }
-                    | ClosePhase::Closed,
-                    _,
-                ))
-                | None => return,
             }
-            self.pump_schedule(now, &mut out);
-            self.execute(out);
+            (ClosePhase::Committing { .. }, _)
+                if !self.activity.audio_recognition.commit_pending() =>
+            {
+                self.close_legs_begin(now, out);
+            }
+            (ClosePhase::ClosingActivity { until, closed }, _) if closed || until <= now => {
+                self.close_legs(out);
+            }
+            (
+                ClosePhase::Unwinding { .. }
+                | ClosePhase::Exiting { .. }
+                | ClosePhase::Draining { .. }
+                | ClosePhase::Edge { .. }
+                | ClosePhase::Committing { .. }
+                | ClosePhase::ClosingActivity { .. }
+                | ClosePhase::Closed,
+                _,
+            ) => return,
         }
+        self.pump_schedule(now, out);
     }
 
     /// Flush the recogniser and wait for its final until `until`.
@@ -323,6 +315,7 @@ impl Driver {
         if let Some(closing) = &mut self.session.closing {
             closing.phase = ClosePhase::Committing { until };
         }
+        out.signal(Signal::CloseProgress);
         self.answer_close_drains(out);
         let timeout = until.saturating_duration_since(now);
         // Nobody awaits it: the commit's `EndOfTurn` and user item are the record.
@@ -337,6 +330,7 @@ impl Driver {
         if let Some(closing) = &mut self.session.closing {
             closing.phase = ClosePhase::ClosingActivity { until, closed: rt.is_none() };
         }
+        out.signal(Signal::CloseProgress);
         self.answer_close_drains(out);
         let _ = self.shared.closing.send(true);
         out.machine().close_turn_detector();
@@ -380,10 +374,14 @@ impl Driver {
                 }
                 false
             }
-            ClosePhase::Exiting { .. }
-            | ClosePhase::Committing { .. }
-            | ClosePhase::ClosingActivity { .. }
-            | ClosePhase::Closed => false,
+            // The legs' bound: the session closes without them.
+            ClosePhase::ClosingActivity { .. } => {
+                out.signal(Signal::CloseProgress);
+                false
+            }
+            ClosePhase::Exiting { .. } | ClosePhase::Committing { .. } | ClosePhase::Closed => {
+                false
+            }
         }
     }
 
@@ -524,6 +522,7 @@ impl Driver {
         if let Some(closing) = &mut self.session.closing {
             closing.phase = ClosePhase::Edge { until: now.saturating_add(EDGE_BOUND) };
         }
+        out.signal(Signal::CloseProgress);
         let reason =
             self.session.closing.as_ref().map(|c| c.reason).unwrap_or(CloseReason::UserInitiated);
         self.session.on_close_edge();
