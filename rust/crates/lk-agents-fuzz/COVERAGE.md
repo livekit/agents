@@ -687,8 +687,9 @@ build, the voice core's unit tests, the fuzz suites (every contract's examples, 
 and probe, the replay corpus, determinism, the regression tests), the 1,024-seed survey, a
 4,096-seed campaign on the next window (`VOICE_GATE_SEEDS`), and the soak. It fails on any
 finding of a contract not in `check::KNOWN_FINDINGS` (the open findings, listed so a new kind of
-defect cannot hide among them), on a soak residue, and on a campaign that did not run. About
-three minutes on a laptop.
+defect cannot hide among them), on a soak residue, and on a campaign that did not run. A new
+finding's case is saved to `replay/` pinned to it, because a campaign seed only reproduces
+inside its whole window. About three minutes on a laptop.
 
 What it can and cannot miss:
 

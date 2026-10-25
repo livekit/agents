@@ -23,7 +23,8 @@
 //!   seed to seed; the baseline a search change is measured against.
 //! - `VOICE_FAMILY=Decided` opens one journal family variant by variant; `VOICE_DETAIL=1` adds the
 //!   first seed and detail behind each finding; `VOICE_SAVE=1` writes every failing seed's case
-//!   into `replay/`, where the replay test picks it up.
+//!   into `replay/`, where the replay test picks it up. A finding outside the known ones is always
+//!   saved there, and fails the survey.
 //! - `VOICE_TRACE=1` (any run) narrates every input as it is applied.
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -189,14 +190,25 @@ fn campaign(window: &Window) {
                 if here.insert(&failure.contract) {
                     found.entry(failure.contract.clone()).or_default()[band_of] += 1;
                 }
+                let first = !example.contains_key(&failure.contract);
                 example
                     .entry(failure.contract.clone())
                     .or_insert_with(|| (seed, failure.detail.clone()));
+                // A new finding is saved at once, pinned to itself: a seed only reproduces inside
+                // its whole window, because the setup arms learn from the seeds before it, while
+                // the saved case replays anywhere.
+                if first && !KNOWN_FINDINGS.contains(&failure.contract.as_str()) {
+                    let path = corpus.join(format!("{}-{seed}.json", failure.contract));
+                    replay::save(&path, &outcome.case, replay::Expect::failing(failure))
+                        .expect("the corpus is writable");
+                    println!("saved {}", path.display());
+                }
             }
             if save {
                 let contract = &outcome.failures[0].contract;
                 let path = corpus.join(format!("{contract}-{seed}.json"));
-                replay::save(&path, &outcome.case, &outcome).expect("the corpus is writable");
+                replay::save(&path, &outcome.case, replay::Expect::of(&outcome))
+                    .expect("the corpus is writable");
             }
         }
     }
