@@ -351,11 +351,15 @@ const IDLE_TTL: Duration = Duration::from_secs(60);
 const IDLE_PER_DATABASE: usize = 2;
 const IDLE_TOTAL: usize = 64;
 
-/// The connections closed threads left behind, by database id: a thread's next turn takes one
-/// back, with the schema version it knew, instead of dialing and probing again.
+/// The connections of this process by database id. One that an open holds is shared: a request
+/// whose lane's holder is in this process uses the holder's socket, which carries several
+/// requests at once (no statement here opens an interactive transaction). The ones closed threads
+/// left behind are parked: a thread's next turn takes one back, with the schema version it knew,
+/// instead of dialing and probing again.
 #[derive(Default)]
 pub(crate) struct DbPool {
     idle: Mutex<HashMap<String, Vec<Idle>>>,
+    live: Mutex<HashMap<String, Vec<Live>>>,
 }
 
 struct Idle {
@@ -364,7 +368,54 @@ struct Idle {
     since: Instant,
 }
 
+/// A connection opens hold now, with how many of them.
+struct Live {
+    conn: Conn,
+    schema: Arc<Mutex<Option<i64>>>,
+    users: usize,
+}
+
 impl DbPool {
+    /// A connection of the database that another open holds, now shared with one more.
+    fn share(&self, database_id: &str) -> Option<(Conn, Arc<Mutex<Option<i64>>>)> {
+        let mut live = self.live.lock().expect("pool");
+        let held = live.get_mut(database_id)?;
+        held.retain(|l| !l.conn.is_closed());
+        let shared = held.first_mut()?;
+        shared.users += 1;
+        Some((shared.conn.clone(), shared.schema.clone()))
+    }
+
+    /// A connection this open dialed or took parked: later opens of the database share it.
+    fn hold(&self, conn: &Conn, schema: Arc<Mutex<Option<i64>>>) {
+        let mut live = self.live.lock().expect("pool");
+        live.entry(conn.database_id().to_owned()).or_default().push(Live {
+            conn: conn.clone(),
+            schema,
+            users: 1,
+        });
+    }
+
+    /// One open is done with the connection: at the last, it is parked for the next open.
+    fn release(&self, conn: Conn, schema: Option<i64>) {
+        {
+            let mut live = self.live.lock().expect("pool");
+            if let Some(held) = live.get_mut(conn.database_id())
+                && let Some(i) = held.iter().position(|l| l.conn.same(&conn))
+            {
+                held[i].users -= 1;
+                if held[i].users > 0 {
+                    return;
+                }
+                held.remove(i);
+                if held.is_empty() {
+                    live.remove(conn.database_id());
+                }
+            }
+        }
+        self.put(conn, schema);
+    }
+
     fn take(&self, database_id: &str) -> Option<Idle> {
         let mut idle = self.idle.lock().expect("pool");
         let parked = idle.get_mut(database_id)?;
@@ -446,8 +497,8 @@ impl ThreadDb {
         }
     }
 
-    /// A pooled open: the parked connection of `database_id` when there is one, else `dial`'s,
-    /// and `close` parks it for the next open.
+    /// A pooled open: the connection of `database_id` another open holds, shared, else its
+    /// parked one, else `dial`'s; `close` parks it for the next open once no open holds it.
     pub(crate) async fn pooled<F, Fut>(
         pool: Arc<DbPool>,
         database_id: &str,
@@ -459,10 +510,17 @@ impl ThreadDb {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Conn, StorageError>>,
     {
+        if let Some((conn, schema)) = pool.share(database_id) {
+            let mut db = Self::over(conn, None, lease_ttl, renew_interval);
+            db.schema = schema;
+            db.pool = Some(pool);
+            return Ok(db);
+        }
         let mut db = match pool.take(database_id) {
             Some(idle) => Self::over(idle.conn, idle.schema, lease_ttl, renew_interval),
             None => Self::open_with_timing(dial().await?, lease_ttl, renew_interval).await?,
         };
+        pool.hold(&db.conn, db.schema.clone());
         db.pool = Some(pool);
         Ok(db)
     }
@@ -479,14 +537,15 @@ impl ThreadDb {
         Ok(&self.conn)
     }
 
-    /// Done with the database: the connection is parked for the thread's next turn when this
-    /// open was pooled, closed otherwise. Every clone is closed with it.
+    /// Done with the database: when this open was pooled, the connection is parked for the
+    /// thread's next turn once no other open shares it; closed otherwise. Every clone is closed
+    /// with it.
     pub fn close(&self) {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
         match &self.pool {
-            Some(pool) => pool.put(self.conn.clone(), *self.schema.lock().expect("schema")),
+            Some(pool) => pool.release(self.conn.clone(), *self.schema.lock().expect("schema")),
             None => self.conn.close(),
         }
     }
@@ -949,28 +1008,65 @@ impl ThreadDb {
         Ok(self.live()?.exec(SET_WAITER, vec![waiter.into(), lane.into()]).await?.rows_affected > 0)
     }
 
-    /// The holder's boundary check.
-    /// The holder's boundary check, one batch: the lane's waiter and the task's status.
+    /// The holder's boundary check, one batch: the lane's waiter and the task's row.
     pub async fn boundary(
         &self,
         lane: &str,
         task_id: &str,
-    ) -> Result<(Option<String>, Option<String>), StorageError> {
+    ) -> Result<(Option<String>, Option<TaskRow>), StorageError> {
         let out = self
             .conn
             .batch(vec![
                 statement(WAITER, vec![lane.into()]),
-                statement(TASK_STATUS, vec![lane.into(), task_id.into()]),
+                statement(&select_task(), vec![lane.into(), task_id.into()]),
             ])
             .await?;
-        let text = |r: &StatementResult| {
-            r.rows()
-                .first()
-                .and_then(|row| row.first())
-                .and_then(SqlValue::as_str)
-                .map(str::to_owned)
+        let waiter = out.results[0]
+            .rows()
+            .first()
+            .and_then(|row| row.first())
+            .and_then(SqlValue::as_str)
+            .map(str::to_owned);
+        let row = out.results[1].rows().first().map(TaskRow::from_row).transpose()?;
+        Ok((waiter, row))
+    }
+
+    /// `tasks/cancel` on a running row: the request goes into its metadata, with the reason,
+    /// for the holder to act on. `false` when the row is no longer `working`.
+    pub async fn request_cancel(
+        &self,
+        lane: &str,
+        task_id: &str,
+        reason: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        let Some(row) = self
+            .read(&select_task(), vec![lane.into(), task_id.into()], TaskRow::from_row)
+            .await?
+            .into_iter()
+            .next()
+        else {
+            return Ok(false);
         };
-        Ok((text(&out.results[0]), text(&out.results[1])))
+        let mut data = row.data;
+        if !data.is_object() {
+            data = Value::Object(serde_json::Map::new());
+        }
+        let metadata = data
+            .as_object_mut()
+            .expect("an object")
+            .entry("metadata")
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(m) = metadata.as_object_mut() {
+            m.insert(crate::run::CANCEL_REQUESTED_KEY.into(), Value::Bool(true));
+            if let Some(reason) = reason {
+                m.insert(crate::run::REASON_KEY.into(), Value::String(reason.into()));
+            }
+        }
+        let r = self
+            .conn
+            .exec(REQUEST_CANCEL, vec![SqlValue::json(&data), lane.into(), task_id.into()])
+            .await?;
+        Ok(r.rows_affected > 0)
     }
 
     pub async fn waiter(&self, lane: &str) -> Result<Option<String>, StorageError> {
@@ -1067,6 +1163,67 @@ impl ThreadDb {
                 self.read(&select_tasks(), vec![lane.into(), limit.into()], TaskRow::from_row).await
             }
         }
+    }
+
+    /// Items written ahead of the run's commit, under its fence, without moving the lane's
+    /// version: what another lane must read while the run still works, such as the person's
+    /// message before a delegation (docs/delegation.md). The commit writes them again.
+    pub async fn write_items(
+        &self,
+        lane: &str,
+        fence: &Fence,
+        items: &[ItemWrite],
+    ) -> Result<(), StorageError> {
+        let mut stmts = Vec::new();
+        for item in items {
+            stmts.push(statement(
+                &insert_item(true),
+                vec![
+                    item.id.as_str().into(),
+                    lane.into(),
+                    lane.into(),
+                    item.message_id.clone().into(),
+                    SqlValue::json(&crate::chat_item::encode(&item.payload)?),
+                    lane.into(),
+                    fence.version.into(),
+                    fence.lease_token.as_str().into(),
+                ],
+            ));
+        }
+        let out = self.live()?.batch(stmts).await?;
+        if out.results.iter().any(|r| r.rows_affected() == 0) {
+            return Err(StorageError::VersionConflict {
+                lane: lane.to_owned(),
+                expected: fence.version,
+            });
+        }
+        Ok(())
+    }
+
+    /// One task row of the lane, by its id.
+    pub async fn task(&self, lane: &str, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
+        Ok(self
+            .read(&select_task(), vec![lane.into(), task_id.into()], TaskRow::from_row)
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    /// The task an A2A `messageId` created on the lane, by the unique index.
+    pub async fn task_by_message_id(
+        &self,
+        lane: &str,
+        message_id: &str,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        Ok(self
+            .read(
+                &select_task_by_message_id(),
+                vec![lane.into(), message_id.into()],
+                TaskRow::from_row,
+            )
+            .await?
+            .into_iter()
+            .next())
     }
 
     pub async fn orphans(&self, lane: &str) -> Result<Vec<TaskRow>, StorageError> {
@@ -1229,6 +1386,30 @@ fn first_int(r: &StatementResult) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_open_shares_the_held_connection_and_parks_it_after_the_last_close() {
+        use crate::wsdb::tests::{dial, script, serve};
+
+        let (url, _) = serve(script, false).await;
+        let pool = Arc::new(DbPool::default());
+        let first = dial(&url, "DB_1").await.unwrap();
+        pool.hold(&first, Arc::new(Mutex::new(Some(SCHEMA_VERSION))));
+        // a second open while the first holds it: the same socket, and its schema
+        let (shared, schema) = pool.share("DB_1").expect("the held connection is shared");
+        assert!(shared.same(&first));
+        assert_eq!(*schema.lock().unwrap(), Some(SCHEMA_VERSION));
+        assert!(pool.share("DB_2").is_none(), "only the same database's");
+        // the first close leaves it to the second open; the last one parks it
+        pool.release(first.clone(), Some(SCHEMA_VERSION));
+        assert!(pool.take("DB_1").is_none(), "still held by the second open");
+        assert!(!first.is_closed());
+        pool.release(shared, Some(SCHEMA_VERSION));
+        let parked = pool.take("DB_1").expect("parked once nobody holds it");
+        assert!(parked.conn.same(&first));
+        assert!(pool.share("DB_1").is_none(), "a parked connection is taken, not shared");
+        parked.conn.close();
+    }
 
     #[test]
     fn the_acquire_is_the_plan_statement() {

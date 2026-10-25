@@ -26,7 +26,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub use host::{
-    Boundary, HandlerOutput, HostError, PendingCall, TurnContext, TurnHost, TurnResult,
+    Background, Boundary, HandlerOutput, HostError, PendingCall, TurnContext, TurnHost, TurnResult,
+    WaitingAsk,
 };
 pub use message::{
     A2A_CHANNEL, DEFAULT_DEBOUNCE, DEFAULT_POLICY_MAP, DELEGATION_CHANNEL, DebounceSpec,
@@ -40,12 +41,14 @@ pub use step::{
 
 use crate::StorageError;
 use crate::run::{
+    CANCEL_REQUESTED_KEY, REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST,
+};
+use crate::run::{
     LEASE_POLL_MAX, LEASE_POLL_MIN, LEASE_WAIT_TIMEOUT, Lane, Run, RunOptions, RunOutcome,
     TaskRecord, TaskState, Thread, shortuuid,
 };
-use crate::run::{REASON_LEASE_TIMEOUT, REASON_WORKER_LOST};
 use crate::schema::TaskData;
-use crate::statements::{Duplicate, Receive, ReceiveRequest, Received, SubmittedTask};
+use crate::statements::{Duplicate, Lease, Receive, ReceiveRequest, Received, SubmittedTask};
 use step::python_reason;
 
 /// How many rows a lookup by id or `messageId` scans.
@@ -54,6 +57,20 @@ pub(crate) const LOOKUP_LIMIT: i64 = 500;
 const TASKS_IN_CONTEXT: i64 = 50;
 /// How many runs `reject` reads to name the running task.
 const RUNS_FOR_REJECT: usize = 50;
+/// How often the `live` holder reads the inbox and the cancel requests while work runs in the
+/// background. A request in its own process or one of its worker's jobs tells it at once; this
+/// is the backup path for one from another worker.
+const HOLD_POLL: Duration = Duration::from_secs(1);
+
+/// How the `live` holder's wait between turns ended.
+enum Held {
+    /// A message landed in the inbox.
+    Arrived,
+    /// These tasks' background work finished.
+    Ready(Vec<String>),
+    /// Nothing runs and nothing waits: the lane can be released.
+    Idle,
+}
 
 /// `TurnRunner`'s arguments: the policy map, the debounce map, the wait, the state default. A
 /// field left out is the crate's default.
@@ -184,43 +201,96 @@ impl Turn {
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
         let mut ctx =
             Ctx { lane: self.thread.lane(&self.lane), policy, last_run_id: None, caller_history };
+        // a message that names a task waiting on a question continues that task; any other
+        // message is a new task, whatever questions are open
+        let named = match msg.task_id.as_deref() {
+            Some(named) => ctx.lane.task(named).await?,
+            None => None,
+        };
+        if let Some(row) = &named
+            && row.data.history.iter().any(|m| {
+                m.get("messageId").and_then(Value::as_str) == Some(msg.message_id.as_str())
+            })
+        {
+            // a resend of a message that already continued this task: its answer, once
+            self.host.accepted(&row.id, true, false).await;
+            let mut record = Some(row.clone());
+            if row.state() == Some(TaskState::Working) {
+                record = self.await_task(&ctx, &row.id, false, true).await?;
+            }
+            return Ok(result_for(record, self.thread.id(), &row.id, None));
+        }
+        let waiting = named.filter(|r| r.state() == Some(TaskState::InputRequired)).map(|r| r.id);
+        let continues = waiting.as_deref();
         match policy {
-            Policy::Batch => self.batch(&mut ctx, &msg, &task_id, debounce).await,
+            Policy::Batch => {
+                self.batch(&mut ctx, &msg, continues.unwrap_or(&task_id), debounce, false).await
+            }
+            Policy::Live => {
+                self.batch(&mut ctx, &msg, continues.unwrap_or(&task_id), Duration::ZERO, true)
+                    .await
+            }
             Policy::Concurrent => self.concurrent(&ctx, &msg, &task_id).await,
-            Policy::Reject => self.reject(&ctx, &msg, &task_id).await,
+            Policy::Reject => self.reject(&ctx, &msg, &task_id, continues).await,
             Policy::Interrupt | Policy::Queue => {
                 if !debounce.is_zero() {
                     tokio::time::sleep(debounce).await;
                 }
-                self.exclusive(&ctx, &msg, &task_id, policy == Policy::Interrupt).await
+                self.exclusive(&ctx, &msg, &task_id, policy == Policy::Interrupt, continues).await
             }
         }
     }
 
     // -- interrupt and queue --
 
+    /// `continues` is the task waiting on a question that this message answers: the turn runs
+    /// under it, with no row of its own; `task_id` is the message's own row otherwise.
     async fn exclusive(
         &self,
         ctx: &Ctx,
         msg: &Message,
-        task_id: &str,
+        own_task_id: &str,
         interrupt: bool,
+        continues: Option<&str>,
     ) -> Result<TurnResult, StorageError> {
         // the early `submitted` row, the lease and the pickup, one batch (plan 3.3.4): a
-        // `tasks/get` before the commit finds the task, and a holder that dies leaves an orphan
+        // `tasks/get` before the commit finds the task, and a holder that dies leaves an orphan.
+        // A continuation picks the waiting row up instead, under a run id of its message, so a
+        // resend of the message finds the run committed and runs nothing twice
+        let task_id = continues.unwrap_or(own_task_id);
+        let (run_id, submit) = match continues {
+            Some(waiting) => (format!("{waiting}:{}", msg.message_id), None),
+            None => (task_id.to_owned(), Some(submitted_task(&self.lane, msg, task_id))),
+        };
         let opened = ctx
             .lane
             .open(RunOptions {
                 interrupt,
                 channel: Some(msg.channel.clone()),
                 wait_timeout: self.opts.wait_timeout(),
-                submit: Some(submitted_task(&self.lane, msg, task_id)),
+                submit,
                 pickup: true,
-                ..RunOptions::new(task_id, task_id)
+                ..RunOptions::new(run_id, task_id)
             })
             .await;
         let mut run = match opened {
             Ok(run) => run,
+            Err(StorageError::LeaseTimeout(_)) if continues.is_some() => {
+                // the question still waits; the message failed, on a row never written
+                log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id, threadId = self.thread.id(); "the lane was not released in time; the answer fails lease-timeout and the question stays open");
+                return Ok(TurnResult {
+                    task: unpersisted_failed(
+                        own_task_id,
+                        &self.lane,
+                        Some(msg),
+                        REASON_LEASE_TIMEOUT,
+                    ),
+                    output: None,
+                    thread_id: self.thread.id().to_owned(),
+                    answered_by: own_task_id.to_owned(),
+                    run_id: None,
+                });
+            }
             Err(StorageError::LeaseTimeout(_)) => {
                 log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id, threadId = self.thread.id(); "the lane was not released in time; the task fails lease-timeout");
                 let record = self.fail_unrun(ctx, task_id, REASON_LEASE_TIMEOUT).await?;
@@ -234,6 +304,16 @@ impl Turn {
                     run_id: None,
                 });
             }
+            Err(StorageError::DuplicateMessage(existing)) => {
+                // a resend while its turn still runs: that task's answer, or `worker-lost` when
+                // its holder died
+                self.host.accepted(&existing, true, false).await;
+                let mut record = ctx.lane.task(&existing).await?;
+                if record.as_ref().is_some_and(|r| !r.terminal()) {
+                    record = self.await_task(ctx, &existing, false, true).await?;
+                }
+                return Ok(result_for(record, self.thread.id(), &existing, None));
+            }
             Err(e) => return Err(e),
         };
         if run.submitted == Some(false)
@@ -241,6 +321,7 @@ impl Turn {
         {
             // a retried messageId: the task it created, awaited when a runner still has it, or
             // failed worker-lost when its holder died and the lease lapsed
+            self.host.accepted(&existing.id, true, false).await;
             self.close_run(&mut run, Ok(())).await?;
             if !existing.terminal()
                 && let Some(ended) = self.await_task(ctx, &existing.id.clone(), false, true).await?
@@ -249,17 +330,40 @@ impl Turn {
             }
             return Ok(result_for(Some(existing), self.thread.id(), task_id, None));
         }
+        if continues.is_some() && !run.closed && !run.picked_up {
+            // another message answered the question first: this one is a new task
+            self.close_run(&mut run, Ok(())).await?;
+            return Box::pin(self.exclusive(ctx, msg, own_task_id, interrupt, None)).await;
+        }
         let body = async {
             if run.closed || !run.picked_up {
                 return Ok(None);
             }
             self.fail_orphans(&run, &[task_id.to_owned()]).await?;
-            self.turn(ctx, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], interrupt)
-                .await
-                .map(Some)
+            self.turn(
+                ctx,
+                &mut run,
+                std::slice::from_ref(msg),
+                &[task_id.to_owned()],
+                interrupt,
+                None,
+            )
+            .await
+            .map(Some)
         }
         .await;
-        let outcome = self.close_run(&mut run, body).await?;
+        let outcome = match self.close_run(&mut run, body).await {
+            Err(e @ (StorageError::VersionConflict { .. } | StorageError::Unavailable(_))) => {
+                // the save was not written: the row the client was told about fails now, under
+                // its own id, instead of staying `working` until another holder finds it
+                if let Err(write) = self.fail_unrun(ctx, task_id, REASON_STORAGE_UNAVAILABLE).await
+                {
+                    log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id; "the unsaved task could not be failed: {write}");
+                }
+                return Err(e);
+            }
+            other => other?,
+        };
         match outcome {
             Some(outcome) => self.finish(ctx, outcome, task_id, &mut run).await,
             None => {
@@ -324,12 +428,15 @@ impl Turn {
 
     // -- inbox --
 
+    /// `batch`, and `live` with `live` set: no debounce, a newer message that interrupts stops
+    /// the reply, and the holder keeps the lane while work runs in the background.
     async fn batch(
         &self,
         ctx: &mut Ctx,
         msg: &Message,
         task_id: &str,
         debounce: Duration,
+        live: bool,
     ) -> Result<TurnResult, StorageError> {
         let lease_token = shortuuid("lease_");
         let received = self
@@ -349,7 +456,9 @@ impl Turn {
             .await?;
         match received {
             Receive::Duplicate(Duplicate { task_id: existing }) => {
+                let resent = existing.is_some();
                 let existing_id = existing.unwrap_or_else(|| task_id.to_owned());
+                self.host.accepted(&existing_id, resent, false).await;
                 let mut record = ctx.lane.task(&existing_id).await?;
                 if let Some(r) = &record
                     && !r.terminal()
@@ -360,18 +469,91 @@ impl Turn {
             }
             Receive::Received(Received { acquired: Some(_), .. }) => {
                 // this worker is the runner: let the burst land, then drain
+                self.host.accepted(task_id, false, live).await;
                 if !debounce.is_zero() {
                     tokio::time::sleep(debounce).await;
                 }
-                self.drain(ctx, Some(lease_token)).await?;
+                self.drain(ctx, Some(lease_token), live).await?;
                 let record = ctx.lane.task(task_id).await?;
                 Ok(result_for(record, self.thread.id(), task_id, ctx.last_run_id.as_deref()))
             }
-            Receive::Received(Received { acquired: None, .. }) => {
-                let record = self.await_task(ctx, task_id, true, false).await?;
+            Receive::Received(Received { acquired: None, id }) => {
+                // another holds the lane: told at once when it is in this process or a job of
+                // this worker
+                self.host.accepted(task_id, false, false).await;
+                self.host.arrived(task_id).await;
+                let record = self.await_task_answered(ctx, task_id, id).await?;
                 Ok(result_for(record, self.thread.id(), task_id, ctx.last_run_id.as_deref()))
             }
         }
+    }
+
+    /// `await_task` for a message received into the inbox as row `received`: it ends when the
+    /// task ends, or when a drain consumed the row and the task waits on the person again (the
+    /// message answered a question, and the task asked another).
+    async fn await_task_answered(
+        &self,
+        ctx: &Ctx,
+        task_id: &str,
+        received: i64,
+    ) -> Result<Option<TaskRecord>, StorageError> {
+        let answered = || async {
+            let record = ctx.lane.task(task_id).await?;
+            if record.as_ref().is_some_and(|r| r.state() == Some(TaskState::InputRequired))
+                && ctx.lane.info().await?.is_some_and(|l| l.drained_id >= received)
+            {
+                return Ok::<_, StorageError>(record);
+            }
+            Ok(None)
+        };
+        let deadline = Instant::now() + self.opts.wait_timeout();
+        let mut delay = LEASE_POLL_MIN;
+        loop {
+            if let Some(record) = answered().await? {
+                return Ok(Some(record));
+            }
+            // one pass of the poll: the task ended, or the lease freed and this worker drained
+            let record = self.await_task_once(ctx, task_id, true).await?;
+            if record.as_ref().is_some_and(TaskRecord::terminal) || Instant::now() >= deadline {
+                if Instant::now() >= deadline {
+                    log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id, threadId = self.thread.id(); "a queued message was not answered in time");
+                }
+                return Ok(record);
+            }
+            // a holder in this process says when a turn of the task ended
+            if !self.host.settled(task_id, delay).await {
+                delay = (delay * 2).min(LEASE_POLL_MAX);
+            }
+        }
+    }
+
+    /// One poll of `await_task` under `batch`: the task's row, after a drain when the lease is
+    /// free and the inbox holds rows.
+    async fn await_task_once(
+        &self,
+        ctx: &Ctx,
+        task_id: &str,
+        drain_if_free: bool,
+    ) -> Result<Option<TaskRecord>, StorageError> {
+        let record = ctx.lane.task(task_id).await?;
+        if record.as_ref().is_some_and(TaskRecord::terminal) {
+            return Ok(record);
+        }
+        if drain_if_free && !ctx.lane.inbox_pending().await?.is_empty() {
+            let mut drain_ctx = Ctx {
+                lane: ctx.lane.clone(),
+                policy: ctx.policy,
+                last_run_id: None,
+                caller_history: None,
+            };
+            let live = ctx.policy == Policy::Live;
+            match self.drain(&mut drain_ctx, None, live).await {
+                Err(StorageError::LeaseHeld(_)) => {}
+                Err(e) => return Err(e),
+                Ok(()) => return ctx.lane.task(task_id).await,
+            }
+        }
+        Ok(record)
     }
 
     /// Polls the task and the lease: the task ends, or the lease frees and this worker drains the
@@ -399,7 +581,7 @@ impl Turn {
                 return Ok(record);
             }
             if drain_if_free && !ctx.lane.inbox_pending().await?.is_empty() {
-                match self.drain(&mut drain_ctx, None).await {
+                match self.drain(&mut drain_ctx, None, ctx.policy == Policy::Live).await {
                     Err(StorageError::LeaseHeld(_)) => {}
                     Err(e) => return Err(e),
                     Ok(()) => {
@@ -451,15 +633,39 @@ impl Turn {
     }
 
     /// The drain loop (plan 3.3.4): one turn per batch of pending rows until nothing is pending.
-    /// `LeaseHeld` when another runner holds the lane.
-    async fn drain(&self, ctx: &mut Ctx, lease_token: Option<String>) -> Result<(), StorageError> {
+    /// `LeaseHeld` when another runner holds the lane. Under `live` the runner is the lane's
+    /// holder: a turn is interrupted by a newer message that interrupts, each task's last frames
+    /// go out as its turn commits, and the lane is kept while work runs in the background.
+    async fn drain(
+        &self,
+        ctx: &mut Ctx,
+        lease_token: Option<String>,
+        live: bool,
+    ) -> Result<(), StorageError> {
         let db = self.thread.db().clone();
         let mut lease_token = lease_token;
+        // a dead holder's rows are failed once, when the lane was taken; after that every
+        // `working` row is this holder's own, some of them waiting on background work
+        let mut taken = true;
         loop {
             let rows = db.inbox_pending(&self.lane).await?;
             let Some(last) = rows.last() else {
-                if let Some(token) = &lease_token {
-                    db.drain_check(&self.lane, token).await?;
+                if live && let Some(token) = lease_token.clone() {
+                    match self.hold(&token).await? {
+                        Held::Arrived => continue,
+                        Held::Ready(tasks) => {
+                            if let Some(token) = self.resume(ctx, &tasks).await? {
+                                lease_token = Some(token);
+                            }
+                            continue;
+                        }
+                        Held::Idle => {}
+                    }
+                }
+                if let Some(token) = &lease_token
+                    && !db.drain_check(&self.lane, token).await?.released
+                {
+                    continue; // a message landed after the read
                 }
                 return Ok(());
             };
@@ -473,10 +679,25 @@ impl Turn {
                 })
                 .await?;
             let last_id = last.id;
+            let fail_orphans = taken;
             let body = async {
                 let mut batch: Vec<Message> = Vec::new();
                 let mut batch_ids: Vec<String> = Vec::new();
+                let mut seen: Vec<&String> = Vec::new();
                 for (row, tid) in rows.iter().zip(&task_ids) {
+                    // several rows that continue one task are picked up once
+                    if seen.contains(&tid) {
+                        if batch_ids.contains(tid) {
+                            batch.push(Message::from_a2a(
+                                &row.message,
+                                Some(row.received_at as f64),
+                                Some(tid),
+                            )?);
+                            batch_ids.push(tid.clone());
+                        }
+                        continue;
+                    }
+                    seen.push(tid);
                     let Some(was) = db.pickup_task(&self.lane, tid).await? else {
                         continue; // terminal already: answered by an earlier drain
                     };
@@ -497,27 +718,194 @@ impl Turn {
                     )?);
                     batch_ids.push(tid.clone());
                 }
+                let mut outcome = None;
                 if !batch.is_empty() {
-                    self.fail_orphans(&run, &task_ids).await?;
-                    self.turn(ctx, &mut run, &batch, &batch_ids, false).await?;
+                    if fail_orphans {
+                        self.fail_orphans(&run, &task_ids).await?;
+                    }
+                    let arrivals_after = live.then_some(last_id);
+                    outcome = Some(
+                        self.turn(ctx, &mut run, &batch, &batch_ids, false, arrivals_after).await?,
+                    );
                 }
                 run.drained_id = Some(last_id);
                 run.keep_lease = true;
-                Ok(())
+                Ok((outcome, batch_ids))
             }
             .await;
-            self.close_run(&mut run, body).await?;
+            let (outcome, batch_ids) = match self.close_run(&mut run, body).await {
+                Err(e @ (StorageError::VersionConflict { .. } | StorageError::Unavailable(_))) => {
+                    // the save was not written: the batch's rows fail under their own ids
+                    for tid in &task_ids {
+                        let message = failed_message(tid, REASON_STORAGE_UNAVAILABLE);
+                        if let Err(write) = db.mark_orphan_failed(&self.lane, tid, &message).await {
+                            log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = tid.as_str(); "the unsaved task could not be failed: {write}");
+                        }
+                    }
+                    return Err(e);
+                }
+                other => other?,
+            };
+            taken = false;
             ctx.last_run_id = Some(run.run_id.clone());
             let token = run
                 .lease_token()
                 .ok_or_else(|| StorageError::Invalid("a drain run without a lease".into()))?
                 .to_owned();
+            if live {
+                self.ended(ctx, &batch_ids, outcome.as_ref()).await?;
+                lease_token = Some(token);
+                continue;
+            }
             let check = db.drain_check(&self.lane, &token).await?;
             lease_token = Some(token);
             if check.released {
                 return Ok(());
             }
         }
+    }
+
+    /// The holder between turns under `live`: the lane stays held, its lease renewed, while
+    /// work runs in the background; a message that lands or a finished piece of work ends the
+    /// wait.
+    async fn hold(&self, lease_token: &str) -> Result<Held, StorageError> {
+        let db = self.thread.db();
+        let mut renewal: Option<Lease> = None;
+        let mut wait = Duration::ZERO;
+        let held = loop {
+            // the tasks a client canceled while their work runs: the work stops first
+            let cancel: Vec<String> = self
+                .thread
+                .lane(&self.lane)
+                .tasks(Some(TaskState::Working), TASKS_IN_CONTEXT)
+                .await?
+                .into_iter()
+                .filter(|r| r.data.metadata.get(CANCEL_REQUESTED_KEY) == Some(&Value::Bool(true)))
+                .map(|r| r.id)
+                .collect();
+            let background = self.host.background(wait, cancel).await;
+            if !background.ready.is_empty() {
+                break Held::Ready(background.ready);
+            }
+            if background.running == 0 {
+                break Held::Idle;
+            }
+            // a signaled arrival may be a cancel request: the next pass reads those
+            if background.arrived {
+                if !db.inbox_pending(&self.lane).await?.is_empty() {
+                    break Held::Arrived;
+                }
+                wait = Duration::ZERO;
+                continue;
+            }
+            if !db.inbox_pending(&self.lane).await?.is_empty() {
+                break Held::Arrived;
+            }
+            let lease = renewal.get_or_insert_with(|| {
+                db.start_renewal(&self.lane, self.thread.holder(), lease_token)
+            });
+            if lease.is_lost() {
+                lease.stop();
+                return Err(StorageError::Unavailable(format!(
+                    "lease on lane {} was lost while work ran in the background",
+                    self.lane
+                )));
+            }
+            wait = HOLD_POLL;
+        };
+        if let Some(lease) = renewal {
+            lease.stop();
+        }
+        Ok(held)
+    }
+
+    /// The turn of the tasks whose background work finished, all in one: the model gives one
+    /// reply, which answers each of them; returns the lease token the holder keeps, `None` when
+    /// no turn ran.
+    async fn resume(
+        &self,
+        ctx: &mut Ctx,
+        task_ids: &[String],
+    ) -> Result<Option<String>, StorageError> {
+        let mut ids = Vec::new();
+        let mut batch = Vec::new();
+        for task_id in task_ids {
+            let Some(row) = ctx.lane.task(task_id).await?.filter(|r| !r.terminal()) else {
+                // the task ended meanwhile (a client canceled it): its work's result lands
+                // nowhere
+                log::info!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id.as_str(); "background work ended after its task; its result is dropped");
+                self.host.discard(task_id).await;
+                continue;
+            };
+            // the turn is the task's own: it keeps the channel its message came in on
+            let channel =
+                row.data.history.first().map_or_else(|| A2A_CHANNEL.to_owned(), channel_of);
+            let message = serde_json::json!({
+                "messageId": shortuuid("bg_"),
+                "role": "user",
+                "parts": [],
+                "taskId": task_id,
+                "metadata": {
+                    crate::run::KIND_KEY: crate::run::KIND_BACKGROUND,
+                    crate::run::CHANNEL_KEY: channel,
+                },
+            });
+            batch.push(Message::from_a2a(&message, None, Some(task_id))?);
+            ids.push(task_id.clone());
+        }
+        let Some(last) = ids.last() else {
+            return Ok(None);
+        };
+        let mut run = ctx
+            .lane
+            .open(RunOptions {
+                wait: false,
+                channel: Some(batch[0].channel.clone()),
+                ..RunOptions::new(shortuuid("resume_"), last.clone())
+            })
+            .await?;
+        let drained = ctx.lane.info().await?.map_or(0, |l| l.drained_id);
+        let body = async {
+            let outcome = self.turn(ctx, &mut run, &batch, &ids, false, Some(drained)).await?;
+            run.keep_lease = true;
+            Ok(outcome)
+        }
+        .await;
+        let outcome = self.close_run(&mut run, body).await?;
+        self.ended(ctx, &ids, Some(&outcome)).await?;
+        run.lease_token()
+            .map(|t| Some(t.to_owned()))
+            .ok_or_else(|| StorageError::Invalid("a resumed run without a lease".into()))
+    }
+
+    /// Under `live`: each task a turn took hears how it stopped, on its own answer stream.
+    async fn ended(
+        &self,
+        ctx: &Ctx,
+        task_ids: &[String],
+        outcome: Option<&step::Outcome>,
+    ) -> Result<(), StorageError> {
+        let rows = ctx.lane.tasks(None, TASKS_IN_CONTEXT).await?;
+        let mut told: Vec<&String> = Vec::new();
+        for task_id in task_ids.iter().chain(outcome.and_then(|o| o.merged.as_ref())) {
+            if told.contains(&task_id) {
+                continue;
+            }
+            told.push(task_id);
+            if let Some(row) = rows.iter().find(|r| &r.id == task_id) {
+                if row.state() == Some(TaskState::InputRequired)
+                    && row.ask().and_then(|a| a.get("heard")).is_some()
+                {
+                    // cut off by the next message, which answers it: no frame shows the question
+                    continue;
+                }
+                let output = outcome
+                    .filter(|o| &o.task_id == task_id || o.answered_with.contains(task_id))
+                    .and_then(|o| o.output.as_ref());
+                self.host.on_end(row, output).await;
+            }
+        }
+        Ok(())
     }
 
     // -- concurrent and reject --
@@ -542,8 +930,9 @@ impl Turn {
                 ..RunOptions::new(task_id, task_id)
             })
             .await?;
-        let body =
-            self.turn(ctx, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false).await;
+        let body = self
+            .turn(ctx, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false, None)
+            .await;
         let outcome = self.close_run(&mut run, body).await?;
         self.finish(ctx, outcome, task_id, &mut run).await
     }
@@ -553,6 +942,7 @@ impl Turn {
         ctx: &Ctx,
         msg: &Message,
         task_id: &str,
+        continues: Option<&str>,
     ) -> Result<TurnResult, StorageError> {
         if let Some(info) = ctx.lane.info().await?
             && info.lease_until > self.thread.now_ms() / 1000
@@ -566,7 +956,7 @@ impl Turn {
                 .and_then(|r| r.task_id);
             return Err(StorageError::RunRejected { running_task_id: running });
         }
-        match self.exclusive_nowait(ctx, msg, task_id).await {
+        match self.exclusive_nowait(ctx, msg, task_id, continues).await {
             Err(StorageError::LeaseHeld(_)) => {
                 Err(StorageError::RunRejected { running_task_id: None })
             }
@@ -578,14 +968,20 @@ impl Turn {
         &self,
         ctx: &Ctx,
         msg: &Message,
-        task_id: &str,
+        own_task_id: &str,
+        continues: Option<&str>,
     ) -> Result<TurnResult, StorageError> {
+        let task_id = continues.unwrap_or(own_task_id);
+        let run_id = match continues {
+            Some(waiting) => format!("{waiting}:{}", msg.message_id),
+            None => task_id.to_owned(),
+        };
         let mut run = ctx
             .lane
             .open(RunOptions {
                 wait: false,
                 channel: Some(msg.channel.clone()),
-                ..RunOptions::new(task_id, task_id)
+                ..RunOptions::new(run_id, task_id)
             })
             .await?;
         // the row is written under the lease: a refused message leaves none (docs/text-endpoints.md)
@@ -593,12 +989,14 @@ impl Turn {
             if run.closed {
                 return Ok(None);
             }
-            self.submit(msg, task_id).await?;
+            if continues.is_none() {
+                self.submit(msg, task_id).await?;
+            }
             if !self.pickup(task_id).await? {
                 return Ok(None);
             }
             self.fail_orphans(&run, &[task_id.to_owned()]).await?;
-            self.turn(ctx, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false)
+            self.turn(ctx, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false, None)
                 .await
                 .map(Some)
         }

@@ -395,11 +395,11 @@ async fn task_rows_read_back_as_the_python_tasks_write_would_have_produced() {
     let t5 = row("AST_t5");
     assert_eq!((t5.status.as_str(), t5.message_id.as_deref()), ("working", Some("m5")));
 
-    // The next run: the pending ask is found, a message appends to the history, a completion
-    // writes the artifact and the last message, and a terminal row refuses a write.
+    // The next run: the open question is found, a message appends to the history, a
+    // completion writes the artifact and the last message, and a terminal row refuses a write.
     let mut run = lane.open(RunOptions::new("r2", "AST_9")).await.unwrap();
-    let ask = run.tasks.pending_ask().await.unwrap().expect("one input-required row with an ask");
-    assert_eq!(ask.id, "AST_t2");
+    let waiting = run.tasks.waiting().await.unwrap();
+    assert_eq!(waiting.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["AST_t2"]);
     let stored = run.tasks.get("AST_t1").await.unwrap().expect("stored");
     assert_eq!((stored.seq, stored.status.as_str()), (1, "submitted"));
     assert!(stored.updated_at > 0);

@@ -470,8 +470,15 @@ impl Lane {
             if let Some(loaded) = self.db().acquire(&request).await? {
                 break loaded;
             }
-            // the row is in; a retry of the batch must not report it as a duplicate
-            request.submit = None;
+            // the row is in, or its `messageId` already had one: a resend of a message whose turn
+            // still runs waits on that task, never as the lane's waiter, which would cancel it
+            if let Some(submit) = request.submit.take()
+                && let Some(message_id) = &submit.message_id
+                && let Some(row) = self.db().task_by_message_id(&self.name, message_id).await?
+                && row.task_id != submit.task_id
+            {
+                return Err(StorageError::DuplicateMessage(row.task_id));
+            }
             if !opts.wait {
                 return Err(StorageError::LeaseHeld(format!(
                     "lane {} is held by another run",

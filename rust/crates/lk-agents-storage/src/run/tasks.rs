@@ -19,8 +19,8 @@ use crate::statements::{TaskWrite, ThreadDb};
 
 /// How many rows a lookup by id or `messageId` scans (`Tasks._load`, `Tasks.by_message_id`).
 pub(crate) const LOOKUP_LIMIT: i64 = 500;
-/// How many `input-required` rows `pending_ask` scans.
-const PENDING_ASK_LIMIT: i64 = 50;
+/// How many `input-required` rows `waiting` scans.
+const WAITING_LIMIT: i64 = 50;
 
 /// What a write changes; everything left `None` keeps the existing row's value (`Tasks.write`'s
 /// keyword arguments).
@@ -57,11 +57,17 @@ pub struct WaitOptions {
     pub tool: Option<String>,
     /// For a conversation tool's `InputRequired`, the pending call.
     pub call_id: Option<String>,
-    /// The tool the answer is handed to, when the `InputRequired` named one.
+    /// The tool that relays the answer, when a call of the question is a delegate's.
     pub answer_tool: Option<String>,
     pub deadline: Option<i64>,
     /// The tool's parameter schema, added to the status message as a data part.
     pub schema: Option<Value>,
+    /// The question waits behind the one in front of the person (`ask.queued`).
+    pub queued: bool,
+    /// The question reaches the person exactly as written (`ask.verbatim`).
+    pub verbatim: bool,
+    /// A newer message cut the question off: what the person saw or heard of it (`ask.heard`).
+    pub heard: Option<String>,
 }
 
 /// The lane's task rows as this run writes them (plan 5.5).
@@ -170,22 +176,21 @@ impl Tasks {
             .map(TaskRecord::from_row))
     }
 
-    /// The newest `input-required` row holding a conversation tool's pending call.
-    pub async fn pending_ask(&self) -> Result<Option<TaskRecord>, StorageError> {
+    /// The lane's open questions, oldest first: its `input-required` rows, as of the acquire.
+    pub async fn waiting(&self) -> Result<Vec<TaskRecord>, StorageError> {
         let input_required = TaskState::InputRequired.as_str();
         if let Some(rows) = self.snapshot() {
-            return Ok(rows
-                .iter()
-                .find(|r| r.status == input_required && r.ask().is_some_and(truthy))
-                .cloned());
+            return Ok(rows.iter().rev().filter(|r| r.status == input_required).cloned().collect());
         }
-        Ok(self
+        let mut rows: Vec<TaskRecord> = self
             .db
-            .tasks(&self.lane, Some(input_required), PENDING_ASK_LIMIT)
+            .tasks(&self.lane, Some(input_required), WAITING_LIMIT)
             .await?
             .into_iter()
             .map(TaskRecord::from_row)
-            .find(|r| r.ask().is_some_and(truthy)))
+            .collect();
+        rows.reverse();
+        Ok(rows)
     }
 
     /// Insert or update one row; what the patch leaves `None` keeps the existing row's value.
@@ -248,6 +253,15 @@ impl Tasks {
         }
         if let Some(answer_tool) = opts.answer_tool {
             ask.insert("answer_tool".into(), Value::String(answer_tool));
+        }
+        if opts.queued {
+            ask.insert("queued".into(), Value::Bool(true));
+        }
+        if opts.verbatim {
+            ask.insert("verbatim".into(), Value::Bool(true));
+        }
+        if let Some(heard) = opts.heard {
+            ask.insert("heard".into(), Value::String(heard));
         }
         let mut parts = vec![text_part(question)];
         if let Some(schema) = opts.schema {
@@ -441,18 +455,6 @@ fn parse_status(task_id: &str, status: &str) -> Result<TaskState, StorageError> 
         .ok_or_else(|| StorageError::Decode(format!("task {task_id}: unknown status {status}")))
 }
 
-/// Python truthiness of a JSON value: `if row.get("ask")`.
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +598,5 @@ mod tests {
         assert_eq!(a["parts"], json!([{"kind": "text", "text": "done"}]));
         let d = artifact(&json!({"n": 1}));
         assert_eq!(d["parts"], json!([{"kind": "data", "data": {"n": 1}}]));
-        assert!(truthy(&json!({"question": "q"})) && !truthy(&json!({})) && !truthy(&json!(null)));
     }
 }

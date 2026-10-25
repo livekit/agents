@@ -21,14 +21,18 @@
 //! the handler met fails the run as that error.
 
 use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::Value;
 
 use lk_agents_abi::python::{
     CancelPythonTask, check_pid, log, pyo3_async_runtimes, schedule_coroutine, value_from_py,
 };
 use lk_agents_storage::StorageError as CoreError;
+use lk_agents_storage::run::TaskRecord;
 use lk_agents_storage::run::Thread;
 use lk_agents_storage::turn::{
-    Boundary, HandlerOutput, HostError, Turn, TurnContext, TurnHost, TurnOptions,
+    Background, Boundary, HandlerOutput, HostError, Turn, TurnContext, TurnHost, TurnOptions,
 };
 use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -153,22 +157,48 @@ impl PyBoundary {
         self.inner.client_canceled()
     }
 
+    /// Writes the turn's message item (`item_to_payload` form) now, under the run's fence: a
+    /// delegation is about to go out. Awaitable.
+    #[pyo3(signature = (item, message_id=None))]
+    fn record<'py>(
+        &self,
+        py: Python<'py>,
+        item: &Bound<'py, PyAny>,
+        message_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        check_pid()?;
+        let item = value_from_py(item, "item")?;
+        let boundary = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            boundary.record(item, message_id).await.map_err(to_py_err)
+        })
+    }
+
     /// Whether to yield now. Awaitable; raises the storage error when the check could not read.
-    fn check<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    /// With `read` it reads even right after the turn took its batch.
+    #[pyo3(signature = (read=false))]
+    fn check<'py>(&self, py: Python<'py>, read: bool) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let boundary = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            boundary.check().await.map_err(to_py_err)
+            boundary.check(read).await.map_err(to_py_err)
         })
     }
 }
 
 // --------------------------------------------------------------------- the host
 
-/// The Python host object and the loop it runs on.
+/// The Python host object and the loop it runs on; `on_end` and `background` are optional
+/// on it.
 struct PyTurnHost {
     obj: Py<PyAny>,
     locals: TaskLocals,
+    on_end: bool,
+    background: bool,
+    /// The host has `arrived` and `settled`: it hears a holder in its process.
+    hub: bool,
+    /// The host has `accepted`: it acknowledges a request under the task the turn found.
+    accepted: bool,
 }
 
 impl PyTurnHost {
@@ -205,6 +235,11 @@ fn context_to_py<'py>(py: Python<'py>, ctx: &TurnContext) -> PyResult<(Py<PyAny>
         "agent_stack": ctx.agent_stack,
         "caller_history": ctx.caller_history,
         "answer_tool": ctx.answer_tool,
+        "answer_call_id": ctx.answer_call_id,
+        "front_question": ctx.front_question,
+        "relay": ctx.relay,
+        "cut_off": ctx.cut_off,
+        "live": ctx.live,
     });
     let model = model(py, "storage_turn", "TurnContext", &record)?;
     let boundary = Py::new(py, PyBoundary { inner: ctx.boundary.clone() })?;
@@ -279,6 +314,108 @@ impl TurnHost for PyTurnHost {
             log::warn!(target: "livekit.agents", "the host's on_token raised: {e}");
         }
     }
+
+    async fn on_end(&self, task: &TaskRecord, output: Option<&Value>) {
+        if !self.on_end {
+            return;
+        }
+        let (task, output) = (task.clone(), output.cloned());
+        if let Err(e) = self
+            .call("on_end", move |py| {
+                let record = model(py, "storage_run", "TaskRecord", &task)?;
+                let output = match &output {
+                    Some(v) => lk_agents_abi::python::value_to_py(py, v)?.unbind(),
+                    None => py.None(),
+                };
+                Ok((record, output).into_pyobject(py)?.into_any().cast_into()?)
+            })
+            .await
+        {
+            log::warn!(target: "livekit.agents", "the host's on_end raised: {e}");
+        }
+    }
+
+    async fn discard(&self, task_id: &str) {
+        if !self.background {
+            return;
+        }
+        let task_id = task_id.to_owned();
+        if let Err(e) = self
+            .call("discard", move |py| Ok((task_id,).into_pyobject(py)?.into_any().cast_into()?))
+            .await
+        {
+            log::warn!(target: "livekit.agents", "the host's discard raised: {e}");
+        }
+    }
+
+    async fn accepted(&self, task_id: &str, resent: bool, holds: bool) {
+        if !self.accepted {
+            return;
+        }
+        let task_id = task_id.to_owned();
+        if let Err(e) = self
+            .call("accepted", move |py| {
+                Ok((task_id, resent, holds).into_pyobject(py)?.into_any().cast_into()?)
+            })
+            .await
+        {
+            log::warn!(target: "livekit.agents", "the host's accepted raised: {e}");
+        }
+    }
+
+    async fn arrived(&self, task_id: &str) {
+        if !self.hub {
+            return;
+        }
+        let task_id = task_id.to_owned();
+        if let Err(e) = self
+            .call("arrived", move |py| Ok((task_id,).into_pyobject(py)?.into_any().cast_into()?))
+            .await
+        {
+            log::warn!(target: "livekit.agents", "the host's arrived raised: {e}");
+        }
+    }
+
+    async fn settled(&self, task_id: &str, wait: Duration) -> bool {
+        if !self.hub {
+            tokio::time::sleep(wait).await;
+            return false;
+        }
+        let task_id = task_id.to_owned();
+        let res = self
+            .call("settled", move |py| {
+                Ok((task_id, wait.as_secs_f64()).into_pyobject(py)?.into_any().cast_into()?)
+            })
+            .await;
+        Python::attach(|py| match res {
+            Ok(v) => v.bind(py).is_truthy().unwrap_or(false),
+            Err(e) => {
+                log::warn!(target: "livekit.agents", "the host's settled raised: {e}");
+                false
+            }
+        })
+    }
+
+    async fn background(&self, wait: Duration, cancel: Vec<String>) -> Background {
+        if !self.background {
+            return Background::default();
+        }
+        let res = self
+            .call("background", move |py| {
+                Ok((wait.as_secs_f64(), cancel).into_pyobject(py)?.into_any().cast_into()?)
+            })
+            .await;
+        Python::attach(|py| match res {
+            Ok(v) => parse_request::<Background>(v.bind(py), "background").unwrap_or_else(|e| {
+                log::warn!(target: "livekit.agents", "the host's background answered {e}");
+                Background::default()
+            }),
+            Err(e) => {
+                log::warn!(target: "livekit.agents", "the host's background raised: {e}");
+                Background::default()
+            }
+        })
+    }
 }
 
 // --------------------------------------------------------------------- the turn
@@ -311,7 +448,12 @@ impl PyTurn {
         let locals = TaskLocals::with_running_loop(py)?.copy_context(py)?;
         let opts: TurnOptions =
             options.map(|o| parse_request(o, "options")).transpose()?.unwrap_or_default();
-        let host: Arc<dyn TurnHost> = Arc::new(PyTurnHost { obj: host, locals });
+        let on_end = host.bind(py).hasattr("on_end")?;
+        let background = host.bind(py).hasattr("background")?;
+        let hub = host.bind(py).hasattr("settled")?;
+        let accepted = host.bind(py).hasattr("accepted")?;
+        let host: Arc<dyn TurnHost> =
+            Arc::new(PyTurnHost { obj: host, locals, on_end, background, hub, accepted });
         Ok(Self { inner: Arc::new(Turn::new(thread.inner.clone(), lane, host, opts)) })
     }
 

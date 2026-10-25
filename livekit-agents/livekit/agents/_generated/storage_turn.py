@@ -16,8 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .storage_run import Item, Ref, RunUsage, TaskRecord
 
-Policy = Literal["batch", "interrupt", "queue", "concurrent", "reject"]
-"""A message during a run: one of the five policies of plan 3.3.4."""
+Policy = Literal["batch", "interrupt", "queue", "concurrent", "reject", "live"]
+"""A message during a run: one of the policies of plan 3.3.4, and `live` (docs/delegation.md)."""
 
 
 class Message(BaseModel):
@@ -59,6 +59,19 @@ class TurnOptions(BaseModel):
     """
 
 
+class Background(BaseModel):
+    """What [`TurnHost::background`] reports."""
+
+    running: int = 0
+    """Tools still running in the background."""
+    ready: list[str] = Field(default_factory=list)
+    """The tasks whose background work finished: they get one turn together."""
+    arrived: bool = False
+    """A message landed in the inbox, or a client asked to cancel a task, and the host was told
+    in its process.
+    """
+
+
 class TurnContext(BaseModel):
     """What `A2ASessionContext` exposes today, the storage half: the message, the batch, the history,
     the state, the task, the lane's tasks, and the boundary the host polls. The host record is
@@ -91,8 +104,26 @@ class TurnContext(BaseModel):
     7.5), as the part's `data`.
     """
     answer_tool: str | None
-    """The tool the message is handed to before the model runs: an `InputRequired(tool=)` of
-    the last turn named it, and this message is its answer.
+    """The tool that relays the answer of the question this message answers (a delegate's): it
+    takes the message as said before the model runs.
+    """
+    answer_call_id: str | None
+    """The pending call of the task this message continues: the call that asked."""
+    front_question: str | None
+    """Another question of the lane, in front of the person: a question this turn asks waits
+    behind it.
+    """
+    relay: Any | None
+    """The oldest question waiting behind none: the turn puts it to the person when its own
+    task stops waiting, as `{task_id, question, verbatim}`.
+    """
+    cut_off: Any | None
+    """The question this message answers was cut off by it: `{question, heard, verbatim}`,
+    `heard` being what the person saw or heard of it, often nothing.
+    """
+    live: bool
+    """The turn runs under `live`: a tool may go on in the background after its first
+    update, and a turn of its own answers the task when it ends.
     """
 
 
@@ -103,7 +134,17 @@ class PendingCall(BaseModel):
     name: str
     call_id: str
     answer_tool: str | None = None
-    """The tool that takes the answer, when the `InputRequired` named one."""
+    """The tool that relays the answer, when a call of the question is a delegate's."""
+
+
+class WaitingAsk(BaseModel):
+    """A question of a resumed task that waits behind the one in front of the person."""
+
+    model_config = ConfigDict(frozen=True)
+    task_id: str
+    question: str
+    pending_call: PendingCall
+    verbatim: bool = False
 
 
 class HostEvent(BaseModel):
@@ -134,12 +175,32 @@ class HandlerOutput(BaseModel):
     """A conversation tool's `InputRequired(question)`."""
     pending_call: PendingCall | None = None
     """The call that asked, when `input_required` is set."""
+    asked_task: str | None = None
+    """Of tasks resumed together, the one whose work asked `input_required`: it waits on the
+    person, and `output` is the reply that answers the others.
+    """
     agent_stack: list[Ref] | None = None
     """The agent stack after the handler, when a run moved it or a task on it changed state;
     `None` leaves the stack as loaded.
     """
     interrupted: bool = False
     """The handler yielded at a boundary."""
+    background: bool = False
+    """A tool of the task still runs in the background: the task stays `working` and gets a
+    turn of its own when the tool ends.
+    """
+    queued: bool = False
+    """`input_required` waits behind the question in front of the person; it was not asked."""
+    relayed: str | None = None
+    """The task whose waiting question the reply put to the person (`TurnContext.relay`)."""
+    heard: str | None = None
+    """A newer message cut `input_required` off: what the person saw or heard of it, often
+    nothing. The question waits, and the next message is its answer.
+    """
+    waiting: list[WaitingAsk] = Field(default_factory=list)
+    """Of tasks resumed together, the others whose work asked too: each waits behind the
+    question in front of the person.
+    """
     metadata: dict[str, Any] = Field(default_factory=dict)
     """What the handler put on the task's terminal row, under short keys."""
     error: str | None = None

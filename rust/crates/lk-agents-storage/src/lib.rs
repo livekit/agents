@@ -84,6 +84,10 @@ pub enum StorageError {
     /// A waiter that did not acquire the lane within the wait (plan 3.3.2, reason `lease-timeout`).
     #[error("lease timeout: {0}")]
     LeaseTimeout(String),
+    /// A turn's `messageId` already has a task on the lane, found while waiting for the lease: a
+    /// client resent a message whose turn is still running. The existing task's id.
+    #[error("message already received as task {0}")]
+    DuplicateMessage(String),
     /// The `reject` policy refused the message while a turn runs (plan 3.3.4); the running task
     /// when the journal names it. The Python `RunRejected`.
     #[error("the lane is running a turn; the message was rejected")]

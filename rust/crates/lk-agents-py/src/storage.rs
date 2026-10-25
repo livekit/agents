@@ -20,7 +20,8 @@ use std::time::Duration;
 
 use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py, value_to_py};
 use lk_agents_storage::statements::{
-    AcquireRequest, CommitRequest, Receive, ReceiveRequest, RunEndedRequest, SubmittedTask,
+    AcquireRequest, CommitRequest, Fence, ItemWrite, Receive, ReceiveRequest, RunEndedRequest,
+    SubmittedTask,
 };
 use lk_agents_storage::threads::{ThreadInfo, ThreadTask, attributes_from_json, task_status};
 use lk_agents_storage::{StorageError as CoreError, StorageOptions, TokenMinter};
@@ -373,6 +374,23 @@ impl PyThreadDb {
         awaitable!(py, db.commit(&req), |py, out| model(py, "storage", "CommitResult", &out))
     }
 
+    /// Items written ahead of a commit, under its `Fence`, without moving the lane's version:
+    /// `ItemWrite`s another lane must read while the holder still works. Raises
+    /// `VersionConflict` when the fence matched no row.
+    fn write_items<'py>(
+        &self,
+        py: Python<'py>,
+        lane: String,
+        fence: &Bound<'py, PyAny>,
+        items: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        check_pid()?;
+        let fence: Fence = parse_request(fence, "fence")?;
+        let items: Vec<ItemWrite> = parse_request(items, "items")?;
+        let db = self.inner.clone();
+        awaitable!(py, db.write_items(&lane, &fence, &items))
+    }
+
     /// Leaving by exception: `run_ended` with the outcome, and the release; nothing else. A
     /// `RunEndedRequest`.
     fn run_ended<'py>(
@@ -481,6 +499,21 @@ impl PyThreadDb {
         let message = value_from_py(status_message, "status_message")?;
         let db = self.inner.clone();
         awaitable!(py, db.mark_orphan_failed(&lane, &task_id, &message))
+    }
+
+    /// `tasks/cancel` on a running row: the request and its reason go into its metadata, for
+    /// the holder to act on. `False` when the row is no longer `working`.
+    #[pyo3(signature = (lane, task_id, reason=None))]
+    fn request_cancel<'py>(
+        &self,
+        py: Python<'py>,
+        lane: String,
+        task_id: String,
+        reason: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        check_pid()?;
+        let db = self.inner.clone();
+        awaitable!(py, db.request_cancel(&lane, &task_id, reason.as_deref()))
     }
 
     /// The journal, every lane, after `after_id`: `EventRow`s.

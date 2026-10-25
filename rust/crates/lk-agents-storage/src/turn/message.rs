@@ -11,9 +11,9 @@ use serde_json::{Map, Value};
 
 use crate::StorageError;
 use crate::run::shortuuid;
-use crate::run::{CHANNEL_KEY, KIND_KEY};
+use crate::run::{CHANNEL_KEY, INTERRUPT_KEY, KIND_KEY};
 
-/// A message during a run: one of the five policies of plan 3.3.4.
+/// A message during a run: one of the policies of plan 3.3.4, and `live` (docs/delegation.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Host)]
 #[serde(rename_all = "lowercase")]
 #[python(literal, module = "storage_turn")]
@@ -28,6 +28,10 @@ pub enum Policy {
     Concurrent,
     #[host(rename = "reject")]
     Reject,
+    /// Waits only while the floor is busy: a reply streams or a blocking tool runs. Messages
+    /// that waited together run as one turn; one that interrupts stops the reply.
+    #[host(rename = "live")]
+    Live,
 }
 
 impl Policy {
@@ -136,13 +140,13 @@ impl<'de> Deserialize<'de> for DebounceSpec {
     }
 }
 
-/// Plan 7.3: the default map, keyed by `livekit/channel`.
+/// Plan 7.3 and docs/delegation.md: the default map, keyed by `livekit/channel`.
 pub const DEFAULT_POLICY_MAP: [(&str, Policy); 5] = [
     ("sms", Policy::Batch),
     ("whatsapp", Policy::Batch),
     ("email", Policy::Batch),
-    ("a2a", Policy::Interrupt),
-    ("delegation", Policy::Queue),
+    ("a2a", Policy::Live),
+    ("delegation", Policy::Live),
 ];
 
 /// Plan 7.3: two seconds for the inbox channels, zero for `a2a`; starting points.
@@ -186,7 +190,7 @@ pub fn resolve_policy(policy: &PolicySpec, channel: &str) -> Policy {
             table.insert(k.as_str(), *v);
         }
     }
-    table.get(channel).or_else(|| table.get(A2A_CHANNEL)).copied().unwrap_or(Policy::Interrupt)
+    table.get(channel).or_else(|| table.get(A2A_CHANNEL)).copied().unwrap_or(Policy::Live)
 }
 
 /// The wait before a turn starts so a burst has landed; per channel, or one value for all. A
@@ -261,6 +265,12 @@ impl Message {
             context_id: field("contextId"),
             raw,
         })
+    }
+
+    /// Whether the message stops the reply the lane is producing (`livekit/interrupt`, `true`
+    /// when absent). Only the `live` policy reads it; the others decide by themselves.
+    pub fn interrupts(&self) -> bool {
+        self.metadata.get(INTERRUPT_KEY) != Some(&Value::Bool(false))
     }
 
     /// The text parts, joined by newlines.
@@ -386,9 +396,9 @@ mod tests {
     fn policy_and_debounce_resolution() {
         let none = PolicySpec::Default;
         assert_eq!(resolve_policy(&none, "sms"), Policy::Batch);
-        assert_eq!(resolve_policy(&none, "a2a"), Policy::Interrupt);
-        assert_eq!(resolve_policy(&none, "delegation"), Policy::Queue);
-        assert_eq!(resolve_policy(&none, "carrier-pigeon"), Policy::Interrupt);
+        assert_eq!(resolve_policy(&none, "a2a"), Policy::Live);
+        assert_eq!(resolve_policy(&none, "delegation"), Policy::Live);
+        assert_eq!(resolve_policy(&none, "carrier-pigeon"), Policy::Live);
         let map = PolicySpec::ByChannel([("a2a".to_owned(), Policy::Queue)].into_iter().collect());
         assert_eq!(resolve_policy(&map, "a2a"), Policy::Queue);
         assert_eq!(resolve_policy(&map, "sms"), Policy::Batch);
@@ -397,7 +407,7 @@ mod tests {
         assert_eq!(Policy::parse("batch"), Some(Policy::Batch));
         let d = DebounceSpec::Default;
         assert_eq!(resolve_debounce(&d, "sms", Policy::Batch), Duration::from_secs(2));
-        assert_eq!(resolve_debounce(&d, "a2a", Policy::Interrupt), Duration::ZERO);
+        assert_eq!(resolve_debounce(&d, "a2a", Policy::Live), Duration::ZERO);
         assert_eq!(resolve_debounce(&d, "pigeon", Policy::Batch), Duration::from_secs(2));
         assert_eq!(resolve_debounce(&d, "pigeon", Policy::Queue), Duration::ZERO);
         let one = DebounceSpec::All(Duration::from_secs(1));
@@ -444,9 +454,12 @@ mod tests {
             "the defaults are filled in after the raw keys"
         );
         assert!(Message::from_a2a(&json!({"parts": []}), None, None).is_err());
-        let delegated =
-            json!({"messageId": "x", "parts": [], "metadata": {"livekit/kind": "delegation"}});
-        assert_eq!(Message::from_a2a(&delegated, None, None).unwrap().channel, "delegation");
+        let delegated = json!({"messageId": "x", "parts": [],
+            "metadata": {"livekit/kind": "delegation", "livekit/interrupt": false}});
+        let delegated = Message::from_a2a(&delegated, None, None).unwrap();
+        assert_eq!(delegated.channel, "delegation");
+        assert!(!delegated.interrupts(), "a delegation says it does not interrupt");
+        assert!(m.interrupts(), "absent is an interrupt");
         let with_history = json!({"messageId": "y", "parts": [
             {"kind": "text", "text": "fare?"},
             {"kind": "data", "data": {"items": []}, "metadata": {"livekit/kind": "chat_ctx"}},

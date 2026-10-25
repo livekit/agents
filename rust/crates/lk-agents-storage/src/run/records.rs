@@ -16,7 +16,24 @@ pub const INTERRUPTION_REASON_KEY: &str = "livekit/interruptionReason";
 pub const MERGED_INTO_KEY: &str = "livekit/mergedInto";
 pub const CHANNEL_KEY: &str = "livekit/channel";
 pub const KIND_KEY: &str = "livekit/kind";
+/// On a message: `false` when it does not stop the reply the lane is producing; absent is `true`.
+pub const INTERRUPT_KEY: &str = "livekit/interrupt";
 pub const KEY_KEY: &str = "livekit/key";
+/// On a `working` row: its turn ended and a tool of it still runs; the task answers when the
+/// tool ends.
+pub const BACKGROUND_KEY: &str = "livekit/background";
+/// On a task whose background work ended with other tasks' work: the task whose turn gave the
+/// one reply that answered them all.
+pub const ANSWERED_WITH_KEY: &str = "livekit/answeredWith";
+/// A message the `live` holder makes for itself: the background work of a task finished.
+pub const KIND_BACKGROUND: &str = "background";
+/// On a `working` row: a client asked to cancel it with `tasks/cancel`. The holder stops the
+/// task's tools at their next wait point and ends it `canceled` with what they did.
+pub const CANCEL_REQUESTED_KEY: &str = "livekit/cancelRequested";
+/// On an `input-required` row: the question waits behind the one in front of the person.
+pub const QUEUED_KEY: &str = "livekit/queued";
+/// The part of a reply or a question that reaches the person exactly as written.
+pub const VERBATIM_KEY: &str = "livekit/verbatim";
 /// The key `Tasks::fail` writes into the status message's metadata.
 pub const REASON_KEY: &str = "livekit/reason";
 

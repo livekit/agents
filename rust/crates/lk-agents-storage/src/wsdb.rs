@@ -399,7 +399,12 @@ impl Conn {
         }
     }
 
-    fn is_closed(&self) -> bool {
+    /// The same connection: one socket, shared by the opens of one database.
+    pub(crate) fn same(&self, other: &Conn) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
         self.0.state.lock().expect("state").closed
     }
 
@@ -782,7 +787,7 @@ async fn read_one(read: &mut WsRead) -> Result<pb::ServerMessage, WsdbError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! A fake `wsdb` server on a loopback listener: enough of the protocol to exercise the
     //! client's framing, the per-statement `Batch` shape, the credit flow and the reconnect.
 
@@ -795,7 +800,7 @@ mod tests {
 
     /// Accepts connections forever; `script` answers one request. Every client frame is kept in
     /// the returned log. A `Begin` closes the socket when `drop_on_begin` is set, once.
-    async fn serve(
+    pub(crate) async fn serve(
         script: fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>,
         drop_on_begin: bool,
     ) -> (String, Served) {
@@ -844,7 +849,7 @@ mod tests {
         }))
     }
 
-    fn script(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+    pub(crate) fn script(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         use pb::client_message::Message as C;
         use pb::server_message::Message as S;
         match &m.message {
@@ -918,7 +923,7 @@ mod tests {
         TokenMinter::new("devkey", "secret").unwrap()
     }
 
-    async fn dial(url: &str, db: &str) -> Result<Conn, WsdbError> {
+    pub(crate) async fn dial(url: &str, db: &str) -> Result<Conn, WsdbError> {
         let mut opts = Options::new(url, db);
         opts.reconnect.min_backoff = Duration::from_millis(10);
         opts.reconnect.budget = Duration::from_secs(5);

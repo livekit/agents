@@ -178,6 +178,8 @@ enum Behavior {
     },
     /// `InputRequired("Could you send a photo?")` from `request_photo`, call `p1`.
     Ask,
+    /// As `Ask`, while another call of the step runs on in the background.
+    AskBeside,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -185,12 +187,15 @@ struct Call {
     batch: Vec<String>,
     history: Vec<String>,
     message: Vec<String>,
+    task_id: String,
+    answer_call_id: Option<String>,
 }
 
 struct Fake {
     behavior: Behavior,
     calls: Arc<Mutex<Vec<Call>>>,
     updates: Arc<Mutex<Vec<(String, String)>>>,
+    accepted: Arc<Mutex<Vec<(String, bool)>>>,
 }
 
 impl Fake {
@@ -199,6 +204,7 @@ impl Fake {
             behavior,
             calls: Arc::new(Mutex::new(Vec::new())),
             updates: Arc::new(Mutex::new(Vec::new())),
+            accepted: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -226,6 +232,8 @@ impl TurnHost for Fake {
                 .as_array()
                 .map(|c| c.iter().filter_map(Value::as_str).map(str::to_owned).collect())
                 .unwrap_or_default(),
+            task_id: ctx.task_id.clone(),
+            answer_call_id: ctx.answer_call_id.clone(),
         });
         match &self.behavior {
             Behavior::Echo => Ok(text(&format!("reply to: {message_text}"))),
@@ -262,7 +270,7 @@ impl TurnHost for Fake {
                 entered.set();
                 gate.wait().await;
                 items.push(output_item("lookup", "c1", "found", t + 2e-6));
-                if ctx.boundary.check().await? {
+                if ctx.boundary.check(false).await? {
                     return Ok(HandlerOutput {
                         new_items: items,
                         interrupted: true,
@@ -276,12 +284,20 @@ impl TurnHost for Fake {
                     ..HandlerOutput::default()
                 })
             }
-            Behavior::Ask => {
+            Behavior::Ask | Behavior::AskBeside => {
                 let t = now_secs();
                 Ok(HandlerOutput {
+                    background: matches!(self.behavior, Behavior::AskBeside),
                     new_items: vec![
                         user_item(&message_text, t),
                         call_item("request_photo", "p1", t + 1e-6),
+                        // the asking call keeps its question as its output
+                        output_item(
+                            "request_photo",
+                            "p1",
+                            "waiting for the person's answer to: Could you send a photo?",
+                            t + 2e-6,
+                        ),
                     ],
                     input_required: Some("Could you send a photo?".into()),
                     pending_call: Some(PendingCall {
@@ -300,6 +316,10 @@ impl TurnHost for Fake {
     }
 
     async fn on_token(&self, _task_id: &str, _delta: &str) {}
+
+    async fn accepted(&self, task_id: &str, resent: bool, _holds: bool) {
+        self.accepted.lock().unwrap().push((task_id.to_owned(), resent));
+    }
 }
 
 fn options(policy: Option<Policy>) -> TurnOptions {
@@ -407,13 +427,18 @@ async fn a_run_that_raises_writes_run_ended_and_nothing_else() {
         events[1].payload,
         json!({"outcome": "failed", "reason": "StorageUnavailable: the model is down"})
     );
+    // the row the client was acknowledged with fails now, under its own id
     let rows = lane.tasks(None, 10).await.unwrap();
-    assert_eq!((rows.len(), rows[0].status.as_str()), (1, "working"));
+    assert_eq!((rows.len(), rows[0].status.as_str()), (1, "failed"));
+    assert_eq!(
+        rows[0].status_message.as_ref().unwrap()["metadata"]["livekit/reason"],
+        json!("storage-unavailable")
+    );
     let info = lane.info().await.unwrap().unwrap();
     assert_eq!((info.version, info.lease_until), (0, 0), "released, not bumped");
 
     // The handler raised: the task fails with the error as its last message, and the turn
-    // commits, the orphan above failed worker-lost first, not run again.
+    // commits; the failed row above is not run again.
     let host = Fake::new(Behavior::Raise);
     let r = run_turn(&s, a2a("boom", "m2", None, None), Some(Policy::Queue), host.clone())
         .await
@@ -430,9 +455,8 @@ async fn a_run_that_raises_writes_run_ended_and_nothing_else() {
     );
     assert_eq!(r.output, None);
     assert_eq!(host.batches(), vec![vec!["boom".to_owned()]], "the orphan was not run again");
-    let orphan = lane.task(&rows[0].id).await.unwrap().unwrap();
-    assert_eq!(orphan.status, "failed");
-    assert_eq!(orphan.status_message.unwrap()["metadata"]["livekit/reason"], json!("worker-lost"));
+    let unsaved = lane.task(&rows[0].id).await.unwrap().unwrap();
+    assert_eq!(unsaved.status, "failed");
     let runs = lane.runs(10).await.unwrap();
     assert_eq!(runs[0].reason.as_deref(), Some("RuntimeError: boom"));
     assert_eq!(history_texts(&s).await, vec!["boom"], "the message, no reply, nothing re-run");
@@ -579,6 +603,17 @@ async fn a_message_id_resend_returns_the_existing_task() {
     assert_eq!(again.run_id, None, "nothing ran");
     assert_eq!(s.lane(LANE).history().await.unwrap().len(), 4);
     assert_eq!(echo.calls().len(), 2);
+    // under live too; and the host is told the existing task before anything is awaited
+    let first =
+        run_turn(&s, a2a("hey", "m3", None, None), Some(Policy::Live), echo.clone()).await.unwrap();
+    let again =
+        run_turn(&s, a2a("hey", "m3", None, None), Some(Policy::Live), echo.clone()).await.unwrap();
+    assert_eq!(again.task.id, first.task.id);
+    assert_eq!(echo.calls().len(), 3);
+    let accepted = echo.accepted.lock().unwrap().clone();
+    let resent: Vec<&(String, bool)> = accepted.iter().filter(|(_, r)| *r).collect();
+    assert_eq!(resent.len(), 3, "each resend is accepted under its existing task: {accepted:?}");
+    assert_eq!(resent[2].0, first.task.id);
     cleanup(&storage, &database_id, &[&s]).await;
 }
 
@@ -640,7 +675,7 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost() {
 // -- input required --
 
 #[tokio::test]
-async fn input_required_pending_call_is_the_next_messages_output() {
+async fn an_answer_is_the_next_message_of_the_waiting_task() {
     let Some((storage, database_id)) = fresh_database().await else { return };
     let s = thread(&storage, &database_id, "worker-a").await;
     let first = run_turn(
@@ -662,12 +697,31 @@ async fn input_required_pending_call_is_the_next_messages_output() {
     assert_eq!(first.task.message_id.as_deref(), Some("m1"));
     assert_eq!(first.output, None);
 
+    // a message that names no task is a new task, and the question stays open
+    let other = run_turn(
+        &s,
+        a2a("unrelated", "m0", None, None),
+        Some(Policy::Interrupt),
+        Fake::new(Behavior::Text("sure")),
+    )
+    .await
+    .unwrap();
+    assert_ne!(other.task.id, first.task.id);
+    let still = s.lane(LANE).task(&first.task.id).await.unwrap().unwrap();
+    assert_eq!(still.status, "input-required");
+
+    // the answer names the waiting task, which continues
     let host = Fake::new(Behavior::Text("thanks"));
-    let second =
-        run_turn(&s, a2a("here it is", "m2", None, None), Some(Policy::Interrupt), host.clone())
-            .await
-            .unwrap();
+    let second = run_turn(
+        &s,
+        a2a("here it is", "m2", None, Some(&first.task.id)),
+        Some(Policy::Interrupt),
+        host.clone(),
+    )
+    .await
+    .unwrap();
     assert_eq!(second.output, Some(json!("thanks")));
+    assert_eq!(second.task.id, first.task.id);
     let items = s.lane(LANE).history().await.unwrap();
     let outputs: Vec<&Value> = items
         .iter()
@@ -675,22 +729,57 @@ async fn input_required_pending_call_is_the_next_messages_output() {
         .map(|i| &i.payload)
         .collect();
     assert_eq!(outputs.len(), 1);
-    assert_eq!(outputs[0]["output"], json!("here it is"));
-    assert_eq!(outputs[0]["name"], json!("request_photo"));
-    assert_eq!(outputs[0]["is_error"], json!(false));
+    assert_eq!(
+        outputs[0]["output"],
+        json!("waiting for the person's answer to: Could you send a photo?"),
+        "the asking call keeps its question; nothing writes the answer over it"
+    );
     assert_eq!(
         items.iter().map(|i| i.kind()).collect::<Vec<_>>(),
-        vec!["message", "function_call", "function_call_output", "message", "message"]
+        vec![
+            "message",
+            "function_call",
+            "function_call_output",
+            "message",
+            "message",
+            "message",
+            "message"
+        ]
     );
-    assert_eq!(
-        host.calls()[0].history.len(),
-        3,
-        "the handler sees the question, the call and the answer"
-    );
+    let answers = items
+        .iter()
+        .filter(|i| i.kind() == "message" && i.payload["content"] == json!(["here it is"]))
+        .count();
+    assert_eq!(answers, 1, "the answer is the person's message, once");
+    assert_eq!(host.calls()[0].task_id, first.task.id);
+    assert_eq!(host.calls()[0].answer_call_id.as_deref(), Some("p1"));
     let answered = s.lane(LANE).task(&first.task.id).await.unwrap().unwrap();
     assert_eq!(answered.status, "completed");
-    assert_eq!(answered.data.metadata.get(MERGED_INTO_KEY), Some(&json!(second.task.id)));
+    assert_eq!(answered.data.metadata.get(MERGED_INTO_KEY), None);
+    assert_eq!(answered.message_id.as_deref(), Some("m1"));
     assert!(answered.ask().is_none(), "a completed row holds no pending transition");
+    cleanup(&storage, &database_id, &[&s]).await;
+}
+
+#[tokio::test]
+async fn a_question_beside_work_in_the_background_is_asked_at_once() {
+    let Some((storage, database_id)) = fresh_database().await else { return };
+    let s = thread(&storage, &database_id, "worker-a").await;
+    let asked = run_turn(
+        &s,
+        a2a("my car is damaged", "m1", None, None),
+        Some(Policy::Interrupt),
+        Fake::new(Behavior::AskBeside),
+    )
+    .await
+    .unwrap();
+    assert_eq!(asked.task.status, "input-required", "the question does not wait for the work");
+    assert_eq!(asked.task.ask().unwrap()["call_id"], json!("p1"));
+    assert_eq!(
+        asked.task.data.metadata.get("livekit/background"),
+        Some(&json!(true)),
+        "the task still waits for its work too"
+    );
     cleanup(&storage, &database_id, &[&s]).await;
 }
 

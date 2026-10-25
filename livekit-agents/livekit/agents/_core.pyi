@@ -24,7 +24,9 @@ from ._generated.storage import (
     DrainCheck,
     Duplicate,
     EventRow,
+    Fence,
     InboxRow,
+    ItemWrite,
     LaneRow,
     Loaded,
     Received,
@@ -159,6 +161,12 @@ class ThreadDb:
 
     def mark_orphan_failed(
         self, lane: str, task_id: str, status_message: Any
+    ) -> Awaitable[bool]: ...
+    def write_items(
+        self, lane: str, fence: Fence, items: list[ItemWrite] | list[dict[str, Any]]
+    ) -> Awaitable[None]: ...
+    def request_cancel(
+        self, lane: str, task_id: str, reason: str | None = None
     ) -> Awaitable[bool]: ...
     def events(self, after_id: int = 0, limit: int = 100) -> Awaitable[list[EventRow]]: ...
     def lane_events(self, lane: str, after_id: int = 0) -> Awaitable[list[EventRow]]: ...
@@ -313,7 +321,10 @@ class Boundary:
     def tripped(self) -> bool: ...
     @property
     def client_canceled(self) -> bool: ...
-    def check(self) -> Awaitable[bool]: ...
+    def check(self, read: bool = False) -> Awaitable[bool]:
+        """Whether to yield now; with ``read`` it reads even right after the turn took its
+        batch, because the caller was told that something landed."""
+    def record(self, item: Any, message_id: str | None = None) -> Awaitable[None]: ...
 
 class TurnHostProtocol(Protocol):
     """What ``Turn`` calls back into: the handler and the wire, one object (plan 13.8).
@@ -323,7 +334,15 @@ class TurnHostProtocol(Protocol):
     ``HandlerOutput`` (a dict in its shape is accepted too). An exception it raises is the
     handler's error, ``"<TypeName>: <text>"`` on the failed row; ``asyncio.CancelledError`` ends
     the run ``canceled``. The coroutines run on the loop that constructed the ``Turn`` and are
-    cancelled when Rust drops the operation.
+    cancelled when Rust drops the operation. Under ``live`` the holder also calls, when the
+    object has them, ``on_end(record, output)`` as a task's turn commits and
+    ``background(wait, cancel)`` between turns (``storage_turn.Background``) and ``discard(task_id)``
+    for the work of a task that ended before it. Every request calls, when the object has it,
+    ``accepted(task_id, resent, holds)`` once the turn knows which task the message is (its own,
+    the question it continues, or for a resend the task its message id made) and whether it took
+    the lane. A request that waits on another holder calls, when the object has them,
+    ``arrived(task_id)`` once its message is in the inbox and ``settled(task_id, wait) -> bool``
+    between reads of its task's row.
     """
 
     def handle(
