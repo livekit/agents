@@ -26,11 +26,11 @@ toolset composition. Each `planned-` file relies on at least one of them.
 
 | File | Vertical | The idea | New |
 |---|---|---|---|
-| `planned-05_back_in_stock.py` | retail | order status, and a watch for an out-of-stock item | an `AgentTask` started in the background with `delay=` and `timeout=`: a pure code task returning `Completed`, and one that asks with `InputRequired(question, tool=self.decide)`; `on_timeout` |
+| `planned-05_back_in_stock.py` | retail | order status, and a watch for an out-of-stock item | an `AgentTask` started in the background with `delay=` and `timeout=`: a pure code task returning `Completed`, and one that asks with `InputRequired(question)` and whose model calls `decide`; `on_timeout` |
 | `planned-06_card_servicing_toolsets.py` | financial | cards, payments, rewards: composed, filtered, gated | `Toolset`, `FilteredToolset`, `PrefixedToolset`, `requires_approval`, `InputRequired` from a tool, MCP |
 | `planned-08_summarizing_the_simulations.py` | internal | the summarizer that scores these agents' simulations | sixty submitted tasks, a join with `after=[handles]` and `ctx.task(id).result()`, `Retry`, `concurrency`, `@agent.output_validator` |
 | `planned-09_speed_to_lead.py` | sales | the CRM calling a new lead in minutes, a rep resuming | `lk.threads.*`, a dispatch carrying the thread id, a `message/send` starting a task with no model, a rep resuming with `AgentClient.send(thread_id=)` |
-| `planned-11_post_procedure_check_in.py` | healthcare | check on a patient on day 1, 3 and 7, escalate at once | an `AgentTask` started for a date whose `on_enter` returns `InputRequired(question, tool=self.report, timeout=)`, and that starts the next one |
+| `planned-11_post_procedure_check_in.py` | healthcare | check on a patient on day 1, 3 and 7, escalate at once | an `AgentTask` started for a date whose `on_enter` returns `InputRequired(question, timeout=)`, whose model calls `report`, and that starts the next one |
 | `planned-12_many_chats.py` | any | one assistant, many people, several threads each, with a sidebar | a thread per chat with the user as `scope`, `lk.threads.create(scope=)`, `lk.threads.list(scope=)`, `thread.update(attributes=)` |
 | `planned-13_prescription_refill.py` | healthcare | a refill waits on the prescriber's system, then maybe on the patient | `Working(tool=self.x, timeout=)` waiting on a callback; a `DataPart` calling the tool with no model; `Completed \| InputRequired` from a tool |
 | `planned-14_returns_by_email.py` | retail | a returns desk over email, attachments in, a warehouse that inspects days later | email as a channel: `email:` key, attachments as items, the reply in the thread, a task's question answered by `In-Reply-To`; a link where an attachment out is wanted |
@@ -108,7 +108,7 @@ the A2A wire, the agent card, streams, expiry, timers.
   outside (planned, [planned-agent-tasks.md](../../planned-agent-tasks.md)). Its constructor
   arguments are JSON in its row; its progress is its own A2A history.
 - In an `AgentTask`: `on_enter(ctx)`, `@function_tool` methods, `on_timeout(ctx)`, all taking a `RunContext`; `self.state`; the return
-  value is the transition: `Completed(value)`, `Failed(error)`, `InputRequired(question, tool=,
+  value is the transition: `Completed(value)`, `Failed(error)`, `InputRequired(question,
   timeout=)`, `Working(tool=, timeout=)`, or a plain value for a tool result; a `send()` for
   what runs next; `ctx.update()`; `ctx.state`; `ctx.task_id`.
 - In a handler: `agent.run()`, its return, `ctx.update()`.

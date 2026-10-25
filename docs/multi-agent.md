@@ -73,14 +73,32 @@ run's thread and history, speaks the expert's progress through
 `ctx.update()`, returns the answer, or the question the expert has for the
 person, and records the expert's task on the call. On a call its first
 update releases the turn with a line the model acknowledges while the
-expert works; `announce=False` turns that off.
+expert works; `announce=False` turns that off, and `announce="with_call"`
+asks the model to acknowledge in the same reply as the call instead, on a
+call and in text. Under the `live` inbox a delegation that reports progress
+goes on in the background, in text as on a call: the front desk replies at
+once, the next message runs beside it, and the expert's answer reaches the
+front desk's own task when it comes ([delegation.md](delegation.md)).
+
+Before it sends, the tool writes the person's message to the caller's lane
+and names that lane on the delegation (`livekit/callerLane`), so an expert
+of this project can read the person's own words:
+`await ctx.thread.chat_history(ctx.caller_lane)`. A third-party expert reads
+only the request text. A delegation never interrupts the expert's reply
+(`livekit/interrupt: false`), and a delegation to the caller's own lane is
+refused.
 
 A LiveKit expert gets its own lane in the caller's thread, named after the
 expert agent, and never contends for the caller's lease.
 
 ```python
 result = await delegate.run(
-    prompt, progress=ctx.update, context_id=None, message_history=None, usage=None
+    prompt,
+    progress=ctx.update,
+    context_id=None,
+    message_history=None,
+    usage=None,
+    task_id=None,  # the expert's task waiting on a question: this continues it
 )
 ```
 
@@ -89,8 +107,10 @@ the expert's task: `state` (`completed`, `input-required`, `canceled`),
 `task_id`, `context_id`, and, over A2A, `endpoint`, `transport` and
 `profile` (`livekit` when the extension was in force, else `a2a`). A
 `failed` task raises `DelegationFailed` with what the expert said.
-`progress` takes each status message the expert sends while it works.
-`aclose()` releases what the delegate holds.
+`progress` takes each status message the expert sends while it works. A
+stream that drops is read again with `tasks/resubscribe` (three times, the
+progress already reported is not reported twice); a lost worker is still a
+failure. `aclose()` releases what the delegate holds.
 
 ## A remote expert
 
@@ -116,7 +136,7 @@ the `contextId`, and the expert keeps its own lane in the caller's thread:
 its own history and state, beside the caller's. Inside `agent.run()` the
 delegate finds the run's thread by itself; `context_id=` names one
 explicitly. Any other A2A server gets the request as text and nothing else,
-and keeps a context of its own. The caller depends on nothing coming back
+and keeps a context of its own, one per caller thread. The caller depends on nothing coming back
 but core A2A: the working statuses are the progress, the artifact is the
 answer. See [a2a.md](a2a.md), "Writing an expert in another framework".
 
@@ -126,23 +146,28 @@ token minted from `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`, which passes a
 `public=False` endpoint; an expert anywhere else gets none.
 
 An expert that needs the person's answer ends its task `input-required`:
-the question is the delegation's output. The next delegation in the thread, carrying the person's answer, is
-the answer to that question on the expert's lane; the waiting task ends
-`completed`, merged into the new one. The delegate's tool returns the
-question as `InputRequired(question, tool=)` naming itself, so the front
-desk asks it in its own words, or as written when the expert flagged it
-`livekit/verbatim`, and what the person says next is sent to the expert as the
-tool's next request, as they said it, with no model turn in between: on a
-call the framework runs the tool on the turn's transcript, in text on the
-next message, on whichever worker gets it ([tools.md](tools.md)). A
-delegation canceled on the caller's side, as when the person speaks over a
-call, sends `tasks/cancel` to the expert with `livekit/reason:
-caller-canceled`.
+the question is the delegation's output. The delegate's tool returns it as
+`InputRequired(question)`, so the front desk asks it in its own words, or
+as written when the expert flagged it `livekit/verbatim`. The person's
+answer continues the expert's task: the delegate's tool takes it as said,
+with no model turn in between (on a call on the turn's transcript, in text
+on the next message, on whichever worker gets it), and sends it with the
+`taskId` of the expert's task that asked, recorded on the asking call. The
+expert's task resumes under its own id; its model reads the question and
+the answer, and answers or asks again. The front desk keeps one question in
+front of the person at a time ([human-in-the-loop.md](human-in-the-loop.md)).
+
+A barge-in, or a closed call, stops the front desk's speech, not the
+expert's work: the delegate sends no cancel, and the answer still arrives.
+Only `tasks/cancel` stops an expert's task: `A2ADelegate.cancel(task_id,
+reason=)`, from a tool the developer gives the model; the framework gives
+it none.
 
 `record_delegation(function_call, result)` writes the expert's task on the
 call that delegated, in `FunctionCall.extra`: `lk.delegation.task_id`,
-`lk.delegation.endpoint`, `lk.delegation.transport` and
-`lk.delegation.profile`, so a dashboard joins the two lanes. The delegate's
+`lk.delegation.context_id`, `lk.delegation.endpoint`,
+`lk.delegation.transport` and `lk.delegation.profile`, so a dashboard joins
+the two lanes and an answer to the expert's question continues its task. The delegate's
 own tool records it by itself; a tool of your own that calls `delegate.run`
 calls it.
 

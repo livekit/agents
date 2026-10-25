@@ -147,12 +147,12 @@ call again to confirm). See [voice.md](voice.md).
 
 A tool whose result is a question for the person returns
 `InputRequired(question)`: the agent facing the person asks it in its own
-words, or exactly as written with `verbatim=True`, and the person's next
-message is written as the call's output for the model to go on with. With `tool=`, the answer is not the model's to interpret: it is handed to
-that tool as its first string parameter, on a call and in text, with no model
-turn in between, and the model goes on from that tool's output. The delegate's
-tool does this for an expert's `input-required`
-([multi-agent.md](multi-agent.md)).
+words, or exactly as written with `verbatim=True`; the call keeps the
+question as its output, and the person's next message is the answer, for the
+task's model to go on with. Only the delegate's tool takes an answer as said,
+with no model turn in between, for an expert's `input-required`
+([multi-agent.md](multi-agent.md)). An input that fixed logic must collect is
+an `AgentTask`.
 
 ## Idempotency
 

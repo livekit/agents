@@ -50,14 +50,24 @@ A call is not found by the caller's number; phone continuity is planned,
 see [planned-channels.md](planned-channels.md).
 
 At `start()` the call loads the agent's lane: the stored history when the
-call was handed none, and the state into the object it was given. Each
-voice turn then takes the lane from the end of the person's turn to the
+call was handed none, the state into the object it was given, and the
+lane's open questions. The call's mode follows the text door of its lane
+(`AgentServer.add()` reads it): when that door is `live`, or the lane has
+none, the call holds the lane until it ends: each reply is committed without
+letting go, and a text that arrives during the call is a turn of the call
+([delegation.md](delegation.md), Flow D): the model reads it at once,
+through `generate_reply(user_input=)`, which on a realtime model puts it in
+the model's own context, and the full reply the call generated is the
+text's answer. A text door of the same worker tells the call of a text at
+once, through the worker's IPC. When the text door has another inbox type,
+each voice turn takes the lane from the end of the person's turn to the
 commit of the reply, and releases it without draining, so a text that
-arrived meanwhile is answered by the worker waiting on it. When a text
-turn moved the lane during the call, the history and the state are
-reloaded before the model reads them, so the call knows about the text. A
-turn that produced no reply still releases the lane within 30 seconds.
-Storage failures are logged and never end the call.
+arrived meanwhile is answered by the worker waiting on it; when a text turn
+moved the lane during the call, the history and the state are reloaded
+before the model reads them, and a turn that produced no reply
+still releases the lane within 30 seconds. A voice commit deletes only the
+items the call itself removed. Storage failures are logged and never end
+the call.
 
 ## The thin voice door
 
@@ -83,11 +93,17 @@ async def phone(ctx: JobContext) -> None:
 The tool hands the request on with the call's conversation (messages only,
 no tool calls) and the call's thread. Its first update releases the
 turn with a short acknowledgment the model speaks, so the caller is not
-left in silence; each progress message the expert sends after is spoken
-while it works. The answer comes back as the tool's result and the model
-says it in its own words. A question the expert asks (`input-required`) is
-an answer like any other: the model relays it, and the caller's reply goes
-to the expert in the next delegation. A failed delegation is a tool error.
+left in silence, unless the model already spoke beside the call; once the
+caller heard from that turn, progress the expert sends goes into the
+model's context and is not spoken. The answer comes back as the tool's
+result and the model says it in its own words. A question the expert
+asks (`input-required`) is put to the caller, in the model's words or as
+written, one question at a time. The caller's next turn answers it: the transcript goes, as said and
+with no model call, to the expert's task that asked, which continues. The
+realtime model may still say a few words on that turn by itself; the voice
+agent's instructions keep that short. A barge-in stops the speech, not the
+expert's work, whose answer still arrives. A failed delegation is a tool
+error.
 The tool records the expert's task on the call
 (`record_delegation`, [multi-agent.md](multi-agent.md)).
 

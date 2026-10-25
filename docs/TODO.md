@@ -29,6 +29,10 @@ belongs to. An item leaves this file when the code lands.
 
 | Doc section | Code change |
 | --- | --- |
+| [voice.md](voice.md): a call per voice turn | When the lane's text door is not `live`, a text between two voice turns reaches the session's history on reload, not a realtime model's own context. |
+| [delegation.md](delegation.md): when the expert asks a question | A question cut off under the `interrupt` or `queue` inbox shows the question to the client of the task that asked (only `live` holds its frames back). |
+| [delegation.md](delegation.md): when the expert asks a question | Work of several tasks that ends together is answered by one reply: a task among them that waited on a question and whose work asked nothing ends `completed`, `answeredWith`, and its question is dropped (a single resumed task asks it again after its reply). |
+| [delegation.md](delegation.md): where work runs | A holder on another worker learns of an arrival or a cancel by polling the thread's database (every second while work runs in the background, a call every two seconds); the request waits for its task the same way. Routing by the node itself is cloud work. |
 
 ## Rust core
 

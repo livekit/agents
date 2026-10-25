@@ -52,10 +52,10 @@ so on.
 | ---------------------------------------------- | ----------------- |
 | `SendMessage`, `message/send`                  | a turn; the response is `{"task": ...}` once it ends |
 | `SendStreamingMessage`, `message/stream`       | the same, as server-sent events, in the order below |
-| a message with `taskId`                        | continues that task while it is not terminal; see "Answering a task" |
+| a message with `taskId`                        | continues that task when it waits `input-required`; see "Answering a task" |
 | `GetTask`, `tasks/get`                         | the task, with `historyLength` |
 | `ListTasks`, `tasks/list`                      | every task of the thread named by `contextId`, by last update, filtered by `status`, paged by `pageSize` and `pageToken` |
-| `CancelTask`, `tasks/cancel`                   | `canceled` if not terminal, else `TaskNotCancelableError`; a running turn stops at its next safe point |
+| `CancelTask`, `tasks/cancel`                   | a task that runs: its tools stop at their next wait point outside `ctx.uninterruptible()`, it ends `canceled` with what they did as its status message, and the answer comes as soon as it ended (at most 10 s later); a task that runs nothing ends `canceled` at once; a terminal task is `TaskNotCancelableError` |
 | `SubscribeToTask`, `tasks/resubscribe`         | the current `Task`, then the task's stream from its start, followed live while the task runs; from any worker |
 
 `GetTask`, `CancelTask` and `SubscribeToTask` find the thread from
@@ -67,12 +67,23 @@ A resubscribe resumes after an offset, the SSE `Last-Event-ID` header or
 A stream is, in order:
 
 1. the `Task` in state `submitted`, sent once the task's row is durable, so a
-   resubscribe on another worker finds it;
+   resubscribe on another worker finds it (under `live`, as the message
+   arrives);
 2. zero or more `statusUpdate` events in state `working`, each with a text
    message: the progress a handler or a tool sent with `ctx.update()`;
 3. zero or more `artifactUpdate` chunks of the one artifact named `answer`,
    the last with `lastChunk: true`;
 4. the final `statusUpdate`, with the metadata keys that apply.
+
+Under `live` a task whose tool went on in the background has, between 3 and
+4, a `working` status with `livekit/background: true` carrying the reply so
+far (an acknowledgment), then more progress and the answer when the work
+ends ([delegation.md](delegation.md)). The response of a task another
+holder runs relays that task's durable stream. Under `live` the
+acknowledgment goes out once the message is in the lane's inbox. A resend
+of a `messageId` the lane already has is acknowledged under the task that
+message made, and its response is that task's stream from its first frame,
+its answer included.
 
 ```json
 {"jsonrpc": "2.0", "id": 1, "result": {"task": {"id": "AST_1", "contextId": "AT_x", "status": {"state": "TASK_STATE_SUBMITTED"}}}}
@@ -82,8 +93,10 @@ A stream is, in order:
 ```
 
 Timestamps are omitted above. A message with a `taskId` on a terminal task
-is an `UnsupportedOperationError`: a follow-up is a new task in the same
-context, with `referenceTaskIds` if it builds on an earlier one.
+is an `UnsupportedOperationError`, unless it is a resend of a message the
+task already holds: a follow-up is a new task in the same context, with
+`referenceTaskIds` if it builds on an earlier one. A message with the
+`taskId` of a task that runs is a new task.
 
 ## Answering a task
 
@@ -92,13 +105,21 @@ The question is the turn's reply, as the status message; no model call
 writes it. The pending call stays in the history with a placeholder output,
 `waiting for the person's answer to: <question>`.
 
-The next message in the thread answers it: its text replaces the
+The answer continues the waiting task ([delegation.md](delegation.md)):
+the turn runs under the waiting task's id, the answer replaces the
 placeholder, and the model continues from the history, on whatever worker
-takes the message.
+takes the message. No task of its own is made and nothing is merged.
 
-- With the waiting task's `taskId`, the answer comes back on that task.
-- Without one, the answer is a new task, and the waiting task ends
-  `completed` with `livekit/mergedInto` naming it.
+- A message with the waiting task's `taskId` is its answer. This is how a
+  client and a delegating agent answer.
+- A message from the person (not a delegation) with no `taskId` goes to
+  the question in front of the person: the oldest open question of the
+  lane that is not queued. The person never names a task.
+- A delegation with no `taskId` is a new task; the question stays open.
+
+The question has no timeout. A lane has one question in front of the
+person; one asked while another is in front waits, `input-required` with
+`livekit/queued: true`, and the reply that ends the one in front asks it.
 
 ```json
 {
@@ -129,9 +150,14 @@ the extension still receives the server-set keys and may ignore them.
 | ---------------------------- | -- | ----- |
 | `livekit/channel`            | a message | the channel it came from; absent means `a2a` |
 | `livekit/kind`               | a message, or a data part | `delegation` when another agent asks on its user's behalf; on a data part, `chat_ctx` for a caller's conversation |
+| `livekit/interrupt`          | a message | whether it stops the reply the agent is producing; absent means `true`; a delegation sends `false`; read under `live` |
+| `livekit/callerLane`         | a delegation in the caller's thread | the caller's lane, where the person's own words are |
+| `livekit/background`         | a `working` status; the task | `true` while the task's work goes on in the background after its turn |
+| `livekit/queued`             | an `input-required` task | `true` while its question waits behind the one in front of the person |
+| `livekit/cancelRequested`    | a `working` task | `true` between `tasks/cancel` and the task's end |
 | `livekit/interrupted`        | the final status of a `canceled` task | `true` when the server ended the turn for a newer message |
 | `livekit/interruptionReason` | the same | `new-message` |
-| `livekit/mergedInto`         | the final status of a `completed` task | the task whose turn answered this message too |
+| `livekit/mergedInto`         | the final status of a `completed` task | the task whose turn answered this message too: messages that waited together |
 | `livekit/verbatim`           | the final status of a `completed` or `input-required` task | the part of the text that reaches the person exactly as written; the agent facing the person words the rest |
 | `livekit/reason`             | a `tasks/cancel` request and the final status of the task it canceled; the status message of a `failed` task | why: the client's words on a cancel, else the reasons below |
 

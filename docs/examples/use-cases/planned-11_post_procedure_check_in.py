@@ -2,7 +2,7 @@
 - Northside Surgical Center's recovery line: check on a patient on day 1, 3 and 7, and escalate at
   once when something is wrong.
 - `CheckIn` is an `AgentTask` submitted `at=` a date; `on_enter` returns `InputRequired(question,
-  tool=self.report, timeout=12h)`.
+  timeout=12h)`, and its model reads the answer and calls `report`.
 - `report` submits `Escalate`, a pure code task, when the pain or a concern warrants it, then
   schedules the next check-in.
 - `on_timeout` moves on when the patient does not answer.
@@ -51,9 +51,8 @@ care_team = Agent(
 
 
 # A check-in is an AgentTask submitted at a date. on_enter returns InputRequired with the question
-# in the code's words and report as the tool that takes the answer; the model turns a free-text
-# reply into that call, an app posts the arguments by id. It submits the next check-in before
-# completing.
+# in the code's words; the model turns the reply into a call of report. It submits the next
+# check-in before completing.
 
 
 @dataclass
@@ -69,7 +68,6 @@ class CheckIn(AgentTask[None]):
         day = DAYS[self.step]
         return InputRequired(
             f"Day {day} after your procedure: pain from 0 to 10? Anything worrying you?",
-            tool=self.report,
             timeout=timedelta(hours=12),
         )
 
@@ -130,6 +128,6 @@ async def text(ctx: A2ASessionContext[Recovery]) -> str:
 
 # Each task runs on whichever worker holds the thread then. "About a 4, and the wound is a bit
 # red" arrives as a turn of care_team, which sees the check-in waiting and hands the conversation
-# to it; CheckIn's model calls report(pain=4, concern="the wound is a bit red"). An app posts by
-# task id and skips care_team. The clinic's backend can start the chain with no conversation:
+# to it; CheckIn's model calls report(pain=4, concern="the wound is a bit red"). The clinic's
+# backend can start the chain with no conversation:
 # lk.threads.get(thread_id).submit(agent="recovery", task=CheckIn()), the deployment's agent name.

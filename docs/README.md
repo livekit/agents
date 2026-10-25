@@ -53,6 +53,7 @@ point of view.
 | [storage.md](storage.md) | built | what is saved, the backends, the unit of work |
 | [journal.md](journal.md) | built | what the framework records about a thread, separate from the history |
 | [text-endpoints.md](text-endpoints.md) | built | `@server.a2a_session`, turn policies, bursts and interruptions |
+| [delegation.md](delegation.md) | built | delegation and text over A2A: the `live` inbox, questions to the person, interrupt and cancel, voice in front |
 | [channels.md](channels.md) | built | where a message came from and what that changes |
 | [planned-channels.md](planned-channels.md) | planned | SMS, WhatsApp, email, outbound text |
 | [a2a.md](a2a.md) | built | the wire reference: the agent card, tasks, metadata keys, errors |
@@ -73,8 +74,8 @@ point of view.
 - [`console/`](../console/README.md): the frontend. A chat with a front
   desk, a call over the voice door, and the thread's database beside it.
 - `tests/test_v0_checks.py` runs the end-to-end checks against that stack
-  (`V0_STACK=1`): a thread across two workers, resubscribe, interrupt, an
-  inbox burst, a worker killed mid-turn, input-required and approvals
+  (`V0_STACK=1`): a thread across two workers, resubscribe, two messages
+  within a second under `live`, an inbox burst, a worker killed mid-turn, input-required and approvals
   answered on the other worker, a stateless agent serving two threads,
   the threads service's create and delete, and the console's spoken call.
 

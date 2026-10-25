@@ -2,8 +2,9 @@
 - Larkfield Outfitters' order line: order status, and a watch for an item that is out of stock.
 - `notify_when_back` submits `CheckStock`, a pure code `AgentTask` that checks again with `delay=`
   or hands over to `Offer`.
-- `Offer` asks the shopper with `InputRequired(question, tool=self.decide, timeout=)`; the reply
-  calls `decide`, directly from a form or through the task's model from free text.
+- `Offer` asks the shopper with `InputRequired(question)`; a question has no timeout, the offer
+  lapses by the task's own `timeout=` on `submit`; the task's model reads the reply and calls
+  `decide`.
 - Every hook and tool returns the A2A transition: `Completed`, `InputRequired`, or a plain tool
   result.
 - `on_timeout` completes the task when the offer lapses.
@@ -58,8 +59,8 @@ async def in_stock(api: httpx.AsyncClient, sku: str) -> int:
 
 # Background work is an AgentTask submitted instead of awaited: it runs as its own A2A task beside
 # the conversation. A pure code task has on_enter and no model. A task that must talk to the
-# shopper returns InputRequired with the question in the code's words and the tool that takes the
-# answer. Every return value is the A2A state the task moves to; a plain value is a tool result.
+# shopper returns InputRequired with the question in the code's words; its model reads the answer.
+# Every return value is the A2A state the task moves to; a plain value is a tool result.
 
 
 @dataclass
@@ -90,11 +91,10 @@ class Offer(AgentTask[str]):  # talks to the shopper: offers the hold, places it
         )
 
     async def on_enter(self, ctx: RunContext[Deps, Shopper]) -> InputRequired:
-        # the question is the code's, word for word; a form or the model answers through decide
+        # the question is the code's, word for word; the model answers through decide
         return InputRequired(
             f"Good news: {self.sku} is back in stock. Want me to hold one for 48 hours?",
-            tool=self.decide,
-            timeout=timedelta(days=2),
+            verbatim=True,
         )
 
     @function_tool
@@ -139,6 +139,6 @@ async def text(ctx: A2ASessionContext[Shopper]) -> str:
 
 # A task's constructor arguments are JSON in its row; its progress is its own A2A history; new
 # code runs old rows, so an upgrade is a deploy. The shopper's "yes please" arrives as a turn of
-# shop, which sees Offer waiting and hands the conversation to it; Offer's model calls decide,
-# the tool InputRequired named. A form posts decide's arguments by task id and skips every model.
+# shop, which sees Offer waiting and hands the conversation to it; Offer's model reads it and
+# calls decide.
 # The Completed value is the task's last message to the shopper.

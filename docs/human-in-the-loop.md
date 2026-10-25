@@ -10,7 +10,7 @@ from livekit.agents import Completed, Failed, Rejected, InputRequired, Working
 Completed(value)                 # done: the result, and the last message when text
 Failed(error)                    # failed: the error text is the last message
 Rejected(reason)                 # will not run this input
-InputRequired(question)          # waiting on the person; asked in the facing agent's words
+InputRequired(question)          # waiting on the person, with no timeout; asked in the facing agent's words
 Working(message=None)            # waiting on a system; nothing delivered
 ```
 
@@ -48,21 +48,35 @@ that was exact; the door puts it on the task as `livekit/verbatim`, and the
 delegate delivers that part as written and hands the rest to its model.
 A read-back from `requires_approval` is verbatim.
 
-The person's next message, whenever it comes and on whatever worker,
-replaces that placeholder as the call's output, and the model runs on the
-history: it sees the question, the call and the answer, and continues,
-calling the next tool or asking again. The tool that asked never runs
-again. It has no continuation, which is why a conversation tool can ask and
-cannot act on the answer; the model acts on it.
+The answer continues the waiting task ([delegation.md](delegation.md)),
+whenever it comes and on whatever worker: the call keeps the question as
+its output, the answer is the person's next message, and the task's model
+runs on the history: it sees the question, the call and the answer, and
+continues, calling the next tool or asking again. The tool that asked never
+runs again by itself, so the person can refuse or change the subject. A
+delegate's question is the one exception: its tool sends the answer as said
+to the expert's task, whose own model reads it, in a call that names the
+one that asked (`FunctionCall.extra["lk.answers"]`). An input that fixed
+logic must collect is an `AgentTask`.
 
 On a call the question is spoken and the next user turn is the answer. In
-text, the turn's task ends `input-required` with the question (`livekit/mergedInto` is in
-[a2a-live-ext.md](a2a-live-ext.md)):
+text, the turn's task ends `input-required` with the question:
 
 | The next message | What happens |
 |---|---|
-| carries the waiting task's id | that task continues: it gets the answer and the reply, and the row the message arrived under completes, with `livekit/mergedInto` pointing at that task |
-| carries no task id | its own task carries the reply, and the waiting task completes, with `livekit/mergedInto` pointing at the new one |
+| carries the waiting task's id | that task continues under its own id: the answer, then the reply or the next question; no row of its own, nothing merged |
+| comes from the person and carries no task id | it goes to the question in front of the person, and that task continues |
+| is a delegation and carries no task id | it is a new task; the question stays open |
+
+A task pauses once: the questions of one step are one question, in order and
+each once, verbatim only when every part is, and a question that work in the
+background asks while its task waits joins that task's question, which is
+asked again. A lane has one question in front of the person. A question of
+another task asked while one is in front waits unasked (`livekit/queued`); a
+follow-up of the answered task goes first; when the task in front ends or
+its work goes on in the background, the reply asks the next one. On a call
+the same rule holds for the questions of tools that run at once. A question
+asked by text can be answered on a call, and the reverse.
 
 What `run()` returns then: `result.input_required` is the pending question
 and `result.output` is `None`. The framework ends the task `input-required`
@@ -97,8 +111,7 @@ of its tools:
 A task with a model completes only through a tool that returns `Completed`;
 text from its model goes to the person. See [agent-tasks.md](agent-tasks.md).
 
-Waiting on a system, naming the tool that takes the answer, deadlines and
-answers that call a tool with no model are designed in
+Waiting on a system and deadlines are designed in
 [planned-agent-tasks.md](planned-agent-tasks.md).
 
 See `examples/use-cases/04_a_claim_with_a_photo.py`.

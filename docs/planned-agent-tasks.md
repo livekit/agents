@@ -52,20 +52,20 @@ and code between two waits can be a [graph](graphs.md).
 
 ## Waiting on people and systems
 
-- `InputRequired(question, tool=)` is built: the question word for word,
-  the answer to the named tool. Planned around it: `timeout=`, and how the
-  question reaches the person outside a live call
+- `InputRequired(question)` is built: the question as written or in the
+  agent's words, the answer to the task's model. Planned around it:
+  `timeout=`, and how the question reaches the person outside a live call
   ([planned-channels.md](planned-channels.md)).
 - `Working(tool=, timeout=, message=)` waits on a system and delivers
   nothing; `message=` is what a client sees as the status.
-- The named tool's parameter schema rides on the status as a data part, so
-  a form knows what to render and a system knows what to post.
+- The tool `Working` names has its parameter schema on the status as a data
+  part, so a system knows what to post.
 - `timeout=` schedules `on_timeout(ctx)`, which returns the next transition.
 
 | The answer is | What happens |
 |---|---|
-| a `DataPart` matching the named tool's parameters, from a form, a client or a system posting `message/send` with the task id | the tool is called directly; no model |
-| free text, from a chat box or a call | the tool's first string parameter, no model (built); a tool with none gets a turn of the task's own model, which reads it and calls the tool |
+| a `DataPart` matching the parameters of the tool `Working` names, from a system posting `message/send` with the task id | the tool is called directly; no model |
+| free text, from a chat box or a call | a turn of the task's own model, which reads it and calls the tool that takes it (built) |
 | a message in the main conversation that belongs to the waiting task | the main agent hands the conversation to the task, which holds it until it returns `Completed` |
 
 ## Starting one without waiting

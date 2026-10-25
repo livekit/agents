@@ -115,8 +115,9 @@ message's `livekit/channel`, or `delegation` when its `livekit/kind` is
 
 | Policy       | Behaviour                                                                                                                                                                                                                                                                      | Default for                      |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- |
-| `interrupt`  | the running turn stops at its next safe point, its task ends `canceled` with `livekit/interrupted: true` and `livekit/interruptionReason: "new-message"`, and the new message gets its turn. Nothing already sent is retracted; tools that ran stay in the history            | `a2a`, and any unlisted channel  |
-| `queue`      | each message waits for the running turn, then gets its own turn and its own reply, in the order the messages arrived; nothing merged, nothing cancelled                                                                                                                       | `delegation`                     |
+| `live`       | the message waits only while the floor is busy: a reply is produced or a blocking tool runs. A tool that called `ctx.update()` goes on in the background and frees the floor; its end answers its own task. Messages that waited together run as one turn, the earlier ones `livekit/mergedInto` the last. A message that interrupts (`livekit/interrupt` absent or `true`) stops the reply at its next safe point; a delegation does not. See [delegation.md](delegation.md) | `a2a`, `delegation`, and any unlisted channel |
+| `interrupt`  | the running turn stops at its next safe point, its task ends `canceled` with `livekit/interrupted: true` and `livekit/interruptionReason: "new-message"`, and the new message gets its turn. Nothing already sent is retracted; tools that ran stay in the history            | opt-in                           |
+| `queue`      | each message waits for the running turn, then gets its own turn and its own reply, in the order the messages arrived; nothing merged, nothing cancelled                                                                                                                       | opt-in                           |
 | `batch`      | the message is queued in the lane's inbox; after `debounce`, every queued message is answered in one turn. The reply goes on the last message's task; the earlier ones complete with no artifact and `livekit/mergedInto` pointing at it                                     | `sms`, `whatsapp`, `email`       |
 | `concurrent` | runs take no lease and may overlap; they append to the history and write no state and no agent stack. Only for endpoints with no `state`                                                                                                                                      | opt-in                           |
 | `reject`     | the request fails with `UnsupportedOperationError`, whose data names the running task as `runningTaskId`; no task is created. The client cancels the running task first                                                                                                      | opt-in                           |
@@ -134,9 +135,10 @@ message's `livekit/channel`, or `delegation` when its `livekit/kind` is
 overrides part of the default. `debounce` is the wait before a turn starts
 so a burst has landed, under `batch`, `interrupt` and `queue`: two seconds
 for `sms`, `whatsapp` and `email` and zero for `a2a` and `delegation` by
-default. Under `interrupt` and `queue`, a message that has not had its turn
-after 60 seconds fails `lease-timeout`; under `batch` it keeps waiting, since
-the run that drains the inbox owns its messages.
+default; `live` never waits for a burst. Under `interrupt` and `queue`, a
+message that has not had its turn after 60 seconds fails `lease-timeout`;
+under `live` and `batch` it keeps waiting, since the run that drains the
+inbox owns its messages.
 
 ## Tasks on the wire
 
@@ -150,10 +152,12 @@ that lost its connection resumes from any offset with `tasks/resubscribe`.
 
 - A resent `messageId` returns the task the first send created; nothing
   runs twice.
-- `tasks/cancel` on a running turn ends it `canceled`; the turn yields at its
-  next boundary and a running tool finishes.
+- `tasks/cancel` on a running task stops its tools at their next wait point
+  outside `ctx.uninterruptible()`, and the task ends `canceled` with what
+  they did; the answer to the cancel waits for that.
 - A tool's `InputRequired` ends the turn `input-required` with the question
-  as the reply. The next message in the thread answers it; see
+  as the reply. The answer continues that task, by its `taskId`, or, for a
+  message from the person with none, as the question in front of them; see
   [human-in-the-loop.md](human-in-the-loop.md).
 - A message with the `taskId` of a terminal task fails with
   `UnsupportedOperationError`: a follow-up is a new task.
@@ -166,14 +170,19 @@ short. A stock client ignores them.
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `livekit/channel`                                   | the channel a message came on; `a2a` when absent                                             |
 | `livekit/kind`                                      | `delegation` on a message another agent sent                                                 |
+| `livekit/interrupt`                                 | `false` on a message that must not stop the reply being produced; absent means it does      |
+| `livekit/callerLane`                                | on a delegation in the caller's thread, the caller's lane                                    |
+| `livekit/background`                                | on a `working` task whose work goes on after its turn                                       |
+| `livekit/queued`                                    | on an `input-required` task whose question waits behind the one in front of the person      |
+| `livekit/cancelRequested`                           | on a `working` task a client canceled, until its tools stop                                 |
 | `livekit/interrupted`, `livekit/interruptionReason` | on a `canceled` task the server ended for a newer message                                    |
 | `livekit/mergedInto`                                | on a `completed` task whose message was answered by another task's turn                      |
 | `livekit/reason`                                    | why a task failed: `thread-not-found`, `lease-timeout`, `worker-lost`, `storage-unavailable` |
 | `livekit/verbatim`                                  | the part of an answer or a question that reaches the person exactly as written               |
 
-`livekit/mergedInto` marks three cases: a message a `batch` turn answered
-with a later one, a message that continued a waiting task, and a waiting
-task a new message answered.
+`livekit/mergedInto` marks one case: a message a `live` or `batch` turn
+answered with a later one. An answer to a question continues the waiting
+task under its id, with nothing merged.
 
 ## Clients
 
