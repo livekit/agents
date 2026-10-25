@@ -76,7 +76,6 @@ impl Driver {
             out.trace(InputStep::LegItemDiscarded { leg: AudioChannel::Stt.label(), open });
             return;
         }
-        let Some(ev) = self.speaker_filter(open, ev, out) else { return };
         // The recogniser's item for the peers (the AMD reads the finals).
         if !self.watch.is_empty() {
             self.watch.publish(crate::agent_session::SystemTap::Stt(ev.clone()));
@@ -149,20 +148,6 @@ impl Driver {
             }
             VadEventType::EndOfSpeech => self.start_false_interruption_timer(now, out),
         }
-    }
-
-    /// One `_detector` per wrapper stream. Called by `on_stt` before the turn machine.
-    pub(crate) fn speaker_filter(
-        &mut self,
-        open: u32,
-        ev: lk_agents_abi::SpeechEvent,
-        out: &mut Out,
-    ) -> Option<lk_agents_abi::SpeechEvent> {
-        let decision = self.input.filter_speaker(open, ev);
-        if let Some((speaker, class)) = decision.changed {
-            out.trace(InputStep::SpeakerVerdict { speaker, class });
-        }
-        decision.kept
     }
 
     pub(crate) fn on_turn(&mut self, now: Ts, cmd: TurnCommand, out: &mut Out) {

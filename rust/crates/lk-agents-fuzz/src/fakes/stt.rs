@@ -91,8 +91,7 @@ impl StreamSource<SpeechEvent> for Recognition {
 }
 
 /// Where a transcript sits in the stream's audio: a real recogniser stamps its words with the
-/// seconds of stream it had heard when they began and ended, and the driver's speaker filter
-/// locates the utterance's audio window by exactly those.
+/// seconds of stream it had heard when they began and ended.
 pub(super) struct Clock {
     pub opened: Ts,
     pub started: Option<Ts>,

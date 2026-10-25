@@ -73,7 +73,7 @@ struct Persona {
     /// detector hears and the recogniser has no words for: the shape a false interruption has.
     noise: u8,
     /// How often a stretch comes from someone else in the room, whom the recogniser diarises
-    /// apart: what a speaker filter is for.
+    /// apart.
     other_speaker: u8,
     /// How often the person drops off the call and comes back, per turn.
     leaves: u8,

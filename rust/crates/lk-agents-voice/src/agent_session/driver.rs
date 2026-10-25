@@ -28,7 +28,6 @@ use std::sync::{Arc, Mutex};
 pub enum SystemTap {
     Session(SessionEvent),
     Vad(lk_agents_abi::VadEvent),
-    /// After the speaker filter.
     Stt(lk_agents_abi::SpeechEvent),
     Ivr(IvrCommand),
     CloseRequested,

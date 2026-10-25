@@ -755,11 +755,6 @@
         }
       },
       {
-        "SetSpeakerFilter": {
-          "enabled": false
-        }
-      },
-      {
         "GenerateReply": {
           "user_input": null,
           "instructions": null,

@@ -104,11 +104,6 @@
         }
       },
       {
-        "SetSpeakerFilter": {
-          "enabled": false
-        }
-      },
-      {
         "Configure": {
           "knob": "UserAway",
           "mode": "Default",

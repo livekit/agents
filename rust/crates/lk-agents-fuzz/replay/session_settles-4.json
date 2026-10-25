@@ -285,11 +285,6 @@
         }
       },
       {
-        "SetSpeakerFilter": {
-          "enabled": true
-        }
-      },
-      {
         "LlmToolCall": {
           "chat": 2,
           "name": "agent-2",
@@ -625,11 +620,6 @@
       {
         "WaitForIdle": {
           "hold": 0
-        }
-      },
-      {
-        "SetSpeakerFilter": {
-          "enabled": true
         }
       },
       {

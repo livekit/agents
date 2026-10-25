@@ -615,7 +615,6 @@ inputs! {
     /// A handoff to another agent, with the same fakes behind it.
     Handoff { agent: String, instructions: AgentText, tools: Vec<String>, pause_previous: bool, resume: bool }
         opens [Answer] leaf activity::Update;
-    SetSpeakerFilter { enabled: bool } leaf activity::SetSpeakerFilter;
     UpdateInstructions { text: AgentText } leaf activity::UpdateInstructions;
     UpdateTools { tools: Vec<String> } leaf activity::UpdateTools;
     SetAudioInput { attach: bool } leaf activity::SetAudioInput;

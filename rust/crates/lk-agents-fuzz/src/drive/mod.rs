@@ -198,10 +198,6 @@ pub struct Setup {
     /// against its audio rather than as they are generated, which is the default with a room.
     #[serde(default)]
     pub sync_transcription: bool,
-    /// The speaker filter from the start: learn who the primary speaker is from diarised
-    /// transcripts and suppress the others.
-    #[serde(default)]
-    pub speaker_filter: bool,
 }
 
 fn yes() -> bool {
@@ -276,7 +272,6 @@ impl Default for Setup {
             connect_ms: None,
             video: false,
             sync_transcription: false,
-            speaker_filter: false,
             ivr: None,
             amd: false,
             keyterms: Vec::new(),

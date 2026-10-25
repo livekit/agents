@@ -220,7 +220,6 @@ pub(crate) struct AgentInput {
     stt_open: u64,
     vad_open: u64,
     stt_open_same: bool,
-    speaker_filter: Option<crate::audio::SpeakerFilterConfig>,
 }
 
 impl AgentInput {
@@ -239,7 +238,6 @@ impl AgentInput {
         ),
         video_sampler: Option<Arc<crate::room_io::_input::VideoSampler>>,
         gate: Arc<crate::agent_activity::GateSnapshot>,
-        speaker_filter: Option<crate::audio::SpeakerFilterConfig>,
     ) -> Self {
         AgentInput {
             audio_forwarder_parts,
@@ -257,7 +255,6 @@ impl AgentInput {
             stt_open: 0,
             vad_open: 0,
             stt_open_same: false,
-            speaker_filter,
         }
     }
 
@@ -284,20 +281,6 @@ impl AgentInput {
         &self.audio_forwarder_parts.ended
     }
 
-    /// The speaker filter rides the STT row: a fresh detector per stream opened from now on, and
-    /// the installed stream's replaced.
-    pub(crate) fn set_speaker_filter(&mut self, config: Option<crate::audio::SpeakerFilterConfig>) {
-        self.audio_forwarder_parts
-            .legs
-            .set_speaker_filter(config.as_ref().map(crate::audio::speaker_filter));
-        self.speaker_filter = config;
-    }
-
-    /// A fresh detector for a stream about to open, when a filter is configured.
-    pub(crate) fn new_speaker_filter(&self) -> Option<Arc<crate::audio::SpeakerFilter>> {
-        self.speaker_filter.as_ref().map(crate::audio::speaker_filter)
-    }
-
     /// Whether there is a local VAD (`self.vad is None` decides whether an interim is the onset).
     pub(crate) fn has_vad(&self) -> bool {
         self.audio_forwarder_parts.legs.present(crate::audio::AudioChannel::Vad)
@@ -313,9 +296,6 @@ impl AgentInput {
         match op {
             ChannelOp::Install { leg, sink } => {
                 Some(self.audio_forwarder_parts.legs.install(leg, sink))
-            }
-            ChannelOp::InstallStt { sink, speaker } => {
-                Some(self.audio_forwarder_parts.legs.install_stt(sink, speaker))
             }
             ChannelOp::Clear(leg) => {
                 self.audio_forwarder_parts.legs.clear(leg);
@@ -467,18 +447,6 @@ impl AgentInput {
 
     pub(crate) fn stt_open_same(&self) -> bool {
         self.stt_open_same
-    }
-
-    /// One `_detector` per wrapper stream: the event to forward and a changed speaker verdict.
-    pub(crate) fn filter_speaker(
-        &self,
-        open: u32,
-        ev: lk_agents_abi::SpeechEvent,
-    ) -> crate::audio::SpeakerDecision {
-        match self.audio_forwarder_parts.legs.speaker_filter_for(open) {
-            Some(filter) => filter.decide(ev),
-            None => crate::audio::SpeakerDecision { kept: Some(ev), changed: None },
-        }
     }
 
     /// `_commit_user_turn`'s "flush the stt by pushing silence", `ceil(duration / 0.2)` frames:

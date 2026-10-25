@@ -48,11 +48,6 @@
         }
       },
       {
-        "SetSpeakerFilter": {
-          "enabled": false
-        }
-      },
-      {
         "GenerateReply": {
           "user_input": null,
           "instructions": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
@@ -79,11 +74,6 @@
           ],
           "pause_previous": true,
           "resume": false
-        }
-      },
-      {
-        "SetSpeakerFilter": {
-          "enabled": false
         }
       },
       {

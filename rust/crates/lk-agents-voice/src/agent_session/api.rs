@@ -324,9 +324,7 @@ pub(super) struct ModelRefs {
 }
 
 impl SessionApi {
-    /// Given present, given `None` clears, not-given keeps. The speaker filter follows the STT: the
-    /// options given, else none for a swapped STT (only a `MultiSpeakerAdapter` brings some), kept:
-    /// `None`.
+    /// Given present, given `None` clears, not-given keeps.
     /// Each provider given is wrapped and registered: the command carries its reference.
     fn swap(
         &self,
@@ -334,8 +332,7 @@ impl SessionApi {
         tts: Leg<dyn Tts>,
         stt: Leg<dyn Stt>,
         vad: Leg<dyn Vad>,
-        speaker_filter: Maybe<Option<crate::audio::SpeakerFilterConfig>>,
-    ) -> (ModelRefs, Option<Option<crate::audio::SpeakerFilterConfig>>) {
+    ) -> ModelRefs {
         fn map<T: ?Sized, R>(leg: Leg<T>, f: impl FnOnce(Arc<T>) -> R) -> Maybe<Option<R>> {
             match leg {
                 Maybe::Given(given) => Maybe::Given(given.map(f)),
@@ -362,21 +359,13 @@ impl SessionApi {
             slot(&mut legs.llm, &models.llm);
             slot(&mut legs.tts, &models.tts);
         }
-        let filter = match (&models.stt, speaker_filter) {
-            (_, Maybe::Given(config)) => Some(config),
-            (Maybe::Given(_), Maybe::NotGiven) => Some(None),
-            (Maybe::NotGiven, Maybe::NotGiven) => None,
-        };
-        (models, filter)
+        models
     }
 
     /// Shared by `update_agent`, `hook_described` and `enter_task`. A host frame change closes the
     /// frame it leaves and starts the one it installs; the driver sets an inline task's pair
     /// itself.
-    fn frame(
-        &self,
-        frame: UpdateAgentArgs,
-    ) -> (AgentUpdate, Option<Option<crate::audio::SpeakerFilterConfig>>) {
+    fn frame(&self, frame: UpdateAgentArgs) -> AgentUpdate {
         let UpdateAgentArgs {
             instructions,
             agent,
@@ -388,14 +377,12 @@ impl SessionApi {
             tts,
             stt,
             vad,
-            speaker_filter,
             turn_handling,
         } = frame;
         let options = turn_handling.as_ref().map(crate::turn::agent_patch).unwrap_or_default();
         self.set_agent_layer(Some(options));
-        let (ModelRefs { llm, tts, stt, vad }, speaker_filter) =
-            self.swap(llm, tts, stt, vad, speaker_filter);
-        let update = AgentUpdate {
+        let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad);
+        AgentUpdate {
             agent,
             instructions,
             toolset: host_toolset(tools, tools_host, tool_runner),
@@ -409,8 +396,7 @@ impl SessionApi {
             next: NewActivity::Start,
             call: None,
             task: None,
-        };
-        (update, speaker_filter)
+        }
     }
 
     fn speak(
@@ -822,9 +808,6 @@ pub struct UpdateAgentArgs {
     pub tts: Maybe<Option<Arc<dyn Tts>>>,
     pub stt: Maybe<Option<Arc<dyn Stt>>>,
     pub vad: Maybe<Option<Arc<dyn Vad>>>,
-    /// `MultiSpeakerAdapter`'s options when the new STT is one, `None` for a plain one; given with
-    /// `stt` only (the filter follows the STT).
-    pub speaker_filter: Maybe<Option<crate::audio::SpeakerFilterConfig>>,
     #[host(kwarg(default = None))]
     pub turn_handling: Option<crate::agent_activity::options::TurnHandlingKwargs>,
 }

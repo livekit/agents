@@ -492,10 +492,6 @@ impl Driver {
                     transcription: self.session.outputs.shows_transcription(),
                 });
             }
-            ActivityCommand::SetSpeakerFilter(config) => {
-                // The filter follows the STT the host named.
-                self.input.set_speaker_filter(config);
-            }
             ActivityCommand::SetTranscriptionOutput(output) => {
                 let transcription = output.is_some();
                 let id = output.as_ref().map(|o| o.id);

@@ -6,7 +6,7 @@
 //! invented to stand in for it, because a command carrying an id the driver never issued is a
 //! different test from the one the case asked for.
 use super::start::{
-    Llm, Stt, Tts, frame, given, history, instructions, patch, speaker_filter, toolset, vad_metrics,
+    Llm, Stt, Tts, frame, given, history, instructions, patch, toolset, vad_metrics,
 };
 use super::*;
 
@@ -358,9 +358,6 @@ impl Run {
                 frame.next = if *resume { NewActivity::Resume } else { NewActivity::Start };
                 frame.call = Some(call);
                 ActivityCommand::Update(Box::new(frame)).into()
-            }
-            Input::SetSpeakerFilter { enabled } => {
-                ActivityCommand::SetSpeakerFilter(enabled.then(speaker_filter)).into()
             }
             Input::UpdateInstructions { text: AgentText(text) } => {
                 ActivityCommand::UpdateInstructions(instructions(text)).into()

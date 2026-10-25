@@ -511,11 +511,6 @@ pub enum InputStep {
         label: &'static str,
         how: lk_agents_abi::Closed,
     },
-    /// The primary-speaker filter changed its verdict for a speaker (once per change).
-    SpeakerVerdict {
-        speaker: String,
-        class: crate::audio_recognition::primary_speaker::SpeakerClass,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]

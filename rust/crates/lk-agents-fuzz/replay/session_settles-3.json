@@ -144,11 +144,6 @@
         }
       },
       {
-        "SetSpeakerFilter": {
-          "enabled": true
-        }
-      },
-      {
         "WaitForIdleAndHold": {}
       },
       {

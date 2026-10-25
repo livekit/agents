@@ -107,7 +107,6 @@ impl SetupArms {
             connect_ms: self.on(rng, "connect", &mut d).then(|| ms(rng)),
             video: self.on(rng, "video", &mut d),
             sync_transcription: self.on(rng, "sync_transcription", &mut d),
-            speaker_filter: self.on(rng, "speaker_filter", &mut d),
             pausable_output: self.on(rng, "pausable_output", &mut d),
             speech_gap_ms: self.on(rng, "speech_gap", &mut d).then(|| ms(rng)),
             user_turn_max_words: self.on(rng, "turn_words", &mut d).then(|| rng.u32(1..12)),

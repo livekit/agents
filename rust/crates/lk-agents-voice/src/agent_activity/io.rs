@@ -119,12 +119,12 @@ impl Driver {
                 // A different recogniser is told the full list.
                 let same_stt = self.input.stt_open_same();
                 self.keyterms_on_stt_swap(now, same_stt, out);
-                // A fresh detector per open; the replaced stream keeps its own for its remaining
-                // items.
-                let speaker = self.input.new_speaker_filter();
                 let ticket = self
-                    .apply_leg_op(ChannelOp::InstallStt { sink: Arc::from(sink), speaker }, out)
-                    .expect("InstallStt returns its ticket");
+                    .apply_leg_op(
+                        ChannelOp::Install { leg: AudioChannel::Stt, sink: Arc::from(sink) },
+                        out,
+                    )
+                    .expect("Install returns its ticket");
                 spawn_drain(
                     &self.shared.spawner,
                     self.shared.time.clone(),
@@ -199,10 +199,6 @@ impl Driver {
     pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: ChannelEnd, out: &mut Out) {
         let error = end.error.take();
         let leg = end.leg;
-        // Every item the drain sent is ahead of its end in the queue.
-        if leg == AudioChannel::Stt.label() {
-            self.input.legs().retire_speaker_filter(end.open);
-        }
         on_leg_ended(end, out);
         if let Some(error) = error
             && leg == AudioChannel::Stt.label()

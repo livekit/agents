@@ -835,7 +835,6 @@ class LiveSession:
         agent: str = ...,
         chat_ctx: list[ChatItem] | None = None,
         stt: Any | None = None,
-        speaker_filter: Any | None = None,
         vad: Any | None = None,
         llm: Any | None = None,
         realtime: Any | None = None,
@@ -890,7 +889,6 @@ class LiveSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
-        speaker_filter: NotGivenOr[Any | None] = ...,
     ) -> None: ...
     def hook_described(
         self,
@@ -906,7 +904,6 @@ class LiveSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
-        speaker_filter: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
     ) -> None: ...
     async def update_agent(
@@ -922,7 +919,6 @@ class LiveSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
-        speaker_filter: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
     ) -> bool: ...
     def enter_task(
@@ -939,7 +935,6 @@ class LiveSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
-        speaker_filter: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
         speech_id: int | None = None,
         preserve_function_call_history: bool = False,

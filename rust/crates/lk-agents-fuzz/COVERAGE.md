@@ -61,14 +61,14 @@ The generator plays four actors, each of which acts only on what it observed:
 
 ### 2.1 Actors and operations
 
-82 inputs (`src/input.rs`), grouped by who acts:
+81 inputs (`src/input.rs`), grouped by who acts:
 
 - **The person**, as the models hear them: microphone frames, VAD start/inference/end, STT
   start/interim/preflight/final/end, end-of-turn predictions, overlap verdicts, DTMF.
 - **The developer, through the API**: `say`, `generate_reply`, `interrupt`, turn control
   (commit, clear, claim, release), floor holds and authorisation, fillers, runs; updating
-  instructions, tools, history, models and options; handoffs and tasks; keyterms, speaker
-  filter, IVR; attaching and toggling audio, video and transcription inputs and outputs; drain
+  instructions, tools, history, models and options; handoffs and tasks; keyterms, IVR;
+  attaching and toggling audio, video and transcription inputs and outputs; drain
   and close.
 - **The developer's code, answering the framework**: hook results (on time and late), tool
   results and updates, turn commits, metrics.
@@ -113,7 +113,7 @@ a kind never moves another's draw (agent-store's swarm hunt).
 
 | Who | Drawn per seed |
 |---|---|
-| Setup | about 30 switches, each on in roughly half the seeds (the sampler learns toward values that found new journal variants): STT, VAD, end-of-turn model, interruption detector, endpointing, turn mode, preemptive generation, backchannel threshold, transcription timeout, user-turn limits, speaker filter, keyterms, pipeline or realtime (with or without server turn detection), tools, max tool steps, hooks, TTS, pausable output, synchronised transcription, gap between speeches, IVR, AMD, room legs, video, connect latency, scheduler seed |
+| Setup | about 30 switches, each on in roughly half the seeds (the sampler learns toward values that found new journal variants): STT, VAD, end-of-turn model, interruption detector, endpointing, turn mode, preemptive generation, backchannel threshold, transcription timeout, user-turn limits, keyterms, pipeline or realtime (with or without server turn detection), tools, max tool steps, hooks, TTS, pausable output, synchronised transcription, gap between speeches, IVR, AMD, room legs, video, connect latency, scheduler seed |
 | The person | pace (40-250% of 120-210 words a minute), silence length (20-500%), how long they leave the agent to answer (20-500%), how long they sit in silence before speaking again (0.3-15 s), how often they pause first, hesitate, barge in (anywhere in a reply), backchannel (0-15% per beat while the agent speaks), make noise, have someone else speak, leave the call and come back |
 | The developer | how often it calls the API between turns, per beat, and per beat while the agent speaks (three in ten programs are busy ones), how often the model it prompts calls tools, how often it scopes fillers |
 | The call | average length, 30 s to 2 h flat over orders of magnitude, and how it ends |
@@ -247,7 +247,6 @@ seeds because only a quarter of seeds can speak (section 2.3).
 | `Handoff` | # | # | # | # | # | # | # | + | # | # | # | # |
 | `Task` | # | # | # | # | # | # | # | + | # | # | # | # |
 | `SetStaticKeyterms` | # | # | # | # | # | # | # | + | # | # | # | # |
-| `SetSpeakerFilter` | # | # | # | # | # | # | # | + | # | # | # | # |
 | `Ivr` | # | # | # | # | # | # | # | + | # | # | # | # |
 
 **Developer: inputs and outputs**
@@ -442,7 +441,7 @@ user state.
 - **Never sent**: close reasons other than `user_initiated`, a close carrying an error
   (`apply.rs:439`).
 
-### 5.8 AMD, IVR, speaker filter, keyterms, user away
+### 5.8 AMD, IVR, keyterms, user away
 
 - **AMD**: defaults only (`start.rs:221-229`), no `Execute`/`Close` input; nothing checks that
   nothing plays while it holds authorization, that it emits exactly one result, or that
@@ -450,8 +449,6 @@ user state.
   developer's `PauseAuthorization`, so the two cannot be told apart in the journal.
 - **IVR**: `AddTools` never sent; nothing checks that a loop or silence triggers exactly one
   reply and nothing triggers after close.
-- **Speaker filter**: always detect and suppress (`start.rs:349`); no step for "learning"; no
-  rule that background speakers never reach the turn or history.
 - **Keyterms**: the LLM pass is off (`start.rs:161`), so `KeytermTimeout` and the interval are
   unreachable; no rule that static keyterms reach every new STT stream.
 - **User away**: `Configure` never disables it; no rule that away is reported only after the
@@ -757,7 +754,6 @@ harness waiting, not an actor's operation.
 | `SetAudioOutput` | 304 | 591 | 218 | 366 | 53 | 31 | 331 | 12 | 265 | 46 | 398 | 366 |
 | `SetIoEnabled` | 310 | 599 | 218 | 354 | 43 | 30 | 307 | 5 | 275 | 33 | 394 | 372 |
 | `SetRunOutput` | 115 | 438 | 131 | 363 | 43 | 27 | 291 | 1 | 231 | 20 | 310 | 19 |
-| `SetSpeakerFilter` | 320 | 610 | 228 | 382 | 41 | 23 | 337 | 9 | 262 | 40 | 427 | 368 |
 | `SetStaticKeyterms` | 309 | 612 | 220 | 354 | 43 | 30 | 297 | 5 | 268 | 39 | 400 | 363 |
 | `SetTranscriptionOutput` | 323 | 593 | 204 | 348 | 58 | 35 | 310 | 4 | 276 | 39 | 387 | 358 |
 | `SetVideoInput` | 315 | 591 | 226 | 362 | 45 | 31 | 313 | 7 | 291 | 33 | 409 | 352 |

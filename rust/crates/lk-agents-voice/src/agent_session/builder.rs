@@ -49,7 +49,6 @@ pub struct DriverBuilder {
     /// A TTS with no duplex path arrives wrapped in `StreamAdapter`.
     pub tts: Option<Arc<dyn Tts>>,
     pub stt: Option<Arc<dyn Stt>>,
-    pub speaker_filter: Option<crate::audio::SpeakerFilterConfig>,
     /// `None`: nothing is pushed.
     pub keyterms: Option<crate::keyterm_detection::KeytermSetup>,
     pub vad: Option<Arc<dyn Vad>>,
@@ -132,11 +131,7 @@ impl DriverBuilder {
         if let Some(stt) = &self.stt {
             let (sink, source) =
                 stt.stream(None, None).await.ok_or(DriverError::Missing("a streaming STT"))??;
-            // The speaker filter rides the STT row, a fresh detector per stream.
-            let ticket = legs.install_stt(
-                Arc::from(sink),
-                self.speaker_filter.as_ref().map(crate::audio::speaker_filter),
-            );
+            let ticket = legs.install(AudioChannel::Stt, Arc::from(sink));
             spawn_drain(
                 &self.spawner,
                 self.time.clone(),
@@ -377,7 +372,6 @@ impl DriverBuilder {
             (video_parts, video_forwarder, self.video_in),
             self.video_sampler,
             gate,
-            self.speaker_filter,
         );
         let mut driver = Driver {
             session,
@@ -512,7 +506,6 @@ fn eot_input(ev: lk_agents_abi::turn::detector::LegEvent<lk_agents_abi::EotPredi
         }
         LegEvent::Closed => Input::ChannelEnded(ChannelEnd {
             leg: "eot",
-            open: 0,
             cause: crate::trace::ChannelEndCause::SourceEnded,
             closed: None,
             error: None,

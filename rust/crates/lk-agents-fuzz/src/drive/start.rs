@@ -156,7 +156,6 @@ impl Run {
             audio_out: Some(audio_out),
             text_out: Some(text_out),
             toolset: toolset(&registry, &setup.tools),
-            speaker_filter: setup.speaker_filter.then(speaker_filter),
             keyterms: (!setup.keyterms.is_empty()).then(|| KeytermSetup {
                 detection: KeytermDetection::default(),
                 static_keyterms: setup.keyterms.clone(),
@@ -349,15 +348,6 @@ pub(super) fn history(roles: &[Role], text: &str) -> Vec<ChatItem> {
             ))
         })
         .collect()
-}
-
-pub(super) fn speaker_filter() -> lk_agents_abi::voice::audio::SpeakerFilterConfig {
-    lk_agents_abi::voice::audio::SpeakerFilterConfig {
-        detect_primary_speaker: true,
-        suppress_background_speaker: true,
-        options: Default::default(),
-        formats: Default::default(),
-    }
 }
 
 /// Metrics from a leg the host owns. The values say nothing; that the driver accepts and forwards

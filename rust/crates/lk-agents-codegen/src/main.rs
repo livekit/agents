@@ -80,7 +80,6 @@ const SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/tts/markup/steering.rs", "lk_agents_abi::tts::markup"),
     ("rust/crates/lk-agents-abi/src/tts/markup/expr.rs", "lk_agents_abi::tts::markup"),
     ("rust/crates/lk-agents-abi/src/voice/workflows.rs", "lk_agents_abi::voice::workflows"),
-    ("rust/crates/lk-agents-abi/src/voice/audio.rs", "lk_agents_abi::voice::audio"),
     ("rust/crates/lk-agents-abi/src/vad/vad.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/inference/mod.rs", "lk_agents_abi::inference"),
     // The session schema (plan 13.5): the row models Python reads rows as, then everything else

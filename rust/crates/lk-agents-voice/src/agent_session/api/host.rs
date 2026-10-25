@@ -59,7 +59,6 @@ impl SessionApi {
         agent: String,
         chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
         stt: Option<Arc<dyn Stt>>,
-        speaker_filter: Option<crate::audio::SpeakerFilterConfig>,
         vad: Option<Arc<dyn Vad>>,
         llm: Option<Arc<dyn Llm>>,
         // The native realtime model; a plugin's `RealtimeModel` is `realtime_host`.
@@ -283,7 +282,6 @@ impl SessionApi {
             realtime,
             tts,
             stt,
-            speaker_filter,
             keyterms,
             vad,
             tts_text_transforms: tts_text_transforms.map(|t| t.0).unwrap_or_default(),
@@ -412,9 +410,7 @@ impl SessionApi {
     }
 
     /// `Agent.update_options(stt=.., vad=.., llm=.., tts=..)` on a running agent: an in-place
-    /// provider swap, not a handoff (same frame, no hook, no drain). Each leg is three-state; the
-    /// primary-speaker filter follows the STT, on the same queue (a swapped-in STT that is no
-    /// `MultiSpeakerAdapter` clears it).
+    /// provider swap, not a handoff (same frame, no hook, no drain). Each leg is three-state.
     #[host(method(kw_only))]
     pub fn update_models(
         &self,
@@ -422,15 +418,9 @@ impl SessionApi {
         tts: Maybe<Option<Arc<dyn Tts>>>,
         stt: Maybe<Option<Arc<dyn Stt>>>,
         vad: Maybe<Option<Arc<dyn Vad>>>,
-        speaker_filter: Maybe<Option<crate::audio::SpeakerFilterConfig>>,
     ) -> Result<(), SessionRefused> {
-        let (ModelRefs { llm, tts, stt, vad }, filter) =
-            self.swap(llm, tts, stt, vad, speaker_filter);
-        self.send(ActivityCommand::UpdateModels { stt, vad, llm, tts })?;
-        if let Some(config) = filter {
-            self.send(ActivityCommand::SetSpeakerFilter(config))?;
-        }
-        Ok(())
+        let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad);
+        self.send(ActivityCommand::UpdateModels { stt, vad, llm, tts })
     }
 
     /// `describe_agent` answered: the frame of the `Agent` a tool returned, with the keywords
@@ -441,15 +431,11 @@ impl SessionApi {
         id: u64,
         #[host(kwargs)] frame: UpdateAgentArgs,
     ) -> Result<(), SessionRefused> {
-        let (update, filter) = self.frame(frame);
+        let update = self.frame(frame);
         self.send(Command::HookDone {
             id: HookId(id),
             outcome: HookOutcome::Described(Box::new(update)),
-        })?;
-        if let Some(config) = filter {
-            self.send(ActivityCommand::SetSpeakerFilter(config))?;
-        }
-        Ok(())
+        })
     }
 
     /// The handoff: replace the agent, keep the session. Resolves `True` once the frame is
@@ -464,14 +450,10 @@ impl SessionApi {
     ) -> Result<Reply<bool>, SessionRefused> {
         // Always `_update_activity(previous_activity="close", new_activity="start")`; the
         // pause/resume pair is an inline task's (`enter_task`).
-        let (mut update, filter) = self.frame(frame);
+        let mut update = self.frame(frame);
         let (call, rx) = self.call(Answer::handoff)?;
         update.call = Some(call);
         self.send(ActivityCommand::Update(Box::new(update)))?;
-        // The driver rebuilds the detector on the reopened leg when the swap lands.
-        if let Some(config) = filter {
-            self.send(ActivityCommand::SetSpeakerFilter(config))?;
-        }
         Ok(Reply::new(async move { matches!(rx.await, Ok(Ok(()))) }))
     }
 
@@ -492,7 +474,7 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<(), CommandRefused> {
         let origin = origin_of(origin)?;
-        let (frame, _) = self.frame(frame);
+        let frame = self.frame(frame);
         let entry = TaskEntry {
             handle: handle.clone(),
             frame,

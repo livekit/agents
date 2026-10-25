@@ -489,8 +489,7 @@ impl Driver {
                 | ActivityCommand::UpdateChatCtx(_)
                 | ActivityCommand::SetAudioOutput(_)
                 | ActivityCommand::SetTranscriptionOutput(_)
-                | ActivityCommand::UpdateModels { .. }
-                | ActivityCommand::SetSpeakerFilter(_),
+                | ActivityCommand::UpdateModels { .. },
             )
             | Command::Turn(_)
             | Command::Video(_)

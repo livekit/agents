@@ -213,9 +213,8 @@ impl Command {
                 InterruptSpeech, CommitUserTurn, WaitForIdle, WaitForIdleAndHold, ReleaseIdleHold, ClaimUserTurn,
                 ReleaseUserTurn, SetAllowInterruptions, SetRunOutput, ToolUpdate, FillerStart,
                 FillerStop, PauseAuthorization, ResumeAuthorization),
-            Command::Activity(c) => leaf!(c; ActivityCommand: Update, SetSpeakerFilter,
-                UpdateInstructions, UpdateTools, SetAudioInput, SetVideoInput, SetIoEnabled,
-                UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
+            Command::Activity(c) => leaf!(c; ActivityCommand: Update, UpdateInstructions,
+                UpdateTools, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
             Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure),
             Command::Ivr(c) => leaf!(c; IvrCommand: Start, SeedTranscript, Close, AddTools),
             Command::Task(c) => leaf!(c; TaskCommand: Enter),
@@ -500,8 +499,6 @@ pub enum ActivityCommand {
     /// closing; `on_exit` before the pause; drain; closing re-check; swap; `on_enter` not awaited.
     /// A second queues.
     Update(Box<AgentUpdate>),
-    /// Sent after the STT swap; `None` clears.
-    SetSpeakerFilter(Option<crate::audio::SpeakerFilterConfig>),
     // --- the running frame, changed in place: not a handoff, which replaces the whole frame ---
     /// Replies in flight keep theirs. Carries the full triple: workflow tasks put their persona in
     /// the modality variants.

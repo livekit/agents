@@ -15,7 +15,6 @@ use std::time::Duration;
 
 mod end_of_turn;
 pub mod overlap;
-pub mod primary_speaker;
 mod speech;
 
 const FRESH_FINAL: Duration = Duration::from_millis(500);
