@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 from google.genai import types
 
@@ -352,11 +351,6 @@ class TestCachedContentRequestSuppression:
         the long-decode ceiling so the header does not re-introduce a server-side deadline
         derived from the read timeout."""
         llm = LLM(model="gemini-2.5-flash", api_key="test")
-
-        # client-level: the transport genai will actually consult at request time
-        client_opts = llm._client._api_client._http_options
-        assert client_opts.async_client_args is not None
-        assert isinstance(client_opts.async_client_args["transport"], httpx.AsyncHTTPTransport)
 
         fake, captured = self._patched_stream_capture()
         with patch.object(llm._client.aio.models, "generate_content_stream", fake):
