@@ -7,8 +7,10 @@ use super::{
     Run, Start, TurnId, TurnSnapshot, UserTurnTracker, compute_end_of_turn_metrics,
     user_transcript,
 };
-use crate::agent_activity::pause::TurnSettled;
-use crate::agent_session::cycle::{Decision, Effects, FlushReason, TurnTimer};
+use crate::agent_activity::false_interruption::TurnSettled;
+use crate::agent_session::effects::{
+    Decision, Effect, Effects, FlushReason, ProviderCall, TurnTimer,
+};
 use crate::events::{
     AgentBackchannelOpportunityEvent, EotPredictionEvent, SessionEvent, TranscriptionTimeoutEvent,
     UserTurnExceededEvent,
@@ -214,7 +216,7 @@ impl AudioRecognition {
                 if let Phase::Awaiting { run, req, deadline: Some(_) } = &self.phase {
                     let (run, req) = (*run, *req);
                     self.fired = Some(timer);
-                    // `._bounce_eou_task` -- the one site that cancels with `timed_out=True`.
+                    // `._bounce_eou_task`: the one site that cancels with `timed_out=True`.
                     eff.cancel_eot(req, true);
                     eff.append(self.enter_delaying(now, run, run.min_delay, None, None));
                     self.fired = None;
@@ -234,7 +236,7 @@ impl AudioRecognition {
                 if let Some(turn_start) = self.user_turn_start
                     && !self.turn_transcript_received
                 {
-                    eff.emit(SessionEvent::TranscriptionTimeout(TranscriptionTimeoutEvent {
+                    eff.emit(SessionEvent::UserTranscriptionTimeout(TranscriptionTimeoutEvent {
                         speech_duration: self.turn_speech_duration,
                         turn_start,
                     }));
@@ -290,7 +292,7 @@ impl AudioRecognition {
         eff.append(self.reset_transcription_timeout());
 
         // "reset stt to clear the buffer from previous user turn" (a stream swap here).
-        eff.flush_stt();
+        eff.push(Effect::Provider(ProviderCall::FlushStt));
         eff
     }
 
@@ -347,7 +349,7 @@ impl AudioRecognition {
             }
         }
 
-        // "reset turn-scoped barge-in state once per logical turn (commit or drop)"
+        // "reset turn-scoped interruption state once per logical turn (commit or drop)"
         eff.append(self.overlap.step(In::TurnClosed).1);
 
         // The turn is consumed (`_user_turn_committed = False`); the user may still be talking.
@@ -416,7 +418,7 @@ impl AudioRecognition {
     // --- the user turn limit ------------------------------------------------------------------------
 
     /// `_check_user_turn_limit`. Words are counted with `split_character` off (#2366), unlike the
-    /// barge-in guard, so CJK text hits `max_duration` long before `max_words`.
+    /// interruption guard, so CJK text hits `max_duration` long before `max_words`.
     pub(super) fn check_user_turn_limit(&mut self, now: Ts, transcript: &str) -> Effects {
         let mut eff = Effects::new();
         let limit = self.cfg.user_turn_limit;

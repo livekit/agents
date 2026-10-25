@@ -1,9 +1,5 @@
 # Multi-agent
 
-> Implementation examples below still use deps/state. The target API uses
-> [typed application context](state-and-deps.md) and `ctx.context`; migration
-> is tracked in [TODO.md](TODO.md).
-
 | Pattern | How | History |
 |---|---|---|
 | delegation inside a tool | `(await billing.run(question, usage=ctx.usage)).output` | the expert runs on a fresh history; the caller's history gets the tool call and its result |

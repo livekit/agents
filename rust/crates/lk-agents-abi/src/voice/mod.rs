@@ -3,10 +3,10 @@
 //! no Rust caller is not dead code.
 
 pub mod amd;
-pub mod audio;
 pub mod calls;
 pub mod events;
 pub mod host_policy;
+pub mod io;
 pub mod room_io;
 pub mod rtc;
 pub mod run_result;

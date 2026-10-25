@@ -2,13 +2,13 @@
 
 use super::pipeline_reply::teardown_deadline;
 use super::tools::ToolStep;
-use crate::generation::{GenEvent, ReplyContext, ReplySource};
-use crate::agent_session::SessionShared;
 use crate::agent_session::DriverError;
+use crate::agent_session::SessionShared;
 use crate::events::SessionEvent;
 use crate::generation::{Attempt, Retry};
+use crate::generation::{GenEvent, ReplyContext, ReplySource};
 use crate::speech_handle::SpeechHandle;
-use crate::trace::{FailureClass, GenerationStep, ProviderLeg};
+use crate::trace::{FailureClass, GenerationStep, ProviderKind};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::provider::{Context, LlmMetricState};
@@ -136,7 +136,7 @@ async fn perform_llm_inference(
                 }
             }
         };
-        match retry(shared, handle, &mut attempt, ProviderLeg::Llm, &error).await {
+        match retry(shared, handle, &mut attempt, ProviderKind::Llm, &error).await {
             Retried::Again => continue,
             // What an interrupted retry reports: this stream's metrics, or none if it never opened.
             Retried::Interrupted => {
@@ -214,7 +214,7 @@ async fn read_llm_stream(
             end_segment(&mut open, &mut visible);
         }
     };
-    // A segment left open when the stream ends -- for any reason -- is still a segment.
+    // A segment left open when the stream ends, for any reason, is still a segment.
     end_segment(&mut open, &mut visible);
     let elapsed = shared.time.wall_secs() - data.started_at;
     // `Clock::wall` is strictly increasing, so the guard only rules out "no interval".
@@ -279,7 +279,7 @@ pub(super) async fn retry(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     attempt: &mut Attempt,
-    leg: ProviderLeg,
+    leg: ProviderKind,
     error: &ProviderError,
 ) -> Retried {
     let decision = attempt.failed(error.retryable());

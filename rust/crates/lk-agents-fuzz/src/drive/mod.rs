@@ -20,9 +20,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+use lk_agents_abi::voice::io::{AudioOutput, TextOutput};
 use lk_agents_abi::{
     AudioFrame, BoxFuture, ChatItem, ChatMessage, HostRef, ImageContent, ImageSource, Maybe,
     MediaRef, Realtime, Spawner, Ts,
@@ -33,24 +34,22 @@ use lk_agents_abi::{
 };
 use lk_agents_rtc::RoomEvent;
 use lk_agents_voice::{
-    agent_activity::lifecycle::RoomLinkConfig,
+    DriverBuilder, Runtime, SessionHandle,
+    agent::TurnEdit,
+    agent_activity::DriverConfig,
+    agent_activity::false_interruption::InterruptRefusal,
     agent_activity::options::{ConfigStack, LegSet, SessionPatch, TurnDetection},
     agent_activity::options::{
         Deployment, InterruptionGate, InterruptionGateInputs, RealtimeGate, SttGate,
         resolve_interruption_detector,
     },
-    agent_activity::pause::InterruptRefusal,
     agent_activity::scheduling::SpeechId,
-    DriverBuilder, SessionHandle,
-    agent::TurnEdit,
-    agent_activity::DriverConfig,
     agent_session::{
-        AgentUpdate, Close, Command, DrainRefused, DtmfCommand, FillerSource, FrameCommand,
-        HandoffRefused, HoldId, HookId, HookOutcome, HostAudio, HostAudioOut, HostEvent,
-        HostRecorder, HostTextOut, HostVideo, IdleRefused, IvrCommand, NewActivity,
-        PreviousActivity, RecorderCommand, SayText, SpeechCommand, TaskCommand, TaskEntry,
-        Timebase, ToolUpdate, TurnCommand,
-        cycle::Decision,
+        ActivityCommand, AgentUpdate, Answer as DriverAnswer, Close, Command, CommitSuperseded,
+        DrainRefused, DtmfCommand, Event, FillerSource, HandoffRefused, HoldId, HookId,
+        HookOutcome, HostAudio, HostEvent, HostRecorder, HostVideo, IdleRefused, IvrCommand,
+        NewActivity, PreviousActivity, RecorderCommand, SayText, SpeechCommand, TaskCommand,
+        TaskEntry, Timebase, ToolUpdate, TurnCommand, effects::Decision,
     },
     amd::{
         classifier::{AmdConfig, In as AmdIn, Start as AmdStart},
@@ -59,9 +58,9 @@ use lk_agents_voice::{
     events::SessionEvent,
     filler_scheduler::FillerId,
     generation::Instructions,
-    io::{AudioOutput, TextOutput},
     keyterm_detection::{KeytermDetection, KeytermSetup},
     room_io::RoomIoEvent,
+    room_io::link::RoomLinkConfig,
     run_result::{RunOutput, RunSpec},
     speech_handle::SpeechHandle,
     tool_executor::{ToolAnswer as Answered, Toolset},
@@ -82,7 +81,7 @@ use crate::{
     check::{Failure, Subject, check_all},
     fakes::{self, Control, Record, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot},
     input::{
-        AgentText, Confidence, Count, DtmfInput, HookAnswer, Input, IvrInput, Knob, Legs, Millis,
+        AgentText, Confidence, Count, DtmfInput, HookAnswer, Input, IvrInput, Knob, Millis, Models,
         Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
     },
     record::step_name,
@@ -92,19 +91,22 @@ use crate::{
     },
 };
 use lk_agents_abi::{
-    voice::session_options::{DetectorKind, EndpointingMode, InterruptionMode},
     turn::interruption::InterruptionPort,
+    voice::session_options::{DetectorKind, EndpointingMode, InterruptionMode},
 };
 
 mod apply;
 mod collect;
 mod finish;
+mod queue;
 mod start;
 
 pub use apply::BUDGET_MS;
 pub use finish::{Outcome, PHASES, finish, guard, run};
+pub use queue::Policy;
 
 use self::apply::{Feeding, Pending};
+use self::queue::Next;
 // ==============================================================================================
 // What a session is built with
 // ==============================================================================================
@@ -124,7 +126,7 @@ pub struct Setup {
     /// An end-of-turn predictor on the microphone leg: the third observer of the person.
     #[serde(default)]
     pub eot: bool,
-    /// The adaptive interruption detector: judges whether an overlap is a barge-in.
+    /// The adaptive interruption detector: judges whether an overlap is a interruption.
     #[serde(default)]
     pub interruption: bool,
     /// Learn the endpointing delay from the conversation instead of a fixed one.
@@ -196,10 +198,6 @@ pub struct Setup {
     /// against its audio rather than as they are generated, which is the default with a room.
     #[serde(default)]
     pub sync_transcription: bool,
-    /// The speaker filter from the start: learn who the primary speaker is from diarised
-    /// transcripts and suppress the others.
-    #[serde(default)]
-    pub speaker_filter: bool,
 }
 
 fn yes() -> bool {
@@ -242,6 +240,10 @@ pub struct Case {
     /// in a case with none is one a real call produces with correct providers.
     #[serde(default)]
     pub random: Vec<usize>,
+    /// How the run's queue picked the next pending event. Arrival order for every case saved
+    /// before the run owned its queue.
+    #[serde(default)]
+    pub policy: Policy,
 }
 
 impl Default for Setup {
@@ -270,7 +272,6 @@ impl Default for Setup {
             connect_ms: None,
             video: false,
             sync_transcription: false,
-            speaker_filter: false,
             ivr: None,
             amd: false,
             keyterms: Vec::new(),
@@ -308,32 +309,83 @@ pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T
     if schedule != 0 {
         seed.extend_from_slice(&schedule.to_le_bytes());
     }
+    let _watchdog = watchdog(schedule);
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .start_paused(true)
+        // The run's own future is polled after every task, so the queue owner can step the driver
+        // between any two polls of the tasks it spawned.
+        .event_interval(1)
         .rng_seed(tokio::runtime::RngSeed::from_bytes(&seed))
         .build()
         .expect("simulation runtime")
         .block_on(body)
 }
 
-/// Retains real Tokio joins, so a task the driver detached cannot disappear from the test.
-#[derive(Default)]
-struct Tasks(Mutex<Vec<JoinHandle<()>>>);
+/// Real seconds one simulation may take before the watchdog ends the process; `VOICE_HANG_S`
+/// overrides it. A soak call, the longest run, takes about a second optimised and sixteen times
+/// that unoptimised: this must never fire on a run that is merely slow.
+const HANG_S: u64 = 600;
+
+/// What no step count can see: a product task that never yields, or a lock that never comes back,
+/// blocks the run's only thread, so nothing on it can notice. A thread beside it can, and the only
+/// thing it can do about it is end the process loudly, naming the schedule, rather than leave a
+/// campaign parked forever. Disarmed when the returned sender is dropped, with the simulation.
+fn watchdog(schedule: u64) -> std::sync::mpsc::Sender<()> {
+    use std::io::Write;
+    let limit = std::env::var("VOICE_HANG_S").ok().and_then(|s| s.parse().ok()).unwrap_or(HANG_S);
+    let (disarm, armed) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+            armed.recv_timeout(Duration::from_secs(limit))
+        {
+            // Straight to the stream: the test harness captures `eprintln!` and loses it on abort.
+            let _ = writeln!(
+                std::io::stderr(),
+                "HANG: the simulation of schedule {schedule} (the survey's seed) is still running \
+                 after {limit}s of real time: a step or a task is blocked or never yields. \
+                 Rerun that seed with VOICE_TRACE=1 to see the input it stopped on."
+            );
+            std::process::abort();
+        }
+    });
+    disarm
+}
+
+/// Steps one virtual instant may hold, in the journal or in the run's own loop, before the run
+/// counts as a livelock. The busiest instant measured (1024-seed survey and soak, 2026-10-25) took
+/// 503 journal steps and 127 turns of the loop: twenty times that is a session feeding itself,
+/// and waiting longer only spends real time before the same verdict.
+const NO_PROGRESS_STEPS: u32 = 10_000;
+
+/// Retains real Tokio joins, so a task the driver detached cannot disappear from the test, each
+/// with when and from which line it was spawned, so a task that never finishes can be placed in
+/// the run and in the source.
+struct Tasks {
+    stamps: Stamps,
+    spawned: Mutex<Vec<Spawned>>,
+}
+
+struct Spawned {
+    at: Observed,
+    site: &'static std::panic::Location<'static>,
+    task: JoinHandle<()>,
+}
 
 impl Spawner for Tasks {
     fn spawn(&self, future: BoxFuture<'static, ()>) -> lk_agents_abi::AbortHandle {
+        let site = std::panic::Location::caller();
         let task = tokio::spawn(future);
         let abort = task.abort_handle().into();
-        self.0.lock().unwrap().push(task);
+        self.spawned.lock().unwrap().push(Spawned { at: self.stamps.now(), site, task });
         abort
     }
 }
 
 impl Drop for Tasks {
     fn drop(&mut self) {
-        for task in self.0.get_mut().unwrap().drain(..) {
-            task.abort();
+        for spawned in self.spawned.get_mut().unwrap().drain(..) {
+            spawned.task.abort();
         }
     }
 }
@@ -355,10 +407,16 @@ pub struct Run {
     /// session layer closes its own.
     sync: Option<Arc<lk_agents_voice::transcription::synchronizer::TranscriptSynchronizer>>,
     session: SessionHandle,
-    driver: Option<JoinHandle<()>>,
+    /// The session's cores, stepped by the run itself: the run owns its queue. `None` once it
+    /// finished, or panicked.
+    runtime: Option<Runtime>,
+    queue: queue::Queue,
+    time: Timebase,
     tasks: Arc<Tasks>,
     stamps: Stamps,
     pub registry: Arc<Registry>,
+    /// Where the fakes handed to the session are registered.
+    resources: lk_agents_abi::resources::Resources,
     /// What the fakes have done and not yet been read. Drained after every input; see [`Record`]
     /// for why reading it later still yields the order things happened in.
     records: mpsc::UnboundedReceiver<Record>,
@@ -370,6 +428,8 @@ pub struct Run {
     /// Journal steps the observer stamped, waiting to be absorbed. The observer runs under the
     /// driver's own lock and cannot touch the recording, so it parks them here.
     steps: Arc<Mutex<Vec<(Observed, Step)>>>,
+    /// Set by the observer when it stopped a step for journaling without bound at one instant.
+    livelock: Arc<Mutex<Option<String>>>,
     pending: BTreeMap<u32, Pending>,
     streams: BTreeMap<u32, Feeding>,
     handles: BTreeMap<u64, Arc<SpeechHandle>>,
@@ -391,12 +451,4 @@ pub struct Run {
     room_io: tokio::sync::mpsc::UnboundedSender<RoomIoEvent>,
     pub setup: Setup,
     pub record: Recording,
-}
-
-impl Drop for Run {
-    fn drop(&mut self) {
-        if let Some(driver) = &self.driver {
-            driver.abort();
-        }
-    }
 }

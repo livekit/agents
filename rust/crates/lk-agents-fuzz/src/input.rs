@@ -17,8 +17,8 @@ use lk_agents_abi::{
     utils::vocabulary::{Coverage, Covers},
 };
 use lk_agents_voice::agent_session::{
-    IoLeg, assert_command_is_covered, command_vocabulary as command,
-    frame_command_vocabulary as frame, speech_command_vocabulary as speech,
+    IoKind, activity_command_vocabulary as activity, assert_command_is_covered,
+    command_vocabulary as command, speech_command_vocabulary as speech,
     turn_command_vocabulary as turn,
 };
 
@@ -361,9 +361,9 @@ impl Make for String {
         Some(s.pick(NAMES).to_string())
     }
 }
-impl Make for IoLeg {
+impl Make for IoKind {
     fn make(s: &mut Sampler<'_>) -> Option<Self> {
-        Some(*s.pick(&[IoLeg::AudioInput, IoLeg::AudioOutput, IoLeg::Transcription]))
+        Some(*s.pick(&[IoKind::AudioInput, IoKind::AudioOutput, IoKind::Transcription]))
     }
 }
 
@@ -404,7 +404,7 @@ plain_enum! {
 }
 plain_enum! {
     /// One field of the live session configuration, changed alone so a finding names it.
-    Knob { Detection, MinEndpointing, MaxEndpointing, Interruptions, MinInterruptionWords, UserAway }
+    Knob { Detection, MinEndpointing, MaxEndpointing, Interruptions, MinInterruptionWords, UserAway, MaxToolSteps }
 }
 plain_enum! {
     /// Which turn-taking mode the session runs in.
@@ -444,8 +444,8 @@ impl DtmfKey {
 }
 
 plain_enum! {
-    /// Which provider legs a model swap replaces.
-    Legs { Stt, Llm, Tts, LlmAndTts, All }
+    /// Which models a swap replaces.
+    Models { Stt, Llm, Tts, LlmAndTts, All }
 }
 plain_enum! {
     /// Who is speaking in a history item the host supplies.
@@ -469,8 +469,8 @@ macro_rules! unreferenced {
 }
 
 unreferenced!(
-    bool, AgentText, UserText, Millis, Count, String, IoLeg, SayInput, ToolAnswer, HookAnswer,
-    Knob, TurnMode, IvrInput, Legs, Role, RoomIn, Confidence, ToolArgs, Speaker, RtEvent,
+    bool, AgentText, UserText, Millis, Count, String, IoKind, SayInput, ToolAnswer, HookAnswer,
+    Knob, TurnMode, IvrInput, Models, Role, RoomIn, Confidence, ToolArgs, Speaker, RtEvent,
     DtmfInput, DtmfKey
 );
 
@@ -594,8 +594,8 @@ inputs! {
         opens [Answer] leaf speech::CommitUserTurn;
     /// `wait_for_idle()`. Naming a hold is how its own holder passes through.
     WaitForIdle { hold: Option<Ref<Hold>> } opens [Answer] leaf speech::WaitForIdle;
-    HoldFloor { } opens [Hold, Answer] leaf speech::HoldFloor;
-    ReleaseFloor { hold: Ref<Hold> } leaf speech::ReleaseFloor;
+    WaitForIdleAndHold { } opens [Hold, Answer] leaf speech::WaitForIdleAndHold;
+    ReleaseIdleHold { hold: Ref<Hold> } leaf speech::ReleaseIdleHold;
     ClaimUserTurn { } leaf speech::ClaimUserTurn;
     ReleaseUserTurn { } leaf speech::ReleaseUserTurn;
     /// `AgentTask.complete(result)` from inside a speech's tool.
@@ -614,20 +614,19 @@ inputs! {
     Configure { knob: Knob, mode: TurnMode, ms: Millis, on: bool, words: Count } leaf turn::Configure;
     /// A handoff to another agent, with the same fakes behind it.
     Handoff { agent: String, instructions: AgentText, tools: Vec<String>, pause_previous: bool, resume: bool }
-        opens [Answer] leaf frame::Update;
-    SetSpeakerFilter { enabled: bool } leaf frame::SetSpeakerFilter;
-    UpdateInstructions { text: AgentText } leaf frame::UpdateInstructions;
-    UpdateTools { tools: Vec<String> } leaf frame::UpdateTools;
-    SetAudioInput { attach: bool } leaf frame::SetAudioInput;
-    SetVideoInput { attach: bool } leaf frame::SetVideoInput;
-    SetIoEnabled { leg: IoLeg, enabled: bool } leaf frame::SetIoEnabled;
-    UpdateChatCtx { items: Vec<Role>, text: AgentText } leaf frame::UpdateChatCtx;
-    SetAudioOutput { attach: bool } opens [Output] leaf frame::SetAudioOutput;
-    SetTranscriptionOutput { attach: bool } opens [Output] leaf frame::SetTranscriptionOutput;
-    UpdateModels { legs: Legs } leaf frame::UpdateModels;
+        opens [Answer] leaf activity::Update;
+    UpdateInstructions { text: AgentText } leaf activity::UpdateInstructions;
+    UpdateTools { tools: Vec<String> } leaf activity::UpdateTools;
+    SetAudioInput { attach: bool } leaf activity::SetAudioInput;
+    SetVideoInput { attach: bool } leaf activity::SetVideoInput;
+    SetIoEnabled { leg: IoKind, enabled: bool } leaf activity::SetIoEnabled;
+    UpdateChatCtx { items: Vec<Role>, text: AgentText } leaf activity::UpdateChatCtx;
+    SetAudioOutput { attach: bool } opens [Output] leaf activity::SetAudioOutput;
+    SetTranscriptionOutput { attach: bool } opens [Output] leaf activity::SetTranscriptionOutput;
+    UpdateModels { models: Models } leaf activity::UpdateModels;
     /// `drain()`: the frame's `on_exit`, then scheduling pauses and the session stays open, idle.
     /// `wait` asks for the answer.
-    Drain { wait: bool } opens [Answer] leaf frame::Drain;
+    Drain { wait: bool } opens [Answer] leaf activity::Drain;
     /// One camera frame, as the host-minted key the driver moves without inspecting.
     PushVideo { } leaf command::Video;
     Close { drain: bool } leaf command::Close;
@@ -669,7 +668,7 @@ inputs! {
     MicFrames { mic: Ref<Mic>, chunks: Count };
     /// One detector tick: confidence, verdict, and the duration of what it is reporting -- of
     /// the speech when `speaking`, of the silence otherwise. A real detector restates that total on
-    /// every inference, and the driver decides a barge-in from exactly this number.
+    /// every inference, and the driver decides a interruption from exactly this number.
     VadInference { vad: Ref<Vad>, probability: Confidence, speaking: bool, duration: Millis };
     VadStart { vad: Ref<Vad>, speech_ms: Millis };
     VadEnd { vad: Ref<Vad>, silence_ms: Millis };
@@ -679,7 +678,7 @@ inputs! {
     EotAnswer { prediction: Ref<Prediction>, probability: Confidence, backchannel: Option<Confidence> };
     /// The predictor fails that request instead.
     EotFail { prediction: Ref<Prediction> };
-    /// The interruption detector's judgement of the current overlap: a real barge-in, or not.
+    /// The interruption detector's judgement of the current overlap: a real interruption, or not.
     OverlapVerdict { port: Ref<Interruption>, is_interruption: bool, agent_ended: bool };
     OverlapFail { port: Ref<Interruption> };
     /// The caller starts speaking on a recognition stream.
@@ -746,7 +745,7 @@ macro_rules! not_sent {
 not_sent! {
     command::Speech => "a family, not a leaf: its leaves are in the table";
     command::Turn => "a family, not a leaf: its leaves are in the table";
-    command::Frame => "a family, not a leaf: its leaves are in the table";
+    command::Activity => "a family, not a leaf: its leaves are in the table";
 }
 
 /// Compiles only while every production command leaf is either in the table or excused above.

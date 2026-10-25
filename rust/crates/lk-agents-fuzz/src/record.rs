@@ -18,9 +18,9 @@ use std::{
     },
 };
 
-use lk_agents_abi::Ts;
+use lk_agents_abi::{Ts, resources::ResourceId};
 use lk_agents_voice::{
-    agent_activity::pause::InterruptRefusal,
+    agent_activity::false_interruption::InterruptRefusal,
     agent_activity::scheduling::{SpeechId, SpeechKind},
     agent_session::{HandoffRefused, HoldId, HookCall, HookId, IdleRefused, Timebase},
     events::{SessionEvent, ToolLifecycle},
@@ -411,6 +411,7 @@ pub enum Answer {
     IdleRefused(IdleRefused),
     Hold(u64),
     Committed(String),
+    CommitSuperseded,
     HandoffOk,
     HandoffRefused(HandoffRefused),
     DrainOk,
@@ -476,6 +477,24 @@ pub enum Phase {
     Closed,
 }
 
+/// A task the session spawned: when, from which line of the product, and how the end-of-run join
+/// found it.
+#[derive(Clone, Debug)]
+pub struct Task {
+    pub spawned: Observed,
+    pub site: &'static std::panic::Location<'static>,
+    pub end: TaskEnd,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TaskEnd {
+    Finished,
+    /// The task panicked, with this message.
+    Panicked(String),
+    /// Still pending when nothing else could run: aborted by the join.
+    Stuck,
+}
+
 #[derive(Debug, Default)]
 pub struct Recording {
     now: Observed,
@@ -496,6 +515,12 @@ pub struct Recording {
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
     driver_panic: Option<String>,
+    /// What the session's resource table still held when last looked at, by id and kind.
+    resources_left: Vec<(ResourceId, &'static str)>,
+    /// Why the session was stopped for working without bound at one virtual instant.
+    livelock: Option<String>,
+    /// Every task the session spawned, and how the end-of-run join found it.
+    tasks: Vec<Task>,
     live: Live,
     index: Index,
 }
@@ -551,8 +576,28 @@ impl Recording {
         self.driver_finished
     }
 
+    /// When a close was begun: the case's `Close`, or the session's own (its error policy, a room
+    /// that went away), whichever came first.
+    pub fn close_begun(&self) -> Option<Observed> {
+        let asked = self.inputs_view().close_asked_at();
+        let own = self.internal_view().close_requested().map(|(at, _)| at);
+        asked.into_iter().chain(own).min()
+    }
+
+    pub fn resources_left(&self) -> &[(ResourceId, &'static str)] {
+        &self.resources_left
+    }
+
     pub fn driver_panic(&self) -> Option<&str> {
         self.driver_panic.as_deref()
+    }
+
+    pub fn livelock(&self) -> Option<&str> {
+        self.livelock.as_deref()
+    }
+
+    pub fn tasks(&self) -> &[Task] {
+        &self.tasks
     }
 
     /// Every input the case sent, taken or refused, in order.
@@ -735,8 +780,20 @@ impl Recording {
         self.driver_finished = finished;
     }
 
+    pub fn set_resources_left(&mut self, left: Vec<(ResourceId, &'static str)>) {
+        self.resources_left = left;
+    }
+
     pub fn set_driver_panic(&mut self, panic: String) {
         self.driver_panic = Some(panic);
+    }
+
+    pub fn set_livelock(&mut self, detail: String) {
+        self.livelock = Some(detail);
+    }
+
+    pub fn record_task(&mut self, task: Task) {
+        self.tasks.push(task);
     }
 
     pub fn set_now(&mut self, now: Observed) {
@@ -838,7 +895,7 @@ impl Recording {
 
     /// Journal step variants this run produced, as `Family::Variant`.
     pub fn journal_names(&self) -> BTreeSet<String> {
-        // The folded view is part of the vocabulary: `BargeRepeated` is only ever produced by
+        // The folded view is part of the vocabulary: `ByAudioActivityRepeated` is only ever produced by
         // folding a run of identical barge steps, so a journal that folds to it reached it. The
         // rules keep reading the raw steps; only the reach count reads the fold.
         let steps: Vec<Step> = self.journal.iter().map(|(_, step)| step.clone()).collect();

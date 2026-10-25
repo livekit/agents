@@ -6,9 +6,10 @@
 //! invented to stand in for it, because a command carrying an id the driver never issued is a
 //! different test from the one the case asked for.
 use super::start::{
-    Llm, Stt, Tts, frame, given, history, instructions, patch, speaker_filter, toolset, vad_metrics,
+    Llm, Stt, Tts, frame, given, history, instructions, patch, toolset, vad_metrics,
 };
 use super::*;
+use crate::record::{Task, TaskEnd};
 
 impl Run {
     /// Apply one input, then write down everything that became true because of it.
@@ -27,11 +28,12 @@ impl Run {
         if let Input::Close { .. } = input
             && let Some(sync) = self.sync.take()
         {
-            sync.aclose().await;
+            self.drive(Some(self.budget()), async move { sync.aclose().await }).await;
         }
         let accepted = match input {
             Input::Advance { ms } => {
-                tokio::time::sleep(Duration::from_millis(ms.0)).await;
+                let until = self.time.now().saturating_add(Duration::from_millis(ms.0));
+                self.drive(Some(until), std::future::pending::<()>()).await;
                 true
             }
             Input::AwaitAnswer { answer } => self.await_answer(answer.nth).await,
@@ -129,7 +131,8 @@ answers! {
         Settled::of(r.map_or_else(Answer::IdleRefused, |()| Answer::IdleOk));
     Hold(Result<HoldId, IdleRefused>) r =>
         Settled::of(r.map_or_else(Answer::IdleRefused, |hold| Answer::Hold(hold.0)));
-    Commit(String) text => Settled::of(Answer::Committed(text));
+    Commit(Result<String, CommitSuperseded>) r =>
+        Settled::of(r.map_or(Answer::CommitSuperseded, Answer::Committed));
     Handoff(Result<(), HandoffRefused>) r =>
         Settled::of(r.map_or_else(Answer::HandoffRefused, |()| Answer::HandoffOk));
     Drain(Result<(), DrainRefused>) r =>
@@ -208,11 +211,13 @@ impl Run {
         let mut waiting: Option<Pending> = None;
         let mut stream: Option<(bool, Feeding)> = None;
         let registry = self.registry.clone();
+        let calls = registry.calls();
 
         let command: Command = match input {
             Input::Say { text: AgentText(text), input: say, allow, to_ctx } => {
-                let (handle, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::speech);
                 waiting = Some(Pending::Speech(rx));
+                let call = Some(call);
                 let text = match say {
                     SayInput::Words => SayText::Text(text.clone()),
                     SayInput::TextStream => {
@@ -227,10 +232,10 @@ impl Run {
                     }
                 };
                 let (allow_interruptions, add_to_chat_ctx) = (*allow, *to_ctx);
-                SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, handle }.into()
+                SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call }.into()
             }
             Input::GenerateReply { user_input, instructions, allow } => {
-                let (handle, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::speech);
                 waiting = Some(Pending::Speech(rx));
                 SpeechCommand::GenerateReply {
                     user_input: user_input.clone().map(|UserText(t)| t),
@@ -240,17 +245,17 @@ impl Run {
                     chat_ctx: None,
                     toolset: None,
                     on_enter: false,
-                    handle,
+                    call: Some(call),
                 }
                 .into()
             }
             Input::Interrupt { force, wait } => {
-                let done = wait.then(|| {
-                    let (tx, rx) = oneshot::channel();
+                let call = wait.then(|| {
+                    let (call, rx) = calls.open(DriverAnswer::interrupt);
                     waiting = Some(Pending::Interrupt(rx));
-                    tx
+                    call
                 });
-                SpeechCommand::Interrupt { force: *force, done }.into()
+                SpeechCommand::Interrupt { force: *force, call }.into()
             }
             Input::InterruptSpeech { speech, force } => {
                 let Some(speech) = self.speech_id(*speech) else { return false };
@@ -261,13 +266,13 @@ impl Run {
                 SpeechCommand::SetAllowInterruptions { speech, allow: *allow }.into()
             }
             Input::CommitUserTurn { transcript_timeout, stt_flush, skip_reply } => {
-                let (done, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::commit);
                 waiting = Some(Pending::Commit(rx));
                 SpeechCommand::CommitUserTurn {
                     transcript_timeout: Duration::from_millis(transcript_timeout.0),
                     stt_flush_duration: Duration::from_millis(stt_flush.0),
                     skip_reply: *skip_reply,
-                    done,
+                    call: Some(call),
                 }
                 .into()
             }
@@ -276,18 +281,18 @@ impl Run {
                     Some(None) => return false,
                     given => given.flatten(),
                 };
-                let (done, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::idle);
                 waiting = Some(Pending::Idle(rx));
-                SpeechCommand::WaitForIdle { hold, done }.into()
+                SpeechCommand::WaitForIdle { hold, call: Some(call) }.into()
             }
-            Input::HoldFloor {} => {
-                let (done, rx) = oneshot::channel();
+            Input::WaitForIdleAndHold {} => {
+                let (call, rx) = calls.open(DriverAnswer::hold);
                 waiting = Some(Pending::Hold(rx));
-                SpeechCommand::HoldFloor { done }.into()
+                SpeechCommand::WaitForIdleAndHold { call: Some(call) }.into()
             }
-            Input::ReleaseFloor { hold } => {
+            Input::ReleaseIdleHold { hold } => {
                 let Some(hold) = self.hold_id(*hold) else { return false };
-                SpeechCommand::ReleaseFloor { hold }.into()
+                SpeechCommand::ReleaseIdleHold { hold }.into()
             }
             Input::ClaimUserTurn {} => SpeechCommand::ClaimUserTurn.into(),
             Input::ReleaseUserTurn {} => SpeechCommand::ReleaseUserTurn.into(),
@@ -346,88 +351,96 @@ impl Run {
             }
 
             Input::Handoff { agent, instructions, tools, pause_previous, resume } => {
-                let (done, rx) = oneshot::channel();
+                let (call, rx) = calls.open(DriverAnswer::handoff);
                 waiting = Some(Pending::Handoff(rx));
                 let mut frame = frame(&registry, agent, &instructions.0, tools);
                 frame.previous =
                     if *pause_previous { PreviousActivity::Pause } else { PreviousActivity::Close };
                 frame.next = if *resume { NewActivity::Resume } else { NewActivity::Start };
-                frame.done = Some(done);
-                FrameCommand::Update(Box::new(frame)).into()
-            }
-            Input::SetSpeakerFilter { enabled } => {
-                FrameCommand::SetSpeakerFilter(enabled.then(speaker_filter)).into()
+                frame.call = Some(call);
+                ActivityCommand::Update(Box::new(frame)).into()
             }
             Input::UpdateInstructions { text: AgentText(text) } => {
-                FrameCommand::UpdateInstructions(instructions(text)).into()
+                ActivityCommand::UpdateInstructions(instructions(text)).into()
             }
             Input::UpdateTools { tools } => {
-                FrameCommand::UpdateTools(toolset(&registry, tools)).into()
+                ActivityCommand::UpdateTools(toolset(&registry, tools)).into()
             }
             Input::SetAudioInput { attach } => {
+                // A new microphone replaces the old one as a detach does: nothing said into the
+                // old one reaches the session any more.
+                for (nth, _) in std::mem::take(&mut self.mics) {
+                    self.record.close(at, Kind::Mic, nth);
+                }
                 let source = attach.then(|| {
                     let (mic, frames) = fakes::FakeAudioInput::new();
                     let nth = self.registry.new_mic();
                     self.mics.insert(nth, (frames, 0));
                     HostAudio(mic as _)
                 });
-                if !attach {
-                    for (nth, _) in std::mem::take(&mut self.mics) {
-                        self.record.close(at, Kind::Mic, nth);
-                    }
-                }
-                FrameCommand::SetAudioInput(source).into()
+                ActivityCommand::SetAudioInput(source).into()
             }
             Input::SetVideoInput { attach } => {
                 let source = attach.then(|| {
                     HostVideo(fakes::FakeVideoInput::new(&registry, self.refs.clone()) as _)
                 });
-                FrameCommand::SetVideoInput(source).into()
+                ActivityCommand::SetVideoInput(source).into()
             }
             Input::SetIoEnabled { leg, enabled } => {
-                FrameCommand::SetIoEnabled { leg: *leg, enabled: *enabled }.into()
+                ActivityCommand::SetIoEnabled { leg: *leg, enabled: *enabled }.into()
             }
             Input::UpdateChatCtx { items, text: AgentText(text) } => {
-                FrameCommand::UpdateChatCtx(history(items, text)).into()
+                ActivityCommand::UpdateChatCtx(history(items, text)).into()
             }
             Input::SetAudioOutput { attach } => {
                 let out = attach.then(|| {
                     let pausable = self.setup.pausable_output;
-                    HostAudioOut(fakes::FakeAudioOutput::new(registry.clone(), pausable))
+                    let sink = fakes::FakeAudioOutput::new(registry.clone(), pausable);
+                    self.resources.register_audio_output(sink)
                 });
-                FrameCommand::SetAudioOutput(out).into()
+                ActivityCommand::SetAudioOutput(out).into()
             }
             Input::SetTranscriptionOutput { attach } => {
-                let out = attach.then(|| HostTextOut(fakes::FakeTextOutput::new(registry.clone())));
-                FrameCommand::SetTranscriptionOutput(out).into()
+                let out = attach.then(|| {
+                    let sink = fakes::FakeTextOutput::new(registry.clone());
+                    self.resources.register_text_output(sink)
+                });
+                ActivityCommand::SetTranscriptionOutput(out).into()
             }
-            Input::UpdateModels { legs } => {
-                let (stt, llm, tts) = match legs {
-                    Legs::Stt => (true, false, false),
-                    Legs::Llm => (false, true, false),
-                    Legs::Tts => (false, false, true),
-                    Legs::LlmAndTts => (false, true, true),
-                    Legs::All => (true, true, true),
+            Input::UpdateModels { models } => {
+                let (stt, llm, tts) = match models {
+                    Models::Stt => (true, false, false),
+                    Models::Llm => (false, true, false),
+                    Models::Tts => (false, false, true),
+                    Models::LlmAndTts => (false, true, true),
+                    Models::All => (true, true, true),
                 };
-                FrameCommand::UpdateModels {
+                ActivityCommand::UpdateModels {
                     stt: given(stt.then(|| {
                         let connect = Duration::from_millis(self.setup.connect_ms.unwrap_or(0));
-                        fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>
+                        let stt = fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>;
+                        self.resources.register_stt(stt)
                     })),
-                    llm: given(llm.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>)),
-                    tts: given(tts.then(|| fakes::FakeTts::new(registry.clone()) as Arc<Tts>)),
+                    llm: given(llm.then(|| {
+                        let llm = fakes::FakeLlm::new(registry.clone()) as Arc<Llm>;
+                        self.resources.register_llm(llm)
+                    })),
+                    tts: given(tts.then(|| {
+                        let tts = fakes::FakeTts::new(registry.clone()) as Arc<Tts>;
+                        self.resources.register_tts(tts)
+                    })),
                     vad: Maybe::NotGiven,
                 }
                 .into()
             }
 
             Input::Drain { wait } => {
-                let done = wait.then(|| {
-                    let (tx, rx) = oneshot::channel();
+                let call = wait.then(|| {
+                    let (call, rx) = calls.open(DriverAnswer::drain);
                     waiting = Some(Pending::Drain(rx));
-                    tx
+                    call
                 });
-                FrameCommand::Drain { done }.into()
+                ActivityCommand::Drain { call }.into()
             }
             Input::PushVideo {} => Command::Video(ImageContent {
                 id: "img_case".into(),
@@ -472,9 +485,9 @@ impl Run {
                     ) else {
                         return false;
                     };
-                    let (done, rx) = oneshot::channel();
+                    let (call, rx) = calls.open(DriverAnswer::dtmf);
                     waiting = Some(Pending::Dtmf(rx));
-                    DtmfCommand::Start { collector, done }.into()
+                    DtmfCommand::Start { collector, call: Some(call) }.into()
                 }
                 DtmfInput::Digit => DtmfCommand::Digit { digit: key.digit().to_owned() }.into(),
                 DtmfInput::Stop => DtmfCommand::Stop.into(),
@@ -511,8 +524,11 @@ impl Run {
 
         // A command the driver never received made no call: the loop is gone, the input is
         // refused, and nothing is opened for it. Only a command the driver has opens the stream it
-        // feeds and the call it will answer.
+        // feeds and the call it will answer. What it handed over is released, as the host API
+        // does.
+        let handed = command.resources();
         if self.session.api.send(command).is_err() {
+            handed.into_iter().for_each(|id| self.resources.release(id));
             return false;
         }
         if let Some((audio, feeding)) = stream {
@@ -567,7 +583,7 @@ pub(super) enum Feeding {
 
 impl Run {
     /// Close every utterance still open on a recognition stream.
-    fn end_utterances_on(&mut self, at: Observed, stt: u32) {
+    pub(super) fn end_utterances_on(&mut self, at: Observed, stt: u32) {
         let open: Vec<u32> = self
             .utterances
             .iter()
@@ -736,19 +752,26 @@ impl Run {
 /// answers the moment it is released, so anything still pending after this is stuck.
 pub const BUDGET_MS: u64 = 30_000;
 
+/// When a close that has not finished never will: a virtual day, where the longest close the
+/// phases allow is under a minute. The paused clock jumps to the next armed timer whenever nothing
+/// can run, so a session left idle with nothing armed to wake it gets here at once, for free.
+const NEVER_MS: u64 = 86_400_000;
+
 /// How many times closing will wait for a fresh batch of tasks before giving up on the driver.
 const MAX_JOIN_ROUNDS: u32 = 100;
 
 impl Run {
     async fn await_answer(&mut self, nth: u32) -> bool {
-        let Some(waiting) = self.pending.get_mut(&nth) else { return false };
-        match tokio::time::timeout(Duration::from_millis(BUDGET_MS), waiting.recv()).await {
-            Ok(settled) => {
-                self.pending.remove(&nth);
+        let Some(mut waiting) = self.pending.remove(&nth) else { return false };
+        match self.drive(Some(self.budget()), waiting.recv()).await {
+            Some(settled) => {
                 self.record_answer(nth, settled);
                 true
             }
-            Err(_) => false,
+            None => {
+                self.pending.insert(nth, waiting);
+                false
+            }
         }
     }
 
@@ -756,44 +779,241 @@ impl Run {
         let Some(resource) = self.record.resource(Kind::Speech, nth) else { return false };
         let Id::Speech(speech) = resource.id() else { return false };
         let Some(handle) = self.handles.get(&speech.0).cloned() else { return false };
-        tokio::time::timeout(Duration::from_millis(BUDGET_MS), handle.wait_for_done()).await.is_ok()
+        self.drive(Some(self.budget()), async move { handle.wait_for_done().await }).await.is_some()
     }
 
+    /// Before a close nothing obliges the session to exit, so that wait is an ordinary one. Once a
+    /// close is begun it is waited out however long it takes: its phases are each bounded, and
+    /// virtual time is free.
     async fn await_exit(&mut self) -> bool {
-        let Some(driver) = &mut self.driver else { return true };
-        let Ok(joined) = tokio::time::timeout(Duration::from_millis(BUDGET_MS), driver).await
-        else {
-            return false;
-        };
-        self.driver = None;
-        if let Err(error) = joined {
-            self.record.set_driver_panic(format!("{error}"));
+        let wait = if self.record.close_begun().is_some() { NEVER_MS } else { BUDGET_MS };
+        let until = self.time.now().saturating_add(Duration::from_millis(wait));
+        self.drive(Some(until), std::future::pending::<()>()).await;
+        let exited = self.runtime.is_none();
+        if exited {
+            self.record.enter_phase(Phase::Closed);
         }
-        self.record.enter_phase(Phase::Closed);
-        true
+        exited
     }
 
-    /// Await every retained task.
+    /// How long one awaited thing may take from now.
+    pub(super) fn budget(&self) -> Ts {
+        self.time.now().saturating_add(Duration::from_millis(BUDGET_MS))
+    }
+
+    /// Step the session until `done` resolves, virtual time reaches `until`, or the driver is gone.
+    /// What reached the queue is pending; a due wake is delivered before any same-instant input;
+    /// then the policy chooses between the next pending event and a scheduling round for the
+    /// driver's ready tasks. Once the driver stopped it finishes and is dropped, as a session's
+    /// loop is, so what waited on it is released. `None` unless `done` resolved.
+    pub(super) async fn drive<T>(
+        &mut self,
+        until: Option<Ts>,
+        done: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        let mut done = std::pin::pin!(done);
+        // Iterations at one virtual instant: an event, a wake, frames or a task's turn each.
+        let mut instant = (self.time.now(), 0u32);
+        loop {
+            tokio::select! {
+                biased;
+                value = &mut done => return Some(value),
+                () = std::future::ready(()) => {}
+            }
+            let now = self.time.now();
+            instant = if now == instant.0 { (now, instant.1 + 1) } else { (now, 0) };
+            let counted = (instant.1 >= NO_PROGRESS_STEPS).then(|| {
+                format!(
+                    "{NO_PROGRESS_STEPS} steps of the session at {} ms without virtual time moving",
+                    self.stamps.now().at_ms
+                )
+            });
+            let observed = self.livelock.lock().unwrap().take();
+            if let Some(detail) = observed.or(counted) {
+                self.record.set_livelock(detail);
+                self.drop_runtime();
+            }
+            let Some(runtime) = &mut self.runtime else {
+                // The host's loop outlives the session's: what is ready still runs, so a task the
+                // driver cancelled on its way out is gone before the case sends anything else.
+                // Bounded, as the session's own instants are: a task left spinning never stops.
+                for _ in 0..NO_PROGRESS_STEPS {
+                    if !tasks_runnable() {
+                        break;
+                    }
+                    one_task_turn().await;
+                }
+                return None;
+            };
+            while let Ok(event) = runtime.queue.try_recv() {
+                self.queue.push(event);
+            }
+            // Frames are not scheduled: each reaches the data plane as it arrives.
+            if !runtime.frames.is_empty() {
+                let now = self.time.read();
+                self.step(|runtime| {
+                    while let Ok(frame) = runtime.frames.try_recv() {
+                        runtime.on_frame(frame, now);
+                    }
+                });
+                continue;
+            }
+            if runtime.driver.stopped() {
+                let undelivered = self.queue.drain();
+                self.step(|runtime| runtime.finish(undelivered));
+                self.drop_runtime();
+                continue;
+            }
+            let now = self.time.now();
+            let wake_at = runtime.driver.wake_at();
+            if wake_at.is_some_and(|at| at <= now) {
+                let now = self.time.read();
+                self.step(|runtime| runtime.handle(Event::Wake, now));
+                continue;
+            }
+            match self.queue.next(tasks_runnable()) {
+                Some(Next::Event(event)) => {
+                    let now = self.time.read();
+                    self.step(|runtime| runtime.handle(event, now));
+                    continue;
+                }
+                Some(Next::Tasks) => {
+                    one_task_turn().await;
+                    continue;
+                }
+                None => {}
+            }
+            if until.is_some_and(|until| now >= until) {
+                return None;
+            }
+            let next = [wake_at, until].into_iter().flatten().min();
+            let settled = runtime.driver.settled();
+            tokio::select! {
+                biased;
+                value = &mut done => return Some(value),
+                () = self.time.wait_until_opt(next) => {}
+                () = settled => {}
+                Some(frame) = runtime.frames.recv() => {
+                    let now = self.time.read();
+                    self.step(|runtime| runtime.on_frame(frame, now));
+                }
+                event = runtime.queue.recv() => match event {
+                    Some(event) => self.queue.push(event),
+                    None => return None,
+                },
+            }
+        }
+    }
+
+    /// One call into the session's cores. A panic is a finding about them, recorded, and the end
+    /// of them: they are dropped.
+    fn step(&mut self, call: impl FnOnce(&mut Runtime)) {
+        let Some(runtime) = &mut self.runtime else { return };
+        let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(runtime)));
+        self.settle_answers();
+        // The observer unwound out of a livelocked step: the loop reports it, not as a panic.
+        if self.livelock.lock().unwrap().is_some() {
+            self.drop_runtime();
+        } else if let Err(panic) = called {
+            self.record.set_driver_panic(panic_message(&*panic));
+            self.drop_runtime();
+        }
+    }
+
+    /// Hands every answer the step produced to its caller, as the runtime's answer pump does.
+    fn settle_answers(&mut self) {
+        while let Ok((call, answer)) = self.session.answers.try_recv() {
+            self.registry.calls().settle(call, answer);
+        }
+    }
+
+    /// The cores are gone, as production drops them: a call never answered is closed.
+    fn drop_runtime(&mut self) {
+        self.runtime = None;
+        self.registry.calls().close();
+    }
+
+    /// Await every retained task, and record how each ended.
     ///
     /// A task may spawn another before finishing, so this loops -- and because the work is the
     /// product's, the loop can fail to terminate. It is bounded for the same reason the release
     /// loop is: an unbounded loop here is a hang, not a slow run, and a driver that keeps
     /// spawning while closing is a result worth reporting rather than waiting on forever.
-    pub async fn join_tasks(&mut self) -> Result<(), String> {
-        for round in 0..MAX_JOIN_ROUNDS {
-            let tasks = std::mem::take(&mut *self.tasks.0.lock().unwrap());
-            if tasks.is_empty() {
-                return Ok(());
+    ///
+    /// Each batch is raced against a deadline a budget away, the session stepped meanwhile as its
+    /// own loop would be: a session whose close never finished, frozen, would hold every task it
+    /// ends. The clock is paused and moves only
+    /// when nothing can run, so the deadline passes exactly when the tasks still pending can never
+    /// finish: those are recorded as stuck and aborted, and the run completes.
+    pub async fn join_tasks(&mut self) {
+        // A livelocked session may have left a task spinning, which no deadline would outrun: the
+        // livelock is the finding, and the tasks are aborted with the run.
+        if self.record.livelock().is_some() {
+            return;
+        }
+        for _ in 0..MAX_JOIN_ROUNDS {
+            let batch = std::mem::take(&mut *self.tasks.spawned.lock().unwrap());
+            if batch.is_empty() {
+                return;
             }
-            let _ = round;
-            for task in tasks {
-                if let Err(error) = task.await
-                    && !error.is_cancelled()
-                {
-                    return Err(format!("child task panicked: {error}"));
-                }
+            let deadline = self.budget();
+            for Spawned { at, site, mut task } in batch {
+                let joined = match self.drive(Some(deadline), &mut task).await {
+                    Some(joined) => Some(joined),
+                    // The session has exited: only its tasks are left to run.
+                    None => tokio::select! {
+                        joined = &mut task => Some(joined),
+                        () = self.time.wait_until(deadline) => None,
+                    },
+                };
+                let end = match joined {
+                    Some(Err(error)) if error.is_panic() => {
+                        TaskEnd::Panicked(panic_message(&*error.into_panic()))
+                    }
+                    Some(_) => TaskEnd::Finished,
+                    None => {
+                        task.abort();
+                        TaskEnd::Stuck
+                    }
+                };
+                self.record.record_task(Task { spawned: at, site, end });
             }
         }
-        Err(format!("still spawning tasks after {MAX_JOIN_ROUNDS} rounds of joining"))
+        // Still spawning after every round: what is left is not going to finish either.
+        for Spawned { at, site, task } in std::mem::take(&mut *self.tasks.spawned.lock().unwrap()) {
+            let end = if task.is_finished() { TaskEnd::Finished } else { TaskEnd::Stuck };
+            task.abort();
+            self.record.record_task(Task { spawned: at, site, end });
+        }
     }
+}
+
+/// What a panic said, when it said it with a string.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_default()
+}
+
+/// Let the runtime poll one task, then come back: the run's future wakes itself and, with an event
+/// interval of one, is polled again after the next task. `yield_now` defers its wake until every
+/// ready task has run, which would never let the driver step between two of them.
+async fn one_task_turn() {
+    let mut turned = false;
+    std::future::poll_fn(|cx| {
+        if std::mem::replace(&mut turned, true) {
+            return std::task::Poll::Ready(());
+        }
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    })
+    .await
+}
+
+/// Whether a task the driver spawned is ready to run: a turn would move it.
+fn tasks_runnable() -> bool {
+    let metrics = tokio::runtime::Handle::current().metrics();
+    metrics.global_queue_depth() + metrics.worker_local_queue_depth(0) > 0
 }

@@ -46,12 +46,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, RealClock, StreamSource, Tts};
 use lk_agents_abi::FrameId;
-use lk_agents_abi::utils::frame::{Frame, FrameTable, InboundFrame};
 use lk_agents_abi::telemetry::{
     LogRecord, Severity, SpanBuilder, TelemetryBuffer, attr_bool, attr_num, attr_str, attrs,
 };
+use lk_agents_abi::utils::frame::{Frame, FrameTable, InboundFrame};
+use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, RealClock, StreamSource, Tts};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -190,13 +190,13 @@ impl AgentCore {
 
     // ------------------------------------------------------------------ §1.11, the side tables
 
-    /// Ids the shim may delete from its payload map.
+    /// IdMint the shim may delete from its payload map.
     #[napi]
     pub fn drain_host_refs(&self) -> Vec<i64> {
         host_table::drain_released().into_iter().map(|i| i as i64).collect()
     }
 
-    /// Ids the shim may delete from its *error* map.
+    /// IdMint the shim may delete from its *error* map.
     #[napi]
     pub fn drain_error_refs(&self) -> Vec<i64> {
         errors::drain_released()

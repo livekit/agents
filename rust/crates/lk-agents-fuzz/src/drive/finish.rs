@@ -37,7 +37,7 @@ impl Run {
             // A recognition stream left mid-utterance keeps the caller "speaking", which keeps the
             // session from ever being idle.
             (Kind::Utterance, &|nth| Input::SttEnd { utterance: Ref::new(nth) }),
-            (Kind::Hold, &|nth| Input::ReleaseFloor { hold: Ref::new(nth) }),
+            (Kind::Hold, &|nth| Input::ReleaseIdleHold { hold: Ref::new(nth) }),
             (Kind::Hook, &|nth| Input::HookDone {
                 hook: Ref::new(nth),
                 answer: HookAnswer::Returned,
@@ -202,12 +202,6 @@ const QUIET_ROUNDS: u32 = 2;
 /// Reaching this is a finding, not a limit to raise.
 const MAX_RELEASE_ROUNDS: u32 = 100;
 
-/// Wall-clock seconds one run may take before the runner declares it broken.
-///
-/// The product's clock is virtual and paused, so real seconds elapsing can only mean spinning or
-/// blocking. Not a performance budget: a run that approaches this is already wrong.
-const WALL_CLOCK_LIMIT_S: u64 = 30;
-
 /// What one run found.
 ///
 /// `expectations` separates a contract that passed from one that never applied. A report that
@@ -225,7 +219,8 @@ pub struct Outcome {
     /// For each input the run sent, the kinds it was actually observed to open. Checked against
     /// what the table declares, so a wrong row cannot hide.
     pub opened: BTreeMap<&'static str, BTreeSet<Kind>>,
-    /// The run stopped because a contract failed, rather than because it finished.
+    /// The run stopped before its close: the session livelocked, or never went quiet. What a
+    /// run never reached cannot be judged, so a reader of what is left live must not read it.
     pub stopped_early: bool,
     /// `(input, phase)`: which inputs landed in which phase of the conversation, read off the
     /// journal as it stood when each input was applied. COVERAGE.md's operation x phase table.
@@ -248,24 +243,29 @@ pub fn run(case: Case) -> Outcome {
 }
 
 async fn run_in(case: Case) -> Outcome {
-    let started = Instant::now();
-    let mut run = Run::start(&case.setup).await;
+    let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
     let mut outcome = Outcome { case: case.clone(), ..Outcome::default() };
 
     for input in &case.inputs {
         run.apply(input).await;
-        if let Some(found) = guard(&run, &mut outcome, started) {
+        if let Some(found) = guard(&run, &mut outcome) {
             return found;
         }
     }
-    finish(run, outcome, started).await
+    // `Settle` is never sampled: only `finish` sends it, so a case holding one is a whole run,
+    // its release rounds and ending included, as a campaign saves it. Finishing it again would
+    // replay a different run.
+    if case.inputs.contains(&Input::Settle {}) {
+        return join(run, outcome).await;
+    }
+    finish(run, outcome).await
 }
 
 /// Let everything in flight finish, then close the session and join its tasks.
 ///
 /// Most of the interesting driver states are on the far side of a run's armed deadlines and owed
 /// answers, so stopping mid-turn would never reach them.
-pub async fn finish(mut run: Run, mut outcome: Outcome, started: Instant) -> Outcome {
+pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
     let mut quiet = 0;
     let mut rounds = 0;
     while quiet < QUIET_ROUNDS {
@@ -287,37 +287,43 @@ pub async fn finish(mut run: Run, mut outcome: Outcome, started: Instant) -> Out
             return outcome;
         }
         let mut offered = run.releases();
-        if offered.is_empty() {
-            quiet += 1;
-        } else {
-            quiet = 0;
-        }
+        let releases = offered.len();
         // Advance regardless, so an armed deadline with nothing else to do still fires.
         offered.push(run.release_advance());
         for input in offered {
             outcome.case.inputs.push(input.clone());
             run.apply(&input).await;
-            if let Some(found) = guard(&run, &mut outcome, started) {
+            if let Some(found) = guard(&run, &mut outcome) {
                 return found;
             }
+        }
+        // Once the driver has exited, a release it refuses is one nothing will ever take: what is
+        // left of a dead session is `nothing_left_live`'s to judge, not work still to do.
+        let applied = run.record.applied();
+        let taken =
+            applied[applied.len() - 1 - releases..applied.len() - 1].iter().any(|a| a.accepted);
+        if releases == 0 || (run.record.driver_finished() && !taken) {
+            quiet += 1;
+        } else {
+            quiet = 0;
         }
     }
 
     for input in [Input::Settle {}, Input::Close { drain: true }, Input::AwaitExit {}] {
         outcome.case.inputs.push(input.clone());
         run.apply(&input).await;
-        if let Some(found) = guard(&run, &mut outcome, started) {
+        if let Some(found) = guard(&run, &mut outcome) {
             return found;
         }
     }
+    join(run, outcome).await
+}
 
-    if let Err(stuck) = run.join_tasks().await {
-        outcome.failures.push(Failure {
-            contract: "driver_exits_only_on_close".into(),
-            subject: Subject::Session,
-            detail: stuck,
-        });
-    }
+/// Join the session's tasks and judge the run.
+async fn join(mut run: Run, mut outcome: Outcome) -> Outcome {
+    run.join_tasks().await;
+    // What the tasks did on their way out is part of the run.
+    run.collect();
     record_outcome(&run, &mut outcome);
     outcome
 }
@@ -326,22 +332,16 @@ pub async fn finish(mut run: Run, mut outcome: Outcome, started: Instant) -> Out
 /// at the end, over the whole recording -- they read the whole recording anyway, and run after
 /// every input they were most of a survey's wall time and a case stopped at its first finding,
 /// which cost the rest of what that run would have reached.
-pub fn guard(run: &Run, outcome: &mut Outcome, started: Instant) -> Option<Outcome> {
-    if started.elapsed().as_secs() >= WALL_CLOCK_LIMIT_S {
-        record_outcome(run, outcome);
-        outcome.failures.push(Failure {
-            contract: "run_terminates".into(),
-            subject: Subject::Session,
-            detail: format!(
-                "still running after {WALL_CLOCK_LIMIT_S}s of real time and {} inputs, with the \
-                 product's own clock paused: the run is spinning or blocked",
-                outcome.case.inputs.len()
-            ),
-        });
-        outcome.stopped_early = true;
-        return Some(std::mem::take(outcome));
-    }
-    None
+///
+/// Moving is counted in steps at one virtual instant, never in real seconds, so a slow machine
+/// cannot change a verdict. A livelocked session was stopped, and nothing applied after it would
+/// reach it: the run ends there. What can block without stepping at all -- a task that never
+/// yields -- is the watchdog's (`simulate_with`), which aborts rather than judges.
+pub fn guard(run: &Run, outcome: &mut Outcome) -> Option<Outcome> {
+    run.record.livelock()?;
+    record_outcome(run, outcome);
+    outcome.stopped_early = true;
+    Some(std::mem::take(outcome))
 }
 
 fn record_outcome(run: &Run, outcome: &mut Outcome) {
@@ -357,8 +357,20 @@ fn record_outcome(run: &Run, outcome: &mut Outcome) {
 
 /// The phases of a conversation, in COVERAGE.md's column order.
 pub const PHASES: [&str; 14] = [
-    "starting", "idle", "listening", "person_speaking", "away", "thinking", "speaking", "overlap",
-    "tool_running", "turn_hook", "draining", "on_exit", "on_enter", "closing",
+    "starting",
+    "idle",
+    "listening",
+    "person_speaking",
+    "away",
+    "thinking",
+    "speaking",
+    "overlap",
+    "tool_running",
+    "turn_hook",
+    "draining",
+    "on_exit",
+    "on_enter",
+    "closing",
 ];
 
 /// For each input, every phase the conversation was in when it was applied.
@@ -438,6 +450,41 @@ fn opened_by_input(record: &Recording) -> BTreeMap<&'static str, BTreeSet<Kind>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A task that wakes itself forever never lets the clock move: the run stops the session as
+    /// a livelock instead of spinning with it.
+    #[test]
+    fn a_task_spinning_at_one_instant_is_a_livelock() {
+        let livelock = simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Policy::default()).await;
+            tokio::spawn(async {
+                loop {
+                    tokio::task::yield_now().await;
+                }
+            });
+            run.apply(&Input::Advance { ms: Millis(20) }).await;
+            run.record.livelock().map(str::to_owned)
+        });
+        assert!(livelock.is_some(), "a spinning task was not reported");
+    }
+
+    /// A joined task names the product line that spawned it, not the spawner's: without
+    /// `#[track_caller]` through `Spawner::spawn` every stuck task would point at the harness.
+    #[test]
+    fn a_task_names_the_line_that_spawned_it() {
+        let sites = simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Policy::default()).await;
+            for input in [Input::Close { drain: false }, Input::AwaitExit {}] {
+                run.apply(&input).await;
+            }
+            run.join_tasks().await;
+            run.record.tasks().iter().map(|t| t.site.file().to_owned()).collect::<Vec<_>>()
+        });
+        assert!(!sites.is_empty(), "the session spawned no task to check");
+        for site in sites {
+            assert!(site.contains("lk-agents-voice/src/"), "a task is placed at {site}");
+        }
+    }
 
     /// Every contract's probe reaches its prerequisite: the run passes, and the contract made at
     /// least one expectation on it. Without this a probe can rot into a case that runs fine and

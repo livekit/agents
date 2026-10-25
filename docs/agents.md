@@ -6,8 +6,9 @@ process. It holds no history, and nothing changes it after construction.
 
 ## Definition
 
-The target follows OpenAI-style application context. The implementation still
-uses separate deps/state generics; [TODO.md](TODO.md) tracks migration.
+An agent declares its application context type with `Agent[Context]`. Pass an
+instance to `run(context=...)`; tools and instruction functions access it as
+`ctx.context`.
 
 ```python
 from livekit.agents import Agent, RunContext
@@ -25,14 +26,12 @@ scheduler = Agent[SchedulingContext](
 | `name`, `id` | Stable agent identity; see below |
 | `llm`, `stt`, `tts`, `vad` | Model objects or supported strings |
 | `tools` | Tools and toolsets |
-| `output_type` | Final output contract, including proposed output-function support |
+| `output_type` | Final output contract, including output functions |
 | Voice options | Agent overrides for the live session |
 
 `Agent[SchedulingContext]` and `RunContext[SchedulingContext]` carry the
 application context type. Tools read application data and services through
-`ctx.context`. The output contract must preserve typed run results; the full
-inference signature needs implementation type tests. No separate deps_type
-or state_type is part of the target constructor. See
+`ctx.context`. The output contract determines the type of run results. See
 [application context](state-and-deps.md) for persistence responsibilities.
 
 The id names the agent's lane in a thread (see [lanes.md](lanes.md)). It is
@@ -47,13 +46,11 @@ freeze: a later registration raises `RuntimeError`.
 
 ## Persisted application fields
 
-The shared Agent is not a data container. A run's context may declare fields
-with `persisted(default_factory=...)`. Explicit store.load_context restores
-and validates them before activation; managed execution automatically
-checkpoints their changes with execution state. store.save_context exposes
-the same field-save machinery with documented transaction ownership. Unmarked customers, clients, and services are application-supplied
-runtime values, never automatically serialized. No state_type parameter or
-handwritten snapshot is needed for the default path. Scope belongs to the
+A run's context marks stored fields with `persisted(default_factory=...)`.
+Call `store.load_context(app)` to restore and validate them, then call
+`store.save_context(app)` after the run to save changes. Marking a field
+alone does not save mutations. Unmarked customers, clients, and services
+are application-supplied runtime values. Scope belongs to the
 conversation/job, not to the agent definition. See
 [context and persisted fields](state-and-deps.md) for the complete example.
 
@@ -84,12 +81,11 @@ model requests (default 12), where it raises `UnexpectedModelBehavior`.
 Inside a managed `a2a_session` endpoint the runtime supplies the loaded history
 and scoped `ctx.store`. The application constructs its context with fresh
 runtime dependencies, explicitly calls `await ctx.store.load_context(app)`,
-and passes `context=app` to the run. The framework checkpoints marked fields
-together with execution changes. See [context loading](state-and-deps.md#explicit-load-and-save-on-the-store).
+passes `context=app` to the run, and calls `await ctx.store.save_context(app)`
+to save changes. See [context loading](state-and-deps.md#explicit-load-and-save-on-the-store).
 The active agent is restored from the execution record after a handoff;
 see [multi-agent.md](multi-agent.md). On a call the same agent runs in the
-voice pipeline; see [voice.md](voice.md). Those transport pages retain current
-implementation examples until the context migration is built.
+voice pipeline; see [voice.md](voice.md).
 
 ## `RunContext`
 
@@ -128,11 +124,8 @@ instructions are never part of the history.
 
 ## Structured output
 
-This section describes the current standalone run behavior. The target
-durable execution contract in [agent-tasks.md](agent-tasks.md) adds callable
-output types and intermediate conversational text alongside explicit final
-output. It is not yet implemented; a typed output does not make input waits
-automatic in the current runtime.
+`output_type` defines the accepted final result. Multi-turn tasks can ask
+questions before producing that result; see [agent tasks](agent-tasks.md).
 
 ```python
 fnol = Agent(..., output_type=Claim)
@@ -145,8 +138,10 @@ async def claim_number_format(ctx: RunContext[ClaimContext], output: Claim) -> C
 ```
 
 With an `output_type` other than `str`, the run gives the model a
-`final_result` tool whose parameters are the type's schema, and the answer
-is the call to it. A plain text reply sends the model back to call it.
+`final_result` tool whose parameters are the type's schema. An accepted call
+produces the final result. In a conversational task, ordinary text waits for
+human input; in a standalone structured run, the model must produce the
+final result before the run returns.
 `output_type` accepts any type: a dataclass, a pydantic model, a union, a
 list, a scalar. A type whose schema is not an object is wrapped as
 `{"result": ...}` in the tool's schema and unwrapped, so `result.output`
@@ -157,9 +152,8 @@ return value is the output. It raises `ModelRetry` to send the model back
 with the reason; arguments that do not match the type do the same.
 Each retry is a model request counted against `max_steps`.
 
-The current voice implementation uses AgentTask for structured results. The
-target replaces separate task authoring with durable executions of Agent;
-see [agent-tasks.md](agent-tasks.md) and [TODO.md](TODO.md).
+For multi-turn conversations with typed final results, see
+[agent-tasks.md](agent-tasks.md).
 
 ## Hooks
 
@@ -174,12 +168,10 @@ The pipeline nodes of a voice agent, `stt_node`, `llm_node`, `tts_node`,
 `transcription_node` and `realtime_audio_output_node`, stay overridable by
 subclassing. `run()` calls the model through `llm_node` too.
 
-## What an agent is not
+## History and streaming
 
-An agent has no `chat_ctx=` argument, no `update_instructions`, no
-`update_tools` and no `update_chat_ctx`. To steer the
-model between turns, render state through `@agent.instructions` or hand off
-to another agent. The history belongs to the thread: inside the agent's
+To steer the model between turns, render context through
+`@agent.instructions` or hand off to another agent. The history belongs to the thread: inside the agent's
 hooks and tools, `agent.chat_ctx` is a read-only view of the history the
 current run works on, and outside them it raises.
 

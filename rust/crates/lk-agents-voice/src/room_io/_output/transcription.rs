@@ -1,13 +1,14 @@
 //! `_output.py`'s `_ParticipantTranscriptionOutput`: a participant's transcript, as a text stream
 //! and as a legacy transcription, and its host object.
 
-use crate::io::{IoError, Result, TextOutput};
 use crate::room_io::{
     find_micro_track_id, is_local_proxy_participant, local_micro_track_id, publishes_on_behalf_of,
 };
 use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::tts::markup::{ExpressiveTag, expression_attribute};
+use lk_agents_abi::voice::io::Result;
+use lk_agents_abi::voice::io::{IoError, TextOutput};
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID, Monotone, Spawner, SpawnerExt, TOPIC_TRANSCRIPTION,

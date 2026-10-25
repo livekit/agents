@@ -1,17 +1,17 @@
 //! `perform_audio_forwarding`: one segment's frames pushed to the sink, and what the sink reports.
 
 use crate::agent_activity::scheduling::SpeechId;
-use crate::generation::GenEvent;
-use crate::agent_session::SessionShared;
 use crate::agent_session::DriverError;
+use crate::agent_session::SessionShared;
+use crate::generation::GenEvent;
 use crate::generation::TurnAccumulator;
 use crate::speech_handle::SpeechHandle;
 use crate::trace::{PlayoutStep, SinkCall};
 use crate::transcription::Heard;
 use lk_agents_abi::AudioFrame;
+use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackObserver};
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use lk_agents_rtc::frame_duration;
-use lk_agents_voice::io::{AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackObserver};
 use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,11 +60,14 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
     segment: &mut S,
 ) -> Result<Heard, DriverError> {
     let Some(out) = out else {
+        // Raced like the sink path's `watched`: a cut source may never end its segment.
         let complete = loop {
-            if handle.interrupted() {
-                break false;
-            }
-            match segment.next().await? {
+            let next = tokio::select! {
+                biased;
+                () = handle.wait_for_interrupted() => break false,
+                next = segment.next() => next?,
+            };
+            match next {
                 Next::Frame(_) | Next::Boundary => {}
                 Next::End => break true,
             }
@@ -187,8 +190,8 @@ async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool
     }
     shared.trace(crate::trace::InterruptStep::PlayoutGate {
         speech,
-        op: crate::agent_session::cycle::GateOp::Pause,
-        cause: crate::agent_session::cycle::GateCause::Launch,
+        op: crate::agent_session::effects::GateOp::Pause,
+        cause: crate::agent_session::effects::GateCause::Launch,
     });
     loop {
         tokio::select! {
@@ -437,7 +440,7 @@ impl Playing<'_> {
     }
 
     async fn cut<S: Segment>(&mut self, segment: &mut S, text: String) -> Heard {
-        // Synchronous: barge-in may not wait for a lock.
+        // Synchronous: interruption may not wait for a lock.
         clear_sink(self.shared, self.handle.id(), self.out);
         self.drain(segment);
         let heard = self.heard_at_cut(text).await;

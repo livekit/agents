@@ -1,29 +1,33 @@
 //! The session's command vocabulary: everything a host or a system may ask of the driver, each
 //! answered (when it is) through the channel it carries.
 
-use crate::agent_activity::pause::InterruptRefusal;
+use crate::agent_activity::false_interruption::InterruptRefusal;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::tool_executor::Toolset;
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
+use crate::tool_executor::Toolset;
 use crate::workflows::{TaskHandle, TaskId};
-use lk_agents_abi::{ChatContext, Llm, Maybe, Stt, Tts, Vad};
-use lk_agents_voice::io::AudioInput;
+use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::voice::io::AudioInput;
+use lk_agents_abi::{ChatContext, Maybe};
 use std::sync::Arc;
 
 /// Enqueueing a command does not mean the operation was accepted or completed.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum Command {
     Speech(SpeechCommand),
-    Frame(FrameCommand),
+    Activity(ActivityCommand),
     Turn(TurnCommand),
     /// The pixels stay in the binding's side table (an `ImageSource::Frame` key); the host mints
     /// the `img_` id.
     Video(lk_agents_abi::ImageContent),
     Close(Close),
     /// An id nobody waits on is dropped.
-    HookDone { id: HookId, outcome: HookOutcome },
+    HookDone {
+        id: HookId,
+        outcome: HookOutcome,
+    },
     /// Plugin-measured only (VAD, realtime usage, EOT/interruption); LLM/TTS/STT/EOU never come
     /// from here.
     HostMetrics(Box<lk_agents_abi::metrics::base::AgentMetrics>),
@@ -75,9 +79,13 @@ pub struct HookId(pub u64);
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum IvrCommand {
     /// A running navigator stands.
-    Start { max_silence: std::time::Duration },
+    Start {
+        max_silence: std::time::Duration,
+    },
     /// A final counted as if heard (AMD's greeting), so the first menu repeat is the second chunk.
-    SeedTranscript { text: String },
+    SeedTranscript {
+        text: String,
+    },
     Close,
     /// Added to the **session's** tools before `Start` and AMD's resume; acted on by the core, not
     /// relayed.
@@ -92,10 +100,16 @@ pub enum HookOutcome {
     Turn(Vec<crate::agent::TurnEdit>),
     Described(Box<AgentUpdate>),
     Rendered(String),
-    Filler { text: Option<String>, spoke: bool },
+    Filler {
+        text: Option<String>,
+        spoke: bool,
+    },
     /// `function_tools_executed` handled: each output's `reply_required`, in order, and the event's
     /// `handoff_required`, as the handlers left them.
-    ToolsExecuted { reply_required: Vec<bool>, handoff_required: bool },
+    FunctionToolsExecuted {
+        reply_required: Vec<bool>,
+        handoff_required: bool,
+    },
     /// `on_user_turn_completed` skips the reply; a describe drops the handoff.
     Failed,
 }
@@ -122,13 +136,63 @@ impl std::str::FromStr for Origin {
             "hook" => Ok(Origin::Hook),
             "task" => Ok(Origin::Task),
             other => match other.strip_prefix("tool:") {
-                Some(call_id) if !call_id.is_empty() => Ok(Origin::Tool { call_id: call_id.to_owned() }),
+                Some(call_id) if !call_id.is_empty() => {
+                    Ok(Origin::Tool { call_id: call_id.to_owned() })
+                }
                 Some(_) | None => Err(format!(
                     "origin must be None, \"host\", \"hook\", \"task\" or \"tool:<call_id>\", got {other:?}"
                 )),
             },
         }
     }
+}
+
+/// A `commit_user_turn()` superseded by a newer one; the host's future is cancelled.
+#[lk_agents_abi::host(error(kind = "asyncio.CancelledError"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("superseded by a newer commit_user_turn()")]
+pub struct CommitSuperseded;
+
+/// The id a caller gives a command it awaits; the answer carries it back. `None` where a command
+/// takes one means nobody awaits the answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RequestId(pub u64);
+
+/// What an awaited command is answered with, once, on the session's answer stream.
+#[derive(Debug)]
+pub enum Answer {
+    Speech(Arc<SpeechHandle>),
+    Interrupt(Result<(), InterruptRefusal>),
+    Commit(Result<String, CommitSuperseded>),
+    Idle(Result<(), IdleRefused>),
+    Hold(Result<HoldId, IdleRefused>),
+    Drain(Result<(), DrainRefused>),
+    Handoff(Result<(), HandoffRefused>),
+    Dtmf(crate::workflows::builtins::dtmf::DtmfOutcome),
+}
+
+macro_rules! answer_picks {
+    ($($pick:ident: $variant:ident($payload:ty)),* $(,)?) => {
+        impl Answer {
+            $(pub fn $pick(self) -> Option<$payload> {
+                match self {
+                    Answer::$variant(payload) => Some(payload),
+                    _ => None,
+                }
+            })*
+        }
+    };
+}
+
+answer_picks! {
+    speech: Speech(Arc<SpeechHandle>),
+    interrupt: Interrupt(Result<(), InterruptRefusal>),
+    commit: Commit(Result<String, CommitSuperseded>),
+    idle: Idle(Result<(), IdleRefused>),
+    hold: Hold(Result<HoldId, IdleRefused>),
+    drain: Drain(Result<(), DrainRefused>),
+    handoff: Handoff(Result<(), HandoffRefused>),
+    dtmf: Dtmf(crate::workflows::builtins::dtmf::DtmfOutcome),
 }
 
 #[derive(Debug)]
@@ -146,12 +210,11 @@ impl Command {
         }
         match self {
             Command::Speech(c) => leaf!(c; SpeechCommand: Say, GenerateReply, Interrupt,
-                InterruptSpeech, CommitUserTurn, WaitForIdle, HoldFloor, ReleaseFloor, ClaimUserTurn,
+                InterruptSpeech, CommitUserTurn, WaitForIdle, WaitForIdleAndHold, ReleaseIdleHold, ClaimUserTurn,
                 ReleaseUserTurn, SetAllowInterruptions, SetRunOutput, ToolUpdate, FillerStart,
                 FillerStop, PauseAuthorization, ResumeAuthorization),
-            Command::Frame(c) => leaf!(c; FrameCommand: Update, SetSpeakerFilter,
-                UpdateInstructions, UpdateTools, SetAudioInput, SetVideoInput, SetIoEnabled,
-                UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
+            Command::Activity(c) => leaf!(c; ActivityCommand: Update, UpdateInstructions,
+                UpdateTools, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
             Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure),
             Command::Ivr(c) => leaf!(c; IvrCommand: Start, SeedTranscript, Close, AddTools),
             Command::Task(c) => leaf!(c; TaskCommand: Enter),
@@ -204,9 +267,9 @@ impl From<IvrCommand> for Command {
     }
 }
 
-impl From<FrameCommand> for Command {
-    fn from(c: FrameCommand) -> Command {
-        Command::Frame(c)
+impl From<ActivityCommand> for Command {
+    fn from(c: ActivityCommand) -> Command {
+        Command::Activity(c)
     }
 }
 
@@ -222,11 +285,11 @@ impl From<TaskCommand> for Command {
     }
 }
 
-/// Outlives the frame across handoffs. The binding sends `Clear` and `Configure`; `Commit` is the
-/// loop's own tail of `SpeechCommand::CommitUserTurn`.
+/// Outlives the frame across handoffs.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum TurnCommand {
-    /// Sent by the loop to itself, never by a host; a typed turn is `generate_reply(user_input=)`.
+    /// Commit the turn now (`commit_user_turn`'s tail); a typed turn is
+    /// `generate_reply(user_input=)`.
     Commit {
         /// `commit_user_turn(skip_reply=True)`: close the turn, keep the transcript, generate nothing.
         skip_reply: bool,
@@ -241,14 +304,16 @@ pub enum TurnCommand {
 /// One collection at a time.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum DtmfCommand {
-    /// `done` is answered once with the first outcome, or `Stopped`; the confirm arm is spoken by
-    /// the driver.
+    /// Answered once with the first outcome, or `Stopped`; the confirm arm is spoken by the
+    /// driver.
     Start {
         collector: crate::workflows::builtins::dtmf::DtmfCollector,
-        done: tokio::sync::oneshot::Sender<crate::workflows::builtins::dtmf::DtmfOutcome>,
+        call: Option<RequestId>,
     },
     /// Ignored with no collection running.
-    Digit { digit: String },
+    Digit {
+        digit: String,
+    },
     Stop,
 }
 
@@ -266,7 +331,7 @@ pub enum SpeechCommand {
         /// `None` takes the session default.
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        handle: tokio::sync::oneshot::Sender<Arc<SpeechHandle>>,
+        call: Option<RequestId>,
     },
     GenerateReply {
         /// `None` replies to the context as it stands.
@@ -282,15 +347,12 @@ pub enum SpeechCommand {
         /// Whole, because specs, host objects and runner must agree.
         toolset: Option<Arc<Toolset>>,
         on_enter: bool,
-        handle: tokio::sync::oneshot::Sender<Arc<SpeechHandle>>,
+        call: Option<RequestId>,
     },
     /// A pending preemptive generation is dropped; the current speech is interrupted (a refusal is
     /// the whole answer); the socket is told once; the queue is walked in pop order up to the first
     /// refusal, each speech whole.
-    Interrupt {
-        force: bool,
-        done: Option<tokio::sync::oneshot::Sender<Result<(), InterruptRefusal>>>,
-    },
+    Interrupt { force: bool, call: Option<RequestId> },
     /// Unforced it is scoped to the playing step; `force` ends the speech, tools and all.
     InterruptSpeech { speech: SpeechId, force: bool },
     /// Flush, wait for the final (skipped if one landed in the last 0.5 s), commit. No STT or
@@ -300,18 +362,15 @@ pub enum SpeechCommand {
         transcript_timeout: std::time::Duration,
         stt_flush_duration: std::time::Duration,
         skip_reply: bool,
-        done: tokio::sync::oneshot::Sender<String>,
+        call: Option<RequestId>,
     },
     /// Idle: nothing current, queued or being decided, the user silent, no claim or foreign hold.
-    WaitForIdle {
-        hold: Option<HoldId>,
-        done: tokio::sync::oneshot::Sender<Result<(), IdleRefused>>,
-    },
-    /// `RunContext.foreground()`: wait for idle, then hold it until `ReleaseFloor`; a waiter naming
+    WaitForIdle { hold: Option<HoldId>, call: Option<RequestId> },
+    /// `RunContext.foreground()`: wait for idle, then hold it until `ReleaseIdleHold`; a waiter naming
     /// the hold passes through.
-    HoldFloor { done: tokio::sync::oneshot::Sender<Result<HoldId, IdleRefused>> },
+    WaitForIdleAndHold { call: Option<RequestId> },
     /// Unknown ids are a no-op.
-    ReleaseFloor { hold: HoldId },
+    ReleaseIdleHold { hold: HoldId },
     /// Pins the user state to `speaking` and holds idle open. Reentrant.
     ClaimUserTurn,
     /// The last release re-derives the user state.
@@ -363,7 +422,7 @@ pub enum ToolUpdate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HoldId(pub u64);
 
-/// Why a `WaitForIdle`/`HoldFloor` was answered without reaching idle: `_core.SessionClosing`,
+/// Why a `WaitForIdle`/`WaitForIdleAndHold` was answered without reaching idle: `_core.SessionClosing`,
 /// which the shim raises as `ActivityClosedError`.
 #[lk_agents_abi::host(error(kind = "livekit.agents._core.SessionClosing"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
@@ -411,8 +470,6 @@ macro_rules! host_handle_debug {
 host_handle_debug!(HostAudio);
 host_handle_debug!(HostRecorder);
 host_handle_debug!(HostVideo labelled);
-host_handle_debug!(HostAudioOut labelled);
-host_handle_debug!(HostTextOut labelled);
 
 #[derive(Debug)]
 pub enum RecorderCommand {
@@ -424,30 +481,24 @@ pub enum RecorderCommand {
 
 pub struct HostRecorder(pub Arc<dyn lk_agents_media::recorder::AudioRecorder>);
 
-pub struct HostVideo(pub Arc<dyn lk_agents_voice::io::VideoInput>);
+pub struct HostVideo(pub Arc<dyn lk_agents_abi::voice::io::VideoInput>);
 
 /// Video input is handled at the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub enum IoLeg {
+pub enum IoKind {
     AudioInput,
     AudioOutput,
     Transcription,
 }
 
-pub struct HostAudioOut(pub Arc<dyn lk_agents_voice::io::AudioOutput>);
-
-pub struct HostTextOut(pub Arc<dyn lk_agents_voice::io::TextOutput>);
-
 /// Scheduling pauses are the driver's own, never a command.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
-pub enum FrameCommand {
+pub enum ActivityCommand {
     /// No stream is torn down, so no word is dropped. Order (`_update_activity`): refuse when
     /// closing; `on_exit` before the pause; drain; closing re-check; swap; `on_enter` not awaited.
     /// A second queues.
     Update(Box<AgentUpdate>),
-    /// Sent after the STT swap; `None` clears.
-    SetSpeakerFilter(Option<crate::audio::SpeakerFilterConfig>),
     // --- the running frame, changed in place: not a handoff, which replaces the whole frame ---
     /// Replies in flight keep theirs. Carries the full triple: workflow tasks put their persona in
     /// the modality variants.
@@ -458,26 +509,31 @@ pub enum FrameCommand {
     SetVideoInput(Option<HostVideo>),
     /// The leg stays: a muted mic stops feeding STT; a disabled output plans speech without a
     /// voice.
-    SetIoEnabled { leg: IoLeg, enabled: bool },
+    SetIoEnabled {
+        leg: IoKind,
+        enabled: bool,
+    },
     /// **Replaces** the running frame's context (already filtered host-side).
     UpdateChatCtx(Vec<lk_agents_abi::ChatItem>),
     /// A playing speech is **interrupted** (nobody can hear it); the pause facts are re-read at
     /// once.
-    SetAudioOutput(Option<HostAudioOut>),
+    SetAudioOutput(Option<lk_agents_abi::resources::AudioOutputRef>),
     /// A reply in flight keeps its leg.
-    SetTranscriptionOutput(Option<HostTextOut>),
+    SetTranscriptionOutput(Option<lk_agents_abi::resources::TextOutputRef>),
     /// **Not a handoff**: only the providers change; the streaming legs reopen as a handoff reopens
     /// them.
     UpdateModels {
-        stt: Maybe<Option<Arc<dyn Stt>>>,
-        vad: Maybe<Option<Arc<dyn Vad>>>,
-        llm: Maybe<Option<Arc<dyn Llm>>>,
-        tts: Maybe<Option<Arc<dyn Tts>>>,
+        stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
+        vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
+        llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
+        tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
     },
     /// Runs the driving frame's `on_exit` (once per frame), then pauses scheduling until the speech
     /// in flight finishes, tools included. A second joins. Refused only if the pause is lifted or
     /// the loop ends.
-    Drain { done: Option<tokio::sync::oneshot::Sender<Result<(), DrainRefused>>> },
+    Drain {
+        call: Option<RequestId>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
@@ -485,20 +541,20 @@ pub enum DrainRefused {
     /// The loop ended with no close to answer the drain.
     Closing,
     /// Scheduling was resumed under the drain's pause: the frame runs again.
-    FrameChanging,
+    ActivityChanging,
 }
 
 impl DrainRefused {
     pub fn as_str(self) -> &'static str {
         match self {
             DrainRefused::Closing => "closing",
-            DrainRefused::FrameChanging => "frame_changing",
+            DrainRefused::ActivityChanging => "activity_changing",
         }
     }
 }
 
 pub struct AgentUpdate {
-    /// Stamped on every `SessionEvent::ItemAdded`; the host maps it back to its `Agent`.
+    /// Stamped on every `SessionEvent::ConversationItemAdded`; the host maps it back to its `Agent`.
     pub agent: String,
     /// Workflow tasks put their persona in the modality variants.
     pub instructions: Instructions,
@@ -509,18 +565,18 @@ pub struct AgentUpdate {
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     /// `NotGiven` keeps, `Given(x)` installs, `Given(None)` is `Agent(llm=None)`. The host picks
     /// `NotGiven` on identity, so warm state is preserved.
-    pub llm: Maybe<Option<Arc<dyn Llm>>>,
-    pub tts: Maybe<Option<Arc<dyn Tts>>>,
+    pub llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
+    pub tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
     /// `Given` closes the leg and reopens it.
-    pub stt: Maybe<Option<Arc<dyn Stt>>>,
-    pub vad: Maybe<Option<Arc<dyn Vad>>>,
+    pub stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
+    pub vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
     /// **Replaced whole** and re-resolved over the resulting legs.
     pub options: crate::agent_activity::options::SessionPatch,
     /// `Close` runs the leaving frame's `on_exit`; `Pause` keeps it for a later resume, no hook.
     pub previous: PreviousActivity,
     /// `Start` runs the arriving frame's `on_enter`; `Resume` does not.
     pub next: NewActivity,
-    pub done: Option<tokio::sync::oneshot::Sender<Result<(), HandoffRefused>>>,
+    pub call: Option<RequestId>,
     /// `None` is a host handoff.
     pub task: Option<TaskId>,
 }
@@ -546,7 +602,52 @@ pub enum HandoffRefused {
     NotDescribed,
 }
 
+/// The provider a three-state argument hands over.
+fn handed<R>(arg: &Maybe<Option<R>>, id: impl Fn(&R) -> ResourceId) -> Option<ResourceId> {
+    match arg {
+        Maybe::Given(Some(r)) => Some(id(r)),
+        Maybe::Given(None) | Maybe::NotGiven => None,
+    }
+}
+
+impl Command {
+    /// The providers it hands the core.
+    pub fn resources(&self) -> Vec<ResourceId> {
+        match self {
+            Command::Activity(ActivityCommand::Update(update))
+            | Command::HookDone { outcome: HookOutcome::Described(update), .. } => {
+                update.resources().collect()
+            }
+            Command::Task(TaskCommand::Enter(entry)) => entry.frame.resources().collect(),
+            Command::Activity(ActivityCommand::SetAudioOutput(Some(out))) => vec![out.id],
+            Command::Activity(ActivityCommand::SetTranscriptionOutput(Some(out))) => vec![out.id],
+            Command::Activity(ActivityCommand::UpdateModels { stt, vad, llm, tts }) => [
+                handed(stt, |r| r.id),
+                handed(vad, |r| r.id),
+                handed(llm, |r| r.id),
+                handed(tts, |r| r.id),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
 impl AgentUpdate {
+    /// The providers it hands over.
+    pub(crate) fn resources(&self) -> impl Iterator<Item = ResourceId> {
+        [
+            handed(&self.llm, |r| r.id),
+            handed(&self.tts, |r| r.id),
+            handed(&self.stt, |r| r.id),
+            handed(&self.vad, |r| r.id),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
     pub fn frame(agent: impl Into<String>, instructions: Instructions) -> Self {
         AgentUpdate {
             agent: agent.into(),
@@ -560,13 +661,11 @@ impl AgentUpdate {
             options: Default::default(),
             previous: PreviousActivity::Close,
             next: NewActivity::Start,
-            done: None,
+            call: None,
             task: None,
         }
     }
-}
 
-impl AgentUpdate {
     pub(crate) fn reopens(&self) -> &'static str {
         match (self.stt.is_given(), self.vad.is_given()) {
             (false, false) => "",
@@ -591,7 +690,7 @@ impl std::fmt::Debug for AgentUpdate {
             .field("options", &self.options)
             .field("previous", &self.previous)
             .field("next", &self.next)
-            .field("awaited", &self.done.is_some())
+            .field("call", &self.call)
             .finish()
     }
 }
@@ -602,7 +701,7 @@ pyo3::create_exception!(
     _core,
     SessionClosing,
     pyo3::exceptions::PyRuntimeError,
-    "`wait_for_idle()`/`hold_floor()` refused: the session is closing. The shim raises `ActivityClosedError`."
+    "`wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing. The shim raises `ActivityClosedError`."
 );
 
 #[cfg(feature = "python")]

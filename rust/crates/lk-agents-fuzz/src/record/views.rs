@@ -124,7 +124,7 @@ impl<'a> InputsView<'a> {
     pub fn audio_input(&self) -> Switch {
         self.switch(|input| match input {
             Input::SetIoEnabled {
-                leg: lk_agents_voice::agent_session::IoLeg::AudioInput,
+                leg: lk_agents_voice::agent_session::IoKind::AudioInput,
                 enabled,
             } => Some(*enabled),
             Input::SetAudioInput { attach } => Some(*attach),
@@ -136,7 +136,7 @@ impl<'a> InputsView<'a> {
     pub fn transcription_output(&self) -> Switch {
         self.switch(|input| match input {
             Input::SetIoEnabled {
-                leg: lk_agents_voice::agent_session::IoLeg::Transcription,
+                leg: lk_agents_voice::agent_session::IoKind::Transcription,
                 enabled,
             } => Some(*enabled),
             Input::SetTranscriptionOutput { attach } => Some(*attach),
@@ -263,7 +263,7 @@ impl<'a> HostView<'a> {
     }
 
     /// Every API call developer code made that returns a value -- `say`, `interrupt`,
-    /// `wait_for_idle`, `hold_floor`, `commit_user_turn`, `handoff`, `drain`, a DTMF start --
+    /// `wait_for_idle`, `wait_for_idle_and_hold`, `commit_user_turn`, `handoff`, `drain`, a DTMF start --
     /// in the order they were made. Each is a future the developer awaits.
     pub fn api_calls(&self) -> Vec<ApiCallView<'a>> {
         self.0
@@ -352,7 +352,7 @@ impl<'a> SpeechView<'a> {
 
     /// Started by the driver on a preflight transcript, before the turn ended.
     pub fn is_speculative(&self) -> bool {
-        self.kind() == Some(SpeechKind::Guess)
+        self.kind() == Some(SpeechKind::Preemptive)
     }
 
     /// When the host was told this speech exists.

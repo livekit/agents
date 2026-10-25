@@ -2,13 +2,8 @@
 
 An agent is shared configuration. A task is one conversational execution of an agent,
 with its own draft state, history, pending interactions, and eventual output.
-Define behavior with the existing `Agent(...)` and its decorators; there is
-no second subclass-based AgentTask authoring API.
-
-This is the target design, not a claim that the runtime implements it today.
-[TODO.md](TODO.md) tracks the migration. `Call` below is a
-proposed surface; callable output types and automatic conversational waits
-also require implementation. They must be pinned with strict type tests.
+Define behavior with `Agent(...)` and register tools and instructions with
+its decorators.
 
 ## Definition, draft, and output
 
@@ -40,16 +35,13 @@ class BookingContext:
 
 Tools read/write `ctx.context.draft` and call `ctx.context.hotel`. Identity,
 services, helper methods, and mutable data share one local context object.
-There is no separate deps/state configuration or self.state. The context is
-not automatically visible to the model: dynamic instructions render the draft.
+Dynamic instructions render selected context data for the model.
 Output types remain validated final-result contracts.
 
 Mark saved user data with `persisted(default_factory=...)`.
 `store.load_context` explicitly restores and validates those fields; the
-runtime checkpoints their changes automatically during managed execution. It does
-not serialize the entire context: customer/service objects are supplied by the
-application's context factory. No separate snapshot model or draft repository
-is needed. See [application context](state-and-deps.md) for field keys,
+application calls `store.save_context` to save their changes. The
+application supplies fresh customer and service objects. See [application context](state-and-deps.md) for field keys,
 context-scope ownership, collections, compatibility, and load/save lifecycle.
 
 A draft is scoped to a booking context, not the shared Agent definition.
@@ -69,9 +61,7 @@ in framework execution records.
 | Valid accepted final output | Complete execution and deliver typed result |
 | Terminal failure, refusal, cancellation, or timeout | Persist and deliver distinct terminal outcome |
 
-An ordinary reply ends a turn, not the job. Final output ends the job.
-There is no required `Completed(value)` wrapper in this authoring API.
-Historical AgentTask transitions remain implementation details to migrate.
+An ordinary reply ends a turn. Accepted final output completes the task.
 
 For structured output, expose an explicit final-output mechanism alongside
 ordinary conversational text. Text must remain available for questions; do
@@ -79,7 +69,7 @@ not retry every question as an invalid Booking. Validation failures in final
 output return feedback to the model within the execution's retry/usage budget.
 
 For `output_type=str`, intermediate and final text cannot be distinguished by
-type. Durable task execution must use an explicit final-output action even
+type. Conversational tasks use an explicit final-output action even
 for strings. A normal standalone text `agent.run()` retains its existing
 one-turn behavior, where an answer is that run's output. These execution
 modes must be explicit in runner/context; never guess completion from wording.
@@ -87,9 +77,8 @@ modes must be explicit in runner/context; never guess completion from wording.
 ## Questions and automatic resumption
 
 A model-generated question/conversational reply is checkpointed as
-`InputRequired` with an agent-loop receiver. The next human message appends
-to history and resumes the same agent. No pending tool call is fabricated,
-no Python callback is needed, and no second model request rephrases the text.
+`InputRequired` with an agent-loop receiver. The runtime delivers the text directly. The next human message appends
+to history and resumes the same agent.
 
 A Python tool can also return a question directly:
 
@@ -136,23 +125,22 @@ book_room = Agent[BookingContext](
 )
 ```
 
-Callable output types follow Pydantic AI's output-function model: arguments
-are validated, the function may request a model retry, and its accepted return
-value is the final typed output. The function is a terminal output surface,
+When `output_type` is a function, its parameters define the final-output
+arguments the model must provide. The framework validates those arguments
+before calling the function. The function may request a model retry; its
+accepted return value is the final typed output. The function is a terminal output surface,
 not an ordinary tool whose result is returned to the model. Its input schema,
 return type, context types, and retries need full typing and runtime validation.
 Output functions should prefer validation/read-only resolution of already
 committed effects; side effects still require their own idempotency contract.
 
-The `ctx.execution_id` spelling is proposed; job identity must be distinct
-from the A2A request/turn ID and stable across human turns and worker changes.
+`ctx.execution_id` identifies the task across human turns. Each A2A request
+or turn has its own identity.
 
-The existing [hotel example](../examples/hotel-receptionist/backend_agent.py)
-will migrate from `BookRoom(AgentTask[str, RoomDraft])` to a shared `book_room`
-Agent. Its set_stay, choose_room, record_guest, and payment-reference tools
-become `@book_room.tool` functions mutating `ctx.context.draft`. `_status` becomes
-`@book_room.instructions`. Booking writes return ordinary tool results;
-accepted final output completes the execution, rather than a Completed wrapper.
+Booking tools such as set_stay, choose_room, record_guest, and payment-reference
+collection update `ctx.context.draft`. An `@book_room.instructions` function
+renders the current draft. Booking writes return tool results; accepted final
+output completes the task.
 
 Approval must bind to exact effect terms and draft identity/revision. Changed
 dates, room, price, guest, or payment details invalidate prior approval even
@@ -181,21 +169,18 @@ fills the pending call and the parent LLM phrases the result. The original
 Python tool is not rerun and no cross-turn Python stack is restored.
 
 `Call(child)` without a context override intentionally shares compatible
-context/scope, as with OpenAI-style local context. A handoff also retains the
-current scope. Restoration uses recorded scope IDs; it never recreates a new
+context and persisted scope. Both agents read and modify the same application
+data. A handoff also retains the current scope. Restoration uses recorded scope IDs; it never recreates a new
 draft just because another worker receives the turn. History transfer remains
 explicit and independent of shared application data.
 
 Use children for reusable conversations such as VerifyGuest. Ordinary booking
-questions stay in book_room. A class, separate mutable task object, start
-hook, RunAgent transition, resume decorator, or bound Python handler is not
-required to author a conversational child.
+questions stay in book_room.
 
 ## Deferred work
 
 Durable execution, external-operation waits, schedulers, journals for recovery,
-and deployment compatibility are outside this phase. The exploratory runtime
-design is archived outside this folder at `~/livekit/durable-execution.md`.
+and deployment compatibility are outside this phase.
 Graphs and [code workflows](code-workflows.md) are also deferred.
 
 The current proposal covers conversational tasks, human input, typed final

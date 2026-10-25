@@ -5,20 +5,17 @@
 //! a frame, a history, a patch -- the live objects a command carries, built from the case's terms.
 use super::*;
 
-/// Journal steps one virtual instant may hold before the run counts as a livelock.
-const NO_PROGRESS_STEPS: u32 = 100_000;
-
 impl Run {
     /// Start a real driver with the fakes attached, and record what it opens on the way up.
     ///
     /// The trace observer is installed before the loop is spawned, so the first step the driver
     /// decides is stamped from the same counter as everything else the case observes. That one
     /// counter is what makes the recording a happens-before order rather than a pile of clocks.
-    pub async fn start(setup: &Setup) -> Run {
+    pub async fn start(setup: &Setup, schedule: u64, policy: Policy) -> Run {
         let time = Timebase::simulated();
         let stamps = Stamps::new(time.clone());
         let (registry, records) = Registry::new(stamps.clone());
-        let tasks = Arc::new(Tasks::default());
+        let tasks = Arc::new(Tasks { stamps: stamps.clone(), spawned: Mutex::default() });
 
         let mut config = ConfigStack::default();
         config.session.turn.detection = match setup.turn {
@@ -128,8 +125,10 @@ impl Run {
             let (mic, frames) = fakes::FakeAudioInput::new();
             Some((mic, (registry.new_mic(), frames)))
         };
-        let (mut driver, session) = DriverBuilder {
-            time,
+        let resources = lk_agents_abi::resources::Resources::default();
+        let (mut runtime, session) = DriverBuilder {
+            resources: resources.clone(),
+            time: time.clone(),
             spawner: tasks.clone(),
             config: DriverConfig::new(config, legs),
             thresholds: lk_agents_abi::tokenize::language::ThresholdOptions::new(
@@ -154,7 +153,6 @@ impl Run {
             audio_out: Some(audio_out),
             text_out: Some(text_out),
             toolset: toolset(&registry, &setup.tools),
-            speaker_filter: setup.speaker_filter.then(speaker_filter),
             keyterms: (!setup.keyterms.is_empty()).then(|| KeytermSetup {
                 detection: KeytermDetection::default(),
                 static_keyterms: setup.keyterms.clone(),
@@ -189,8 +187,9 @@ impl Run {
         registry.attach_api(session.api.clone());
 
         let steps: Arc<Mutex<Vec<(Observed, Step)>>> = Arc::default();
+        let livelock: Arc<Mutex<Option<String>>> = Arc::default();
         {
-            let (steps, stamps) = (steps.clone(), stamps.clone());
+            let (steps, stamps, livelock) = (steps.clone(), stamps.clone(), livelock.clone());
             let mut trace = session.trace.lock().unwrap();
             // What the driver wrote while it was being built -- the config it resolved, the wall
             // epoch, the realtime socket's opening -- is journal too, and came before anyone
@@ -199,24 +198,30 @@ impl Run {
             for step in trace.steps() {
                 steps.lock().unwrap().push((stamps.next(), step));
             }
-            // Virtual time only advances when every task is idle, so a driver that keeps feeding
-            // itself at one instant never returns control to the case: fail the run by name.
+            // A step that journals forever never returns to the run's loop, which counts its own
+            // iterations: the observer is the only one that sees it, and stops it the only way
+            // anything can stop a step, by unwinding out of it.
             let mut instant = (tokio::time::Instant::now(), 0u32);
             trace.observe(Box::new(move |step| {
                 let now = tokio::time::Instant::now();
                 instant = if now == instant.0 { (now, instant.1 + 1) } else { (now, 0) };
-                assert!(
-                    instant.1 < NO_PROGRESS_STEPS,
-                    "no progress: {NO_PROGRESS_STEPS} journal steps without virtual time moving, last {step:?}"
-                );
                 let at = stamps.next();
+                if instant.1 >= NO_PROGRESS_STEPS {
+                    let detail = format!(
+                        "{NO_PROGRESS_STEPS} journal steps at {} ms without virtual time moving, \
+                         the last {step:?}",
+                        at.at_ms
+                    );
+                    *livelock.lock().unwrap() = Some(detail.clone());
+                    panic!("{detail}");
+                }
                 steps.lock().unwrap().push((at, step.clone()));
             }));
         }
         // The systems are the host's to start, right after `start()`: the navigator so an `Ivr`
         // command has a reader, the AMD as the reference's `await amd.execute()`.
         if setup.ivr.is_some() {
-            lk_agents_voice::agent_session::start(&session.peer, session.ivr_detection);
+            lk_agents_voice::agent_session::start_ivr(&session.peer, session.ivr_detection);
         }
         if setup.amd {
             let llm = fakes::FakeLlm::new(registry.clone());
@@ -228,13 +233,16 @@ impl Run {
             let _ = amd.input(AmdIn::Start(AmdStart::DetectionTimer));
             let _ = amd.input(AmdIn::Start(AmdStart::Listening));
         }
-        let driver = tokio::spawn(async move { driver.run().await });
+        runtime.driver.open(time.read());
         let mut run = Run {
             sync,
             room: room_tx,
             room_io: room_io_tx,
             session,
-            driver: Some(driver),
+            resources: resources.clone(),
+            runtime: Some(runtime),
+            queue: super::queue::Queue::new(schedule, policy),
+            time,
             tasks,
             stamps,
             registry,
@@ -242,6 +250,7 @@ impl Run {
             controls: BTreeMap::new(),
             segments: BTreeMap::new(),
             steps,
+            livelock,
             pending: BTreeMap::new(),
             streams: BTreeMap::new(),
             handles: BTreeMap::new(),
@@ -266,10 +275,10 @@ impl Run {
 pub(super) type Stt = dyn lk_agents_abi::Stt;
 pub(super) type Llm = dyn lk_agents_abi::Llm;
 pub(super) type Tts = dyn lk_agents_abi::Tts;
-pub(super) type AudioIn = dyn lk_agents_voice::io::AudioInput;
+pub(super) type AudioIn = dyn lk_agents_abi::voice::io::AudioInput;
 pub(super) type VadLeg = dyn lk_agents_abi::Vad;
 pub(super) type EotDet = dyn lk_agents_abi::EotDetector;
-pub(super) type VideoIn = dyn lk_agents_voice::io::VideoInput;
+pub(super) type VideoIn = dyn lk_agents_abi::voice::io::VideoInput;
 
 /// `Maybe` spells "not mentioned" and "set to nothing" differently, and a leg the case did not
 /// name must be the former: `Given(None)` would tear the provider out.
@@ -319,7 +328,7 @@ pub(super) fn frame(
         options: SessionPatch::default(),
         previous: PreviousActivity::Pause,
         next: NewActivity::Start,
-        done: None,
+        call: None,
         task: None,
     }
 }
@@ -344,15 +353,6 @@ pub(super) fn history(roles: &[Role], text: &str) -> Vec<ChatItem> {
             ))
         })
         .collect()
-}
-
-pub(super) fn speaker_filter() -> lk_agents_abi::voice::audio::SpeakerFilterConfig {
-    lk_agents_abi::voice::audio::SpeakerFilterConfig {
-        detect_primary_speaker: true,
-        suppress_background_speaker: true,
-        options: Default::default(),
-        formats: Default::default(),
-    }
 }
 
 /// Metrics from a leg the host owns. The values say nothing; that the driver accepts and forwards
@@ -392,6 +392,7 @@ pub(super) fn patch(
         Knob::Interruptions => patch.turn.interruption.enabled = Some(on),
         Knob::MinInterruptionWords => patch.turn.interruption.min_words = Some(words.0),
         Knob::UserAway => patch.timers.user_away = delay.map(Nullable::Value),
+        Knob::MaxToolSteps => patch.speech.max_tool_steps = Some(words.0),
     }
     patch
 }

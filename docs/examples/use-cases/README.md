@@ -6,9 +6,9 @@ outbound reminders, speed-to-lead and patient outreach. Healthcare, financial se
 insurance, retail and sales, plus the summarizer that runs inside agent-service. The API they use
 is documented one feature at a time in `../../README.md`.
 
-## Built
+## Conversation examples
 
-These use the approved design; a code gap, where one remains, is in `../../TODO.md`.
+These examples cover tools, conversations, and structured results.
 
 | File | Vertical | The idea | New |
 |---|---|---|---|
@@ -17,12 +17,11 @@ These use the approved design; a code gap, where one remains, is in `../../TODO.
 | `04_a_claim_with_a_photo.py` | insurance | a first notice of loss needs a photo, maybe tonight | a tool returns `InputRequired(question)`: the turn waits, the next message becomes the call's output; `output_type=` |
 | `07_hospital_main_line.py` | healthcare | billing, scheduling and nurse triage behind one number | delegation in a tool, handoff saved on the lane's agent stack, the voice door delegating to the same brain |
 | `10_mortgage_prequalification.py` | financial | a runtime list of questions answered over days | `AgentTask` awaited from a tool in text: a handoff plus a deferred call; answers kept in the state |
-| `15_renewal_email_graph.py` | insurance | a renewal email drafted and reviewed until compliant | summarize/review task loop; example awaiting migration from Graph |
+| `15_renewal_email_graph.py` | insurance | a renewal email drafted and reviewed until compliant | summarize/review task loop; graph-based review loop |
 
-## Planned
+## Integration examples
 
-These show design that is not built yet: background tasks, channels, the thread handle,
-toolset composition. Each `planned-` file relies on at least one of them.
+These examples cover channels, thread handles, and toolset composition.
 
 | File | Vertical | The idea | New |
 |---|---|---|---|
@@ -61,7 +60,7 @@ toolset composition. Each `planned-` file relies on at least one of them.
 - A call is a `LiveSession`: the fast brain. It either runs a small agent itself (01) or stays
   thin and hands every request to the same brain the text door runs, `tools=[A2ADelegate(url)]`
   (03, 07).
-- A text turn is `Agent.run(message, message_history=, state=, deps=)`: pure, it appends to the
+- A text turn is `Agent.run(message, message_history=, state=, deps=)`: it appends to the
   history you pass and returns a typed result. The handler returns the answer; the framework
   commits the history, the state and the journal and delivers it.
 
@@ -87,13 +86,10 @@ toolset composition. Each `planned-` file relies on at least one of them.
 
 ## Conversational agent tasks
 
-The end-state [agent execution API](../../agent-tasks.md) uses Agent definitions,
+The [agent task API](../../agent-tasks.md) uses Agent definitions,
 persisted draft state, automatic InputRequired waits, child Call(agent, context=...),
-and typed final output or output functions. It does not require AgentTask
-subclasses, completion wrappers, resume handlers, or workflow checkpoint syntax.
+and typed final output or output functions.
 
-Current Python examples still need migration (see [TODO.md](../../TODO.md)).
-Their historical AgentTask classes, Completed returns, graph imports, and
-cross-turn await behavior are not the target API. General code workflows and
+General code workflows and
 graph authoring are [deferred](../../code-workflows.md). Durable execution,
 automatic recovery, and external wake-ups are also outside the current phase.

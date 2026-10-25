@@ -2,35 +2,36 @@
 //! `AgentSession` call, each assembling, opening, closing or sending one command.
 
 use super::{
-    CLOSE_TIMEOUT, CommandRefused, CommitSuperseded, FramePusher, HostFrame, HostMetricsRecord,
-    HostParts, InterruptionPortFactory, NodeFactory, NotAnImage, NotInterruptible, OpenRefused,
+    CLOSE_TIMEOUT, CommandRefused, FramePusher, HostMetricsRecord, HostParts,
+    InterruptionPortFactory, ModelRefs, NodeFactory, NotAnImage, NotInterruptible, OpenRefused,
     Ready, Reply, SessionApi, SessionBuildError, SessionEvents, SessionRefused, SessionRoom,
-    SessionRunner, Stage, StartFailed, TextPusher, UnknownCloseReason, host_toolset, llm_leg,
-    origin_of, session_tools, stt_leg, tts_leg,
+    SessionRunner, Stage, StartFailed, TextPusher, UnknownCloseReason, UpdateAgentArgs,
+    host_toolset, llm_leg, origin_of, session_tools, stt_leg, tts_leg,
 };
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_activity::DriverConfig;
+use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::DriverBuilder;
 use crate::agent_session::commands::{
-    Command, DrainRefused, DtmfCommand, FillerSource, FrameCommand, HoldId, HookId, HookOutcome,
-    HostAudio, HostAudioOut, HostTextOut, HostVideo, IdleRefused, IoLeg, IvrCommand, Origin,
-    SayText, SpeechCommand, TaskCommand, TaskEntry, ToolUpdate, TurnCommand,
+    ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId, HookId, HookOutcome,
+    HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand,
+    TaskCommand, TaskEntry, ToolUpdate, TurnCommand,
 };
-use crate::agent_session::driver::DriverBuilder;
 use crate::agent_session::time::Timebase;
+use crate::agent_session::{Answer, CommitSuperseded};
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::trace::Step;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::HostWire;
+use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::{Llm, Maybe, Spawner, Stt, Tts, Vad};
-use lk_agents_voice::io::{AudioInput, AudioOutput, TextOutput};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// `voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
 /// `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
 /// borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
-#[lk_agents_abi::host(object(name = "AgentSession"))]
+#[lk_agents_abi::host(object(name = "LiveSession"))]
 impl SessionApi {
     /// Assemble a session; the loop begins at `start()`.
     ///
@@ -58,7 +59,6 @@ impl SessionApi {
         agent: String,
         chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
         stt: Option<Arc<dyn Stt>>,
-        speaker_filter: Option<crate::audio::SpeakerFilterConfig>,
         vad: Option<Arc<dyn Vad>>,
         llm: Option<Arc<dyn Llm>>,
         // The native realtime model; a plugin's `RealtimeModel` is `realtime_host`.
@@ -79,7 +79,9 @@ impl SessionApi {
         turn_detector: Option<Arc<dyn lk_agents_abi::EotDetector>>,
         turn_detector_streaming: bool,
         // The adaptive-interruption detector: an object means the host's gate said yes.
-        interruption_detector: Option<Arc<dyn lk_agents_abi::turn::interruption::InterruptionSource>>,
+        interruption_detector: Option<
+            Arc<dyn lk_agents_abi::turn::interruption::InterruptionSource>,
+        >,
         text_output: bool,
         // `RoomOptions._to_rust_config()`, resolved per leg; without it the scalars above.
         room_io_config: Option<crate::room_io::types::RoomIoConfig>,
@@ -92,7 +94,7 @@ impl SessionApi {
         // The host's own io legs, replacing the room's (which `agent_session.py` has turned off).
         host_audio_input: Option<Arc<dyn AudioInput>>,
         host_audio_output: Option<Arc<dyn AudioOutput>>,
-        host_video_input: Option<Arc<dyn lk_agents_voice::io::VideoInput>>,
+        host_video_input: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
         // `VoiceActivityVideoSampler(speaking_fps, silent_fps)`'s two rates; `None`: every frame.
         video_sampler: Option<(f64, f64)>,
         // A custom `video_sampler` callable: the host pumps and gates; the driver reads no camera.
@@ -115,9 +117,16 @@ impl SessionApi {
         let anchor = lk_agents_abi::WallAnchor::of(&*clock);
         let config = room_io_config.unwrap_or_else(|| RoomIoConfig {
             participant_identity: participant_identity.map(Into::into),
-            audio_input: Some(AudioInputConfig { sample_rate: input_sample_rate, auto_gain_control, ..AudioInputConfig::default() }),
+            audio_input: Some(AudioInputConfig {
+                sample_rate: input_sample_rate,
+                auto_gain_control,
+                ..AudioInputConfig::default()
+            }),
             audio_output: Some(AudioOutputConfig {
-                publish: lk_agents_rtc::TrackPublishOptions { sample_rate: output_sample_rate, ..Default::default() },
+                publish: lk_agents_rtc::TrackPublishOptions {
+                    sample_rate: output_sample_rate,
+                    ..Default::default()
+                },
             }),
             text_output: text_output.then(TextOutputConfig::default),
             ..RoomIoConfig::default()
@@ -128,7 +137,8 @@ impl SessionApi {
         }
         let realtime = realtime.or_else(|| {
             realtime_host.map(|host| {
-                Arc::new(lk_agents_abi::llm::realtime::HostRealtimeModel::new(host, anchor)) as Arc<dyn lk_agents_abi::Realtime>
+                Arc::new(lk_agents_abi::llm::realtime::HostRealtimeModel::new(host, anchor))
+                    as Arc<dyn lk_agents_abi::Realtime>
             })
         });
         let (session_layer, diagnostics) = match options {
@@ -156,7 +166,7 @@ impl SessionApi {
         // **Nothing starts here**; the loop begins at `start()`. Synchronous so a host can bind the
         // room's legs and recorder before starting. Read before the config moves into `RoomIo`.
         let sync_speed = config.text_output.as_ref().map(|t| t.transcription_speed_factor);
-        let room_link = crate::agent_activity::lifecycle::RoomLinkConfig {
+        let room_link = crate::room_io::link::RoomLinkConfig {
             close_on_disconnect: config.close_on_disconnect,
             delete_room_on_close: config.delete_room_on_close,
             room: room.name().to_owned(),
@@ -181,7 +191,9 @@ impl SessionApi {
             (Some(audio), Some(text))
                 if room_io.wants_transcript_sync(has_external_audio_output) =>
             {
-                use crate::transcription::synchronizer::{Liang, SyncConfig, TranscriptSynchronizer};
+                use crate::transcription::synchronizer::{
+                    Liang, SyncConfig, TranscriptSynchronizer,
+                };
                 let sync = TranscriptSynchronizer::new(SyncConfig {
                     audio_next: audio,
                     text_next: Some(text),
@@ -202,7 +214,9 @@ impl SessionApi {
         // audio leg it has nothing to play into. What a factory raises comes back as itself.
         let realtime_audio_node = match (realtime_audio_output_node, &audio_out) {
             (Some(factory), Some(next)) => Some(
-                factory.audio_node(crate::io::CoreAudioSink::new(Arc::clone(next))).map_err(SessionBuildError::Node)?,
+                factory
+                    .audio_node(crate::io::CoreAudioSink::new(Arc::clone(next)))
+                    .map_err(SessionBuildError::Node)?,
             ),
             _ => None,
         };
@@ -241,7 +255,9 @@ impl SessionApi {
             sink_can_pause: true,
         };
 
+        let resources = lk_agents_abi::resources::Resources::default();
         let builder = DriverBuilder {
+            resources: resources.clone(),
             agent,
             time: time.clone(),
             spawner: spawner.clone(),
@@ -266,7 +282,6 @@ impl SessionApi {
             realtime,
             tts,
             stt,
-            speaker_filter,
             keyterms,
             vad,
             tts_text_transforms: tts_text_transforms.map(|t| t.0).unwrap_or_default(),
@@ -276,7 +291,9 @@ impl SessionApi {
                 None
             } else {
                 host_video_input.or_else(|| {
-                    room_io.video_input().map(|v| v as Arc<dyn lk_agents_voice::io::VideoInput>)
+                    room_io
+                        .video_input()
+                        .map(|v| v as Arc<dyn lk_agents_abi::voice::io::VideoInput>)
                 })
             },
             recorder: None,
@@ -301,6 +318,7 @@ impl SessionApi {
             time,
             dtmf_reply: Mutex::new(None),
             host: HostParts::default(),
+            resources,
         };
         // The reference's `@deprecate_params` warnings, as `Diagnostic` events, not Python logs.
         if let Some(events) = &on_event {
@@ -308,7 +326,8 @@ impl SessionApi {
                 events.event(&HostWire::Diagnostic(d.wire()));
             }
         }
-        api.host = HostParts { events: on_event, eot: turn_detector, has_options: options.is_some() };
+        api.host =
+            HostParts { events: on_event, eot: turn_detector, has_options: options.is_some() };
         Ok(api)
     }
 
@@ -357,20 +376,29 @@ impl SessionApi {
     /// fresh handle each call over the same leg.
     #[host(getter)]
     pub fn audio_output(&self) -> Option<Arc<crate::room_io::_output::RoomAudioLeg>> {
-        self.room_io.audio_output().map(|out| Arc::new(crate::room_io::_output::RoomAudioLeg::of(out, self.anchor)))
+        self.room_io
+            .audio_output()
+            .map(|out| Arc::new(crate::room_io::_output::RoomAudioLeg::of(out, self.anchor)))
     }
 
     /// The agent's transcription leg, as `_core.RoomTranscriptionOutput`, when `text_output` is on.
     #[host(getter)]
-    pub fn transcription_output(&self) -> Option<Arc<crate::room_io::_output::transcription::RoomTranscriptionLeg>> {
-        self.room_io.agent_transcription().map(|t| Arc::new(crate::room_io::_output::transcription::RoomTranscriptionLeg::of(t)))
+    pub fn transcription_output(
+        &self,
+    ) -> Option<Arc<crate::room_io::_output::transcription::RoomTranscriptionLeg>> {
+        self.room_io
+            .agent_transcription()
+            .map(|t| Arc::new(crate::room_io::_output::transcription::RoomTranscriptionLeg::of(t)))
     }
 
     /// Record the session into `recorder`; `None` detaches (`RecorderIO.start()`/`aclose()`). The
     /// recorder taps the driver's audio path, so no chain node wraps a leg. Safe before or after
     /// `start()`; the file's `finish` stays the host's.
     #[host(method(name = "attach_recorder"))]
-    pub fn host_attach_recorder(&self, #[host(required)] recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>) {
+    pub fn host_attach_recorder(
+        &self,
+        #[host(required)] recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
+    ) {
         self.attach_recorder(recorder);
     }
 
@@ -382,9 +410,7 @@ impl SessionApi {
     }
 
     /// `Agent.update_options(stt=.., vad=.., llm=.., tts=..)` on a running agent: an in-place
-    /// provider swap, not a handoff (same frame, no hook, no drain). Each leg is three-state; the
-    /// primary-speaker filter follows the STT, on the same queue (a swapped-in STT that is no
-    /// `MultiSpeakerAdapter` clears it).
+    /// provider swap, not a handoff (same frame, no hook, no drain). Each leg is three-state.
     #[host(method(kw_only))]
     pub fn update_models(
         &self,
@@ -392,26 +418,24 @@ impl SessionApi {
         tts: Maybe<Option<Arc<dyn Tts>>>,
         stt: Maybe<Option<Arc<dyn Stt>>>,
         vad: Maybe<Option<Arc<dyn Vad>>>,
-        speaker_filter: Maybe<Option<crate::audio::SpeakerFilterConfig>>,
     ) -> Result<(), SessionRefused> {
-        let (llm, tts, stt, filter) = self.swap(llm, tts, stt, &vad, speaker_filter);
-        self.send(FrameCommand::UpdateModels { stt, vad, llm, tts })?;
-        if let Some(config) = filter {
-            self.send(FrameCommand::SetSpeakerFilter(config))?;
-        }
-        Ok(())
+        let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad);
+        self.send(ActivityCommand::UpdateModels { stt, vad, llm, tts })
     }
 
     /// `describe_agent` answered: the frame of the `Agent` a tool returned, with the keywords
     /// `update_agent` takes. The driver performs the handoff from here.
     #[host(method(kw_only = "frame"))]
-    pub fn hook_described(&self, id: u64, #[host(kwargs)] frame: HostFrame) -> Result<(), SessionRefused> {
-        let (update, filter) = self.frame(frame);
-        self.send(Command::HookDone { id: HookId(id), outcome: HookOutcome::Described(Box::new(update)) })?;
-        if let Some(config) = filter {
-            self.send(FrameCommand::SetSpeakerFilter(config))?;
-        }
-        Ok(())
+    pub fn hook_described(
+        &self,
+        id: u64,
+        #[host(kwargs)] frame: UpdateAgentArgs,
+    ) -> Result<(), SessionRefused> {
+        let update = self.frame(frame);
+        self.send(Command::HookDone {
+            id: HookId(id),
+            outcome: HookOutcome::Described(Box::new(update)),
+        })
     }
 
     /// The handoff: replace the agent, keep the session. Resolves `True` once the frame is
@@ -420,41 +444,37 @@ impl SessionApi {
     /// The driver owns the providers, scheduler and buffered frames and outlives the swap, so there
     /// is no `ReusableResources` handover. An omitted provider keeps its stream.
     #[host(method(kw_only))]
-    pub fn update_agent(&self, #[host(kwargs)] frame: HostFrame) -> Result<Reply<bool>, SessionRefused> {
+    pub fn update_agent(
+        &self,
+        #[host(kwargs)] frame: UpdateAgentArgs,
+    ) -> Result<Reply<bool>, SessionRefused> {
         // Always `_update_activity(previous_activity="close", new_activity="start")`; the
         // pause/resume pair is an inline task's (`enter_task`).
-        let (mut update, filter) = self.frame(frame);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        update.done = Some(tx);
-        self.send(FrameCommand::Update(Box::new(update)))?;
-        // The driver rebuilds the detector on the reopened leg when the swap lands.
-        if let Some(config) = filter {
-            self.send(FrameCommand::SetSpeakerFilter(config))?;
-        }
+        let mut update = self.frame(frame);
+        let (call, rx) = self.call(Answer::handoff)?;
+        update.call = Some(call);
+        self.send(ActivityCommand::Update(Box::new(update)))?;
         Ok(Reply::new(async move { matches!(rx.await, Ok(Ok(()))) }))
     }
 
-    /// `await task` inside a tool body or a hook (`AgentTask.__await_impl`, `agent.py:899`); the
+    /// `await task` inside a tool body or a hook (`AgentTask.__await_impl`); the
     /// awaiter parks on `handle.joined()` while the driver pauses the parent frame, runs the task's
     /// frame, and re-installs the parent once the handle settles.
     ///
     /// Frame keywords are `update_agent`'s; `speech_id` is the awaiting speech (`None` from
     /// `on_enter`/`on_exit`); `parent` is the awaiter's agent id, naming the slot the task takes.
-    #[host(method(
-        kw_only = "frame",
-        defaults(preserve_function_call_history = false)
-    ))]
+    #[host(method(kw_only = "frame", defaults(preserve_function_call_history = false)))]
     pub fn enter_task(
         &self,
         handle: &crate::workflows::HostTaskHandle,
-        #[host(kwargs)] frame: HostFrame,
+        #[host(kwargs)] frame: UpdateAgentArgs,
         speech_id: Option<u64>,
         preserve_function_call_history: bool,
         parent: Option<String>,
         origin: Option<&str>,
     ) -> Result<(), CommandRefused> {
         let origin = origin_of(origin)?;
-        let (frame, _) = self.frame(frame);
+        let frame = self.frame(frame);
         let entry = TaskEntry {
             handle: handle.clone(),
             frame,
@@ -467,40 +487,53 @@ impl SessionApi {
 
     /// `session.input.audio = ..` after `start()`; `None` detaches. The reference delivers audio
     /// from a source attached after start, so this must reach the driver.
-    #[host(method(send = FrameCommand::SetAudioInput(source.map(HostAudio))))]
-    pub fn set_audio_input(&self, #[host(required)] source: Option<Arc<dyn AudioInput>>) -> Result<(), SessionRefused>;
+    #[host(method(send = ActivityCommand::SetAudioInput(source.map(HostAudio))))]
+    pub fn set_audio_input(
+        &self,
+        #[host(required)] source: Option<Arc<dyn AudioInput>>,
+    ) -> Result<(), SessionRefused>;
 
     /// `session.input.video = ..` after `start()`: the driver's video pump reads the new source (the
     /// room's own leg is a no-op, a host `io.VideoInput` is wrapped), or stops on `None`.
-    #[host(method(send = FrameCommand::SetVideoInput(source.map(HostVideo))))]
+    #[host(method(send = ActivityCommand::SetVideoInput(source.map(HostVideo))))]
     pub fn set_video_input(
         &self,
-        #[host(required)] source: Option<Arc<dyn lk_agents_voice::io::VideoInput>>,
+        #[host(required)] source: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     ) -> Result<(), SessionRefused>;
 
     /// `session.output.audio = ..` after `start()`: the next speech plays into the new sink, one
     /// in flight is interrupted. `None` takes the sink away. The room's own leg handed back is the
     /// sink the driver already plays into, as the reference's `sink is self._audio_sink` return.
     #[host(method)]
-    pub fn set_audio_output(&self, #[host(required)] sink: Option<Arc<dyn AudioOutput>>) -> Result<(), SessionRefused> {
+    pub fn set_audio_output(
+        &self,
+        #[host(required)] sink: Option<Arc<dyn AudioOutput>>,
+    ) -> Result<(), SessionRefused> {
         if let Some(sink) = &sink {
             if self.room_io.audio_output().is_some_and(|room| Arc::ptr_eq(&room, sink)) {
                 return Ok(());
             }
             sink.tracker().anchor_to(self.anchor);
         }
-        self.send(FrameCommand::SetAudioOutput(sink.map(HostAudioOut)))
+        let sink = sink.map(|s| self.resources.register_audio_output(s));
+        self.send(ActivityCommand::SetAudioOutput(sink))
     }
 
     /// `session.output.transcription = ..` after `start()`: the next reply forwards into the new
     /// leg; one in flight keeps the leg it started with.
-    #[host(method(send = FrameCommand::SetTranscriptionOutput(sink.map(HostTextOut))))]
-    pub fn set_transcription_output(&self, #[host(required)] sink: Option<Arc<dyn TextOutput>>) -> Result<(), SessionRefused>;
+    #[host(method)]
+    pub fn set_transcription_output(
+        &self,
+        #[host(required)] sink: Option<Arc<dyn TextOutput>>,
+    ) -> Result<(), SessionRefused> {
+        let sink = sink.map(|s| self.resources.register_text_output(s));
+        self.send(ActivityCommand::SetTranscriptionOutput(sink))
+    }
 
     /// `Agent.update_tools()` on a running agent. All three parts go together: the runner is
     /// per-agent. The reference's follow-up `update_chat_ctx(chat_ctx.copy(tools=tools))` stays on
     /// the host side.
-    #[host(method(kw_only = "tools_host", send = FrameCommand::UpdateTools(host_toolset(tools, tools_host, tool_runner))))]
+    #[host(method(kw_only = "tools_host", send = ActivityCommand::UpdateTools(host_toolset(tools, tools_host, tool_runner))))]
     pub fn update_tools(
         &self,
         tools: Option<Vec<lk_agents_abi::ToolSpec>>,
@@ -512,7 +545,10 @@ impl SessionApi {
     /// the driver merges into its session layer and re-resolves. An update that says nothing is a
     /// no-op (`keyterms`/`expressive` never reach the driver).
     #[host(method)]
-    pub fn update_turn_options(&self, update: crate::agent_activity::options::UpdateKwargs) -> Result<(), SessionRefused> {
+    pub fn update_turn_options(
+        &self,
+        update: crate::agent_activity::options::UpdateKwargs,
+    ) -> Result<(), SessionRefused> {
         let (patch, diagnostics) = crate::agent_activity::options::update_patch(&update);
         if let Some(events) = &self.host.events {
             for d in diagnostics {
@@ -529,7 +565,10 @@ impl SessionApi {
     /// The outbound-SIP re-evaluation (`_on_room_io_participant_linked`): the warmup leaf of the
     /// session layer, re-resolved by the driver.
     #[host(method)]
-    pub fn set_aec_warmup(&self, #[host(required)] duration: Option<f64>) -> Result<(), SessionRefused> {
+    pub fn set_aec_warmup(
+        &self,
+        #[host(required)] duration: Option<f64>,
+    ) -> Result<(), SessionRefused> {
         let patch = crate::agent_activity::options::aec_warmup_patch(duration);
         self.configure(&patch);
         self.send(TurnCommand::Configure(patch))
@@ -538,17 +577,22 @@ impl SessionApi {
     /// The configuration the driver runs on, as the dict `session.options` views, current the
     /// instant a change is sent. `None` for a session built with no options object.
     #[host(method)]
-    pub fn resolved_options(&self) -> Option<crate::agent_activity::options::ResolvedSessionOptions> {
+    pub fn resolved_options(
+        &self,
+    ) -> Option<crate::agent_activity::options::ResolvedSessionOptions> {
         if !self.host.has_options {
             return None;
         }
         let stack = self.stack();
-        Some(crate::agent_activity::options::resolved_session_options(&stack.resolve(&self.legs()), &stack.session))
+        Some(crate::agent_activity::options::resolved_session_options(
+            &stack.resolve(&self.legs()),
+            &stack.session,
+        ))
     }
 
     /// `AgentActivity.push_video(frame)`: one sampled frame, on its way to the model, from
     /// `ChatContent.image_frame(..)` (the frame is already interned; only a `MediaRef` moves).
-    /// `False` when the loop did not take it (not started or closed, as `agent_activity.py:1479`);
+    /// `False` when the loop did not take it (not started or closed);
     /// a non-image part raises.
     #[host(method(name = "push_video"))]
     pub fn host_push_video(&self, content: lk_agents_abi::ChatContent) -> Result<bool, NotAnImage> {
@@ -556,7 +600,7 @@ impl SessionApi {
         Ok(self.push_video(image))
     }
 
-    /// `AgentTask.complete(result)` from inside `speech`'s tool (`agent.py:894`): the output the run
+    /// `AgentTask.complete(result)` from inside `speech`'s tool: the output the run
     /// ending on that speech reads. `error` is the `isinstance(result, Exception)` arm.
     #[host(method(kw_only = "value"))]
     pub fn set_run_output(
@@ -580,12 +624,7 @@ impl SessionApi {
     /// The overrides apply to this reply only. `tool_choice=None` lets the provider decide, unlike
     /// `"none"`; `chat_ctx=` replaces the history for planning; `tools=`, `tools_host=` and
     /// `tool_runner=` go together, and only a passed `tools` pins the reply's toolset.
-    #[host(method(
-        kw_only,
-        defaults(
-            on_enter = false
-        )
-    ))]
+    #[host(method(kw_only, defaults(on_enter = false)))]
     #[allow(clippy::too_many_arguments)]
     pub fn generate_reply(
         &self,
@@ -603,8 +642,11 @@ impl SessionApi {
     ) -> Result<crate::speech_handle::HostSpeech, CommandRefused> {
         let origin = origin_of(origin)?;
         // An empty toolset would tell the model about no tool at all; `None` keeps the frame's.
-        let toolset = tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, tool_runner)));
-        let (handle, speech) = crate::speech_handle::HostSpeech::pending(self.api()?, allow_interruptions);
+        let toolset =
+            tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, tool_runner)));
+        let (call, rx) = self.call(Answer::speech)?;
+        let speech =
+            crate::speech_handle::HostSpeech::pending(self.api()?, rx, allow_interruptions);
         self.send_from(
             origin,
             SpeechCommand::GenerateReply {
@@ -615,7 +657,7 @@ impl SessionApi {
                 chat_ctx: chat_ctx.map(lk_agents_abi::ChatContext::new),
                 toolset,
                 on_enter,
-                handle,
+                call: Some(call),
             },
         )?;
         Ok(speech)
@@ -633,14 +675,17 @@ impl SessionApi {
     ) -> Result<(), CommandRefused> {
         if !(max_silence.is_finite() && max_silence >= 0.0) {
             return Err(CommandRefused::Invalid(
-                "ivr_start: max_silence must be a finite, non-negative number of seconds".to_owned(),
+                "ivr_start: max_silence must be a finite, non-negative number of seconds"
+                    .to_owned(),
             ));
         }
         // `_start_ivr_detection`: the session's tools extended, then the navigator started.
         if let Some(tools) = session_tools(tools, tools_host) {
             self.send(Command::Ivr(IvrCommand::AddTools(tools)))?;
         }
-        Ok(self.send(Command::Ivr(IvrCommand::Start { max_silence: Duration::from_secs_f64(max_silence) }))?)
+        Ok(self.send(Command::Ivr(IvrCommand::Start {
+            max_silence: Duration::from_secs_f64(max_silence),
+        }))?)
     }
 
     /// `AMD._run`: the answering-machine detector, started as a peer of this session over its
@@ -654,7 +699,8 @@ impl SessionApi {
         tools: Option<lk_agents_abi::HostRef>,
         stt: Option<Arc<dyn Stt>>,
     ) -> Result<(), CommandRefused> {
-        let config = crate::amd::classifier::AmdConfig::resolve(&cfg).map_err(|e| CommandRefused::Invalid(e.to_string()))?;
+        let config = crate::amd::classifier::AmdConfig::resolve(&cfg)
+            .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
         let setup = crate::amd::detector::AmdSetup {
             config,
             prompt: cfg.prompt.unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
@@ -671,11 +717,18 @@ impl SessionApi {
     /// with the host). An unknown `reason` is a `ValueError`. Idempotent. The room io's teardown is
     /// `close_io`, called after the `close` handlers.
     #[host(method(kw_only, defaults(reason = "user_initiated", drain = false, has_error = false)))]
-    pub fn aclose(&self, reason: &str, drain: bool, has_error: bool) -> Result<Reply<()>, UnknownCloseReason> {
+    pub fn aclose(
+        &self,
+        reason: &str,
+        drain: bool,
+        has_error: bool,
+    ) -> Result<Reply<()>, UnknownCloseReason> {
         let reason = lk_agents_abi::voice::events::CloseReason::from_wire(reason)
             .ok_or_else(|| UnknownCloseReason(reason.to_owned()))?;
         // The error object is the host's; the driver carries only the fact of it.
-        let error = has_error.then(|| ProviderError::Local(lk_agents_abi::errors::ApiError::new("the host's close error")));
+        let error = has_error.then(|| {
+            ProviderError::Local(lk_agents_abi::errors::ApiError::new("the host's close error"))
+        });
         // A session never started has nothing to wait for, and its turn-detector stream stays the
         // host's to close.
         let was_running = self.api().is_ok();
@@ -743,7 +796,7 @@ impl SessionApi {
     /// `cancel_agent_handoff()`).
     #[host(method(send = Command::HookDone {
         id: HookId(id),
-        outcome: HookOutcome::ToolsExecuted { reply_required, handoff_required },
+        outcome: HookOutcome::FunctionToolsExecuted { reply_required, handoff_required },
     }))]
     pub fn hook_tools_executed(
         &self,
@@ -759,14 +812,16 @@ impl SessionApi {
         defaults(spoke = false),
         send = Command::HookDone { id: HookId(id), outcome: HookOutcome::Filler { text, spoke } }
     ))]
-    pub fn hook_filler(&self, id: u64, text: Option<String>, spoke: bool) -> Result<(), SessionRefused>;
+    pub fn hook_filler(
+        &self,
+        id: u64,
+        text: Option<String>,
+        spoke: bool,
+    ) -> Result<(), SessionRefused>;
 
     /// `Agent.on_user_turn_completed` returned for hook call `id`, with its edits to the turn's
     /// request. A late answer is journalled and dropped.
-    #[host(method(
-        kw_only = "instructions",
-        defaults(stop = false)
-    ))]
+    #[host(method(kw_only = "instructions", defaults(stop = false)))]
     pub fn hook_turn_done(
         &self,
         id: u64,
@@ -846,7 +901,7 @@ impl SessionApi {
 
     /// `Agent.update_instructions()` on the agent that is already driving. Changes only the
     /// prompt; `update_agent` would replace the whole frame.
-    #[host(method(send = FrameCommand::UpdateInstructions(instructions)))]
+    #[host(method(send = ActivityCommand::UpdateInstructions(instructions)))]
     pub fn update_instructions(&self, instructions: Instructions) -> Result<(), SessionRefused>;
 
     /// `input.set_audio_enabled` / `output.set_audio_enabled` / `output.set_transcription_enabled`.
@@ -854,12 +909,12 @@ impl SessionApi {
     #[host(method)]
     pub fn set_io_enabled(&self, leg: &str, enabled: bool) -> Result<(), CommandRefused> {
         let leg = match leg {
-            "audio_input" => IoLeg::AudioInput,
-            "audio_output" => IoLeg::AudioOutput,
-            "transcription" => IoLeg::Transcription,
+            "audio_input" => IoKind::AudioInput,
+            "audio_output" => IoKind::AudioOutput,
+            "transcription" => IoKind::Transcription,
             other => return Err(CommandRefused::Invalid(format!("unknown io leg {other:?}"))),
         };
-        Ok(self.send(FrameCommand::SetIoEnabled { leg, enabled })?)
+        Ok(self.send(ActivityCommand::SetIoEnabled { leg, enabled })?)
     }
 
     /// `RunContext.update()` after the first, or a detached tool's return. `kind` is `"progress"`
@@ -879,7 +934,9 @@ impl SessionApi {
                 message: message.ok_or_else(|| missing("a progress update carries `message`"))?,
                 raw: raw.ok_or_else(|| missing("a progress update carries `raw`"))?,
             },
-            "final" => ToolUpdate::Final { answer: answer.ok_or_else(|| missing("a final update carries `answer`"))? },
+            "final" => ToolUpdate::Final {
+                answer: answer.ok_or_else(|| missing("a final update carries `answer`"))?,
+            },
             other => {
                 return Err(CommandRefused::Invalid(format!(
                     "tool_update kind must be \"progress\" or \"final\", got {other:?}"
@@ -892,15 +949,21 @@ impl SessionApi {
 
     /// `Agent.update_chat_ctx()` on a running agent: replace the context.
     /// `exclude_invalid_function_calls` is applied host-side before the items arrive.
-    #[host(method(send = FrameCommand::UpdateChatCtx(items)))]
-    pub fn update_chat_ctx(&self, items: Vec<lk_agents_abi::ChatItem>) -> Result<(), SessionRefused>;
+    #[host(method(send = ActivityCommand::UpdateChatCtx(items)))]
+    pub fn update_chat_ctx(
+        &self,
+        items: Vec<lk_agents_abi::ChatItem>,
+    ) -> Result<(), SessionRefused>;
 
     /// `AgentSession.interrupt(force=)`: interrupt the current and queued speeches up to the first
     /// uninterruptible; answers when they are done, or with the refusal.
     #[host(method(kw_only, defaults(force = false)))]
-    pub fn interrupt(&self, force: bool) -> Result<Reply<Result<(), NotInterruptible>>, SessionRefused> {
-        let (done, rx) = tokio::sync::oneshot::channel();
-        self.send(SpeechCommand::Interrupt { force, done: Some(done) })?;
+    pub fn interrupt(
+        &self,
+        force: bool,
+    ) -> Result<Reply<Result<(), NotInterruptible>>, SessionRefused> {
+        let (call, rx) = self.call(Answer::interrupt)?;
+        self.send(SpeechCommand::Interrupt { force, call: Some(call) })?;
         Ok(Reply::new(async move {
             match rx.await {
                 Ok(Ok(())) => Ok(()),
@@ -912,11 +975,11 @@ impl SessionApi {
     }
 
     /// `AgentSession.drain()`: the driving frame's `on_exit`, then scheduling paused until no
-    /// speech is left; the session stays open. Answers `None`, `"frame_changing"` or `"closing"`.
+    /// speech is left; the session stays open. Answers `None`, `"activity_changing"` or `"closing"`.
     #[host(method)]
     pub fn drain(&self) -> Result<Reply<Option<String>>, SessionRefused> {
-        let (done, rx) = tokio::sync::oneshot::channel();
-        self.send(FrameCommand::Drain { done: Some(done) })?;
+        let (call, rx) = self.call(Answer::drain)?;
+        self.send(ActivityCommand::Drain { call: Some(call) })?;
         Ok(Reply::new(async move {
             match rx.await {
                 Ok(Ok(())) => None,
@@ -940,15 +1003,16 @@ impl SessionApi {
         dtmf_stop_event: String,
     ) -> Result<Reply<lk_agents_abi::voice::workflows::DtmfOutcomeWire>, CommandRefused> {
         use crate::workflows::builtins::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome};
-        let stop = DtmfEvent::parse(&dtmf_stop_event)
-            .ok_or_else(|| CommandRefused::Invalid(format!("{dtmf_stop_event:?} is not a DTMF key")))?;
+        let stop = DtmfEvent::parse(&dtmf_stop_event).ok_or_else(|| {
+            CommandRefused::Invalid(format!("{dtmf_stop_event:?} is not a DTMF key"))
+        })?;
         let timeout = Duration::try_from_secs_f64(dtmf_input_timeout)
             .map_err(|e| CommandRefused::Invalid(format!("dtmf_input_timeout: {e}")))?;
         let collector = DtmfCollector::new(num_digits, ask_for_confirmation, timeout, stop)
             .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
         let guard = collector.reply_flag();
-        let (done, rx) = tokio::sync::oneshot::channel();
-        self.send(DtmfCommand::Start { collector, done })?;
+        let (call, rx) = self.call(Answer::dtmf)?;
+        self.send(DtmfCommand::Start { collector, call: Some(call) })?;
         *self.dtmf_reply.lock().unwrap_or_else(|p| p.into_inner()) = Some(guard);
         Ok(Reply::new(async move { rx.await.unwrap_or(DtmfOutcome::Stopped).wire() }))
     }
@@ -976,28 +1040,31 @@ impl SessionApi {
     /// `AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
     /// Refused with [`IdleRefused::Closing`] if it closes first.
     #[host(method(kw_only))]
-    pub fn wait_for_idle(&self, hold: Option<u64>) -> Result<Reply<Result<(), IdleRefused>>, SessionRefused> {
-        let (done, rx) = tokio::sync::oneshot::channel();
-        self.send(SpeechCommand::WaitForIdle { hold: hold.map(HoldId), done })?;
+    pub fn wait_for_idle(
+        &self,
+        hold: Option<u64>,
+    ) -> Result<Reply<Result<(), IdleRefused>>, SessionRefused> {
+        let (call, rx) = self.call(Answer::idle)?;
+        self.send(SpeechCommand::WaitForIdle { hold: hold.map(HoldId), call: Some(call) })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)) }))
     }
 
     /// `RunContext.foreground()`: wait for idle, then hold the floor until
-    /// [`release_floor`](Self::release_floor). Answers the hold's id.
+    /// [`release_idle_hold`](Self::release_idle_hold). Answers the hold's id.
     #[host(method(kw_only))]
-    pub fn hold_floor(
+    pub fn wait_for_idle_and_hold(
         &self,
         origin: Option<&str>,
     ) -> Result<Reply<Result<u64, IdleRefused>>, CommandRefused> {
-        let (done, rx) = tokio::sync::oneshot::channel();
-        self.send_from(origin_of(origin)?, SpeechCommand::HoldFloor { done })?;
+        let (call, rx) = self.call(Answer::hold)?;
+        self.send_from(origin_of(origin)?, SpeechCommand::WaitForIdleAndHold { call: Some(call) })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)).map(|h| h.0) }))
     }
 
     /// `_wait_for_idle_and_hold`'s exit. A hold the loop no longer has is a no-op, and so is a
     /// closed loop: it has released everything already.
-    #[host(method(send = SpeechCommand::ReleaseFloor { hold: HoldId(hold) }))]
-    pub fn release_floor(&self, hold: u64);
+    #[host(method(send = SpeechCommand::ReleaseIdleHold { hold: HoldId(hold) }))]
+    pub fn release_idle_hold(&self, hold: u64);
 
     /// `AgentSession._claim_user_turn()`'s enter: pins the user state to `speaking` and holds
     /// `wait_for_idle` open. Reentrant.
@@ -1019,16 +1086,18 @@ impl SessionApi {
         retry_instructions: String,
         origin: Option<&str>,
     ) -> Result<(), CommandRefused> {
-        let spec = crate::run_result::RunSpec { user_input, expects_output, max_retries, retry_instructions };
+        let spec = crate::run_result::RunSpec {
+            user_input,
+            expects_output,
+            max_retries,
+            retry_instructions,
+        };
         Ok(self.send_from(origin_of(origin)?, Command::Run(Box::new(spec)))?)
     }
 
     /// `AgentSession.say(text)`: speak these words, no LLM. Synchronous; the handle is the promise
     /// the loop fulfils.
-    #[host(method(
-        kw_only = "allow_interruptions",
-        defaults(add_to_chat_ctx = true)
-    ))]
+    #[host(method(kw_only = "allow_interruptions", defaults(add_to_chat_ctx = true)))]
     pub fn say(
         &self,
         text: String,
@@ -1050,16 +1119,14 @@ impl SessionApi {
     ) -> Result<(crate::speech_handle::HostSpeech, TextPusher), CommandRefused> {
         // Backpressure against a runaway producer, not a buffer.
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        let speech = self.speak(SayText::Stream(rx), allow_interruptions, add_to_chat_ctx, origin)?;
+        let speech =
+            self.speak(SayText::Stream(rx), allow_interruptions, add_to_chat_ctx, origin)?;
         Ok((speech, TextPusher(std::sync::Mutex::new(Some(tx)))))
     }
 
     /// `AgentSession.say(text, audio=..)`: pre-synthesised frames instead of TTS, pushed like
     /// [`say_stream`](Self::say_stream)'s chunks; `text` is still committed.
-    #[host(method(
-        kw_only = "allow_interruptions",
-        defaults(add_to_chat_ctx = true)
-    ))]
+    #[host(method(kw_only = "allow_interruptions", defaults(add_to_chat_ctx = true)))]
     pub fn say_audio(
         &self,
         text: String,
@@ -1069,17 +1136,15 @@ impl SessionApi {
     ) -> Result<(crate::speech_handle::HostSpeech, FramePusher), CommandRefused> {
         // Deeper than the text channel: at 20 ms a frame, 64 would be 1.3 s of audio.
         let (tx, rx) = tokio::sync::mpsc::channel(512);
-        let speech = self.speak(SayText::Audio { text, rx }, allow_interruptions, add_to_chat_ctx, origin)?;
+        let speech =
+            self.speak(SayText::Audio { text, rx }, allow_interruptions, add_to_chat_ctx, origin)?;
         Ok((speech, FramePusher(std::sync::Mutex::new(Some(tx)))))
     }
 
     /// A metrics record only a plugin can measure, emitted as `metrics_collected`. Engine-computed
     /// kinds are refused (they would count twice).
     #[host(method)]
-    pub fn host_metrics(
-        &self,
-        record: HostMetricsRecord,
-    ) -> Result<(), CommandRefused> {
+    pub fn host_metrics(&self, record: HostMetricsRecord) -> Result<(), CommandRefused> {
         let HostMetricsRecord(record) = record;
         use lk_agents_abi::metrics::base::AgentMetrics as M;
         match &record {
@@ -1089,12 +1154,16 @@ impl SessionApi {
                     record.type_literal()
                 )));
             }
-            M::Vad(_) | M::EotInference(_) | M::RealtimeModel(_) | M::Interruption(_) | M::Avatar(_) => {}
+            M::Vad(_)
+            | M::EotInference(_)
+            | M::RealtimeModel(_)
+            | M::Interruption(_)
+            | M::Avatar(_) => {}
         }
         Ok(self.send(Command::HostMetrics(Box::new(record)))?)
     }
 
-    /// `_start_ivr_detection(transcript)`: a final the navigator counts as if heard -- AMD's
+    /// `_start_ivr_detection(transcript)`: a final the navigator counts as if heard: AMD's
     /// greeting transcript, so the first menu repeat is the second chunk, not the first.
     #[host(method(send = IvrCommand::SeedTranscript { text: text.to_owned() }))]
     pub fn ivr_final(&self, text: &str) -> Result<(), SessionRefused>;
@@ -1105,7 +1174,7 @@ impl SessionApi {
     pub fn ivr_close(&self) -> Result<(), SessionRefused>;
 
     /// `_AMDClassifier.start_detection_timer()`: the overall detection budget, armed (or moved)
-    /// from now -- at *answer*, not at dial, so pre-answer ringback cannot burn it.
+    /// from now: at *answer*, not at dial, so pre-answer ringback cannot burn it.
     #[host(method)]
     pub fn amd_start_detection_timer(&self) -> Result<(), SessionRefused> {
         use crate::amd::classifier::{In, Start};
@@ -1140,7 +1209,11 @@ impl SessionApi {
             .ok_or_else(|| CommandRefused::Invalid(format!("unknown AMD category {category:?}")))?;
         let reason = AmdReason::from_wire(reason)
             .ok_or_else(|| CommandRefused::Invalid(format!("unknown AMD reason {reason:?}")))?;
-        Ok(self.amd_input(In::Verdict(Verdict::Settle { category, reason, speech_duration: None }))?)
+        Ok(self.amd_input(In::Verdict(Verdict::Settle {
+            category,
+            reason,
+            speech_duration: None,
+        }))?)
     }
 
     /// `_AMDClassifier.end_input()`: no more transcripts, the classification in flight cancelled.
@@ -1204,13 +1277,13 @@ impl SessionApi {
         stt_flush_duration: f64,
         skip_reply: bool,
     ) -> Result<Reply<Result<String, CommitSuperseded>>, SessionRefused> {
-        let (done, rx) = tokio::sync::oneshot::channel();
+        let (call, rx) = self.call(Answer::commit)?;
         self.send(SpeechCommand::CommitUserTurn {
             transcript_timeout: Duration::from_secs_f64(transcript_timeout.max(0.0)),
             stt_flush_duration: Duration::from_secs_f64(stt_flush_duration.max(0.0)),
             skip_reply,
-            done,
+            call: Some(call),
         })?;
-        Ok(Reply::new(async move { rx.await.map_err(|_| CommitSuperseded) }))
+        Ok(Reply::new(async move { rx.await.unwrap_or(Err(CommitSuperseded)) }))
     }
 }

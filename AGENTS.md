@@ -79,8 +79,8 @@ make doctor           # Check development environment health
 ## Architecture Overview
 
 This is the `v2.0` branch: Agents 2.0, in beta. `docs/README.md` indexes the design, one feature
-per page; `planned-*.md` pages describe what is not built yet, and `docs/TODO.md` lists where the
-code still differs from a built page.
+per page. Feature documents describe the end state without implementation-status labels;
+inspect the implementation to determine what remains to change.
 
 ### Core Concepts
 - **Fast brain / slow brain**: the pattern every example follows. A frontend agent talks to the

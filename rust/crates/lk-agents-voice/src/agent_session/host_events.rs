@@ -15,7 +15,7 @@ pub enum HookKind {
     DescribeAgent,
     RenderToolReply,
     FillerSource,
-    ToolsExecuted,
+    FunctionToolsExecuted,
 }
 
 impl HookKind {
@@ -27,7 +27,7 @@ impl HookKind {
             HookKind::DescribeAgent => "describe_agent",
             HookKind::RenderToolReply => "render_tool_reply",
             HookKind::FillerSource => "filler_source",
-            HookKind::ToolsExecuted => "function_tools_executed",
+            HookKind::FunctionToolsExecuted => "function_tools_executed",
         }
     }
 }
@@ -52,9 +52,9 @@ pub enum HookCall {
     /// Unanswered, the reference's defaults are used.
     RenderToolReply { id: HookId, agent: String, call_ids: Vec<String>, at_tail: bool },
     FillerSource { id: HookId, filler: FillerId, step: u32 },
-    /// `function_tools_executed`, emitted by the host; answered with `HookOutcome::ToolsExecuted`.
+    /// `function_tools_executed`, emitted by the host; answered with `HookOutcome::FunctionToolsExecuted`.
     /// Unanswered, the event stands as issued.
-    ToolsExecuted {
+    FunctionToolsExecuted {
         id: HookId,
         speech: SpeechId,
         event: Box<lk_agents_abi::voice::events::ToolsExecutedEvent>,
@@ -70,7 +70,7 @@ impl HookCall {
             | HookCall::DescribeAgent { id, .. }
             | HookCall::RenderToolReply { id, .. }
             | HookCall::FillerSource { id, .. }
-            | HookCall::ToolsExecuted { id, .. } => *id,
+            | HookCall::FunctionToolsExecuted { id, .. } => *id,
         }
     }
 
@@ -82,7 +82,7 @@ impl HookCall {
             HookCall::DescribeAgent { .. } => HookKind::DescribeAgent,
             HookCall::RenderToolReply { .. } => HookKind::RenderToolReply,
             HookCall::FillerSource { .. } => HookKind::FillerSource,
-            HookCall::ToolsExecuted { .. } => HookKind::ToolsExecuted,
+            HookCall::FunctionToolsExecuted { .. } => HookKind::FunctionToolsExecuted,
         }
     }
 }
@@ -156,7 +156,7 @@ impl HookCall {
                     at_tail: *at_tail,
                 })
             }
-            HookCall::ToolsExecuted { event, .. } => {
+            HookCall::FunctionToolsExecuted { event, .. } => {
                 use lk_agents_abi::ChatItem;
                 HostWire::HookToolsExecuted(w::ToolsExecutedHookWire {
                     hook,
@@ -192,7 +192,7 @@ impl SessionEvent {
         // `created_at` is the host's stamp (`#[binding(skip)]`): inert here.
         let host_stamp = 0.0;
         match self {
-            SessionEvent::UserTranscript(t) => HostWire::UserTranscript(w::UserInputTranscribed {
+            SessionEvent::UserInputTranscribed(t) => HostWire::UserTranscript(w::UserInputTranscribed {
                 transcript: t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default(),
                 is_final: t.is_final,
                 item_id: t.item_id.clone(),
@@ -211,7 +211,7 @@ impl SessionEvent {
                 })
             }
             SessionEvent::Diagnostic(d) => HostWire::Diagnostic(d.wire()),
-            SessionEvent::ToolsExecuted(e) => HostWire::ToolsExecuted((**e).clone()),
+            SessionEvent::FunctionToolsExecuted(e) => HostWire::FunctionToolsExecuted((**e).clone()),
             SessionEvent::UserTurnCompleted(e) => {
                 HostWire::UserTurnCompleted(w::UserTurnCompletedWire {
                     turn: e.turn.0,
@@ -233,7 +233,7 @@ impl SessionEvent {
             SessionEvent::UserTurnExceeded(e) => HostWire::UserTurnExceeded(e.clone()),
             // Wire kind `transcription_timeout`, model discriminant `user_transcription_timeout`.
             // `turn_start` is monotonic, hence the anchor.
-            SessionEvent::TranscriptionTimeout(e) => {
+            SessionEvent::UserTranscriptionTimeout(e) => {
                 HostWire::TranscriptionTimeout(w::UserTranscriptionTimeout {
                     speech_duration: e.speech_duration.as_secs_f64(),
                     vad_speech_started_at: anchor.seconds(e.turn_start),
@@ -276,7 +276,7 @@ impl SessionEvent {
                 })
             }
             SessionEvent::AmdResult { verdict } => HostWire::AmdResult(verdict.clone()),
-            SessionEvent::ItemAdded { item, agent, visibility, run, .. } => {
+            SessionEvent::ConversationItemAdded { item, agent, visibility, run, .. } => {
                 HostWire::ItemAdded(w::ItemAddedWire {
                     item: (**item).clone(),
                     agent: agent.clone(),

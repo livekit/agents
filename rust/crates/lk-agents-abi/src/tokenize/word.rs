@@ -36,7 +36,7 @@ pub fn is_char_based(c: char) -> bool {
 pub struct WordTokenizerOptions {
     /// Offsets still span the source.
     pub ignore_punctuation: bool,
-    /// One token per [`is_char_based`] character; the barge-in guards turn it on for CJK.
+    /// One token per [`is_char_based`] character; the interruption guards turn it on for CJK.
     pub split_character: bool,
     /// Whitespace is glued to the front of the following token.
     pub retain_format: bool,
@@ -66,8 +66,17 @@ struct Pos {
 
 /// `split_words` for the host: `(word, start_char, end_char)`, with character offsets
 /// (`replace_words` splices with them).
-#[crate::host(export(pid = false, name = "split_words", defaults(ignore_punctuation = true, split_character = false, retain_format = false)))]
-pub fn split_words_of(text: &str, ignore_punctuation: bool, split_character: bool, retain_format: bool) -> Vec<(String, usize, usize)> {
+#[crate::host(export(
+    pid = false,
+    name = "split_words",
+    defaults(ignore_punctuation = true, split_character = false, retain_format = false)
+))]
+pub fn split_words_of(
+    text: &str,
+    ignore_punctuation: bool,
+    split_character: bool,
+    retain_format: bool,
+) -> Vec<(String, usize, usize)> {
     let opts = WordTokenizerOptions { ignore_punctuation, split_character, retain_format };
     split_words(text, opts).into_iter().map(|w| (w.text.into_owned(), w.start, w.end)).collect()
 }
@@ -187,7 +196,7 @@ mod tests {
         assert_eq!(spans(&split_words("é 世界", split)), [("é", 0, 1), ("世", 2, 3), ("界", 3, 4)]);
     }
 
-    // Catches: the character branch always on (#2366); both barge-in guards opt in.
+    // Catches: the character branch always on (#2366); both interruption guards opt in.
     #[test]
     fn cjk_splits_per_character_only_when_the_flag_is_set() {
         assert_eq!(spans(&split_words("你好吗", DEFAULTS)), [("你好吗", 0, 3)]);

@@ -5,7 +5,7 @@ use thiserror::Error;
 /// The gateway's fixed input rate (`inference/interruption.py:50`).
 pub const SAMPLE_RATE: u32 = 16_000;
 
-/// 25 ms per model frame, two consecutive frames: the shortest thing the server calls a barge-in.
+/// 25 ms per model frame, two consecutive frames: the shortest thing the server calls a interruption.
 pub const MIN_INTERRUPTION_DURATION: f64 = 0.025 * 2.0;
 
 /// Ceiling on the rolling window, prefix included; larger is rejected (the model was trained on
@@ -118,7 +118,11 @@ impl InterruptionOptions {
 mod tests {
     use super::*;
 
-    fn opts(max_audio_duration: f64, api_key: &str, api_secret: &str) -> Result<InterruptionOptions, OptionsError> {
+    fn opts(
+        max_audio_duration: f64,
+        api_key: &str,
+        api_secret: &str,
+    ) -> Result<InterruptionOptions, OptionsError> {
         InterruptionOptions::new(
             None,
             MIN_INTERRUPTION_DURATION,

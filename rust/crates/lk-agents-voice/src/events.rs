@@ -191,7 +191,7 @@ pub mod diagnostics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
 pub enum SpeechOutcome {
     Completed,
-    /// Cut short: a barge-in, `interrupt()`, or the interruption watchdog.
+    /// Cut short: a interruption, `interrupt()`, or the interruption watchdog.
     Interrupted,
     /// A provider failed it; the handle's `exception()` carries the error.
     Failed,
@@ -262,12 +262,23 @@ pub enum RunFailure {
 /// One entry of a tool call's lifecycle (`ToolExecutionUpdatedEvent.update`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolLifecycle {
-    Started { call: lk_agents_abi::FunctionCall },
+    Started {
+        call: lk_agents_abi::FunctionCall,
+    },
     /// `ctx.update(message)`: `id` is the call's own first, then `{call_id}_update_N`.
-    Updated { id: String, call_id: String, message: String },
+    Updated {
+        id: String,
+        call_id: String,
+        message: String,
+    },
     /// The call's single terminal entry (`{call_id}_final` once detached); `message` is `None`
     /// when there is nothing to voice.
-    Ended { id: String, call_id: String, message: Option<String>, status: ToolEndStatus },
+    Ended {
+        id: String,
+        call_id: String,
+        message: Option<String>,
+        status: ToolEndStatus,
+    },
     /// The deferred reply covering `update_ids`: `Scheduled`, then one of the three ends.
     Reply {
         update_ids: Vec<String>,
@@ -355,12 +366,12 @@ pub enum SessionEvent {
     Diagnostic(DiagnosticEvent),
     EotPrediction(EotPredictionEvent),
     AgentBackchannelOpportunity(AgentBackchannelOpportunityEvent),
-    UserTranscript(Box<UserTranscriptEvent>),
+    UserInputTranscribed(Box<UserTranscriptEvent>),
     StartOfSpeech(StartOfSpeechEvent),
     EndOfSpeech(EndOfSpeechEvent),
     PreemptiveGeneration(PreemptiveGenerationEvent),
     UserTurnExceeded(UserTurnExceededEvent),
-    TranscriptionTimeout(TranscriptionTimeoutEvent),
+    UserTranscriptionTimeout(TranscriptionTimeoutEvent),
     /// `on_backchannel_confirmed`: the driver clears the realtime model's buffered audio.
     BackchannelConfirmed,
     /// `on_interruption`: the overlap was a real interruption.
@@ -398,7 +409,7 @@ pub enum SessionEvent {
         at: Ts,
     },
     /// `function_tools_executed`: one batch of tool calls, with their outputs.
-    ToolsExecuted(Box<crate::tool_executor::ToolsExecutedEvent>),
+    FunctionToolsExecuted(Box<crate::tool_executor::ToolsExecutedEvent>),
     /// `tool_execution_updated`: one call's start, updates, terminal entry and deferred reply.
     ToolExecutionUpdated(ToolLifecycle),
     /// A speech ended, for every kind and cause, after every `ItemAdded` it produced; the handle is
@@ -428,7 +439,7 @@ pub enum SessionEvent {
         reason: lk_agents_abi::voice::events::CloseReason,
         error: Option<lk_agents_abi::errors::ProviderError>,
     },
-    ItemAdded {
+    ConversationItemAdded {
         item: Box<lk_agents_abi::ChatItem>,
         /// Which agent produced it, as the host's opaque id. Stamped here because only the loop
         /// orders a handoff turn's items before the swap.

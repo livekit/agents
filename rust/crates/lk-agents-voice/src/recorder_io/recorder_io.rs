@@ -1,4 +1,8 @@
-use crate::io::{PlaybackEvent, PlaybackObserver};
+use crate::agent_session::Driver;
+use crate::agent_session::effects::{Out, TurnTimer};
+use crate::room_io::RECORDER_FLUSH;
+use crate::trace::PlayoutStep;
+use lk_agents_abi::voice::io::{AudioOutput, PlaybackEvent, PlaybackObserver};
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_media::recorder::AudioRecorder;
 use std::sync::Arc;
@@ -31,7 +35,7 @@ impl RecorderTap {
     }
 }
 
-/// Forwards one [`crate::io::PlaybackTracker`]'s events to a recorder. Via the tracker because it
+/// Forwards one [`lk_agents_abi::voice::io::PlaybackTracker`]'s events to a recorder. Via the tracker because it
 /// suppresses over-reports, which would close a segment still being filled.
 pub struct RecorderPlaybackObserver(pub RecorderTap);
 
@@ -49,6 +53,66 @@ impl PlaybackObserver for RecorderPlaybackObserver {
             PlaybackEvent::Finished(e) => {
                 r.on_playback_finished(tap.now(), e.playback_position.as_secs_f64())
             }
+        }
+    }
+}
+
+/// The recorder tap as the driver runs it: attached, observing the audio output, flushed on a
+/// timer, detached with one last flush.
+impl Driver {
+    /// A second attach replaces the first.
+    pub(crate) fn attach_recorder(
+        &mut self,
+        now: Ts,
+        recorder: Arc<dyn lk_agents_media::recorder::AudioRecorder>,
+        out: &mut Out,
+    ) {
+        let tap = crate::recorder_io::RecorderTap::new(recorder, self.shared.time.clock());
+        *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = Some(tap);
+        self.observe_recorder(None);
+        out.machine().arm(TurnTimer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
+    }
+
+    /// One last flush, observer off, timer cancelled.
+    pub(crate) fn detach_recorder(&mut self, now: Ts, out: &mut Out) {
+        if self.shared.recorder_tap().is_none() {
+            return;
+        }
+        self.flush_recorder(now, false, out);
+        if let Some(observer) =
+            self.shared.recorder_observer.lock().unwrap_or_else(|p| p.into_inner()).take()
+            && let Some(out) = self.shared.output.audio()
+        {
+            out.tracker().unobserve(&observer);
+        }
+        *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = None;
+        out.machine().cancel(TurnTimer::RecorderFlush);
+        out.trace(PlayoutStep::RecorderDetached);
+    }
+
+    /// Off `previous` first.
+    pub(crate) fn observe_recorder(&self, previous: Option<&dyn AudioOutput>) {
+        let Some(tap) = self.shared.recorder_tap() else { return };
+        let mut slot = self.shared.recorder_observer.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(old) = slot.take()
+            && let Some(prev) = previous
+        {
+            prev.tracker().unobserve(&old);
+        }
+        if let Some(out) = self.shared.output.audio() {
+            let observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
+                Arc::new(crate::recorder_io::RecorderPlaybackObserver(tap));
+            out.tracker().observe(observer.clone());
+            *slot = Some(observer);
+        }
+    }
+
+    pub(crate) fn flush_recorder(&mut self, now: Ts, rearm: bool, out: &mut Out) {
+        let Some(tap) = self.shared.recorder_tap() else { return };
+        let ok = tap.recorder.flush(tap.now()).is_ok();
+        out.trace(PlayoutStep::RecorderFlushed { ok });
+        if rearm && !self.session.closing_past_edge() {
+            out.machine().arm(TurnTimer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
         }
     }
 }

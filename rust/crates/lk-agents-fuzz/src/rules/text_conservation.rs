@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use lk_agents_voice::{
-    agent_session::IoLeg,
+    agent_session::IoKind,
     trace::{PlayoutStep::TranscriptForwarded, Step::Playout},
 };
 
@@ -22,7 +22,9 @@ use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::{AgentText, Input, SayInput},
-    record::{Answer, Detail, Handle, HostView, InferenceView, InputsView, Kind, Recording, SpeechView},
+    record::{
+        Answer, Detail, Handle, HostView, InferenceView, InputsView, Kind, Recording, SpeechView,
+    },
 };
 
 pub struct TextConservation;
@@ -31,18 +33,18 @@ impl Rule for TextConservation {
     const CONTRACT: Contract = Contract {
         id: "text_conservation",
         guarantee: "Forwarded transcript is a prefix of the text the case gave the speech; a speech that completed with a transcript path live throughout forwarded all of it.",
-        examples: &[all_text_forwarded, completed_with_no_transcript_path, detached_mid_speech_forwards_nothing,],
+        examples: &[
+            all_text_forwarded,
+            completed_with_no_transcript_path,
+            detached_mid_speech_forwards_nothing,
+        ],
         counterexamples: &[forwarded_unsent_text, completed_but_lost_text],
         probe: None,
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let inputs = r.inputs_view();
-        let (host, internal, inference) = (
-            r.host_view(),
-            r.internal_view(),
-            r.inference_view(),
-        );
+        let (host, internal, inference) = (r.host_view(), r.internal_view(), r.inference_view());
         let spoken = said_text(&inputs, &host);
         let transcription = inputs.transcription_output();
 
@@ -59,15 +61,24 @@ impl Rule for TextConservation {
 
             // Nothing reaches the host that the case did not give it, and nothing is reordered:
             // what was forwarded so far is a prefix of what was given.
-            check.expect(&speech, given.starts_with(&forwarded), format!("forwarded {forwarded:?} is not a prefix of given {given:?}"));
+            check.expect(
+                &speech,
+                given.starts_with(&forwarded),
+                format!("forwarded {forwarded:?} is not a prefix of given {given:?}"),
+            );
 
             // A speech that ran to the end without interruption or error forwarded everything, as
             // long as there was a transcript path to forward it down for the whole of its life.
             let until = speech.done_at().unwrap_or(r.now());
-            let live_path =
-                speech.created_at().is_none_or(|created| transcription.on_throughout(created, until));
+            let live_path = speech
+                .created_at()
+                .is_none_or(|created| transcription.on_throughout(created, until));
             if live_path && speech.completed_normally() && speech.is_scheduled() {
-                check.expect(&speech, forwarded == given, format!("completed speech forwarded {forwarded:?}, was given {given:?}"));
+                check.expect(
+                    &speech,
+                    forwarded == given,
+                    format!("completed speech forwarded {forwarded:?}, was given {given:?}"),
+                );
             }
         }
     }
@@ -149,12 +160,7 @@ fn squash(text: &str) -> String {
 /// input, so the path starts live. A detach before the speech existed and one part-way through
 /// it are the same thing to the completion clause: some of the speech had nowhere to go.
 fn say(text: &str) -> Input {
-    Input::Say {
-        text: AgentText(text.into()),
-        input: SayInput::Words,
-        allow: None,
-        to_ctx: true,
-    }
+    Input::Say { text: AgentText(text.into()), input: SayInput::Words, allow: None, to_ctx: true }
 }
 
 /// A `say` of two words, answered with the speech it created, as a real run records it.
@@ -179,7 +185,7 @@ fn all_text_forwarded() -> Recording {
 fn completed_with_no_transcript_path() -> Recording {
     use lk_agents_voice::agent_activity::scheduling::SpeechKind;
     Authored::new()
-        .sent(Input::SetIoEnabled { leg: IoLeg::Transcription, enabled: false })
+        .sent(Input::SetIoEnabled { leg: IoKind::Transcription, enabled: false })
         .sent_opening(say("one two"), &[(Kind::Answer, Detail::None)])
         .result(0, Answer::Speech(1))
         .speech_created(1, SpeechKind::Say)

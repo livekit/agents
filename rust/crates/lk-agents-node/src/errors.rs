@@ -88,7 +88,11 @@ fn api_kind(name: Option<&str>) -> Option<ApiErrorKind> {
 impl From<JsProviderError> for ProviderError {
     fn from(e: JsProviderError) -> Self {
         ProviderError::Host {
-            error: lk_agents_abi::errors::HostError::captured(e.kind, e.message, intern(e.host_ref)),
+            error: lk_agents_abi::errors::HostError::captured(
+                e.kind,
+                e.message,
+                intern(e.host_ref),
+            ),
             api_kind: api_kind(e.api_kind.as_deref()),
             retryable: e.retryable,
             status_code: e.status_code,
@@ -125,9 +129,9 @@ impl From<&ProviderError> for JsErrorOut {
 
 // ------------------------------------------------------------------ the release protocol
 
-/// Ids whose `ProviderError` is still alive somewhere and whose JS entry must stay.
+/// IdMint whose `ProviderError` is still alive somewhere and whose JS entry must stay.
 static LIVE: Mutex<Vec<i64>> = Mutex::new(Vec::new());
-/// Ids whose `ProviderError` has been consumed and whose JS entry may go.
+/// IdMint whose `ProviderError` has been consumed and whose JS entry may go.
 ///
 /// The same shape as `lk-agents-py`'s `host_table` release queue and for the same reason: the drop
 /// happens on whatever tokio worker last held the error, which is never the JS thread. Pushing an
@@ -189,7 +193,7 @@ pub fn release(err: &ProviderError) {
     }
 }
 
-/// Ids the shim may now delete from its map. Drained by the host, never pushed to it -- same rule
+/// IdMint the shim may now delete from its map. Drained by the host, never pushed to it -- same rule
 /// as the telemetry drain.
 pub fn drain_released() -> Vec<i64> {
     std::mem::take(&mut *lock(&RELEASED))

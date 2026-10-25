@@ -5,11 +5,17 @@
 //!
 //! `VOICE_SOAK_SEEDS` and `VOICE_SOAK_BUDGET` size it; the default is eight callers of about forty
 //! turns each.
-use std::collections::BTreeMap;
+//!
+//! Every call must reach its close, so the residue is read off every one: a call that stopped
+//! before it (a livelock, a release phase that never went quiet, a close that never finished)
+//! fails the soak, by seed with why, rather than being left out of the oracle. A long call's
+//! findings outside the known ones fail the soak as they fail the survey.
+use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_fuzz::{
+    check::KNOWN_FINDINGS,
     drive::{Run, Setup, simulate_with},
-    record::Kind,
+    record::{Kind, Phase},
     search::{Dials, explore_at, sample_setup},
 };
 
@@ -61,7 +67,8 @@ fn nothing_grows_with_the_conversation() {
         |key: &str, or: u64| std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(or);
     let seeds = env("VOICE_SOAK_SEEDS", 8);
     let budget = env("VOICE_SOAK_BUDGET", 12_000) as usize;
-    let mut growing: Vec<String> = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
+    let mut closed = 0;
     for seed in 0..seeds {
         // A caller the mode can converse with: a recogniser, and no realtime socket.
         let setup = Setup {
@@ -69,14 +76,26 @@ fn nothing_grows_with_the_conversation() {
             realtime: None,
             ..sample_setup(&mut fastrand::Rng::with_seed(seed))
         };
-        let case = explore_at(setup, seed, budget, Dials::conversation()).case;
+        let outcome = explore_at(setup, seed, budget, Dials::conversation());
+        for failure in &outcome.failures {
+            if !KNOWN_FINDINGS.contains(&failure.contract.as_str()) {
+                problems.push(format!("seed {seed}: {}: {}", failure.contract, failure.detail));
+            }
+        }
+        let case = outcome.case;
         let run = simulate_with(case.schedule, async {
-            let mut run = Run::start(&case.setup).await;
+            let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
             for input in &case.inputs {
                 run.apply(input).await;
             }
             run
         });
+        if run.record.phase() != Phase::Closed {
+            let why: BTreeSet<String> = outcome.failures.into_iter().map(|f| f.contract).collect();
+            problems.push(format!("seed {seed}: stopped before its close: {why:?}"));
+            continue;
+        }
+        closed += 1;
         let turns = case.inputs.iter().filter(|i| i.name() == "SttFinal").count();
         println!("seed {seed}: {} inputs, {turns} user turns", case.inputs.len());
         for (kind, (peak, left)) in live_by_quarter(&run) {
@@ -87,15 +106,12 @@ fn nothing_grows_with_the_conversation() {
             // A leak is what is still live once the release phase has released everything it
             // could: the peaks are for a reader, the residue is the oracle.
             if left > 0 && !lives_with_the_session(kind) {
-                growing.push(format!(
+                problems.push(format!(
                     "seed {seed}: {left} {kind:?} still live after the release phase (peaks {peak:?})"
                 ));
             }
         }
     }
-    assert!(
-        growing.is_empty(),
-        "resources left live after the release phase:\n  {}",
-        growing.join("\n  ")
-    );
+    println!("{closed} of {seeds} calls reached their close and were judged");
+    assert!(problems.is_empty(), "the soak failed:\n  {}", problems.join("\n  "));
 }

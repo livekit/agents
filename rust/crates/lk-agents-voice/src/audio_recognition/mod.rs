@@ -1,12 +1,12 @@
 //! `voice/audio_recognition.py`: `AudioRecognition`, the user's turn folded from the STT and VAD
 //! streams, and the types it decides with.
 
+use crate::agent_activity::false_interruption::count_min_words;
 use crate::agent_activity::options::{DetectorKind, LegSet, SessionConfig};
-use crate::agent_activity::pause::count_min_words;
-use crate::agent_session::cycle::{Effects, TurnTimer};
+use crate::agent_session::effects::{Effects, TurnTimer};
+use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
 use crate::events::{AgentBackchannelOpportunityEvent, SessionEvent, UserTranscriptEvent};
-use crate::audio_recognition::overlap::OverlapJudge;
 use lk_agents_abi::tokenize::language::{LanguageCode, ThresholdOptions};
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{ChatContext, EotPrediction, SpeechEvent, Ts};
@@ -15,7 +15,6 @@ use std::time::Duration;
 
 mod end_of_turn;
 pub mod overlap;
-pub mod primary_speaker;
 mod speech;
 
 const FRESH_FINAL: Duration = Duration::from_millis(500);
@@ -36,15 +35,17 @@ const NON_SPECIFIC_LANGUAGE_CODES: [&str; 2] = ["auto", "multi"];
 pub struct AudioRecognition {
     /// `_turn_detector`; `None` commits turns on silence alone.
     eot: Option<std::sync::Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
-    /// The interruption detector's port; `None` is VAD-only barge-in.
-    interruption: Option<std::sync::Arc<dyn crate::agent_activity::pause::InterruptionPort>>,
+    /// The interruption detector's port; `None` is VAD-only interruption.
+    interruption:
+        Option<std::sync::Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
     /// `_commit_user_turn_atask` waiting for the final transcript.
     pending_commit: Option<PendingCommit>,
     cfg: TurnConfig,
     phase: Phase,
     endpointing: Endpointing,
     thresholds: ThresholdOptions,
-    wall_anchor: Option<WallAnchor>,
+    /// Pairs wall and monotonic clocks so server onsets map without reading a clock.
+    pub(crate) wall_anchor: Option<WallAnchor>,
 
     // --- transcript accumulation -------------------------------------------------------------
     audio_transcript: String,
@@ -70,8 +71,9 @@ pub struct AudioRecognition {
     /// `_ignore_user_transcript_until`.
     ignore_user_transcript_until: Option<Ts>,
     transcript_buffer: VecDeque<SpeechEvent>,
-    /// `_STTPipeline.input_started_at`, owned by the driver and pushed in.
-    input_started_at: Option<Ts>,
+    /// `_STTPipeline.input_started_at`, owned by the driver: the STT stream's anchor, stamped on
+    /// the first frame and reset on stream swap; every hold-window test is relative to it.
+    pub(crate) input_started_at: Option<Ts>,
     /// `_adaptive_interruption_active`: the channel is open. Unlike the static config flag,
     /// teardown clears this one.
     interruption_active: bool,
@@ -181,7 +183,8 @@ impl AudioRecognition {
     /// The interruption detector's port.
     pub(crate) fn interruption(
         &self,
-    ) -> Option<&std::sync::Arc<dyn crate::agent_activity::pause::InterruptionPort>> {
+    ) -> Option<&std::sync::Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>
+    {
         self.interruption.as_ref()
     }
 
@@ -213,7 +216,7 @@ impl AudioRecognition {
         &self.phase
     }
 
-    /// `_current_transcript`: this turn's transcript, interim included (the barge-in `min_words`
+    /// `_current_transcript`: this turn's transcript, interim included (the interruption `min_words`
     /// guard reads this). An empty interim adds no separator.
     pub fn current_transcript(&self) -> String {
         if self.interim_transcript.is_empty() {
@@ -276,29 +279,13 @@ impl AudioRecognition {
 
     // --- driver-owned inputs -----------------------------------------------------------------
 
-    /// The STT stream's anchor, stamped on the first frame (`._push_audio`) and reset on stream
-    /// swap; every hold-window test is relative to it.
-    pub fn set_input_started_at(&mut self, at: Option<Ts>) {
-        self.input_started_at = at;
-    }
-
-    pub fn input_started_at(&self) -> Option<Ts> {
-        self.input_started_at
-    }
-
-    pub fn set_wall_anchor(&mut self, anchor: WallAnchor) {
-        self.wall_anchor = Some(anchor);
-    }
-
-    pub fn wall_anchor(&self) -> Option<WallAnchor> {
-        self.wall_anchor
-    }
-
     /// The turn detector and the interruption port, as the session opened them.
     pub(crate) fn set_detectors(
         &mut self,
         eot: Option<std::sync::Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
-        interruption: Option<std::sync::Arc<dyn crate::agent_activity::pause::InterruptionPort>>,
+        interruption: Option<
+            std::sync::Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>,
+        >,
     ) {
         self.eot = eot;
         self.interruption = interruption;
@@ -310,7 +297,7 @@ impl AudioRecognition {
     }
 
     /// `update_options(endpointing_opts=..)`: the estimator is replaced, learned floor and all.
-    pub fn set_endpointing(&mut self, cfg: &crate::turn::Endpointing) {
+    pub fn set_endpointing(&mut self, cfg: &crate::turn::EndpointingOptions) {
         self.endpointing = Endpointing::new(cfg);
     }
 
@@ -366,7 +353,7 @@ pub(super) struct TurnEdits {
 
 pub(super) struct PendingCommit {
     pub(super) skip_reply: bool,
-    pub(super) done: tokio::sync::oneshot::Sender<String>,
+    pub(super) call: Option<crate::agent_session::RequestId>,
     pub(super) deadline: Ts,
     pub(super) close: bool,
 }
@@ -751,7 +738,7 @@ enum Start {
 }
 
 fn user_transcript(ev: &SpeechEvent, is_final: bool, speaking: Option<bool>) -> SessionEvent {
-    SessionEvent::UserTranscript(Box::new(UserTranscriptEvent {
+    SessionEvent::UserInputTranscribed(Box::new(UserTranscriptEvent {
         ev: ev.clone(),
         is_final,
         speaking,

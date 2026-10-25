@@ -84,7 +84,7 @@ after that answer; the schema has no approval flag the model could set. See
 
 ## Conversational agent tasks
 
-The end-state [agent execution API](agent-tasks.md) uses shared Agent
+The [agent task API](agent-tasks.md) uses shared Agent
 configuration, persisted draft state, and typed final output. Every human
 wait is represented as InputRequired on both calls and text:
 
@@ -96,7 +96,6 @@ wait is represented as InputRequired on both calls and text:
 Neither needs a Python callback. Typed final output or an accepted output
 function result completes the execution; a conversational question does not.
 A parent receives its child's result as tool output, then its LLM resumes.
-The separate Completed wrapper in existing AgentTask code is being retired
-from this authoring model; current implementation gaps are in [TODO.md](TODO.md).
+
 
 Graph steps, code-workflow waits, and external-service wake-ups are deferred.

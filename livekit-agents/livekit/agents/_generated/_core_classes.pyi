@@ -821,7 +821,7 @@ class FramePusher:
     def end(self) -> None: ...
 
 
-class AgentSession:
+class LiveSession:
     """`voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
     `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
     borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
@@ -835,7 +835,6 @@ class AgentSession:
         agent: str = ...,
         chat_ctx: list[ChatItem] | None = None,
         stt: Any | None = None,
-        speaker_filter: Any | None = None,
         vad: Any | None = None,
         llm: Any | None = None,
         realtime: Any | None = None,
@@ -890,7 +889,6 @@ class AgentSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
-        speaker_filter: NotGivenOr[Any | None] = ...,
     ) -> None: ...
     def hook_described(
         self,
@@ -906,7 +904,6 @@ class AgentSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
-        speaker_filter: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
     ) -> None: ...
     async def update_agent(
@@ -922,7 +919,6 @@ class AgentSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
-        speaker_filter: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
     ) -> bool: ...
     def enter_task(
@@ -939,7 +935,6 @@ class AgentSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
-        speaker_filter: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
         speech_id: int | None = None,
         preserve_function_call_history: bool = False,
@@ -1067,8 +1062,8 @@ class AgentSession:
     def dtmf_digit(self, digit: str) -> None: ...
     def dtmf_stop(self) -> None: ...
     async def wait_for_idle(self, *, hold: int | None = None) -> None: ...
-    async def hold_floor(self, *, origin: str | None = None) -> int: ...
-    def release_floor(self, hold: int) -> None: ...
+    async def wait_for_idle_and_hold(self, *, origin: str | None = None) -> int: ...
+    def release_idle_hold(self, hold: int) -> None: ...
     def claim_user_turn(self) -> None: ...
     def release_user_turn(self) -> None: ...
     def run(

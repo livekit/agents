@@ -34,7 +34,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "ReleaseUserTurn": {}
@@ -45,11 +45,6 @@
       {
         "AwaitAnswer": {
           "answer": 0
-        }
-      },
-      {
-        "SetSpeakerFilter": {
-          "enabled": false
         }
       },
       {
@@ -79,11 +74,6 @@
           ],
           "pause_previous": true,
           "resume": false
-        }
-      },
-      {
-        "SetSpeakerFilter": {
-          "enabled": false
         }
       },
       {
@@ -216,7 +206,7 @@
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "GenerateReply": {
@@ -241,11 +231,11 @@
       },
       {
         "UpdateModels": {
-          "legs": "Stt"
+          "models": "Stt"
         }
       },
       {
-        "HoldFloor": {}
+        "WaitForIdleAndHold": {}
       },
       {
         "PushVideo": {}
@@ -309,7 +299,7 @@
         }
       },
       {
-        "ReleaseFloor": {
+        "ReleaseIdleHold": {
           "hold": 0
         }
       },

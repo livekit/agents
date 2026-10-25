@@ -12,4 +12,6 @@ pub mod room_io;
 
 pub mod rooms;
 
+pub mod link;
+
 pub use types::{ParticipantIdentity, ParticipantKind, TrackPublishOptions, TrackSource};

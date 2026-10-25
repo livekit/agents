@@ -24,7 +24,6 @@
 use std::{
     collections::BTreeSet,
     ops::{Range, RangeInclusive},
-    time::Instant,
 };
 
 use fastrand::Rng;
@@ -39,7 +38,7 @@ use lk_agents_voice::{
 
 use super::uniform;
 use crate::{
-    drive::{Case, Outcome, Run, Setup},
+    drive::{Case, Outcome, Policy, Run, Setup},
     input::{
         AGENT_TURNS, AgentText, Confidence, Count, HookAnswer, Input, Make, Millis, Ref, RoomIn,
         RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode, USER_TURNS, UserText,
@@ -73,7 +72,7 @@ struct Persona {
     /// detector hears and the recogniser has no words for: the shape a false interruption has.
     noise: u8,
     /// How often a stretch comes from someone else in the room, whom the recogniser diarises
-    /// apart: what a speaker filter is for.
+    /// apart.
     other_speaker: u8,
     /// How often the person drops off the call and comes back, per turn.
     leaves: u8,
@@ -109,7 +108,7 @@ impl Persona {
 
 /// One stretch of the person's microphone: speaking or silent, this long, at this pacing.
 ///
-/// The one primitive. A pause is a silent segment, a barge-in is a speech segment placed while
+/// The one primitive. A pause is a silent segment, a interruption is a speech segment placed while
 /// the agent's speech is live, a hesitation is a speech segment the person is not done after,
 /// and the detector's and recogniser's verdicts are placed around a speech segment from the
 /// models below. Not to be confused with [`Kind::Segment`], a flushed audio segment on the
@@ -153,8 +152,6 @@ const JITTER_MS: Range<u64> = 10..60;
 
 /// How long a gap stalls: from a network hiccup to a stall the driver's own timers notice.
 const STALL_MS: Range<u64> = 100..500;
-
-
 
 // ==============================================================================================
 // What the providers say about a stretch
@@ -201,8 +198,6 @@ const STT_LATE_FINAL_MS: Range<u64> = 1_500..3_000;
 /// as a streaming provider does, so a long turn has many and a short one has one.
 const STT_INTERIM_EVERY_MS: u64 = 400;
 
-
-
 /// Detector confidence while speaking: straddles 50, so hysteresis and flicker are reached.
 const SPEAKING_P: Range<u8> = 45..95;
 
@@ -215,9 +210,7 @@ const EOT_DONE_P: Range<u8> = 70..101;
 
 const EOT_MORE_P: Range<u8> = 0..31;
 
-
-
-/// Speech over the agent shorter than this is judged a backchannel -- "mm-hm" -- not a barge-in,
+/// Speech over the agent shorter than this is judged a backchannel -- "mm-hm" -- not a interruption,
 /// the distinction the adaptive detector exists to make. Matches the driver's default minimum
 /// interruption duration, so by default the detector and the driver agree on what counts.
 const BACKCHANNEL_MS: u64 = 500;
@@ -250,7 +243,7 @@ struct Host {
     unprompted: u8,
     /// The chance, per beat, of a call inside whatever the conversation is doing.
     during: u8,
-    /// The same while the agent's audio is playing, barge-ins included: the window a developer
+    /// The same while the agent's audio is playing, interruptions included: the window a developer
     /// most often acts in, and the one a run spends least time in.
     speaking: u8,
     /// How often the model answers with a tool call rather than words, when the agent has tools:
@@ -354,7 +347,7 @@ impl Providers {
 /// over orders of magnitude, from one in ten thousand (a conversation with nothing random in it)
 /// to a thousand (uniform moves with a conversation step now and then), so every decade gets as
 /// many seeds as every other. A flat draw of a probability instead spent nearly every seed in
-/// runs a random close ended early: measured on 2026-10-22, barge-ins went unreached.
+/// runs a random close ended early: measured on 2026-10-22, interruptions went unreached.
 pub fn randomness(seed: u64) -> f64 {
     10f64.powf(Rng::with_seed(seed ^ 0x636f_6865_7265_6e63).f64() * 7.0 - 4.0)
 }
@@ -428,7 +421,8 @@ impl Dials {
     pub fn of(seed: u64) -> Self {
         let mut rng = Rng::with_seed(seed ^ 0x6361_6c6c);
         // A standard normal from two uniforms (Box-Muller).
-        let normal = (-2.0 * (1.0 - rng.f64()).ln()).sqrt() * (std::f64::consts::TAU * rng.f64()).cos();
+        let normal =
+            (-2.0 * (1.0 - rng.f64()).ln()).sqrt() * (std::f64::consts::TAU * rng.f64()).cos();
         let length = (CALL_MEDIAN_MS.ln() + CALL_SPREAD * normal).exp();
         Dials {
             randomness: randomness(seed),
@@ -443,15 +437,13 @@ impl Dials {
 }
 
 async fn converse_in(setup: Setup, seed: u64, budget: usize, dials: Dials) -> Outcome {
-    let started = Instant::now();
     let mut talk = Talk {
-        run: Run::start(&setup).await,
+        run: Run::start(&setup, seed, Policy::of(seed)).await,
         outcome: Outcome {
-            case: Case { setup, schedule: seed, ..Case::default() },
+            case: Case { setup, schedule: seed, policy: Policy::of(seed), ..Case::default() },
             ..Outcome::default()
         },
         rng: Rng::with_seed(seed),
-        started,
         budget,
         unanswered: BTreeSet::new(),
         heard: BTreeSet::new(),
@@ -473,7 +465,7 @@ async fn converse_in(setup: Setup, seed: u64, budget: usize, dials: Dials) -> Ou
     match talk.converse().await {
         Err(Halt::Found(found)) => *found,
         Ok(()) | Err(Halt::Spent | Halt::Ended) => {
-            crate::drive::finish(talk.run, talk.outcome, started).await
+            crate::drive::finish(talk.run, talk.outcome).await
         }
     }
 }
@@ -491,7 +483,6 @@ struct Talk {
     run: Run,
     outcome: Outcome,
     rng: Rng,
-    started: Instant,
     budget: usize,
     /// Predictions the predictor will never answer, so the driver's timeout runs on them.
     unanswered: BTreeSet<u32>,
@@ -552,7 +543,7 @@ impl Talk {
         }
         self.outcome.case.inputs.push(input.clone());
         self.run.apply(&input).await;
-        match crate::drive::guard(&self.run, &mut self.outcome, self.started) {
+        match crate::drive::guard(&self.run, &mut self.outcome) {
             Some(found) => Err(Halt::Found(Box::new(found))),
             None => Ok(()),
         }
@@ -629,7 +620,11 @@ impl Talk {
 
     /// The session began closing: the host or the room asked, or the session gave up on its own.
     fn closing(&self) -> bool {
-        self.run.record.applied().iter().any(|a| a.accepted && matches!(a.input, Input::Close { .. }))
+        self.run
+            .record
+            .applied()
+            .iter()
+            .any(|a| a.accepted && matches!(a.input, Input::Close { .. }))
             || self.run.record.internal_view().close_requested().is_some()
     }
 
@@ -739,7 +734,7 @@ impl Talk {
 
 /// The person's side: a stretch of microphone, and what the providers say about it.
 impl Talk {
-    /// "Mm-hm" over the agent: short enough to be a backchannel, not a barge-in.
+    /// "Mm-hm" over the agent: short enough to be a backchannel, not a interruption.
     fn backchannel(&mut self) -> Segment {
         let text = BACKCHANNELS[self.rng.usize(0..BACKCHANNELS.len())];
         let dur_ms = self.rng.u64(BACKCHANNEL_SAID_MS);
@@ -1002,7 +997,7 @@ impl Talk {
             // A prediction the driver asked for shows up here too, after the advance.
             self.predict(seg.done).await?;
             // The detector answers when it has heard enough: a stretch long enough to be a
-            // barge-in is judged as soon as it is one, a shorter one once it has ended.
+            // interruption is judged as soon as it is one, a shorter one once it has ended.
             let evidence = seg.dur_ms >= BACKCHANNEL_MS || vad_ended;
             if overlapping && !judged && evidence && vad_started_at.is_some_and(|at| elapsed > at) {
                 let barge = seg.dur_ms >= BACKCHANNEL_MS;
@@ -1287,7 +1282,7 @@ impl Talk {
             }
             // The model, the tools and the hooks answer whatever the person decides to do next:
             // their answers go out before the person hears the reply and makes up their mind,
-            // so a tool that asks for idle has asked before any barge-in lands on its step.
+            // so a tool that asks for idle has asked before any interruption lands on its step.
             self.beat().await?;
             for row in std::mem::take(&mut rows) {
                 self.send(row).await?;

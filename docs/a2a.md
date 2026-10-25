@@ -32,9 +32,8 @@ and the `Task` that answers it carries the id; send it on every message
 after. A `contextId` the threads service does not know ends the task `failed` with
 `livekit/reason: thread-not-found`.
 
-A thread is found by its id and nothing else. A message never carries a
-key; the platform's own ingress finding a thread by phone number is
-planned ([planned-channels.md](planned-channels.md)).
+An A2A message addresses a thread by ID. The platform resolves phone numbers
+to thread IDs before dispatch; see [channel routing](planned-channels.md).
 
 Every message carries a `messageId`; a resent message with the same id
 returns the task the first one created and runs nothing.

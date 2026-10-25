@@ -9,6 +9,4 @@ without having an LLM choose every transition. Ordinary Python awaits do not
 provide durable resume points. Before adding an API, validate a real use case
 and compare using an existing workflow engine.
 
-No Workflow/Step/Target/Route classes, resume decorators, binding syntax,
-DurableFuture, scheduler, or static diagram API is required now. The earlier
-runtime exploration is archived at `~/livekit/durable-execution.md`.
+Workflow authoring, scheduling, and static workflow diagrams remain future work.

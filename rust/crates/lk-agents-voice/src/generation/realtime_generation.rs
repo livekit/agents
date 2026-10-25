@@ -1,7 +1,7 @@
 //! `_realtime_generation_task`: one step of a realtime reply, the generation's events played as
 //! segments, through the realtime audio node when the agent has one.
 
-use crate::agent_activity::realtime::{RealtimeWake, realtime_turns};
+use crate::agent_activity::realtime::{RealtimeWake, realtime_state};
 use crate::agent_session::{DriverError, SessionShared, Tx};
 use crate::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
 use crate::generation::playout::{Next, Segment, first_frame, perform_audio_forwarding};
@@ -11,9 +11,9 @@ use crate::io::RealtimeAudioNode;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{NextStep, StepDecision};
 use lk_agents_abi::llm::realtime::Event;
+use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, ChatItem, llm::realtime as rt};
-use lk_agents_voice::io::{AudioOutput, PlaybackTracker};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -49,7 +49,7 @@ pub(crate) async fn realtime_generation_task(
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
     // Locked for the step by the one task that ever reads it; the channel outlives the step.
     let mut rx = events.lock().await;
-    let audio_out = shared.audio_out();
+    let audio_out = shared.output.audio();
     // `realtime_audio_output_node`: frames go to the node, which emits into the sink itself.
     let node = shared.realtime_audio.clone();
     let node_out =
@@ -58,7 +58,7 @@ pub(crate) async fn realtime_generation_task(
         Some(n) => Some(n),
         None => audio_out.as_deref(),
     };
-    // The calls run as they arrive, alongside the playout (`agent_activity.py:4122`).
+    // The calls run as they arrive, alongside the playout.
     let mut tools = ToolStep::new();
     let mut generation = Generation {
         shared,
@@ -178,7 +178,7 @@ impl Segment for Generation<'_> {
             let Some(ev) = self.events.recv().await else { return Ok(Next::End) };
             self.received = true;
             if self.response_id.is_none()
-                && let Some(id) = realtime_turns::response_id_of(&ev)
+                && let Some(id) = realtime_state::response_id_of(&ev)
             {
                 self.response_id = Some(id.to_owned());
             }
@@ -205,7 +205,7 @@ impl Segment for Generation<'_> {
                 }
                 Event::FunctionCall(ready) => {
                     // Stamped at its execution start: the call arrives during the generation,
-                    // before the message it belongs to is placed (`agent_activity.py:4108-4113`).
+                    // before the message it belongs to is placed.
                     let mut call = *ready.call;
                     call.created_at = self.shared.time.wall();
                     self.tools.dispatch(self.shared, self.handle, self.ctx, call);
@@ -222,7 +222,7 @@ impl Segment for Generation<'_> {
     }
 }
 
-/// The node in front of the session's sink; boundaries and barge-in still reach `out` directly.
+/// The node in front of the session's sink; boundaries and interruption still reach `out` directly.
 pub(crate) struct NodeOutput<'a> {
     pub(crate) node: &'a dyn RealtimeAudioNode,
     pub(crate) out: &'a dyn AudioOutput,
@@ -246,7 +246,7 @@ impl AudioOutput for NodeOutput<'_> {
         self.out.sample_rate()
     }
 
-    async fn capture(&self, frame: &AudioFrame) -> lk_agents_voice::io::Result<()> {
+    async fn capture(&self, frame: &AudioFrame) -> lk_agents_abi::voice::io::Result<()> {
         self.node.push(frame).await;
         Ok(())
     }

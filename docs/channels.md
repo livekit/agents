@@ -3,8 +3,8 @@
 A thread endpoint takes messages from every channel the same way, and the
 handler never knows which one sent them. One thread, one history, one
 state, whatever the channel of the moment. Web chat, API clients, partner
-agents and phone calls are built; SMS, WhatsApp and email come with the
-platform's ingress and egress and are planned, see
+agents and phone calls reach the thread directly. SMS, WhatsApp and email
+use the platform's ingress and egress; see
 [planned-channels.md](planned-channels.md).
 
 | Channel                      | How it reaches the thread                                          | Which thread                                                      | The reply                               |
@@ -21,9 +21,8 @@ debounce for a message that arrives while a turn runs; see
 [text-endpoints.md](text-endpoints.md). Delegations default to `queue`, web
 chat and API clients to `interrupt`.
 
-A thread is found by its id only; see [threads.md](threads.md). Finding
-a call's thread by the caller's number is planned; see
-[planned-channels.md](planned-channels.md).
+Messages address a thread by id; see [threads.md](threads.md). The platform
+resolves phone numbers to thread IDs; see [channel routing](planned-channels.md).
 
 ## Mixing channels
 
@@ -42,7 +41,7 @@ The agent's voice and text turns share one lane; see [lanes.md](lanes.md).
 ## Attachments
 
 A file part on a message reaches the model as part of the user message.
-Typed attachments are planned; see [planned-channels.md](planned-channels.md).
+See [typed attachments](planned-channels.md) for attachment handling.
 
 See `examples/use-cases/01_appointments_by_phone_and_text.py` and
 `04_a_claim_with_a_photo.py`.

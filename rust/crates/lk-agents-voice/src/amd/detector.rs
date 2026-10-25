@@ -1,11 +1,11 @@
-use crate::agent_session::cycle::TurnTimer;
-use crate::agent_session::{IvrCommand, Origin, Peer, SpeechCommand, SystemGone, Watched};
+use crate::agent_session::effects::TurnTimer;
+use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemGone, SystemTap};
 use crate::amd::classifier::{
     Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out,
     TranscriptSource, Verdict,
 };
 use crate::events::SessionEvent;
-use crate::trace::{CoreStep, DetectorLeg, DetectorStep, InputStep, LegEndCause, Step};
+use crate::trace::{ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::amd::{AMD_PROMPT, AmdCategory};
 use lk_agents_abi::{
@@ -22,7 +22,7 @@ pub const SAVE_PREDICTION_TOOL: &str = "save_prediction";
 /// `classifier.postpone_termination`, offered while extensions remain.
 pub const POSTPONE_TERMINATION_TOOL: &str = "postpone_termination";
 
-/// The leg table's peer row and the journal's name for it (`LegOpened{"amd"}`, `LegEnded{"amd"}`).
+/// The leg table's peer row and the journal's name for it (`StreamOpened{"amd"}`, `ChannelEnded{"amd"}`).
 const TAP: &str = "amd";
 
 fn save_prediction_spec() -> lk_agents_abi::ToolSpec {
@@ -142,9 +142,13 @@ enum SttLeg {
     /// No STT of AMD's own: the session's finals feed the machine.
     None,
     Opening,
-    /// In the leg table's peer row behind `gate`: frames flow while the machine listens. `sink`
-    /// is that row's, for the host's own frames.
-    Installed { gate: Arc<AtomicBool>, sink: Arc<dyn StreamSink<AudioFrame>> },
+    /// On the forwarder's `Amd` channel as `tap`, behind `gate`: frames flow while the machine
+    /// listens. `sink` is the same stream, for the host's own frames.
+    Installed {
+        gate: Arc<AtomicBool>,
+        sink: Arc<dyn StreamSink<AudioFrame>>,
+        tap: lk_agents_abi::resources::ResourceId,
+    },
     /// Cleared; an open that lands now is discarded.
     Done,
 }
@@ -171,7 +175,7 @@ impl StreamSink<AudioFrame> for GatedSink {
 }
 
 pub struct AmdSystem {
-    peer: Peer,
+    peer: PeerHandle,
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     machine: Option<Amd>,
     timers: TimerSet<AmdTimer>,
@@ -188,7 +192,7 @@ pub struct AmdSystem {
 impl AmdSystem {
     /// `AMD._run`: holding authorization from now, subscribed to the feed, the tap opening off the
     /// loop. Past the close request nothing is attached and the handle answers `SystemGone`.
-    pub fn spawn(peer: Peer, setup: AmdSetup) -> AmdHandle {
+    pub fn spawn(peer: PeerHandle, setup: AmdSetup) -> AmdHandle {
         if *peer.closing.borrow() {
             peer.journal(Step::Core(CoreStep::PortFailure("amd: attached after the close")));
             return AmdHandle::detached();
@@ -204,7 +208,7 @@ impl AmdSystem {
         AmdHandle { tx }
     }
 
-    fn new(peer: Peer, setup: AmdSetup, tx: tokio::sync::mpsc::UnboundedSender<Msg>) -> Self {
+    fn new(peer: PeerHandle, setup: AmdSetup, tx: tokio::sync::mpsc::UnboundedSender<Msg>) -> Self {
         let stt = setup.stt.clone();
         // The machine holds the authorization from the attach.
         let (machine, out) = Amd::attached(setup.config);
@@ -234,7 +238,7 @@ impl AmdSystem {
     /// session's queue is gone.
     async fn run(
         mut self,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<Watched>,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<SystemTap>,
         mut msgs: tokio::sync::mpsc::UnboundedReceiver<Msg>,
     ) {
         let time = self.peer.time.clone();
@@ -264,9 +268,9 @@ impl AmdSystem {
     }
 
     /// One item off the feed: what the reference's `AudioRecognition` hands the classifier.
-    pub fn on_watched(&mut self, now: Ts, item: Watched) {
+    pub fn on_watched(&mut self, now: Ts, item: SystemTap) {
         match item {
-            Watched::Vad(ev) => match ev.kind {
+            SystemTap::Vad(ev) => match ev.kind {
                 lk_agents_abi::VadEventType::StartOfSpeech => {
                     self.step(now, In::Human(Human::SpeechStarted))
                 }
@@ -278,7 +282,7 @@ impl AmdSystem {
                 lk_agents_abi::VadEventType::InferenceDone => {}
             },
             // The session's finals once each; the empty clearing final is no words.
-            Watched::Stt(ev) => {
+            SystemTap::Stt(ev) => {
                 if ev.kind == SpeechEventType::FinalTranscript
                     && let Some(text) = ev.best_alternative().map(|a| a.text.clone())
                     && !text.trim().is_empty()
@@ -290,12 +294,12 @@ impl AmdSystem {
                 }
             }
             // `amd._on_end_of_turn`, before the commit verdict.
-            Watched::Session(SessionEvent::UserTurnCompleted(_)) => {
+            SystemTap::Session(SessionEvent::UserTurnCompleted(_)) => {
                 self.step(now, In::Human(Human::EndOfTurn))
             }
-            Watched::Session(_) | Watched::Ivr(_) => {}
+            SystemTap::Session(_) | SystemTap::Ivr(_) => {}
             // `self._amd.aclose()`; a verdict still owed is never released.
-            Watched::CloseRequested => {
+            SystemTap::CloseRequested => {
                 self.step(now, In::Close);
                 self.closed = true;
             }
@@ -378,7 +382,7 @@ impl AmdSystem {
                 // `interrupt(force=True)`: the greeting is being spoken over.
                 Effect::Interrupt { force } => {
                     let _ =
-                        self.peer.send(Origin::Amd, SpeechCommand::Interrupt { force, done: None });
+                        self.peer.send(Origin::Amd, SpeechCommand::Interrupt { force, call: None });
                 }
             }
         }
@@ -390,7 +394,7 @@ impl AmdSystem {
         self.cancel_classification();
         self.requests += 1;
         let n = self.requests;
-        self.peer.journal(Step::Input(InputStep::LegRequested { leg: DetectorLeg::Amd, req: n }));
+        self.peer.journal(Step::Input(InputStep::LegRequested { leg: DetectorName::Amd, req: n }));
         let wall = self.peer.time.wall();
         let chat_ctx = ChatContext::new(vec![
             ChatItem::Message(ChatMessage::text(
@@ -456,12 +460,12 @@ impl AmdSystem {
         }
         if failed {
             self.peer.journal(Step::Input(InputStep::LegFailed {
-                leg: DetectorLeg::Amd,
+                leg: DetectorName::Amd,
                 recoverable: true,
             }));
             return;
         }
-        self.peer.journal(Step::Input(InputStep::LegVerdict { leg: DetectorLeg::Amd, req }));
+        self.peer.journal(Step::Input(InputStep::LegVerdict { leg: DetectorName::Amd, req }));
         for call in calls {
             let args: Option<serde_json::Value> = serde_json::from_str(&call.arguments).ok();
             match call.name.as_str() {
@@ -531,10 +535,10 @@ impl AmdSystem {
         let gate = Arc::new(AtomicBool::new(self.machine.as_ref().is_some_and(Amd::listening)));
         let sink: Arc<dyn StreamSink<AudioFrame>> =
             Arc::new(GatedSink { inner: Arc::from(sink), open: Arc::clone(&gate) });
-        self.stt = SttLeg::Installed { gate, sink: Arc::clone(&sink) };
-        let ticket = self.peer.install_audio_tap(sink);
-        self.peer.journal(Step::Input(InputStep::LegOpened { leg: TAP }));
-        spawn_tap_drain(self.peer.clone(), source, ticket, self.tx.clone());
+        let tap = self.peer.install_audio_tap(Arc::clone(&sink));
+        self.stt = SttLeg::Installed { gate, sink, tap };
+        self.peer.journal(Step::Input(InputStep::StreamOpened { leg: TAP }));
+        spawn_tap_drain(self.peer.clone(), source, tap, self.tx.clone());
     }
 
     fn discard_tap(&self, source: SttSource) {
@@ -560,29 +564,30 @@ impl AmdSystem {
     /// is out or the machine closed.
     fn sync_tap(&mut self) {
         let over = matches!(self.machine, Some(Amd::Emitted(_) | Amd::Closed(_)));
-        let clear = match &self.stt {
+        let removed = match &self.stt {
             SttLeg::Installed { gate, .. } if self.machine.as_ref().is_some_and(Amd::listening) => {
                 gate.store(true, Ordering::Relaxed);
-                false
+                None
             }
             SttLeg::Installed { .. } | SttLeg::Opening if over => {
-                let installed = matches!(self.stt, SttLeg::Installed { .. });
+                let tap =
+                    if let SttLeg::Installed { tap, .. } = self.stt { Some(tap) } else { None };
                 self.stt = SttLeg::Done;
-                installed
+                tap
             }
-            _ => false,
+            _ => None,
         };
-        if clear {
-            self.peer.clear_audio_tap();
+        if let Some(tap) = removed {
+            self.peer.remove_audio_tap(tap);
         }
     }
 }
 
-/// The tap's drain onto the system's channel: source closed once, row forgotten if still installed.
+/// The tap's drain onto the system's channel: source closed once, tap removed if still installed.
 fn spawn_tap_drain(
-    peer: Peer,
+    peer: PeerHandle,
     mut source: SttSource,
-    ticket: crate::audio::Ticket,
+    tap: lk_agents_abi::resources::ResourceId,
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
 ) {
     let mut closing = peer.closing.clone();
@@ -597,18 +602,18 @@ fn spawn_tap_drain(
             match next {
                 Some(Ok(Some(ev))) => {
                     if tx.send(Msg::Transcript(ev)).is_err() {
-                        break LegEndCause::Closing;
+                        break ChannelEndCause::Closing;
                     }
                 }
-                Some(Ok(None)) => break LegEndCause::SourceEnded,
-                Some(Err(_)) => break LegEndCause::Error,
-                None => break LegEndCause::Closing,
+                Some(Ok(None)) => break ChannelEndCause::SourceEnded,
+                Some(Err(_)) => break ChannelEndCause::Error,
+                None => break ChannelEndCause::Closing,
             }
         };
-        peer.audio_tap_ended(ticket);
+        peer.remove_audio_tap(tap);
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let closed = source.close(deadline).await;
-        peer.journal(Step::Input(InputStep::LegEnded { leg: TAP, cause }));
+        peer.journal(Step::Input(InputStep::ChannelEnded { leg: TAP, cause }));
         peer.journal(Step::Input(InputStep::HostStreamClosed { label: TAP, how: closed }));
     });
 }

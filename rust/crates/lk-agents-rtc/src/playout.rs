@@ -1,6 +1,6 @@
 //! [`PlayoutLedger`]: the two counters `rtc.AudioSource` does not keep, so played/discarded per
 //! `wait_for_playout` window is computed once instead of reconstructed from a race. Atomics, not a
-//! `Mutex`: `clear_queue` is the barge-in path and must not wait behind `capture`. Subtractions
+//! `Mutex`: `clear_queue` is the interruption path and must not wait behind `capture`. Subtractions
 //! saturate because `queued` is host-supplied.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,7 +35,8 @@ impl PlayoutLedger {
     pub fn add_pushed_samples(&self, samples_per_channel: u32, sample_rate: u32) {
         if sample_rate > 0 {
             self.add_pushed(Duration::from_nanos(
-                u64::from(samples_per_channel).saturating_mul(1_000_000_000) / u64::from(sample_rate),
+                u64::from(samples_per_channel).saturating_mul(1_000_000_000)
+                    / u64::from(sample_rate),
             ));
         }
     }
@@ -115,7 +116,7 @@ mod tests {
     }
 
     // Catches: discarded audio counted as played, or a window's discard leaking into the next.
-    // `discarded` is the barge-in signal `on_playback_finished(interrupted=True)` derives from, so
+    // `discarded` is the interruption signal `on_playback_finished(interrupted=True)` derives from, so
     // both errors change what the user is told about an interruption.
     #[test]
     fn a_clear_moves_the_unplayed_part_from_played_to_discarded() {

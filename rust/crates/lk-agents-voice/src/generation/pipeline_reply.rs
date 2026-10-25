@@ -3,13 +3,13 @@
 use super::forward::{Voice, voice_leg};
 use super::llm::{SegEvent, produce_segments};
 use super::tools::run_tools;
-use crate::generation::realtime_generation::realtime_generation_task;
-use crate::generation::{GenEvent, ReplyContext, ReplySource};
-use crate::agent_session::SessionShared;
 use crate::agent_session::DriverError;
+use crate::agent_session::SessionShared;
+use crate::generation::realtime_generation::realtime_generation_task;
 use crate::generation::{
     FinishInputs, RequestInputs, TurnAccumulator, TurnOutcome, TurnStats, plan_request,
 };
+use crate::generation::{GenEvent, ReplyContext, ReplySource};
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::NextStep;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -85,7 +85,7 @@ fn step_spoken(
     });
 }
 
-/// A tool reply is the same turn on the same handle, so a barge-in during a tool call stops what is
+/// A tool reply is the same turn on the same handle, so a interruption during a tool call stops what is
 /// still talking.
 async fn run(
     shared: &Arc<SessionShared>,
@@ -151,7 +151,17 @@ fn finish_step(
     has_tool_output: bool,
     tools_running: bool,
 ) -> Finished {
-    finish_step_with(shared, handle, ctx, acc, interrupted, stats, has_tool_output, tools_running, None)
+    finish_step_with(
+        shared,
+        handle,
+        ctx,
+        acc,
+        interrupted,
+        stats,
+        has_tool_output,
+        tools_running,
+        None,
+    )
 }
 
 /// [`finish_step`], with the provider's ids for the assistant message's metrics.
@@ -256,7 +266,7 @@ async fn pipeline_reply_task_impl(
             let outcome = finished.outcome;
             return Ok(StepOutcome::Done(Finished { outcome, interrupted: true }));
         }
-        // The swap is the host's; the driver reports it -- and then still runs `follow_up`.
+        // The swap is the host's; the driver reports it, and then still runs `follow_up`.
         NextStep::Handoff { agent, follow_up } => {
             shared.report(GenEvent::Handoff { speech: handle.id(), agent });
             follow_up
@@ -289,14 +299,14 @@ async fn follow_up(
     let key = (handle.id(), spoken_step);
     let frame =
         wait_frame(shared, handle, FRAME_SYNC, |f| f.tools_committed.contains_key(&key)).await;
-    // A draining activity's reply offers no tools (agent_activity.py:3705).
+    // A draining activity's reply offers no tools.
     let mut request = request;
     if frame.tools_committed.get(&key) == Some(&true) {
         request.tool_choice = lk_agents_abi::ToolChoice::Forbidden;
     }
     let instructions = frame.instructions.render(Some(lk_agents_abi::Modality::Audio));
     let planned = plan_request(RequestInputs {
-        record: &frame.record,
+        record: &frame.chat_ctx,
         pending: &pending,
         new_message: None,
         instructions: &instructions,
@@ -324,6 +334,7 @@ async fn follow_up(
         user_metrics: request.previous_user_metrics.or_else(|| prev.user_metrics.clone()),
         // A fresh id: this step commits its own assistant message.
         message_id: shared.mint_item_id(),
+        speech: prev.speech,
     }
 }
 
@@ -338,7 +349,7 @@ async fn replan_after(
     let bound = crate::speech_handle::INTERRUPTION_TIMEOUT + Duration::from_secs(1);
     let frame = wait_frame(shared, handle, bound, |f| f.finished.contains(&after)).await;
     let instructions = frame.instructions.render(Some(lk_agents_abi::Modality::Audio));
-    spec.plan(&frame.record, &instructions, shared.time.wall())
+    spec.plan(&frame.chat_ctx, &instructions, shared.time.wall())
 }
 
 /// Cut short by interruption or closing, and by `bound` on the clock.
@@ -346,9 +357,9 @@ async fn wait_frame(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     bound: Duration,
-    ready: impl Fn(&crate::agent_session::FrameView) -> bool,
-) -> crate::agent_session::FrameView {
-    let mut rx = shared.frame.subscribe();
+    ready: impl Fn(&crate::agent_session::ActivitySnapshot) -> bool,
+) -> crate::agent_session::ActivitySnapshot {
+    let mut rx = shared.activity.subscribe();
     let mut closing = shared.closing.subscribe();
     let published = async {
         while !ready(&rx.borrow_and_update()) {
@@ -363,7 +374,7 @@ async fn wait_frame(
         _ = closing.wait_for(|c| *c) => {}
         _ = shared.time.timeout(bound, published) => {}
     }
-    shared.frame_view()
+    shared.activity.borrow().clone()
 }
 
 pub(super) fn empty_outcome(

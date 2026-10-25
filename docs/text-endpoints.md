@@ -1,9 +1,5 @@
 # Text endpoints
 
-> Implementation examples below still use deps/state. The target API uses
-> [typed application context](state-and-deps.md) and `ctx.context`; migration
-> is tracked in [TODO.md](TODO.md).
-
 A text endpoint is a door into a thread over the A2A protocol. Web chats,
 API clients and partner agents all come through it, and the handler never
 knows which.

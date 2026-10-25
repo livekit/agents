@@ -3,8 +3,8 @@
 
 use std::num::NonZeroUsize;
 
-use lk_agents_abi::{HostRef, Ts};
 use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::{HostRef, Ts};
 use thiserror::Error;
 
 use crate::interruption::audio::{AudioError, AudioFrame, AudioWindow};
@@ -322,7 +322,7 @@ impl InterruptionCore {
                     &entry,
                     true,
                     Some(started_at),
-                    // `ended_at=time.time()`: a barge-in ends the overlap now.
+                    // `ended_at=time.time()`: a interruption ends the overlap now.
                     Some(wall),
                     false,
                     wall,
@@ -428,14 +428,32 @@ mod tests {
         Ts::from_nanos((secs * 1e9) as u64)
     }
 
-    fn end_overlap(c: &mut InterruptionCore, ended_at: f64, agent_ended: bool, now: f64) -> Option<InputOutcome> {
-        c.on_input(InputEvent::OverlapSpeechEnded(OverlapEnd { ended_at, agent_ended }), now).unwrap()
+    fn end_overlap(
+        c: &mut InterruptionCore,
+        ended_at: f64,
+        agent_ended: bool,
+        now: f64,
+    ) -> Option<InputOutcome> {
+        c.on_input(InputEvent::OverlapSpeechEnded(OverlapEnd { ended_at, agent_ended }), now)
+            .unwrap()
     }
 
     /// The server's answer to the request stamped `sent`, arriving at `at`.
-    fn verdict(c: &mut InterruptionCore, detected: bool, sent: f64, prediction_duration: f64, probabilities: &[f32], at: f64) -> RecvOutcome {
-        let v = Verdict { created_at: ts(sent).as_nanos(), prediction_duration, probabilities: probabilities.to_vec() };
-        let msg = if detected { ServerMessage::Detected(v) } else { ServerMessage::InferenceDone(v) };
+    fn verdict(
+        c: &mut InterruptionCore,
+        detected: bool,
+        sent: f64,
+        prediction_duration: f64,
+        probabilities: &[f32],
+        at: f64,
+    ) -> RecvOutcome {
+        let v = Verdict {
+            created_at: ts(sent).as_nanos(),
+            prediction_duration,
+            probabilities: probabilities.to_vec(),
+        };
+        let msg =
+            if detected { ServerMessage::Detected(v) } else { ServerMessage::InferenceDone(v) };
         c.on_server_message(msg, ts(at), at).unwrap()
     }
 
@@ -642,10 +660,7 @@ mod tests {
         assert!((event.detection_delay - 0.15).abs() < 1e-9);
         assert_eq!(span_update, None, "no span was supplied");
 
-        assert_eq!(
-            end_overlap(&mut c, 1.2, false, 1.2),
-            None
-        );
+        assert_eq!(end_overlap(&mut c, 1.2, false, 1.2), None);
     }
 
     // Catches: applying a verdict that arrives after the overlap closed.
@@ -677,7 +692,10 @@ mod tests {
 
         // Either source alone is enough.
         let user = ServerMessage::SessionCreated { default_threshold: None };
-        assert_eq!(core_with(Some(0.9)).on_server_message(user, ts(0.0), 0.0), Ok(RecvOutcome::Ignored));
+        assert_eq!(
+            core_with(Some(0.9)).on_server_message(user, ts(0.0), 0.0),
+            Ok(RecvOutcome::Ignored)
+        );
         let server = ServerMessage::SessionCreated { default_threshold: Some(0.5) };
         assert_eq!(core().on_server_message(server, ts(0.0), 0.0), Ok(RecvOutcome::Ignored));
     }

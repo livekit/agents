@@ -34,7 +34,7 @@ pub const LINKED: &[&str] = &[
 ];
 
 /// `#[host(object)]` classes whose methods land on a hand-written napi class, by path.
-const ON_HAND_WRITTEN: &[(&str, &str)] = &[("AgentSession", "crate::session::AgentSession")];
+const ON_HAND_WRITTEN: &[(&str, &str)] = &[("LiveSession", "crate::session::LiveSession")];
 
 fn on_hand_written(o: &Object) -> Option<&'static str> {
     ON_HAND_WRITTEN.iter().find(|(n, _)| *n == o.name).map(|(_, c)| *c)
@@ -43,7 +43,7 @@ fn on_hand_written(o: &Object) -> Option<&'static str> {
 /// Names `lk-agents-node` writes by hand; napi keys by Rust ident and `index.d.ts` is one namespace.
 const HAND_WRITTEN: &[&str] = &[
     "AgentCore",
-    "AgentSession",
+    "LiveSession",
     "TtsInfo",
     "DriveOutcome",
     "FrameView",

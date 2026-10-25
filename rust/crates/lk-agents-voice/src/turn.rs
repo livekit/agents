@@ -11,20 +11,20 @@ use lk_agents_abi::voice::session_options::{
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TurnPolicy {
+pub struct TurnHandlingOptions {
     pub detection: TurnDetection,
     /// What the session runs (four-way); what the turn machine reads.
     pub owner: TurnDetectionMode,
-    pub endpointing: Endpointing,
-    pub interruption: Interruption,
-    pub preemptive: PreemptiveGeneration,
-    pub user_turn_limit: UserTurnLimit,
+    pub endpointing: EndpointingOptions,
+    pub interruption: InterruptionOptions,
+    pub preemptive: PreemptiveGenerationOptions,
+    pub user_turn_limit: UserTurnLimitOptions,
     /// `ivr_detection`: a turn's outcome is also fed to the IVR machine.
     pub ivr_detection: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Endpointing {
+pub struct EndpointingOptions {
     pub mode: EndpointingMode,
     pub min_delay: Duration,
     pub max_delay: Duration,
@@ -33,7 +33,7 @@ pub struct Endpointing {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Interruption {
+pub struct InterruptionOptions {
     pub enabled: bool,
     /// `None` is "the session picks the best available strategy" -- a state no concrete mode names.
     pub mode: Option<InterruptionMode>,
@@ -51,7 +51,7 @@ pub struct Interruption {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PreemptiveGeneration {
+pub struct PreemptiveGenerationOptions {
     pub enabled: bool,
     pub preemptive_tts: bool,
     pub max_speech_duration: Duration,
@@ -59,7 +59,7 @@ pub struct PreemptiveGeneration {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UserTurnLimit {
+pub struct UserTurnLimitOptions {
     pub max_words: Option<u32>,
     pub max_duration: Option<Duration>,
 }

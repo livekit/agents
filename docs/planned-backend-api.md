@@ -1,8 +1,7 @@
-# The backend API: planned
+# Thread handles and clients
 
-Not built. This page extends [backend-api.md](backend-api.md), which
-describes the threads client, the tokens and `AgentClient` as they work
-today.
+This page extends [backend-api.md](backend-api.md) with thread handles
+and client operations.
 
 ## A thread handle
 

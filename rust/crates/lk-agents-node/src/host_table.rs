@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use lk_agents_abi::{HostRef, MediaRef, RefRegistry};
 
-/// The one queue. Ids whose last `Arc` has dropped, waiting for the JS thread to delete them.
+/// The one queue. IdMint whose last `Arc` has dropped, waiting for the JS thread to delete them.
 static RELEASED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 
 /// Zero-sized forwarder, so the `'static` `Arc` owns no data of its own -- exactly
@@ -56,7 +56,7 @@ pub fn intern_host(id: u64) -> HostRef {
     HostRef::new(id, registry())
 }
 
-/// Ids the shim may now `map.delete(...)`. Pull, never push.
+/// IdMint the shim may now `map.delete(...)`. Pull, never push.
 pub fn drain_released() -> Vec<u64> {
     std::mem::take(&mut *RELEASED.lock().unwrap_or_else(|p| p.into_inner()))
 }

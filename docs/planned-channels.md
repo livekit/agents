@@ -1,9 +1,8 @@
-# Planned: channels
+# Channel routing and delivery
 
-Not built. This extends [channels.md](channels.md) with SMS, WhatsApp and
-email, the dispatch handler, and typed attachments. Everything below reaches
-the agent through the same thread endpoint and the same policies as the
-built channels.
+This page extends [channels.md](channels.md) with SMS, WhatsApp, email,
+dispatch routing, and typed attachments. All channels use the same thread
+endpoint and input policies.
 
 ## Ingress and egress
 
@@ -34,8 +33,7 @@ set when the platform creates it and never changed.
 
 A SIP call's dispatch names the thread the platform resolved by the
 caller's `phone:` key, so a call continues the texts and calls before it.
-Built today, a call continues only the thread its dispatch names in its
-metadata, else a new one; see [voice.md](voice.md).
+See [voice.md](voice.md) for dispatch metadata.
 
 ## Who is texting
 
@@ -45,8 +43,7 @@ Dispatch, not to this framework.
 
 ## A text during a call, heard live
 
-Built today, a text during a call is answered by text and the call learns
-of it on its next turn. When the platform routes a thread to one worker,
+When the platform routes a thread to one worker,
 the text lands on the call's worker and `LiveSession.on_inbox_message`
 decides what happens: spoken as a user turn of the call by default,
 answered by text, or left for after the call.

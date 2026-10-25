@@ -65,7 +65,6 @@ pub struct SpeechData {
     pub end_time: f64,
     pub confidence: f64,
     pub speaker_id: Option<String>,
-    pub is_primary_speaker: Option<bool>,
     // `None` vs `[]` matters to `TranscriptSynchronizer`.
     #[python(ty = "list[TimedString] | None", import = "..types:TimedString", default = "None")]
     #[node(ty = "string[] | null")]
@@ -109,7 +108,6 @@ impl SpeechData {
             end_time: 0.0,
             confidence: 0.0,
             speaker_id: None,
-            is_primary_speaker: None,
             words: None,
             source_languages: None,
             source_texts: None,

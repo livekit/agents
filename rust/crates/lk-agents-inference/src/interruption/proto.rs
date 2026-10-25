@@ -44,7 +44,7 @@ pub enum ServerMessage {
     SessionClosed,
     #[serde(rename = "bargein_detected")]
     Detected(Verdict),
-    /// "I looked and it is not a barge-in (yet)."
+    /// "I looked and it is not a interruption (yet)."
     #[serde(rename = "inference_done")]
     InferenceDone(Verdict),
     #[serde(rename = "error")]

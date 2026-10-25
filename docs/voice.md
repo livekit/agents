@@ -1,9 +1,5 @@
 # Voice
 
-> Implementation examples below still use deps/state. The target API uses
-> [typed application context](state-and-deps.md) and `ctx.context`; migration
-> is tracked in [TODO.md](TODO.md).
-
 A call runs on a `LiveSession`: the runtime a room attaches to, with the
 models, turn detection and audio. It runs an `Agent`, and it runs it in the
 same thread a text endpoint uses, so a call and a text in one thread
@@ -50,8 +46,8 @@ the web console sends it, else a new thread. It is `ctx.thread` on the
 `JobContext`, `None` on a server without storage, and
 `LiveSession(thread=ctx.thread)` is how the call gets it. A `LiveSession`
 without `thread=` keeps its history in memory, not saved.
-A call is not found by the caller's number; phone continuity is planned,
-see [planned-channels.md](planned-channels.md).
+For phone-number routing and conversation continuity, see
+[channel routing](planned-channels.md).
 
 At `start()` the call loads the agent's lane: the stored history when the
 call was handed none, and the state into the object it was given. Each
@@ -101,13 +97,10 @@ the same memory.
 
 ## Structured results in voice
 
-A voice turn's reply is speech. The end-state design separates that
-intermediate conversation from a child's typed final output: Call(agent,
-state=...) starts a durable agent execution whose result fills the parent's
-pending tool call. No AgentTask subclass or restored Python await is needed.
-See [agent-tasks.md](agent-tasks.md); the existing awaited AgentTask examples
-still need migration. Voice/text final-output integration must implement the
-same completion contract while preserving realtime speech behavior.
+A voice turn delivers conversational speech. `Call(agent, context=...)` starts
+a child task; its typed final result fills the parent's pending tool call.
+The parent agent then generates the spoken response. Voice and text use the
+same [task completion contract](agent-tasks.md).
 
 See `examples/use-cases/01_appointments_by_phone_and_text.py`,
 `03_insurance_eligibility.py` and `07_hospital_main_line.py`.

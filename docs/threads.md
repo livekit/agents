@@ -43,7 +43,7 @@ By its id, and nothing else.
 A backend that wants to find a conversation again stores the thread id in
 its own tables, against its user, lead or order, and passes it on as
 `contextId` or in the dispatch; see [backend-api.md](backend-api.md).
-Finding a call's thread by the caller's number is planned; see
+For phone-number routing, see
 [planned-channels.md](planned-channels.md).
 
 ## One person, several conversations
@@ -62,7 +62,7 @@ thread id. Each thread is its own memory: what the agent learned in one
 of a person's threads it does not know in another. An application that
 wants one memory keeps one thread per person.
 
-SMS, WhatsApp and email are planned; see [planned-channels.md](planned-channels.md).
+For SMS, WhatsApp and email routing, see [planned-channels.md](planned-channels.md).
 
 ## Runs
 

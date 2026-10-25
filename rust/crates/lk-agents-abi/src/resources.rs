@@ -1,0 +1,239 @@
+//! The providers a session uses, by id. The host registers each one when it hands it over and
+//! puts the typed reference in its command: the core decides with the reference (its id and what
+//! the provider said about itself at registration) and names the id in the effects that reach it.
+//! The table resolves an id to the provider for whoever performs those effects. The microphone and
+//! the audio sinks it feeds are registered the same way, so the data plane names them by id.
+
+use crate::llm::realtime::RealtimeCapabilities;
+use crate::voice::io::{
+    AudioInput, AudioOutput, AudioOutputCapabilities, AudioOutputExt, TextOutput,
+};
+use crate::{
+    AudioFrame, Llm, ProviderId, RealtimeSession, StreamSink, Stt, SttCapabilities, Tts,
+    TtsCapabilities, Vad, VadCapabilities,
+};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ResourceId(pub u64);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SttRef {
+    pub id: ResourceId,
+    pub provider: ProviderId,
+    pub capabilities: SttCapabilities,
+    /// The object registered: the same recogniser handed back under a new id is not reopened.
+    pub instance: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VadRef {
+    pub id: ResourceId,
+    pub provider: ProviderId,
+    pub capabilities: VadCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LlmRef {
+    pub id: ResourceId,
+    pub provider: ProviderId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TtsRef {
+    pub id: ResourceId,
+    pub provider: ProviderId,
+    pub capabilities: TtsCapabilities,
+    pub sample_rate: u32,
+    pub num_channels: u16,
+}
+
+/// The session a realtime model opened: what it said it can do when it opened.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RealtimeRef {
+    pub id: ResourceId,
+    pub capabilities: RealtimeCapabilities,
+}
+
+/// The agent's audio output: what it said about itself when handed over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioOutputRef {
+    pub id: ResourceId,
+    pub label: String,
+    /// Taken over its whole chain: `pause` only if every link can pause.
+    pub capabilities: AudioOutputCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextOutputRef {
+    pub id: ResourceId,
+    pub label: String,
+}
+
+enum Resource {
+    Stt(Arc<dyn Stt>),
+    Vad(Arc<dyn Vad>),
+    Llm(Arc<dyn Llm>),
+    Tts(Arc<dyn Tts>),
+    Realtime(Arc<dyn RealtimeSession>),
+    AudioOutput(Arc<dyn AudioOutput>),
+    TextOutput(Arc<dyn TextOutput>),
+    AudioInput(Arc<dyn AudioInput>),
+    AudioSink(Arc<dyn StreamSink<AudioFrame>>),
+}
+
+#[derive(Default)]
+struct Table {
+    next: u64,
+    live: BTreeMap<ResourceId, Resource>,
+}
+
+/// Shared by the host side that registers and the side that performs, until the runtime owns it.
+#[derive(Clone, Default)]
+pub struct Resources(Arc<Mutex<Table>>);
+
+impl Resources {
+    fn insert(&self, resource: Resource) -> ResourceId {
+        let mut table = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        table.next += 1;
+        let id = ResourceId(table.next);
+        table.live.insert(id, resource);
+        id
+    }
+
+    fn get<T>(&self, id: ResourceId, pick: impl FnOnce(&Resource) -> Option<T>) -> Option<T> {
+        let table = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        table.live.get(&id).and_then(pick)
+    }
+
+    pub fn register_stt(&self, stt: Arc<dyn Stt>) -> SttRef {
+        let (provider, capabilities) = (stt.id(), stt.capabilities());
+        let instance = Arc::as_ptr(&stt).cast::<()>() as usize;
+        SttRef { id: self.insert(Resource::Stt(stt)), provider, capabilities, instance }
+    }
+
+    pub fn register_vad(&self, vad: Arc<dyn Vad>) -> VadRef {
+        let (provider, capabilities) = (vad.id(), vad.capabilities());
+        VadRef { id: self.insert(Resource::Vad(vad)), provider, capabilities }
+    }
+
+    pub fn register_llm(&self, llm: Arc<dyn Llm>) -> LlmRef {
+        let provider = llm.id();
+        LlmRef { id: self.insert(Resource::Llm(llm)), provider }
+    }
+
+    pub fn register_tts(&self, tts: Arc<dyn Tts>) -> TtsRef {
+        let (provider, capabilities) = (tts.id(), tts.capabilities());
+        let (sample_rate, num_channels) = (tts.sample_rate(), tts.num_channels());
+        TtsRef {
+            id: self.insert(Resource::Tts(tts)),
+            provider,
+            capabilities,
+            sample_rate,
+            num_channels,
+        }
+    }
+
+    pub fn register_realtime(&self, session: Arc<dyn RealtimeSession>) -> RealtimeRef {
+        let capabilities = session.capabilities();
+        RealtimeRef { id: self.insert(Resource::Realtime(session)), capabilities }
+    }
+
+    pub fn realtime(&self, id: ResourceId) -> Option<Arc<dyn RealtimeSession>> {
+        self.get(id, |r| if let Resource::Realtime(s) = r { Some(Arc::clone(s)) } else { None })
+    }
+
+    pub fn register_audio_output(&self, out: Arc<dyn AudioOutput>) -> AudioOutputRef {
+        let label = out.label().to_owned();
+        let capabilities = AudioOutputCapabilities { pause: out.can_pause() };
+        AudioOutputRef { id: self.insert(Resource::AudioOutput(out)), label, capabilities }
+    }
+
+    pub fn register_text_output(&self, out: Arc<dyn TextOutput>) -> TextOutputRef {
+        let label = out.label().to_owned();
+        TextOutputRef { id: self.insert(Resource::TextOutput(out)), label }
+    }
+
+    pub fn audio_output(&self, id: ResourceId) -> Option<Arc<dyn AudioOutput>> {
+        self.get(id, |r| if let Resource::AudioOutput(o) = r { Some(Arc::clone(o)) } else { None })
+    }
+
+    pub fn text_output(&self, id: ResourceId) -> Option<Arc<dyn TextOutput>> {
+        self.get(id, |r| if let Resource::TextOutput(o) = r { Some(Arc::clone(o)) } else { None })
+    }
+
+    pub fn register_audio_input(&self, input: Arc<dyn AudioInput>) -> ResourceId {
+        self.insert(Resource::AudioInput(input))
+    }
+
+    pub fn audio_input(&self, id: ResourceId) -> Option<Arc<dyn AudioInput>> {
+        self.get(id, |r| if let Resource::AudioInput(i) = r { Some(Arc::clone(i)) } else { None })
+    }
+
+    /// A stream's input side the microphone feeds: an STT, VAD or detector stream.
+    pub fn register_audio_sink(&self, sink: Arc<dyn StreamSink<AudioFrame>>) -> ResourceId {
+        self.insert(Resource::AudioSink(sink))
+    }
+
+    pub fn audio_sink(&self, id: ResourceId) -> Option<Arc<dyn StreamSink<AudioFrame>>> {
+        self.get(id, |r| if let Resource::AudioSink(s) = r { Some(Arc::clone(s)) } else { None })
+    }
+
+    pub fn stt(&self, id: ResourceId) -> Option<Arc<dyn Stt>> {
+        self.get(id, |r| if let Resource::Stt(s) = r { Some(Arc::clone(s)) } else { None })
+    }
+
+    pub fn vad(&self, id: ResourceId) -> Option<Arc<dyn Vad>> {
+        self.get(id, |r| if let Resource::Vad(v) = r { Some(Arc::clone(v)) } else { None })
+    }
+
+    pub fn llm(&self, id: ResourceId) -> Option<Arc<dyn Llm>> {
+        self.get(id, |r| if let Resource::Llm(l) = r { Some(Arc::clone(l)) } else { None })
+    }
+
+    pub fn tts(&self, id: ResourceId) -> Option<Arc<dyn Tts>> {
+        self.get(id, |r| if let Resource::Tts(t) = r { Some(Arc::clone(t)) } else { None })
+    }
+
+    pub fn prewarm(&self, id: ResourceId) {
+        let table = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        match table.live.get(&id) {
+            Some(Resource::Stt(s)) => s.prewarm(),
+            Some(Resource::Vad(v)) => v.prewarm(),
+            Some(Resource::Llm(l)) => l.prewarm(),
+            Some(Resource::Tts(t)) => t.prewarm(),
+            Some(
+                Resource::Realtime(_)
+                | Resource::AudioOutput(_)
+                | Resource::TextOutput(_)
+                | Resource::AudioInput(_)
+                | Resource::AudioSink(_),
+            )
+            | None => {}
+        }
+    }
+
+    /// What the table still holds, by id and kind: nothing once the session has ended.
+    pub fn live(&self) -> Vec<(ResourceId, &'static str)> {
+        let table = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let kind = |r: &Resource| match r {
+            Resource::Stt(_) => "stt",
+            Resource::Vad(_) => "vad",
+            Resource::Llm(_) => "llm",
+            Resource::Tts(_) => "tts",
+            Resource::Realtime(_) => "realtime",
+            Resource::AudioOutput(_) => "audio output",
+            Resource::TextOutput(_) => "text output",
+            Resource::AudioInput(_) => "audio input",
+            Resource::AudioSink(_) => "audio sink",
+        };
+        table.live.iter().map(|(id, r)| (*id, kind(r))).collect()
+    }
+
+    /// Whoever holds a clone (a stream or a reply in flight) keeps the provider alive.
+    pub fn release(&self, id: ResourceId) {
+        let mut table = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        table.live.remove(&id);
+    }
+}

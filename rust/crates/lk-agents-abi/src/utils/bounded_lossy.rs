@@ -59,7 +59,7 @@ impl<T> Shared<T> {
 }
 
 /// Drop-oldest, for the audio-in legs. Not `mpsc`: `try_send` drops the newest frame (the
-/// barge-in) and `send().await` backpressures a GIL-holding callback. Never for text->TTS.
+/// interruption) and `send().await` backpressures a GIL-holding callback. Never for text->TTS.
 pub struct BoundedLossy<T> {
     shared: Arc<Shared<T>>,
 }

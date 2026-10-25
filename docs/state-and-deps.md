@@ -1,23 +1,19 @@
 # Application context and persisted fields
 
-The target API follows OpenAI-style local context: `Agent[Context]`,
-`run(context=...)`, and `ctx.context`. One typed object can contain identity,
-mutable application data, services, and helper methods. There are no separate
-public `deps_type` or `state_type` parameters.
+Declare the application context type with `Agent[Context]`, pass an instance
+with `run(context=...)`, and access it in tools through `ctx.context`.
+One typed object contains identity, mutable application data, services, and
+helper methods.
 
 Persistence is opt-in **per field**, not per entire context. Mark a user's
 validated data structure with `persisted(...)`; explicitly load its saved
-values and let managed saves checkpoint changes. Ordinary fields remain runtime dependencies/data.
+values with `load_context` and save changes with `save_context`. Ordinary
+fields remain runtime dependencies/data.
 
 This proposal covers conversation and draft persistence. A durable execution
 engine, automatic task recovery, scheduler wake-ups, and operation journals
 are deferred. Transaction and effect examples below explain persistence limits;
 they do not require a new durable runtime in this phase.
-
-This is the end-state contract. Current code still uses deps/state; see
-[TODO.md](TODO.md). `persisted` and the context/scoping signatures below are
-proposed API, not implemented imports. The dataclass field helper and typed
-Agent/output inference need strict type tests before implementation lands.
 
 ## A complete context
 
@@ -66,7 +62,7 @@ application-defined. The runtime sees the draft marker through dataclass
 field metadata. It validates the declared type and never attempts to infer
 persistence from whether an arbitrary object happens to serialize.
 
-| Value | Saved automatically? | How it is restored |
+| Value | Included by `save_context`? | How it is restored |
 | --- | --- | --- |
 | `draft` | Yes, under `draft` | Decode and validate RoomDraft before user code |
 | `customer` | No | Application supplies/loads it for each activation |
@@ -82,9 +78,8 @@ context = BookingContext(
 )
 ```
 
-No snapshot class, repository, serializer, or save call is required for the
-marked draft. Customer information may be refreshed from its authoritative
-source instead of becoming an obsolete saved copy. Stable principal/tenant
+Call `save_context` to save the marked draft. Refresh customer information
+from its authoritative source for each activation. Stable principal/tenant
 and context-scope references belong in the execution envelope so reactivation
 can resolve the same authorized subject without waiting for a new HTTP request.
 
@@ -134,10 +129,8 @@ connection and manages leases; application code does not open storage, close
 connections, or pass thread/scope IDs for ordinary context persistence.
 Construct the application context explicitly, then load its marked fields.
 
-This entrypoint is proposed syntax; ctx.store and its context methods are not
-implemented yet. customers/hotel_service are application dependencies, and
-ctx.customer_id represents trusted identity metadata, not a currently exposed
-A2ASessionContext field.
+`customers` and `hotel_service` are application dependencies.
+`ctx.customer_id` carries the authenticated customer identity.
 
 ```python
 @server.a2a_session(endpoint="booking", description="Book a hotel room.")
@@ -170,57 +163,42 @@ await load_context(app, store=ctx.store)
 await save_context(app, store=ctx.store)
 ```
 
-Keep canonical methods on the store. There is no implicit global connection
-or second entrypoint-specific persistence policy. Tools, scheduled wake-ups,
-and tests receive an appropriately scoped store from their execution host;
-they need no fake HTTP entrypoint to load/save context. Manually opening a
-connection remains low-level infrastructure, not the ordinary user API.
+Use the scoped store for both methods. Entrypoints, tools, and tests receive
+the store from their execution host. The runtime manages its connection.
 
 A store view is activation-scoped and must not be retained in persisted
 context or reused after its runtime ends. A child receiver uses the child's
 recorded scope; a handoff or shared-context child retains the existing one.
 Returning from the handler lets the runtime finish its commit and release
-resources; users do not manage that lifecycle with try/finally.
+resources.
 
-## Automatic checkpoints are the safety net
+## Explicit saves
 
-Explicit loading makes the hydration boundary visible. After a context has
-been loaded/enrolled in a durable execution, the runtime saves its marked
-fields automatically at defined execution checkpoints as well as accepting
-explicit save_context requests. Standalone agent.run is not automatically
-durable merely because a context contains markers; it needs a managed
-execution/store association. A background wake-up uses the registered
-application context factory followed by the same load operation.
+`persisted(...)` selects fields for storage. Mutating a marked field changes
+only the in-memory object until the application calls `save_context`.
+`agent.run(...)` and returning from a handler do not implicitly save context.
 
-For a managed activation:
+For each activation:
 
-1. Obtain the application's fresh runtime context and explicitly load the
-   persisted fields for the recorded scope.
-2. Validate all marked values before instructions, tools, or output functions.
-3. Run the model/tool activation.
-4. Checkpoint marked fields with settled tool results, history, consumed input,
-   pending receivers, status, and delivery outbox records.
+1. Construct the context with fresh runtime dependencies.
+2. Call `await store.load_context(app)` to restore and validate marked fields.
+3. Run the agent with `context=app`.
+4. Call `await store.save_context(app)` to save the resulting application data.
 
-Checkpoint before releasing execution for human input, an operation, or a
-child, and on accepted final output. Capture nested in-place mutations;
-correctness cannot depend solely on observing attribute setters.
+Save after each turn whose changes should be retained, including turns that
+return `InputRequired`. `save_context` validates and serializes all marked
+fields, including nested in-place mutations, and checks the loaded revision
+to reject stale writes. Unmarked fields remain in memory.
 
-During an active run transaction, save_context participates in that unit of
-work; it must not independently commit a new draft while leaving its tool
-result/history behind. A call from an unfinished tool is staged or rejected
-if no coherent checkpoint can be formed; it never promises to persist a
-Python program counter. Outside a managed run, save_context performs an
-explicit version-checked field transaction. The API must expose/document
-transaction ownership; an independent manual save is not a full conversation
-checkpoint. The final save in an entrypoint may be idempotent/redundant after
-an automatic checkpoint, but must not overwrite a newer revision.
+In a managed transaction, `save_context` stages the field write for the
+runtime's commit alongside conversation changes. Outside that transaction,
+it commits a version-checked field write. An explicit save is required in
+either case. The runtime owns connection and transaction cleanup.
 
-On an uncommitted failure, discard local mutations and reload the last
-checkpoint. Do not automatically commit arbitrary partial state in except
-or finally. A hard process kill may execute neither block. Explicit saves
-and automatic checkpoints do not make every assignment durable immediately.
-Services are never restored from JSON; constructors/default factories must
-not perform business effects.
+A crash before commit loses uncommitted changes. On failure, reload the last
+saved values. Save only changes the application intends to retain; placing
+`save_context` in `finally` can persist incomplete work. Loading or saving
+context does not preserve a Python call stack.
 
 An external effect may succeed before its local result is committed. Stable
 operation identities and idempotency/reconciliation are required; saving a
@@ -293,7 +271,7 @@ rather than unbounded context snapshots.
 
 ## Field names and schema changes
 
-The Python field name is its storage name. There is no separate key argument.
+The Python field name is its storage name.
 Two contexts with the same field name remain isolated by scope. Inherited or
 shared-scope declarations must not assign incompatible contracts to the same
 stored field. Collection entry keys remain application-chosen data, distinct
@@ -316,15 +294,11 @@ Store schema identity and field-name manifests with snapshots. Removing a field
 or unmarking it must not silently destroy saved data. Defaults do not justify
 silently accepting arbitrary incompatible changes. Retain old contracts long
 enough to detect remove/reintroduce cases and validate pending outputs against
-their saved receivers. No user-written version number is required, and no
-automatic migration engine is assumed to exist today.
+their saved receivers.
 
 Runtime dependency recreation and schema evolution remain separate concerns.
 Define a context factory/provider at the application boundary for service and
-customer loading, followed by explicit load_context; this does not require
-handwritten draft snapshot functions.
-The exact registration and default-field discovery syntax is implementation
-work, including full support for context subclasses and alternate model types.
+customer loading, followed by explicit load_context.
 
 ## Concurrency and execution ownership
 
@@ -336,15 +310,15 @@ same hydrated values. Independent background jobs should use separate scopes
 or explicit application concurrency control. Their completion reaches the
 parent as an event/result, not as a hidden draft mutation.
 
-## Framework precedent and LiveKit extension
+## Persistence boundaries
 
-[OpenAI local context](https://openai.github.io/openai-agents-python/context/)
-combines application data and dependencies; its
-[RunState serialization hooks](https://openai.github.io/openai-agents-python/human_in_the_loop/#serialization-options)
-allow explicit context serialization and reconstruction. Automatic per-field
-`persisted`, field-based storage names/scopes, atomic draft checkpoints, and automatic
-conversational InputRequired are LiveKit extensions, not OpenAI guarantees.
-History persistence, settled tool checkpoints, and safe external-effect
-recovery have different contracts; saving a draft alone supplies none of the
-other two. A durable execution runtime and external wake-up recovery are
-deferred; persistence here does not promise them.
+The application supplies a typed context object containing its data and runtime
+services. Only fields marked `persisted(...)` are stored. Explicit loading
+restores those fields; explicit `save_context` calls record their changes without serializing
+service clients or other unmarked values.
+
+Conversation history, application fields, and external effects have separate
+lifecycles. Saving a draft does not record an external operation's outcome or
+make that operation safe to repeat. Services must enforce idempotency and
+reconcile uncertain outcomes. A durable execution runtime and external wake-up
+recovery are deferred; context persistence does not provide them.

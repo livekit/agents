@@ -149,7 +149,10 @@ pub enum TurnEdit {
 pub struct SessionChatCtx {
     items: Vec<Committed>,
     ids: BTreeSet<String>,
-    frame: String,
+    agent: String,
+    /// Bumped by every commit that adds or replaces; a preemptive generation planned against an
+    /// older version is discarded.
+    version: u64,
 }
 
 impl SessionChatCtx {
@@ -159,10 +162,10 @@ impl SessionChatCtx {
 
     /// Set the driving frame. `carry`: the frame brought no context, so the previous frame's
     /// conversation becomes its own (a resume after an inline task). Returns the ids carried.
-    pub fn set_frame(&mut self, agent: &str, carry: bool) -> Vec<String> {
+    pub fn set_agent(&mut self, agent: &str, carry: bool) -> Vec<String> {
         let mut carried = Vec::new();
         if carry {
-            let from = std::mem::replace(&mut self.frame, agent.to_owned());
+            let from = std::mem::replace(&mut self.agent, agent.to_owned());
             if from == agent {
                 return carried;
             }
@@ -173,19 +176,37 @@ impl SessionChatCtx {
                 }
             }
         } else {
-            self.frame = agent.to_owned();
+            self.agent = agent.to_owned();
         }
         carried
     }
 
-    pub fn frame(&self) -> &str {
-        &self.frame
+    pub fn agent(&self) -> &str {
+        &self.agent
+    }
+
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// The only write, inserted by the item's own `created_at`; an existing id is replaced in
     /// place. The fixed-id instructions message is never recorded.
     #[must_use = "a commit is performed by the driver: the speech is told, the event is emitted"]
     pub fn commit(
+        &mut self,
+        item: ChatItem,
+        source: Source,
+        visibility: Visibility,
+        agent: &str,
+    ) -> (Committed, CommitOutcome) {
+        let commit = self.insert(item, source, visibility, agent);
+        if commit.1 != CommitOutcome::Filtered {
+            self.version += 1;
+        }
+        commit
+    }
+
+    fn insert(
         &mut self,
         item: ChatItem,
         source: Source,
@@ -215,10 +236,11 @@ impl SessionChatCtx {
         (entry, outcome)
     }
 
-    /// `Agent.update_chat_ctx`: `agent`'s view becomes exactly `items`. Dropped items stay in
-    /// history; known items are promoted in place; new ones are `HostCtx`, frame-only.
+    /// `Agent.update_chat_ctx`: `agent`'s view becomes exactly `items` (the version is kept).
+    /// Dropped items stay in history; known items are promoted in place; new ones are `HostCtx`,
+    /// frame-only.
     pub fn update_agent_chat_ctx(&mut self, items: Vec<ChatItem>, agent: &str) {
-        self.frame = agent.to_owned();
+        self.agent = agent.to_owned();
         let incoming: BTreeSet<&str> = items.iter().map(ChatItem::id).collect();
         // A host-supplied item nobody else was told about leaves the record entirely.
         let ids = &mut self.ids;
@@ -235,7 +257,7 @@ impl SessionChatCtx {
             }
         });
         for item in items {
-            let _ = self.commit(item, Source::HostCtx, Visibility::Model, agent);
+            let _ = self.insert(item, Source::HostCtx, Visibility::Model, agent);
         }
     }
 
@@ -260,7 +282,7 @@ impl SessionChatCtx {
         ChatContext::new(
             self.items
                 .iter()
-                .filter(|c| c.agent == self.frame && c.visibility.model())
+                .filter(|c| c.agent == self.agent && c.visibility.model())
                 .map(|c| c.item.clone())
                 .collect(),
         )
@@ -273,7 +295,7 @@ impl SessionChatCtx {
             self.items
                 .iter()
                 .filter(|c| {
-                    c.agent == self.frame
+                    c.agent == self.agent
                         && c.visibility.model()
                         && !matches!(c.source, Source::Remote { .. })
                         && !matches!(

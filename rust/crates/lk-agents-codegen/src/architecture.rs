@@ -28,7 +28,7 @@ const CORE: &[&str] = &[
     "generation",
     "turn",
     "agent_session::SessionShared",
-    "agent_session::FrameView",
+    "agent_session::ActivitySnapshot",
     "io::RealtimeAudioNode",
     "tool_executor::Toolset",
     "tool_executor::SessionTools",

@@ -45,7 +45,8 @@ impl Run {
                 },
             );
         }
-        self.record.set_driver_finished(self.driver.as_ref().is_none_or(JoinHandle::is_finished));
+        self.record.set_driver_finished(self.runtime.is_none());
+        self.record.set_resources_left(self.resources.live());
         self.record.set_now(now);
     }
 
@@ -96,6 +97,10 @@ impl Run {
                 Record::Closed { at, slot } => {
                     if self.record.live().has(slot.kind, slot.nth) {
                         self.record.close(at, slot.kind, slot.nth);
+                    }
+                    // Nothing more can be said on a closed recognition stream.
+                    if slot.kind == Kind::Stt {
+                        self.end_utterances_on(at, slot.nth);
                     }
                 }
                 Record::Produced { at, tts, chunk, text } => {
@@ -152,7 +157,7 @@ impl Run {
                 Step::Speech(SpeechStep::IdleAnswered { hold: Some(hold), .. }) => {
                     self.open_once(at, Kind::Hold, Id::Hold(*hold), Detail::None);
                 }
-                Step::Speech(SpeechStep::FloorHoldReleased { hold }) => {
+                Step::Speech(SpeechStep::IdleHoldReleased { hold }) => {
                     self.close_by_id(at, Kind::Hold, Id::Hold(*hold));
                 }
                 Step::Generation(GenerationStep::FillerStarted { filler, .. }) => {

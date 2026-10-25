@@ -1,5 +1,7 @@
-use crate::io::{IoError, Result};
 use crate::room_io::types::{PRE_CONNECT_AUDIO_BUFFER_STREAM, PRE_CONNECT_MAX_DELTA};
+use lk_agents_abi::AbortHandle;
+use lk_agents_abi::voice::io::IoError;
+use lk_agents_abi::voice::io::Result;
 use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Spawner, SpawnerExt, Ts};
 use lk_agents_media::Decoder;
 use lk_agents_rtc::{ByteStream, RtcRoom, TrackSid};
@@ -7,7 +9,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
-use lk_agents_abi::AbortHandle;
 
 #[derive(Debug, Clone)]
 pub struct PreConnectBuffer {
@@ -70,9 +71,7 @@ impl PreConnectAudioHandler {
     /// Subscribe to the pre-connect topic. A duplicate registration warns and continues; returns
     /// whether it took.
     pub fn register(self: &Arc<Self>) -> bool {
-        let Ok(mut streams) =
-            self.room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM)
-        else {
+        let Ok(mut streams) = self.room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM) else {
             return false;
         };
         let this = self.clone();

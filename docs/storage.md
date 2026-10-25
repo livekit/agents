@@ -1,9 +1,7 @@
 # Storage
 
-> The implementation-oriented tables below predate persisted context fields.
-> The target stores only `persisted(...)` application fields under durable
-> context scopes, separately from history/active-agent/wait records. See
-> [application context](state-and-deps.md) for the proposed context API.
+> Context persistence: design. See [application context](state-and-deps.md)
+> for field storage and scopes. The tables below describe current storage.
 
 Every thread has its own database: the history, the journal, the typed
 state and the tasks, in one place the framework loads before a run and
@@ -13,11 +11,11 @@ can take the next message, and a crash loses at most the run in flight.
 ## Application records and context fields
 
 Draft persistence and direct application writes can use the same AgentDB.
-They are two access patterns, not a requirement to use two database products:
+Choose the access pattern according to the data and its commit requirements:
 
 | Access | Purpose | Commit behavior |
 | --- | --- | --- |
-| persisted context fields | Automatically checkpoint small application working data | Commit with execution state under managed runs |
+| persisted context fields | Save marked application data with explicit `save_context` | Join the managed commit, or commit directly outside a managed transaction |
 | Explicit application SQL/transactions | Business records, unique operation IDs, invoices, outbox entries | Commit at application-selected durable boundaries |
 
 Use the same thread database when the data belongs to that thread. A
@@ -36,16 +34,12 @@ await store.save_context(app)
 ```
 
 Connection open/close, thread/scope resolution, and lease ownership are
-framework responsibilities. The existing storage.open(thread_id) is an
-infrastructure API, not required in user entrypoints.
+framework responsibilities.
 
-The target handle adds load_context/save_context and application SQL/transaction
-operations. The current Python Thread handle exposes framework reads/runs,
-not arbitrary application SQL. The Rust connection already provides exec,
-query_all, and batch; the framework's Commit currently accepts only its
-known history/state/task/event fields. Exposing application transactions and
-joining application writes to framework commits require explicit implementation.
-The console's raw data-plane query access is not proof of a Python tool API.
+The scoped store provides context load/save and application database access.
+Application transactions declare whether they join the managed commit or
+commit independently. Framework-owned history, state, task, and event tables
+remain protected from application writes.
 
 Do not place raw SQL inside the draft or assume that an arbitrary application
 write automatically joins the turn's transaction. Expose whether an operation
@@ -72,12 +66,9 @@ an outbox committed with the operation record.
 After a provider timeout or crash between effect and outcome commit, reconcile
 the same operation; absence of a result is not proof no charge happened. Domain
 uniqueness constraints guard repeated semantic requests even when the LLM emits
-another tool call ID. Automatic persisted fields are working data, not a
+another tool call ID. Persisted context fields are working data, not a
 replacement for those constraints. Both can share one AgentDB while keeping
 separate commit boundaries.
-
-The hotel's current Hotel.bookings is an in-memory list; moving it to AgentDB
-business tables is future implementation work, not current example behavior.
 
 ## What is saved
 

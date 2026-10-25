@@ -8,7 +8,7 @@
 //! the room.
 use std::collections::BTreeMap;
 
-use lk_agents_voice::agent_session::IoLeg;
+use lk_agents_voice::agent_session::IoKind;
 
 use crate::{
     authored::Authored,
@@ -62,7 +62,8 @@ impl Rule for ForwardedWhileEnabled {
             }
             for tag in heard.tags {
                 let Tag::Mic { mic, chunk } = *tag else { continue };
-                let late = pushed_enabled.get(&(mic, chunk)).is_some_and(|pushed| *pushed < heard.at);
+                let late =
+                    pushed_enabled.get(&(mic, chunk)).is_some_and(|pushed| *pushed < heard.at);
                 check.expect_with(Subject::Resource(Kind::Mic, mic), late, || {
                     format!(
                         "{:?} stream {} heard mic {mic} chunk {chunk} while audio input was disabled (seq {})",
@@ -105,13 +106,17 @@ fn expect_reached(
             if !stream.open_throughout(pushed, end) {
                 continue;
             }
-            check.expect_with(Subject::Resource(Kind::Mic, mic), stream.heard_after(mic, chunk, pushed), || {
-                format!(
-                    "mic {mic} chunk {chunk} pushed at seq {} never reached {kind:?} stream {}",
-                    pushed.seq,
-                    stream.nth()
-                )
-            });
+            check.expect_with(
+                Subject::Resource(Kind::Mic, mic),
+                stream.heard_after(mic, chunk, pushed),
+                || {
+                    format!(
+                        "mic {mic} chunk {chunk} pushed at seq {} never reached {kind:?} stream {}",
+                        pushed.seq,
+                        stream.nth()
+                    )
+                },
+            );
         }
     }
 }
@@ -130,7 +135,7 @@ fn frames(chunks: u32) -> Input {
 }
 
 fn audio_input(enabled: bool) -> Input {
-    Input::SetIoEnabled { leg: IoLeg::AudioInput, enabled }
+    Input::SetIoEnabled { leg: IoKind::AudioInput, enabled }
 }
 
 fn heard(chunk: u16) -> Vec<Tag> {

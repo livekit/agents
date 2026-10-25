@@ -1,10 +1,10 @@
-use crate::agent_session::cycle::TurnTimer;
-use crate::agent_session::{IvrCommand, Origin, Peer, SpeechCommand, Watched};
+use crate::agent_session::effects::TurnTimer;
+use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap};
 use crate::events::SessionEvent;
 use crate::trace::{CoreStep, DetectorStep, IvrLifecycle, Step};
 use lk_agents_abi::voice::events::{AgentState, UserState};
 use lk_agents_abi::{SpawnerExt, Ts};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// `IVRActivity(max_silence_duration=5.0)`: the reference's default silence budget.
@@ -32,8 +32,8 @@ fn tokenize(text: &str) -> Vec<String> {
     out
 }
 
-fn term_counts(text: &str) -> HashMap<String, f64> {
-    let mut counts: HashMap<String, f64> = HashMap::new();
+fn term_counts(text: &str) -> BTreeMap<String, f64> {
+    let mut counts: BTreeMap<String, f64> = BTreeMap::new();
     for token in tokenize(text) {
         *counts.entry(token).or_insert(0.0) += 1.0;
     }
@@ -129,11 +129,11 @@ impl TfidfLoopDetector {
             return false;
         }
 
-        let docs: Vec<HashMap<String, f64>> = self.chunks.iter().map(|c| term_counts(c)).collect();
+        let docs: Vec<BTreeMap<String, f64>> = self.chunks.iter().map(|c| term_counts(c)).collect();
         let n = docs.len() as f64;
 
         // `smooth_idf=True`: a term in every document keeps a non-zero idf.
-        let mut df: HashMap<&str, f64> = HashMap::new();
+        let mut df: BTreeMap<&str, f64> = BTreeMap::new();
         for doc in &docs {
             for term in doc.keys() {
                 *df.entry(term.as_str()).or_insert(0.0) += 1.0;
@@ -145,10 +145,10 @@ impl TfidfLoopDetector {
         };
 
         // l2-normalised tf-idf, so cosine similarity is a plain dot product.
-        let vectors: Vec<HashMap<&str, f64>> = docs
+        let vectors: Vec<BTreeMap<&str, f64>> = docs
             .iter()
             .map(|doc| {
-                let mut v: HashMap<&str, f64> =
+                let mut v: BTreeMap<&str, f64> =
                     doc.iter().map(|(t, c)| (t.as_str(), c * idf(t))).collect();
                 let norm = v.values().map(|x| x * x).sum::<f64>().sqrt();
                 if norm > 0.0 {
@@ -194,7 +194,7 @@ struct Navigator {
 }
 
 pub struct IvrSystem {
-    peer: Peer,
+    peer: PeerHandle,
     nav: Option<Navigator>,
     /// The (agent, user) labels last seen (`IVRActivity._current_agent_state/_current_user_state`);
     /// `initializing` counts as quiet.
@@ -207,7 +207,7 @@ pub struct IvrSystem {
 
 impl IvrSystem {
     /// The system, subscribed to the feed and navigating now if `ivr_detection`.
-    pub fn spawn(peer: Peer, ivr_detection: bool) {
+    pub fn spawn(peer: PeerHandle, ivr_detection: bool) {
         let rx = peer.subscribe();
         let mut system = IvrSystem {
             peer,
@@ -224,7 +224,7 @@ impl IvrSystem {
     }
 
     /// The loop: a due deadline fires before same-instant feed items; ends at close.
-    async fn run(mut self, mut rx: tokio::sync::mpsc::UnboundedReceiver<Watched>) {
+    async fn run(mut self, mut rx: tokio::sync::mpsc::UnboundedReceiver<SystemTap>) {
         let time = self.peer.time.clone();
         let api = self.peer.api.clone();
         while !self.closed {
@@ -245,23 +245,23 @@ impl IvrSystem {
         }
     }
 
-    fn on_watched(&mut self, now: Ts, item: Watched) {
+    fn on_watched(&mut self, now: Ts, item: SystemTap) {
         match item {
             // `_on_user_input_transcribed`: finals only, while a navigator runs.
-            Watched::Session(SessionEvent::UserTranscript(t)) if t.is_final => {
+            SystemTap::Session(SessionEvent::UserInputTranscribed(t)) if t.is_final => {
                 let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
                 self.on_final(&text);
             }
-            Watched::Session(SessionEvent::AgentStateChanged { new, .. }) => {
+            SystemTap::Session(SessionEvent::AgentStateChanged { new, .. }) => {
                 self.states.0 = new;
                 self.quiet_edge(now);
             }
-            Watched::Session(SessionEvent::UserStateChanged { new, .. }) => {
+            SystemTap::Session(SessionEvent::UserStateChanged { new, .. }) => {
                 self.states.1 = new;
                 self.quiet_edge(now);
             }
-            Watched::Session(_) | Watched::Vad(_) | Watched::Stt(_) => {}
-            Watched::Ivr(command) => match command {
+            SystemTap::Session(_) | SystemTap::Vad(_) | SystemTap::Stt(_) => {}
+            SystemTap::Ivr(command) => match command {
                 IvrCommand::Start { max_silence } => self.start(now, max_silence),
                 IvrCommand::SeedTranscript { text } => self.on_final(&text),
                 IvrCommand::Close => self.close(),
@@ -269,7 +269,7 @@ impl IvrSystem {
                 IvrCommand::AddTools(_) => {}
             },
             // `_ivr_activity.aclose()`: no nudge inside the close window.
-            Watched::CloseRequested => {
+            SystemTap::CloseRequested => {
                 self.close();
                 self.closed = true;
             }
@@ -349,11 +349,10 @@ impl IvrSystem {
         self.reply(IvrReplyOrigin::Silence, true);
     }
 
-    /// `generate_reply(allow_interruptions=..)` with no input, under the navigator's origin; the
-    /// handle is dropped, as in the reference.
+    /// `generate_reply(allow_interruptions=..)` with no input, under the navigator's origin; nobody
+    /// awaits the handle, as in the reference.
     fn reply(&mut self, origin: IvrReplyOrigin, allow_interruptions: bool) {
         self.peer.journal(Step::Detector(DetectorStep::IvrTriggered { origin }));
-        let (handle, _dropped) = tokio::sync::oneshot::channel();
         let _ = self.peer.send(
             Origin::Ivr,
             SpeechCommand::GenerateReply {
@@ -364,7 +363,7 @@ impl IvrSystem {
                 chat_ctx: None,
                 toolset: None,
                 on_enter: false,
-                handle,
+                call: None,
             },
         );
     }

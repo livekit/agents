@@ -2,7 +2,6 @@
 
 **URI:** `https://livekit.io/a2a/ext/agents/v1`
 **Baseline:** A2A 1.0, JSON-RPC 2.0 over HTTP with server-sent events
-**Status:** v1, implemented by `livekit-agents` 2.0 (server, client, delegate)
 
 This document is the specification. The SDK is written from it; where
 they disagree, the SDK is wrong.

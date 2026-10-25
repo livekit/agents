@@ -13,6 +13,18 @@ include!(concat!(env!("OUT_DIR"), "/rules.rs"));
 mod registry {
     use super::*;
 
+    /// The known findings name contracts that exist, so a renamed or deleted rule cannot leave the
+    /// gate tolerating a name nothing reports.
+    #[test]
+    fn every_known_finding_is_a_contract() {
+        for known in crate::check::KNOWN_FINDINGS {
+            assert!(
+                *known == "session_settles" || RULES.iter().any(|rule| rule.id() == *known),
+                "{known} is listed as a known finding but is no contract"
+            );
+        }
+    }
+
     /// Every contract's id is its file name, so the report, `failure.json` and the source agree
     /// on what a rule is called.
     #[test]

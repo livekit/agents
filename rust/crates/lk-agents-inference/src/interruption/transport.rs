@@ -7,18 +7,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, UNIX_EPOCH};
 
-use lk_agents_abi::{Clock, HostRef};
-use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::ApiConnectOptions;
-use lk_agents_abi::types::retry::{self, RequestKind, RetryDecision};
+use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::metrics::base::InterruptionMetrics;
+use lk_agents_abi::types::retry::{self, RequestKind, RetryDecision};
+use lk_agents_abi::{Clock, HostRef};
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 
+use crate::headers::HeaderProvider;
 use crate::interruption::core::{
     InputEvent, InputOutcome, InterruptionCore, RecvOutcome, SpanAttributes, StreamError,
 };
-use crate::interruption::event::{InterruptionDetectionError, OverlappingSpeechEvent, interruption_metrics};
+use crate::interruption::event::{
+    InterruptionDetectionError, OverlappingSpeechEvent, interruption_metrics,
+};
 use crate::interruption::options::InterruptionOptions;
 use crate::interruption::proto::{
     ClientMessage, ENCODING_S16LE, ServerMessage, SessionCreateSettings, frame_request,
@@ -26,9 +29,8 @@ use crate::interruption::proto::{
 use crate::interruption::retry::{
     ConnectFailure, closed_unexpectedly, connect_error, session_create_failed,
 };
-use crate::headers::HeaderProvider;
-use crate::token::{DEFAULT_TTL_SECS, create_access_token};
 use crate::interruption::{LABEL, MODEL, PROVIDER};
+use crate::token::{DEFAULT_TTL_SECS, create_access_token};
 use crate::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 
 /// One connection's two halves.
@@ -102,14 +104,12 @@ impl AdaptiveInterruptionDetector {
     pub fn update_options(&self, threshold: Option<f64>, min_interruption_duration: Option<f64>) {
         self.opts.lock().unwrap().update(threshold, min_interruption_duration);
         let mut streams = self.streams.lock().unwrap();
-        streams.retain(|s| {
-            match s.upgrade() {
-                Some(reconnect) => {
-                    reconnect.notify_one();
-                    true
-                }
-                None => false,
+        streams.retain(|s| match s.upgrade() {
+            Some(reconnect) => {
+                reconnect.notify_one();
+                true
             }
+            None => false,
         });
     }
 
@@ -129,7 +129,10 @@ impl AdaptiveInterruptionDetector {
     /// A [`private_stream`](Self::private_stream) under the caller's own retry ladder (the host's
     /// `_main_task`): the first failure ends it, reported once. `transport` replaces the
     /// detector's socket for this stream (the host's `http_session`).
-    pub fn private_stream_once(&self, transport: Option<Arc<dyn WsTransport>>) -> InterruptionStream {
+    pub fn private_stream_once(
+        &self,
+        transport: Option<Arc<dyn WsTransport>>,
+    ) -> InterruptionStream {
         let mut config = self.config.clone();
         config.conn_options.max_retry = 0;
         if let Some(transport) = transport {
@@ -165,7 +168,7 @@ impl AdaptiveInterruptionDetector {
 }
 
 /// What one stream reports to its caller: a verdict, the failure (recoverable or not) that
-/// explains why none came, so the session can hand barge-in back to the VAD (I-24), or the verdict
+/// explains why none came, so the session can hand interruption back to the VAD (I-24), or the verdict
 /// to write on the span the caller pushed (a span is a host object, §1.11).
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
@@ -332,7 +335,14 @@ async fn main_task_inner(
         };
         // `_main_task`'s ladder (`inference/interruption.py:462`): every arm emits an error event
         // first; `recoverable` differs (#5727). `max_retry = 0` re-raises the real error.
-        match retry::decide(RequestKind::Interruption, &ctx.config.conn_options, num_retries, err.error.retryable, None, false) {
+        match retry::decide(
+            RequestKind::Interruption,
+            &ctx.config.conn_options,
+            num_retries,
+            err.error.retryable,
+            None,
+            false,
+        ) {
             RetryDecision::Stop | RetryDecision::Raise => {
                 ctx.emit_error(err.error.clone(), false);
                 return Err(err.error);
@@ -524,7 +534,7 @@ async fn send_task(
         let now = ctx.clock.now();
         core.lock().unwrap().check_inflight_timeout(now)?;
 
-    // Stamped just before the write, so the round trip excludes queueing time.
+        // Stamped just before the write, so the round trip excludes queueing time.
         let created_at = ctx.clock.now();
         let payload = frame_request(created_at.as_nanos(), &samples);
         sink.send_binary(payload).await.map_err(send_failed)?;

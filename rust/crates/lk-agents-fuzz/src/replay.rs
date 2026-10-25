@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use crate::{
-    check::Subject,
+    check::{Failure, Subject},
     drive::{Case, Outcome},
 };
 
@@ -30,16 +30,18 @@ impl Expect {
     pub fn of(outcome: &Outcome) -> Expect {
         match outcome.failures.first() {
             None => Expect::Passes,
-            Some(failure) => Expect::Fails {
-                contract: failure.contract.clone(),
-                subject: failure.subject.clone(),
-            },
+            Some(failure) => Expect::failing(failure),
         }
+    }
+
+    /// Pinned to one finding of the run, not necessarily its first.
+    pub fn failing(failure: &Failure) -> Expect {
+        Expect::Fails { contract: failure.contract.clone(), subject: failure.subject.clone() }
     }
 }
 
-pub fn save(path: impl AsRef<Path>, case: &Case, outcome: &Outcome) -> std::io::Result<()> {
-    let saved = Saved { case: case.clone(), expect: Expect::of(outcome) };
+pub fn save(path: impl AsRef<Path>, case: &Case, expect: Expect) -> std::io::Result<()> {
+    let saved = Saved { case: case.clone(), expect };
     let json = serde_json::to_string_pretty(&saved).expect("a case serialises");
     std::fs::write(path, json + "\n")
 }

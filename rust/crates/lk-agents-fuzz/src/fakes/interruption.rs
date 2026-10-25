@@ -58,7 +58,7 @@ impl FakeInterruption {
 impl InterruptionPort for FakeInterruption {
     fn audio(&self) -> Arc<dyn StreamSink<AudioFrame>> {
         let slot = *self.slot.get().expect("registered at construction");
-        Arc::new(Forward { slot, registry: self.registry.clone() })
+        Arc::new(Forward { slot, registry: self.registry.clone(), ended: None })
     }
 
     fn signal(&self, signal: InterruptionSignal) {

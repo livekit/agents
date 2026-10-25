@@ -74,7 +74,7 @@ pub fn provider_error_to_node(e: lk_agents_abi::errors::ProviderError) -> JsErro
     JsError::new(kind, e.message().to_owned())
 }
 
-/// `IdleRefused`'s Node map: `wait_for_idle()` / `hold_floor()` on a closing session, the error
+/// `IdleRefused`'s Node map: `wait_for_idle()` / `wait_for_idle_and_hold()` on a closing session, the error
 /// `lk-agents-py` raises as `SessionClosing`.
 pub fn idle_refused_to_node(_: lk_agents_voice::agent_session::IdleRefused) -> JsError {
     JsError::new("SessionClosing", "session is closing")

@@ -20,7 +20,10 @@ use lk_agents_voice::{
 
 use crate::{
     input::Input,
-    record::{Answer, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Tag},
+    record::{
+        Answer, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Tag, Task,
+        TaskEnd,
+    },
 };
 
 /// Builds a `Recording` fact by fact, as if a driver had produced it.
@@ -272,9 +275,32 @@ impl Authored {
         self
     }
 
+    /// The session's resource table still held this one when the run last looked.
+    pub fn resource_left(mut self, id: u64, kind: &'static str) -> Self {
+        let mut left = self.recording.resources_left().to_vec();
+        left.push((lk_agents_abi::resources::ResourceId(id), kind));
+        self.recording.set_resources_left(left);
+        self
+    }
+
+    /// The run stopped the session for working without bound at one instant.
+    pub fn livelocked(mut self, detail: &str) -> Self {
+        self.recording.set_livelock(detail.to_owned());
+        self
+    }
+
     pub fn driver_panicked(mut self, panic: &str) -> Self {
         self.recording.set_driver_panic(panic.to_owned());
         self.driver_finished()
+    }
+
+    /// The session spawned a task here, which the run's join found ended this way.
+    #[track_caller]
+    pub fn task(mut self, end: TaskEnd) -> Self {
+        let spawned = self.next();
+        let site = std::panic::Location::caller();
+        self.recording.record_task(Task { spawned, site, end });
+        self
     }
 
     /// Virtual time passes with nothing else observed.

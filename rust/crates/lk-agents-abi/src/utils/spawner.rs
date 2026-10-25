@@ -57,12 +57,16 @@ impl From<tokio::task::AbortHandle> for AbortHandle {
 
 /// `tokio::spawn` panics on a host thread with no reactor, so the runtime handle is injected.
 /// Returns an [`AbortHandle`], not a `JoinHandle`, which would detach on drop.
+///
+/// `#[track_caller]`, so an executor can name the line that spawned a task it reports as stuck.
 pub trait Spawner: Send + Sync {
+    #[track_caller]
     fn spawn(&self, f: BoxFuture<'static, ()>) -> AbortHandle;
 }
 
 /// Blanket-implemented, including for `dyn Spawner`.
 pub trait SpawnerExt: Spawner {
+    #[track_caller]
     fn spawn_unboxed<F>(&self, f: F) -> AbortHandle
     where
         F: Future<Output = ()> + Send + 'static,

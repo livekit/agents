@@ -9,12 +9,13 @@ use std::{
     time::Duration,
 };
 
-use lk_agents_abi::{AudioFrame, MediaRef, Ts, errors::RefRegistry};
-use lk_agents_media::recorder::{AudioRecorder, RecorderError};
-use lk_agents_voice::io::{
-    self, AudioInput, AudioOutput, AudioOutputCapabilities, PlaybackFinished, PlaybackTracker,
+use lk_agents_abi::voice::io;
+use lk_agents_abi::voice::io::{
+    AudioInput, AudioOutput, AudioOutputCapabilities, PlaybackFinished, PlaybackTracker,
     TextOutput, VideoInput,
 };
+use lk_agents_abi::{AudioFrame, MediaRef, Ts, errors::RefRegistry};
+use lk_agents_media::recorder::{AudioRecorder, RecorderError};
 
 use super::{Control, Registry};
 use crate::{

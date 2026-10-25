@@ -23,13 +23,15 @@
 //!   seed to seed; the baseline a search change is measured against.
 //! - `VOICE_FAMILY=Decided` opens one journal family variant by variant; `VOICE_DETAIL=1` adds the
 //!   first seed and detail behind each finding; `VOICE_SAVE=1` writes every failing seed's case
-//!   into `replay/`, where the replay test picks it up.
+//!   into `replay/`, where the replay test picks it up. A finding outside the known ones is always
+//!   saved there, and fails the survey.
 //! - `VOICE_TRACE=1` (any run) narrates every input as it is applied.
 use std::collections::{BTreeMap, BTreeSet};
 
 #[allow(unused_imports)]
 use lk_agents_fuzz::{
-    drive::{Outcome, Setup, PHASES},
+    check::KNOWN_FINDINGS,
+    drive::{Outcome, PHASES, Setup},
     input::Input,
     record::Kind,
     replay,
@@ -53,27 +55,6 @@ fn survey() {
     campaign(&window);
 }
 
-/// What makes two failures the same finding: the rule, the kind of thing it failed on, and the
-/// message with every number blanked out. Ids, sequence numbers and instants differ from run to
-/// run for one cause; keyed on them, a finding count grows with run length instead of bugs.
-fn signature(failure: &lk_agents_fuzz::check::Failure) -> String {
-    use lk_agents_fuzz::check::Subject;
-    let subject = match &failure.subject {
-        Subject::Session => "session".to_owned(),
-        Subject::Speech(_) => "speech".to_owned(),
-        Subject::Resource(kind, _) => format!("{kind:?}"),
-    };
-    let mut detail = String::new();
-    for c in failure.detail.chars() {
-        if !c.is_ascii_digit() {
-            detail.push(c);
-        } else if !detail.ends_with('#') {
-            detail.push('#');
-        }
-    }
-    format!("{subject}: {detail}")
-}
-
 /// Decades of randomness the report breaks down by, from 1e-4 to 1e3.
 const BANDS: usize = 7;
 
@@ -86,6 +67,54 @@ struct Band {
     reached: BTreeSet<String>,
     edges: BTreeSet<(String, String)>,
     cells: BTreeSet<(&'static str, &'static str)>,
+    /// Distinct `(contract, subject kind)` pairs found in the band.
+    findings: BTreeSet<(String, String)>,
+    /// Seeds failing each contract.
+    hits: BTreeMap<String, usize>,
+}
+
+impl Band {
+    fn absorb(&mut self, outcome: &Outcome, took: std::time::Duration) {
+        self.seeds += 1;
+        self.time += took;
+        self.reached.extend(outcome.reached.iter().cloned());
+        self.edges.extend(outcome.edges.iter().cloned());
+        self.cells.extend(outcome.cells.iter().copied());
+        self.failing += usize::from(!outcome.ok());
+        self.findings
+            .extend(outcome.failures.iter().map(|f| (f.contract.clone(), f.subject.kind())));
+        let failed: BTreeSet<&String> = outcome.failures.iter().map(|f| &f.contract).collect();
+        for contract in failed {
+            *self.hits.entry(contract.clone()).or_default() += 1;
+        }
+    }
+}
+
+/// One row per band: what it reached and found, and what only it reached.
+fn table(title: &str, rows: &[(String, &Band)]) {
+    println!("\n{title}:");
+    println!("  {:<14} seeds failing    time variants  edges  cells findings  only here", "");
+    for (i, (label, band)) in rows.iter().enumerate() {
+        let elsewhere: BTreeSet<&String> = rows
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .flat_map(|(_, (_, b))| &b.reached)
+            .collect();
+        let only: Vec<&str> =
+            band.reached.iter().filter(|v| !elsewhere.contains(v)).map(String::as_str).collect();
+        println!(
+            "  {label:<14} {:>5} {:>7} {:>6.1}s {:>8} {:>6} {:>6} {:>8}  {}",
+            band.seeds,
+            band.failing,
+            band.time.as_secs_f64(),
+            band.reached.len(),
+            band.edges.len(),
+            band.cells.len(),
+            band.findings.len(),
+            only.join(", ")
+        );
+    }
 }
 
 /// One campaign's seeds, budget and search settings.
@@ -108,6 +137,7 @@ fn campaign(window: &Window) {
     let mut example: BTreeMap<String, (u64, String)> = BTreeMap::new();
     let mut exercised: BTreeMap<&'static str, u32> = BTreeMap::new();
     let mut bands: [Band; BANDS] = Default::default();
+    let mut policies: BTreeMap<String, Band> = BTreeMap::new();
     // Runs in which both observers closed a speech: the precondition of a decided turn.
     let mut both_closed = 0;
     let save = std::env::var_os("VOICE_SAVE").is_some();
@@ -130,13 +160,9 @@ fn campaign(window: &Window) {
         let began = std::time::Instant::now();
         let outcome = search::explore(setup, seed, budget);
         let band_of = ((search::randomness(seed).log10() + 4.0) as usize).min(BANDS - 1);
-        let band = &mut bands[band_of];
-        band.seeds += 1;
-        band.time += began.elapsed();
-        band.reached.extend(outcome.reached.iter().cloned());
-        band.edges.extend(outcome.edges.iter().cloned());
-        band.cells.extend(outcome.cells.iter().copied());
-        band.failing += usize::from(!outcome.ok());
+        let took = began.elapsed();
+        bands[band_of].absorb(&outcome, took);
+        policies.entry(format!("{:?}", outcome.case.policy)).or_default().absorb(&outcome, took);
         let known = reached.len();
         reached.extend(outcome.reached.iter().cloned());
         if window.learn {
@@ -158,17 +184,31 @@ fn campaign(window: &Window) {
         let sent = |name: &str| outcome.case.inputs.iter().any(|i| i.name() == name);
         both_closed += usize::from(sent("VadEnd") && sent("SttFinal"));
         if !outcome.ok() {
+            let mut here: BTreeSet<&str> = BTreeSet::new();
             for failure in &outcome.failures {
-                findings.insert((failure.contract.clone(), signature(failure)));
-                found.entry(failure.contract.clone()).or_default()[band_of] += 1;
+                findings.insert((failure.contract.clone(), failure.subject.kind()));
+                if here.insert(&failure.contract) {
+                    found.entry(failure.contract.clone()).or_default()[band_of] += 1;
+                }
+                let first = !example.contains_key(&failure.contract);
                 example
                     .entry(failure.contract.clone())
                     .or_insert_with(|| (seed, failure.detail.clone()));
+                // A new finding is saved at once, pinned to itself: a seed only reproduces inside
+                // its whole window, because the setup arms learn from the seeds before it, while
+                // the saved case replays anywhere.
+                if first && !KNOWN_FINDINGS.contains(&failure.contract.as_str()) {
+                    let path = corpus.join(format!("{}-{seed}.json", failure.contract));
+                    replay::save(&path, &outcome.case, replay::Expect::failing(failure))
+                        .expect("the corpus is writable");
+                    println!("saved {}", path.display());
+                }
             }
             if save {
                 let contract = &outcome.failures[0].contract;
                 let path = corpus.join(format!("{contract}-{seed}.json"));
-                replay::save(&path, &outcome.case, &outcome).expect("the corpus is writable");
+                replay::save(&path, &outcome.case, replay::Expect::of(&outcome))
+                    .expect("the corpus is writable");
             }
         }
     }
@@ -188,24 +228,26 @@ fn campaign(window: &Window) {
         edges.len(),
         findings.len()
     );
-    println!("\nby randomness (uniform moves per conversation move):");
-    println!("  band          seeds failing    time variants  edges  cells  only here");
-    for (i, band) in bands.iter().enumerate() {
-        let elsewhere: BTreeSet<&String> =
-            bands.iter().enumerate().filter(|(j, _)| *j != i).flat_map(|(_, b)| &b.reached).collect();
-        let only: Vec<&String> = band.reached.iter().filter(|v| !elsewhere.contains(v)).collect();
-        println!(
-            "  1e{:<+2}..1e{:<+2} {:>6} {:>7} {:>6.1}s {:>8} {:>6} {:>6}  {}",
-            i as i32 - 4,
-            i as i32 - 3,
-            band.seeds,
-            band.failing,
-            band.time.as_secs_f64(),
-            band.reached.len(),
-            band.edges.len(),
-            band.cells.len(),
-            only.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(", ")
-        );
+    let decades: Vec<(String, &Band)> = bands
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (format!("1e{:+}..1e{:+}", i as i32 - 4, i as i32 - 3), b))
+        .collect();
+    table("by randomness (uniform moves per conversation move)", &decades);
+    let policies: Vec<(String, &Band)> = policies.iter().map(|(p, b)| (p.clone(), b)).collect();
+    table("by queue policy", &policies);
+    // gosim's yardstick: how often each policy hits each finding, per seed it ran.
+    println!("\nhit rate per contract, by queue policy (failing seeds / seeds):");
+    let contracts: BTreeSet<&String> = policies.iter().flat_map(|(_, b)| b.hits.keys()).collect();
+    for contract in contracts {
+        let rates: Vec<String> = policies
+            .iter()
+            .map(|(p, b)| {
+                let hits = b.hits.get(contract).copied().unwrap_or(0);
+                format!("{p} {:>5.1}%", 100.0 * hits as f64 / b.seeds.max(1) as f64)
+            })
+            .collect();
+        println!("  {}  {contract}", rates.join("  "));
     }
     println!();
     let leanings: Vec<String> = arms
@@ -246,7 +288,7 @@ fn campaign(window: &Window) {
         }
     }
     println!();
-    println!("failures, by decade of randomness:");
+    println!("failing seeds per contract, by decade of randomness:");
     if found.is_empty() {
         println!("  none");
     }
@@ -269,6 +311,22 @@ fn campaign(window: &Window) {
     }
     if idle == 0 {
         println!("       none");
+    }
+
+    // The gate: a contract outside the known findings is new, whatever window found it.
+    let new: Vec<&String> =
+        found.keys().filter(|contract| !KNOWN_FINDINGS.contains(&contract.as_str())).collect();
+    println!("\nfindings outside the known ones (check::KNOWN_FINDINGS):");
+    for contract in &new {
+        let (seed, what) = &example[*contract];
+        println!("  NEW {contract}: seed {seed}: {what}");
+    }
+    if new.is_empty() {
+        println!("  none");
+    }
+    let unseen: Vec<&&str> = KNOWN_FINDINGS.iter().filter(|k| !found.contains_key(**k)).collect();
+    if !unseen.is_empty() {
+        println!("known findings this window did not reach: {unseen:?}");
     }
 
     // Only the sound direction: a row that opens something directly without declaring it.
@@ -300,4 +358,5 @@ fn campaign(window: &Window) {
             println!("{input}\t{}", row.join("\t"));
         }
     }
+    assert!(new.is_empty(), "new findings: {new:?}");
 }
