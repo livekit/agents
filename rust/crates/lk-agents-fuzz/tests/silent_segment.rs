@@ -1,6 +1,6 @@
 //! A speech authorized after its audio output was detached plays a silent segment, and a cut
 //! still ends it.
-use lk_agents_fuzz::drive::{Case, Setup, run};
+use lk_agents_fuzz::drive::{Case, Outcome, Setup, run};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
 
 // Catches: the no-output path of `perform_audio_forwarding` awaiting the next frame without
@@ -10,7 +10,21 @@ use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
 // seeds from 21000, where joining the task parked the campaign for good).
 #[test]
 fn a_cut_silent_segment_ends() {
-    let inputs = vec![
+    let outcome = cut_silent_segment(vec![]);
+    assert!(outcome.ok(), "{:#?}", outcome.failures);
+}
+
+// The same cut, with the synthesis failed after the close: the run goes quiet, and the reply
+// task is left awaiting a frame at the end-of-run join, which parked the run forever before a
+// task that can never finish was reported as `every_task_finishes`.
+#[test]
+fn a_cut_silent_segment_ends_after_its_synthesis_failed() {
+    let outcome = cut_silent_segment(vec![Input::TtsFail { tts: Ref::new(0) }]);
+    assert!(outcome.ok(), "{:#?}", outcome.failures);
+}
+
+fn cut_silent_segment(after_close: Vec<Input>) -> Outcome {
+    let mut inputs = vec![
         Input::PauseAuthorization {},
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         Input::Advance { ms: Millis(20) },
@@ -23,6 +37,6 @@ fn a_cut_silent_segment_ends() {
         Input::Close { drain: false },
         Input::Advance { ms: Millis(20) },
     ];
-    let outcome = run(Case { setup: Setup::default(), inputs, ..Case::default() });
-    assert!(outcome.ok(), "{:#?}", outcome.failures);
+    inputs.extend(after_close);
+    run(Case { setup: Setup::default(), inputs, ..Case::default() })
 }

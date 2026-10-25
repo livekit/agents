@@ -497,6 +497,8 @@ pub struct Recording {
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
     driver_panic: Option<String>,
+    /// Every task the session spawned, by when, and whether it finished once the run joined it.
+    tasks: Vec<(Observed, bool)>,
     live: Live,
     index: Index,
 }
@@ -554,6 +556,10 @@ impl Recording {
 
     pub fn driver_panic(&self) -> Option<&str> {
         self.driver_panic.as_deref()
+    }
+
+    pub fn tasks(&self) -> &[(Observed, bool)] {
+        &self.tasks
     }
 
     /// Every input the case sent, taken or refused, in order.
@@ -738,6 +744,10 @@ impl Recording {
 
     pub fn set_driver_panic(&mut self, panic: String) {
         self.driver_panic = Some(panic);
+    }
+
+    pub fn record_task(&mut self, spawned: Observed, finished: bool) {
+        self.tasks.push((spawned, finished));
     }
 
     pub fn set_now(&mut self, now: Observed) {

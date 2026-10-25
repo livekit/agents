@@ -18,7 +18,7 @@ impl Run {
         let time = Timebase::simulated();
         let stamps = Stamps::new(time.clone());
         let (registry, records) = Registry::new(stamps.clone());
-        let tasks = Arc::new(Tasks::default());
+        let tasks = Arc::new(Tasks { stamps: stamps.clone(), spawned: Mutex::default() });
 
         let mut config = ConfigStack::default();
         config.session.turn.detection = match setup.turn {

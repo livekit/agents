@@ -277,6 +277,13 @@ impl Authored {
         self.driver_finished()
     }
 
+    /// The session spawned a task, which the run joined to its end or found stuck.
+    pub fn task(mut self, finished: bool) -> Self {
+        let at = self.next();
+        self.recording.record_task(at, finished);
+        self
+    }
+
     /// Virtual time passes with nothing else observed.
     pub fn later(mut self, ms: u64) -> Self {
         self.later_ms += ms;

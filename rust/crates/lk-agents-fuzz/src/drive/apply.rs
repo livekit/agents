@@ -881,25 +881,37 @@ impl Run {
         self.registry.calls().close();
     }
 
-    /// Await every retained task.
+    /// Await every retained task, and record whether each finished.
     ///
     /// A task may spawn another before finishing, so this loops -- and because the work is the
     /// product's, the loop can fail to terminate. It is bounded for the same reason the release
     /// loop is: an unbounded loop here is a hang, not a slow run, and a driver that keeps
     /// spawning while closing is a result worth reporting rather than waiting on forever.
+    ///
+    /// Each batch is raced against a deadline a budget away. The clock is paused and moves only
+    /// when nothing can run, so the deadline passes exactly when the tasks still pending can never
+    /// finish: those are recorded as stuck and aborted, and the run completes.
     pub async fn join_tasks(&mut self) -> Result<(), String> {
-        for round in 0..MAX_JOIN_ROUNDS {
-            let tasks = std::mem::take(&mut *self.tasks.0.lock().unwrap());
+        for _ in 0..MAX_JOIN_ROUNDS {
+            let tasks = std::mem::take(&mut *self.tasks.spawned.lock().unwrap());
             if tasks.is_empty() {
                 return Ok(());
             }
-            let _ = round;
-            for task in tasks {
-                if let Err(error) = task.await
-                    && !error.is_cancelled()
-                {
-                    return Err(format!("child task panicked: {error}"));
-                }
+            let deadline = self.budget();
+            for (spawned, mut task) in tasks {
+                let finished = tokio::select! {
+                    joined = &mut task => match joined {
+                        Err(error) if !error.is_cancelled() => {
+                            return Err(format!("child task panicked: {error}"));
+                        }
+                        _ => true,
+                    },
+                    () = self.time.wait_until(deadline) => {
+                        task.abort();
+                        false
+                    }
+                };
+                self.record.record_task(spawned, finished);
             }
         }
         Err(format!("still spawning tasks after {MAX_JOIN_ROUNDS} rounds of joining"))
