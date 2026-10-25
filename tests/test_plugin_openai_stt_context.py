@@ -15,6 +15,8 @@ from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, inference, vad
 from livekit.agents.stt import SpeechEvent, SpeechEventType
 from livekit.plugins.openai import stt
 
+from .fake_ws import FakeWSSession, HeartbeatTimeoutSocket, ParkedSocket, wait_until
+
 pytestmark = pytest.mark.unit
 
 
@@ -811,3 +813,43 @@ async def test_file_transcription_earlier_model_keeps_singular_language() -> Non
 
     assert 'name="language"\r\n\r\nen' in body
     assert 'name="languages[]"' not in body
+
+
+def _halfopen_stream(session: FakeWSSession) -> stt.SpeechStream:
+    stt_ = stt.STT(
+        api_key="sk-test",
+        base_url="http://localhost:8000/v1",
+        client=openai.AsyncClient(api_key="sk-test", base_url="http://localhost:8000/v1"),
+    )
+    stt_._session = session  # type: ignore[assignment]
+    return stt_.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+
+# -- half-open socket detection (#7900) --
+
+
+@pytest.mark.asyncio
+async def test_socket_is_opened_with_a_heartbeat() -> None:
+    """aiohttp defaults `heartbeat` to None, so without it the read side of a
+    half-open socket parks forever and the reconnect, which only fires when
+    `recv_task` ends, never gets a turn."""
+    session = FakeWSSession(ParkedSocket)
+    stream = _halfopen_stream(session)
+    try:
+        await wait_until(lambda: len(session.kwargs) == 1)
+        assert session.kwargs[0].get("heartbeat") == 30.0
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_timeout_reconnects_without_spinning() -> None:
+    """The ERROR frame a missed heartbeat produces has to end the recv loop and
+    request a reconnect, instead of being stepped over until aiohttp reports CLOSED."""
+    session = FakeWSSession(HeartbeatTimeoutSocket)
+    stream = _halfopen_stream(session)
+    try:
+        await wait_until(lambda: len(session.sockets) > 1)
+        assert session.sockets[0].receives == 1
+    finally:
+        await stream.aclose()

@@ -24,6 +24,8 @@ from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
 
+from .fake_ws import FakeWSSession, HeartbeatTimeoutSocket, ParkedSocket, wait_until
+
 pytestmark = pytest.mark.plugin("elevenlabs")
 
 
@@ -763,3 +765,42 @@ async def test_recognize_does_not_retry_a_client_error(
     assert exc_info.value.message == message
     assert exc_info.value.body == parsed
     assert requests == 1
+
+
+def _halfopen_stream(session: FakeWSSession) -> elevenlabs_stt.SpeechStream:
+    stt_ = elevenlabs_stt.STT(
+        api_key="sk_test",
+        base_url="http://localhost:8000/v1",
+        http_session=session,  # type: ignore[arg-type]
+    )
+    return stt_.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+
+# -- half-open socket detection (#7900) --
+
+
+@pytest.mark.asyncio
+async def test_socket_is_opened_with_a_heartbeat() -> None:
+    """aiohttp defaults `heartbeat` to None, so without it the read side of a
+    half-open socket parks forever and the reconnect, which only fires when
+    `recv_task` ends, never gets a turn."""
+    session = FakeWSSession(ParkedSocket)
+    stream = _halfopen_stream(session)
+    try:
+        await wait_until(lambda: len(session.kwargs) == 1)
+        assert session.kwargs[0].get("heartbeat") == 30.0
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_timeout_reconnects_without_spinning() -> None:
+    """The ERROR frame a missed heartbeat produces has to end the recv loop and
+    request a reconnect, instead of being stepped over until aiohttp reports CLOSED."""
+    session = FakeWSSession(HeartbeatTimeoutSocket)
+    stream = _halfopen_stream(session)
+    try:
+        await wait_until(lambda: len(session.sockets) > 1)
+        assert session.sockets[0].receives == 1
+    finally:
+        await stream.aclose()
