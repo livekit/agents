@@ -145,7 +145,7 @@ capped near a quarter of the seeds.
 
 ## 3. Promises and the rules that check them
 
-24 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
+27 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
 that must fail. Failures are counted per seed over 1,024 seeds, split by how random the run
 was: **conversation** (under 0.01 uniform moves per conversation move, 295 seeds), **mixed**
 (0.01 to 10, 437 seeds) and **uniform** (over 10, 292 seeds). A failure in a conversation seed
@@ -159,8 +159,11 @@ was a driver bug).
 | P1 | `speech_settles` | every speech is done once nothing is left to answer | 17 / 16 / 2 |
 | P1 | `drain_answers_once_settled` | `drain()` answers only after `on_exit` and every speech is done | 0 / 0 / 0 |
 | P1 | `idle_respects_holds` | `wait_for_idle` waits for other callers' floor holds | 48 / 59 / 35 |
-| P1 | `driver_exits_only_on_close` | the driver stops only after a close, never by panicking (incl. the no-progress watchdog) | 0 / 0 / 0 |
-| P1 | harness: `session_settles` | the run goes quiet once everything is released | 23 / 145 / 127 |
+| P1 | `driver_exits_only_on_close` | the driver stops only after a close, never by panicking | 0 / 0 / 0 |
+| P1 | `virtual_time_advances` | the session never does unbounded work at one virtual instant (a livelock) | 0 / 0 / 0 |
+| P1 | `every_task_finishes` | every task the session spawned finishes, without panicking, once it closed; a report names the spawning line | 0 / 0 / 0 |
+| P1 | harness: `session_settles` | the run goes quiet once everything is released | 0 / 11 / 21 (2026-10-25; was 23 / 145 / 127 while a dead driver's refused releases counted as work) |
+| P5 | `nothing_left_live` | once the driver exited, no hold, tool, hook call, filler, segment, utterance, prediction, realtime turn or say stream is still open | 15 / 77 / 60 (new 2026-10-25: holds in most, a detached tool in 14 of 1,024 seeds, a hook call in 2) |
 | P2 | `interruption_has_cause` | every interruption matches an input that allows it | 22 / 87 / 140 |
 | P2 | `interrupted_handle_is_journalled` | every interrupted handle has its `Interrupted` step | 5 / 45 / 46 |
 | P2 | `playback_requires_authorization` | nothing speculative is played before it is authorised | 0 / 0 / 0 |
@@ -180,7 +183,7 @@ was a driver bug).
 | P5 | `provider_failure_is_accounted` | every injected failure is retried, surfaced or closes the session | 9 / 23 / 35 |
 | P5 | `speech_error_is_injected` | a failed speech traces back to an injected failure or an explicit refusal | 1 / 6 / 19 |
 | P5 | `provider_streams_closed` | every LLM, TTS and STT stream is closed by the end | 7 / 41 / 6 |
-| P5 | soak: residue | after a long call and release, nothing opened is still live | red: of 8 calls, seed 5 leaves 59 speeches, 13 fillers, 2 tools and an answer live, speeches piling up (peaks 13, 28, 46, 59 by quarter); seed 6 leaves a floor hold. 4 of the 8 hear the person only 0-7 times (section 9) |
+| P5 | soak: residue | after a long call and release, nothing opened is still live | red (2026-10-25): seed 6 leaves a floor hold. A call that never reached its close is excluded and reported, never read as a leak; most calls must be judged |
 
 Every rule is exercised. Promises with no rule are listed per subsystem in section 5.
 
@@ -615,6 +618,12 @@ Each is a choice the search makes for every run that a real call does not.
   soak calls the person is heard 0 to 7 times (three of them over 12,000 inputs), which the soak
   does not judge: it only checks for leaks. Either a driver bug or a fake's, and the first thing
   to triage.
+- Registered providers are not checked to be released. After the driver exits, the session's
+  provider table (`lk_agents_abi::resources`) still holds entries in 285 of 300 runs: the data
+  plane's sinks and the microphone in most (the runtime never releases them on exit), and in 116
+  a model or output the host registered for a command the driver never took. The table dies with
+  the session, so this is memory held until then, not a process leak. Checking it needs a
+  read-only accessor on `Resources` and a decision on who releases the data plane's entries.
 - A stuck agent is not caught by anything yet. The person now waits their own patience, so a
   stuck agent shows as a long silence, but no rule says how long the agent may stay silent after
   a turn it should answer. That rule needs the per-operation bounds `TEST_STRATEGY.md` leaves
@@ -672,6 +681,29 @@ Measured nowhere here, and each a separate source of production risk:
   `lk-agents-rtc`.
 
 ## 12. Keeping it true
+
+**The launch gate** is one command, `rust/crates/lk-agents-fuzz/launch-gate.sh`: the workspace
+build, the voice core's unit tests, the fuzz suites (every contract's examples, counterexamples
+and probe, the replay corpus, determinism, the regression tests), the 1,024-seed survey, a
+4,096-seed campaign on the next window (`VOICE_GATE_SEEDS`), and the soak. It fails on any
+finding of a contract not in `check::KNOWN_FINDINGS` (the open findings, listed so a new kind of
+defect cannot hide among them), on a soak residue, and on a campaign that did not run. About
+three minutes on a laptop.
+
+What it can and cannot miss:
+
+- **Verdicts never depend on real time.** A livelock is counted in steps at one virtual instant
+  (`NO_PROGRESS_STEPS`, twenty times the busiest instant measured), in the journal and in the
+  run's own loop, and reported as `virtual_time_advances`. Every wait the harness makes is
+  bounded in virtual time (`BUDGET_MS`), every loop in rounds (release, join), so a slow machine
+  cannot change a verdict.
+- **A real hang ends the process, loudly.** A product task that never yields blocks the run's
+  only thread, where no step count can see it; a watchdog thread beside it (`VOICE_HANG_S`, 600 s)
+  aborts with the seed. It is a crash, not a verdict: rerun the seed with `VOICE_TRACE=1`.
+- **Leaks**: tasks (`every_task_finishes`, with the spawning line), speeches (`speech_settles`),
+  answers (`api_calls_return`), provider streams (`provider_streams_closed`), turn-owned work
+  (`nothing_left_live`), and growth over forty turns (the soak). Not checked: the provider table
+  (`lk_agents_abi::resources`), section 9.
 
 ```bash
 cd rust

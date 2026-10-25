@@ -323,8 +323,8 @@ pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T
 }
 
 /// Real seconds one simulation may take before the watchdog ends the process; `VOICE_HANG_S`
-/// overrides it. Ten times the slowest run measured (a soak call in a debug build), because it
-/// must never fire on a run that is merely slow.
+/// overrides it. A soak call, the longest run, takes about a second optimised and sixteen times
+/// that unoptimised: this must never fire on a run that is merely slow.
 const HANG_S: u64 = 600;
 
 /// What no step count can see: a product task that never yields, or a lock that never comes back,
