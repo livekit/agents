@@ -12,7 +12,7 @@ from datetime import timedelta
 from typing import Any
 
 from .. import _core
-from .._core import Streams, ThreadDb, Threads
+from .._core import Streams, Thread, Threads
 from .._generated.storage_threads import ThreadInfo
 
 GET_THREAD_TTL = 30.0
@@ -34,6 +34,7 @@ class AgentDBStorage:
     project.
 
     Args:
+        url: The project URL, ``LIVEKIT_URL`` when omitted.
         api_key, api_secret: The project's key pair, ``LIVEKIT_API_KEY`` and
             ``LIVEKIT_API_SECRET`` when omitted; the worker mints its own tokens from them.
         lease_ttl: Lease lifetime, rounded up to whole seconds; ``LIVEKIT_AGENTDB_LEASE_TTL``
@@ -46,20 +47,24 @@ class AgentDBStorage:
     def __init__(
         self,
         *,
+        url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
         lease_ttl: timedelta | None = None,
         renew_interval: timedelta | None = None,
         holder: str = "",
     ) -> None:
+        url = url or os.environ.get("LIVEKIT_URL")
         api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
         api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
-        if not api_key or not api_secret:
+        if not url or not api_key or not api_secret:
             raise ValueError(
-                "AgentDBStorage needs the project's LIVEKIT_API_KEY and LIVEKIT_API_SECRET"
+                "AgentDBStorage needs the project's LIVEKIT_URL, LIVEKIT_API_KEY and "
+                "LIVEKIT_API_SECRET"
             )
 
         self._core = _core.Storage(
+            url=url,
             api_key=api_key,
             api_secret=api_secret,
             lease_ttl=_seconds(lease_ttl, "LIVEKIT_AGENTDB_LEASE_TTL"),
@@ -67,6 +72,7 @@ class AgentDBStorage:
         )
         # what a job process rebuilds the storage from (``__reduce__``)
         self._args: dict[str, Any] = {
+            "url": url,
             "api_key": api_key,
             "api_secret": api_secret,
             "lease_ttl": lease_ttl,
@@ -99,14 +105,14 @@ class AgentDBStorage:
 
         return self._remember(await self._core.threads.get_thread(thread_id))
 
-    async def open(self, thread_id: str) -> ThreadDb:
-        """One connection to the thread's database."""
+    async def open(self, thread_id: str) -> Thread:
+        """One connection to the thread's database, under this worker's holder."""
         info = await self.get_thread(thread_id)
-        return await self._core.open(info.database_id)
+        return await self._core.open(info.database_id, self.holder)
 
-    async def open_database(self, database_id: str) -> ThreadDb:
+    async def open_database(self, database_id: str) -> Thread:
         """One connection to a database by its id, skipping the threads service."""
-        return await self._core.open(database_id)
+        return await self._core.open(database_id, self.holder)
 
     def _remember(self, info: ThreadInfo) -> ThreadInfo:
         _thread_cache[info.thread_id] = (time.monotonic() + GET_THREAD_TTL, info)

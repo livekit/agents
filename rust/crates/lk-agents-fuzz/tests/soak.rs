@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use lk_agents_fuzz::{
     drive::{Run, Setup, simulate_with},
     record::Kind,
-    search::{explore_conversation, sample_setup},
+    search::{Dials, explore_at, sample_setup},
 };
 
 /// Per kind, the most of it live in each quarter of the run, by stamp, and what is left live at
@@ -69,7 +69,7 @@ fn nothing_grows_with_the_conversation() {
             realtime: None,
             ..sample_setup(&mut fastrand::Rng::with_seed(seed))
         };
-        let case = explore_conversation(setup, seed, budget).case;
+        let case = explore_at(setup, seed, budget, Dials::conversation()).case;
         let run = simulate_with(case.schedule, async {
             let mut run = Run::start(&case.setup).await;
             for input in &case.inputs {

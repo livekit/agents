@@ -77,3 +77,26 @@ jobs:
 
       - name: Check Types
         run: uv run python scripts/check_types.py
+
+  storage-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: storage-tests-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: storage-tests-
+
+      # the staging tests skip without a project in the environment
+      - name: Test the agent-store client and the A2A turn engine
+        working-directory: rust
+        run: cargo test --locked -p lk-agents-storage -p lk-agents-a2a

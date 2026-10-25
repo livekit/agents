@@ -1,9 +1,12 @@
 //! `EXPORT_SOURCES` in, [`Exposed`] out: every `#[host(export|object|error|stream|kwargs|proxy)]`
 //! item, with the file's `type` aliases read through.
 
-use super::meta::{has_host_derive, head_of, host_attr_strict, host_attrs_strict, meta_rust, meta_str, want_head, Meta};
+use super::meta::{
+    Meta, has_host_derive, head_of, host_attr_strict, host_attrs_strict, meta_rust, meta_str,
+    want_head,
+};
 use super::signature::{python_gated, reply_split, rty, signature};
-use super::{quote, Res};
+use super::{Res, quote};
 use crate::ir::*;
 use lk_agents_bindgen::doc;
 use syn::spanned::Spanned as _;
@@ -55,7 +58,12 @@ pub fn exposed(label: &str, module: &str, text: &str) -> Res<Exposed> {
 
 /// Every exposed `#[host(..)]` item in one `EXPORT_SOURCES` file. `module` is written in the
 /// list: a private module re-exported at the crate root has no path of its own.
-pub fn exposed_with(label: &str, module: &str, text: &str, global: &[(String, String)]) -> Res<Exposed> {
+pub fn exposed_with(
+    label: &str,
+    module: &str,
+    text: &str,
+    global: &[(String, String)],
+) -> Res<Exposed> {
     let parsed = syn::parse_file(text).map_err(|e| format!("{label}: {e}"))?;
     let mut al = Aliases::default();
     for (n, t) in aliases(text).into_iter().chain(global.iter().cloned()) {
@@ -73,7 +81,15 @@ pub fn exposed_with(label: &str, module: &str, text: &str, global: &[(String, St
                 let rust = f.sig.ident.to_string();
                 let at = format!("{label}: {rust}");
                 want_head(&at, &m, "export")?;
-                out.fns.push(export_fn(&at, &m, &f.sig, &f.attrs, format!("{module}::{rust}"), rust, &al)?);
+                out.fns.push(export_fn(
+                    &at,
+                    &m,
+                    &f.sig,
+                    &f.attrs,
+                    format!("{module}::{rust}"),
+                    rust,
+                    &al,
+                )?);
             }
             syn::Item::Const(c) => {
                 let Some(m) = host_attr_strict(label, &c.attrs)? else { continue };
@@ -83,7 +99,15 @@ pub fn exposed_with(label: &str, module: &str, text: &str, global: &[(String, St
                 let rust = c.ident.to_string();
                 let at = format!("{label}: {rust}");
                 want_head(&at, &m, "export")?;
-                out.fns.push(export_const(&at, &m, &c.ty, &c.attrs, format!("{module}::{rust}"), &rust, &al)?);
+                out.fns.push(export_const(
+                    &at,
+                    &m,
+                    &c.ty,
+                    &c.attrs,
+                    format!("{module}::{rust}"),
+                    &rust,
+                    &al,
+                )?);
             }
             syn::Item::Impl(imp) => {
                 let Some(m) = host_attr_strict(label, &imp.attrs)? else { continue };
@@ -107,7 +131,9 @@ pub fn exposed_with(label: &str, module: &str, text: &str, global: &[(String, St
                                 .map(|v| {
                                     Ok(host_attr_strict(label, &v.attrs)?
                                         .and_then(|m| meta_str(&m, "rename"))
-                                        .unwrap_or_else(|| lk_agents_bindgen::to_snake(&v.ident.to_string())))
+                                        .unwrap_or_else(|| {
+                                            lk_agents_bindgen::to_snake(&v.ident.to_string())
+                                        }))
                                 })
                                 .collect::<Res<_>>()?,
                             open: false,
@@ -117,34 +143,64 @@ pub fn exposed_with(label: &str, module: &str, text: &str, global: &[(String, St
                             values: Vec::new(),
                             open: true,
                         }),
-                        "error" => out.errors.push(error_type(label, module, &e.ident, &m, Some(&e.variants))?),
-                        "stream" => out.streams.push(stream(label, module, &e.ident, &e.attrs, &m, &al, None)?),
+                        "error" => out.errors.push(error_type(
+                            label,
+                            module,
+                            &e.ident,
+                            &m,
+                            Some(&e.variants),
+                        )?),
+                        "stream" => out
+                            .streams
+                            .push(stream(label, module, &e.ident, &e.attrs, &m, &al, None)?),
                         // The wire strings, Rust side only: the enum crosses by its own impls, if at all.
                         "wire_strs" => {}
-                        other => return Err(format!("{label}: enum {}: #[host({other})] -- an enum takes wire_enum, wire_strs, string, error or stream", e.ident)),
+                        other => {
+                            return Err(format!(
+                                "{label}: enum {}: #[host({other})] -- an enum takes wire_enum, wire_strs, string, error or stream",
+                                e.ident
+                            ));
+                        }
                     }
                 }
             }
             syn::Item::Struct(st) => {
                 for m in host_attrs_strict(label, &st.attrs)? {
                     match head_of(&m).as_str() {
-                        "client" | "kwargs" => out.kwargs.push(kw_record(label, module, st, &m, &al)?),
+                        "client" | "kwargs" => {
+                            out.kwargs.push(kw_record(label, module, st, &m, &al)?)
+                        }
                         "error" => out.errors.push(error_type(label, module, &st.ident, &m, None)?),
-                        "stream" => out.streams.push(stream(label, module, &st.ident, &st.attrs, &m, &al, None)?),
+                        "stream" => out
+                            .streams
+                            .push(stream(label, module, &st.ident, &st.attrs, &m, &al, None)?),
                         // `Display` out, `FromStr` in; the macro writes nothing.
                         "string" => out.wire_enums.push(WireEnum {
                             name: st.ident.to_string(),
                             values: Vec::new(),
                             open: true,
                         }),
-                        other => return Err(format!("{label}: struct {}: #[host({other})] -- a struct takes client, kwargs, error, stream or string", st.ident)),
+                        other => {
+                            return Err(format!(
+                                "{label}: struct {}: #[host({other})] -- a struct takes client, kwargs, error, stream or string",
+                                st.ident
+                            ));
+                        }
                     }
                 }
             }
             syn::Item::Type(t) => {
                 for m in host_attrs_strict(label, &t.attrs)? {
                     want_head(&format!("{label}: type {}", t.ident), &m, "stream")?;
-                    out.streams.push(stream(label, module, &t.ident, &t.attrs, &m, &al, Some(&t.ty))?);
+                    out.streams.push(stream(
+                        label,
+                        module,
+                        &t.ident,
+                        &t.attrs,
+                        &m,
+                        &al,
+                        Some(&t.ty),
+                    )?);
                 }
             }
             syn::Item::Trait(tr) => {
@@ -195,7 +251,9 @@ fn export_const(
 ) -> Res<ExportFn> {
     for key in ["defaults", "kw_only", "err"] {
         if m.iter().any(|x| x.key.starts_with(&format!("export.{key}"))) {
-            return Err(format!("{at}: `{key}` on a const -- a const takes no arguments and cannot fail"));
+            return Err(format!(
+                "{at}: `{key}` on a const -- a const takes no arguments and cannot fail"
+            ));
         }
     }
     let ret = rty(at, ty, al)?;
@@ -204,7 +262,8 @@ fn export_const(
         python_only: python_gated(attrs),
         rust_path,
         // An UPPER_CASE name is a module attribute, as the in-place expansion reads it.
-        is_attr: name.chars().any(|c| c.is_ascii_uppercase()) && !name.chars().any(|c| c.is_ascii_lowercase()),
+        is_attr: name.chars().any(|c| c.is_ascii_uppercase())
+            && !name.chars().any(|c| c.is_ascii_lowercase()),
         name,
         doc: doc(attrs),
         sig: Sig {
@@ -222,13 +281,21 @@ fn export_const(
 }
 
 /// `#[host(export)] impl T { .. }`: associated items as module functions, called through `T::`.
-fn exported_impl(label: &str, module: &str, imp: &syn::ItemImpl, out: &mut Exposed, al: &Aliases) -> Res<()> {
+fn exported_impl(
+    label: &str,
+    module: &str,
+    imp: &syn::ItemImpl,
+    out: &mut Exposed,
+    al: &Aliases,
+) -> Res<()> {
     let syn::Type::Path(p) = &*imp.self_ty else {
         return Err(format!("{label}: #[host(export)] on an impl is for `impl Type`"));
     };
     let core = p.path.segments.last().expect("a path").ident.to_string();
     if imp.trait_.is_some() || !imp.generics.params.is_empty() {
-        return Err(format!("{label}: impl {core}: #[host(export)] is for an inherent, non-generic impl"));
+        return Err(format!(
+            "{label}: impl {core}: #[host(export)] is for an inherent, non-generic impl"
+        ));
     }
     let mut any = false;
     for inner in &imp.items {
@@ -238,7 +305,15 @@ fn exported_impl(label: &str, module: &str, imp: &syn::ItemImpl, out: &mut Expos
                 let rust = c.ident.to_string();
                 let at = format!("{label}: {core}::{rust}");
                 want_head(&at, &m, "export")?;
-                out.fns.push(export_const(&at, &m, &c.ty, &c.attrs, format!("{module}::{core}::{rust}"), &rust, al)?);
+                out.fns.push(export_const(
+                    &at,
+                    &m,
+                    &c.ty,
+                    &c.attrs,
+                    format!("{module}::{core}::{rust}"),
+                    &rust,
+                    al,
+                )?);
                 any = true;
             }
             syn::ImplItem::Fn(f) => {
@@ -246,14 +321,24 @@ fn exported_impl(label: &str, module: &str, imp: &syn::ItemImpl, out: &mut Expos
                 let rust = f.sig.ident.to_string();
                 let at = format!("{label}: {core}::{rust}");
                 want_head(&at, &m, "export")?;
-                out.fns.push(export_fn(&at, &m, &f.sig, &f.attrs, format!("{module}::{core}::{rust}"), rust, al)?);
+                out.fns.push(export_fn(
+                    &at,
+                    &m,
+                    &f.sig,
+                    &f.attrs,
+                    format!("{module}::{core}::{rust}"),
+                    rust,
+                    al,
+                )?);
                 any = true;
             }
             _ => {}
         }
     }
     if !any {
-        return Err(format!("{label}: impl {core}: #[host(export)] on an impl with no #[host(export)] item"));
+        return Err(format!(
+            "{label}: impl {core}: #[host(export)] on an impl with no #[host(export)] item"
+        ));
     }
     Ok(())
 }
@@ -279,7 +364,11 @@ fn object(label: &str, module: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Alias
         Some("arc") => Cell::Arc,
         // A wrapper over a value the binding cannot make a class itself: a plain class to the stub.
         Some("value" | "input") => Cell::Plain,
-        Some(other) => return Err(format!("{at}: cell = \"{other}\" -- write plain, mutex, arc, value or input")),
+        Some(other) => {
+            return Err(format!(
+                "{at}: cell = \"{other}\" -- write plain, mutex, arc, value or input"
+            ));
+        }
     };
     let mut methods = Vec::new();
     let mut consts = Vec::new();
@@ -302,7 +391,9 @@ fn object(label: &str, module: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Alias
         let head = head_of(&fm);
         // A method's kind comes from its signature: `async fn`, no receiver, `-> Reply<T>`.
         if !["new", "getter", "setter", "method"].contains(&head.as_str()) {
-            return Err(format!("{at}: #[host({head})] -- a method marker is new, getter, setter or method"));
+            return Err(format!(
+                "{at}: #[host({head})] -- a method marker is new, getter, setter or method"
+            ));
         }
         let receiverless = !f.sig.inputs.iter().any(|i| matches!(i, syn::FnArg::Receiver(_)));
         let (sig_in, reply) = match reply_split(&at, &f.sig, al)? {
@@ -349,8 +440,16 @@ fn object(label: &str, module: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Alias
         cell,
         doc: doc(&imp.attrs),
         methods,
-        stub_extra: m.iter().filter(|x| x.key == "object.stub").filter_map(|x| x.value.clone()).collect(),
-        stub_imports: m.iter().filter(|x| x.key == "object.stub_import").filter_map(|x| x.value.clone()).collect(),
+        stub_extra: m
+            .iter()
+            .filter(|x| x.key == "object.stub")
+            .filter_map(|x| x.value.clone())
+            .collect(),
+        stub_imports: m
+            .iter()
+            .filter(|x| x.key == "object.stub_import")
+            .filter_map(|x| x.value.clone())
+            .collect(),
         consts,
     })
 }
@@ -363,8 +462,11 @@ fn error_type(
     variants: Option<&syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>>,
 ) -> Res<ErrorType> {
     let at = format!("{label}: {ident}");
-    let with = meta_rust(m, "error.with")
-        .or_else(|| m.iter().any(|x| x.key == "error.original").then(|| "crate::runtime::raise_host_error".to_owned()));
+    let with = meta_rust(m, "error.with").or_else(|| {
+        m.iter()
+            .any(|x| x.key == "error.original")
+            .then(|| "crate::runtime::raise_host_error".to_owned())
+    });
     let kind = meta_str(m, "error.kind");
     if with.is_some() && kind.is_some() {
         return Err(format!("{at}: `kind` and `with` are two answers to one question"));
@@ -375,21 +477,35 @@ fn error_type(
         // `#[host(delegate)]` on a one-field tuple variant: the wrapped error's own map answers.
         if vm.iter().any(|x| x.key == "delegate") {
             let syn::Fields::Unnamed(u) = &v.fields else {
-                return Err(format!("{at}::{}: `delegate` wraps one error, in a one-field tuple variant", v.ident));
+                return Err(format!(
+                    "{at}::{}: `delegate` wraps one error, in a one-field tuple variant",
+                    v.ident
+                ));
             };
             let inner = match u.unnamed.iter().map(|f| &f.ty).collect::<Vec<_>>().as_slice() {
                 [syn::Type::Path(p)] => p.path.segments.last().map(|s| s.ident.to_string()),
                 _ => None,
             }
-            .ok_or_else(|| format!("{at}::{}: `delegate` wraps one error, in a one-field tuple variant", v.ident))?;
+            .ok_or_else(|| {
+                format!(
+                    "{at}::{}: `delegate` wraps one error, in a one-field tuple variant",
+                    v.ident
+                )
+            })?;
             out.push((v.ident.to_string(), "(inner)", format!("={inner}")));
             continue;
         }
         let Some(k) = meta_str(&vm, "kind") else {
-            return Err(format!("{at}::{}: a variant of an error type takes #[host(kind = \"..\")] or #[host(delegate)]", v.ident));
+            return Err(format!(
+                "{at}::{}: a variant of an error type takes #[host(kind = \"..\")] or #[host(delegate)]",
+                v.ident
+            ));
         };
         if with.is_some() {
-            return Err(format!("{at}::{}: a variant `kind` beside `with` -- the converter is the whole answer", v.ident));
+            return Err(format!(
+                "{at}::{}: a variant `kind` beside `with` -- the converter is the whole answer",
+                v.ident
+            ));
         }
         let pat = match v.fields {
             syn::Fields::Unit => "",
@@ -408,7 +524,13 @@ fn error_type(
     })
 }
 
-fn kw_record(label: &str, module: &str, st: &syn::ItemStruct, m: &[Meta], al: &Aliases) -> Res<KwRecord> {
+fn kw_record(
+    label: &str,
+    module: &str,
+    st: &syn::ItemStruct,
+    m: &[Meta],
+    al: &Aliases,
+) -> Res<KwRecord> {
     let at = format!("{label}: {}", st.ident);
     let syn::Fields::Named(named) = &st.fields else {
         return Err(format!("{at}: a keyword record has named fields -- they are the keywords"));
@@ -417,8 +539,14 @@ fn kw_record(label: &str, module: &str, st: &syn::ItemStruct, m: &[Meta], al: &A
     for f in &named.named {
         let name = f.ident.as_ref().expect("named").to_string();
         let fm = host_attr_strict(label, &f.attrs)?.unwrap_or_default();
-        if let Some(bad) = fm.iter().find(|x| !["kwarg", "kwarg.default", "kwarg.lenient"].contains(&x.key.as_str())) {
-            return Err(format!("{at}.{name}: #[host({})] -- a keyword field takes kwarg(default, lenient)", bad.key));
+        if let Some(bad) = fm
+            .iter()
+            .find(|x| !["kwarg", "kwarg.default", "kwarg.lenient"].contains(&x.key.as_str()))
+        {
+            return Err(format!(
+                "{at}.{name}: #[host({})] -- a keyword field takes kwarg(default, lenient)",
+                bad.key
+            ));
         }
         fields.push(KwField {
             ty: rty(&format!("{at}.{name}"), &f.ty, al)?,
@@ -448,9 +576,22 @@ fn stream(
 ) -> Res<Stream> {
     let at = format!("{label}: {ident}");
     let known = [
-        "name", "sink", "push", "input", "output", "end_input",
-        "close_ends_input", "optional_sink", "error", "deadline", "stub", "stub_import", "source",
-        "arg", "input_py", "doc",
+        "name",
+        "sink",
+        "push",
+        "input",
+        "output",
+        "end_input",
+        "close_ends_input",
+        "optional_sink",
+        "error",
+        "deadline",
+        "stub",
+        "stub_import",
+        "source",
+        "arg",
+        "input_py",
+        "doc",
     ];
     for x in m.iter().skip(1) {
         let key = x.key.strip_prefix("stream.").unwrap_or(&x.key);
@@ -458,12 +599,14 @@ fn stream(
             return Err(format!("{at}: stream({key}) -- a stream takes {}", known.join(", ")));
         }
     }
-    let name = meta_str(m, "stream.name").ok_or_else(|| format!("{at}: stream(name = \"..\") is the class name"))?;
+    let name = meta_str(m, "stream.name")
+        .ok_or_else(|| format!("{at}: stream(name = \"..\") is the class name"))?;
     let ty = |key: &str| -> Res<Option<RTy>> {
         match meta_rust(m, &format!("stream.{key}")) {
             None => Ok(None),
             Some(t) => {
-                let parsed = syn::parse_str::<syn::Type>(&t).map_err(|e| format!("{at}: {key} = \"{t}\": {e}"))?;
+                let parsed = syn::parse_str::<syn::Type>(&t)
+                    .map_err(|e| format!("{at}: {key} = \"{t}\": {e}"))?;
                 Ok(Some(rty(&format!("{at}.{key}"), &parsed, al)?))
             }
         }
@@ -471,12 +614,18 @@ fn stream(
     let sink_ty = meta_rust(m, "stream.sink");
     let input = ty("input")?;
     if sink_ty.is_some() != input.is_some() {
-        return Err(format!("{at}: `sink` and `input` come together -- a stream pushes something or nothing"));
+        return Err(format!(
+            "{at}: `sink` and `input` come together -- a stream pushes something or nothing"
+        ));
     }
-    let output = ty("output")?.ok_or_else(|| format!("{at}: stream(output = \"T\") is what recv() yields"))?;
+    let output = ty("output")?
+        .ok_or_else(|| format!("{at}: stream(output = \"T\") is what recv() yields"))?;
     let flag = |k: &str| m.iter().any(|x| x.key == format!("stream.{k}"));
-    if sink_ty.is_none() && (flag("end_input") || flag("close_ends_input") || flag("optional_sink")) {
-        return Err(format!("{at}: end_input/close_ends_input/optional_sink on a stream with no sink"));
+    if sink_ty.is_none() && (flag("end_input") || flag("close_ends_input") || flag("optional_sink"))
+    {
+        return Err(format!(
+            "{at}: end_input/close_ends_input/optional_sink on a stream with no sink"
+        ));
     }
     let is_box = |t: &syn::Type| matches!(t, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Box"));
     let boxed = match meta_rust(m, "stream.source") {
@@ -498,14 +647,22 @@ fn stream(
         close_ends_input: flag("close_ends_input"),
         optional_sink: meta_str(m, "stream.optional_sink"),
         err_with: meta_rust(m, "stream.error").unwrap_or_else(|| "ProviderError".to_owned()),
-        deadline: meta_rust(m, "stream.deadline").unwrap_or_else(|| "crate::inference::NATIVE_CLOSE_DEADLINE".to_owned()),
+        deadline: meta_rust(m, "stream.deadline")
+            .unwrap_or_else(|| "crate::inference::NATIVE_CLOSE_DEADLINE".to_owned()),
         // The class's own `__doc__`: one source type backs several classes.
         doc: meta_str(m, "stream.doc").map(|d| vec![d]).unwrap_or_default(),
-        stub_extra: m.iter().filter(|x| x.key == "stream.stub").filter_map(|x| x.value.clone()).collect(),
-        stub_imports: m.iter().filter(|x| x.key == "stream.stub_import").filter_map(|x| x.value.clone()).collect(),
+        stub_extra: m
+            .iter()
+            .filter(|x| x.key == "stream.stub")
+            .filter_map(|x| x.value.clone())
+            .collect(),
+        stub_imports: m
+            .iter()
+            .filter(|x| x.key == "stream.stub_import")
+            .filter_map(|x| x.value.clone())
+            .collect(),
     })
 }
-
 
 fn span_text(text: &str, span: proc_macro2::Span) -> String {
     let (start, end) = (span.start(), span.end());
@@ -601,7 +758,9 @@ fn proxy(
     let name = match (meta_rust(m, "proxy.name"), &host) {
         (Some(n), _) => n,
         (None, Some(_)) => format!("Py{}", tr.ident),
-        (None, None) => return Err(format!("{at}: proxy(name = \"..\") names the generated struct")),
+        (None, None) => {
+            return Err(format!("{at}: proxy(name = \"..\") names the generated struct"));
+        }
     };
     let state: Vec<(String, String)> = m
         .iter()
@@ -609,7 +768,8 @@ fn proxy(
         .then(|| ("clock".to_owned(), "std::sync::Arc<dyn lk_agents_abi::Clock>".to_owned()))
         .into_iter()
         .collect();
-    let async_trait = tr.attrs.iter().any(|a| a.path().segments.last().is_some_and(|s| s.ident == "async_trait"));
+    let async_trait =
+        tr.attrs.iter().any(|a| a.path().segments.last().is_some_and(|s| s.ident == "async_trait"));
     let mut methods = Vec::new();
     for inner in &tr.items {
         let syn::TraitItem::Fn(f) = inner else { continue };
@@ -617,14 +777,18 @@ fn proxy(
         let mat = format!("{at}::{rust}");
         let marker = host_attr_strict(label, &f.attrs)?;
         if host.is_some() && marker.as_ref().is_some_and(|m| m.iter().any(|x| x.key != "soon")) {
-            return Err(format!("{mat}: a bare proxy's methods carry no marker but `soon` -- each calls `_core_{rust}` and crosses by its signature"));
+            return Err(format!(
+                "{mat}: a bare proxy's methods carry no marker but `soon` -- each calls `_core_{rust}` and crosses by its signature"
+            ));
         }
         let fm = match marker {
             Some(fm) => fm,
             None if host.is_some() => Vec::new(),
             None => {
                 if f.default.is_none() {
-                    return Err(format!("{mat}: a required method with no host marker -- the proxy cannot implement it (soon)"));
+                    return Err(format!(
+                        "{mat}: a required method with no host marker -- the proxy cannot implement it (soon)"
+                    ));
                 }
                 continue;
             }
@@ -641,14 +805,21 @@ fn proxy(
         let action = match meta_str(&fm, "soon") {
             Some(method) => ProxyAction::Soon { method },
             None if fm.is_empty() => ProxyAction::Core,
-            None => return Err(format!("{mat}: #[host({})] -- a proxy method takes soon = \"..\" or nothing", head_of(&fm))),
+            None => {
+                return Err(format!(
+                    "{mat}: #[host({})] -- a proxy method takes soon = \"..\" or nothing",
+                    head_of(&fm)
+                ));
+            }
         };
         match &action {
             // A bare getter lending a borrow is read once and stored; any other host call cannot lend.
             ProxyAction::Core if ret_ref && f.sig.asyncness.is_none() && !has_params => {}
             _ if ret_ref => return Err(format!("{mat}: a host call cannot lend a reference")),
             ProxyAction::Soon { .. } if !ret.is_empty() && !ret_result => {
-                return Err(format!("{mat}: `soon` is fire-and-forget: it returns () or Result<(), E>"));
+                return Err(format!(
+                    "{mat}: `soon` is fire-and-forget: it returns () or Result<(), E>"
+                ));
             }
             _ => {}
         }

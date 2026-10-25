@@ -453,7 +453,7 @@ async def test_live_session_state_and_deps_reach_the_run_context(
         "message",
     ]
     db = await storage.open(sid)
-    row = await db.lane(agent.id)
+    row = await db.lane_info(agent.id)
     db.close()
     assert row is not None and load_state(row.state, Patient) == Patient(looked_up=1)
 

@@ -385,8 +385,12 @@ pub enum RTy {
     /// `impl Iterator<Item = T>` (return only): collected into a list.
     Iter(Box<RTy>),
     Tuple(Vec<RTy>),
-    Json { by_ref: bool },
-    JsonMap { by_ref: bool },
+    Json {
+        by_ref: bool,
+    },
+    JsonMap {
+        by_ref: bool,
+    },
     /// Seconds as a float.
     Duration,
     /// Unix seconds as a float.
@@ -398,7 +402,10 @@ pub enum RTy {
     /// `NOT_GIVEN`, `None` and a value apart.
     Maybe(Box<RTy>),
     /// A unit enum crosses as its string, a record as its binding twin.
-    Declared { name: String, by_ref: bool },
+    Declared {
+        name: String,
+        by_ref: bool,
+    },
     /// `Arc<dyn Trait>` of a `#[host(proxy)]` trait: the host object in that proxy.
     Dyn(String),
     /// `Arc<T>` of an `arc`-cell object (returned only): that class over the same `Arc`.
@@ -406,7 +413,9 @@ pub enum RTy {
     /// A host object interned in the side table.
     HostRef,
     /// One half of a stream pair (returned only), as the method's `stream = ".."` class.
-    StreamHalf { sink: bool },
+    StreamHalf {
+        sink: bool,
+    },
     SelfTy,
 }
 
@@ -555,7 +564,6 @@ pub struct KwField {
     pub default: Option<String>,
     pub lenient: bool,
 }
-
 
 /// `#[host(stream(..))]`: the Rust->host stream class over a source (and optionally a sink).
 #[derive(Debug, Clone)]

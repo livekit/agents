@@ -2,7 +2,7 @@
 
 The errors are ``_core``'s own classes; the rows, records and the turn's context are the generated
 models of ``_generated/storage*.py``. This module holds the two things that are JSON on one side
-and Python on the other: a chat item (``ChatItem`` against its ``payload``) and a lane's
+and Python on the other: a chat item (``ChatItem`` against its protobuf JSON) and a lane's
 state (the door's ``state_type`` against the ``state`` column).
 """
 
@@ -11,9 +11,12 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Iterable
-from typing import TypeVar
+from typing import Any, TypeVar
 
+from google.protobuf import json_format
 from pydantic import BaseModel, JsonValue, TypeAdapter
+
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .._core import (
     NotSerializable,
@@ -24,8 +27,8 @@ from .._core import (
     TooLarge,
     VersionConflict,
 )
-from .._generated.storage import ChatItemRow
-from .._generated.storage_run import Item
+from .._generated.storage_run import ItemRow
+from .._proto import decode_chat_item, encode_chat_item
 from ..llm import ChatContext, ChatItem
 
 S = TypeVar("S")
@@ -36,25 +39,19 @@ TERMINAL_TASK_STATES: frozenset[str] = frozenset({"completed", "failed", "cancel
 STATE_LIMIT = 64 * 1024
 """Plan 5.3 rule 6: state under 64 KiB."""
 
-_item_adapter: TypeAdapter[ChatItem] = TypeAdapter(ChatItem)
-_ITEM_EXCLUDE = {"metrics", "hash", "group_id", "reply_required"}
+
+def item_to_payload(item: ChatItem) -> dict[str, Any]:
+    """A chat item as ``_core`` holds it: ``livekit.agent.ChatContext.ChatItem`` protobuf JSON."""
+    return json_format.MessageToDict(encode_chat_item(item))
 
 
-def item_to_payload(item: ChatItem) -> dict[str, JsonValue]:
-    """A chat item as ``_core`` holds it: the dump less what storage drops (``None``s, metrics,
-    image and audio content, ``group_id``, ``reply_required``, ``extra`` values that are not
-    strings). ``_core`` stores it as ``livekit.agent.ChatContext.ChatItem`` protobuf JSON."""
-    payload = item.model_dump(mode="json", exclude_none=True, exclude=_ITEM_EXCLUDE)
-    if isinstance(content := payload.get("content"), list):
-        payload["content"] = [c for c in content if isinstance(c, str)]
-    if isinstance(extra := payload.get("extra"), dict):
-        payload["extra"] = {k: v for k, v in extra.items() if isinstance(v, str)}
-    return payload
+def payload_to_item(payload: dict[str, Any]) -> ChatItem:
+    return decode_chat_item(json_format.ParseDict(payload, agent_pb.ChatContext.ChatItem()))
 
 
-def history_of(rows: Iterable[Item | ChatItemRow]) -> ChatContext:
+def history_of(rows: Iterable[ItemRow]) -> ChatContext:
     """The stored items as the chat context the model reads."""
-    return ChatContext([_item_adapter.validate_python(row.payload) for row in rows])
+    return ChatContext([payload_to_item(row.payload) for row in rows])
 
 
 def dump_state(state: S, state_type: type[S]) -> JsonValue:
@@ -113,5 +110,6 @@ __all__ = [
     "dump_state",
     "history_of",
     "item_to_payload",
+    "payload_to_item",
     "load_state",
 ]

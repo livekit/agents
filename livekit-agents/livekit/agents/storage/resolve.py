@@ -9,17 +9,16 @@ the turn.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pydantic import JsonValue
 
-from .. import _core, utils
+from .. import _core
 from .._core import Threads
-from .._generated.storage import CommitRequest, EventRow, EventWrite, TaskWrite
-from .._generated.storage_run import Ref, TaskRecord
+from .._generated.storage import EventRow
+from .._generated.storage_run import Ref, TaskPage, TaskRow
 from .._generated.storage_threads import ThreadInfo
 from ..llm import ChatContext
 from ..log import logger
@@ -171,7 +170,7 @@ class Thread:
         finally:
             core.close()
 
-    async def tasks(self, agent: str | None = None) -> list[TaskRecord]:
+    async def tasks(self, agent: str | None = None) -> list[TaskRow]:
         """The lane's task rows, newest first."""
         core = await self._open()
         try:
@@ -179,62 +178,64 @@ class Thread:
         finally:
             core.close()
 
-    async def all_tasks(self) -> list[TaskRecord]:
+    async def task(self, task_id: str) -> TaskRow | None:
+        """One task, whichever agent's it is."""
+        core = await self._open()
+        try:
+            return await core.task(task_id)
+        finally:
+            core.close()
+
+    async def list_tasks(
+        self,
+        status: str | None = None,
+        updated_after: int = 0,
+        page_size: int = 50,
+        page_token: str | None = None,
+    ) -> TaskPage:
+        """One page of every agent's tasks, last updated first (A2A ``tasks/list``)."""
+        core = await self._open()
+        try:
+            return await core.list_tasks(status, updated_after, page_size, page_token)
+        finally:
+            core.close()
+
+    async def all_tasks(self) -> list[TaskRow]:
         """Every lane's task rows, oldest first."""
         core = await self._open()
         try:
-            records: list[TaskRecord] = []
+            records: list[TaskRow] = []
             for lane in await core.lanes():
-                records.extend(await core.tasks(lane.name, limit=500))
+                records.extend(await core.tasks(lane.lane, limit=500))
         finally:
             core.close()
 
         records.sort(key=lambda r: (r.updated_at, r.seq))
         return records
 
-    async def background_tasks(self, agent: str | None = None) -> list[TaskRecord]:
+    async def background_tasks(self, agent: str | None = None) -> list[TaskRow]:
         """The session's submitted tasks, rows with a name rather than turns: every lane's, or
         one agent's."""
         records = await self.tasks(agent) if agent else await self.all_tasks()
         return [record for record in records if record.name]
 
-    async def cancel(self, record: TaskRecord, metadata: dict[str, JsonValue]) -> None:
-        """``tasks/cancel``: an unfenced commit of the row ``canceled`` under ``metadata`` (plan
-        5.5); a running turn yields at its next boundary and writes nothing over it."""
-        db = await self._storage.open(self._id)
+    async def cancel(self, record: TaskRow, metadata: dict[str, JsonValue]) -> None:
+        """``tasks/cancel``: the row ``canceled`` with ``metadata`` merged in (plan 5.5); a
+        running turn yields at its next checkpoint and writes nothing over it."""
+        core = await self._open()
         try:
-            await db.commit(
-                CommitRequest(
-                    lane=self._agent_name,
-                    run_id=f"cancel_{record.id}_{utils.shortuuid()}",
-                    tasks=[
-                        TaskWrite(
-                            task_id=record.id,
-                            status="canceled",
-                            message_id=record.message_id,
-                            name=record.name,
-                            status_message=record.status_message,
-                            data=record.data.model_copy(update={"metadata": metadata}),
-                            internal=record.internal,
-                        )
-                    ],
-                    events=[
-                        self._event("run_started", {"task_id": record.id, "channel": "cancel"})
-                    ],
-                    run_ended=self._event("run_ended", {"outcome": "completed", "reason": None}),
-                )
-            )
+            await core.cancel_task(self._agent_name, record.task_id, metadata)
         finally:
-            db.close()
+            core.close()
 
     async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
         """One page of the session's journal (docs/journal.md), every lane, in order; pass the
         last ``id`` to read the next."""
-        db = await self._storage.open(self._id)
+        core = await self._open()
         try:
-            return await db.events(after_id, limit)
+            return await core.events(after_id, limit)
         finally:
-            db.close()
+            core.close()
 
     async def update(
         self, *, attributes: Mapping[str, str] | None = None, idle_ttl_seconds: int | None = None
@@ -246,11 +247,8 @@ class Thread:
             idle_ttl_seconds=idle_ttl_seconds,
         )
 
-    def _event(self, type: str, payload: dict[str, JsonValue]) -> EventWrite:
-        return EventWrite(ts_ms=int(time.time() * 1000), type=type, payload=payload)
-
     async def _open(self) -> _core.Thread:
-        return _core.Thread(await self._storage.open(self._id), self._storage.holder)
+        return await self._storage.open(self._id)
 
 
 __all__ = [

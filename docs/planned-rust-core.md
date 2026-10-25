@@ -33,19 +33,20 @@ failed with `livekit/reason=storage-unavailable`.
 
 ### The host boundary
 
-One trait, `TurnHost`, with three calls:
+One trait, `TurnHost`, with one call:
 
 ```
-handle(ctx: TurnContext) -> HandlerOutput   // the a2a_session handler, or Agent.run()
-on_update(task_id, text)                    // a working status frame to the wire
-on_token(task_id, delta)                    // streamed answer text
+handle(ctx: TurnContext) -> (Sink<Verdict>, Source<TurnEvent>)   // the a2a_session handler
 ```
+
+The source yields a `checkpoint` before each model call and before the answer
+streams, each answered with `continue` or `yield` through the sink, then the
+`output`. Status frames and streamed tokens go from the handler to the wire
+directly.
 
 `TurnContext` carries the thread id, the lane, the message and the batch,
 the history as JSON items, the state as JSON, the task id, the lane's task
-rows, a delegating caller's history when the message carried one, and the
-`Boundary` the handler polls before each model call and before the answer
-streams. `HandlerOutput` is what the turn reads back: the output (text or a
+rows, and a delegating caller's history when the message carried one. `HandlerOutput` is what the turn reads back: the output (text or a
 typed value), the new items, the state, the usage, an `InputRequired`
 question with its pending call, whether the handler yielded, and the
 handler's error. Every value crosses as JSON
@@ -72,7 +73,7 @@ is request handling), and the A2A door, which calls `_core.Turn.submit` and
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | 1    | The lease TTL and the renewal interval as `StorageOptions` fields (default 10 s and 3 s); the Python tests on a real agent-db                                                     | done                                                                    |
 | 2    | `run::Lane`, `Run`, `Tasks` in Rust; `run.py` reduced to the binding                                                                                                              | the crate side is built; `run.py` still runs its own unit of work       |
-| 3    | `turn` in Rust with `TurnHost`, exposed as `_core.Thread`, `_core.Turn`, `_core.Boundary`; `policies.py` reduced to `Message` and the context type; the A2A door on `_core.Turn` | the crate side and `_core` are built; the door still calls `TurnRunner` |
+| 3    | `turn` in Rust with `TurnHost`, exposed as `_core.Thread`, `_core.Turn`; `policies.py` reduced to `Message` and the context type; the A2A door on `_core.Turn` | the crate side and `_core` are built; the door still calls `TurnRunner` |
 | 4    | The storage cases as crate tests (`run_local.rs`, `turn_local.rs`)                                                                                                                | done                                                                    |
 
 Each step leaves the demos running.

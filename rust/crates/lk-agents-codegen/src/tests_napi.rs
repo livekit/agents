@@ -29,7 +29,8 @@ fn gaps(src: &str) -> String {
 // `napi build` failed on it (2026-09-24).
 #[test]
 fn a_keyword_parameter_is_a_plain_ts_name() {
-    let out = generate("#[host(export)]\npub fn resolve_ref(root: &str, r#ref: &str) -> bool { true }");
+    let out =
+        generate("#[host(export)]\npub fn resolve_ref(root: &str, r#ref: &str) -> bool { true }");
     assert!(out.contains("pub fn resolve_ref(root: String, ref_: String) -> bool {\n    lk_agents_abi::resolve_ref(&root, &ref_)\n}"), "{out}");
     assert!(!out.contains("r#ref"), "{out}");
 }
@@ -38,7 +39,9 @@ fn a_keyword_parameter_is_a_plain_ts_name() {
 // borrowed `&str` taken as something the core cannot borrow.
 #[test]
 fn an_export_is_a_camel_case_napi_function_that_lends_its_strings() {
-    let out = generate("#[host(export(name = \"is_cloud\"))]\npub fn is_cloud_url(url: &str) -> bool { true }");
+    let out = generate(
+        "#[host(export(name = \"is_cloud\"))]\npub fn is_cloud_url(url: &str) -> bool { true }",
+    );
     assert!(out.contains("#[napi(js_name = \"isCloud\")]\npub fn is_cloud(url: String) -> bool {\n    lk_agents_abi::is_cloud_url(&url)\n}"), "{out}");
 }
 
@@ -46,8 +49,13 @@ fn an_export_is_a_camel_case_napi_function_that_lends_its_strings() {
 // value, as pyo3's signature gives it, not the type's `Default`.
 #[test]
 fn an_omitted_argument_takes_the_declared_default() {
-    let out = generate("#[host(export(defaults(n = 20, flag = true)))]\npub fn f(n: usize, flag: bool) {}");
-    assert!(out.contains("pub fn f(env: Env, n: Option<i64>, flag: Option<bool>) -> napi::Result<()>"), "{out}");
+    let out = generate(
+        "#[host(export(defaults(n = 20, flag = true)))]\npub fn f(n: usize, flag: bool) {}",
+    );
+    assert!(
+        out.contains("pub fn f(env: Env, n: Option<i64>, flag: Option<bool>) -> napi::Result<()>"),
+        "{out}"
+    );
     assert!(out.contains("let n = match n { Some(v) => <usize>::try_from(v)"), "{out}");
     assert!(out.contains("None => 20 };"), "{out}");
     assert!(out.contains("let flag = flag.unwrap_or(true);"), "{out}");
@@ -78,9 +86,15 @@ fn a_wire_enum_parses_in_and_names_its_strings_in_typescript() {
     let src = "#[host(wire_enum)]\npub enum Mode { #[host(rename = \"on-air\")] OnAir, Off }\n\
                #[host(export)]\npub fn f(m: Mode) -> Mode { m }";
     let out = generate(src);
-    assert!(out.contains("#[napi(js_name = \"f\", ts_return_type = \"'on-air' | 'off'\")]"), "{out}");
+    assert!(
+        out.contains("#[napi(js_name = \"f\", ts_return_type = \"'on-air' | 'off'\")]"),
+        "{out}"
+    );
     assert!(out.contains("#[napi(ts_arg_type = \"'on-air' | 'off'\")] m: String"), "{out}");
-    assert!(out.contains("m.parse().map_err(|e| crate::host_error::JsError::new(\"ValueError\""), "{out}");
+    assert!(
+        out.contains("m.parse().map_err(|e| crate::host_error::JsError::new(\"ValueError\""),
+        "{out}"
+    );
     assert!(out.contains(".as_str().to_owned()"), "{out}");
     // `wire_strs` (and a wire_enum's `err`/`msg`) are Rust-only: an enum under it binds as nothing.
     let src = "#[host(wire_strs(err = E, msg = E(s.to_owned())))]\npub enum Mode { OnAir, Off }\n\
@@ -100,13 +114,24 @@ fn errors_carry_the_python_kind_through_the_same_tables() {
                #[host(export(err = \"AssertionError\"))]\npub fn b() -> Result<u8, Other> { todo!() }\n\
                #[host(export)]\npub fn c() -> Result<u8, Unmapped> { todo!() }";
     let out = generate(src);
-    assert!(out.contains("pub fn parse_error_to_node(e: lk_agents_abi::ParseError) -> JsError {"), "{out}");
+    assert!(
+        out.contains("pub fn parse_error_to_node(e: lk_agents_abi::ParseError) -> JsError {"),
+        "{out}"
+    );
     assert!(out.contains("lk_agents_abi::ParseError::WrongType(..) => \"TypeError\","), "{out}");
     assert!(out.contains("_ => \"RuntimeError\","), "{out}");
-    assert!(out.contains("lk_agents_abi::a().map_err(crate::generated::errors::parse_error_to_node)"), "{out}");
+    assert!(
+        out.contains("lk_agents_abi::a().map_err(crate::generated::errors::parse_error_to_node)"),
+        "{out}"
+    );
     assert!(out.contains("JsError::new(\"AssertionError\", e.to_string())"), "{out}");
     assert!(out.contains("JsError::new(\"ValueError\", e.to_string())"), "{out}");
-    assert!(out.contains("pub fn a(env: Env) -> napi::Result<u8> {\n    crate::host_error::run(&env, || {"), "{out}");
+    assert!(
+        out.contains(
+            "pub fn a(env: Env) -> napi::Result<u8> {\n    crate::host_error::run(&env, || {"
+        ),
+        "{out}"
+    );
 }
 
 // Catches: an item Node cannot bind failing the whole run (and with it the pyo3 side of every
@@ -117,7 +142,10 @@ fn an_item_node_cannot_bind_is_a_listed_gap_not_a_failed_run() {
                #[host(export)]\npub fn ok() -> u8 { 0 }";
     let m = gaps(src);
     assert!(m.contains("- `lk_agents_abi::b`: parameter `o`:"), "{m}");
-    assert!(m.contains("1 core items bound (1 functions and consts, 0 classes, 0 records, 0 proxies)"), "{m}");
+    assert!(
+        m.contains("1 core items bound (1 functions and consts, 0 classes, 0 records, 0 proxies)"),
+        "{m}"
+    );
     assert!(!generate(src).contains("pub fn b("), "a refused item must not be half-emitted");
 }
 
@@ -126,7 +154,8 @@ fn an_item_node_cannot_bind_is_a_listed_gap_not_a_failed_run() {
 #[test]
 fn an_item_from_an_unlinked_crate_is_a_gap() {
     let decls = parse::file("t.rs", "lk_agents_abi", "").unwrap();
-    let x = parse::exposed("t.rs", "lk_agents_rtc", "#[host(export)]\npub fn f() -> u8 { 0 }").unwrap();
+    let x =
+        parse::exposed("t.rs", "lk_agents_rtc", "#[host(export)]\npub fn f() -> u8 { 0 }").unwrap();
     let out = napi::emit(&decls, &x).unwrap();
     let m = &out.iter().find(|o| o.path == "mod.rs").unwrap().text;
     assert!(m.contains("`lk_agents_rtc` is not linked by lk-agents-node"), "{m}");
@@ -148,11 +177,18 @@ fn a_class_holds_its_cell_and_each_method_reaches_it_the_cell_s_way() {
                #[host(method)] pub fn is_on(status_code: u16) -> bool { true }\n}";
     let out = generate(src);
     assert!(out.contains("#[napi(js_name = \"Gate\")]\npub struct Gate {\n    pub(crate) inner: std::sync::Mutex<lk_agents_abi::Gate>,\n}"), "{out}");
-    assert!(out.contains("Gate { inner: std::sync::Mutex::new(lk_agents_abi::Gate::new()) }") || out.contains("std::sync::Mutex::new(out)"), "{out}");
+    assert!(
+        out.contains("Gate { inner: std::sync::Mutex::new(lk_agents_abi::Gate::new()) }")
+            || out.contains("std::sync::Mutex::new(out)"),
+        "{out}"
+    );
     assert!(out.contains("pub fn fail(&self, reason: Option<String>) {\n        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);"), "{out}");
     assert!(out.contains("#[napi(getter, js_name = \"disabled\")]"), "{out}");
     assert!(out.contains("#[napi(setter, js_name = \"rate\")]\n    pub fn set_rate(&mut self, rate: u32) {\n        self.inner.set_rate(rate);"), "{out}");
-    assert!(out.contains("#[napi(js_name = \"isOn\")]\n    pub fn is_on(status_code: u16) -> bool {"), "{out}");
+    assert!(
+        out.contains("#[napi(js_name = \"isOn\")]\n    pub fn is_on(status_code: u16) -> bool {"),
+        "{out}"
+    );
 }
 
 // Catches: an exposed class argument converted instead of lent off its JS object -- the core takes
@@ -173,12 +209,22 @@ fn an_async_method_runs_on_the_runtime_and_converts_back_on_the_js_thread() {
     let src = "#[host(object(name = \"C\", cell = \"arc\"))]\nimpl C {\n\
                #[host(method)] pub async fn fetch(&self, id: String) -> Result<u32, E> { todo!() }\n}";
     let out = generate(src);
-    assert!(out.contains("#[napi(js_name = \"fetch\", ts_return_type = \"Promise<number>\")]"), "{out}");
+    assert!(
+        out.contains("#[napi(js_name = \"fetch\", ts_return_type = \"Promise<number>\")]"),
+        "{out}"
+    );
     assert!(out.contains("pub fn fetch<'env>(&self, env: &'env Env, id: String) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, u32>>"), "{out}");
     assert!(out.contains("let inner = std::sync::Arc::clone(&self.inner);"), "{out}");
-    assert!(out.contains("env.spawn_future_with_callback(async move { Ok(inner.fetch(id).await.map_err("), "{out}");
+    assert!(
+        out.contains(
+            "env.spawn_future_with_callback(async move { Ok(inner.fetch(id).await.map_err("
+        ),
+        "{out}"
+    );
     assert!(out.contains("Err(e) => Err(e.into_napi(env)),"), "{out}");
-    let m = gaps("#[host(object(name = \"C\", cell = \"arc\"))]\nimpl C {\n#[host(method)] pub async fn f(&self, id: &str) -> u32 { 0 }\n}");
+    let m = gaps(
+        "#[host(object(name = \"C\", cell = \"arc\"))]\nimpl C {\n#[host(method)] pub async fn f(&self, id: &str) -> u32 { 0 }\n}",
+    );
     assert!(m.contains("cannot hold across an await"), "{m}");
 }
 
@@ -186,7 +232,9 @@ fn an_async_method_runs_on_the_runtime_and_converts_back_on_the_js_thread() {
 // Node reader would look for.
 #[test]
 fn a_python_protocol_method_is_a_gap() {
-    let m = gaps("#[host(object(name = \"B\"))]\nimpl B {\n#[host(method)] pub fn __len__(&self) -> usize { 0 }\n}");
+    let m = gaps(
+        "#[host(object(name = \"B\"))]\nimpl B {\n#[host(method)] pub fn __len__(&self) -> usize { 0 }\n}",
+    );
     assert!(m.contains("`__len__` is a Python protocol method"), "{m}");
 }
 
@@ -223,7 +271,10 @@ fn a_node_record_s_typescript_is_node_rs_s_field_for_field() {
         let ts = node::field_ts(&decls, d, f, true).unwrap().unwrap();
         assert!(out.contains(&format!("ts_type = {:?}", ts.ty)), "{} -> {}\n{out}", f.name, ts.ty);
     }
-    assert!(out.contains("#[napi(ts_type = \"'speaking' | 'away'\")]\n    pub new_state: String,"), "{out}");
+    assert!(
+        out.contains("#[napi(ts_type = \"'speaking' | 'away'\")]\n    pub new_state: String,"),
+        "{out}"
+    );
     // Optional in TypeScript is `Option` in napi, whatever the core type.
     assert!(out.contains("pub start_time: Option<f64>,"), "{out}");
     let ts = crate::node::emit(&decls).unwrap().into_iter().map(|o| o.text).collect::<String>();
@@ -236,9 +287,20 @@ fn a_node_record_s_typescript_is_node_rs_s_field_for_field() {
 #[test]
 fn record_defaults_are_the_declaration_s_both_ways() {
     let out = generate(EVENT.replace("pub new_state: UserState,\n", "").as_str());
-    assert!(out.contains("start_time: match v.start_time { Some(v) => v, None => 0.0_f64 },"), "{out}");
-    assert!(out.contains("created_at: Some(lk_agents_abi::epoch_secs(std::time::SystemTime::now())),"), "{out}");
-    assert!(out.contains("impl From<UserStateChangedEvent> for lk_agents_abi::voice::events::UserStateChanged {"), "an infallible read is a `From`\n{out}");
+    assert!(
+        out.contains("start_time: match v.start_time { Some(v) => v, None => 0.0_f64 },"),
+        "{out}"
+    );
+    assert!(
+        out.contains("created_at: Some(lk_agents_abi::epoch_secs(std::time::SystemTime::now())),"),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "impl From<UserStateChangedEvent> for lk_agents_abi::voice::events::UserStateChanged {"
+        ),
+        "an infallible read is a `From`\n{out}"
+    );
 }
 
 // Catches: a declared unit enum read from JS through a `FromStr` the derive does not promise -- a
@@ -247,7 +309,10 @@ fn record_defaults_are_the_declaration_s_both_ways() {
 fn a_declared_enum_field_is_written_and_not_read() {
     let out = generate(EVENT);
     assert!(out.contains("new_state: v.new_state.as_str().to_owned(),"), "{out}");
-    assert!(!out.contains("for lk_agents_abi::voice::events::UserStateChanged {\n    type Error"), "{out}");
+    assert!(
+        !out.contains("for lk_agents_abi::voice::events::UserStateChanged {\n    type Error"),
+        "{out}"
+    );
     assert!(!out.contains("impl From<UserStateChangedEvent> for"), "{out}");
 }
 
@@ -270,10 +335,18 @@ fn a_union_is_its_member_object_and_is_read_by_its_discriminant() {
     "#;
     let out = generate(src);
     assert!(out.contains("pub enum U {\n    Ay(A),\n    Be(B),\n}"), "{out}");
-    assert!(out.contains("U::Ay(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },"), "{out}");
+    assert!(
+        out.contains(
+            "U::Ay(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },"
+        ),
+        "{out}"
+    );
     assert!(out.contains("let tag: String = obj.get_named_property(\"type\")?;"), "{out}");
     assert!(out.contains("\"a\" => Ok(U::Ay("), "{out}");
-    assert!(out.contains("#[napi(js_name = \"type\", ts_type = \"'a'\")]\n    pub r#type: String,"), "{out}");
+    assert!(
+        out.contains("#[napi(js_name = \"type\", ts_type = \"'a'\")]\n    pub r#type: String,"),
+        "{out}"
+    );
     assert!(out.contains("ts_return_type = \"A | B\""), "{out}");
 }
 
@@ -315,7 +388,9 @@ fn streams_and_proxies_node_cannot_bind_are_named_gaps() {
                pub type TtsSource = Box<dyn StreamSource<u32>>;";
     let m = gaps(src);
     assert!(m.contains("- `TtsStream`: error = \"crate::e\" is not a #[host(error)] type"), "{m}");
-    let m = gaps("#[host(proxy(host = \"h.C\"))]\npub trait T: Send + Sync {\nfn label(&self) -> String;\n}");
+    let m = gaps(
+        "#[host(proxy(host = \"h.C\"))]\npub trait T: Send + Sync {\nfn label(&self) -> String;\n}",
+    );
     assert!(m.contains("not yet: a bare proxy"), "{m}");
 }
 
@@ -341,13 +416,19 @@ const GROUPS: &str = r#"
 // same-named group records collapsing into one napi item (`index.d.ts` is one namespace).
 #[test]
 fn a_group_record_is_bound_and_named_by_its_inline_modules() {
-    let (label, module) = ("rust/crates/lk-agents-abi/src/inference/mod.rs", "lk_agents_abi::inference");
+    let (label, module) =
+        ("rust/crates/lk-agents-abi/src/inference/mod.rs", "lk_agents_abi::inference");
     let decls = parse::file(label, module, GROUPS).unwrap();
     let x = parse::exposed(label, "lk_agents_abi", GROUPS).unwrap();
     let out = napi::emit(&decls, &x).unwrap().into_iter().map(|o| o.text).collect::<String>();
     for m in ["stt", "tts"] {
         let js = format!("{}{}CartesiaOptions", m[..1].to_uppercase(), &m[1..]);
-        assert!(out.contains(&format!("impl From<&lk_agents_abi::inference::gateway::{m}::CartesiaOptions> for {js} {{")), "{out}");
+        assert!(
+            out.contains(&format!(
+                "impl From<&lk_agents_abi::inference::gateway::{m}::CartesiaOptions> for {js} {{"
+            )),
+            "{out}"
+        );
         assert!(out.contains(&format!("#[napi(object, js_name = \"{js}\")]")), "{out}");
     }
 }
@@ -365,11 +446,22 @@ fn a_stream_pushes_synchronously_and_receives_as_a_promise() {
                pub type TtsSource = Box<dyn StreamSource<u32>>;";
     let out = generate(src);
     assert!(out.contains("#[napi(js_name = \"pushText\")]\n    pub fn push_text(&self, env: Env, token: String) -> napi::Result<()> {"), "{out}");
-    assert!(out.contains("self.sink()?.push(token).map_err(crate::generated::errors::stream_error_to_node)"), "{out}");
+    assert!(
+        out.contains(
+            "self.sink()?.push(token).map_err(crate::generated::errors::stream_error_to_node)"
+        ),
+        "{out}"
+    );
     assert!(out.contains("JsError::new(\"RuntimeError\", \"one-shot\")"), "{out}");
-    assert!(out.contains("#[napi(js_name = \"recv\", ts_return_type = \"Promise<number | null>\")]"), "{out}");
+    assert!(
+        out.contains("#[napi(js_name = \"recv\", ts_return_type = \"Promise<number | null>\")]"),
+        "{out}"
+    );
     assert!(out.contains("env.spawn_future_with_callback("), "{out}");
-    assert!(out.contains("if let Some(sink) = &self.sink {\n            sink.end_input();\n        }"), "aclose ends the input first\n{out}");
+    assert!(
+        out.contains("if let Some(sink) = &self.sink {\n            sink.end_input();\n        }"),
+        "aclose ends the input first\n{out}"
+    );
 }
 
 // --- the small gaps ----------------------------------------------------------------------------------
@@ -390,7 +482,10 @@ fn a_lenient_parameter_reads_the_default() {
     let out = generate("#[host(export)]\npub fn f(#[host(lenient)] n: u32) {}");
     assert!(out.contains("pub fn f(n: napi::bindgen_prelude::Unknown<'_>)"), "{out}");
     assert!(out.contains("let n: u32 = crate::host_error::lenient(&n);"), "{out}");
-    assert!(gaps("#[host(export)]\npub fn f(#[host(lenient)] d: Duration) {}").contains("reads a plain value"));
+    assert!(
+        gaps("#[host(export)]\npub fn f(#[host(lenient)] d: Duration) {}")
+            .contains("reads a plain value")
+    );
 }
 
 // Catches: a defaulted `&str` refused (it was `encode_image(format = "png")`), or the omitted

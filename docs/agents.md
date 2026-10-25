@@ -6,33 +6,34 @@ process. It holds no history, and nothing changes it after construction.
 
 ## Definition
 
+The target follows OpenAI-style application context. The implementation still
+uses separate deps/state generics; [TODO.md](TODO.md) tracks migration.
+
 ```python
 from livekit.agents import Agent, RunContext
 
-scheduler = Agent(                       # Agent[Deps, Patient, str], id "scheduler"
-    instructions="Northside Family Clinic scheduling. Confirm, book or move appointments.",
-    llm="google/gemma-4-31b-it",
-    deps_type=Deps,                      # what the tools need for one run, never saved
-    state_type=Patient,                  # what the thread saves after every run
-    output_type=str,                     # the type of result.output
+scheduler = Agent[SchedulingContext](
+    instructions="Confirm, book or move appointments.",
+    llm=MODEL,
+    output_type=Appointment,
 )
 ```
 
 | Parameter | Meaning |
-|---|---|
-| `instructions` | the system prompt, a `str` or an `Instructions` with audio and text variants; dynamic parts come from `@agent.instructions` |
-| `name`, `id` | the agent's id; see below |
-| `llm`, `stt`, `tts`, `vad` | models, as objects or model strings; a text agent needs `llm` only |
-| `tools` | tools and toolsets; see [tools.md](tools.md) |
-| `deps_type`, `state_type`, `output_type` | the three type parameters of `Agent[Deps, State, Output]`; see [state-and-deps.md](state-and-deps.md) |
-| `turn_handling`, `tool_handling`, `expressive`, ... | voice settings that override the `LiveSession`'s for this agent; see [voice.md](voice.md) |
+| --- | --- |
+| `instructions` | Static or channel-specific instructions; dynamic parts come from registered functions |
+| `name`, `id` | Stable agent identity; see below |
+| `llm`, `stt`, `tts`, `vad` | Model objects or supported strings |
+| `tools` | Tools and toolsets |
+| `output_type` | Final output contract, including proposed output-function support |
+| Voice options | Agent overrides for the live session |
 
-`deps_type`, `state_type` and `output_type` make the agent an
-`Agent[Deps, State, Output]`: its tools and instruction functions take a
-`RunContext[Deps, State]`, and `run()` returns a `RunResult[Output]`, so a
-typo in `ctx.deps.x` or a wrong use of `result.output` is a type error. The
-state, the output and every tool's arguments are validated against their
-types; the developer never handles raw dicts.
+`Agent[SchedulingContext]` and `RunContext[SchedulingContext]` carry the
+application context type. Tools read application data and services through
+`ctx.context`. The output contract must preserve typed run results; the full
+inference signature needs implementation type tests. No separate deps_type
+or state_type is part of the target constructor. See
+[application context](state-and-deps.md) for persistence responsibilities.
 
 The id names the agent's lane in a thread (see [lanes.md](lanes.md)). It is
 `name=` or `id=` when given; otherwise a module-level `Agent(...)` takes the
@@ -44,14 +45,25 @@ Tools, instruction functions, validators and `on_enter` are registered with
 decorators at import. The first time the agent is bound to a thread they
 freeze: a later registration raises `RuntimeError`.
 
+## Persisted application fields
+
+The shared Agent is not a data container. A run's context may declare fields
+with `persisted(default_factory=...)`. Explicit store.load_context restores
+and validates them before activation; managed execution automatically
+checkpoints their changes with execution state. store.save_context exposes
+the same field-save machinery with documented transaction ownership. Unmarked customers, clients, and services are application-supplied
+runtime values, never automatically serialized. No state_type parameter or
+handwritten snapshot is needed for the default path. Scope belongs to the
+conversation/job, not to the agent definition. See
+[context and persisted fields](state-and-deps.md) for the complete example.
+
 ## Running a turn
 
 ```python
 result = await scheduler.run(
     message,                             # str, or a ChatMessage
     message_history=history,             # the conversation so far; omit for a fresh one
-    state=state,                         # the typed state; mutated in place by tools
-    deps=deps,                           # per-run services
+    context=context,                     # typed application data and dependencies
     usage=None,                          # a RunUsage to add this run's usage to
     max_steps=12,                        # the most model requests one turn may make
 )
@@ -62,28 +74,31 @@ result.all_messages()                    # the history after the turn, without i
 result.usage                             # requests, input_tokens, output_tokens, tool_calls
 ```
 
-`run()` is pure: a turn on the history it is given, a typed result, nothing
-kept after it returns and no knowledge of where the message came from. The
+`run()` operates on the supplied history and context; tools may mutate that
+context and perform external effects. The shared Agent definition keeps no
+per-run history or application data after it returns. The
 next turn continues from `result.all_messages()`. The model and tool loop
 stops at the answer, at an `InputRequired` from a tool, or after `max_steps`
 model requests (default 12), where it raises `UnexpectedModelBehavior`.
 
-Inside an `a2a_session` endpoint the framework hands the handler the loaded history
-and state and commits what the run added after the handler returns; see
-[text-endpoints.md](text-endpoints.md). There, `root.run(message)` runs
-whichever agent is on top of the lane's agent stack after a handoff
-([multi-agent.md](multi-agent.md)), so the handler stays one line. On a call the same agent runs in the
-voice pipeline; see [voice.md](voice.md).
+Inside a managed `a2a_session` endpoint the runtime supplies the loaded history
+and scoped `ctx.store`. The application constructs its context with fresh
+runtime dependencies, explicitly calls `await ctx.store.load_context(app)`,
+and passes `context=app` to the run. The framework checkpoints marked fields
+together with execution changes. See [context loading](state-and-deps.md#explicit-load-and-save-on-the-store).
+The active agent is restored from the execution record after a handoff;
+see [multi-agent.md](multi-agent.md). On a call the same agent runs in the
+voice pipeline; see [voice.md](voice.md). Those transport pages retain current
+implementation examples until the context migration is built.
 
 ## `RunContext`
 
 Every tool, instruction function and validator receives
-`RunContext[Deps, State]` as its first argument:
+`RunContext[Context]` as its first argument:
 
 | Member | What |
 |---|---|
-| `ctx.deps` | what was passed to `run(deps=)` or `LiveSession(deps=)` |
-| `ctx.state` | the thread's typed state, loaded; mutate it in place |
+| `ctx.context` | the application object passed to run(context=...); data, services, and helper methods |
 | `ctx.thread` | the durable thread this run belongs to, the same object an `a2a_session` handler gets; see [threads.md](threads.md) |
 | `ctx.live_session` | the `LiveSession` of the call, `None` outside a call |
 | `ctx.task_id` | the A2A task id of the turn; the idempotency key for outside calls |
@@ -95,15 +110,15 @@ On a call the context also carries the speech: `ctx.speech_handle`,
 `ctx.wait_for_playout()`, `ctx.with_filler(...)`, `ctx.foreground()` and
 `ctx.disallow_interruptions()`; see [voice.md](voice.md).
 
-`RunContext[None, Patient]` says the agent has no deps; `RunContext[None, None]`
-no deps and no state.
+`RunContext[None]` indicates no application context. Conversation history and
+runtime metadata remain separate from the application object.
 
 ## Dynamic instructions
 
 ```python
 @scheduler.instructions
-def known_appointment(ctx: RunContext[Deps, Patient]) -> str:
-    a = ctx.state.appointment
+def known_appointment(ctx: RunContext[SchedulingContext]) -> str:
+    a = ctx.context.patient.appointment
     return f"Next appointment: {a.when:%A %H:%M} with {a.provider}." if a else "Ask for last name and date of birth."
 ```
 
@@ -113,11 +128,17 @@ instructions are never part of the history.
 
 ## Structured output
 
+This section describes the current standalone run behavior. The target
+durable execution contract in [agent-tasks.md](agent-tasks.md) adds callable
+output types and intermediate conversational text alongside explicit final
+output. It is not yet implemented; a typed output does not make input waits
+automatic in the current runtime.
+
 ```python
 fnol = Agent(..., output_type=Claim)
 
 @fnol.output_validator
-async def claim_number_format(ctx: RunContext[None, Loss], output: Claim) -> Claim:
+async def claim_number_format(ctx: RunContext[ClaimContext], output: Claim) -> Claim:
     if not output.claim_number.startswith("CLM-"):
         raise ModelRetry("The claim number must start with CLM-")
     return output
@@ -136,8 +157,9 @@ return value is the output. It raises `ModelRetry` to send the model back
 with the reason; arguments that do not match the type do the same.
 Each retry is a model request counted against `max_steps`.
 
-In a voice turn the reply is speech, so structured results on a call come
-from an `AgentTask[T]`; see [agent-tasks.md](agent-tasks.md).
+The current voice implementation uses AgentTask for structured results. The
+target replaces separate task authoring with durable executions of Agent;
+see [agent-tasks.md](agent-tasks.md) and [TODO.md](TODO.md).
 
 ## Hooks
 

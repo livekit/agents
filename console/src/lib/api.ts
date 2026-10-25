@@ -1,4 +1,5 @@
 import type { Grant, SessionDump, SessionRow, ConsoleConfig } from "./types";
+import type { Target } from "./wsdb";
 
 /**
  * The console API (`examples/console_api.py`): the demo grant, the subject's
@@ -114,3 +115,6 @@ export async function nameSession(sessionId: string, firstMessage: string) {
 
 export const streamUrl = (id: string, offset = -1) =>
   `${API_URL}/api/streams/${encodeURIComponent(id)}?offset=${offset}&live=sse`;
+
+/** Where the thread's database answers, and a token to dial it with, for the SQL tab. */
+export const getDb = (id: string) => getJSON<Target>(`/api/sessions/${encodeURIComponent(id)}/db`);

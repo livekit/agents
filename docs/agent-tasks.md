@@ -1,143 +1,208 @@
 # Agent tasks
 
-An `AgentTask[Output]` is an agent with a job that ends with a value of
-type `Output`: `await` on it returns an `Output`, and its tools return
-`Completed[Output]`. A tool or a hook awaits it: the task takes the
-conversation, on a call or in text, and hands it back when it completes.
+An agent is shared configuration. A task is one conversational execution of an agent,
+with its own draft state, history, pending interactions, and eventual output.
+Define behavior with the existing `Agent(...)` and its decorators; there is
+no second subclass-based AgentTask authoring API.
 
-Submitting a task to run in the background, and starting one from outside,
-are designed in [planned-agent-tasks.md](planned-agent-tasks.md).
+This is the target design, not a claim that the runtime implements it today.
+[TODO.md](TODO.md) tracks the migration. `Call` below is a
+proposed surface; callable output types and automatic conversational waits
+also require implementation. They must be pinned with strict type tests.
 
-## Writing one
+## Definition, draft, and output
 
 ```python
-from livekit.agents import AgentTask, Completed, Failed, RunContext, function_tool
-
-class CaptureDateOfBirth(AgentTask[str]):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="Ask for the caller's date of birth, then record it.",
-            llm="google/gemma-4-31b-it",
-        )
-
-    async def on_enter(self, ctx: RunContext) -> None:
-        self.session.generate_reply(instructions="Ask for the date of birth.")
-
-    @function_tool
-    async def record(self, ctx: RunContext, date_of_birth: str) -> Completed[str]:
-        """Record the date of birth.
-
-        Args:
-            date_of_birth: YYYY-MM-DD
-        """
-        return Completed(date_of_birth)
+book_room = Agent[BookingContext](
+    id="book-room",
+    instructions=(
+        "Collect and refine the booking details. Ask for anything missing. "
+        "Reserve only after approval. Produce the final Booking only after "
+        "the reservation service confirms it."
+    ),
+    llm=MODEL,
+    output_type=Booking,
+)
 ```
 
-The constructor takes what an `Agent` takes for a call (`instructions`,
-`tools`, `llm`, `stt`, `tts`, `vad`, `turn_handling`) and
-`preserve_function_call_history=`. A task is a new instance per use: its
-constructor arguments are its input, and it is awaited once. An `Agent` is
-the shared, stateless one. The hooks take the context explicitly,
-`RunContext[Deps, State]`, for an awaited task and a submitted one alike.
-
-A task that keeps state names its type on the class:
+`Agent[BookingContext]` describes the application context type; output_type
+supplies the final-result contract. Construct the definition once and register
+tools/instructions at import. A run receives context explicitly; the shared
+agent never contains mutable job data.
 
 ```python
 @dataclass
-class QState:
-    answers: dict[str, str] = field(default_factory=dict)
-
-class Questionnaire(AgentTask[Answers, QState]):
-    ...
+class BookingContext:
+    customer: Customer
+    hotel: HotelServices
+    draft: RoomDraft = persisted(default_factory=RoomDraft)
 ```
 
-`self.state` is a `QState`, built empty when the task starts, saved by the
-framework while the task waits and restored on the next turn.
-`AgentTask[Output]` alone has no state. `ctx.state` inside the task's tools
-is still the thread's state, for what must outlive the task.
+Tools read/write `ctx.context.draft` and call `ctx.context.hotel`. Identity,
+services, helper methods, and mutable data share one local context object.
+There is no separate deps/state configuration or self.state. The context is
+not automatically visible to the model: dynamic instructions render the draft.
+Output types remain validated final-result contracts.
 
-| Hook | When | Returns |
-|---|---|---|
-| `on_enter(self, ctx)` | when the task takes the conversation | `None`, or a transition |
-| `on_exit(self)` | when it leaves the conversation, on a call | |
+Mark saved user data with `persisted(default_factory=...)`.
+`store.load_context` explicitly restores and validates those fields; the
+runtime checkpoints their changes automatically during managed execution. It does
+not serialize the entire context: customer/service objects are supplied by the
+application's context factory. No separate snapshot model or draft repository
+is needed. See [application context](state-and-deps.md) for field keys,
+context-scope ownership, collections, compatibility, and load/save lifecycle.
 
-`on_enter` takes the `RunContext` when it declares a parameter, on a call
-and in text alike; an `on_enter(self)` with none still works on a call.
+A draft is scoped to a booking context, not the shared Agent definition.
+Multiple booking jobs can use the same book_room definition with independent
+drafts. Handoffs can share a scope, and an explicit fresh child context creates
+a new one. Active-agent identity and conversation history are stored separately
+in framework execution records.
 
-The task's tools and `on_enter` end it with a transition (see
-[human-in-the-loop.md](human-in-the-loop.md)):
+## Agent-loop outcomes
 
-- `Completed(value)` ends the task; `value` is what `await` returns.
-- `Failed(error)` or `Rejected(reason)` ends it; `await` raises `ToolError`
-  with the text.
-- `InputRequired(question)` speaks the question and waits for the person's
-  next turn, which is the call's output; the task's model continues.
+| Agent loop produces | Runtime behavior |
+| --- | --- |
+| Ordinary tool call | Run tool, record output, continue the model loop |
+| Person-facing conversational text | Checkpoint InputRequired; deliver text and release execution |
+| Explicit InputRequired from a tool | Save pending call and question; wait for a human reply |
+| Call of a child agent | Persist child execution and parent receiver; parent waits |
+| Valid accepted final output | Complete execution and deliver typed result |
+| Terminal failure, refusal, cancellation, or timeout | Persist and deliver distinct terminal outcome |
 
-A task with a model completes only through a tool that returns
-`Completed`; text from its model goes to the person. `on_enter` returning
-`Failed("...")` ends the task before its model runs.
+An ordinary reply ends a turn, not the job. Final output ends the job.
+There is no required `Completed(value)` wrapper in this authoring API.
+Historical AgentTask transitions remain implementation details to migrate.
 
-## Awaited: a guided sub-flow
+For structured output, expose an explicit final-output mechanism alongside
+ordinary conversational text. Text must remain available for questions; do
+not retry every question as an invalid Booking. Validation failures in final
+output return feedback to the model within the execution's retry/usage budget.
+
+For `output_type=str`, intermediate and final text cannot be distinguished by
+type. Durable task execution must use an explicit final-output action even
+for strings. A normal standalone text `agent.run()` retains its existing
+one-turn behavior, where an answer is that run's output. These execution
+modes must be explicit in runner/context; never guess completion from wording.
+
+## Questions and automatic resumption
+
+A model-generated question/conversational reply is checkpointed as
+`InputRequired` with an agent-loop receiver. The next human message appends
+to history and resumes the same agent. No pending tool call is fabricated,
+no Python callback is needed, and no second model request rephrases the text.
+
+A Python tool can also return a question directly:
+
+```python
+@book_room.tool
+async def clarify_view(ctx: RunContext[BookingContext]):
+    return InputRequired("Would you prefer a garden or sea view?")
+```
+
+Here the tool call is pending: the human answer becomes its output before
+the model continues. The original tool body is not called again to interpret
+the answer. The LLM can clarify, answer side questions, and change the draft.
+`verbatim=True` preserves exact wording; a separate frontend agent may phrase
+an expert's question under an explicit presentation policy.
+
+Waits and delivery must commit before releasing execution. Voice and text
+share this contract. Only the foreground execution receives unaddressed human
+input; a parent paused for a child cannot compete for the same reply.
+
+## Booking tools and authoritative completion
+
+Tools enforce availability, price, prerequisites, and approval. The output
+schema alone cannot prove that a model-generated booking actually exists.
+Validate completion against the authoritative service, either in an output
+validator or an output function.
+
+```python
+async def booking_result(
+    ctx: RunContext[BookingContext],
+    confirmation_code: str,
+) -> Booking:
+    # Check ownership and that this reservation belongs to this execution.
+    return await ctx.context.hotel.get_confirmed_booking_for_execution(
+        confirmation_code,
+        execution_id=ctx.execution_id,
+    )
+
+
+book_room = Agent[BookingContext](
+    id="book-room",
+    instructions=BOOKING_INSTRUCTIONS,
+    llm=MODEL,
+    output_type=booking_result,
+)
+```
+
+Callable output types follow Pydantic AI's output-function model: arguments
+are validated, the function may request a model retry, and its accepted return
+value is the final typed output. The function is a terminal output surface,
+not an ordinary tool whose result is returned to the model. Its input schema,
+return type, context types, and retries need full typing and runtime validation.
+Output functions should prefer validation/read-only resolution of already
+committed effects; side effects still require their own idempotency contract.
+
+The `ctx.execution_id` spelling is proposed; job identity must be distinct
+from the A2A request/turn ID and stable across human turns and worker changes.
+
+The existing [hotel example](../examples/hotel-receptionist/backend_agent.py)
+will migrate from `BookRoom(AgentTask[str, RoomDraft])` to a shared `book_room`
+Agent. Its set_stay, choose_room, record_guest, and payment-reference tools
+become `@book_room.tool` functions mutating `ctx.context.draft`. `_status` becomes
+`@book_room.instructions`. Booking writes return ordinary tool results;
+accepted final output completes the execution, rather than a Completed wrapper.
+
+Approval must bind to exact effect terms and draft identity/revision. Changed
+dates, room, price, guest, or payment details invalidate prior approval even
+when the tool has no arguments. A model interpreting a reply cannot authorize
+different terms. Recheck current availability before committing a booking.
+
+## Child executions
+
+A parent agent tool delegates a reusable responsibility:
 
 ```python
 @front_desk.tool
-async def verify_caller(ctx: RunContext[Deps, Patient]) -> str:
-    """Verify the caller before touching their appointments."""
-    ctx.state.date_of_birth = await CaptureDateOfBirth()
-    return "verified"
+async def start_booking(ctx: RunContext[CustomerContext]):
+    app = ctx.context
+    return Call(
+        book_room,
+        context=BookingContext(customer=app.customer, hotel=app.hotel),
+    )
 ```
 
-A task is awaited inside a tool or inside an agent's `on_enter` or
-`on_exit` on a call. While it runs, the agent that awaited it is paused and
-the task's activity has the conversation. When it ends, what the task added
-to the history stays in the thread's history, without its function calls
-unless the task was built with `preserve_function_call_history=True`, and
-the paused agent resumes. Wrap the await in `async with ctx.foreground():`
-so it does not race with speech already queued; see [voice.md](voice.md).
+The explicit child context above gets a fresh durable scope and RoomDraft;
+customer and hotel references are reused as runtime dependencies. Child
+creation, its initial persisted fields, and parent tool receiver commit
+consistently, then the parent pauses. The child's accepted Booking output
+fills the pending call and the parent LLM phrases the result. The original
+Python tool is not rerun and no cross-turn Python stack is restored.
 
-`task.done()` says whether it has ended. `task.cancel()` interrupts it and
-ends it; the awaiting code receives a `ToolError`.
+`Call(child)` without a context override intentionally shares compatible
+context/scope, as with OpenAI-style local context. A handoff also retains the
+current scope. Restoration uses recorded scope IDs; it never recreates a new
+draft just because another worker receives the turn. History transfer remains
+explicit and independent of shared application data.
 
-## Awaited in text
+Use children for reusable conversations such as VerifyGuest. Ordinary booking
+questions stay in book_room. A class, separate mutable task object, start
+hook, RunAgent transition, resume decorator, or bound Python handler is not
+required to author a conversational child.
 
-```python
-@dataclass
-class BookRoom(AgentTask[RoomBooking, RoomDraft]):
-    guests: int                                        # the arguments: JSON-shaped, the task's input
+## Deferred work
 
-    def __post_init__(self) -> None:
-        super().__init__(instructions="Book the room.", llm="google/gemma-4-31b-it")
+Durable execution, external-operation waits, schedulers, journals for recovery,
+and deployment compatibility are outside this phase. The exploratory runtime
+design is archived outside this folder at `~/livekit/durable-execution.md`.
+Graphs and [code workflows](code-workflows.md) are also deferred.
 
-    @function_tool
-    async def confirm(self, ctx: RunContext[Hotel, Caller]) -> Completed[RoomBooking]: ...
+The current proposal covers conversational tasks, human input, typed final
+output, child agents, and [persisted context fields](state-and-deps.md).
+Persistence does not restore Python stacks or automatically retry external effects.
 
-
-@front_desk.tool
-async def start_booking(ctx: RunContext[Hotel, Caller], guests: int) -> str:
-    booking = await BookRoom(guests=guests)            # turns pass here
-    return f"booked {booking.code}"
-```
-
-Inside `agent.run()` the await is a handoff plus a deferred call. The tool's
-call stays pending in the history, the task is pushed on the lane's agent
-stack with its arguments and its state, and the task's `on_enter` runs; what
-the task's model says ends the turn `input-required`. Each later message runs
-the task, on any worker: the stack entry rebuilds it from its class name and
-arguments, as a dataclass, and restores `self.state`. `Completed(value)`
-pops the task and writes the value as the pending call's output, and the
-agent below continues its turn from there, phrasing the result; `Failed`
-writes a `ToolError`. `InputRequired` from a task's tool waits exactly as it
-does from a conversation tool, and `InputRequired(question, tool=)` hands the
-person's answer to that tool of the task as its first string parameter, with
-no model turn in between; a tool with no string parameter gets the answer as
-a turn of the task's model, which calls it ([tools.md](tools.md)). See
-[lanes.md](lanes.md) for the stack.
-
-A task class must be importable by the server that gets the next message:
-the registry finds `AgentTask` subclasses by class name. See `examples/hotel-receptionist/`:
-a room booking and a verification, awaited from the back office's tools.
-
-## Structured results on a call
-
-A voice turn's reply is speech, so a typed result on a call is an
-`AgentTask[Output]`: the value its tool returns in `Completed(value)`.
+Acceptance checks cover intermediate text alongside typed final output,
+string-output disambiguation, output-function retries and provenance checks,
+shared and isolated child contexts, persisted fields, model- versus
+tool-originated questions, approval invalidation, and parent resumption.

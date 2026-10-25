@@ -63,7 +63,14 @@ SATURATED_ITEMS: list[llm.ChatItem] = [
             "llm_node_ttfs": 1.0,
         },
     ),
-    FunctionCall(id="item_fc", call_id="call-1", name="fn", arguments="{}", created_at=_TS),
+    FunctionCall(
+        id="item_fc",
+        call_id="call-1",
+        name="fn",
+        arguments="{}",
+        extra={"lk.delegation.task_id": "t1"},
+        created_at=_TS,
+    ),
     FunctionCallOutput(
         id="item_fco",
         call_id="call-1",

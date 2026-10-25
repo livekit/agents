@@ -8,9 +8,10 @@ pub fn emit(decls: &[Decl]) -> Result<Vec<Out>, String> {
     let mut modules: Vec<String> = Vec::new();
     for d in decls {
         if let Some(t) = d.target(Host::Node)
-            && !modules.contains(&t.module) {
-                modules.push(t.module.clone());
-            }
+            && !modules.contains(&t.module)
+        {
+            modules.push(t.module.clone());
+        }
     }
     modules.iter().map(|m| module(decls, m)).collect()
 }
@@ -122,7 +123,12 @@ pub(crate) struct FieldTs {
     pub ty: String,
 }
 
-pub(crate) fn field_ts(all: &[Decl], d: &Decl, f: &Field, inline: bool) -> Result<Option<FieldTs>, String> {
+pub(crate) fn field_ts(
+    all: &[Decl],
+    d: &Decl,
+    f: &Field,
+    inline: bool,
+) -> Result<Option<FieldTs>, String> {
     if f.private {
         return Ok(None); // a host-private attribute is not part of the wire shape
     }
@@ -133,8 +139,10 @@ pub(crate) fn field_ts(all: &[Decl], d: &Decl, f: &Field, inline: bool) -> Resul
     // `timeout: float` without `| None`, so the Rust type says the key may be missing.
     let rust_option =
         matches!(&f.ty, Ty::Foreign(Foreign { rust: Some(r), .. }) if matches!(**r, Ty::Option(_)));
-    let optional =
-        matches!(f.ty, Ty::Option(_)) || rust_option || f.default.is_some() || f.default_factory.is_some();
+    let optional = matches!(f.ty, Ty::Option(_))
+        || rust_option
+        || f.default.is_some()
+        || f.default_factory.is_some();
     // As in Python: under `total=False` an outer `Option` is absence, which `?` already says.
     let absent = d.target(Host::Python).is_some_and(|t| t.kind == Kind::TypedDict && !t.total);
     let ty = match &f.ty {
@@ -147,7 +155,8 @@ pub(crate) fn field_ts(all: &[Decl], d: &Decl, f: &Field, inline: bool) -> Resul
 /// napi's camelCase (also agents-js's); leading underscores are kept.
 pub(crate) fn camel(name: &str) -> String {
     // SCREAMING_CASE is a constant's name, kept as is.
-    if name.chars().any(|c| c.is_ascii_uppercase()) && !name.chars().any(|c| c.is_ascii_lowercase()) {
+    if name.chars().any(|c| c.is_ascii_uppercase()) && !name.chars().any(|c| c.is_ascii_lowercase())
+    {
         return name.to_owned();
     }
     let lead = name.len() - name.trim_start_matches('_').len();
@@ -171,7 +180,12 @@ fn render(all: &[Decl], t: &Ty, owner: &str) -> Result<String, String> {
 }
 
 /// [`render`], optionally with every string enum and union spelled out (see [`field_ts`]).
-pub(crate) fn render_with(all: &[Decl], t: &Ty, owner: &str, inline: bool) -> Result<String, String> {
+pub(crate) fn render_with(
+    all: &[Decl],
+    t: &Ty,
+    owner: &str,
+    inline: bool,
+) -> Result<String, String> {
     Ok(match t {
         Ty::Str => "string".to_owned(),
         Ty::Int | Ty::Float => "number".to_owned(),
@@ -181,10 +195,18 @@ pub(crate) fn render_with(all: &[Decl], t: &Ty, owner: &str, inline: bool) -> Re
         // `| null`, not `| undefined`: JSON can only spell absent-vs-empty this way.
         Ty::Option(i) => format!("{} | null", render_with(all, i, owner, inline)?),
         Ty::List(i) => format!("{}[]", render_with(all, i, owner, inline)?),
-        Ty::Map(k, v) => format!("Record<{}, {}>", render_with(all, k, owner, inline)?, render_with(all, v, owner, inline)?),
+        Ty::Map(k, v) => format!(
+            "Record<{}, {}>",
+            render_with(all, k, owner, inline)?,
+            render_with(all, v, owner, inline)?
+        ),
         Ty::Tuple(items) => format!(
             "[{}]",
-            items.iter().map(|i| render_with(all, i, owner, inline)).collect::<Result<Vec<_>, _>>()?.join(", ")
+            items
+                .iter()
+                .map(|i| render_with(all, i, owner, inline))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ")
         ),
         Ty::Declared(n) => {
             let decl = all.iter().find(|d| &d.rust_name == n);
@@ -201,7 +223,11 @@ pub(crate) fn render_with(all: &[Decl], t: &Ty, owner: &str, inline: bool) -> Re
                 _ if inline && decl.is_some() => {
                     let d = decl.expect("checked");
                     match &d.body {
-                        Body::Unit(vs) => vs.iter().map(|v| format!("'{}'", v.value)).collect::<Vec<_>>().join(" | "),
+                        Body::Unit(vs) => vs
+                            .iter()
+                            .map(|v| format!("'{}'", v.value))
+                            .collect::<Vec<_>>()
+                            .join(" | "),
                         Body::Union(members) => members
                             .iter()
                             .map(|m| render_with(all, &m.ty, owner, inline))

@@ -37,6 +37,14 @@ is a delegation to another registered agent: two brains in one thread are
 two lanes, whether the second brain is a worker of its own or an
 `AgentHandler(lane="backend")` of the same worker.
 
+The agent-stack representation above describes the current implementation.
+The target [durable agent execution model](agent-tasks.md) stores child Agent
+identity, execution history, context-scope reference, and result receiver instead of requiring
+a user-defined AgentTask class. Migration must preserve existing entries;
+context sharing is explicit. Handoffs and implicit-context children retain
+the scope; a fresh child context gets its own persisted fields. Shared scopes
+must serialize/fence updates. See [application context](state-and-deps.md).
+
 ## One writer at a time
 
 A lane has exactly one writer at a time, held two ways:

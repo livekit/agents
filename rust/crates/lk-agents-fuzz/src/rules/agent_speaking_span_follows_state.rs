@@ -163,5 +163,6 @@ fn the_agent_speaks() -> Case {
             Input::Advance { ms: Millis(200) },
         ],
         schedule: 0,
+        random: vec![],
     }
 }

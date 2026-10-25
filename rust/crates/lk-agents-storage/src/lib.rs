@@ -1,65 +1,39 @@
-//! `lk-agents-storage`: the session storage client of the Agents 2.0 plan (agent-db/docs/
-//! thread-registry-plan.md, 13.2 and 13.5). Rust owns everything that talks to a socket on the
-//! worker's behalf and every byte of SQL; Python (`livekit.agents.storage`) is a thin layer over
-//! the typed methods here and never sees a statement.
+//! `lk-agents-storage`: the thread storage client of Agents 2.0. Python never sees SQL.
 //!
-//! * [`wsdb`]: the data-plane client, one authenticated WebSocket per open thread database:
-//!   `Hello`, `Exec`, streaming `Query` paced by credits, `Batch` with one result per statement,
-//!   `Begin`/`Commit`/`Rollback`, `Cancel`, and a reconnect that maps a lost transaction to
-//!   [`StorageError::Unavailable`].
-//! * [`schema`]: the session tables as `#[derive(Host)]` records with `#[table]`, whose pydantic
-//!   twins `lk-agents-codegen` writes; the DDL is livekit/protocol's `thread_schema_v1.sql`.
-//! * [`statements`]: every statement a thread database sees, each one method of
-//!   [`ThreadDb`]: acquire and load, renew (and the renewal timer), the fenced commit,
-//!   `run_ended`, the inbox receive transaction, the drain check, `waiter`, the orphaned task.
-//! * [`run`]: the run unit of work over those statements (plan 5.2, 13.8): [`run::Thread`],
-//!   [`run::Lane::open`] with the lease wait, [`run::Run::commit`] and [`run::Run::abandon`],
-//!   [`run::Tasks`]; the host supplies history items and state as JSON.
-//! * [`turn`]: the turn state machine over a run (plan 3.3.4, 13.8): [`turn::Turn::run`] takes one
-//!   A2A message through its policy, and [`turn::TurnHost`] is the one trait the host implements
-//!   to run the handler and report progress.
-//! * [`streams`]: the answer streams over `/v0/agentstore/streams` (plan 6).
-//! * [`threads`]: the Public API's `ThreadService` (plan 4.3), and [`agentstore`] the base URL,
-//!   its error mapping and the databases client.
-//! * [`token`]: the worker's data plane credentials, `agent.databaseAdmin`, minted per dial
-//!   (plan 13.6).
+//! * [`conn`]: one authenticated WebSocket per open thread database.
+//! * [`schema`]: the thread tables as records, and every statement.
+//! * `sql`: typed row reads, the `statement!` macro, and the checks of both.
+//! * [`db`]: [`ThreadDb`] and the lane's operations: acquire, lease, commit, inbox, reads.
+//! * [`run`]: [`Thread`], [`Lane::open`], [`Run`] and [`Tasks`].
+//! * [`streams`]: the answer streams over `/v0/agentstore/streams`.
 //!
-//! Every request goes to agentstore through public-api-server, under one base URL
-//! ([`agentstore::agentstore_url_from_env`]). [`Storage`] is the root: that URL and the project's
-//! key pair, from which a thread database is opened and the streams and threads clients are made. Host-neutral by design: no pyo3 here;
+//! [`Storage`] is the root: the project's URL and key pair. No pyo3 here;
 //! `lk-agents-py/src/storage.rs` is the Python face.
-//!
-//! Errors are [`StorageError`], the list of plan 5.2 and 13.5: `ThreadNotFound`,
-//! `VersionConflict`, `NotSerializable(field)`, `TooLarge(what, limit)` and `Unavailable`
-//! (retryable), plus the transport and decoding failures a client has to name.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-pub mod agentstore;
-pub mod chat_item;
+use livekit_api::services::databases::DatabaseClient;
+use livekit_api::services::threads::ThreadClient;
+use livekit_api::services::{LiveKitApi, ServerError, ServiceError, public_api_url};
+
+use conn::WsdbError;
+
+pub mod conn;
+pub mod db;
 pub mod run;
 pub mod schema;
-pub mod statements;
+pub(crate) mod sql;
 pub mod streams;
-pub mod threads;
-pub mod token;
-pub mod turn;
-pub mod wire;
-pub mod wsdb;
 
-pub use agentstore::Databases;
+pub use conn::{Conn, Options as ConnOptions, TokenMinter};
+use db::DbPool;
+pub use db::{LaneDb, Lease, ThreadDb};
 pub use run::{Lane, Run, RunOptions, Tasks, Thread};
-use statements::DbPool;
-pub use statements::{Lease, ThreadDb};
 pub use streams::{StreamReader, Streams};
-pub use threads::Threads;
-pub use token::TokenMinter;
-pub use turn::{Turn, TurnHost, TurnOptions, TurnResult};
-pub use wsdb::{Conn, Options as ConnOptions};
 
-/// Plan 5.2 and 13.5. `Unavailable` is the one retryable error; a task that ends on it fails
-/// with reason `storage-unavailable` (5.12).
+/// A storage failure. `Unavailable` is the one retryable error; a task that ends on it fails
+/// with reason `storage-unavailable`.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum StorageError {
     /// An id the threads service does not know, or a database agent-db does not have.
@@ -74,18 +48,16 @@ pub enum StorageError {
     NotSerializable(String, String),
     #[error("{what} exceeds the limit of {limit} bytes")]
     TooLarge { what: String, limit: usize },
-    /// Retryable: a connection lost mid-request, a transaction a reconnect discarded, a severed
-    /// database, a closed connection, a lease that lapsed.
+    /// Retryable: a connection lost mid-request, a severed database, a lease that lapsed.
     #[error("agent-store unavailable: {0}")]
     Unavailable(String),
     /// `Lane::open` with `wait: false` found the lease held.
     #[error("lease held: {0}")]
     LeaseHeld(String),
-    /// A waiter that did not acquire the lane within the wait (plan 3.3.2, reason `lease-timeout`).
+    /// A waiter that did not acquire the lane within the wait (reason `lease-timeout`).
     #[error("lease timeout: {0}")]
     LeaseTimeout(String),
-    /// The `reject` policy refused the message while a turn runs (plan 3.3.4); the running task
-    /// when the journal names it. The Python `RunRejected`.
+    /// The `reject` policy refused the message while a turn runs; the running task, if known.
     #[error("the lane is running a turn; the message was rejected")]
     RunRejected { running_task_id: Option<String> },
     /// The host cancelled the handler mid-turn: the run ended `canceled` and nothing was written.
@@ -123,13 +95,87 @@ impl StorageError {
     }
 }
 
-/// Where agentstore is: the public API's base URL, `https://host`. The data plane is
-/// `wss://host/v0/agentstore/db`, the streams `https://host/v0/agentstore/streams`.
+/// The data plane's errors: a drop mid-request, a severed database, a write of unknown outcome
+/// (`outcome_unknown`), a request still refused after its resends (`retry`) and a closed
+/// connection are `StorageUnavailable`, retryable; `not_found` at `Hello` is
+/// `ThreadNotFound`; a refused token is `Unauthorized`; the rest keep agent-db's code.
+impl From<WsdbError> for StorageError {
+    fn from(e: WsdbError) -> Self {
+        match e {
+            WsdbError::Closed | WsdbError::Disconnected | WsdbError::Timeout | WsdbError::Io(_) => {
+                StorageError::Unavailable(e.to_string())
+            }
+            WsdbError::Server { code, message } => match code.as_str() {
+                "unavailable" | "resource_exhausted" | "retry" | "outcome_unknown" => {
+                    StorageError::Unavailable(message)
+                }
+                "not_found" => StorageError::ThreadNotFound(message),
+                "unauthenticated" | "permission_denied" => StorageError::Unauthorized(message),
+                _ => StorageError::Server { code, message },
+            },
+            WsdbError::Protocol(m) => StorageError::Protocol(m),
+            WsdbError::TooLarge(_) => {
+                StorageError::TooLarge { what: "request".into(), limit: conn::MAX_FRAME }
+            }
+        }
+    }
+}
+
+/// A `livekit-api` failure as a storage error: `not_found` is `NotFound`, `unauthenticated` and
+/// `permission_denied` `Unauthorized`, a lost request and the retryable codes `Unavailable`,
+/// anything else `Server` with its code.
+pub fn service_error(e: ServiceError) -> StorageError {
+    match e {
+        ServiceError::Twirp(ServerError::Request(e)) => StorageError::Unavailable(e.to_string()),
+        ServiceError::Twirp(ServerError::Twirp(c)) => match c.code.as_str() {
+            "not_found" => StorageError::NotFound(c.msg),
+            "unauthenticated" | "permission_denied" => StorageError::Unauthorized(c.msg),
+            "unavailable" | "deadline_exceeded" | "resource_exhausted" => {
+                StorageError::Unavailable(c.msg)
+            }
+            _ => StorageError::Server { code: c.code, message: c.msg },
+        },
+        ServiceError::Twirp(e) => StorageError::Decode(e.to_string()),
+        other => StorageError::Invalid(other.to_string()),
+    }
+}
+
+/// A threads service failure, with a missing thread as [`StorageError::ThreadNotFound`].
+pub fn thread_error(e: ServiceError) -> StorageError {
+    match service_error(e) {
+        StorageError::NotFound(m) => StorageError::ThreadNotFound(m),
+        other => other,
+    }
+}
+
+/// A non-2xx with the body read: 503 is retryable (`Unavailable`), 404 is `NotFound`.
+pub(crate) async fn http_ok(resp: reqwest::Response) -> Result<reqwest::Response, StorageError> {
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(resp);
+    }
+    let message = resp.text().await.unwrap_or_default();
+    let message = serde_json::from_str::<serde_json::Value>(&message)
+        .ok()
+        .and_then(|v| {
+            v.get("message").or_else(|| v.get("msg")).and_then(|m| m.as_str()).map(str::to_owned)
+        })
+        .unwrap_or(message);
+    Err(match status.as_u16() {
+        404 => StorageError::NotFound(message),
+        502..=504 => StorageError::Unavailable(message),
+        401 | 403 => StorageError::Unauthorized(message),
+        s => StorageError::Http { status: s, message },
+    })
+}
+
+/// Where agentstore is and how leases behave. The data plane is `wss://<public API>/v0/agentstore/db`,
+/// the streams `https://<public API>/v0/agentstore/streams`.
 #[derive(Debug, Clone)]
 pub struct StorageOptions {
-    /// The public API, derived from `LIVEKIT_URL`.
+    /// The project's public API, `https://host`.
     pub url: String,
-    pub reconnect: wsdb::Reconnect,
+    pub reconnect: conn::Reconnect,
     /// Lease lifetime on the database clock, rounded up to whole seconds.
     pub lease_ttl: Duration,
     /// How often an open run renews its lease; must be nonzero.
@@ -137,57 +183,26 @@ pub struct StorageOptions {
 }
 
 impl StorageOptions {
-    pub fn new(url: impl Into<String>) -> Self {
+    /// `project_url` is the project's `LIVEKIT_URL`; its public API is derived from it.
+    pub fn new(project_url: &str) -> Self {
         Self {
-            url: url.into().trim_end_matches('/').to_owned(),
-            reconnect: wsdb::Reconnect::default(),
-            lease_ttl: statements::DEFAULT_LEASE_TTL,
-            renew_interval: statements::DEFAULT_RENEW_INTERVAL,
+            url: public_api_url(project_url),
+            reconnect: conn::Reconnect::default(),
+            lease_ttl: db::DEFAULT_LEASE_TTL,
+            renew_interval: db::DEFAULT_RENEW_INTERVAL,
         }
-    }
-
-    /// The public API of `LIVEKIT_URL`'s project.
-    pub fn from_env() -> Result<Self, StorageError> {
-        Ok(Self::new(agentstore::agentstore_url_from_env()?))
-    }
-
-    fn base(&self) -> Result<url::Url, StorageError> {
-        let u = url::Url::parse(&self.url)
-            .map_err(|e| StorageError::Invalid(format!("agentstore url {}: {e}", self.url)))?;
-        if !matches!(u.scheme(), "http" | "https") || u.host_str().is_none() {
-            return Err(StorageError::Invalid(format!(
-                "agentstore url {} is not http(s)",
-                self.url
-            )));
-        }
-        Ok(u)
-    }
-
-    /// The data plane, the base with `ws`/`wss` for `http`/`https`.
-    pub fn data_plane(&self) -> Result<String, StorageError> {
-        let u = self.base()?;
-        let scheme = if u.scheme() == "https" { "wss" } else { "ws" };
-        let rest = &self.url[u.scheme().len()..];
-        Ok(format!("{scheme}{rest}{}", agentstore::DB_PATH))
-    }
-
-    /// The streams root.
-    pub fn streams(&self) -> Result<String, StorageError> {
-        self.base()?;
-        Ok(format!("{}{}", self.url, agentstore::STREAMS_PATH))
     }
 }
 
-/// The root a worker holds: credentials and URLs. One [`ThreadDb`] per open thread, one
-/// [`Streams`], one [`Threads`] and one [`Databases`] shared by all of them.
+/// The root a worker holds: credentials and URLs. One [`Thread`] per open thread, one
+/// [`Streams`] and one `livekit-api` client for threads and databases, shared by all of them.
 #[derive(Clone)]
 pub struct Storage {
     opts: StorageOptions,
     data_plane: String,
     minter: TokenMinter,
     streams: Streams,
-    threads: Threads,
-    databases: Databases,
+    api: Arc<LiveKitApi>,
     /// The connections closed threads parked for their next turn.
     pool: Arc<DbPool>,
 }
@@ -211,28 +226,21 @@ impl Storage {
         if opts.renew_interval.is_zero() {
             return Err(StorageError::Invalid("renew_interval must be positive".into()));
         }
+        let url = &opts.url;
+        let data_plane = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
+            (Some(host), _) => format!("wss://{host}/v0/agentstore/db"),
+            (_, Some(host)) => format!("ws://{host}/v0/agentstore/db"),
+            _ => return Err(StorageError::Invalid(format!("agentstore url {url} is not http(s)"))),
+        };
         install_tls_provider();
         let http = reqwest::Client::builder()
             .use_rustls_tls()
             .build()
             .map_err(|e| StorageError::Invalid(format!("http client: {e}")))?;
-        let streams = Streams::new(http, opts.streams()?, minter.clone());
-        let threads = Threads::new(minter.threads(&opts.url));
-        let databases = Databases::new(minter.databases(&opts.url));
-        Ok(Self {
-            data_plane: opts.data_plane()?,
-            opts,
-            minter,
-            streams,
-            threads,
-            databases,
-            pool: Arc::default(),
-        })
-    }
-
-    /// [`StorageOptions::from_env`], `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
-    pub fn from_env() -> Result<Self, StorageError> {
-        Self::new(StorageOptions::from_env()?, TokenMinter::from_env()?)
+        let streams = Streams::new(http, format!("{url}/v0/agentstore/streams"), minter.clone());
+        let api =
+            Arc::new(LiveKitApi::with_api_key(&opts.url, minter.api_key(), &minter.api_secret));
+        Ok(Self { data_plane, opts, minter, streams, api, pool: Arc::default() })
     }
 
     pub fn options(&self) -> &StorageOptions {
@@ -243,9 +251,9 @@ impl Storage {
         &self.minter
     }
 
-    /// Dials one connection to `database_id` and reads its schema version (plan 13.4: one
-    /// connection per open thread, closed at run end with [`ThreadDb::close`]).
-    pub async fn open(&self, database_id: &str) -> Result<ThreadDb, StorageError> {
+    /// One connection to `database_id` (one per open thread, closed at run end with
+    /// [`Thread::close`]), its leases and waiter marks under `holder`.
+    pub async fn open(&self, database_id: &str, holder: &str) -> Result<Thread, StorageError> {
         let mut opts = ConnOptions::new(self.data_plane.clone(), database_id);
         opts.reconnect = self.opts.reconnect.clone();
         let minter = self.minter.clone();
@@ -257,20 +265,59 @@ impl Storage {
             || async move { Ok(Conn::dial(opts, minter).await?) },
         )
         .await
+        .map(|db| Thread::new(db, holder))
     }
 
     pub fn streams(&self) -> &Streams {
         &self.streams
     }
 
-    pub fn threads(&self) -> &Threads {
-        &self.threads
+    /// The threads service: map its errors with [`thread_error`].
+    pub fn threads(&self) -> &ThreadClient {
+        self.api.threads()
     }
 
-    /// The database lifecycle, for development and tests.
-    pub fn databases(&self) -> &Databases {
-        &self.databases
+    /// The database lifecycle, for development and tests: map its errors with
+    /// [`service_error`].
+    pub fn databases(&self) -> &DatabaseClient {
+        self.api.databases()
     }
+}
+
+/// `prefix` and twelve random hex digits, as the Python `utils.shortuuid`.
+pub fn shortuuid(prefix: &str) -> String {
+    use rand::RngCore;
+    use std::fmt::Write as _;
+    let mut bytes = [0u8; 6];
+    rand::rng().fill_bytes(&mut bytes);
+    let mut out = String::with_capacity(prefix.len() + 12);
+    out.push_str(prefix);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
+pub fn now_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// Unix seconds as a `Timestamp`, to the nearest nanosecond, so the float reads back unchanged.
+pub fn timestamp(t: f64) -> pbjson_types::Timestamp {
+    let seconds = t.floor();
+    let nanos = ((t - seconds) * 1e9).round() as i32;
+    if nanos >= 1_000_000_000 {
+        pbjson_types::Timestamp { seconds: seconds as i64 + 1, nanos: 0 }
+    } else {
+        pbjson_types::Timestamp { seconds: seconds as i64, nanos }
+    }
+}
+
+/// Unix milliseconds: what events are stamped with.
+pub fn now_ms() -> i64 {
+    (now_secs() * 1000.0) as i64
 }
 
 #[cfg(test)]
@@ -278,46 +325,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_data_plane_and_streams_sit_under_the_public_api() {
-        let o = StorageOptions::new("https://beta-api.staging.livekit.cloud/");
-        assert_eq!(
-            o.data_plane().unwrap(),
-            "wss://beta-api.staging.livekit.cloud/v0/agentstore/db"
-        );
-        assert_eq!(
-            o.streams().unwrap(),
-            "https://beta-api.staging.livekit.cloud/v0/agentstore/streams"
-        );
-        let o = StorageOptions::new("http://localhost:9000");
-        assert_eq!(o.data_plane().unwrap(), "ws://localhost:9000/v0/agentstore/db");
-        assert!(StorageOptions::new("ws://x").data_plane().is_err());
-        assert!(StorageOptions::new("ftp://x").streams().is_err());
+    fn the_data_plane_sits_under_the_project_public_api() {
+        let minter = || TokenMinter::new("devkey", "secret").unwrap();
+        let storage = |url: &str| Storage::new(StorageOptions::new(url), minter());
+        let staging = storage("wss://my-app.staging.livekit.cloud").unwrap();
+        assert_eq!(staging.opts.url, "https://beta-api.staging.livekit.cloud");
+        assert_eq!(staging.data_plane, "wss://beta-api.staging.livekit.cloud/v0/agentstore/db");
+        let local = storage("ws://localhost:9000/").unwrap();
+        assert_eq!(local.data_plane, "ws://localhost:9000/v0/agentstore/db");
+        assert!(storage("ftp://x").is_err());
+    }
+
+    /// The float reads back unchanged, and a rounding to a whole second carries.
+    #[test]
+    fn a_timestamp_keeps_the_seconds_float() {
+        let t = timestamp(1791760302.4035509);
+        assert_eq!(t.seconds as f64 + f64::from(t.nanos) / 1e9, 1791760302.4035509);
+        assert_eq!(timestamp(0.9999999999), pbjson_types::Timestamp { seconds: 1, nanos: 0 });
     }
 
     #[test]
-    fn lease_timing_defaults_and_invalid_durations() {
-        let defaults = StorageOptions::new("https://beta-api.staging.livekit.cloud");
-        assert_eq!(defaults.lease_ttl, statements::DEFAULT_LEASE_TTL);
-        assert_eq!(defaults.renew_interval, statements::DEFAULT_RENEW_INTERVAL);
-        for (ttl, interval) in [
-            (Duration::ZERO, defaults.renew_interval),
-            (Duration::MAX, defaults.renew_interval),
-            (defaults.lease_ttl, Duration::ZERO),
-        ] {
-            let mut opts = defaults.clone();
-            opts.lease_ttl = ttl;
-            opts.renew_interval = interval;
-            assert!(matches!(
-                Storage::new(opts, TokenMinter::new("devkey", "secret").unwrap()),
-                Err(StorageError::Invalid(_))
-            ));
+    fn wsdb_errors_map_to_storage_errors() {
+        assert!(matches!(StorageError::from(WsdbError::Timeout), StorageError::Unavailable(_)));
+        assert!(matches!(
+            StorageError::from(WsdbError::Disconnected),
+            StorageError::Unavailable(_)
+        ));
+        let nf =
+            WsdbError::Server { code: "not_found".into(), message: "database not found".into() };
+        assert!(matches!(StorageError::from(nf), StorageError::ThreadNotFound(_)));
+        let other = WsdbError::Server { code: "exec".into(), message: "constraint".into() };
+        assert!(matches!(StorageError::from(other), StorageError::Server { .. }));
+        for code in ["retry", "outcome_unknown"] {
+            let e =
+                StorageError::from(WsdbError::Server { code: code.into(), message: "m".into() });
+            assert!(e.retryable(), "{code}");
         }
-    }
-
-    #[test]
-    fn only_unavailable_is_retryable() {
-        assert!(StorageError::Unavailable("x".into()).retryable());
-        assert!(!StorageError::VersionConflict { lane: "l".into(), expected: 1 }.retryable());
-        assert!(!StorageError::ThreadNotFound("s".into()).retryable());
     }
 }

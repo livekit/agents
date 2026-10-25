@@ -39,7 +39,10 @@ fn refuse_python(src: &str) -> String {
 /// The `_core` classes' stub, for the `class` kind.
 fn generate_stub(src: &str) -> String {
     let decls = parse::file("test.rs", "lk_agents_abi", src).expect("the declaration parses");
-    stub::emit(&decls, &ir::Exposed::default()).expect("the stub generates").expect("there is a class").text
+    stub::emit(&decls, &ir::Exposed::default())
+        .expect("the stub generates")
+        .expect("there is a class")
+        .text
 }
 
 // --- typed dicts --------------------------------------------------------------------------------
@@ -49,7 +52,10 @@ fn generate_stub(src: &str) -> String {
 // a user-visible API change that fails only at the call that omits (or relies on) a key.
 #[test]
 fn a_typed_dict_says_total_false_only_when_declared() {
-    for (total, want) in [("total = \"False\", ", "class Opts(TypedDict, total=False):"), ("", "class Opts(TypedDict):")] {
+    for (total, want) in [
+        ("total = \"False\", ", "class Opts(TypedDict, total=False):"),
+        ("", "class Opts(TypedDict):"),
+    ] {
         let out = generate_python(&format!(
             "#[derive(Host)]\n#[python(typed_dict, {total}module = \"m\", name = \"Opts\")]\npub struct Opts {{ pub enabled: bool }}"
         ));
@@ -66,7 +72,11 @@ fn a_typed_dict_says_total_false_only_when_declared() {
 // a declaration in a path-less group (module "").
 #[test]
 fn a_declaration_key_that_cannot_be_honoured_is_refused_by_name() {
-    let opts = |attr: &str| format!("#[derive(Host)]\n#[python({attr}, module = \"m\", name = \"Opts\")]\npub struct Opts {{ pub a: bool, pub b: bool }}");
+    let opts = |attr: &str| {
+        format!(
+            "#[derive(Host)]\n#[python({attr}, module = \"m\", name = \"Opts\")]\npub struct Opts {{ pub a: bool, pub b: bool }}"
+        )
+    };
     let cases = [
         (opts("dataclass, total = \"False\""), &["dataclass", "total"][..]),
         (opts("typed_dict, total = \"false\""), &["not a Python bool", "\"false\""]),
@@ -325,7 +335,9 @@ fn exports_stub(src: &str) -> String {
 // `ast.parse` of `_core_classes.pyi` failed on it (2026-09-24). pyo3 already calls it `ref`.
 #[test]
 fn a_keyword_parameter_is_its_python_name_in_the_stub() {
-    let stub = exports_stub("#[host(export(kw_only))]\npub fn resolve_ref(root: &str, r#ref: &str) -> bool { true }");
+    let stub = exports_stub(
+        "#[host(export(kw_only))]\npub fn resolve_ref(root: &str, r#ref: &str) -> bool { true }",
+    );
     assert!(stub.contains("def resolve_ref(*, root: str, ref: str) -> bool: ..."), "{stub}");
     assert!(!stub.contains("r#"), "{stub}");
 }
@@ -434,7 +446,10 @@ fn order_places_a_host_field_between_declared_ones() {
         }
         "#,
     );
-    assert!(out.contains("    a: float = 1.0\n    next: Out | None = None\n    b: bool = False\n"), "{out}");
+    assert!(
+        out.contains("    a: float = 1.0\n    next: Out | None = None\n    b: bool = False\n"),
+        "{out}"
+    );
 }
 
 // Catches: a `__post_init__` hook calling `_bindings` in a module that never imported it -- a
@@ -450,7 +465,12 @@ fn a_post_init_hook_imports_the_bindings_module() {
         "#,
     );
     assert!(out.contains("from .. import _bindings\n"), "{out}");
-    assert!(out.contains("    def __post_init__(self) -> None:\n        _bindings.data_post_init(self)\n"), "{out}");
+    assert!(
+        out.contains(
+            "    def __post_init__(self) -> None:\n        _bindings.data_post_init(self)\n"
+        ),
+        "{out}"
+    );
 }
 
 // Catches: a `type_import` of an absolute module emitted as a runtime import. `openai` is not a
@@ -551,7 +571,10 @@ fn a_string_slice_const_in_a_group_is_a_literal_and_a_union() {
     let out = generate_python(GROUP);
     assert!(out.contains("DeepgramModels = Literal[\"deepgram/nova-3\", \"deepgram/nova-2\"]\n\"\"\"Doc of the literal.\"\"\"\n"), "{out}");
     assert!(out.contains("STTEncoding = Literal[\"pcm_s16le\"]\n"), "{out}");
-    assert!(out.contains("STTModels = DeepgramModels | STTEncoding | Literal[\"auto\"]\n"), "{out}");
+    assert!(
+        out.contains("STTModels = DeepgramModels | STTEncoding | Literal[\"auto\"]\n"),
+        "{out}"
+    );
     assert!(out.contains("OptsOrName = Opts | str\n"), "{out}");
     assert!(!out.contains("NotALiteral") && !out.contains("NOT_A_LITERAL"), "{out}");
 }
@@ -580,10 +603,23 @@ fn a_group_gives_its_structs_kind_module_path_and_total() {
 #[test]
 fn a_group_with_node_emits_the_typescript_twins() {
     let out = generate_node(GROUP);
-    assert!(out.contains("export type DeepgramModels =\n  | 'deepgram/nova-3'\n  | 'deepgram/nova-2';\n"), "{out}");
-    assert!(out.contains("export type STTModels =\n  | DeepgramModels\n  | STTEncoding\n  | 'auto';\n"), "{out}");
+    assert!(
+        out.contains(
+            "export type DeepgramModels =\n  | 'deepgram/nova-3'\n  | 'deepgram/nova-2';\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("export type STTModels =\n  | DeepgramModels\n  | STTEncoding\n  | 'auto';\n"),
+        "{out}"
+    );
     assert!(out.contains("export type OptsOrName =\n  | Opts\n  | string;\n"), "{out}");
-    assert!(out.contains("  interim?: boolean;\n  timeout?: number | null;\n  keyterm?: string | string[];\n"), "{out}");
+    assert!(
+        out.contains(
+            "  interim?: boolean;\n  timeout?: number | null;\n  keyterm?: string | string[];\n"
+        ),
+        "{out}"
+    );
 }
 
 // Catches: the Python-to-TypeScript rule guessing at a name it cannot see.
@@ -615,7 +651,12 @@ fn a_routed_union_generates_its_dispatch_table_keyed_by_the_wire_kind() {
     let out = generate_python(ROUTED);
     assert!(out.contains("from .events import TimeoutEvent\n"), "{out}");
     assert!(out.contains("PUBLIC_EVENTS: dict[str, tuple[type[Any], str]] = {\n    \"timeout\": (TimeoutEvent, \"user_timeout\"),\n}"), "{out}");
-    assert!(out.contains("IGNORED_EVENTS: frozenset[str] = frozenset(\n    {\n        \"done\",\n    }\n)"), "{out}");
+    assert!(
+        out.contains(
+            "IGNORED_EVENTS: frozenset[str] = frozenset(\n    {\n        \"done\",\n    }\n)"
+        ),
+        "{out}"
+    );
     let e = refuse_python(&ROUTED.replace("#[python(dispatch = \"dispatch\")]\n", ""));
     assert!(e.contains("names no #[python(dispatch"), "{e}");
     let e = refuse_python(&ROUTED.replace("#[python(ignored)]", "#[python(event)]"));
@@ -675,7 +716,9 @@ fn a_methods_stub_kind_is_its_signatures() {
 // `#[host(required)]` one.
 #[test]
 fn the_stub_defaults_an_option_where_the_expansion_does() {
-    let stub = exports_stub("#[host(export)]\npub fn f(a: Option<u8>, b: u8, c: Option<u8>, #[host(required)] d: Option<u8>, e: Option<u8>) {}");
+    let stub = exports_stub(
+        "#[host(export)]\npub fn f(a: Option<u8>, b: u8, c: Option<u8>, #[host(required)] d: Option<u8>, e: Option<u8>) {}",
+    );
     assert!(stub.contains("def f(a: int | None, b: int, c: int | None, d: int | None, e: int | None = None) -> None: ..."), "{stub}");
 }
 
@@ -703,8 +746,14 @@ fn record_level_defaults_reach_each_field_that_says_nothing() {
         "#,
     );
     assert!(out.contains("    provider: str\n"), "{out}");
-    assert!(out.contains("    tokens: int = 0\n") && out.contains("    duration: float = 0.0\n"), "{out}");
-    assert!(out.contains("    note: str | None = None\n") && out.contains("    requests: int = 1\n"), "{out}");
+    assert!(
+        out.contains("    tokens: int = 0\n") && out.contains("    duration: float = 0.0\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("    note: str | None = None\n") && out.contains("    requests: int = 1\n"),
+        "{out}"
+    );
     assert!(out.contains("    timestamp: float\n"), "{out}");
     let out = generate_stub(
         r#"
@@ -713,7 +762,10 @@ fn record_level_defaults_reach_each_field_that_says_nothing() {
         pub struct Thing { pub name: String, pub count: u32 }
         "#,
     );
-    assert!(out.contains("def __init__(self, *, name: str = \"\", count: int = 0) -> None"), "{out}");
+    assert!(
+        out.contains("def __init__(self, *, name: str = \"\", count: int = 0) -> None"),
+        "{out}"
+    );
 }
 
 // Catches: the file's `module`/`path` overriding a record's own, reaching a record with no Python
@@ -736,7 +788,10 @@ fn a_file_default_fills_module_and_path_where_the_record_says_nothing() {
     let decls = parse::file("test.rs", "lk_agents_abi", src).expect("the declaration parses");
     let py = |name: &str| {
         let d = decls.iter().find(|d| d.rust_name == name).expect("declared");
-        d.targets.iter().find(|t| t.host == ir::Host::Python).map(|t| (t.module.clone(), t.path.clone()))
+        d.targets
+            .iter()
+            .find(|t| t.host == ir::Host::Python)
+            .map(|t| (t.module.clone(), t.path.clone()))
     };
     assert_eq!(py("A"), Some(("events".into(), Some("livekit.agents.voice.events".into()))));
     assert_eq!(py("B"), Some(("other".into(), Some("livekit.agents.other".into()))));
@@ -750,20 +805,35 @@ fn a_file_default_fills_module_and_path_where_the_record_says_nothing() {
 // --- the session schema ------------------------------------------------------------------------
 
 // Catches: a `#[table]` record of `lk-agents-storage` that the generator cannot read (the derive's
-// own `#[table]` beside `#[python(..)]`), a `type` column that
-// loses its name, a JSONB column rendered as something narrower than `Any`, or one of the five row
-// models of plan 13.5 missing from the `storage` module.
+// own `#[table]` beside `#[python(..)]`), a `type` column that loses its name, a JSONB column
+// rendered as something narrower than `Any`, or one of the five row models of plan 13.5 missing.
 #[test]
 fn the_session_schema_renders_its_five_pydantic_row_models() {
     let src = include_str!("../../lk-agents-storage/src/schema.rs");
-    let decls = parse::file("schema.rs", "lk_agents_storage::schema", src).expect("the schema parses");
+    let decls =
+        parse::file("schema.rs", "lk_agents_storage::schema", src).expect("the schema parses");
     let outs = python::emit(&decls).expect("the schema generates");
-    let storage = outs.iter().find(|o| o.path.contains("storage")).expect("a storage module");
-    for model in ["ChatItemRow", "EventRow", "LaneRow", "InboxRow", "TaskRow"] {
-        assert!(storage.text.contains(&format!("class {model}(BaseModel):")), "{model} missing:\n{}", storage.text);
+    let module = |name: &str| {
+        let file = format!("{name}.py");
+        let found = outs.iter().find(|o| o.path.rsplit('/').next() == Some(file.as_str()));
+        found.unwrap_or_else(|| panic!("no {name} module"))
+    };
+    let (storage, run) = (module("storage"), module("storage_run"));
+    for (out, model) in [
+        (storage, "EventRow"),
+        (storage, "InboxRow"),
+        (run, "ItemRow"),
+        (run, "TaskRow"),
+        (run, "LaneRow"),
+    ] {
+        assert!(
+            out.text.contains(&format!("class {model}(BaseModel):")),
+            "{model} missing:\n{}",
+            out.text
+        );
     }
     assert!(storage.text.contains("    type: str"), "{}", storage.text);
-    assert!(storage.text.contains("    payload: Any"), "{}", storage.text);
-    assert!(storage.text.contains("    state: Any | None"), "{}", storage.text);
-    assert!(storage.text.contains("    lease_until: int"), "{}", storage.text);
+    assert!(run.text.contains("    payload: dict[str, Any]"), "{}", run.text);
+    assert!(run.text.contains("    state: Any | None"), "{}", run.text);
+    assert!(run.text.contains("    lease_until: int"), "{}", run.text);
 }

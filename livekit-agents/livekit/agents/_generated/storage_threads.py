@@ -1,7 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
-#     rust/crates/lk-agents-storage/src/threads.rs
+#     rust/crates/lk-agents-py/src/storage.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -49,7 +49,7 @@ class ThreadItem(BaseModel):
     seq: int
     """Position in the agent's history."""
     message_id: str
-    item: Any
+    item: dict[str, Any]
 
 
 class ThreadItemPage(BaseModel):

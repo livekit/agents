@@ -3,8 +3,11 @@
 
 use std::rc::Rc;
 
-use super::types::{from_js, n_of_field, napi_ty, to_js, ts_override, N};
-use super::{by_key, doc_line, host_name, js_name, key, push_unique, raw, summary, Cx, Dir, HAND_WRITTEN, LINKED};
+use super::types::{N, from_js, n_of_field, napi_ty, to_js, ts_override};
+use super::{
+    Cx, Dir, HAND_WRITTEN, LINKED, by_key, doc_line, host_name, js_name, key, push_unique, raw,
+    summary,
+};
 use crate::ir::*;
 use crate::node::{camel, field_ts};
 
@@ -48,9 +51,10 @@ pub(super) fn ident_path(r: &Rec) -> String {
 pub(super) fn rec_for(cx: &Cx, name: &str, dir: Dir) -> Result<Rc<Rec>, String> {
     let r = rec(cx, name)?;
     if dir == Dir::FromJs
-        && let Some(why) = &r.no_from_js {
-            return Err(format!("`{}` cannot be built from JS: {why}", r.decl));
-        }
+        && let Some(why) = &r.no_from_js
+    {
+        return Err(format!("`{}` cannot be built from JS: {why}", r.decl));
+    }
     Ok(r)
 }
 
@@ -74,7 +78,8 @@ pub(super) fn rec(cx: &Cx, name: &str) -> Result<Rc<Rec>, String> {
 /// `SOURCES` files whose host-only declarations stay unbound although their path is known: the rule
 /// below once keyed on the `host/` and `provider/` directories, which these files were not in.
 /// Binding them (`RawFunctionDescription`, and through it the `TaskGroup*` arms) is its own change.
-const UNBOUND: &[&str] = &["llm/chat_context", "llm/provider_format/tools", "telemetry/report", "worker/job"];
+const UNBOUND: &[&str] =
+    &["llm/chat_context", "llm/provider_format/tools", "telemetry/report", "worker/job"];
 
 /// A projection's `from`; a binding-target record is itself; a host-only declaration only where
 /// the path cannot be guessed wrong: its `SOURCES` path is its file's module, or the root.
@@ -161,9 +166,14 @@ fn plan_rec(cx: &Cx, name: &str) -> Result<Rec, String> {
                 let field_in = format!("v.{}", raw(&f.name));
                 let from = if optional && !is_option {
                     match (from_js(cx, &n, "v", &label), default_rust(f, &n)) {
-                        (Ok(e), Some(def)) => Some(format!("match {field_in} {{ Some(v) => {e}, None => {def} }}")),
+                        (Ok(e), Some(def)) => {
+                            Some(format!("match {field_in} {{ Some(v) => {e}, None => {def} }}"))
+                        }
                         (Ok(_), None) => {
-                            no_from_js.get_or_insert(format!("`{}`'s Python default has no Rust spelling here", f.rust_name));
+                            no_from_js.get_or_insert(format!(
+                                "`{}`'s Python default has no Rust spelling here",
+                                f.rust_name
+                            ));
                             None
                         }
                         (Err(why), _) => {
@@ -197,20 +207,33 @@ fn plan_rec(cx: &Cx, name: &str) -> Result<Rec, String> {
             let mut arms = Vec::new();
             for m in members {
                 let Ty::Declared(member) = &m.ty else {
-                    return Err(format!("arm `{}` is not a declared record ({:?})", m.rust_name, m.ty));
+                    return Err(format!(
+                        "arm `{}` is not a declared record ({:?})",
+                        m.rust_name, m.ty
+                    ));
                 };
-                let member = &by_key(cx.decls, member).map(key).or_else(|| cx.decls.iter().find(|d| &d.rust_name == member).map(key)).unwrap_or_else(|| member.clone());
+                let member = &by_key(cx.decls, member)
+                    .map(key)
+                    .or_else(|| cx.decls.iter().find(|d| &d.rust_name == member).map(key))
+                    .unwrap_or_else(|| member.clone());
                 let r = rec(cx, member).map_err(|e| format!("arm `{}`: {e}", m.rust_name))?;
                 let tag = match &r.kind {
                     RecKind::Struct { tag: Some((k, v)), .. } => Some((camel(k), v.clone())),
                     RecKind::Struct { tag: None, .. } => {
                         let md = by_key(cx.decls, member).expect("planned");
-                        md.fields().iter().find_map(|f| f.literal.as_ref().map(|l| (camel(&f.name), l.clone())))
+                        md.fields()
+                            .iter()
+                            .find_map(|f| f.literal.as_ref().map(|l| (camel(&f.name), l.clone())))
                     }
-                    RecKind::Union(_) => return Err(format!("arm `{}` is itself a union", m.rust_name)),
+                    RecKind::Union(_) => {
+                        return Err(format!("arm `{}` is itself a union", m.rust_name));
+                    }
                 };
                 if tag.is_none() {
-                    no_from_js.get_or_insert(format!("arm `{}` has no discriminant to dispatch on", m.rust_name));
+                    no_from_js.get_or_insert(format!(
+                        "arm `{}` has no discriminant to dispatch on",
+                        m.rust_name
+                    ));
                 }
                 if let Some(why) = &r.no_from_js {
                     no_from_js.get_or_insert(format!("arm `{}`: {why}", m.rust_name));
@@ -218,7 +241,8 @@ fn plan_rec(cx: &Cx, name: &str) -> Result<Rec, String> {
                 deps.push(member.clone());
                 arms.push(Arm { variant: m.rust_name.clone(), member: member.clone(), tag });
             }
-            let keys: Vec<&String> = arms.iter().filter_map(|a| a.tag.as_ref().map(|t| &t.0)).collect();
+            let keys: Vec<&String> =
+                arms.iter().filter_map(|a| a.tag.as_ref().map(|t| &t.0)).collect();
             if keys.windows(2).any(|w| w[0] != w[1]) {
                 no_from_js.get_or_insert("the arms discriminate on different keys".to_owned());
             }
@@ -231,7 +255,9 @@ fn plan_rec(cx: &Cx, name: &str) -> Result<Rec, String> {
 pub(super) fn collect_deps(n: &N, out: &mut Vec<String>) {
     match n {
         N::Record(r) | N::Union(r) => push_unique(out, r),
-        N::Option(i) | N::Vec(i) | N::Map(i) | N::Maybe(i) | N::Ref(i) | N::Iter(i) => collect_deps(i, out),
+        N::Option(i) | N::Vec(i) | N::Map(i) | N::Maybe(i) | N::Ref(i) | N::Iter(i) => {
+            collect_deps(i, out)
+        }
         N::Tuple(items) => items.iter().for_each(|i| collect_deps(i, out)),
         _ => {}
     }
@@ -247,7 +273,9 @@ fn default_rust(f: &Field, n: &N) -> Option<String> {
     if let Some(fac) = &f.default_factory {
         return match (fac.as_str(), n) {
             ("list" | "dict", _) => Some("Default::default()".to_owned()),
-            ("time.time", N::Float(_)) => Some("lk_agents_abi::epoch_secs(std::time::SystemTime::now())".to_owned()),
+            ("time.time", N::Float(_)) => {
+                Some("lk_agents_abi::epoch_secs(std::time::SystemTime::now())".to_owned())
+            }
             _ => None,
         };
     }
@@ -262,7 +290,10 @@ fn default_rust(f: &Field, n: &N) -> Option<String> {
         (s, N::Float(w)) if s.parse::<f64>().is_ok() => {
             Some(if s.contains('.') { format!("{s}_{w}") } else { format!("{s}.0_{w}") })
         }
-        (s, N::Duration) if s.parse::<f64>().is_ok() => Some(format!("std::time::Duration::from_secs_f64({})", if s.contains('.') { s.to_owned() } else { format!("{s}.0") })),
+        (s, N::Duration) if s.parse::<f64>().is_ok() => Some(format!(
+            "std::time::Duration::from_secs_f64({})",
+            if s.contains('.') { s.to_owned() } else { format!("{s}.0") }
+        )),
         _ => None,
     }
 }
@@ -278,7 +309,11 @@ pub(super) fn emit_rec(cx: &Cx, r: &Rec) -> String {
         RecKind::Struct { tag, fields } => {
             b.push_str(&format!("#[napi(object, js_name = \"{id}\")]\npub struct {id} {{\n"));
             if let Some((k, v)) = tag {
-                b.push_str(&format!("    #[napi(js_name = \"{}\", ts_type = \"'{v}'\")]\n    pub {}: String,\n", camel(k), tag_ident(k)));
+                b.push_str(&format!(
+                    "    #[napi(js_name = \"{}\", ts_type = \"'{v}'\")]\n    pub {}: String,\n",
+                    camel(k),
+                    tag_ident(k)
+                ));
             }
             for f in fields {
                 for l in summary(&f.doc) {
@@ -307,7 +342,8 @@ pub(super) fn emit_rec(cx: &Cx, r: &Rec) -> String {
             b.push_str("        }\n    }\n}\n");
             if r.no_from_js.is_none() {
                 // `From` when nothing can fail, else `TryFrom` with a `HostError`.
-                let fallible = fields.iter().any(|f| f.from_js.as_deref().is_some_and(|e| e.contains('?')));
+                let fallible =
+                    fields.iter().any(|f| f.from_js.as_deref().is_some_and(|e| e.contains('?')));
                 if fallible {
                     b.push_str(&format!(
                         "\nimpl TryFrom<{id}> for {core} {{\n    type Error = crate::host_error::JsError;\n\n    fn try_from(v: {id}) -> Result<Self, Self::Error> {{\n        Ok({core} {{\n"
@@ -316,13 +352,22 @@ pub(super) fn emit_rec(cx: &Cx, r: &Rec) -> String {
                     b.push_str(&format!("\nimpl From<{id}> for {core} {{\n    fn from(v: {id}) -> Self {{\n        {core} {{\n"));
                 }
                 for f in fields {
-                    b.push_str(&format!("            {}: {},\n", f.core_field, f.from_js.as_deref().expect("checked")));
+                    b.push_str(&format!(
+                        "            {}: {},\n",
+                        f.core_field,
+                        f.from_js.as_deref().expect("checked")
+                    ));
                 }
-                b.push_str(if fallible { "        })\n    }\n}\n" } else { "        }\n    }\n}\n" });
+                b.push_str(if fallible {
+                    "        })\n    }\n}\n"
+                } else {
+                    "        }\n    }\n}\n"
+                });
             }
         }
         RecKind::Union(arms) => {
-            let members: Vec<Rc<Rec>> = arms.iter().map(|a| rec(cx, &a.member).expect("planned")).collect();
+            let members: Vec<Rc<Rec>> =
+                arms.iter().map(|a| rec(cx, &a.member).expect("planned")).collect();
             b.push_str(&format!("pub enum {id} {{\n"));
             for (a, m) in arms.iter().zip(&members) {
                 b.push_str(&format!("    {}({}),\n", a.variant, m.ident));
@@ -343,7 +388,10 @@ pub(super) fn emit_rec(cx: &Cx, r: &Rec) -> String {
             b.push_str("        }\n    }\n}\n\n");
             b.push_str(&format!("impl From<&{core}> for {id} {{\n    fn from(v: &{core}) -> Self {{\n        match v {{\n"));
             for (a, m) in arms.iter().zip(&members) {
-                b.push_str(&format!("            {core}::{}(x) => {id}::{}({}::from(x)),\n", a.variant, a.variant, m.ident));
+                b.push_str(&format!(
+                    "            {core}::{}(x) => {id}::{}({}::from(x)),\n",
+                    a.variant, a.variant, m.ident
+                ));
             }
             b.push_str("        }\n    }\n}\n");
             if r.no_from_js.is_none() {
@@ -365,7 +413,10 @@ pub(super) fn emit_rec(cx: &Cx, r: &Rec) -> String {
                     "\nimpl TryFrom<{id}> for {core} {{\n    type Error = crate::host_error::JsError;\n\n    fn try_from(v: {id}) -> Result<Self, Self::Error> {{\n        Ok(match v {{\n"
                 ));
                 for a in arms {
-                    b.push_str(&format!("            {id}::{}(x) => {core}::{}(x.try_into()?),\n", a.variant, a.variant));
+                    b.push_str(&format!(
+                        "            {id}::{}(x) => {core}::{}(x.try_into()?),\n",
+                        a.variant, a.variant
+                    ));
                 }
                 b.push_str("        })\n    }\n}\n");
             }

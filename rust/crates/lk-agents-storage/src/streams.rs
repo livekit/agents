@@ -1,17 +1,10 @@
-//! The answer streams (plan 6) over agentstore's streams API, reached through public-api-server
-//! at `/v0/agentstore/streams` (agent-db's `/v1/streams`, docs/durable-streams-plan.md section 5):
+//! The answer streams at `/v0/agentstore/streams`: the A2A event frames a turn sent, as JSON
+//! records.
 //!
-//! * `POST /v0/agentstore/streams` creates with `{content_type, ttl_seconds, region}` and answers the `AST_`
-//!   id; the TTL is a fixed day, the stream's own, independent of the thread.
-//! * `POST .../streams/{id}` appends a body; `Stream-Closed: true` closes. Appends are queued per
-//!   stream and sent in order by a task; a failed append is logged and does not fail the turn,
-//!   since the live response already carried the frame.
-//! * `GET .../streams/{id}?offset=` reads from an offset (`-1` the beginning, else a token the
-//!   server minted, carried in `Stream-Next-Offset`); `&live=sse` follows the tail as
-//!   `text/event-stream` with `data` and `control` events, and rotates about every minute, so the
-//!   reader reconnects from its offset until the stream closes.
-//!
-//! Records are JSON: the A2A event frames the worker sent.
+//! * `POST /streams` creates one (`AST_..`, a day's TTL); `POST /streams/{id}` appends, and
+//!   `Stream-Closed: true` closes. Appends are queued and sent in order; a failed one is logged.
+//! * `GET /streams/{id}?offset=` reads from an offset (`-1` the beginning); `&live=sse` follows
+//!   the tail and rotates about every minute, so the reader reconnects from its offset.
 
 use lk_agents_host_derive::Host;
 use std::collections::HashMap;
@@ -22,10 +15,9 @@ use std::time::Duration;
 use futures_util::StreamExt as _;
 use tokio::sync::{mpsc, watch};
 
-use crate::StorageError;
-use crate::token::TokenMinter;
+use crate::conn::TokenMinter;
+use crate::{StorageError, http_ok};
 
-/// A stream lives a day (plan 6).
 pub const DEFAULT_TTL: Duration = Duration::from_secs(86_400);
 pub const CONTENT_TYPE: &str = "application/json";
 /// The beginning, as the server spells it.
@@ -92,7 +84,7 @@ impl Streams {
             .send()
             .await
             .map_err(transport)?;
-        let resp = ok(resp).await?;
+        let resp = http_ok(resp).await?;
         resp.json::<StreamInfo>().await.map_err(|e| StorageError::Decode(e.to_string()))
     }
 
@@ -148,7 +140,7 @@ impl Streams {
             .send()
             .await
             .map_err(transport)?;
-        let resp = ok(resp).await?;
+        let resp = http_ok(resp).await?;
         Ok(header(&resp, "Stream-Offset").unwrap_or_default())
     }
 
@@ -164,10 +156,9 @@ impl Streams {
             .send()
             .await
             .map_err(transport)?;
-        ok(resp).await.map(|_| ())
+        http_ok(resp).await.map(|_| ())
     }
 
-    /// Deletes the stream and its records.
     pub async fn delete(&self, stream_id: &str) -> Result<(), StorageError> {
         let resp = self
             .http
@@ -176,7 +167,7 @@ impl Streams {
             .send()
             .await
             .map_err(transport)?;
-        ok(resp).await.map(|_| ())
+        http_ok(resp).await.map(|_| ())
     }
 
     /// Reads from `from` (`None`: the beginning). With `live`, follows the tail until the stream
@@ -254,7 +245,7 @@ impl StreamReader {
             .send()
             .await
             .map_err(transport)?;
-        let resp = ok(resp).await?;
+        let resp = http_ok(resp).await?;
         if let Some(next) = header(&resp, "Stream-Next-Offset") {
             self.from = next;
         }
@@ -281,7 +272,7 @@ impl StreamReader {
                 .send()
                 .await
                 .map_err(transport)?;
-            let resp = ok(resp).await?;
+            let resp = http_ok(resp).await?;
             self.sse = Some(Sse { body: Box::pin(resp.bytes_stream()), buf: Vec::new() });
         }
         let sse = self.sse.as_mut().expect("opened above");
@@ -362,27 +353,6 @@ fn transport(e: reqwest::Error) -> StorageError {
     StorageError::Unavailable(e.to_string())
 }
 
-/// A non-2xx with the body read: 503 is retryable (`Unavailable`), 404 is `NotFound`.
-pub(crate) async fn ok(resp: reqwest::Response) -> Result<reqwest::Response, StorageError> {
-    let status = resp.status();
-    if status.is_success() {
-        return Ok(resp);
-    }
-    let message = resp.text().await.unwrap_or_default();
-    let message = serde_json::from_str::<serde_json::Value>(&message)
-        .ok()
-        .and_then(|v| {
-            v.get("message").or_else(|| v.get("msg")).and_then(|m| m.as_str()).map(str::to_owned)
-        })
-        .unwrap_or(message);
-    Err(match status.as_u16() {
-        404 => StorageError::NotFound(message),
-        502..=504 => StorageError::Unavailable(message),
-        401 | 403 => StorageError::Unauthorized(message),
-        s => StorageError::Http { status: s, message },
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,12 +371,5 @@ mod tests {
         assert!(d.contains("streamNextOffset"));
         assert!(take_event(&mut buf).is_none());
         assert_eq!(buf, b"ev");
-    }
-
-    #[test]
-    fn an_empty_body_is_no_records() {
-        assert!(split_records(b" ").unwrap().is_empty());
-        assert!(split_records(b"[]").unwrap().is_empty());
-        assert!(split_records(b"nope").is_err());
     }
 }

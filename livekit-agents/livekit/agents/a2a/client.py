@@ -253,7 +253,7 @@ class AgentClient:
 def _as_stored_message(message: str | StoredMessage) -> StoredMessage:
     """A text as a one-part user message; a dict copied, with the ids every message needs."""
     if isinstance(message, str):
-        msg: StoredMessage = {"role": "user", "parts": [{"kind": "text", "text": message}]}
+        msg: StoredMessage = {"role": "ROLE_USER", "parts": [{"text": message}]}
     else:
         msg = dict(message)
 

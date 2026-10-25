@@ -190,7 +190,7 @@ async def history_items(storage: AgentDBStorage, thread_id: str, lane: str) -> l
 async def waiter_of(storage: AgentDBStorage, thread_id: str, lane: str) -> str:
     db = await storage.open(thread_id)
     try:
-        row = await db.lane(lane)
+        row = await db.lane_info(lane)
     finally:
         db.close()
     return (row.waiter or "") if row is not None else ""
@@ -634,7 +634,7 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
     del stream
 
 
-async def test_tasks_cancel_ends_a_running_turn_at_its_boundary(
+async def test_tasks_cancel_ends_a_running_turn_at_its_checkpoint(
     agentdb_storage: AgentDBStorage,
 ) -> None:
     entered, release = asyncio.Event(), asyncio.Event()

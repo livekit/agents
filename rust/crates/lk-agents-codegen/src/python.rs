@@ -14,15 +14,19 @@ pub fn emit(decls: &[Decl]) -> Result<Vec<Out>, String> {
     let mut modules: Vec<String> = Vec::new();
     for d in decls {
         if let Some(t) = d.target(Host::Python)
-            && !modules.contains(&t.module) {
-                modules.push(t.module.clone());
-            }
+            && !modules.contains(&t.module)
+        {
+            modules.push(t.module.clone());
+        }
     }
     let mut out: Vec<Out> = modules.iter().map(|m| module(decls, m)).collect::<Result<_, _>>()?;
     for d in decls {
         if let Some(m) = &d.dispatch {
             if modules.contains(m) || out.iter().any(|o| o.path == format!("{m}.py")) {
-                return Err(format!("{}: dispatch module `{m}` is already a generated module", d.rust_name));
+                return Err(format!(
+                    "{}: dispatch module `{m}` is already a generated module",
+                    d.rust_name
+                ));
             }
             out.push(dispatch(decls, d, m)?);
         }
@@ -38,21 +42,27 @@ fn dispatch(decls: &[Decl], d: &Decl, module: &str) -> Result<Out, String> {
         return Err(format!("{}: #[python(dispatch)] is for a union", d.rust_name));
     };
     // The binding's rule (`decl_tag`): the emit twin's tag, else the declaration's other one.
-    let wire_of = |at: &str, name: &str, twin: Option<&String>| -> Result<(String, &Decl), String> {
-        let md = decls.iter().find(|x| x.rust_name == name).ok_or_else(|| format!("{at}: `{name}` is not declared"))?;
-        let t = md
-            .targets_for(Host::Binding)
-            .filter(|t| t.kind == Kind::Emit)
-            .find(|t| twin.is_none_or(|n| &t.name == n))
-            .ok_or_else(|| format!("{at}: `{name}` has no binding emit twin to read its wire kind from"))?;
-        let wire = t
-            .tag
-            .as_ref()
-            .or_else(|| md.targets.iter().find_map(|x| x.tag.as_ref()))
-            .map(|(_, v)| v.clone())
-            .ok_or_else(|| format!("{at}: `{name}` carries no tag"))?;
-        Ok((wire, md))
-    };
+    let wire_of =
+        |at: &str, name: &str, twin: Option<&String>| -> Result<(String, &Decl), String> {
+            let md = decls
+                .iter()
+                .find(|x| x.rust_name == name)
+                .ok_or_else(|| format!("{at}: `{name}` is not declared"))?;
+            let t = md
+                .targets_for(Host::Binding)
+                .filter(|t| t.kind == Kind::Emit)
+                .find(|t| twin.is_none_or(|n| &t.name == n))
+                .ok_or_else(|| {
+                    format!("{at}: `{name}` has no binding emit twin to read its wire kind from")
+                })?;
+            let wire = t
+                .tag
+                .as_ref()
+                .or_else(|| md.targets.iter().find_map(|x| x.tag.as_ref()))
+                .map(|(_, v)| v.clone())
+                .ok_or_else(|| format!("{at}: `{name}` carries no tag"))?;
+            Ok((wire, md))
+        };
     let mut events: Vec<(String, String, String, String)> = Vec::new();
     let mut ignored: Vec<String> = Vec::new();
     let mut kinds: Vec<String> = Vec::new();
@@ -69,7 +79,9 @@ fn dispatch(decls: &[Decl], d: &Decl, module: &str) -> Result<Out, String> {
             }
             (Some(kind), false) => (kind.clone(), None),
             (Some(_), true) => {
-                return Err(format!("{at}: `{name}` is declared, so its tag is its kind; drop #[python(kind)]"));
+                return Err(format!(
+                    "{at}: `{name}` is declared, so its tag is its kind; drop #[python(kind)]"
+                ));
             }
         };
         if !kinds.contains(&wire) {
@@ -82,11 +94,13 @@ fn dispatch(decls: &[Decl], d: &Decl, module: &str) -> Result<Out, String> {
         match route {
             Dispatch::Ignored => ignored.push(wire),
             Dispatch::Event => {
-                let py = md
-                    .targets_for(Host::Python)
-                    .find(|t| t.kind == Kind::Pydantic)
-                    .ok_or_else(|| format!("{at}: an event member needs a pydantic Python target"))?;
-                let public = py.tag.as_ref().map(|(_, v)| v.clone()).ok_or_else(|| format!("{at}: `{}` has no discriminant to emit it under", py.name))?;
+                let py =
+                    md.targets_for(Host::Python).find(|t| t.kind == Kind::Pydantic).ok_or_else(
+                        || format!("{at}: an event member needs a pydantic Python target"),
+                    )?;
+                let public = py.tag.as_ref().map(|(_, v)| v.clone()).ok_or_else(|| {
+                    format!("{at}: `{}` has no discriminant to emit it under", py.name)
+                })?;
                 events.push((wire, py.name.clone(), py.module.clone(), public));
             }
         }
@@ -236,7 +250,6 @@ fn modules(visible: &[&Decl]) -> String {
     )
 }
 
-
 /// Names the distinct Rust sources, first-seen order, so the file says where to edit.
 fn header(b: &mut String, mine: &[&Decl]) {
     let mut sources: Vec<&str> = Vec::new();
@@ -256,7 +269,6 @@ fn header(b: &mut String, mine: &[&Decl]) {
     );
     b.push_str("from __future__ import annotations\n\n");
 }
-
 
 /// Deterministic, grouped imports. Relative ones come from `#[python(from = "..")]`; a foreign
 /// type without one is assumed builtin.
@@ -340,7 +352,8 @@ fn imports(b: &mut String, all: &[Decl], mine: &[&Decl]) -> Result<(), String> {
                 let inline_union = all.iter().any(|o| {
                     &o.rust_name == n
                         && matches!(o.body, Body::Union(_))
-                        && o.target(Host::Python).is_some_and(|t| t.inline && t.discriminator.is_some())
+                        && o.target(Host::Python)
+                            .is_some_and(|t| t.inline && t.discriminator.is_some())
                 });
                 if inline_union {
                     needs(&mut stdlib, "typing", "Annotated");
@@ -383,20 +396,21 @@ fn imports(b: &mut String, all: &[Decl], mine: &[&Decl]) -> Result<(), String> {
                 let dotted_name =
                     factory.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
                 if let Some((head, _)) = factory.split_once('.').filter(|_| dotted_name)
-                    && !plain.contains(&head) {
-                        plain.push(match head {
-                            "time" => "time",
-                            "datetime" => "datetime",
-                            other => {
-                                return Err(format!(
-                                    "{}: default_factory `{factory}` names module `{other}`, which \
+                    && !plain.contains(&head)
+                {
+                    plain.push(match head {
+                        "time" => "time",
+                        "datetime" => "datetime",
+                        other => {
+                            return Err(format!(
+                                "{}: default_factory `{factory}` names module `{other}`, which \
                                      the emitter has no import for -- add it, or use a callable \
                                      imported with #[python(from = ..)]",
-                                    d.rust_name
-                                ));
-                            }
-                        });
-                    }
+                                d.rust_name
+                            ));
+                        }
+                    });
+                }
             }
             foreign_imports(&f.ty, &mut rel, &mut deferred, &mut stdlib, &mut third);
             // `import = ".."` is collected for every field, not only foreign annotations: a
@@ -408,13 +422,14 @@ fn imports(b: &mut String, all: &[Decl], mine: &[&Decl]) -> Result<(), String> {
                     let Some((module, names)) = group.split_once(':') else { continue };
                     // A `type_import` is always under `TYPE_CHECKING`: an absolute one may name a
                     // package the host does not depend on.
-                    let target: &mut Vec<(String, Vec<String>)> = if type_only || module.starts_with('.') {
-                        bucket
-                    } else if STDLIB.contains(&module) {
-                        continue; // already handled by the stdlib routing in `foreign_imports`
-                    } else {
-                        &mut third
-                    };
+                    let target: &mut Vec<(String, Vec<String>)> =
+                        if type_only || module.starts_with('.') {
+                            bucket
+                        } else if STDLIB.contains(&module) {
+                            continue; // already handled by the stdlib routing in `foreign_imports`
+                        } else {
+                            &mut third
+                        };
                     for name in names.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                         match target.iter_mut().find(|(m, _)| m == module) {
                             Some((_, have)) if have.iter().any(|n| n == name) => {}
@@ -606,22 +621,23 @@ fn foreign_imports(
                     let Some((module, names)) = group.split_once(':') else { continue };
                     // A non-dotted `import = ".."` module is absolute: route it by shape, not
                     // into the relative bucket (which would duplicate `typing_extensions`).
-                    let bucket: &mut Vec<(String, Vec<String>)> = if type_only || module.starts_with('.') {
-                        bucket
-                    } else if let Some(std) = STDLIB.iter().find(|m| **m == module) {
-                        // Stdlib joins its block (sharing `typing`'s bucket); unlisted modules are
-                        // third-party. There is no build-time way to ask Python.
-                        for name in names.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                            match stdlib.iter_mut().find(|(m, _)| m == std) {
-                                Some((_, n)) if n.iter().any(|x| x == name) => {}
-                                Some((_, n)) => n.push(name.to_owned()),
-                                None => stdlib.push((std, vec![name.to_owned()])),
+                    let bucket: &mut Vec<(String, Vec<String>)> =
+                        if type_only || module.starts_with('.') {
+                            bucket
+                        } else if let Some(std) = STDLIB.iter().find(|m| **m == module) {
+                            // Stdlib joins its block (sharing `typing`'s bucket); unlisted modules are
+                            // third-party. There is no build-time way to ask Python.
+                            for name in names.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                                match stdlib.iter_mut().find(|(m, _)| m == std) {
+                                    Some((_, n)) if n.iter().any(|x| x == name) => {}
+                                    Some((_, n)) => n.push(name.to_owned()),
+                                    None => stdlib.push((std, vec![name.to_owned()])),
+                                }
                             }
-                        }
-                        continue;
-                    } else {
-                        third
-                    };
+                            continue;
+                        } else {
+                            third
+                        };
                     for name in names.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                         match bucket.iter_mut().find(|(m, _)| m == module) {
                             Some((_, have)) if have.iter().any(|n| n == name) => {}
@@ -645,7 +661,6 @@ fn declared_deps(t: &Ty) -> Vec<String> {
         _ => Vec::new(),
     }
 }
-
 
 fn class(all: &[Decl], d: &Decl) -> Result<String, String> {
     let t = d.target(Host::Python).expect("filtered on this");
@@ -921,7 +936,10 @@ fn ordered<'a>(d: &'a Decl, t: &'a Target) -> Result<Vec<Slot<'a>>, String> {
     let mut out: Vec<Slot<'a>> = Vec::new();
     for name in &t.order {
         let Some(slot) = emitted.iter().find(|s| s.name() == name) else {
-            return Err(format!("{}: order names `{name}`, which is not an emitted field", d.rust_name));
+            return Err(format!(
+                "{}: order names `{name}`, which is not an emitted field",
+                d.rust_name
+            ));
         };
         if out.iter().any(|o| o.name() == name) {
             return Err(format!("{}: order names `{name}` twice", d.rust_name));
@@ -1038,7 +1056,7 @@ fn union_expr(
         return format!("(\n{pad}{}\n)", names.join(&format!("\n{pad}| ")));
     };
     let joined =
-        if pad.len() + flat.len() + 1 <= 100 { flat } else { names.join(&format!("\n{pad}| ")) };
+        if pad.len() + flat.len() < 100 { flat } else { names.join(&format!("\n{pad}| ")) };
     // The closing bracket is one level shallower than the members.
     let close = pad.strip_prefix("    ").unwrap_or("");
     format!("Annotated[\n{pad}{joined},\n{pad}Field(discriminator=\"{discriminator}\"),\n{close}]")

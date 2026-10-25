@@ -3,9 +3,9 @@
 What the web console beside it reads and writes, served on ``:7795`` from the environment of
 ``examples/README.md``: the project token it talks to the agents with, the examples
 it can talk to and whether each runs, the threads of a scope started on one of them, one
-thread's database as the console draws it (lanes, items, journal, inbox, tasks), a watch of
-it over SSE, its history and background tasks from the threads service, the thread's
-attributes, and the answer streams, relayed. Run with
+thread's database as the console draws it (lanes, items, journal, inbox, tasks) and where it
+answers for the SQL tab, a watch of it over SSE, its history and background tasks from the
+threads service, the thread's attributes, and the answer streams, relayed. Run with
 ``uv run python console_api.py``.
 """
 
@@ -17,7 +17,6 @@ import os
 import re
 import time
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +33,7 @@ from starlette.routing import Route
 from livekit.agents._generated.storage_threads import ThreadInfo, ThreadItem
 from livekit.agents.a2a import Credentials
 from livekit.agents.storage import AgentDBStorage, ThreadNotFound
+from livekit.agents.storage.protocol import payload_to_item
 
 SERVER_URL = re.sub(r"^ws", "http", os.environ["LIVEKIT_URL"]).rstrip("/")
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
@@ -87,17 +87,28 @@ async def database_dump(thread_id: str) -> dict[str, Any]:
         inbox: list[Any] = []
         tasks: list[Any] = []
         for lane in lanes:
-            items += await db.history(lane.lane)
+            history = await db.history(lane.lane)
+            items += [
+                {
+                    "lane": lane.lane,
+                    "seq": seq,
+                    "id": item.id,
+                    "message_id": item.message_id,
+                    "type": (payload := history_item(item.payload))["type"],
+                    "payload": payload,
+                }
+                for seq, item in enumerate(history, 1)
+            ]
             inbox += await db.inbox(lane.lane)
             tasks += await db.tasks(lane.lane, limit=200)
         events = await db.events(0, 1000)
         return {
-            "databaseId": db.database_id,
+            "databaseId": db.id,
             "tip": db.tip,
             "tables": ["lanes", "items", "events", "inbox", "tasks"],
             "schemaVersion": 1,
             "lanes": [dump_of(lane) for lane in lanes],
-            "items": [dump_of(item) for item in items],
+            "items": items,
             "events": [dump_of(event) for event in events],
             "inbox": [dump_of(entry) for entry in inbox],
             "tasks": [dump_of(task) for task in tasks],
@@ -189,30 +200,9 @@ async def create_session(request: Request) -> Response:
     return JSONResponse({"session": row(created)}, status_code=201)
 
 
-def snake(name: str) -> str:
-    return re.sub(r"[A-Z]", lambda m: "_" + m.group().lower(), name)
-
-
-def seconds(timestamp: str) -> float:
-    """An RFC 3339 UTC timestamp, as protobuf JSON writes it, in unix seconds."""
-    head, _, fraction = timestamp.removesuffix("Z").removesuffix("+00:00").partition(".")
-    whole = datetime.fromisoformat(head).replace(tzinfo=timezone.utc).timestamp()
-    return whole + float(f"0.{fraction or 0}")
-
-
-def history_item(entry: ThreadItem) -> dict[str, Any] | None:
-    """A ``ChatContext.ChatItem`` in protobuf JSON as the console's history item: the kind as
-    ``type``, snake_case fields, ``created_at`` in seconds."""
-    if not entry.item:
-        return None
-    kind, body = next(iter(entry.item.items()))
-    out = {snake(k): v for k, v in body.items()}
-    out["type"] = snake(kind)
-    if isinstance(out.get("role"), str):
-        out["role"] = out["role"].lower()
-    if isinstance(out.get("created_at"), str):
-        out["created_at"] = seconds(out["created_at"])
-    return out
+def history_item(payload: dict[str, Any]) -> dict[str, Any]:
+    """A ``ChatContext.ChatItem`` in protobuf JSON as the console's history item."""
+    return dump_of(payload_to_item(payload))
 
 
 async def history(request: Request) -> Response:
@@ -230,7 +220,7 @@ async def history(request: Request) -> Response:
                 break
     except ThreadNotFound:
         return JSONResponse({"error": f"unknown thread {thread_id}"}, status_code=404)
-    items = [item for entry in entries if (item := history_item(entry))]
+    items = [history_item(entry.item) for entry in entries if entry.item]
     return JSONResponse({"items": items})
 
 
@@ -252,6 +242,29 @@ async def session(request: Request) -> Response:
         return JSONResponse(await session_dump(thread_id))
     except ThreadNotFound:
         return JSONResponse({"error": f"unknown thread {thread_id}"}, status_code=404)
+
+
+async def db(request: Request) -> Response:
+    """Where the thread's database answers and a token for it, so the SQL tab dials wsdb itself."""
+    thread_id = request.path_params["id"]
+    try:
+        info = await storage.get_thread(thread_id)
+    except ThreadNotFound:
+        return JSONResponse({"error": f"unknown thread {thread_id}"}, status_code=404)
+    now = int(time.time())
+    claims = {
+        "iss": credentials.api_key,
+        "nbf": now,
+        "exp": now + TOKEN_TTL,
+        "agent": {"databaseAdmin": True},
+    }
+    return JSONResponse(
+        {
+            "url": re.sub(r"^http", "ws", storage.url) + "/v0/agentstore/db",
+            "databaseId": info.database_id,
+            "token": jwt.encode(claims, credentials.api_secret, algorithm="HS256"),
+        }
+    )
 
 
 async def attributes(request: Request) -> Response:
@@ -347,6 +360,7 @@ app = Starlette(
         Route("/api/sessions", create_session, methods=["POST"]),
         Route("/api/sessions/{id}", session),
         Route("/api/sessions/{id}/attributes", attributes, methods=["POST"]),
+        Route("/api/sessions/{id}/db", db),
         Route("/api/sessions/{id}/history", history),
         Route("/api/sessions/{id}/tasks", tasks),
         Route("/api/sessions/{id}/watch", watch),

@@ -140,7 +140,7 @@ async def test_a_task_awaited_in_text_holds_the_conversation_until_completed(
 
     db = await agentdb_storage.open(ctx_id)
     try:
-        lane = await db.lane("front-desk")
+        lane = await db.lane_info("front-desk")
         assert lane is not None and not lane.agent_stack
         history = [row.payload for row in await db.history("front-desk")]
     finally:

@@ -2,19 +2,39 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { A2AClient, interpret, uuid } from "./a2a";
-import { HttpError, createSession, getConfig, getGrant, getHistory, listSessions, nameSession } from "./api";
+import {
+  HttpError,
+  createSession,
+  getConfig,
+  getGrant,
+  getHistory,
+  listSessions,
+  nameSession,
+} from "./api";
 import { listExamples, sameExample, type Example } from "./examples";
 import { text } from "./format";
-import type { Delegation, Entry, Grant, SessionRow, ConsoleConfig } from "./types";
+import type {
+  Delegation,
+  Entry,
+  Grant,
+  SessionRow,
+  ConsoleConfig,
+  Timing,
+} from "./types";
 
 export const SESSION_KEY = "console.session";
 const PENDING_KEY = "console.pending";
 
 type Pending = { taskId: string; sessionId: string; text?: string };
 /** An entry before it is given its id: a distributive Omit, so each kind keeps its fields. */
-type Draft = Entry extends infer E ? (E extends Entry ? Omit<E, "id" | "at"> : never) : never;
+type Draft = Entry extends infer E
+  ? E extends Entry
+    ? Omit<E, "id" | "at">
+    : never
+  : never;
 
-const read = (name: string) => (typeof window === "undefined" ? null : window.localStorage.getItem(name));
+const read = (name: string) =>
+  typeof window === "undefined" ? null : window.localStorage.getItem(name);
 const write = (name: string, value: string | null) => {
   if (value === null) window.localStorage.removeItem(name);
   else window.localStorage.setItem(name, value);
@@ -32,27 +52,39 @@ export const DELEGATION_KEYS = {
 } as const;
 const DELEGATE_TOOL = "delegate";
 
-type HistoryItem = Record<string, unknown> & { extra?: Record<string, unknown> };
+type HistoryItem = Record<string, unknown> & {
+  extra?: Record<string, unknown>;
+};
 
 /** Whether a history item is a call that delegated: the delegate tool, or any tool that recorded the expert's task. */
-const delegated = (item: HistoryItem) => item.name === DELEGATE_TOOL || typeof item.extra?.[DELEGATION_KEYS.taskId] === "string";
+const delegated = (item: HistoryItem) =>
+  item.name === DELEGATE_TOOL ||
+  typeof item.extra?.[DELEGATION_KEYS.taskId] === "string";
 
 /** The call a frame belongs to: a non-blocking tool's later frames are `<call>_update_<n>` and `<call>_final` (voice/events.py). */
-export const baseCall = (callId: string) => callId.replace(/_(update_\d+|final)$/, "");
+export const baseCall = (callId: string) =>
+  callId.replace(/_(update_\d+|final)$/, "");
 
 /** The `lk.delegation.*` a frame recorded, without the ones it did not. */
-const recorded = (item: HistoryItem) => Object.fromEntries(Object.entries(delegationExtra(item)).filter(([, value]) => value));
+const recorded = (item: HistoryItem) =>
+  Object.fromEntries(
+    Object.entries(delegationExtra(item)).filter(([, value]) => value),
+  );
 
 /** The request as the call sent it: the delegate tool's `task`, else the arguments as `key value`. */
 function requestOf(args: unknown): string {
   try {
-    const parsed = typeof args === "string" ? (JSON.parse(args) as unknown) : args;
+    const parsed =
+      typeof args === "string" ? (JSON.parse(args) as unknown) : args;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const record = parsed as Record<string, unknown>;
       if (typeof record.request === "string") return record.request;
       if (typeof record.task === "string") return record.task;
       return Object.entries(record)
-        .map(([key, value]) => `${key} ${typeof value === "string" ? value : JSON.stringify(value)}`)
+        .map(
+          ([key, value]) =>
+            `${key} ${typeof value === "string" ? value : JSON.stringify(value)}`,
+        )
         .join(", ");
     }
   } catch {
@@ -62,10 +94,18 @@ function requestOf(args: unknown): string {
 }
 
 /** What a history item says about where its delegation went (`lk.delegation.*`). */
-function delegationExtra(item: HistoryItem): Pick<Delegation, "taskId" | "endpoint" | "transport" | "profile"> {
+function delegationExtra(
+  item: HistoryItem,
+): Pick<Delegation, "taskId" | "endpoint" | "transport" | "profile"> {
   const extra = item.extra ?? {};
-  const read = (key: string) => (typeof extra[key] === "string" ? (extra[key] as string) : undefined);
-  return { taskId: read(DELEGATION_KEYS.taskId), endpoint: read(DELEGATION_KEYS.endpoint), transport: read(DELEGATION_KEYS.transport), profile: read(DELEGATION_KEYS.profile) };
+  const read = (key: string) =>
+    typeof extra[key] === "string" ? (extra[key] as string) : undefined;
+  return {
+    taskId: read(DELEGATION_KEYS.taskId),
+    endpoint: read(DELEGATION_KEYS.endpoint),
+    transport: read(DELEGATION_KEYS.transport),
+    profile: read(DELEGATION_KEYS.profile),
+  };
 }
 
 /** What a tool said while it ran, as the framework words it to the model (voice/tool_executor.py UPDATE_TEMPLATE). */
@@ -81,7 +121,10 @@ const DISPATCH_NOTE = "Acknowledge in a few natural words";
  */
 export function toolUpdate(output: string): string | null | undefined {
   if (!UPDATE_PREFIX.test(output)) return undefined;
-  const message = output.replace(UPDATE_PREFIX, "").replace(UPDATE_TAIL, "").trim();
+  const message = output
+    .replace(UPDATE_PREFIX, "")
+    .replace(UPDATE_TAIL, "")
+    .trim();
   if (message.includes(DISPATCH_NOTE)) return null;
   return message;
 }
@@ -98,14 +141,19 @@ export function toolUpdate(output: string): string | null | undefined {
  * fault at all: it is dropped and the page starts a new conversation,
  * quietly, and `onSessionLost` lets the room close what it had opened for it.
  */
-export function useConversation({ onSessionLost }: { onSessionLost?: () => void } = {}) {
+export function useConversation({
+  onSessionLost,
+}: { onSessionLost?: () => void } = {}) {
   const [config, setConfig] = useState<ConsoleConfig | null>(null);
   const [grant, setGrant] = useState<Grant | null>(null);
   /** Every example the API knows, and the one this conversation talks to. */
   const [examples, setExamples] = useState<Example[]>([]);
   const [example, setExample] = useState<Example | null>(null);
   const grantRef = useRef<Grant | null>(null);
-  const [card, setCard] = useState<{ name: string; description: string } | null>(null);
+  const [card, setCard] = useState<{
+    name: string;
+    description: string;
+  } | null>(null);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -129,24 +177,31 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
   const firstUserText = useRef<string | null>(null);
   const append = useCallback((entry: Draft) => {
     const id = nextId();
-    if (entry.kind === "user" && firstUserText.current === null) firstUserText.current = entry.text;
+    if (entry.kind === "user" && firstUserText.current === null)
+      firstUserText.current = entry.text;
     setEntries((list) => [...list, { ...entry, id, at: Date.now() } as Entry]);
     return id;
   }, []);
   const patch = useCallback((id: string, update: (entry: Entry) => Entry) => {
-    setEntries((list) => list.map((entry) => (entry.id === id ? update(entry) : entry)));
+    setEntries((list) =>
+      list.map((entry) => (entry.id === id ? update(entry) : entry)),
+    );
   }, []);
 
-  const refreshSessions = useCallback(async (agent: string, endpoint: string, sub: string) => {
-    try {
-      const rows = await listSessions(agent, endpoint, sub);
-      for (const row of rows) if (row.attributes?.title) titled.current.add(row.sessionId);
-      setSessions(rows);
-      setRegistryDown(false);
-    } catch {
-      setRegistryDown(true);
-    }
-  }, []);
+  const refreshSessions = useCallback(
+    async (agent: string, endpoint: string, sub: string) => {
+      try {
+        const rows = await listSessions(agent, endpoint, sub);
+        for (const row of rows)
+          if (row.attributes?.title) titled.current.add(row.sessionId);
+        setSessions(rows);
+        setRegistryDown(false);
+      } catch {
+        setRegistryDown(true);
+      }
+    },
+    [],
+  );
 
   /**
    * Names a session after its first message, through the console's backend,
@@ -195,25 +250,50 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
         const { items } = await getHistory(id, grantRef.current?.agent ?? "");
         const restored: Entry[] = [];
         /* One card per delegating call: its frames (progress, then the answer) join it by call id. */
-        const byCall = new Map<string, Extract<Entry, { kind: "delegation" }>>();
+        const byCall = new Map<
+          string,
+          Extract<Entry, { kind: "delegation" }>
+        >();
         for (const item of items as HistoryItem[]) {
           const kind = item.type as string;
-          const at = typeof item.created_at === "number" ? item.created_at * 1000 : Date.now();
-          const callId = typeof item.call_id === "string" ? baseCall(item.call_id) : undefined;
+          const at =
+            typeof item.created_at === "number"
+              ? item.created_at * 1000
+              : Date.now();
+          const callId =
+            typeof item.call_id === "string"
+              ? baseCall(item.call_id)
+              : undefined;
           if (kind === "agent_handoff") {
             /* Which agent answers from here: the voice door hands the session to its
                voice agent for a call. */
-            const agent = typeof item.new_agent_id === "string" ? item.new_agent_id : "";
-            if (agent) restored.push({ kind: "status", id: nextId(), at, text: `${agent} answers from here` });
+            const agent =
+              typeof item.new_agent_id === "string" ? item.new_agent_id : "";
+            if (agent)
+              restored.push({
+                kind: "status",
+                id: nextId(),
+                at,
+                text: `${agent} answers from here`,
+              });
           } else if (kind === "message") {
             const role = item.role === "user" ? "user" : "agent";
             restored.push(
               role === "user"
                 ? { kind: "user", id: nextId(), at, text: text(item.content) }
-                : { kind: "agent", id: nextId(), at, text: text(item.content), interrupted: item.interrupted === true || undefined },
+                : {
+                    kind: "agent",
+                    id: nextId(),
+                    at,
+                    text: text(item.content),
+                    interrupted: item.interrupted === true || undefined,
+                  },
             );
           } else if (kind === "function_call") {
-            const args = typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments ?? {});
+            const args =
+              typeof item.arguments === "string"
+                ? item.arguments
+                : JSON.stringify(item.arguments ?? {});
             const known = callId ? byCall.get(callId) : undefined;
             /* A later frame: the final one carries the expert's task id. */
             if (known) Object.assign(known, recorded(item));
@@ -230,7 +310,14 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
               };
               if (callId) byCall.set(callId, entry);
               restored.push(entry);
-            } else restored.push({ kind: "tool", id: nextId(), at, name: String(item.name ?? ""), args });
+            } else
+              restored.push({
+                kind: "tool",
+                id: nextId(),
+                at,
+                name: String(item.name ?? ""),
+                args,
+              });
           } else if (kind === "function_call_output") {
             const output = text(item.output);
             const update = toolUpdate(output);
@@ -238,17 +325,33 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
             if (update === null) continue;
             const owner = callId ? byCall.get(callId) : undefined;
             if (owner) {
-              if (update !== undefined) owner.progress.push({ at, text: update });
+              if (update !== undefined)
+                owner.progress.push({ at, text: update });
               else {
                 owner.answer = output;
                 owner.failed = Boolean(item.is_error) || undefined;
                 owner.endedAt = at;
               }
-            } else if (update !== undefined) restored.push({ kind: "progress", id: nextId(), at, text: update });
-            else restored.push({ kind: "tool", id: nextId(), at, name: String(item.name ?? ""), output, isError: Boolean(item.is_error) });
+            } else if (update !== undefined)
+              restored.push({
+                kind: "progress",
+                id: nextId(),
+                at,
+                text: update,
+              });
+            else
+              restored.push({
+                kind: "tool",
+                id: nextId(),
+                at,
+                name: String(item.name ?? ""),
+                output,
+                isError: Boolean(item.is_error),
+              });
           }
         }
-        firstUserText.current = restored.find((entry) => entry.kind === "user")?.text ?? null;
+        firstUserText.current =
+          restored.find((entry) => entry.kind === "user")?.text ?? null;
         setEntries(restored);
       } catch (cause) {
         if (cause instanceof HttpError && cause.status === 404) {
@@ -261,7 +364,14 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
           }
           return;
         }
-        setEntries([{ kind: "status", id: nextId(), at: Date.now(), text: "The conversation's history could not be loaded." }]);
+        setEntries([
+          {
+            kind: "status",
+            id: nextId(),
+            at: Date.now(),
+            text: "The conversation's history could not be loaded.",
+          },
+        ]);
       } finally {
         if (sessionRef.current === id) setRestoring(false);
       }
@@ -280,23 +390,41 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
     if (!id) return;
     let items: HistoryItem[];
     try {
-      items = (await getHistory(id, grantRef.current?.agent ?? "")).items as HistoryItem[];
+      items = (await getHistory(id, grantRef.current?.agent ?? ""))
+        .items as HistoryItem[];
     } catch {
       return;
     }
-    const calls = new Map<string, { call: HistoryItem; extra: ReturnType<typeof recorded>; output?: HistoryItem }>();
+    const calls = new Map<
+      string,
+      {
+        call: HistoryItem;
+        extra: ReturnType<typeof recorded>;
+        output?: HistoryItem;
+      }
+    >();
     for (const item of items) {
       if (typeof item.call_id !== "string") continue;
       const callId = baseCall(item.call_id);
       const known = calls.get(callId);
       if (item.type === "function_call") {
         if (known) Object.assign(known.extra, recorded(item));
-        else if (delegated(item)) calls.set(callId, { call: item, extra: recorded(item) });
-      } else if (item.type === "function_call_output" && known && toolUpdate(text(item.output)) === undefined) known.output = item;
+        else if (delegated(item))
+          calls.set(callId, { call: item, extra: recorded(item) });
+      } else if (
+        item.type === "function_call_output" &&
+        known &&
+        toolUpdate(text(item.output)) === undefined
+      )
+        known.output = item;
     }
     if (!calls.size) return;
     setEntries((list) => {
-      const claimed = new Set(list.flatMap((entry) => (entry.kind === "delegation" && entry.callId ? [entry.callId] : [])));
+      const claimed = new Set(
+        list.flatMap((entry) =>
+          entry.kind === "delegation" && entry.callId ? [entry.callId] : [],
+        ),
+      );
       const unclaimed = [...calls].filter(([callId]) => !claimed.has(callId));
       let changed = false;
       const next = list.map((entry) => {
@@ -313,7 +441,10 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
           task: requestOf(call.arguments) || entry.task,
           answer: output ? text(output.output) : entry.answer,
           failed: output ? Boolean(output.is_error) || undefined : entry.failed,
-          endedAt: output && typeof output.created_at === "number" ? output.created_at * 1000 : (entry.endedAt ?? Date.now()),
+          endedAt:
+            output && typeof output.created_at === "number"
+              ? output.created_at * 1000
+              : (entry.endedAt ?? Date.now()),
         };
       });
       return changed ? next : list;
@@ -322,23 +453,46 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
 
   /** One turn's frames, from message/stream or tasks/resubscribe. */
   const consume = useCallback(
-    async (frames: AsyncGenerator<Parameters<typeof interpret>[0]>, userText?: string) => {
+    async (
+      frames: AsyncGenerator<Parameters<typeof interpret>[0]>,
+      userText?: string,
+    ) => {
       let reply: string | null = null;
       let artifactText = "";
       let taskId: string | null = null;
+      const sentAt = performance.now();
+      const timing: Timing = {};
+      const stamp = (mark: keyof Timing) => {
+        if (timing[mark] === undefined)
+          timing[mark] = Math.round(performance.now() - sentAt);
+      };
       setBusy(true);
       try {
         for await (const frame of frames) {
           for (const event of interpret(frame)) {
             switch (event.type) {
               case "error":
-                append({ kind: "status", text: `This turn failed: ${event.message}`, taskId: taskId ?? undefined, failed: true });
+                append({
+                  kind: "status",
+                  text: `This turn failed: ${event.message}`,
+                  taskId: taskId ?? undefined,
+                  failed: true,
+                });
                 return;
               case "task":
+                stamp("ack");
                 taskId = event.taskId;
                 /* The first message made the session. */
-                if (!sessionRef.current) setSession(event.contextId, { fresh: true });
-                write(PENDING_KEY, JSON.stringify({ taskId, sessionId: event.contextId, text: userText } satisfies Pending));
+                if (!sessionRef.current)
+                  setSession(event.contextId, { fresh: true });
+                write(
+                  PENDING_KEY,
+                  JSON.stringify({
+                    taskId,
+                    sessionId: event.contextId,
+                    text: userText,
+                  } satisfies Pending),
+                );
                 if (event.artifactText) artifactText = event.artifactText;
                 break;
               case "progress":
@@ -348,17 +502,53 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
                   for (let index = list.length - 1; index >= 0; index--) {
                     const entry = list[index];
                     if (entry.kind === "user") break;
-                    if (entry.kind === "delegation" && entry.answer === undefined)
-                      return list.map((candidate, at) => (at === index ? { ...entry, progress: [...entry.progress, { at: now, text: event.text }] } : candidate));
+                    if (
+                      entry.kind === "delegation" &&
+                      entry.answer === undefined
+                    )
+                      return list.map((candidate, at) =>
+                        at === index
+                          ? {
+                              ...entry,
+                              progress: [
+                                ...entry.progress,
+                                { at: now, text: event.text },
+                              ],
+                            }
+                          : candidate,
+                      );
                   }
-                  return [...list, { kind: "delegation", id: nextId(), at: now, name: "", task: userText ?? "", progress: [{ at: now, text: event.text }] }];
+                  return [
+                    ...list,
+                    {
+                      kind: "delegation",
+                      id: nextId(),
+                      at: now,
+                      name: "",
+                      task: userText ?? "",
+                      progress: [{ at: now, text: event.text }],
+                    },
+                  ];
                 });
                 break;
               case "artifact":
-                if (!reply) reply = append({ kind: "agent", text: "", taskId: taskId ?? undefined, streaming: true });
+                if (event.text) stamp("first");
+                if (!reply)
+                  reply = append({
+                    kind: "agent",
+                    text: "",
+                    taskId: taskId ?? undefined,
+                    streaming: true,
+                  });
                 patch(reply, (entry) =>
                   entry.kind === "agent"
-                    ? { ...entry, text: event.append ? entry.text + event.text : event.text || entry.text }
+                    ? {
+                        ...entry,
+                        text: event.append
+                          ? entry.text + event.text
+                          : event.text || entry.text,
+                        timing: { ...timing },
+                      }
                     : entry,
                 );
                 break;
@@ -368,11 +558,35 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
               case "ended": {
                 write(PENDING_KEY, null);
                 /* The turn's delegation, if any, is over with it. */
-                setEntries((list) => list.map((entry) => (entry.kind === "delegation" && entry.endedAt === undefined ? { ...entry, endedAt: Date.now() } : entry)));
-                if (artifactText && !reply) reply = append({ kind: "agent", text: artifactText, taskId: event.taskId });
-                if (reply) patch(reply, (entry) => ({ ...entry, streaming: false }) as Entry);
+                setEntries((list) =>
+                  list.map((entry) =>
+                    entry.kind === "delegation" && entry.endedAt === undefined
+                      ? { ...entry, endedAt: Date.now() }
+                      : entry,
+                  ),
+                );
+                stamp("done");
+                if (artifactText && !reply)
+                  reply = append({
+                    kind: "agent",
+                    text: artifactText,
+                    taskId: event.taskId,
+                  });
+                if (reply)
+                  patch(
+                    reply,
+                    (entry) =>
+                      ({
+                        ...entry,
+                        streaming: false,
+                        timing: { ...timing },
+                      }) as Entry,
+                  );
                 /* The plan's spelling of the A2A states: input-required, not INPUT_REQUIRED. */
-                const state = event.state.replace("TASK_STATE_", "").toLowerCase().replace(/_/g, "-");
+                const state = event.state
+                  .replace("TASK_STATE_", "")
+                  .toLowerCase()
+                  .replace(/_/g, "-");
                 const meta = Object.entries(event.meta)
                   .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
                   .join(" ");
@@ -382,7 +596,10 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
                   taskId: event.taskId,
                   state,
                   meta: meta || undefined,
-                  failed: state === "failed" || state === "canceled" || state === "rejected",
+                  failed:
+                    state === "failed" ||
+                    state === "canceled" ||
+                    state === "rejected",
                 });
                 break;
               }
@@ -406,7 +623,15 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
         void settleDelegations();
       }
     },
-    [append, grant, name, patch, refreshSessions, setSession, settleDelegations],
+    [
+      append,
+      grant,
+      name,
+      patch,
+      refreshSessions,
+      setSession,
+      settleDelegations,
+    ],
   );
 
   const send = useCallback(
@@ -420,12 +645,19 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
       };
       if (!sessionRef.current && grant) {
         /* The thread is the subject's: made here so the list shows it. */
-        const created = await createSession(grant.sub, grant.agent, grant.endpointName);
+        const created = await createSession(
+          grant.sub,
+          grant.agent,
+          grant.endpointName,
+        );
         setSession(created.sessionId, { fresh: true });
       }
       if (sessionRef.current) message.contextId = sessionRef.current;
       append({ kind: "user", text: textToSend });
-      await consume(a2a.stream("message/stream", { message }, sessionRef.current), textToSend);
+      await consume(
+        a2a.stream("message/stream", { message }, sessionRef.current),
+        textToSend,
+      );
     },
     [append, consume, grant, setSession],
   );
@@ -435,9 +667,17 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
       const a2a = client.current;
       if (!a2a) return;
       if (pending.text) append({ kind: "user", text: pending.text });
-      append({ kind: "status", text: "resuming the reply", taskId: pending.taskId });
+      append({
+        kind: "status",
+        text: "resuming the reply",
+        taskId: pending.taskId,
+      });
       await consume(
-        a2a.stream("tasks/resubscribe", { id: pending.taskId, contextId: pending.sessionId }, pending.sessionId),
+        a2a.stream(
+          "tasks/resubscribe",
+          { id: pending.taskId, contextId: pending.sessionId },
+          pending.sessionId,
+        ),
         pending.text,
       );
     },
@@ -448,17 +688,26 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
   const connect = useCallback(
     async (chosen: Example, sub: string) => {
       const minted = await getGrant(sub, chosen.agent, chosen.endpoint);
-      const cardResponse = await fetch(`${minted.endpoint}/.well-known/agent-card.json`, {
-        headers: { Authorization: `Bearer ${minted.token}` },
-      });
-      const agentCard = (await cardResponse.json()) as { name: string; description?: string };
+      const cardResponse = await fetch(
+        `${minted.endpoint}/.well-known/agent-card.json`,
+        {
+          headers: { Authorization: `Bearer ${minted.token}` },
+        },
+      );
+      const agentCard = (await cardResponse.json()) as {
+        name: string;
+        description?: string;
+      };
       grantRef.current = minted;
       setGrant(minted);
       setExample(chosen);
       setCard({
         name: agentCard.name,
         /* The card's one-line description, as a title: no trailing full stop. */
-        description: (agentCard.description ?? agentCard.name).replace(/\.\s*$/, ""),
+        description: (agentCard.description ?? agentCard.name).replace(
+          /\.\s*$/,
+          "",
+        ),
       });
       client.current = new A2AClient(minted.endpoint, minted.token);
       await refreshSessions(minted.agent, minted.endpointName, minted.sub);
@@ -492,7 +741,9 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
           /* restore() dropped a session that no longer exists. */
           if (sessionRef.current !== saved) return;
           const pendingRaw = read(PENDING_KEY);
-          const pending = pendingRaw ? (JSON.parse(pendingRaw) as Pending) : null;
+          const pending = pendingRaw
+            ? (JSON.parse(pendingRaw) as Pending)
+            : null;
           if (pending && pending.sessionId === saved) void resume(pending);
         }
       } catch {
@@ -563,7 +814,8 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
     (id: string) => {
       if (id === sessionRef.current) return;
       setSession(id, { fresh: !sessionRef.current });
-      if (grant) void refreshSessions(grant.agent, grant.endpointName, grant.sub);
+      if (grant)
+        void refreshSessions(grant.agent, grant.endpointName, grant.sub);
     },
     [grant, refreshSessions, setSession],
   );

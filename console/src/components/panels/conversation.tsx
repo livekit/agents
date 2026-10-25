@@ -1,7 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { RoomAudioRenderer, useLocalParticipant, useMediaDeviceSelect } from "@livekit/components-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import {
+  RoomAudioRenderer,
+  useLocalParticipant,
+  useMediaDeviceSelect,
+} from "@livekit/components-react";
 import { CopyId } from "../chrome/copy";
 import { Icon } from "../chrome/icon";
 import { Orb, type OrbState } from "../chrome/orb";
@@ -11,7 +22,7 @@ import { tail } from "@/lib/format";
 import { elapsed, type VoiceTurn, type useCall } from "@/lib/use-call";
 import { useStick } from "@/lib/use-stick";
 import type { TaskLog } from "@/lib/use-session";
-import type { Entry, TaskRow } from "@/lib/types";
+import type { Entry, TaskRow, Timing } from "@/lib/types";
 
 export type Call = ReturnType<typeof useCall>;
 
@@ -22,13 +33,21 @@ const SETTLE_SLACK_MS = 10_000;
 const DELEGATE = "delegate";
 
 /** What the mark and its line say, from the thread, the turn in flight and the call. */
-export function stateLine(entries: Entry[], busy: boolean, call: Pick<Call, "connected" | "connecting" | "agent">): { state: OrbState; line: string } {
-  if (call.connecting) return { state: "connecting", line: "Connecting the call" };
+export function stateLine(
+  entries: Entry[],
+  busy: boolean,
+  call: Pick<Call, "connected" | "connecting" | "agent">,
+): { state: OrbState; line: string } {
+  if (call.connecting)
+    return { state: "connecting", line: "Connecting the call" };
   if (call.connected) {
     const agent = call.agent.state;
-    if (agent === "speaking") return { state: "speaking", line: "On a call, speaking" };
-    if (agent === "thinking") return { state: "thinking", line: "On a call, thinking" };
-    if (agent === "listening") return { state: "listening", line: "On a call, listening" };
+    if (agent === "speaking")
+      return { state: "speaking", line: "On a call, speaking" };
+    if (agent === "thinking")
+      return { state: "thinking", line: "On a call, thinking" };
+    if (agent === "listening")
+      return { state: "listening", line: "On a call, listening" };
     return { state: "connecting", line: "On a call, waiting for the agent" };
   }
   if (busy) {
@@ -36,28 +55,46 @@ export function stateLine(entries: Entry[], busy: boolean, call: Pick<Call, "con
     for (let index = entries.length - 1; index >= 0; index--) {
       const entry = entries[index];
       if (entry.kind === "user") break;
-      if (entry.kind === "progress") return { state: "thinking", line: entry.text };
-      if (entry.kind === "delegation" && entry.progress.length) return { state: "thinking", line: entry.progress[entry.progress.length - 1].text };
+      if (entry.kind === "progress")
+        return { state: "thinking", line: entry.text };
+      if (entry.kind === "delegation" && entry.progress.length)
+        return {
+          state: "thinking",
+          line: entry.progress[entry.progress.length - 1].text,
+        };
     }
     return { state: "thinking", line: "Thinking" };
   }
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
     if (entry.kind === "user") break;
-    if (entry.kind === "status" && entry.state) return entry.state === "input-required" ? { state: "asked", line: "Asked you a question" } : { state: "listening", line: "Listening" };
+    if (entry.kind === "status" && entry.state)
+      return entry.state === "input-required"
+        ? { state: "asked", line: "Asked you a question" }
+        : { state: "listening", line: "Listening" };
   }
   return { state: "listening", line: "Listening" };
 }
 
 /** The thread: the text entries and the call's turns, in the order they happened. */
 function merge(entries: Entry[], voice: VoiceTurn[]): Entry[] {
-  const spoken: Entry[] = voice.map((turn) => ({ kind: turn.role, id: `v-${turn.id}`, at: turn.at, text: turn.text, voice: true }));
+  const spoken: Entry[] = voice.map((turn) => ({
+    kind: turn.role,
+    id: `v-${turn.id}`,
+    at: turn.at,
+    text: turn.text,
+    voice: true,
+  }));
   const sorted = [...entries, ...spoken].sort((a, b) => a.at - b.at);
   /* Nothing said is nothing shown; a handoff before anything was said divides nothing. */
-  const said = (entry: Entry) => (entry.kind === "user" && entry.text.trim() !== "") || (entry.kind === "agent" && (entry.text.trim() !== "" || entry.streaming === true));
+  const said = (entry: Entry) =>
+    (entry.kind === "user" && entry.text.trim() !== "") ||
+    (entry.kind === "agent" &&
+      (entry.text.trim() !== "" || entry.streaming === true));
   return sorted.filter((entry, index) => {
     if (entry.kind === "user" || entry.kind === "agent") return said(entry);
-    if (entry.kind === "status" && !entry.taskId && !entry.failed) return sorted.slice(0, index).some(said);
+    if (entry.kind === "status" && !entry.taskId && !entry.failed)
+      return sorted.slice(0, index).some(said);
     return true;
   });
 }
@@ -78,6 +115,7 @@ export function ConversationPanel({
   busy,
   ready,
   agentName,
+  title,
   note,
   command,
   call,
@@ -96,6 +134,8 @@ export function ConversationPanel({
   busy: boolean;
   ready: boolean;
   agentName: string;
+  /** The name as something to click, the example picker; else the plain name. */
+  title?: ReactNode;
   note: string;
   /** What to run, under the note, one click to copy: an example that is not running. */
   command?: string;
@@ -112,7 +152,10 @@ export function ConversationPanel({
   onOpenTask: (taskId: string) => void;
 }) {
   const { thread, taskOf } = useMemo(() => {
-    const cards = entries.filter((entry): entry is Extract<Entry, { kind: "delegation" }> => entry.kind === "delegation");
+    const cards = entries.filter(
+      (entry): entry is Extract<Entry, { kind: "delegation" }> =>
+        entry.kind === "delegation",
+    );
     const byId = new Map(expertTasks.map((task) => [task.task_id, task]));
     const taskOf = new Map<string, TaskRow>();
     const claimed = new Set<string>();
@@ -122,11 +165,18 @@ export function ConversationPanel({
         taskOf.set(card.id, byId.get(card.taskId)!);
         claimed.add(card.taskId);
       }
-    const seen = (task: TaskRow) => taskLog.get(task.task_id)?.firstSeen ?? task.updated_at * 1000;
+    const seen = (task: TaskRow) =>
+      taskLog.get(task.task_id)?.firstSeen ?? task.updated_at * 1000;
     /* A card the history has not settled yet (the turn in flight) takes the newest unclaimed task seen since it started. */
     for (const card of cards) {
       if (card.callId || card.taskId) continue;
-      const task = expertTasks.filter((candidate) => !claimed.has(candidate.task_id) && seen(candidate) >= card.at - SETTLE_SLACK_MS).sort((a, b) => b.seq - a.seq)[0];
+      const task = expertTasks
+        .filter(
+          (candidate) =>
+            !claimed.has(candidate.task_id) &&
+            seen(candidate) >= card.at - SETTLE_SLACK_MS,
+        )
+        .sort((a, b) => b.seq - a.seq)[0];
       if (!task) continue;
       taskOf.set(card.id, task);
       claimed.add(task.task_id);
@@ -142,37 +192,79 @@ export function ConversationPanel({
       taskId: task.task_id,
       progress: [],
     }));
-    for (const orphan of orphans) taskOf.set(orphan.id, byId.get((orphan as Extract<Entry, { kind: "delegation" }>).taskId!)!);
-    return { thread: merge([...entries, ...orphans].sort((a, b) => a.at - b.at), voice), taskOf };
+    for (const orphan of orphans)
+      taskOf.set(
+        orphan.id,
+        byId.get((orphan as Extract<Entry, { kind: "delegation" }>).taskId!)!,
+      );
+    return {
+      thread: merge(
+        [...entries, ...orphans].sort((a, b) => a.at - b.at),
+        voice,
+      ),
+      taskOf,
+    };
   }, [entries, expertTasks, taskLog, voice]);
   const empty = thread.length === 0 && !restoring;
   const { state, line } = stateLine(entries, busy, call);
   /* The dots at the foot of the thread: while a turn runs with nothing streaming and no card already breathing. */
   const lastEntry = entries[entries.length - 1];
-  const thinking = busy && !entries.some((entry) => entry.kind === "agent" && entry.streaming) && !(lastEntry?.kind === "delegation" && lastEntry.endedAt === undefined);
+  const thinking =
+    busy &&
+    !entries.some((entry) => entry.kind === "agent" && entry.streaming) &&
+    !(lastEntry?.kind === "delegation" && lastEntry.endedAt === undefined);
   const inCall = call.connected || call.connecting;
-  const agentTrack = call.connected && call.agent.isConnected ? call.agent.microphoneTrack : undefined;
+  const agentTrack =
+    call.connected && call.agent.isConnected
+      ? call.agent.microphoneTrack
+      : undefined;
   const last = thread[thread.length - 1];
-  const { attach, following, follow, onScroll } = useStick([thread.length, last?.kind === "agent" ? last.text : last?.kind === "delegation" ? last.progress.length : null, thinking]);
+  const { attach, following, follow, onScroll } = useStick([
+    thread.length,
+    last?.kind === "agent"
+      ? last.text
+      : last?.kind === "delegation"
+        ? last.progress.length
+        : null,
+    thinking,
+  ]);
   /* The mark: large on the empty stage, beside the name once there is a thread. */
   const size: "large" | "medium" = empty ? "large" : "medium";
   /* The line under the name: the note on the empty stage, else only while something happens. */
   const stated = empty ? Boolean(note) : inCall || state !== "listening";
 
   const head = (
-    <div key="head" className="mx-auto w-full max-w-measure px-4 pt-3 pb-2 data-[size=large]:pb-6" data-head="true" data-size={size}>
+    <div
+      key="head"
+      className="mx-auto w-full max-w-measure px-4 pt-3 pb-2 data-[size=large]:pb-6"
+      data-head="true"
+      data-size={size}
+    >
       <div
         className="grid items-center gap-x-3 gap-y-1 data-[size=large]:justify-items-center data-[size=large]:text-center data-[size=medium]:grid-cols-[auto_minmax(0,1fr)] data-[size=small]:grid-cols-[auto_minmax(0,1fr)]"
         data-size={size}
       >
-        <span className="flex items-center justify-center data-[stated=true]:row-span-2 data-[size=large]:h-mark-lg data-[size=medium]:h-mark" data-size={size} data-stated={stated}>
+        <span
+          className="flex items-center justify-center data-[stated=true]:row-span-2 data-[size=large]:h-mark-lg data-[size=medium]:h-mark"
+          data-size={size}
+          data-stated={stated}
+        >
           <Orb state={state} size={size} audioTrack={agentTrack} />
         </span>
-        <h1 className="m-0 truncate font-mono text-[length:var(--fs-title-sm)] text-ink data-[size=large]:mt-3 data-[size=large]:text-[length:var(--fs-title)] data-[stated=true]:self-end" data-size={size} data-stated={stated}>
-          {agentName || "Agent"}
+        <h1
+          className="group m-0 min-w-0 truncate font-mono data-[picker=true]:overflow-visible text-[length:var(--fs-title-sm)] text-ink data-[size=large]:mt-3 data-[size=large]:text-[length:var(--fs-title)] data-[stated=true]:self-end"
+          data-size={size}
+          data-stated={stated}
+          data-picker={Boolean(title)}
+        >
+          {title ?? (agentName || "Agent")}
         </h1>
         {!stated ? null : (
-          <p className="m-0 flex min-h-row-sm items-center gap-2 self-start text-state text-label" role="status" data-state-line={state}>
+          <p
+            className="m-0 flex min-h-row-sm items-center gap-2 self-start text-state text-label"
+            role="status"
+            data-state-line={state}
+          >
             <span className="truncate">{empty ? note : line}</span>
             {!empty && state === "thinking" ? <Dots /> : null}
           </p>
@@ -189,8 +281,15 @@ export function ConversationPanel({
   const composer = (
     <div key="composer" className="grid" data-empty={empty} data-foot="true">
       <div className="grid bg-room">
-        <div className="mx-auto grid w-full max-w-measure gap-2 px-4 py-3 data-[empty=true]:py-0" data-empty={empty}>
-          {call.connected ? <CallPill call={call} onHangUp={onHangUp} /> : call.connecting ? <ConnectingPill onHangUp={onHangUp} /> : null}
+        <div
+          className="mx-auto grid w-full max-w-measure gap-2 px-4 py-3 data-[empty=true]:py-0"
+          data-empty={empty}
+        >
+          {call.connected ? (
+            <CallPill call={call} onHangUp={onHangUp} />
+          ) : call.connecting ? (
+            <ConnectingPill onHangUp={onHangUp} />
+          ) : null}
           {call.error ? (
             <p className="m-0 px-3 text-failed-text" role="alert">
               The call could not start. Keep chatting in text.
@@ -198,8 +297,16 @@ export function ConversationPanel({
           ) : null}
           <Composer
             ready={ready}
-            placeholder={call.connected ? "Type during the call" : "Send a message"}
-            calling={call.connecting ? "connecting" : call.connected ? "connected" : "idle"}
+            placeholder={
+              call.connected ? "Type during the call" : "Send a message"
+            }
+            calling={
+              call.connecting
+                ? "connecting"
+                : call.connected
+                  ? "connected"
+                  : "idle"
+            }
             onSend={onSend}
             onCall={onCall}
           />
@@ -228,17 +335,39 @@ export function ConversationPanel({
         <>
           {head}
           <div key="thread" className="relative min-h-0 min-w-0">
-            <div ref={attach} className="h-full min-h-0 overflow-x-hidden overflow-y-auto px-4 py-3" data-log="conversation" onScroll={onScroll}>
+            <div
+              ref={attach}
+              className="h-full min-h-0 overflow-x-hidden overflow-y-auto px-4 py-3"
+              data-log="conversation"
+              onScroll={onScroll}
+            >
               <div className="mx-auto grid max-w-measure grid-cols-[minmax(0,1fr)] gap-[var(--pad-6)]">
                 {thread.map((entry) =>
                   entry.kind === "delegation" ? (
-                    <DelegationCard key={entry.id} entry={entry} task={taskOf.get(entry.id)} log={taskLog.get(taskOf.get(entry.id)?.task_id ?? "")} now={now} onOpenTask={onOpenTask} />
+                    <DelegationCard
+                      key={entry.id}
+                      entry={entry}
+                      task={taskOf.get(entry.id)}
+                      log={taskLog.get(taskOf.get(entry.id)?.task_id ?? "")}
+                      now={now}
+                      onOpenTask={onOpenTask}
+                    />
                   ) : (
-                    <EntryView key={entry.id} entry={entry} agentName={agentName} onOpenTask={onOpenTask} />
+                    <EntryView
+                      key={entry.id}
+                      entry={entry}
+                      agentName={agentName}
+                      onOpenTask={onOpenTask}
+                    />
                   ),
                 )}
                 {thinking ? (
-                  <div className="flex h-row items-center gap-2 px-3 text-label" role="status" aria-live="polite" data-thinking="true">
+                  <div
+                    className="flex h-row items-center gap-2 px-3 text-label"
+                    role="status"
+                    aria-live="polite"
+                    data-thinking="true"
+                  >
                     <Dots />
                     <span className="truncate">{line}</span>
                   </div>
@@ -246,7 +375,12 @@ export function ConversationPanel({
               </div>
             </div>
             {!following ? (
-              <button type="button" className="btn absolute bottom-3 left-1/2 -translate-x-1/2 shadow-[var(--shadow)]" onClick={follow} data-action="latest">
+              <button
+                type="button"
+                className="btn absolute bottom-3 left-1/2 -translate-x-1/2 shadow-[var(--shadow)]"
+                onClick={follow}
+                data-action="latest"
+              >
                 <Icon name="disclosureDown" size={12} />
                 Latest
               </button>
@@ -289,7 +423,11 @@ function Composer({
     onSend(text);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
       event.preventDefault();
       send();
     } else if (event.key === "Escape" && draft) {
@@ -320,7 +458,15 @@ function Composer({
       />
       <div className="flex items-center gap-3">
         {calling === "idle" ? (
-          <button type="button" className="btn btnQuiet composerBtn" disabled={!ready} title="Call the agent" aria-label="Call the agent" data-action="speech" onClick={onCall}>
+          <button
+            type="button"
+            className="btn btnQuiet composerBtn"
+            disabled={!ready}
+            title="Call the agent"
+            aria-label="Call the agent"
+            data-action="speech"
+            onClick={onCall}
+          >
             <Icon name="voice" size={16} />
           </button>
         ) : null}
@@ -366,14 +512,28 @@ function CallPill({ call, onHangUp }: { call: Call; onHangUp: () => void }) {
     return () => window.clearInterval(timer);
   }, []);
   const agent = call.agent;
-  const { devices, activeDeviceId } = useMediaDeviceSelect({ kind: "audioinput", room: call.session.room });
+  const { devices, activeDeviceId } = useMediaDeviceSelect({
+    kind: "audioinput",
+    room: call.session.room,
+  });
   const microphones = devices.filter((device) => device.deviceId !== "");
   return (
-    <div className="callPill" data-call-bar="true" data-agent-state={agent.state} data-live={agent.isConnected}>
+    <div
+      className="callPill"
+      data-call-bar="true"
+      data-agent-state={agent.state}
+      data-live={agent.isConnected}
+    >
       <RoomAudioRenderer />
       <span className="callDot" aria-hidden="true" />
       <span className="max-w-[var(--w-chip)] truncate">
-        {agent.isConnected ? (agent.state === "speaking" ? "The agent is speaking" : agent.state === "thinking" ? "Thinking" : "Listening") : "Waiting for the agent"}
+        {agent.isConnected
+          ? agent.state === "speaking"
+            ? "The agent is speaking"
+            : agent.state === "thinking"
+              ? "Thinking"
+              : "Listening"
+          : "Waiting for the agent"}
       </span>
       <span className="text-label tabular-nums" data-call-elapsed="true">
         {elapsed(call.startedAt, now)}
@@ -383,11 +543,21 @@ function CallPill({ call, onHangUp }: { call: Call; onHangUp: () => void }) {
           type="button"
           className="callBtn"
           aria-pressed={isMicrophoneEnabled}
-          title={isMicrophoneEnabled ? "Mute the microphone" : "Unmute the microphone"}
-          aria-label={isMicrophoneEnabled ? "Mute the microphone" : "Unmute the microphone"}
+          title={
+            isMicrophoneEnabled
+              ? "Mute the microphone"
+              : "Unmute the microphone"
+          }
+          aria-label={
+            isMicrophoneEnabled
+              ? "Mute the microphone"
+              : "Unmute the microphone"
+          }
           data-action="mic"
           data-muted={!isMicrophoneEnabled}
-          onClick={() => void localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)}
+          onClick={() =>
+            void localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)
+          }
         >
           <Icon name={isMicrophoneEnabled ? "mic" : "micOff"} size={14} />
         </button>
@@ -399,7 +569,11 @@ function CallPill({ call, onHangUp }: { call: Call; onHangUp: () => void }) {
               aria-label="Microphone"
               data-action="microphone"
               value={activeDeviceId}
-              onChange={(event) => void call.setMicrophone(event.target.value).catch(() => undefined)}
+              onChange={(event) =>
+                void call
+                  .setMicrophone(event.target.value)
+                  .catch(() => undefined)
+              }
             >
               {microphones.map((device) => (
                 <option key={device.deviceId} value={device.deviceId}>
@@ -410,7 +584,14 @@ function CallPill({ call, onHangUp }: { call: Call; onHangUp: () => void }) {
           </label>
         ) : null}
       </span>
-      <button type="button" className="callBtn callEnd" title="End the call" aria-label="End the call" data-action="hang-up" onClick={onHangUp}>
+      <button
+        type="button"
+        className="callBtn callEnd"
+        title="End the call"
+        aria-label="End the call"
+        data-action="hang-up"
+        onClick={onHangUp}
+      >
         <Icon name="phoneOff" size={14} />
       </button>
     </div>
@@ -423,7 +604,14 @@ function ConnectingPill({ onHangUp }: { onHangUp: () => void }) {
     <div className="callPill" data-call-bar="true" data-live="false">
       <Icon name="loader" size={14} className="animate-spin text-label" />
       <span className="text-label">Connecting</span>
-      <button type="button" className="callBtn callEnd" title="Cancel the call" aria-label="Cancel the call" data-action="hang-up" onClick={onHangUp}>
+      <button
+        type="button"
+        className="callBtn callEnd"
+        title="Cancel the call"
+        aria-label="Cancel the call"
+        data-action="hang-up"
+        onClick={onHangUp}
+      >
         <Icon name="phoneOff" size={14} />
       </button>
     </div>
@@ -431,13 +619,21 @@ function ConnectingPill({ onHangUp }: { onHangUp: () => void }) {
 }
 
 /** A tool's arguments as `key value` pairs, when they are a JSON object; the text as given otherwise. */
-function argumentPairs(args: string | undefined): { pairs: [string, string][] | null; raw: unknown } {
+function argumentPairs(args: string | undefined): {
+  pairs: [string, string][] | null;
+  raw: unknown;
+} {
   if (!args) return { pairs: [], raw: undefined };
   try {
     const parsed = JSON.parse(args) as unknown;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
       return {
-        pairs: Object.entries(parsed as Record<string, unknown>).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)]),
+        pairs: Object.entries(parsed as Record<string, unknown>).map(
+          ([key, value]) => [
+            key,
+            typeof value === "string" ? value : JSON.stringify(value),
+          ],
+        ),
         raw: parsed,
       };
     return { pairs: null, raw: parsed };
@@ -456,13 +652,27 @@ function argumentPairs(args: string | undefined): { pairs: [string, string][] | 
 function ToolRow({ entry }: { entry: Extract<Entry, { kind: "tool" }> }) {
   const isCall = entry.output === undefined;
   const delegate = entry.name === DELEGATE;
-  const { pairs, raw } = isCall ? argumentPairs(entry.args) : { pairs: null, raw: entry.output };
+  const { pairs, raw } = isCall
+    ? argumentPairs(entry.args)
+    : { pairs: null, raw: entry.output };
   const hasDocument = raw !== undefined && raw !== "";
-  const task = delegate && pairs ? pairs.find(([key]) => key === "task")?.[1] : undefined;
+  const task =
+    delegate && pairs ? pairs.find(([key]) => key === "task")?.[1] : undefined;
   return (
-    <article className="grid min-w-0 gap-1 px-3 text-label data-[tool=output]:pl-[calc(var(--pad-3)+var(--pad-5))]" data-entry="tool" data-tool={isCall ? "call" : "output"} data-delegate={delegate || undefined}>
+    <article
+      className="grid min-w-0 gap-1 px-3 text-label data-[tool=output]:pl-[calc(var(--pad-3)+var(--pad-5))]"
+      data-entry="tool"
+      data-tool={isCall ? "call" : "output"}
+      data-delegate={delegate || undefined}
+    >
       <div className="flex min-w-0 items-start gap-2">
-        {isCall ? <Icon name={delegate ? "lanes" : "tool"} size={12} className="mt-px flex-none" /> : null}
+        {isCall ? (
+          <Icon
+            name={delegate ? "lanes" : "tool"}
+            size={12}
+            className="mt-px flex-none"
+          />
+        ) : null}
         <span className="min-w-0 wrap-break-word whitespace-pre-wrap">
           {isCall ? (
             delegate ? (
@@ -483,17 +693,24 @@ function ToolRow({ entry }: { entry: Extract<Entry, { kind: "tool" }> }) {
                     ))}
                   </span>
                 ) : pairs === null ? (
-                  <span className="ml-2 font-mono text-micro">{entry.args}</span>
+                  <span className="ml-2 font-mono text-micro">
+                    {entry.args}
+                  </span>
                 ) : null}
               </>
             )
           ) : (
-            <span className={entry.isError ? "text-failed-text" : undefined}>{entry.output}</span>
+            <span className={entry.isError ? "text-failed-text" : undefined}>
+              {entry.output}
+            </span>
           )}
         </span>
       </div>
       {hasDocument ? (
-        <Disclosure label={isCall ? (delegate ? "details" : "arguments") : "output"} data={isCall ? (delegate ? "details" : "arguments") : "output"}>
+        <Disclosure
+          label={isCall ? (delegate ? "details" : "arguments") : "output"}
+          data={isCall ? (delegate ? "details" : "arguments") : "output"}
+        >
           <Document value={raw} />
         </Disclosure>
       ) : null}
@@ -501,11 +718,33 @@ function ToolRow({ entry }: { entry: Extract<Entry, { kind: "tool" }> }) {
   );
 }
 
-function EntryView({ entry, agentName, onOpenTask }: { entry: Entry; agentName: string; onOpenTask: (taskId: string) => void }) {
+/** The time from the send to the first piece of the reply, under it. */
+function TimingLine({ timing }: { timing: Timing }) {
+  if (timing.first === undefined) return null;
+  return (
+    <span className="px-3 font-mono text-micro text-label" data-timing="true">
+      {`ttft ${(timing.first / 1000).toFixed(2)}s`}
+    </span>
+  );
+}
+
+function EntryView({
+  entry,
+  agentName,
+  onOpenTask,
+}: {
+  entry: Entry;
+  agentName: string;
+  onOpenTask: (taskId: string) => void;
+}) {
   switch (entry.kind) {
     case "user":
       return (
-        <div className="grid min-w-0 justify-items-end gap-1" data-entry="user" data-voice={entry.voice || undefined}>
+        <div
+          className="grid min-w-0 justify-items-end gap-1"
+          data-entry="user"
+          data-voice={entry.voice || undefined}
+        >
           {entry.voice ? <VoiceMark /> : null}
           <div className="bubble" data-side="user">
             {entry.text}
@@ -527,18 +766,27 @@ function EntryView({ entry, agentName, onOpenTask }: { entry: Entry; agentName: 
             {entry.interrupted ? (
               <>
                 {"..."}
-                <span className="ml-2 align-baseline text-tag text-label" data-interrupted-tag="true">
+                <span
+                  className="ml-2 align-baseline text-tag text-label"
+                  data-interrupted-tag="true"
+                >
                   interrupted
                 </span>
               </>
             ) : null}
           </div>
+          {entry.timing ? <TimingLine timing={entry.timing} /> : null}
         </div>
       );
     case "question":
       return (
-        <div className="grid min-w-0 justify-items-start gap-1" data-entry="question">
-          <span className="px-3 window-label text-label">{agentName ? `${agentName.split(" / ")[0]} asks` : "asks"}</span>
+        <div
+          className="grid min-w-0 justify-items-start gap-1"
+          data-entry="question"
+        >
+          <span className="px-3 window-label text-label">
+            {agentName ? `${agentName.split(" / ")[0]} asks` : "asks"}
+          </span>
           <div className="bubble" data-side="agent">
             {entry.text}
           </div>
@@ -550,7 +798,10 @@ function EntryView({ entry, agentName, onOpenTask }: { entry: Entry; agentName: 
       return null;
     case "progress":
       return (
-        <p className="m-0 flex min-h-row-sm min-w-0 items-start gap-2 px-3 text-label italic" data-entry="progress">
+        <p
+          className="m-0 flex min-h-row-sm min-w-0 items-start gap-2 px-3 text-label italic"
+          data-entry="progress"
+        >
           <Icon name="activity" size={12} className="mt-px flex-none" />
           <span className="min-w-0 wrap-break-word">{entry.text}</span>
         </p>
@@ -558,7 +809,11 @@ function EntryView({ entry, agentName, onOpenTask }: { entry: Entry; agentName: 
     case "status":
       if (!entry.taskId && !entry.failed)
         return (
-          <p className="m-0 flex min-w-0 items-center gap-3 py-1 text-micro text-label before:h-px before:flex-1 before:bg-line-weak after:h-px after:flex-1 after:bg-line-weak" data-entry="status" data-divider="true">
+          <p
+            className="m-0 flex min-w-0 items-center gap-3 py-1 text-micro text-label before:h-px before:flex-1 before:bg-line-weak after:h-px after:flex-1 after:bg-line-weak"
+            data-entry="status"
+            data-divider="true"
+          >
             {entry.text}
           </p>
         );
@@ -571,7 +826,11 @@ function EntryView({ entry, agentName, onOpenTask }: { entry: Entry; agentName: 
         >
           {entry.taskId ? (
             <span className="inline-flex items-center">
-              <CopyId id={entry.taskId} short={tail(entry.taskId)} className={entry.failed ? "text-failed-text" : ""} />
+              <CopyId
+                id={entry.taskId}
+                short={tail(entry.taskId)}
+                className={entry.failed ? "text-failed-text" : ""}
+              />
               <button
                 type="button"
                 className="btn btnQuiet size-row-sm p-0"
@@ -585,7 +844,9 @@ function EntryView({ entry, agentName, onOpenTask }: { entry: Entry; agentName: 
             </span>
           ) : null}
           <span>{entry.text}</span>
-          {entry.meta ? <span className="wrap-break-word">{entry.meta}</span> : null}
+          {entry.meta ? (
+            <span className="wrap-break-word">{entry.meta}</span>
+          ) : null}
         </p>
       );
   }

@@ -48,12 +48,13 @@
      wrong wherever --accent was overridden. A filter has no such problem. */
   --accent-lift: brightness(1.16);
 
-  /* ---- Code: muted syntax, no green ------------------------------- */
-  --code-keyword: #7f9fc4;
-  --code-string: #c0a06a;
-  --code-number: #c08a8a;
-  --code-type: #a89ac4;
-  --code-comment: #7a7a7a;
+  /* ---- Code: syntax that reads on the sunken well, no green ------- */
+  --code-keyword: #8cb4ff;
+  --code-string: #e6c07b;
+  --code-number: #f09a7a;
+  --code-type: #c9a2f0;
+  --code-comment: #8a8a8a;
+  --code-gutter: #6a6a6a;
 
 
   /* ---- Status: attention only. Silence is good. No green. ---------- */

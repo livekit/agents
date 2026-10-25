@@ -66,14 +66,11 @@ const SOURCES: &[(&str, &str)] = &[
     // that crosses `_core`'s storage boundary: the statements' requests and results, the run
     // records, the turn's context and output, the threads' and the streams' records.
     ("rust/crates/lk-agents-storage/src/schema.rs", "lk_agents_storage::schema"),
-    ("rust/crates/lk-agents-storage/src/statements.rs", "lk_agents_storage::statements"),
+    ("rust/crates/lk-agents-storage/src/db.rs", "lk_agents_storage::db"),
     ("rust/crates/lk-agents-storage/src/streams.rs", "lk_agents_storage::streams"),
-    ("rust/crates/lk-agents-storage/src/run/records.rs", "lk_agents_storage::run"),
     ("rust/crates/lk-agents-storage/src/run.rs", "lk_agents_storage::run"),
-    ("rust/crates/lk-agents-storage/src/turn/message.rs", "lk_agents_storage::turn"),
-    ("rust/crates/lk-agents-storage/src/turn.rs", "lk_agents_storage::turn"),
-    ("rust/crates/lk-agents-storage/src/turn/host.rs", "lk_agents_storage::turn"),
-    ("rust/crates/lk-agents-storage/src/threads.rs", "lk_agents_storage::threads"),
+    ("rust/crates/lk-agents-a2a/src/lib.rs", "lk_agents_a2a"),
+    ("rust/crates/lk-agents-py/src/storage.rs", "lk_agents_py::storage"),
 ];
 
 /// `#[host(export ..)]` / `#[host(object ..)]` files, with the path the binding reaches their

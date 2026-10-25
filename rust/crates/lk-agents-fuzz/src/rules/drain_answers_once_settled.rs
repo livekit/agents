@@ -166,5 +166,6 @@ fn drain_while_speaking() -> Case {
             Input::Advance { ms: Millis(50) },
         ],
         schedule: 0,
+        random: vec![],
     }
 }

@@ -1,23 +1,7 @@
-//! The run: the unit of work a lane commits (plan 5.2, 13.8), over a [`ThreadDb`]. The port of
-//! `storage/run.py`; Python and Node keep the developer-facing surface and call this through
-//! `_core`.
-//!
-//! [`Thread`] is one thread's database, shared by every lane; [`Lane`] one registered agent's
-//! part of it; [`Lane::open`] is the `lane.run(...)` of 5.2:
-//!
-//! * it takes the lease and loads the lane in one acquire batch (3.3.2), waiting for a held lease
-//!   with backoff from 100 ms to 1 s, as the lane's `waiter` under `interrupt`; a `run_id` that
-//!   already committed yields a closed [`Run`] that writes nothing;
-//! * [`Run::commit`] writes history, state, agent stack, events, task rows and usage in one fenced
-//!   write, releasing the lease or renewing it when the runner continues;
-//! * [`Run::abandon`] writes `run_ended` with the outcome and releases, nothing else;
-//! * `exclusive: false` is the `concurrent` policy: no lease, append-only, no fence.
-//!
-//! History items and state cross as JSON: an [`Item`] is the stored payload of one chat item, in
-//! the extension's canonical form, with its id; the state is the host's snapshot.
-
-mod records;
-mod tasks;
+//! The run: the unit of work a lane commits. [`Thread`] is one thread's database, [`Lane`] one
+//! agent's part of it, and [`Lane::open`] takes it for one [`Run`], which ends with
+//! [`Run::commit`] (one fenced write) or [`Run::abandon`] (`run_ended` and the release).
+//! `exclusive: false` is the `concurrent` policy: no lease, append-only.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,111 +9,40 @@ use std::time::{Duration, Instant};
 
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
-pub use records::*;
-pub use tasks::{SubmitOptions, TaskPatch, Tasks, WaitOptions, agent_message, artifact};
-
-use crate::StorageError;
-use crate::schema::{ChatItemRow, EventRow, InboxRow};
-use crate::statements::{
-    AcquireRequest, CommitRequest, EventWrite, Fence, ItemWrite, Lease, LeaseAfter, Loaded,
-    RunEndedRequest, SubmittedTask, ThreadDb,
+use crate::db::{
+    Acquire, Commit, Committed, EventWrite, LaneDb, Lease, Loaded, TaskPage, TaskQuery, TaskWrite,
+    ThreadDb,
 };
+use crate::schema::{Ask, EventRow, RunEnded, RunEvent, RunStarted};
+pub use crate::schema::{ItemRow, LaneRow, TaskRow};
+pub use crate::timestamp;
+use crate::{StorageError, shortuuid};
+use livekit_protocol::agent::chat_context::ChatItem;
 
-/// Plan 3.3.2: a waiter that has not acquired after 60 s fails `lease-timeout`.
+/// a waiter that has not acquired after 60 s fails `lease-timeout`.
 pub const LEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
-pub const LEASE_POLL_MIN: Duration = Duration::from_millis(100);
-pub const LEASE_POLL_MAX: Duration = Duration::from_secs(1);
 
-/// `utils.shortuuid`: `prefix + uuid4().hex[:12]`, six random bytes as hex.
-pub fn shortuuid(prefix: &str) -> String {
-    use rand::RngCore;
-    use std::fmt::Write as _;
-    let mut bytes = [0u8; 6];
-    rand::rng().fill_bytes(&mut bytes);
-    let mut out = String::with_capacity(prefix.len() + 12);
-    out.push_str(prefix);
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
+/// Waiting for a lane another holder has: a pause from 100 ms, doubling up to 1 s, until a
+/// deadline.
+pub struct LanePoll {
+    deadline: Instant,
+    pause: Duration,
 }
 
-/// The clock a session stamps events with, in Unix milliseconds; tests inject one.
-pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
-
-fn wall_clock() -> Clock {
-    Arc::new(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as i64)
-    })
-}
-
-/// A JSON value in one canonical text: object keys sorted, no spaces. Only equality matters
-/// (`json.dumps(payload, sort_keys=True, separators=(",", ":"))` in the Python).
-pub fn canonical(v: &Value) -> String {
-    fn sorted(v: &Value) -> Value {
-        match v {
-            Value::Object(o) => {
-                let mut keys: Vec<&String> = o.keys().collect();
-                keys.sort();
-                Value::Object(keys.into_iter().map(|k| (k.clone(), sorted(&o[k]))).collect())
-            }
-            Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
-            other => other.clone(),
-        }
-    }
-    sorted(v).to_string()
-}
-
-/// One history item in memory: the chat item's JSON (`item_to_payload`, the form `chat_item`
-/// converts to and from the stored protobuf JSON), with the `id` the row carries. The payload's `type` is the item
-/// kind: `message`, `function_call`, `function_call_output`, `agent_handoff`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_run", config = "frozen=True")]
-pub struct Item {
-    pub id: String,
-    pub payload: Value,
-}
-
-impl Item {
-    /// From a payload that carries its own `id` and `type`, as every chat item does.
-    pub fn new(payload: Value) -> Result<Self, StorageError> {
-        let text =
-            |key: &str| {
-                payload.get(key).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| {
-                    StorageError::Invalid(format!("chat item without a string {key}"))
-                })
-            };
-        text("type")?;
-        Ok(Self { id: text("id")?, payload })
+impl LanePoll {
+    pub fn new(timeout: Duration) -> Self {
+        Self { deadline: Instant::now() + timeout, pause: Duration::from_millis(100) }
     }
 
-    pub fn from_row(row: ChatItemRow) -> Self {
-        Self { id: row.id, payload: row.payload }
-    }
-
-    /// The payload's `type`.
-    pub fn kind(&self) -> &str {
-        self.payload.get("type").and_then(Value::as_str).unwrap_or_default()
-    }
-
-    /// Instructions are rendered per run, never stored (plan 5.1), and `agent_config_update` is a
-    /// runtime note to the model, not a chat item of the extension.
-    fn stored(&self) -> bool {
-        if self.kind() == "agent_config_update" {
+    /// Pauses before the next attempt; `false`, at once, once the deadline passed.
+    pub async fn pause(&mut self) -> bool {
+        if Instant::now() >= self.deadline {
             return false;
         }
-        if self.kind() == "message"
-            && matches!(
-                self.payload.get("role").and_then(Value::as_str),
-                Some("system" | "developer")
-            )
-        {
-            return false;
-        }
+        tokio::time::sleep(self.pause).await;
+        self.pause = (self.pause * 2).min(Duration::from_secs(1));
         true
     }
 }
@@ -191,33 +104,24 @@ impl AgentStack {
     }
 
     pub fn to_json(&self) -> Value {
-        Value::Array(self.refs.iter().map(Ref::to_json).collect())
+        serde_json::to_value(&self.refs).unwrap_or_default()
     }
 }
 
-/// The lane's journal as this run sees it: what was loaded, and what it appends.
+/// What this run appends to the lane's journal.
+#[derive(Default)]
 pub struct EventLog {
-    pub loaded: Vec<EventRow>,
-    clock: Clock,
     new: Vec<EventWrite>,
 }
 
 impl EventLog {
-    pub fn new(loaded: Vec<EventRow>, clock: Clock) -> Self {
-        Self { loaded, clock, new: Vec::new() }
-    }
-
     /// Appends an event, stamped now.
     pub fn append(&mut self, r#type: &str, payload: Value) {
-        self.new.push(EventWrite { ts_ms: (self.clock)(), r#type: r#type.to_owned(), payload });
-    }
-
-    pub fn new_events(&self) -> &[EventWrite] {
-        &self.new
+        self.new.push(EventWrite::new(r#type, payload));
     }
 }
 
-/// Token usage of one run (`voice.run_result.RunUsage`); written as a `usage` event when the run
+/// Token usage of one run; written as a `usage` event when the run
 /// made a request or a tool call.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Host)]
 #[python(pydantic, module = "storage_run")]
@@ -232,13 +136,7 @@ pub struct RunUsage {
     pub tool_calls: i64,
 }
 
-impl RunUsage {
-    pub fn total_tokens(&self) -> i64 {
-        self.input_tokens + self.output_tokens
-    }
-}
-
-/// `lane.run(...)`'s arguments.
+/// How [`Lane::open`] takes the lane.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
     /// Idempotency key: a `run_id` that already committed yields a closed run.
@@ -247,18 +145,16 @@ pub struct RunOptions {
     pub task_id: String,
     /// `false` is the `concurrent` policy: no lease, append-only commit.
     pub exclusive: bool,
-    /// Poll for a held lease (100 ms to 1 s backoff, `wait_timeout`); `false` fails with
-    /// [`StorageError::LeaseHeld`] at once.
+    /// Wait for a lease another holder has; `false` fails with [`StorageError::LeaseHeld`].
     pub wait: bool,
-    /// Record this worker as the lane's `waiter` while it polls, so the holder yields at its next
-    /// boundary (plan 3.3.4).
+    /// Record this worker as the lane's `waiter` while it waits, so the holder yields.
     pub interrupt: bool,
     /// The request's channel, for the `run_started` event.
     pub channel: Option<String>,
     pub wait_timeout: Duration,
     /// The turn's `submitted` row, written in the acquire batch (`Run::submitted` tells whether
     /// it was new); `None` for a run with no row or one submitted earlier.
-    pub submit: Option<SubmittedTask>,
+    pub submit: Option<TaskWrite>,
     /// Take `task_id`'s row to `working` in the acquire batch (`Run::picked_up`).
     pub pickup: bool,
 }
@@ -279,130 +175,110 @@ impl RunOptions {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// the session
-// ---------------------------------------------------------------------------------------------
-
-struct SessionInner {
-    db: ThreadDb,
-    id: String,
-    holder: String,
-    clock: Clock,
-    after_commit: Option<Arc<dyn Fn() + Send + Sync>>,
-}
-
-/// The session's database, shared by every lane (plan 5.2 `SessionHandle`). Cheap to clone: one
+/// The thread's database, shared by every lane. Cheap to clone: one
 /// connection behind every clone.
 #[derive(Clone)]
 pub struct Thread {
-    inner: Arc<SessionInner>,
+    db: ThreadDb,
+    holder: Arc<str>,
 }
 
 impl Thread {
-    /// Over an open database. The lease's holder is this handle, not the process: the acquire lets a
-    /// holder re-take its own lease (plan 3.3.2), which is for the inbox receive and the drain that
-    /// follows it, never for a second request of the same worker on the same lane, which must wait
-    /// like a request from any other worker.
+    /// Over an open database. Leases carry this handle as their holder, so a second request of the
+    /// same worker on a lane waits like any other worker's.
     pub fn new(db: ThreadDb, holder: &str) -> Self {
-        let id = db.conn().database_id().to_owned();
-        Self {
-            inner: Arc::new(SessionInner {
-                db,
-                id,
-                holder: format!("{holder}/{}", shortuuid("")),
-                clock: wall_clock(),
-                after_commit: None,
-            }),
-        }
-    }
-
-    /// The clock events are stamped with; tests set one.
-    pub fn with_clock(mut self, clock: Clock) -> Self {
-        Arc::get_mut(&mut self.inner).expect("a fresh thread").clock = clock;
-        self
-    }
-
-    /// The backend's hook after every commit: the touch of the thread (plan 3.3.8).
-    pub fn with_after_commit(mut self, hook: Arc<dyn Fn() + Send + Sync>) -> Self {
-        Arc::get_mut(&mut self.inner).expect("a fresh thread").after_commit = Some(hook);
-        self
+        Self { db, holder: format!("{holder}/{}", shortuuid("")).into() }
     }
 
     /// The database id.
     pub fn id(&self) -> &str {
-        &self.inner.id
+        self.db.database_id()
     }
 
     /// `<worker holder>/<handle>`: what this handle's leases and waiter marks carry.
     pub fn holder(&self) -> &str {
-        &self.inner.holder
+        &self.holder
     }
 
-    pub fn now_ms(&self) -> i64 {
-        (self.inner.clock)()
-    }
-
-    pub fn db(&self) -> &ThreadDb {
-        &self.inner.db
-    }
-
-    fn after_commit(&self) {
-        if let Some(hook) = &self.inner.after_commit {
-            hook();
-        }
+    /// The durable commit sequence last observed on the connection.
+    pub fn tip(&self) -> i64 {
+        self.db.tip()
     }
 
     pub fn lane(&self, agent: &str) -> Lane {
-        Lane { thread: self.clone(), name: agent.to_owned() }
+        Lane { holder: self.holder.clone(), db: self.db.lane(agent) }
     }
 
     /// The journal, every lane, after the event `after_id`.
     pub async fn events(&self, after_id: i64, limit: i64) -> Result<Vec<EventRow>, StorageError> {
-        self.inner.db.events(after_id, limit).await
+        self.db.events(after_id, limit).await
     }
 
-    pub async fn lanes(&self) -> Result<Vec<LaneInfo>, StorageError> {
-        self.inner.db.lanes().await?.into_iter().map(LaneInfo::from_row).collect()
+    /// One task, whichever lane it is on.
+    pub async fn task(&self, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
+        self.db.task(task_id).await
+    }
+
+    /// One page of every lane's tasks, last updated first (A2A `tasks/list`).
+    pub async fn list_tasks(&self, q: &TaskQuery) -> Result<TaskPage, StorageError> {
+        self.db.list_tasks(q).await
+    }
+
+    pub async fn lanes(&self) -> Result<Vec<LaneRow>, StorageError> {
+        self.db.lanes().await
     }
 
     pub fn close(&self) {
-        self.inner.db.close();
+        self.db.close();
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// the lane
-// ---------------------------------------------------------------------------------------------
-
-/// One registered agent's part of a session (plan 5.2 `LaneHandle`).
+/// One registered agent's part of a thread.
 #[derive(Clone)]
 pub struct Lane {
-    thread: Thread,
-    name: String,
+    holder: Arc<str>,
+    db: LaneDb,
 }
 
 impl Lane {
     pub fn name(&self) -> &str {
-        &self.name
+        self.db.name()
     }
 
-    pub fn thread(&self) -> &Thread {
-        &self.thread
+    pub fn holder(&self) -> &str {
+        &self.holder
     }
 
-    fn db(&self) -> &ThreadDb {
-        self.thread.db()
+    pub fn db(&self) -> &LaneDb {
+        &self.db
     }
 
     /// The whole history; how another lane reads it.
-    pub async fn history(&self) -> Result<Vec<Item>, StorageError> {
-        Ok(self.db().history(&self.name).await?.into_iter().map(Item::from_row).collect())
+    pub async fn history(&self) -> Result<Vec<ItemRow>, StorageError> {
+        self.db.history().await
+    }
+
+    pub async fn info(&self) -> Result<Option<LaneRow>, StorageError> {
+        self.db.info().await
+    }
+
+    pub async fn task(&self, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
+        self.db.task(task_id).await
+    }
+
+    /// The newest task rows, of one state when given.
+    pub async fn tasks(
+        &self,
+        status: Option<TaskState>,
+        limit: i64,
+    ) -> Result<Vec<TaskRow>, StorageError> {
+        self.db.tasks(status, limit).await
     }
 
     /// The last `limit` runs, newest first; the `submitted` insert before a lease is
     /// bookkeeping, not a turn.
     pub async fn runs(&self, limit: usize) -> Result<Vec<RunSummary>, StorageError> {
-        let rows = self.db().lane_events(&self.name, 0).await?;
+        let rows = self.db.events(0).await?;
         let mut runs: Vec<RunSummary> = RunSummary::from_events(&rows)
             .into_iter()
             .filter(|r| r.channel.as_deref() != Some(SUBMIT_CHANNEL))
@@ -413,206 +289,165 @@ impl Lane {
         Ok(runs)
     }
 
-    pub async fn tasks(
+    /// `tasks/cancel`: the row `canceled` with `metadata` merged in; a running turn yields at its
+    /// next checkpoint. `None` when the task is not the lane's.
+    pub async fn cancel_task(
         &self,
-        status: Option<TaskState>,
-        limit: i64,
-    ) -> Result<Vec<TaskRecord>, StorageError> {
-        let rows = self.db().tasks(&self.name, status.map(TaskState::as_str), limit).await?;
-        Ok(rows.into_iter().map(TaskRecord::from_row).collect())
+        task_id: &str,
+        metadata: Map<String, Value>,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        let Some(row) = self.db.task(task_id).await? else { return Ok(None) };
+        let mut data = row.data;
+        data.metadata.extend(metadata);
+        let run_id = format!("cancel_{task_id}_{}", shortuuid(""));
+        let commit = Commit {
+            run_id,
+            tasks: vec![TaskWrite {
+                task_id: row.task_id,
+                status: TaskState::Canceled,
+                message_id: row.message_id,
+                name: row.name,
+                data,
+                ask: row.ask,
+            }],
+            events: vec![EventWrite::run_started(&RunStarted {
+                task_id: Some(task_id.to_owned()),
+                channel: Some("cancel".into()),
+                ..RunStarted::default()
+            })],
+            run_ended: EventWrite::run_ended(&RunEnded {
+                outcome: RunOutcome::Completed,
+                reason: None,
+            }),
+            read_task: Some(task_id.to_owned()),
+            ..Commit::default()
+        };
+        Ok(self.db.append(&commit).await?.task)
     }
 
-    pub async fn task(&self, task_id: &str) -> Result<Option<TaskRecord>, StorageError> {
-        Ok(self.tasks(None, 500).await?.into_iter().find(|r| r.id == task_id))
-    }
-
-    pub async fn inbox_pending(&self) -> Result<Vec<InboxRow>, StorageError> {
-        self.db().inbox_pending(&self.name).await
-    }
-
-    pub async fn info(&self) -> Result<Option<LaneInfo>, StorageError> {
-        self.db().lane(&self.name).await?.map(LaneInfo::from_row).transpose()
-    }
-
-    /// Takes the lane (plan 3.3) and loads it. The run commits with [`Run::commit`] and ends by
+    /// Takes the lane and loads it. The run commits with [`Run::commit`] and ends by
     /// error with [`Run::abandon`]; a run dropped without either stops renewing and lets its lease
     /// lapse, which the next acquire sees as a `run_started` without a `run_ended`.
     pub async fn open(&self, opts: RunOptions) -> Result<Run, StorageError> {
-        if opts.exclusive { self.acquire(opts).await } else { self.open_concurrent(opts).await }
+        let loaded = match opts.exclusive {
+            true => Some(self.acquire(&opts).await?),
+            false => None,
+        };
+        let (lease, closed, lane_row, items, tasks, submitted, picked_up) = match loaded {
+            Some(l) => {
+                if !l.already_committed {
+                    l.lease.keep_alive();
+                }
+                let tasks = Tasks::loaded(self.db.clone(), l.tasks);
+                let lane = Some(l.lane);
+                (Some(l.lease), l.already_committed, lane, l.items, tasks, l.submitted, l.picked_up)
+            }
+            None => {
+                let items = self.db.history().await?;
+                (None, false, None, items, Tasks::new(self.db.clone()), None, false)
+            }
+        };
+        let state = lane_row.as_ref().and_then(|l| l.state.clone());
+        Ok(Run {
+            db: self.db.clone(),
+            lease,
+            holder: self.holder.to_string(),
+            run_id: opts.run_id,
+            task_id: opts.task_id,
+            channel: opts.channel,
+            closed,
+            loaded: items.iter().map(|i| (i.id.clone(), i.payload.clone())).collect(),
+            history: items,
+            loaded_state: state.clone(),
+            state,
+            agents: AgentStack::new(lane_row.and_then(|l| l.agent_stack).unwrap_or_default()),
+            events: EventLog::default(),
+            tasks,
+            submitted,
+            picked_up,
+            usage: RunUsage::default(),
+            outcome: RunOutcome::Completed,
+            reason: None,
+            finished: false,
+        })
     }
 
-    async fn acquire(&self, opts: RunOptions) -> Result<Run, StorageError> {
-        let thread = &self.thread;
-        let holder = thread.holder().to_owned();
-        let token = shortuuid("lease_");
-        let mut request = AcquireRequest {
-            lane: self.name.clone(),
-            holder: holder.clone(),
-            lease_token: token.clone(),
-            run_id: opts.run_id.clone(),
-            ts_ms: thread.now_ms(),
-            task_id: opts.task_id.clone(),
-            run_started: serde_json::json!({
-                "task_id": opts.task_id,
-                "stream_id": opts.task_id,
-                "channel": opts.channel,
-            }),
-            events_after: 0,
-            submit: opts.submit.clone(),
+    /// The acquire, polled with backoff while another holder has the lane, as the lane's `waiter`
+    /// under `interrupt`.
+    async fn acquire(&self, opts: &RunOptions) -> Result<Loaded, StorageError> {
+        let mut request = Acquire {
+            holder: &self.holder,
+            run_id: &opts.run_id,
+            task_id: &opts.task_id,
+            run_started: RunStarted {
+                task_id: Some(opts.task_id.clone()),
+                stream_id: Some(opts.task_id.clone()),
+                channel: opts.channel.clone(),
+                exclusive: None,
+            },
+            submit: opts.submit.as_ref(),
             pickup: opts.pickup,
-            tasks_limit: tasks::LOOKUP_LIMIT,
+            tasks_limit: LOOKUP_LIMIT,
         };
-        let deadline = Instant::now() + opts.wait_timeout;
-        let mut delay = LEASE_POLL_MIN;
+        let mut poll = LanePoll::new(opts.wait_timeout);
         let mut marked = false;
-        let loaded: Loaded = loop {
-            request.ts_ms = thread.now_ms();
-            if let Some(loaded) = self.db().acquire(&request).await? {
-                break loaded;
+        loop {
+            if let Some(loaded) = self.db.acquire(&request).await? {
+                return Ok(loaded);
             }
             // the row is in; a retry of the batch must not report it as a duplicate
             request.submit = None;
             if !opts.wait {
-                return Err(StorageError::LeaseHeld(format!(
-                    "lane {} is held by another run",
-                    self.name
-                )));
+                let name = self.name();
+                return Err(StorageError::LeaseHeld(format!("lane {name} is held by another run")));
             }
             if opts.interrupt && !marked {
-                marked = self.db().set_waiter(&self.name, &holder).await?;
+                marked = self.db.set_waiter(&self.holder).await?;
                 if marked {
-                    log::debug!(target: "livekit.agents", lane = self.name.as_str(), holder = holder.as_str(); "waiting for the lane as its waiter");
+                    log::debug!(target: "livekit.agents", lane = self.name(), holder = &*self.holder; "waiting for the lane as its waiter");
                 }
             }
-            if Instant::now() >= deadline {
+            if !poll.pause().await {
                 return Err(StorageError::LeaseTimeout(format!(
                     "lane {} was not released within {}s",
-                    self.name,
+                    self.name(),
                     opts.wait_timeout.as_secs_f64()
                 )));
             }
-            tokio::time::sleep(delay).await;
-            delay = (delay * 2).min(LEASE_POLL_MAX);
-        };
-        let mut history = Vec::with_capacity(loaded.items.len());
-        let mut loaded_order = Vec::with_capacity(loaded.items.len());
-        let mut loaded_payloads = HashMap::new();
-        let mut message_ids = HashMap::new();
-        for row in loaded.items {
-            if let Some(m) = &row.message_id {
-                message_ids.insert(row.id.clone(), m.clone());
-            }
-            loaded_order.push(row.id.clone());
-            loaded_payloads.insert(row.id.clone(), canonical(&row.payload));
-            history.push(Item::from_row(row));
         }
-        let stack = Ref::stack_from_json(loaded.lane.agent_stack.as_ref())?;
-        let closed = loaded.already_committed;
-        let lease =
-            if closed { None } else { Some(self.db().start_renewal(&self.name, &holder, &token)) };
-        Ok(Run {
-            thread: thread.clone(),
-            lane: self.name.clone(),
-            db: self.db().clone(),
-            run_id: opts.run_id,
-            task_id: opts.task_id,
-            channel: opts.channel,
-            version: loaded.version,
-            closed,
-            history,
-            loaded_order,
-            loaded_payloads,
-            message_ids,
-            state: loaded.lane.state.clone(),
-            state_json: loaded.lane.state,
-            agents: AgentStack::new(stack),
-            events: EventLog::new(loaded.events, thread.inner.clock.clone()),
-            tasks: Tasks::loaded(self.db().clone(), &self.name, loaded.tasks),
-            submitted: loaded.submitted,
-            picked_up: loaded.picked_up,
-            answer_task: None,
-            committed_task: None,
-            usage: RunUsage::default(),
-            lease,
-            lease_token: Some(token),
-            exclusive: true,
-            holder,
-            outcome: RunOutcome::Completed,
-            reason: None,
-            keep_lease: false,
-            drained_id: None,
-            committed_version: None,
-            finished: false,
-        })
-    }
-
-    async fn open_concurrent(&self, opts: RunOptions) -> Result<Run, StorageError> {
-        let thread = &self.thread;
-        let rows = self.db().history(&self.name).await?;
-        let loaded_order: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
-        let loaded_payloads = rows.iter().map(|r| (r.id.clone(), canonical(&r.payload))).collect();
-        Ok(Run {
-            thread: thread.clone(),
-            lane: self.name.clone(),
-            db: self.db().clone(),
-            run_id: opts.run_id,
-            task_id: opts.task_id,
-            channel: opts.channel,
-            version: 0,
-            closed: false,
-            history: rows.into_iter().map(Item::from_row).collect(),
-            loaded_order,
-            loaded_payloads,
-            message_ids: HashMap::new(),
-            state: None,
-            state_json: None,
-            agents: AgentStack::default(),
-            events: EventLog::new(Vec::new(), thread.inner.clock.clone()),
-            tasks: Tasks::new(self.db().clone(), &self.name),
-            submitted: None,
-            picked_up: false,
-            answer_task: None,
-            committed_task: None,
-            usage: RunUsage::default(),
-            lease: None,
-            lease_token: None,
-            exclusive: false,
-            holder: thread.holder().to_owned(),
-            outcome: RunOutcome::Completed,
-            reason: None,
-            keep_lease: false,
-            drained_id: None,
-            committed_version: None,
-            finished: false,
-        })
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// the run
-// ---------------------------------------------------------------------------------------------
+/// What [`Run::commit`] does besides writing the run.
+#[derive(Debug, Clone, Default)]
+pub struct CommitOptions {
+    /// Extend the lease instead of releasing it: the runner continues with pending inbox rows.
+    pub keep_lease: bool,
+    /// The last inbox row a drain consumed.
+    pub drained_id: Option<i64>,
+    /// The task the turn answers, read back with the commit.
+    pub answer_task: Option<String>,
+}
 
-/// Everything a run reads and writes, committed together (plan 5.2).
+/// Everything a run reads and writes, committed together.
 pub struct Run {
-    thread: Thread,
-    lane: String,
-    db: ThreadDb,
+    db: LaneDb,
+    /// The lease the run holds; `None` under the `concurrent` policy, which takes none.
+    lease: Option<Lease>,
+    pub holder: String,
     pub run_id: String,
     pub task_id: String,
     pub channel: Option<String>,
-    /// The version loaded: the fence of the commit.
-    pub version: i64,
     /// A `run_id` that already committed: the run writes nothing and answers nothing twice.
     pub closed: bool,
     /// The whole history, loaded; append as the model and the tools speak, delete by removing.
-    pub history: Vec<Item>,
-    loaded_order: Vec<String>,
-    loaded_payloads: HashMap<String, String>,
-    message_ids: HashMap<String, String>,
+    pub history: Vec<ItemRow>,
+    /// What was loaded, by id, in order.
+    loaded: Vec<(String, ChatItem)>,
     /// The state snapshot as loaded, `None` for a fresh lane; the host replaces it with its
     /// default-constructed state, and the commit writes it when it differs from what was loaded.
     pub state: Option<Value>,
-    state_json: Option<Value>,
+    loaded_state: Option<Value>,
     pub agents: AgentStack,
     pub events: EventLog,
     pub tasks: Tasks,
@@ -620,137 +455,68 @@ pub struct Run {
     pub submitted: Option<bool>,
     /// Whether the acquire's `pickup` took the row to `working`.
     pub picked_up: bool,
-    /// The task the turn answers: its row comes back with the commit (`committed_task`).
-    pub answer_task: Option<String>,
-    /// `answer_task`'s row as the commit left it.
-    pub committed_task: Option<TaskRecord>,
     pub usage: RunUsage,
-    lease: Option<Lease>,
-    lease_token: Option<String>,
-    pub exclusive: bool,
-    pub holder: String,
     pub outcome: RunOutcome,
     pub reason: Option<String>,
-    /// Renew the lease at commit instead of releasing it: the runner continues with pending inbox
-    /// rows or due tasks (3.3.4).
-    pub keep_lease: bool,
-    /// The last inbox row a drain consumed, written at commit.
-    pub drained_id: Option<i64>,
-    committed_version: Option<i64>,
     finished: bool,
 }
 
 impl Run {
     pub fn lane(&self) -> &str {
-        &self.lane
-    }
-
-    pub fn lease_token(&self) -> Option<&str> {
-        self.lease_token.as_deref()
+        self.db.name()
     }
 
     pub fn lease(&self) -> Option<&Lease> {
         self.lease.as_ref()
     }
 
-    /// A renew returned no row or failed: the run can no longer commit.
-    pub fn lease_lost(&self) -> bool {
-        self.lease.as_ref().is_some_and(Lease::is_lost)
+    /// The version loaded: the fence of the commit; `0` for a run that took no lease.
+    pub fn version(&self) -> i64 {
+        self.lease.as_ref().map_or(0, Lease::version)
     }
 
-    /// The version after the commit; `None` before it, and for a closed run.
-    pub fn committed_version(&self) -> Option<i64> {
-        self.committed_version
-    }
-
-    /// Records the A2A `messageId` an item came from: the idempotency key on `items`.
-    pub fn mark_message(&mut self, item_id: &str, message_id: &str) {
-        self.message_ids.insert(item_id.to_owned(), message_id.to_owned());
-    }
-
-    /// Awaits `fut` while the lease holds; a lost lease cancels it with `Unavailable`.
-    pub async fn guard<F: Future>(&self, fut: F) -> Result<F::Output, StorageError> {
-        let Some(lease) = &self.lease else {
-            return Ok(fut.await);
-        };
-        tokio::pin!(fut);
-        tokio::select! {
-            out = &mut fut => Ok(out),
-            _ = lease.lost() => Err(StorageError::Unavailable(format!("lease on lane {} was lost", self.lane))),
+    /// The run's writes: the changed and deleted items, their journal entries, the task rows,
+    /// usage, the snapshots that changed, and `run_ended`.
+    pub fn writes(&self, opts: CommitOptions) -> Commit {
+        let exclusive = self.lease.is_some();
+        let (items, delete_items) = item_changes(&self.history, &self.loaded);
+        let mut events = Vec::new();
+        if !exclusive {
+            events.push(EventWrite::run_started(&RunStarted {
+                task_id: Some(self.task_id.clone()),
+                stream_id: Some(self.task_id.clone()),
+                channel: self.channel.clone(),
+                exclusive: Some(false),
+            }));
         }
-    }
-
-    /// The boundary check under `interrupt`: a worker waiting for the lane, or `None`.
-    pub async fn waiter(&self) -> Result<Option<String>, StorageError> {
-        if !self.exclusive {
-            return Ok(None);
-        }
-        Ok(self.db.waiter(&self.lane).await?.filter(|w| !w.is_empty() && *w != self.holder))
-    }
-
-    /// The items that changed since the load, and the loaded ids no longer in the history.
-    pub fn item_writes(&self) -> (Vec<ItemWrite>, Vec<String>) {
-        item_writes(&self.history, &self.loaded_order, &self.loaded_payloads, &self.message_ids)
-    }
-
-    /// `Run._commit_request`: what [`Run::commit`] sends, for inspection.
-    pub fn commit_request(&self, now_ms: i64) -> CommitRequest {
-        let (items, delete_items) = self.item_writes();
-        let mut events: Vec<EventWrite> = Vec::new();
-        if !self.exclusive {
-            events.push(EventWrite {
-                ts_ms: now_ms,
-                r#type: "run_started".into(),
-                payload: serde_json::json!({
-                    "task_id": self.task_id,
-                    "stream_id": self.task_id,
-                    "channel": self.channel,
-                    "exclusive": false,
-                }),
-            });
-        }
-        // docs/journal.md: every item that entered the history, before the run's own events
-        events.extend(items.iter().filter(|w| !self.loaded_payloads.contains_key(&w.id)).map(
-            |w| EventWrite {
-                ts_ms: now_ms,
-                r#type: "conversation_item_added".into(),
-                payload: serde_json::json!({"item": w.payload}),
-            },
-        ));
-        events.extend(self.events.new_events().iter().cloned());
+        events.extend(
+            items
+                .iter()
+                .filter(|i| !self.loaded.iter().any(|(id, _)| *id == i.id))
+                .map(|i| EventWrite::new("conversation_item_added", json!({"item": &i.payload}))),
+        );
+        events.extend(self.events.new.iter().cloned());
         if self.usage.requests != 0 || self.usage.tool_calls != 0 {
-            events.push(EventWrite {
-                ts_ms: now_ms,
-                r#type: "usage".into(),
-                payload: serde_json::to_value(self.usage).unwrap_or(Value::Null),
-            });
+            let usage = serde_json::to_value(self.usage).unwrap_or(Value::Null);
+            events.push(EventWrite::new("usage", usage));
         }
-        let state = if self.exclusive {
-            self.state.clone().filter(|s| Some(s) != self.state_json.as_ref())
-        } else {
-            None
-        };
-        CommitRequest {
-            lane: self.lane.clone(),
+        Commit {
             run_id: self.run_id.clone(),
-            fence: self.exclusive.then(|| Fence {
-                version: self.version,
-                lease_token: self.lease_token.clone().unwrap_or_default(),
-            }),
-            items,
             delete_items,
+            items,
             events,
             tasks: self.tasks.writes().to_vec(),
-            state,
-            agent_stack: (self.exclusive && self.agents.is_dirty()).then(|| self.agents.to_json()),
-            drained_id: if self.exclusive { self.drained_id } else { None },
-            run_ended: EventWrite {
-                ts_ms: now_ms,
-                r#type: "run_ended".into(),
-                payload: serde_json::json!({"outcome": self.outcome, "reason": self.reason}),
-            },
-            after: if self.keep_lease { LeaseAfter::Renew } else { LeaseAfter::Release },
-            read_task: self.answer_task.clone(),
+            state: self
+                .state
+                .clone()
+                .filter(|s| exclusive && Some(s) != self.loaded_state.as_ref()),
+            agent_stack: (exclusive && self.agents.is_dirty()).then(|| self.agents.to_json()),
+            drained_id: opts.drained_id.filter(|_| exclusive),
+            run_ended: EventWrite::run_ended(&RunEnded {
+                outcome: self.outcome,
+                reason: self.reason.clone(),
+            }),
+            read_task: opts.answer_task,
         }
     }
 
@@ -765,152 +531,529 @@ impl Run {
         Ok(())
     }
 
-    /// Leaving normally: one fenced write of everything the run holds (plan 5.2). A closed run
+    /// Leaving normally: one fenced write of everything the run holds. A closed run
     /// releases the lease and writes nothing. `VersionConflict` means the run outlived its lease.
-    pub async fn commit(&mut self, now_ms: i64) -> Result<(), StorageError> {
+    pub async fn commit(&mut self, opts: CommitOptions) -> Result<Committed, StorageError> {
         self.finish()?;
-        if self.closed {
-            if let Some(token) = &self.lease_token {
-                self.db.release(&self.lane, token).await?;
+        let version = self.version();
+        match &self.lease {
+            Some(lease) if self.closed => {
+                lease.release(None).await?;
+                Ok(Committed { version, task: None })
             }
-            return Ok(());
+            Some(lease) => lease.commit(&self.writes(opts.clone()), opts.keep_lease).await,
+            None => self.db.append(&self.writes(opts)).await,
         }
-        let request = self.commit_request(now_ms);
-        let result = self.db.commit(&request).await?;
-        self.committed_version = Some(result.version);
-        self.committed_task = result.task.map(TaskRecord::from_row);
-        self.thread.after_commit();
-        Ok(())
     }
 
     /// Leaving by error: `run_ended` with the outcome and the reason, and the release; nothing else.
-    /// A closed run releases; a concurrent run has nothing to write. The Python passes `Canceled`
-    /// for a `CancelledError` and `Failed` otherwise, with `reason` as `<type>: <message>`. A
-    /// `run_ended` that could not be written is logged, as a crash would leave the same journal.
+    /// A `run_ended` that could not be written is logged.
     pub async fn abandon(
         &mut self,
-        now_ms: i64,
         outcome: RunOutcome,
         reason: impl Into<String>,
     ) -> Result<(), StorageError> {
         self.finish()?;
-        if self.closed || !self.exclusive {
-            if let (true, Some(token)) = (self.closed, &self.lease_token) {
-                self.db.release(&self.lane, token).await?;
-            }
-            return Ok(());
+        let Some(lease) = &self.lease else { return Ok(()) };
+        if self.closed {
+            return lease.release(None).await;
         }
-        let reason = reason.into();
-        let request = RunEndedRequest {
-            lane: self.lane.clone(),
-            run_id: self.run_id.clone(),
-            lease_token: self.lease_token.clone().unwrap_or_default(),
-            ts_ms: now_ms,
-            payload: serde_json::json!({"outcome": outcome, "reason": reason}),
-        };
-        if let Err(e) = self.db.run_ended(&request).await {
-            log::warn!(target: "livekit.agents", lane = self.lane.as_str(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
+        let ended = EventWrite::run_ended(&RunEnded { outcome, reason: Some(reason.into()) });
+        if let Err(e) = lease.release(Some((&self.run_id, &ended))).await {
+            log::warn!(target: "livekit.agents", lane = self.db.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
         }
         Ok(())
     }
 }
 
-/// `Run._item_writes`: every stored item whose canonical JSON differs from what was loaded, with
-/// the A2A `messageId` it came from; the loaded ids no longer in the history, in loaded order.
-fn item_writes(
-    history: &[Item],
-    loaded_order: &[String],
-    loaded_payloads: &HashMap<String, String>,
-    message_ids: &HashMap<String, String>,
-) -> (Vec<ItemWrite>, Vec<String>) {
-    let mut writes = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for item in history.iter().filter(|i| i.stored()) {
-        seen.insert(item.id.as_str());
-        if loaded_payloads.get(&item.id).is_some_and(|l| *l == canonical(&item.payload)) {
-            continue;
-        }
-        writes.push(ItemWrite {
-            id: item.id.clone(),
-            message_id: message_ids.get(&item.id).cloned(),
-            payload: item.payload.clone(),
-        });
+/// The stored items that differ from what was `loaded`, and the loaded ids no longer in the
+/// history, in loaded order.
+fn item_changes(history: &[ItemRow], loaded: &[(String, ChatItem)]) -> (Vec<ItemRow>, Vec<String>) {
+    let by_id: HashMap<&str, &ChatItem> = loaded.iter().map(|(id, i)| (id.as_str(), i)).collect();
+    let stored: Vec<&ItemRow> = history.iter().filter(|i| i.stored()).collect();
+    let changed = stored
+        .iter()
+        .filter(|i| by_id.get(i.id.as_str()) != Some(&&i.payload))
+        .map(|i| (*i).clone())
+        .collect();
+    let kept: std::collections::HashSet<&str> = stored.iter().map(|i| i.id.as_str()).collect();
+    let deleted =
+        loaded.iter().filter(|(id, _)| !kept.contains(id.as_str())).map(|(id, _)| id.clone());
+    (changed, deleted.collect())
+}
+
+/// The Live extension's metadata keys, written `livekit/<name>`.
+pub const INTERRUPTED_KEY: &str = "livekit/interrupted";
+pub const INTERRUPTION_REASON_KEY: &str = "livekit/interruptionReason";
+pub const MERGED_INTO_KEY: &str = "livekit/mergedInto";
+pub const CHANNEL_KEY: &str = "livekit/channel";
+pub const KIND_KEY: &str = "livekit/kind";
+pub const KEY_KEY: &str = "livekit/key";
+/// The key `Tasks::fail` writes into the status message's metadata.
+pub const REASON_KEY: &str = "livekit/reason";
+
+/// The `failed` and `rejected` reasons.
+pub const REASON_WORKER_LOST: &str = "worker-lost";
+pub const REASON_LEASE_TIMEOUT: &str = "lease-timeout";
+pub const REASON_REJECTED: &str = "rejected";
+pub const REASON_THREAD_NOT_FOUND: &str = "thread-not-found";
+pub const REASON_STORAGE_UNAVAILABLE: &str = "storage-unavailable";
+pub const REASON_TIMEOUT: &str = "timeout";
+pub const REASON_UNKNOWN_CLASS: &str = "unknown-class";
+pub const REASON_INVALID_ARGUMENTS: &str = "invalid-arguments";
+
+/// The channel of the append-only run that writes a task's `submitted` row before the lease.
+pub const SUBMIT_CHANNEL: &str = "submit";
+
+/// The framework's task states; the terminal ones are immutable. The A2A edge maps them to its
+/// own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Host)]
+#[serde(rename_all = "kebab-case")]
+#[python(literal, module = "storage_run")]
+pub enum TaskState {
+    #[host(rename = "submitted")]
+    Submitted,
+    #[host(rename = "working")]
+    Working,
+    #[host(rename = "input-required")]
+    InputRequired,
+    #[host(rename = "completed")]
+    Completed,
+    #[host(rename = "failed")]
+    Failed,
+    #[host(rename = "canceled")]
+    Canceled,
+    #[host(rename = "rejected")]
+    Rejected,
+}
+
+impl TaskState {
+    /// `None` for a status no state spells (the derive's `from_wire`).
+    pub fn parse(s: &str) -> Option<TaskState> {
+        TaskState::from_wire(s)
     }
-    let deleted = loaded_order.iter().filter(|id| !seen.contains(id.as_str())).cloned().collect();
-    (writes, deleted)
+
+    /// Completed, failed, canceled or rejected: immutable once written.
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            TaskState::Completed | TaskState::Failed | TaskState::Canceled | TaskState::Rejected
+        )
+    }
+}
+
+/// What `run_ended` records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Host)]
+#[serde(rename_all = "kebab-case")]
+#[python(literal, module = "storage_run")]
+pub enum RunOutcome {
+    #[host(rename = "completed")]
+    Completed,
+    #[host(rename = "input-required")]
+    InputRequired,
+    #[host(rename = "failed")]
+    Failed,
+    #[host(rename = "canceled")]
+    Canceled,
+    #[host(rename = "rejected")]
+    Rejected,
+}
+
+/// One rebuild rule for everything durable that names code: `name` is an
+/// `Agent`'s name or an `AgentTask` class name; `args` the constructor arguments, JSON-shaped,
+/// `None` for a plain `Agent`. On the agent stack a task entry also carries `state`, the task's
+/// own state as it waits, and `call_id`, the call of the agent below that awaits it. Stored as
+/// `{"name": .., "args": .., "state": .., "call_id": ..}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
+#[python(pydantic, module = "storage_run", config = "frozen=True")]
+pub struct Ref {
+    pub name: String,
+    #[serde(default)]
+    #[python(default = "None")]
+    pub args: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[python(default = "None")]
+    pub state: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[python(default = "None")]
+    pub call_id: Option<String>,
+}
+
+impl Ref {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), args: None, state: None, call_id: None }
+    }
+
+    pub fn with_args(name: impl Into<String>, args: Value) -> Self {
+        Self { name: name.into(), args: Some(args), state: None, call_id: None }
+    }
+}
+
+/// One run as the journal tells it: `run_started` and, when it ended, `run_ended`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Host)]
+#[python(pydantic, module = "storage_run")]
+pub struct RunSummary {
+    pub run_id: String,
+    pub lane: String,
+    pub task_id: Option<String>,
+    pub channel: Option<String>,
+    pub started_at_ms: i64,
+    pub ended_at_ms: Option<i64>,
+    pub outcome: Option<RunOutcome>,
+    pub reason: Option<String>,
+}
+
+impl RunSummary {
+    /// A `run_started` without a `run_ended`: the worker died mid-run.
+    pub fn interrupted(&self) -> bool {
+        self.ended_at_ms.is_none()
+    }
+
+    /// In the order the runs started; a `run_ended` whose run was not started is ignored, and a
+    /// second `run_started` of a run (a holder re-entering its lease) replaces the first in place.
+    pub fn from_events(events: &[EventRow]) -> Vec<RunSummary> {
+        let mut runs: Vec<RunSummary> = Vec::new();
+        for ev in events {
+            match ev.run_event() {
+                Some(RunEvent::Started(started)) => {
+                    let summary = RunSummary {
+                        run_id: ev.run_id.clone(),
+                        lane: ev.lane.clone(),
+                        task_id: started.task_id,
+                        channel: started.channel,
+                        started_at_ms: ev.ts_ms,
+                        ended_at_ms: None,
+                        outcome: None,
+                        reason: None,
+                    };
+                    match runs.iter_mut().find(|r| r.run_id == ev.run_id) {
+                        Some(existing) => *existing = summary,
+                        None => runs.push(summary),
+                    }
+                }
+                Some(RunEvent::Ended(ended)) => {
+                    if let Some(run) = runs.iter_mut().find(|r| r.run_id == ev.run_id) {
+                        run.ended_at_ms = Some(ev.ts_ms);
+                        run.outcome = Some(ended.outcome);
+                        run.reason = ended.reason;
+                    }
+                }
+                None => {}
+            }
+        }
+        runs
+    }
+}
+
+/// How many rows a lookup by id or `messageId` scans.
+pub(crate) const LOOKUP_LIMIT: i64 = 500;
+/// How many `input-required` rows `pending_ask` scans.
+const PENDING_ASK_LIMIT: i64 = 50;
+
+/// What a write changes; everything left `None` keeps the existing row's value.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TaskPatch {
+    pub message_id: Option<String>,
+    /// The `AgentTask` class name, the `name` column.
+    pub name: Option<String>,
+    /// Merged over the row's `data.metadata`; an empty map changes nothing.
+    pub metadata: Option<Map<String, Value>>,
+    pub ask: Option<Ask>,
+    pub status_message: Option<a2a::Message>,
+    pub history: Option<Vec<a2a::Message>>,
+    pub artifacts: Option<Vec<a2a::Artifact>>,
+}
+
+/// The pending transition a task waits on.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WaitOptions {
+    /// For a conversation tool's `InputRequired`, the pending call's tool.
+    pub tool: Option<String>,
+    /// For a conversation tool's `InputRequired`, the pending call.
+    pub call_id: Option<String>,
+    /// The tool the answer is handed to, when the `InputRequired` named one.
+    pub answer_tool: Option<String>,
+    /// The tool's parameter schema, added to the status message as a data part.
+    pub schema: Option<Value>,
+}
+
+/// The lane's task rows as this run writes them.
+pub struct Tasks {
+    lane: LaneDb,
+    /// In write order.
+    writes: Vec<TaskWrite>,
+    /// The lane's newest rows as the acquire loaded them, newest first: what the run's lookups
+    /// read instead of the database. Complete when shorter than [`LOOKUP_LIMIT`].
+    loaded: Option<Vec<TaskRow>>,
+}
+
+impl Tasks {
+    pub fn new(lane: LaneDb) -> Self {
+        Self { lane, writes: Vec::new(), loaded: None }
+    }
+
+    /// Over the rows an acquire loaded, newest first.
+    pub fn loaded(lane: LaneDb, loaded: Vec<TaskRow>) -> Self {
+        Self { lane, writes: Vec::new(), loaded: Some(loaded) }
+    }
+
+    /// The loaded rows, when they are the whole lane.
+    fn snapshot(&self) -> Option<&[TaskRow]> {
+        self.loaded.as_deref().filter(|rows| rows.len() < LOOKUP_LIMIT as usize)
+    }
+
+    /// The lane's newest rows, `limit` of them, as of the acquire.
+    pub async fn recent(&self, limit: i64) -> Result<Vec<TaskRow>, StorageError> {
+        if let Some(rows) = self.loaded.as_deref() {
+            return Ok(rows.iter().take(limit as usize).cloned().collect());
+        }
+        self.lane.tasks(None, limit).await
+    }
+
+    /// The `working` rows, oldest first: a dead holder's, as of the acquire.
+    pub async fn working(&self) -> Result<Vec<TaskRow>, StorageError> {
+        if let Some(rows) = self.snapshot() {
+            return Ok(rows
+                .iter()
+                .rev()
+                .filter(|r| r.status == TaskState::Working)
+                .cloned()
+                .collect());
+        }
+        let working = self.lane.tasks(Some(TaskState::Working), LOOKUP_LIMIT).await?;
+        Ok(working.into_iter().rev().collect())
+    }
+
+    pub fn lane(&self) -> &LaneDb {
+        &self.lane
+    }
+
+    /// The pending writes, in the order they were first made.
+    pub fn writes(&self) -> &[TaskWrite] {
+        &self.writes
+    }
+
+    /// The first loaded row that matches, else, when the loaded rows are not the whole lane, the
+    /// stored one `read` finds.
+    async fn find(
+        &self,
+        matches: impl Fn(&TaskRow) -> bool,
+        read: impl std::future::Future<Output = Result<Option<TaskRow>, StorageError>>,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        match self.loaded.as_deref().and_then(|rows| rows.iter().find(|r| matches(r))) {
+            Some(r) => Ok(Some(r.clone())),
+            None if self.snapshot().is_some() => Ok(None),
+            None => read.await,
+        }
+    }
+
+    /// The task of an A2A `messageId`: a pending write first, then the lane's rows.
+    pub async fn by_message_id(&self, message_id: &str) -> Result<Option<TaskRow>, StorageError> {
+        if let Some(w) = self.writes.iter().find(|w| w.message_id.as_deref() == Some(message_id)) {
+            // not stored yet: no `seq` and no `updated_at`
+            return Ok(Some(TaskRow {
+                task_id: w.task_id.clone(),
+                lane: self.lane.name().to_owned(),
+                seq: 0,
+                name: w.name.clone(),
+                message_id: w.message_id.clone(),
+                status: w.status,
+                updated_at: 0,
+                data: w.data.clone(),
+                ask: w.ask.clone(),
+            }));
+        }
+        let read = self.lane.task_for_message(message_id);
+        self.find(|r| r.message_id.as_deref() == Some(message_id), read).await
+    }
+
+    /// The newest `input-required` row holding a conversation tool's pending call.
+    pub async fn pending_ask(&self) -> Result<Option<TaskRow>, StorageError> {
+        if let Some(rows) = self.snapshot() {
+            return Ok(rows
+                .iter()
+                .find(|r| r.status == TaskState::InputRequired && r.ask.is_some())
+                .cloned());
+        }
+        Ok(self
+            .lane
+            .tasks(Some(TaskState::InputRequired), PENDING_ASK_LIMIT)
+            .await?
+            .into_iter()
+            .find(|r| r.ask.is_some()))
+    }
+
+    /// Insert or update one row; what the patch leaves `None` keeps the existing row's value.
+    pub async fn write(
+        &mut self,
+        task_id: &str,
+        status: TaskState,
+        patch: TaskPatch,
+    ) -> Result<&TaskWrite, StorageError> {
+        let base = match self.writes.iter().find(|w| w.task_id == task_id) {
+            Some(w) => Some(w.clone()),
+            None => {
+                let row = self.find(|r| r.task_id == task_id, self.lane.task(task_id)).await?;
+                row.map(|r| TaskWrite {
+                    task_id: r.task_id,
+                    status: r.status,
+                    message_id: r.message_id,
+                    name: r.name,
+                    data: r.data,
+                    ask: r.ask,
+                })
+            }
+        };
+        let write = merge_write(task_id, base.as_ref(), status, patch)?;
+        match self.writes.iter().position(|w| w.task_id == task_id) {
+            Some(i) => {
+                self.writes[i] = write;
+                Ok(&self.writes[i])
+            }
+            None => {
+                self.writes.push(write);
+                Ok(self.writes.last().expect("just pushed"))
+            }
+        }
+    }
+
+    /// `input-required`: the question is the status message, `ask` the pending transition.
+    pub async fn wait(
+        &mut self,
+        task_id: &str,
+        question: &str,
+        opts: WaitOptions,
+    ) -> Result<(), StorageError> {
+        let ask = Ask {
+            question: question.to_owned(),
+            tool: opts.tool,
+            call_id: opts.call_id,
+            answer_tool: opts.answer_tool,
+        };
+        let mut parts = vec![a2a::Part::text(question)];
+        if let Some(schema) = opts.schema {
+            parts.push(a2a::Part::data(schema));
+        }
+        self.write(
+            task_id,
+            TaskState::InputRequired,
+            TaskPatch {
+                ask: Some(ask),
+                status_message: Some(agent_message(parts, task_id)),
+                ..TaskPatch::default()
+            },
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+/// `Tasks.write`'s row: `patch` over `base`, `data` and `internal` rebuilt from both.
+fn merge_write(
+    task_id: &str,
+    base: Option<&TaskWrite>,
+    status: TaskState,
+    patch: TaskPatch,
+) -> Result<TaskWrite, StorageError> {
+    if let Some(b) = base
+        && b.status.is_terminal()
+    {
+        return Err(StorageError::Invalid(format!(
+            "task {task_id} is {}: terminal rows are immutable",
+            b.status.as_str()
+        )));
+    }
+    let mut data = base.map(|b| b.data.clone()).unwrap_or_default();
+    if let Some(metadata) = patch.metadata {
+        data.metadata.extend(metadata);
+    }
+    if let Some(history) = patch.history {
+        data.history = history;
+    }
+    if let Some(artifacts) = patch.artifacts {
+        data.artifacts = Some(artifacts);
+    }
+    if let Some(message) = patch.status_message {
+        data.status_message = Some(message);
+    }
+
+    let ask = if patch.ask.is_none() && (status.is_terminal() || status == TaskState::Working) {
+        // a terminal or running row holds no pending question
+        None
+    } else {
+        patch.ask.or_else(|| base.and_then(|b| b.ask.clone()))
+    };
+
+    Ok(TaskWrite {
+        task_id: task_id.to_owned(),
+        status,
+        message_id: patch.message_id.or_else(|| base.and_then(|b| b.message_id.clone())),
+        name: patch.name.or_else(|| base.and_then(|b| b.name.clone())),
+        data,
+        ask,
+    })
+}
+
+/// An agent message of `task_id`.
+pub fn agent_message(parts: Vec<a2a::Part>, task_id: &str) -> a2a::Message {
+    a2a::Message {
+        message_id: shortuuid("msg_"),
+        task_id: Some(task_id.to_owned()),
+        ..a2a::Message::new(a2a::Role::Agent, parts)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use livekit_protocol::agent::chat_context::chat_item;
     use serde_json::json;
 
     #[test]
-    fn shortuuid_is_twelve_hex_after_the_prefix() {
-        let id = shortuuid("AST_");
-        assert_eq!(id.len(), 16);
-        assert!(id[4..].chars().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(shortuuid(""), shortuuid(""));
-    }
-
-    #[test]
-    fn canonical_sorts_keys_at_every_depth() {
-        let a = json!({"b": [{"y": 1, "x": 2}], "a": null});
-        let b = json!({"a": null, "b": [{"x": 2, "y": 1}]});
-        assert_eq!(canonical(&a), canonical(&b));
-        assert_eq!(canonical(&a), r#"{"a":null,"b":[{"x":2,"y":1}]}"#);
-    }
-
-    #[test]
-    fn item_writes_skip_instructions_and_unchanged_items_and_list_deletions() {
-        let loaded = [
-            Item::new(json!({"id": "i1", "type": "message", "role": "user", "content": ["hi"]}))
-                .unwrap(),
-            Item::new(
-                json!({"id": "i2", "type": "message", "role": "assistant", "content": ["hello"]}),
-            )
-            .unwrap(),
-            Item::new(json!({"id": "i3", "type": "function_call", "name": "f"})).unwrap(),
-        ];
-        let order: Vec<String> = loaded.iter().map(|i| i.id.clone()).collect();
-        let payloads: HashMap<String, String> =
-            loaded.iter().map(|i| (i.id.clone(), canonical(&i.payload))).collect();
+    fn item_changes_skip_instructions_and_unchanged_items_and_list_deletions() {
+        use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
+        use livekit_protocol::agent::{AgentConfigUpdate, ChatMessage, ChatRole, FunctionCall};
+        let msg = |id: &str, role: ChatRole, text: &str| {
+            ItemRow::new(chat_item::Item::Message(ChatMessage {
+                id: id.into(),
+                role: role as i32,
+                content: vec![ChatContent { payload: Some(Payload::Text(text.into())) }],
+                ..Default::default()
+            }))
+        };
+        let call = ItemRow::new(chat_item::Item::FunctionCall(FunctionCall {
+            id: "i3".into(),
+            name: "f".into(),
+            ..Default::default()
+        }));
+        let loaded: Vec<(String, ChatItem)> =
+            [msg("i1", ChatRole::User, "hi"), msg("i2", ChatRole::Assistant, "hello"), call]
+                .into_iter()
+                .map(|i| (i.id, i.payload))
+                .collect();
         let mut history = vec![
-            Item::new(
-                json!({"id": "sys", "type": "message", "role": "system", "content": ["be nice"]}),
-            )
-            .unwrap(),
-            Item::new(
-                json!({"id": "dev", "type": "message", "role": "developer", "content": ["x"]}),
-            )
-            .unwrap(),
-            Item::new(json!({"id": "cfg", "type": "agent_config_update", "tools": []})).unwrap(),
-            // the same item with its keys in another order: unchanged
-            Item::new(json!({"content": ["hi"], "role": "user", "type": "message", "id": "i1"}))
-                .unwrap(),
+            msg("sys", ChatRole::System, "be nice"),
+            msg("dev", ChatRole::Developer, "x"),
+            ItemRow::new(chat_item::Item::AgentConfigUpdate(AgentConfigUpdate {
+                id: "cfg".into(),
+                ..Default::default()
+            })),
+            msg("i1", ChatRole::User, "hi"),
             // edited
-            Item::new(
-                json!({"id": "i2", "type": "message", "role": "assistant", "content": ["hey"]}),
-            )
-            .unwrap(),
+            msg("i2", ChatRole::Assistant, "hey"),
             // i3 removed; i4 new
-            Item::new(json!({"id": "i4", "type": "message", "role": "user", "content": ["bye"]}))
-                .unwrap(),
+            ItemRow { message_id: Some("m4".into()), ..msg("i4", ChatRole::User, "bye") },
         ];
-        let mut message_ids = HashMap::new();
-        message_ids.insert("i4".to_owned(), "m4".to_owned());
-        let (writes, deleted) = item_writes(&history, &order, &payloads, &message_ids);
+        let (changed, deleted) = item_changes(&history, &loaded);
         assert_eq!(
-            writes.iter().map(|w| (w.id.as_str(), w.message_id.as_deref())).collect::<Vec<_>>(),
+            changed.iter().map(|w| (w.id.as_str(), w.message_id.as_deref())).collect::<Vec<_>>(),
             vec![("i2", None), ("i4", Some("m4"))]
         );
-        assert_eq!(writes[1].payload["type"], "message");
         assert_eq!(deleted, vec!["i3".to_owned()]);
         history.clear();
-        let (writes, deleted) = item_writes(&history, &order, &payloads, &message_ids);
-        assert!(writes.is_empty());
-        assert_eq!(deleted, order);
-        assert!(Item::new(json!({"type": "message"})).is_err());
+        let (changed, deleted) = item_changes(&history, &loaded);
+        assert!(changed.is_empty());
+        assert_eq!(deleted, vec!["i1", "i2", "i3"]);
     }
 
     #[test]
@@ -931,25 +1074,103 @@ mod tests {
     }
 
     #[test]
-    fn the_event_log_stamps_with_the_clock() {
-        let clock: Clock = Arc::new(|| 42);
-        let mut log = EventLog::new(Vec::new(), clock);
-        log.append("agent_state_changed", json!({"state": "thinking"}));
-        log.append("tool_called", json!({}));
-        let new = log.new_events();
-        assert_eq!((new[0].ts_ms, new[1].r#type.as_str()), (42, "tool_called"));
+    fn run_summaries_follow_run_started_and_run_ended() {
+        let ev = |id: i64, run_id: &str, ty: &str, payload: Value| EventRow {
+            id,
+            ts_ms: id * 10,
+            lane: "front-desk".into(),
+            run_id: run_id.into(),
+            r#type: ty.into(),
+            payload,
+        };
+        let events = vec![
+            ev(1, "r1", "run_started", json!({"task_id": "AST_1", "channel": "a2a"})),
+            ev(2, "r1", "run_ended", json!({"outcome": "completed", "reason": null})),
+            ev(3, "r2", "run_started", json!({"task_id": "AST_2", "channel": null})),
+            ev(4, "r9", "run_ended", json!({"outcome": "failed"})),
+        ];
+        let runs = RunSummary::from_events(&events);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].outcome, Some(RunOutcome::Completed));
+        assert_eq!(runs[0].ended_at_ms, Some(20));
+        assert!(!runs[0].interrupted());
+        assert_eq!(runs[1].channel, None);
+        assert!(runs[1].interrupted());
+    }
+
+    fn message(id: &str) -> a2a::Message {
+        a2a::Message { message_id: id.into(), ..a2a::Message::new(a2a::Role::User, vec![]) }
     }
 
     #[test]
-    fn run_usage_serializes_as_the_dataclass() {
-        let u = RunUsage { requests: 1, input_tokens: 2, output_tokens: 3, tool_calls: 0 };
+    fn a_later_write_keeps_the_row_and_clears_the_ask_when_terminal_or_working() {
+        let base = merge_write(
+            "AST_1",
+            None,
+            TaskState::InputRequired,
+            TaskPatch {
+                message_id: Some("m1".into()),
+                ask: Some(Ask { question: "when?".into(), ..Ask::default() }),
+                history: Some(vec![message("m1")]),
+                ..TaskPatch::default()
+            },
+        )
+        .unwrap();
+        let ask = |w: &TaskWrite| w.ask.clone();
+        assert_eq!(ask(&base).map(|a| a.question), Some("when?".into()));
+        let msg = merge_write(
+            "AST_1",
+            Some(&base),
+            TaskState::InputRequired,
+            TaskPatch { history: Some(vec![message("m2"), message("m3")]), ..TaskPatch::default() },
+        )
+        .unwrap();
+        assert_eq!(ask(&msg), ask(&base), "input-required keeps the pending transition");
+        assert_eq!(msg.message_id.as_deref(), Some("m1"));
+        let done = merge_write(
+            "AST_1",
+            Some(&base),
+            TaskState::Completed,
+            TaskPatch { artifacts: Some(vec![]), ..TaskPatch::default() },
+        )
+        .unwrap();
+        assert_eq!(ask(&done), None);
+        assert_eq!(done.data.artifacts, Some(vec![]));
+        assert_eq!(done.data.history, vec![message("m1")]);
+        let working =
+            merge_write("AST_1", Some(&base), TaskState::Working, TaskPatch::default()).unwrap();
+        assert_eq!(ask(&working), None);
+        let again = merge_write("AST_1", Some(&done), TaskState::Working, TaskPatch::default());
+        assert!(matches!(again, Err(StorageError::Invalid(m)) if m.contains("is completed")));
+    }
+
+    #[test]
+    fn metadata_merges_over_the_stored_metadata() {
+        let base = merge_write(
+            "AST_1",
+            None,
+            TaskState::Submitted,
+            TaskPatch {
+                name: Some("T".into()),
+                metadata: Some(json!({"a": 1, "b": 1}).as_object().cloned().unwrap()),
+                ..TaskPatch::default()
+            },
+        )
+        .unwrap();
+        let next = merge_write(
+            "AST_1",
+            Some(&base),
+            TaskState::Canceled,
+            TaskPatch {
+                metadata: Some(json!({"b": 2, "c": 3}).as_object().cloned().unwrap()),
+                ..TaskPatch::default()
+            },
+        )
+        .unwrap();
         assert_eq!(
-            serde_json::to_string(&u).unwrap(),
-            r#"{"requests":1,"input_tokens":2,"output_tokens":3,"tool_calls":0}"#
+            serde_json::to_value(&next.data.metadata).unwrap(),
+            json!({"a": 1, "b": 2, "c": 3})
         );
-        assert_eq!(u.total_tokens(), 5);
-        let o = RunOptions::new("r1", "AST_1");
-        assert!(o.exclusive && o.wait && !o.interrupt);
-        assert_eq!(o.wait_timeout, LEASE_WAIT_TIMEOUT);
+        assert_eq!(next.name.as_deref(), Some("T"));
     }
 }

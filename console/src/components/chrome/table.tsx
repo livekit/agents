@@ -11,6 +11,8 @@ import { Icon } from "./icon";
 export type Column<T> = {
   id: string;
   label: string;
+  /** A word after the label in its own colour: the column's type in the SQL tab. */
+  note?: string;
   /** What the column means, for the header's tooltip. */
   tip?: string;
   /** The starting width in px; the last column takes the rest. */
@@ -60,6 +62,7 @@ export function DataTable<T>({
   rail,
   group,
   empty,
+  literalHeaders,
   now,
 }: {
   id: string;
@@ -77,6 +80,8 @@ export function DataTable<T>({
   /** Rows partitioned under group headers, in the order the groups first appear. */
   group?: (row: T) => string;
   empty: string;
+  /** Headers as written, in mono: column names that are identifiers (the SQL tab's). */
+  literalHeaders?: boolean;
   /** The clock the cells read, so the table re-renders with it. */
   now?: number;
 }) {
@@ -178,12 +183,14 @@ export function DataTable<T>({
                   role="columnheader"
                   aria-sort={sorted === 1 ? "ascending" : sorted === -1 ? "descending" : "none"}
                   title={column.tip ?? column.label}
-                  className="relative flex h-row-sm min-w-0 items-center gap-1 border-0 bg-transparent px-2 text-left window-label text-label hover:text-ink data-[align=right]:flex-row-reverse"
+                  className="relative flex h-row-sm min-w-0 items-center gap-1 border-0 bg-transparent px-2 text-left window-label text-label hover:text-ink data-[align=right]:flex-row-reverse data-[literal=true]:font-mono data-[literal=true]:text-micro data-[literal=true]:font-normal data-[literal=true]:tracking-normal data-[literal=true]:normal-case data-[literal=true]:text-ink"
                   data-align={column.align}
+                  data-literal={literalHeaders}
                   data-column={column.id}
                   onClick={() => onHeaderClick(column)}
                 >
                   <span className="truncate">{column.label}</span>
+                  {column.note ? <span className="ml-1 flex-none text-[color:var(--code-type)]">{column.note}</span> : null}
                   {sorted ? <Icon name={sorted === 1 ? "disclosureUp" : "disclosureDown"} size={10} className="flex-none" /> : null}
                   {index < columns.length - 1 ? (
                     <span

@@ -1,9 +1,83 @@
 # Storage
 
+> The implementation-oriented tables below predate persisted context fields.
+> The target stores only `persisted(...)` application fields under durable
+> context scopes, separately from history/active-agent/wait records. See
+> [application context](state-and-deps.md) for the proposed context API.
+
 Every thread has its own database: the history, the journal, the typed
 state and the tasks, in one place the framework loads before a run and
 commits after it. Nothing lives in the process between runs, so any worker
 can take the next message, and a crash loses at most the run in flight.
+
+## Application records and context fields
+
+Draft persistence and direct application writes can use the same AgentDB.
+They are two access patterns, not a requirement to use two database products:
+
+| Access | Purpose | Commit behavior |
+| --- | --- | --- |
+| persisted context fields | Automatically checkpoint small application working data | Commit with execution state under managed runs |
+| Explicit application SQL/transactions | Business records, unique operation IDs, invoices, outbox entries | Commit at application-selected durable boundaries |
+
+Use the same thread database when the data belongs to that thread. A
+customer-wide invoice or global room inventory may require a different
+application/database scope; thread deletion/expiry must not accidentally
+remove records whose retention or ownership outlives the conversation.
+Sharing AgentDB does not imply all business records belong in one thread.
+
+The runtime opens storage internally and supplies a scoped handle:
+
+```python
+store = ctx.store
+await store.load_context(app)
+# Run agent/tools with the loaded application context.
+await store.save_context(app)
+```
+
+Connection open/close, thread/scope resolution, and lease ownership are
+framework responsibilities. The existing storage.open(thread_id) is an
+infrastructure API, not required in user entrypoints.
+
+The target handle adds load_context/save_context and application SQL/transaction
+operations. The current Python Thread handle exposes framework reads/runs,
+not arbitrary application SQL. The Rust connection already provides exec,
+query_all, and batch; the framework's Commit currently accepts only its
+known history/state/task/event fields. Exposing application transactions and
+joining application writes to framework commits require explicit implementation.
+The console's raw data-plane query access is not proof of a Python tool API.
+
+Do not place raw SQL inside the draft or assume that an arbitrary application
+write automatically joins the turn's transaction. Expose whether an operation
+participates in the managed unit of work or creates an independently committed
+transaction. Protect framework-owned schema/tables from accidental application
+DDL and writes through the application interface.
+
+For a payment, an independently committed preparation transaction is essential:
+
+```text
+AgentDB transaction: create/retrieve unique pending charge operation
+  -> commit before dispatch
+Payment provider: charge exact saved terms using operation ID as idempotency key
+AgentDB transaction: record outcome and related business changes
+  -> draft/checkpoint references that authoritative outcome
+```
+
+If preparation were staged until the end-of-turn commit, a charge could happen
+before its operation record existed durably. Explicit transaction completion
+must therefore mean durable commit before returning. Do not hold an open SQL
+transaction across network calls to a payment provider. Async dispatch can use
+an outbox committed with the operation record.
+
+After a provider timeout or crash between effect and outcome commit, reconcile
+the same operation; absence of a result is not proof no charge happened. Domain
+uniqueness constraints guard repeated semantic requests even when the LLM emits
+another tool call ID. Automatic persisted fields are working data, not a
+replacement for those constraints. Both can share one AgentDB while keeping
+separate commit boundaries.
+
+The hotel's current Hotel.bookings is an in-memory list; moving it to AgentDB
+business tables is future implementation work, not current example behavior.
 
 ## What is saved
 
@@ -30,9 +104,9 @@ JSON-shaped and under 64 KiB: a field that cannot be written as JSON raises
 
 ## The tables
 
-The schema is livekit/protocol `livekit/agent/thread_schema_v1.sql`, from
-the `protocol/` submodule; the framework runs it on a database's first
-write. JSONB columns hold JSON. The file
+The schema is livekit/protocol `livekit/agent/thread_schema_v1.sql`, which
+`livekit-protocol` carries as `agent::THREAD_SCHEMA_V1`; the framework runs it
+on a database's first write. JSONB columns hold JSON. The file
 tags each column with who reads it: the platform (the threads service's
 GetThreadItems and GetThreadTasks), the A2A methods, or the framework.
 `seq` is a position within a lane; `pos` on `items` and `tasks` is the
@@ -146,5 +220,5 @@ together when it ends, or not at all.
 - **A dead worker.** A run whose worker died is not run again: its task
   fails `worker-lost` when the next holder finds it, and the client resends.
 
-Background tasks and the timers that wake them are planned; see
-[planned-agent-tasks.md](planned-agent-tasks.md).
+Durable execution, operation outboxes, and durable timers are deferred.
+Context persistence remains in scope; see [state-and-deps.md](state-and-deps.md).

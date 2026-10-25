@@ -1,35 +1,42 @@
 //! The storage surface of `_core` (plan 13.4): `lk-agents-storage` as Python sees it. `Storage`
-//! holds the URLs and the key pair; `open(database_id)` dials one connection and returns a
-//! `ThreadDb` whose methods are the typed statements of plan 13.5; `Streams` and `Threads` are
-//! the answer streams and the threads service; `Lease` is a run's renewal timer.
+//! holds the URLs and the key pair; `open(database_id, holder)` dials one connection and returns
+//! a `Thread` (`turn.rs`); `Streams` and `Threads` are the answer streams and the threads service.
 //!
-//! Requests and results cross as the pydantic models `lk-agents-codegen` writes from the crate's
-//! `#[derive(Host)]` records (`livekit.agents._generated.storage*`): a request is a model (or a
-//! dict in its shape, which is what the model dumps to), and every result, row included, comes back
-//! as an instance of its model, validated by the class from the JSON the crate serialised. The
-//! transport underneath is JSON either way; Python never sees SQL. Every async method is an
-//! awaitable on the host loop.
+//! Records cross as the pydantic models `lk-agents-codegen` writes from the crate's
+//! `#[derive(Host)]` records (`livekit.agents._generated.storage*`): an argument is a model (or a
+//! dict in its shape, which is what the model dumps to), and every result comes back as an instance
+//! of its model, validated by the class from the JSON the crate serialised. Python never sees SQL.
+//! Every async method is an awaitable on the host loop.
 //!
 //! Errors are the exceptions of plan 5.2 and 13.5, all under `StorageError`: `ThreadNotFound`,
 //! `VersionConflict`, `NotSerializable`, `TooLarge`, `StorageUnavailable` (retryable) and
 //! `RunRejected` (the `reject` policy, with `running_task_id`); a turn the host cancelled raises
 //! `asyncio.CancelledError`; any other failure is a plain `StorageError`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py, value_to_py};
-use lk_agents_storage::statements::{
-    AcquireRequest, CommitRequest, Receive, ReceiveRequest, RunEndedRequest, SubmittedTask,
+use livekit_protocol::agent::agent_task::{GetTasksRequest, Status as TaskStatus, Task};
+use livekit_protocol::agent::agent_thread::{
+    CreateRequest, GetItemsRequest, GetItemsResponse, Item, ListRequest, ListResponse, Thread,
+    UpdateRequest,
 };
-use lk_agents_storage::threads::{ThreadInfo, ThreadTask, attributes_from_json, task_status};
-use lk_agents_storage::{StorageError as CoreError, StorageOptions, TokenMinter};
+use livekit_protocol::agent::chat_context::ChatItem;
+use livekit_protocol::agent_db;
+use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py, value_to_py};
+
+use crate::turn::PyThread;
+use lk_agents_host_derive::Host;
+use lk_agents_storage::{
+    StorageError as CoreError, StorageOptions, TokenMinter, service_error, thread_error,
+};
 use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pyo3::create_exception!(
@@ -202,17 +209,19 @@ pub struct PyStorage {
 
 #[pymethods]
 impl PyStorage {
-    /// `api_key` and `api_secret` default to `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
+    /// `url` is the project's `LIVEKIT_URL`; the public API agentstore is reached through is
+    /// derived from it.
     #[new]
-    #[pyo3(signature = (*, api_key=None, api_secret=None, lease_ttl=None, renew_interval=None))]
+    #[pyo3(signature = (*, url, api_key, api_secret, lease_ttl=None, renew_interval=None))]
     fn new(
-        api_key: Option<String>,
-        api_secret: Option<String>,
+        url: &str,
+        api_key: String,
+        api_secret: String,
         lease_ttl: Option<f64>,
         renew_interval: Option<f64>,
     ) -> PyResult<Self> {
         check_pid()?;
-        let mut opts = StorageOptions::from_env().map_err(to_py_err)?;
+        let mut opts = StorageOptions::new(url);
         if let Some(seconds) = lease_ttl {
             opts.lease_ttl = Duration::try_from_secs_f64(seconds)
                 .map_err(|e| PyValueError::new_err(format!("lease_ttl: {e}")))?;
@@ -221,12 +230,7 @@ impl PyStorage {
             opts.renew_interval = Duration::try_from_secs_f64(seconds)
                 .map_err(|e| PyValueError::new_err(format!("renew_interval: {e}")))?;
         }
-        let minter = match (api_key, api_secret) {
-            (Some(k), Some(s)) => TokenMinter::new(k, s),
-            (None, None) => TokenMinter::from_env(),
-            _ => Err(CoreError::Invalid("api_key and api_secret go together".into())),
-        }
-        .map_err(to_py_err)?;
+        let minter = TokenMinter::new(api_key, api_secret).map_err(to_py_err)?;
         let inner = lk_agents_storage::Storage::new(opts, minter).map_err(to_py_err)?;
         Ok(Self { inner })
     }
@@ -237,13 +241,19 @@ impl PyStorage {
         self.inner.options().url.clone()
     }
 
-    /// One connection to the session's database, with its schema version read. Awaitable.
-    fn open<'py>(&self, py: Python<'py>, database_id: String) -> PyResult<Bound<'py, PyAny>> {
+    /// One connection to a thread's database, as a `Thread` whose leases and waiter marks carry
+    /// `holder` and a handle id of its own. Awaitable.
+    fn open<'py>(
+        &self,
+        py: Python<'py>,
+        database_id: String,
+        holder: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let storage = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let db = storage.open(&database_id).await.map_err(to_py_err)?;
-            Ok(PyThreadDb { inner: db })
+            let thread = storage.open(&database_id, &holder).await.map_err(to_py_err)?;
+            Ok(PyThread { inner: thread })
         })
     }
 
@@ -256,7 +266,7 @@ impl PyStorage {
     /// The threads client.
     #[getter]
     fn threads(&self) -> PyThreads {
-        PyThreads { inner: self.inner.threads().clone() }
+        PyThreads { inner: self.inner.clone() }
     }
 
     /// `DatabaseService.CreateDatabase`, for development and tests: a `DatabaseInfo`.
@@ -267,13 +277,16 @@ impl PyStorage {
         ttl_seconds: i64,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let databases = self.inner.databases().clone();
-        awaitable!(py, databases.create_database(ttl_seconds), |py, out| model(
+        let storage = self.inner.clone();
+        let req = agent_db::CreateRequest { ttl: duration_of(ttl_seconds) };
+        awaitable!(
             py,
-            "storage",
-            "DatabaseInfo",
-            &out
-        ))
+            async move {
+                let created = storage.databases().create(req).await.map_err(service_error)?;
+                Ok::<_, CoreError>(DatabaseInfo::from(created))
+            },
+            |py, out| model(py, "storage", "DatabaseInfo", &out)
+        )
     }
 
     /// `DatabaseService.DeleteDatabase`.
@@ -283,335 +296,10 @@ impl PyStorage {
         database_id: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let databases = self.inner.databases().clone();
-        awaitable!(py, databases.delete_database(&database_id))
-    }
-}
-
-/// One session's database over one connection (plan 13.4), closed at run end. Requests are
-/// the models of `_generated/storage.py`; rows come back as their row models.
-#[pyclass(name = "ThreadDb", module = "livekit.agents._core", frozen)]
-pub struct PyThreadDb {
-    pub(crate) inner: lk_agents_storage::ThreadDb,
-}
-
-#[pymethods]
-impl PyThreadDb {
-    #[getter]
-    fn database_id(&self) -> String {
-        self.inner.conn().database_id().to_owned()
-    }
-
-    /// The durable commit sequence last observed on this connection.
-    #[getter]
-    fn tip(&self) -> i64 {
-        self.inner.conn().tip()
-    }
-
-    /// Ends the connection; every later call raises `StorageUnavailable`.
-    fn close(&self) {
-        self.inner.close();
-    }
-
-    /// The acquire and the load, one batch (plan 3.3.2): an `AcquireRequest`. The `Loaded` lane,
-    /// or `None` when another holder has the lease.
-    fn acquire<'py>(
-        &self,
-        py: Python<'py>,
-        request: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let req: AcquireRequest = parse_request(request, "acquire request")?;
-        let db = self.inner.clone();
-        awaitable!(py, db.acquire(&req), |py, out| opt_model(py, "storage", "Loaded", &out))
-    }
-
-    /// Releases the lease and writes nothing else: the path of an `already_committed` run.
-    fn release<'py>(
-        &self,
-        py: Python<'py>,
-        lane: String,
-        lease_token: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.release(&lane, &lease_token))
-    }
-
-    /// One renewal; `False` when the lease is no longer this holder's.
-    fn renew<'py>(
-        &self,
-        py: Python<'py>,
-        lane: String,
-        holder: String,
-        lease_token: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.renew(&lane, &holder, &lease_token))
-    }
-
-    /// The renewal timer: renews every three seconds until `Lease.stop()`; `Lease.lost()` resolves
-    /// with `StorageUnavailable` when a renew fails, which cancels the run.
-    fn start_renewal(&self, lane: &str, holder: &str, lease_token: &str) -> PyResult<PyLease> {
-        check_pid()?;
-        let _rt = enter_runtime();
-        Ok(PyLease { inner: self.inner.start_renewal(lane, holder, lease_token) })
-    }
-
-    /// The fenced commit (plan 5.2): a `CommitRequest`, answered with a `CommitResult`; raises
-    /// `VersionConflict` when the fence matched no row. A `None` fence is the `concurrent`
-    /// policy's append-only commit.
-    fn commit<'py>(
-        &self,
-        py: Python<'py>,
-        request: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let req: CommitRequest = parse_request(request, "commit request")?;
-        let db = self.inner.clone();
-        awaitable!(py, db.commit(&req), |py, out| model(py, "storage", "CommitResult", &out))
-    }
-
-    /// Leaving by exception: `run_ended` with the outcome, and the release; nothing else. A
-    /// `RunEndedRequest`.
-    fn run_ended<'py>(
-        &self,
-        py: Python<'py>,
-        request: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let req: RunEndedRequest = parse_request(request, "run_ended request")?;
-        let db = self.inner.clone();
-        awaitable!(py, db.run_ended(&req))
-    }
-
-    /// The inbox receive (plan 3.3.4): a `ReceiveRequest`, answered with a `Received` (the row's
-    /// id, and the version when this worker took the lease) or a `Duplicate` (the task the
-    /// `messageId` already belongs to).
-    fn receive<'py>(
-        &self,
-        py: Python<'py>,
-        request: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let req: ReceiveRequest = parse_request(request, "receive request")?;
-        let db = self.inner.clone();
-        awaitable!(py, db.receive(&req), |py, out: Receive| {
-            let name = match out {
-                Receive::Received(_) => "Received",
-                Receive::Duplicate(_) => "Duplicate",
-            };
-            model(py, "storage", name, &out)
+        let storage = self.inner.clone();
+        awaitable!(py, async move {
+            storage.databases().delete(&database_id).await.map_err(service_error)
         })
-    }
-
-    /// The early `submitted` row under interrupt, queue, concurrent and reject, before the lease
-    /// is tried: a `SubmittedTask`. `True` when inserted, `False` when the task or the message
-    /// already had a row.
-    fn insert_submitted_task<'py>(
-        &self,
-        py: Python<'py>,
-        task: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let task: SubmittedTask = parse_request(task, "submitted task")?;
-        let db = self.inner.clone();
-        awaitable!(py, db.insert_submitted_task(&task))
-    }
-
-    /// The drain check: a `DrainCheck`.
-    fn drain_check<'py>(
-        &self,
-        py: Python<'py>,
-        lane: String,
-        lease_token: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.drain_check(&lane, &lease_token), |py, out| model(
-            py,
-            "storage",
-            "DrainCheck",
-            &out
-        ))
-    }
-
-    /// Records a waiter under `interrupt`; `False` when the lease is free (acquire instead).
-    fn set_waiter<'py>(
-        &self,
-        py: Python<'py>,
-        lane: String,
-        waiter: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.set_waiter(&lane, &waiter))
-    }
-
-    /// The holder's boundary check: the waiting worker, or `None`.
-    fn waiter<'py>(&self, py: Python<'py>, lane: String) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.waiter(&lane))
-    }
-
-    /// Takes a `submitted` or orphaned `working` task to `working`: the status it had (`working`
-    /// means a dead holder had it), or `None` when it is terminal.
-    fn pickup_task<'py>(
-        &self,
-        py: Python<'py>,
-        lane: String,
-        task_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.pickup_task(&lane, &task_id))
-    }
-
-    /// A `working` row whose holder died ends `failed` with `status_message` (reason `worker-lost`).
-    fn mark_orphan_failed<'py>(
-        &self,
-        py: Python<'py>,
-        lane: String,
-        task_id: String,
-        status_message: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let message = value_from_py(status_message, "status_message")?;
-        let db = self.inner.clone();
-        awaitable!(py, db.mark_orphan_failed(&lane, &task_id, &message))
-    }
-
-    /// The journal, every lane, after `after_id`: `EventRow`s.
-    #[pyo3(signature = (after_id=0, limit=100))]
-    fn events<'py>(
-        &self,
-        py: Python<'py>,
-        after_id: i64,
-        limit: i64,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.events(after_id, limit), |py, out| models(py, "storage", "EventRow", out))
-    }
-
-    /// One lane's journal after `after_id`: `EventRow`s.
-    #[pyo3(signature = (lane, after_id=0))]
-    fn lane_events<'py>(
-        &self,
-        py: Python<'py>,
-        lane: String,
-        after_id: i64,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.lane_events(&lane, after_id), |py, out| models(
-            py, "storage", "EventRow", out
-        ))
-    }
-
-    /// Every lane row: `LaneRow`s.
-    fn lanes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.lanes(), |py, out| models(py, "storage", "LaneRow", out))
-    }
-
-    /// One `LaneRow`, or `None`.
-    fn lane<'py>(&self, py: Python<'py>, lane: String) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.lane(&lane), |py, out| opt_model(py, "storage", "LaneRow", &out))
-    }
-
-    /// The whole history of a lane: `ChatItemRow`s in `seq` order.
-    fn history<'py>(&self, py: Python<'py>, lane: String) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.history(&lane), |py, out| models(py, "storage", "ChatItemRow", out))
-    }
-
-    /// `TaskRow`s, newest first, optionally one status.
-    #[pyo3(signature = (lane, status=None, limit=50))]
-    fn tasks<'py>(
-        &self,
-        py: Python<'py>,
-        lane: String,
-        status: Option<String>,
-        limit: i64,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.tasks(&lane, status.as_deref(), limit), |py, out| models(
-            py, "storage", "TaskRow", out
-        ))
-    }
-
-    /// `working` rows a crashed holder left, in `seq` order: `TaskRow`s.
-    fn orphans<'py>(&self, py: Python<'py>, lane: String) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.orphans(&lane), |py, out| models(py, "storage", "TaskRow", out))
-    }
-
-    /// Every inbox row of the lane, drained ones included: `InboxRow`s.
-    fn inbox<'py>(&self, py: Python<'py>, lane: String) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.inbox(&lane), |py, out| models(py, "storage", "InboxRow", out))
-    }
-
-    /// The inbox rows above `drained_id`: `InboxRow`s.
-    fn inbox_pending<'py>(&self, py: Python<'py>, lane: String) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let db = self.inner.clone();
-        awaitable!(py, db.inbox_pending(&lane), |py, out| models(py, "storage", "InboxRow", out))
-    }
-}
-
-/// A held lease with its renewal timer (plan 3.3.2).
-#[pyclass(name = "Lease", module = "livekit.agents._core", frozen)]
-pub struct PyLease {
-    inner: lk_agents_storage::Lease,
-}
-
-#[pymethods]
-impl PyLease {
-    #[getter]
-    fn lane(&self) -> String {
-        self.inner.lane().to_owned()
-    }
-
-    #[getter]
-    fn holder(&self) -> String {
-        self.inner.holder().to_owned()
-    }
-
-    #[getter]
-    fn token(&self) -> String {
-        self.inner.token().to_owned()
-    }
-
-    #[getter]
-    fn is_lost(&self) -> bool {
-        self.inner.is_lost()
-    }
-
-    /// Resolves by raising `StorageUnavailable` once the lease is lost; pending while it is held.
-    /// Race it against the run.
-    fn lost<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        check_pid()?;
-        let lease = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let e = lease.lost().await;
-            Err::<(), PyErr>(to_py_err(e))
-        })
-    }
-
-    /// Ends the timer; the lease itself is released by the commit or `run_ended`.
-    fn stop(&self) {
-        self.inner.stop();
     }
 }
 
@@ -734,7 +422,7 @@ impl PyStreamReader {
 /// fields.
 #[pyclass(name = "Threads", module = "livekit.agents._core", frozen)]
 pub struct PyThreads {
-    inner: lk_agents_storage::Threads,
+    inner: lk_agents_storage::Storage,
 }
 
 #[pymethods]
@@ -755,7 +443,9 @@ impl PyThreads {
         awaitable!(
             py,
             async move {
-                let thread = threads.create_thread(&scope, attributes, idle_ttl_seconds).await;
+                let req =
+                    CreateRequest { scope, attributes, idle_ttl: duration_of(idle_ttl_seconds) };
+                let thread = threads.threads().create(req).await.map_err(thread_error);
                 thread.map(ThreadInfo::from)
             },
             thread_model
@@ -767,7 +457,9 @@ impl PyThreads {
         let threads = self.inner.clone();
         awaitable!(
             py,
-            async move { threads.get_thread(&thread_id).await.map(ThreadInfo::from) },
+            async move {
+                threads.threads().get(&thread_id).await.map_err(thread_error).map(ThreadInfo::from)
+            },
             thread_model
         )
     }
@@ -786,7 +478,10 @@ impl PyThreads {
         let (threads, scope, before) = (self.inner.clone(), scope.to_owned(), before.to_owned());
         awaitable!(
             py,
-            async move { threads.list_threads(&scope, &before, limit).await },
+            async move {
+                let req = ListRequest { scope, page_token: before, limit };
+                threads.threads().list(req).await.map_err(thread_error).map(ThreadPage::from)
+            },
             |py, out| model(py, "storage_threads", "ThreadPage", &out)
         )
     }
@@ -807,7 +502,9 @@ impl PyThreads {
         awaitable!(
             py,
             async move {
-                let thread = threads.update_thread(&thread_id, attributes, idle_ttl_seconds).await;
+                let idle_ttl = idle_ttl_seconds.and_then(duration_of);
+                let req = UpdateRequest { thread_id, attributes, idle_ttl };
+                let thread = threads.threads().update(req).await.map_err(thread_error);
                 thread.map(ThreadInfo::from)
             },
             thread_model
@@ -821,7 +518,10 @@ impl PyThreads {
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let threads = self.inner.clone();
-        awaitable!(py, threads.delete_thread(&thread_id))
+        awaitable!(
+            py,
+            async move { threads.threads().delete(&thread_id).await.map_err(thread_error) }
+        )
     }
 
     /// The thread's chat items, oldest first: a `ThreadItemPage`, whose `after` is the cursor
@@ -840,7 +540,16 @@ impl PyThreads {
         let (thread_id, agent, after) = (thread_id.to_owned(), agent.to_owned(), after.to_owned());
         awaitable!(
             py,
-            async move { threads.get_thread_items(&thread_id, &agent, &after, limit).await },
+            async move {
+                let req = GetItemsRequest {
+                    thread_id,
+                    agent,
+                    page_token: after,
+                    limit,
+                    ..Default::default()
+                };
+                threads.threads().items(req).await.map_err(thread_error).map(ThreadItemPage::from)
+            },
             |py, out| model(py, "storage_threads", "ThreadItemPage", &out)
         )
     }
@@ -859,12 +568,202 @@ impl PyThreads {
         awaitable!(
             py,
             async move {
-                let tasks = threads.get_thread_tasks(&thread_id, status).await?;
-                Ok::<_, CoreError>(tasks.into_iter().map(ThreadTask::from).collect::<Vec<_>>())
+                let mut tasks = Vec::new();
+                let mut page_token = String::new();
+                loop {
+                    let req = GetTasksRequest {
+                        thread_id: thread_id.clone(),
+                        status: status.map(i32::from),
+                        page_token,
+                        ..Default::default()
+                    };
+                    let r = threads.threads().tasks(req).await.map_err(thread_error)?;
+                    tasks.extend(r.tasks.into_iter().map(ThreadTask::from));
+                    if r.next_page_token.is_empty() {
+                        return Ok::<_, CoreError>(tasks);
+                    }
+                    page_token = r.next_page_token;
+                }
             },
             |py, out| models(py, "storage_threads", "ThreadTask", out)
         )
     }
+}
+
+// The thread records: what Python reads threads as (plan 4.3): the proto's fields, times as unix seconds and TTLs as
+// seconds, `0` for never. Python's livekit-protocol does not carry the thread messages.
+
+/// A database made through `DatabaseService.CreateDatabase`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Host)]
+#[python(pydantic, module = "storage", config = "frozen=True")]
+pub struct DatabaseInfo {
+    /// `DB_..`.
+    pub database_id: String,
+    /// Unix seconds; `0` for never.
+    pub expires_at: i64,
+}
+
+impl From<agent_db::CreateResponse> for DatabaseInfo {
+    fn from(r: agent_db::CreateResponse) -> Self {
+        Self { database_id: r.database_id, expires_at: seconds_of(r.expires_at) }
+    }
+}
+
+/// A `Timestamp` as unix seconds; `None` is `0`, never.
+pub fn seconds_of(t: Option<pbjson_types::Timestamp>) -> i64 {
+    t.map_or(0, |t| t.seconds)
+}
+
+/// A `Duration` as whole seconds; `None` is `0`.
+pub fn duration_seconds(d: Option<pbjson_types::Duration>) -> i64 {
+    d.map_or(0, |d| d.seconds)
+}
+
+/// Seconds as a `Duration` for the wire; `0` sends none, the server's default.
+pub fn duration_of(seconds: i64) -> Option<pbjson_types::Duration> {
+    (seconds > 0).then(|| pbjson_types::Duration::from(Duration::from_secs(seconds as u64)))
+}
+
+/// A thread as the host reads it (plan 4.3): the proto's fields, times as unix seconds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Host)]
+#[python(pydantic, module = "storage_threads", config = "frozen=True")]
+pub struct ThreadInfo {
+    pub thread_id: String,
+    /// The subject the thread belongs to, the one a grant is scoped by.
+    pub scope: String,
+    pub attributes: HashMap<String, String>,
+    pub created_at: i64,
+    pub last_active: i64,
+    /// Unix seconds; `0` for never.
+    pub expires_at: i64,
+    pub idle_ttl_seconds: i64,
+    /// The thread's database on agent-db, `DB_..`, created with the thread.
+    pub database_id: String,
+}
+
+impl From<Thread> for ThreadInfo {
+    fn from(t: Thread) -> Self {
+        Self {
+            thread_id: t.thread_id,
+            scope: t.scope,
+            attributes: t.attributes,
+            created_at: seconds_of(t.created_at),
+            last_active: seconds_of(t.last_active),
+            expires_at: seconds_of(t.expires_at),
+            idle_ttl_seconds: duration_seconds(t.idle_ttl),
+            database_id: t.database_id,
+        }
+    }
+}
+
+/// One page of `ListThreads`, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Host)]
+#[python(pydantic, module = "storage_threads", config = "frozen=True")]
+pub struct ThreadPage {
+    pub threads: Vec<ThreadInfo>,
+    /// The cursor for the next page; empty at the end.
+    pub before: String,
+}
+
+impl From<ListResponse> for ThreadPage {
+    fn from(r: ListResponse) -> Self {
+        Self {
+            threads: r.threads.into_iter().map(ThreadInfo::from).collect(),
+            before: r.next_page_token,
+        }
+    }
+}
+
+/// One chat item of a thread as the host reads it; `item` is the `ChatContext.ChatItem` as
+/// protobuf JSON.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
+#[python(pydantic, module = "storage_threads", config = "frozen=True")]
+pub struct ThreadItem {
+    pub agent: String,
+    /// Position in the agent's history.
+    pub seq: i64,
+    pub message_id: String,
+    #[python(ty = "dict[str, Any]", import = "typing:Any")]
+    pub item: ChatItem,
+}
+
+impl From<Item> for ThreadItem {
+    fn from(i: Item) -> Self {
+        Self {
+            agent: i.agent,
+            seq: i.seq,
+            message_id: i.message_id,
+            item: i.item.unwrap_or_default(),
+        }
+    }
+}
+
+/// One page of `GetThreadItems`, oldest first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
+#[python(pydantic, module = "storage_threads", config = "frozen=True")]
+pub struct ThreadItemPage {
+    pub items: Vec<ThreadItem>,
+    /// The cursor for the next page; empty at the end.
+    pub after: String,
+}
+
+impl From<GetItemsResponse> for ThreadItemPage {
+    fn from(r: GetItemsResponse) -> Self {
+        Self {
+            items: r.items.into_iter().map(ThreadItem::from).collect(),
+            after: r.next_page_token,
+        }
+    }
+}
+
+/// One background task of a thread, as `GetThreadTasks` answers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Host)]
+#[python(pydantic, module = "storage_threads", config = "frozen=True")]
+pub struct ThreadTask {
+    pub task_id: String,
+    pub thread_id: String,
+    pub name: String,
+    /// `running`, `completed`, `failed` or `canceled`.
+    pub status: String,
+    pub updated_at: i64,
+}
+
+impl From<Task> for ThreadTask {
+    fn from(t: Task) -> Self {
+        let status = TaskStatus::try_from(t.status).unwrap_or_default();
+        Self {
+            task_id: t.task_id,
+            thread_id: t.thread_id,
+            name: t.name,
+            status: status.as_str_name().to_lowercase(),
+            updated_at: seconds_of(t.updated_at),
+        }
+    }
+}
+
+/// A task status from the host, `running` and so on; `None` for every status.
+pub fn task_status(status: Option<&str>) -> Result<Option<TaskStatus>, CoreError> {
+    status
+        .map(|s| {
+            TaskStatus::from_str_name(&s.to_uppercase())
+                .ok_or_else(|| CoreError::Invalid(format!("unknown task status {s}")))
+        })
+        .transpose()
+}
+
+/// `attributes` from the host: a string map.
+pub fn attributes_from_json(v: Option<&Value>) -> Result<HashMap<String, String>, CoreError> {
+    let Some(v) = v else { return Ok(HashMap::new()) };
+    let obj = v
+        .as_object()
+        .ok_or_else(|| CoreError::Invalid("attributes must be an object of strings".into()))?;
+    obj.iter()
+        .map(|(k, v)| {
+            v.as_str()
+                .map(|s| (k.clone(), s.to_owned()))
+                .ok_or_else(|| CoreError::Invalid(format!("attribute {k} is not a string")))
+        })
+        .collect()
 }
 
 /// A `ThreadInfo` as its model.
@@ -873,8 +772,6 @@ fn thread_model(py: Python<'_>, s: ThreadInfo) -> PyResult<Py<PyAny>> {
 }
 
 lk_agents_abi::register_host!(class PyStorage);
-lk_agents_abi::register_host!(class PyThreadDb);
-lk_agents_abi::register_host!(class PyLease);
 lk_agents_abi::register_host!(class PyStreams);
 lk_agents_abi::register_host!(class PyStreamReader);
 lk_agents_abi::register_host!(class PyThreads);
@@ -890,13 +787,12 @@ lk_agents_abi::register_host!(exception RunRejected);
 mod tests {
     use super::*;
 
-    // Catches: an error of plan 13.5 landing on the wrong Python class, or `Invalid` (a caller's
-    // mistake) raising the retryable one.
     #[test]
     fn core_errors_map_to_their_exceptions() {
+        type Class = fn(Python<'_>) -> Bound<'_, pyo3::types::PyType>;
         Python::initialize();
         Python::attach(|py| {
-            let cases: [(CoreError, fn(Python<'_>) -> Bound<'_, pyo3::types::PyType>); 6] = [
+            let cases: [(CoreError, Class); 6] = [
                 (CoreError::ThreadNotFound("x".into()), |py| py.get_type::<ThreadNotFound>()),
                 (CoreError::VersionConflict { lane: "l".into(), expected: 1 }, |py| {
                     py.get_type::<VersionConflict>()
@@ -914,7 +810,7 @@ mod tests {
             ];
             for (err, class) in cases {
                 let e = to_py_err(err);
-                assert!(e.get_type(py).is(&class(py)), "{e}");
+                assert!(e.get_type(py).is(class(py)), "{e}");
                 assert!(e.is_instance_of::<StorageError>(py));
             }
             assert!(to_py_err(CoreError::Invalid("x".into())).is_instance_of::<PyValueError>(py));
@@ -938,22 +834,22 @@ mod tests {
     fn requests_and_results_cross_as_models() {
         Python::initialize();
         Python::attach(|py| {
-            let d = py.eval(c"{'lane': 'l', 'lease_token': 't'}", None, None).unwrap();
-            let e = parse_request::<RunEndedRequest>(&d, "run_ended request").unwrap_err();
+            let d = py.eval(c"{'id': 'i'}", None, None).unwrap();
+            let e = parse_request::<lk_agents_storage::run::ItemRow>(&d, "item").unwrap_err();
             assert!(e.is_instance_of::<PyValueError>(py), "{e}");
-            assert!(e.to_string().contains("run_id"), "{e}");
+            assert!(e.to_string().contains("payload"), "{e}");
 
             // a pydantic model is whatever `model_dump(mode="json")` says it is
             let ns = PyDict::new(py);
             py.run(
-                c"class M:\n    def model_dump(self, mode):\n        assert mode == 'json'\n        return {'lane': 'l', 'run_id': 'r', 'lease_token': 't', 'ts_ms': 1, 'payload': {}}\n",
+                c"class M:\n    def model_dump(self, mode):\n        assert mode == 'json'\n        return {'id': 'i', 'payload': {'message': {'id': 'i'}}}\n",
                 None,
                 Some(&ns),
             )
             .unwrap();
             let m = ns.get_item("M").unwrap().unwrap().call0().unwrap();
-            let req: RunEndedRequest = parse_request(&m, "run_ended request").unwrap();
-            assert_eq!(req.run_id, "r");
+            let item: lk_agents_storage::run::ItemRow = parse_request(&m, "item").unwrap();
+            assert_eq!((item.id.as_str(), item.message_id.as_deref()), ("i", None));
 
             // a result reaches `model_validate` as the crate's JSON
             py.run(
@@ -963,18 +859,40 @@ mod tests {
             )
             .unwrap();
             let class = ns.get_item("Row").unwrap().unwrap();
-            let row = lk_agents_storage::schema::ChatItemRow {
-                id: "i".into(),
-                lane: "l".into(),
-                seq: 1,
-                message_id: None,
-                payload: serde_json::json!({"type": "message", "role": "user"}),
-            };
-            let out = validate(py, &class, &serde_json::to_value(&row).unwrap()).unwrap();
+            let out = validate(py, &class, &serde_json::to_value(&item).unwrap()).unwrap();
             let (tag, d): (String, Bound<'_, PyDict>) = out.extract(py).unwrap();
             assert_eq!(tag, "validated");
-            assert_eq!(d.get_item("lane").unwrap().unwrap().extract::<String>().unwrap(), "l");
+            assert_eq!(d.get_item("id").unwrap().unwrap().extract::<String>().unwrap(), "i");
             assert!(d.get_item("message_id").unwrap().unwrap().is_none());
         });
+    }
+
+    #[test]
+    fn a_thread_renders_with_the_proto_field_names() {
+        let t =
+            Thread { thread_id: "AT_1".into(), database_id: "DB_1".into(), ..Default::default() };
+        let v = serde_json::to_value(ThreadInfo::from(t)).unwrap();
+        assert_eq!(v["thread_id"], "AT_1");
+        assert_eq!(v["expires_at"], 0, "no timestamp is never");
+        assert_eq!(seconds_of(Some(pbjson_types::Timestamp { seconds: 7, nanos: 0 })), 7);
+        assert_eq!(duration_of(0), None);
+        assert_eq!(duration_seconds(duration_of(90)), 90);
+        assert_eq!(v["database_id"], "DB_1");
+        assert!(attributes_from_json(Some(&serde_json::json!({"a": 1}))).is_err());
+        let task = Task { status: TaskStatus::Running.into(), ..Default::default() };
+        assert_eq!(ThreadTask::from(task).status, "running");
+        assert_eq!(task_status(Some("completed")).unwrap(), Some(TaskStatus::Completed));
+        assert!(task_status(Some("nope")).is_err());
+    }
+
+    #[test]
+    fn a_thread_item_keeps_its_chat_item() {
+        use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
+        let message = chat_item::Item::Message(Default::default());
+        let item =
+            Item { seq: 3, item: Some(ChatItem { item: Some(message) }), ..Default::default() };
+        let v = serde_json::to_value(ThreadItem::from(item)).unwrap();
+        assert_eq!(v["seq"], 3);
+        assert!(v["item"].get("message").is_some(), "the item crosses, not null: {v}");
     }
 }

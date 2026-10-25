@@ -127,5 +127,6 @@ fn preemptive_guess() -> Case {
         setup: Setup { stt: true, turn: TurnMode::Stt, preemptive: true, ..Setup::default() },
         inputs,
         schedule: 0,
+        random: vec![],
     }
 }

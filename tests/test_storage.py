@@ -16,14 +16,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import Agent, AgentTask, InputRequired, RunContext, _core
-from livekit.agents._generated.storage import (
-    LaneRow,
-    Received,
-    ReceiveRequest,
-    SubmittedTask,
-    TaskData,
-)
-from livekit.agents._generated.storage_run import TaskRecord
+from livekit.agents._generated.storage_run import LaneRow, TaskRow
 from livekit.agents._generated.storage_turn import TurnOptions, TurnResult
 from livekit.agents.a2a.endpoint import A2AEndpoint
 from livekit.agents.llm import ChatItem, FunctionToolCall
@@ -96,8 +89,7 @@ async def run_turn(
         thread=Thread(storage, thread_id, agent_name=lane),
         state_type=state_type,
     )
-    db = await storage.open(thread_id)
-    core = _core.Thread(db, storage.holder)
+    core = await storage.open(thread_id)
     try:
         return await _core.Turn(core, lane, host, options).run(message, task_id)
     finally:
@@ -108,28 +100,27 @@ async def history_items(storage: AgentDBStorage, thread_id: str, lane: str) -> l
     return (await Thread(storage, thread_id, agent_name=lane).chat_history()).items
 
 
-async def tasks_of(storage: AgentDBStorage, thread_id: str, lane: str) -> list[TaskRecord]:
+async def tasks_of(storage: AgentDBStorage, thread_id: str, lane: str) -> list[TaskRow]:
     return await Thread(storage, thread_id, agent_name=lane).tasks()
 
 
 async def task_of(
     storage: AgentDBStorage, thread_id: str, lane: str, task_id: str
-) -> TaskRecord | None:
-    return next((t for t in await tasks_of(storage, thread_id, lane) if t.id == task_id), None)
+) -> TaskRow | None:
+    return next((t for t in await tasks_of(storage, thread_id, lane) if t.task_id == task_id), None)
 
 
 async def lane_row(storage: AgentDBStorage, thread_id: str, lane: str) -> LaneRow | None:
-    db = await storage.open(thread_id)
+    core = await storage.open(thread_id)
     try:
-        return await db.lane(lane)
+        return await core.lane_info(lane)
     finally:
-        db.close()
+        core.close()
 
 
 async def run_outcomes(storage: AgentDBStorage, thread_id: str) -> list[str]:
     """What ``run_ended`` recorded, oldest first."""
-    db = await storage.open(thread_id)
-    core = _core.Thread(db, storage.holder)
+    core = await storage.open(thread_id)
     try:
         events = await core.events()
     finally:
@@ -173,7 +164,7 @@ async def test_a_raising_handler_fails_the_task_and_keeps_the_message(
 
     result = await run_turn(storage, sid, LANE, a2a("hello", "m1"), "queue", boom)
     assert result.task.status == "failed"
-    assert result.task.status_message["parts"][0]["text"] == "RuntimeError: boom"
+    assert result.task.data.status_message["parts"][0]["text"] == "RuntimeError: boom"
     assert [i.text_content for i in await history_items(storage, sid, LANE)] == ["hello"]
     assert await run_outcomes(storage, sid) == ["failed"]
 
@@ -259,7 +250,7 @@ async def test_the_interrupting_turn_outlives_the_lease_ttl(agentdb_workers: Wor
 
     r1 = await first
     r2 = await second
-    # the first handler has no boundary inside it, so it completes rather than yields
+    # the first handler has no checkpoint inside it, so it completes rather than yields
     assert r1.task.status == "completed"
     assert r2.task.status == "completed" and r2.output == "late reply"
     items = await history_items(b, sid, LANE)
@@ -303,7 +294,7 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
     first = asyncio.create_task(run_turn(a, sid, LANE, a2a("first", "m1"), "interrupt", handler))
     await tool_entered.wait()
     second = asyncio.create_task(run_turn(b, sid, LANE, a2a("second", "m2"), "interrupt", handler))
-    # B fails the lease and records itself as waiting; A sees it at its next boundary
+    # B fails the lease and records itself as waiting; A sees it at its next checkpoint
     for _ in range(100):
         row = await lane_row(b, sid, LANE)
         if row is not None and (row.waiter or "").startswith("worker-b/"):
@@ -360,8 +351,8 @@ async def test_inbox_batches_a_burst_into_one_reply(agentdb_workers: Workers) ->
 
     assert batches == [["where", "are you"]]
     assert r1.task.status == "completed" and not r1.task.data.artifacts
-    assert r1.task.data.metadata[MERGED_INTO_KEY] == r2.task.id
-    assert r1.answered_by == r2.task.id
+    assert r1.task.data.metadata[MERGED_INTO_KEY] == r2.task.task_id
+    assert r1.answered_by == r2.task.task_id
     assert r2.task.status == "completed" and r2.output == "one reply"
     items = await history_items(a, sid, LANE)
     assert [i.role for i in items if i.type == "message"] == ["user", "assistant"]
@@ -381,46 +372,50 @@ async def test_message_id_resend_returns_the_existing_task(
     again = await run_turn(
         storage, sid, LANE, a2a("hi", "m1", channel="sms"), None, echo, debounce=timedelta(0)
     )
-    assert again.task.id == first.task.id and again.output == first.output
+    assert again.task.task_id == first.task.task_id and again.output == first.output
     # under interrupt the task row holds the message id
     first = await run_turn(storage, sid, LANE, a2a("yo", "m2"), "interrupt", echo)
     again = await run_turn(storage, sid, LANE, a2a("yo", "m2"), "interrupt", echo)
-    assert again.task.id == first.task.id
+    assert again.task.task_id == first.task.task_id
     assert len(await history_items(storage, sid, LANE)) == 4
 
 
 # -- the lease --
 
 
-def receive(task_id: str, message_id: str, text: str, *, lease_token: str) -> ReceiveRequest:
-    message = a2a(text, message_id, channel="sms")
-    return ReceiveRequest(
-        lane=LANE,
-        holder="worker-a",
-        lease_token=lease_token,
-        task_id=task_id,
-        message_id=message_id,
-        message=message,
-        data=TaskData(history=[message]),
-    )
-
-
 async def test_a_lapsed_lease_fails_the_orphan_worker_lost(agentdb_workers: Workers) -> None:
     a, b = agentdb_workers
     sid = await new_session(a, LANE)
-    db = await a.open(sid)
-
-    # worker A receives, picks the task up, and dies before its commit
-    received = await db.receive(receive("AST_1", "m1", "first", lease_token="ta"))
-    assert isinstance(received, Received) and received.acquired == 0
-    assert await db.pickup_task(LANE, "AST_1") == "submitted"
-    await let_the_lease_lapse()
-
+    entered = asyncio.Event()
+    never = asyncio.Event()
     batches: list[list[str]] = []
+
+    async def stuck(ctx: A2ASessionContext[Any]) -> str:
+        entered.set()
+        await never.wait()
+        return "late"
 
     async def handler(ctx: A2ASessionContext[Any]) -> str:
         batches.append([m.parts[0]["text"] for m in ctx.messages])
         return "answered"
+
+    # worker A receives, its drain picks the task up, and it dies before its commit
+    dead = asyncio.create_task(
+        run_turn(
+            a,
+            sid,
+            LANE,
+            a2a("first", "m1", channel="sms"),
+            None,
+            stuck,
+            debounce=timedelta(0),
+            task_id="AST_1",
+        )
+    )
+    await entered.wait()
+    dead.cancel()
+    await asyncio.gather(dead, return_exceptions=True)
+    await let_the_lease_lapse()
 
     # worker B takes the lane for the next message: the orphan fails worker-lost, not run again
     r2 = await run_turn(
@@ -432,8 +427,7 @@ async def test_a_lapsed_lease_fails_the_orphan_worker_lost(agentdb_workers: Work
     # the inbox drain picked the row up once more and found it working: a dead holder had it
     lost = await task_of(b, sid, LANE, "AST_1")
     assert lost is not None and lost.status == "failed"
-    assert lost.status_message["metadata"]["livekit/reason"] == "worker-lost"
-    db.close()
+    assert lost.data.status_message["metadata"]["livekit/reason"] == "worker-lost"
 
 
 async def test_a_resend_after_the_holder_died_fails_worker_lost(
@@ -462,13 +456,13 @@ async def test_a_resend_after_the_holder_died_fails_worker_lost(
     await let_the_lease_lapse()  # the lease lapses with no renewal
 
     lost = await run_turn(b, sid, LANE, a2a("hello", "m1"), "interrupt", echo)
-    assert lost.task.id == "AST_x" and lost.task.status == "failed"
-    assert lost.task.status_message["metadata"]["livekit/reason"] == "worker-lost"
+    assert lost.task.task_id == "AST_x" and lost.task.status == "failed"
+    assert lost.task.data.status_message["metadata"]["livekit/reason"] == "worker-lost"
     assert lost.task.data.history == [a2a("hello", "m1")]
     assert await history_items(b, sid, LANE) == []
 
     again = await run_turn(b, sid, LANE, a2a("hello again", "m2"), "interrupt", echo)
-    assert again.task.id != "AST_x" and again.task.status == "completed"
+    assert again.task.task_id != "AST_x" and again.task.status == "completed"
     assert again.output == "reply to: hello again"
     items = await history_items(b, sid, LANE)
     assert [i.text_content for i in items] == ["hello again", "reply to: hello again"]
@@ -517,16 +511,16 @@ async def test_input_required_pending_call_is_the_next_messages_output(
         "tool": "request_photo",
         "call_id": "p1",
     }
-    assert first.task.status_message["parts"][0]["text"] == "Could you send a photo?"
+    assert first.task.data.status_message["parts"][0]["text"] == "Could you send a photo?"
 
     second = await run_turn(storage, sid, LANE, a2a("here it is", "m2"), "interrupt", handler)
     assert second.output == "thanks"
     items = await history_items(storage, sid, LANE)
     outputs = [i for i in items if i.type == "function_call_output" and i.call_id == "p1"]
     assert outputs[0].output == "here it is"
-    answered = await task_of(storage, sid, LANE, first.task.id)
+    answered = await task_of(storage, sid, LANE, first.task.task_id)
     assert answered is not None and answered.status == "completed"
-    assert answered.data.metadata[MERGED_INTO_KEY] == second.task.id
+    assert answered.data.metadata[MERGED_INTO_KEY] == second.task.task_id
 
 
 async def test_requires_approval_asks_then_runs_on_the_approved_call(
@@ -584,7 +578,7 @@ async def test_requires_approval_asks_then_runs_on_the_approved_call(
     assert "approved" not in json.dumps(build_legacy_openai_schema(cancel_appointment))
     first = await run_turn(storage, sid, LANE, a2a("cancel monday", "m1"), "interrupt", handler)
     assert first.task.status == "input-required" and ran == []
-    assert first.task.status_message["parts"][0]["text"] == (
+    assert first.task.data.status_message["parts"][0]["text"] == (
         "Please confirm: Cancel the appointment on a date (date='monday'). Yes or no?"
     )
     second = await run_turn(storage, sid, LANE, a2a("yes", "m2"), "interrupt", handler)
@@ -638,7 +632,7 @@ async def test_reject_refuses_while_a_turn_runs(agentdb_workers: Workers) -> Non
         await run_turn(b, sid, LANE, a2a("two", "m2"), "reject", echo)
     gate.set()
     r1 = await first
-    assert excinfo.value.running_task_id == r1.task.id, "the error names the running task"
+    assert excinfo.value.running_task_id == r1.task.task_id, "the error names the running task"
     assert r1.output == "slow"
 
 
@@ -679,14 +673,8 @@ async def test_a_submitted_row_exists_while_the_turn_runs(
     result = await turn
     after = await task_of(b, sid, LANE, "AST_early")
     assert after is not None and after.status == "completed" and after.seq == 1
-    assert result.task.id == "AST_early" and result.output == "done"
+    assert result.task.task_id == "AST_early" and result.output == "done"
     assert len(await tasks_of(b, sid, LANE)) == 1, "the commit moved the early row, not added one"
-    # a resend of the message inserts no second row
-    db = await b.open(sid)
-    assert not await db.insert_submitted_task(
-        SubmittedTask(lane=LANE, task_id="AST_other", message_id="m1")
-    )
-    db.close()
 
 
 async def test_a_lease_timeout_fails_the_early_row(agentdb_workers: Workers) -> None:
@@ -708,7 +696,7 @@ async def test_a_lease_timeout_fails_the_early_row(agentdb_workers: Workers) -> 
         b, sid, LANE, a2a("two", "m2"), "queue", echo, task_id="AST_2", wait_timeout=0.05
     )
     assert second.task.status == "failed"
-    assert second.task.status_message["metadata"]["livekit/reason"] == "lease-timeout"
+    assert second.task.data.status_message["metadata"]["livekit/reason"] == "lease-timeout"
     row = await task_of(b, sid, LANE, "AST_2")
     assert row is not None and row.status == "failed", "persisted, not the unwritten stand-in"
     gate.set()
@@ -893,8 +881,7 @@ async def test_create_thread_creates_the_database(agentdb_storage: AgentDBStorag
     assert info.database_id == created.database_id
     second = await run_turn(storage, thread_id, "front", a2a("again", "m2"), "queue", echo)
     assert second.output == "reply to: again"
-    db = await storage.open_database(info.database_id)
-    core = _core.Thread(db, storage.holder)
+    core = await storage.open_database(info.database_id)
     items = await core.history("front")
     assert [i.payload["content"][0] for i in items] == [
         "hi",

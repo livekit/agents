@@ -87,9 +87,12 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
             .into();
     };
     if !input.generics.params.is_empty() {
-        return syn::Error::new_spanned(&input.generics, "#[derive(Vocabulary)] does not support generic enums")
-            .to_compile_error()
-            .into();
+        return syn::Error::new_spanned(
+            &input.generics,
+            "#[derive(Vocabulary)] does not support generic enums",
+        )
+        .to_compile_error()
+        .into();
     }
     let snake = to_snake(&name.to_string());
     let module = quote::format_ident!("{snake}_vocabulary");
@@ -97,13 +100,19 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
     let coverage_fn = quote::format_ident!("{snake}_coverage");
     let variants: Vec<&syn::Ident> = data.variants.iter().map(|v| &v.ident).collect();
     let names: Vec<String> = variants.iter().map(|v| v.to_string()).collect();
-    let bounds = variants.iter().map(|v| quote::quote!(::lk_agents_abi::utils::vocabulary::Covers<#module::#v, With = S>));
+    let bounds = variants
+        .iter()
+        .map(|v| quote::quote!(::lk_agents_abi::utils::vocabulary::Covers<#module::#v, With = S>));
     let bounds2 = bounds.clone();
     let mut kind = None;
     for a in input.attrs.iter().filter(|a| a.path().is_ident("vocabulary")) {
         if let Err(e) = a.parse_nested_meta(|m| {
             kind = Some(m.value()?.parse::<syn::Ident>()?);
-            if m.path.is_ident("kind") { Ok(()) } else { Err(m.error("#[vocabulary] takes `kind = Name`")) }
+            if m.path.is_ident("kind") {
+                Ok(())
+            } else {
+                Err(m.error("#[vocabulary] takes `kind = Name`"))
+            }
         }) {
             return e.to_compile_error().into();
         }
@@ -198,7 +207,8 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// `#[host(wire(err = .., msg = ..))]`.
 #[proc_macro_attribute]
 pub fn host(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let in_place = lk_agents_bindgen::in_place(proc_macro::Span::call_site().local_file().as_deref());
+    let in_place =
+        lk_agents_bindgen::in_place(proc_macro::Span::call_site().local_file().as_deref());
     expand_host(attr.into(), item.into(), in_place).into()
 }
 
@@ -209,7 +219,11 @@ const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, 
     `stream` on a type, `client`/`kwargs` on a struct, `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
     `file` on `const _`, or `group` on an inline mod";
 
-fn expand_host(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream, in_place: bool) -> proc_macro2::TokenStream {
+fn expand_host(
+    attr: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+    in_place: bool,
+) -> proc_macro2::TokenStream {
     use syn::Item as I;
     let head = attr.clone().into_iter().next().map(|t| t.to_string());
     let mut parsed: syn::Item = match syn::parse2(item) {
@@ -251,7 +265,10 @@ fn expand_host(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream, i
     if let (I::Enum(e), Some(head @ ("wire_enum" | "wire_strs"))) = (&mut parsed, head.as_deref()) {
         let tokens = lk_agents_bindgen::Metas::parse(attr.clone()).and_then(|m| {
             let prefix = format!("{head}.");
-            m.only(&format!("`host({head})` on {}", e.ident), &[head, &format!("{prefix}err"), &format!("{prefix}msg")])?;
+            m.only(
+                &format!("`host({head})` on {}", e.ident),
+                &[head, &format!("{prefix}err"), &format!("{prefix}msg")],
+            )?;
             wire_strs(&e.ident, &e.generics, e.variants.iter(), &m, &prefix)
         });
         match tokens {
@@ -264,7 +281,11 @@ fn expand_host(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream, i
 }
 
 /// The item's in-place binding (`lk-agents-bindgen`); the pairing is checked by the caller.
-fn expand(attr: &proc_macro2::TokenStream, parsed: &syn::Item, head: Option<&str>) -> syn::Result<proc_macro2::TokenStream> {
+fn expand(
+    attr: &proc_macro2::TokenStream,
+    parsed: &syn::Item,
+    head: Option<&str>,
+) -> syn::Result<proc_macro2::TokenStream> {
     use syn::Item as I;
     let attr = attr.clone();
     match (parsed, head) {
@@ -292,7 +313,9 @@ fn expand(attr: &proc_macro2::TokenStream, parsed: &syn::Item, head: Option<&str
 fn strip(item: &mut syn::Item, group: bool) {
     let words: &[&str] = if group { &["host", "python", "node", "binding"] } else { &["host"] };
     let clean = |attrs: &mut Vec<syn::Attribute>| {
-        attrs.retain(|a| !a.path().segments.last().is_some_and(|s| words.iter().any(|w| s.ident == w)));
+        attrs.retain(|a| {
+            !a.path().segments.last().is_some_and(|s| words.iter().any(|w| s.ident == w))
+        });
     };
     let params = |inputs: &mut syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>| {
         for input in inputs {
@@ -391,19 +414,31 @@ fn wire_strs<'a>(
     let mut arms: Vec<(String, syn::Ident)> = Vec::new();
     for v in variants {
         if !matches!(v.fields, syn::Fields::Unit) {
-            return Err(syn::Error::new_spanned(&v.ident, "a wire-string variant carries no data: the host sees a string"));
+            return Err(syn::Error::new_spanned(
+                &v.ident,
+                "a wire-string variant carries no data: the host sees a string",
+            ));
         }
         let vm = lk_agents_bindgen::Metas::of(&v.attrs)?;
         vm.only(&format!("{name}::{}", v.ident), &["rename"])?;
-        let wire = vm.text("rename")?.map(str::to_owned).unwrap_or_else(|| to_snake(&v.ident.to_string()));
+        let wire =
+            vm.text("rename")?.map(str::to_owned).unwrap_or_else(|| to_snake(&v.ident.to_string()));
         if arms.iter().any(|(w, _)| w == &wire) {
-            return Err(syn::Error::new_spanned(&v.ident, format!("two variants have the wire string {wire:?}")));
+            return Err(syn::Error::new_spanned(
+                &v.ident,
+                format!("two variants have the wire string {wire:?}"),
+            ));
         }
         arms.push((wire, v.ident.clone()));
     }
-    let err = m.ty(&format!("{prefix}err"))?.map(|t| quote::quote!(#t)).unwrap_or_else(|| quote::quote!(::std::string::String));
+    let err = m
+        .ty(&format!("{prefix}err"))?
+        .map(|t| quote::quote!(#t))
+        .unwrap_or_else(|| quote::quote!(::std::string::String));
     let label = name.to_string();
-    let msg = m.expr(&format!("{prefix}msg"))?.unwrap_or_else(|| quote::quote!(::std::format!("unknown {} {:?}", #label, s)));
+    let msg = m
+        .expr(&format!("{prefix}msg"))?
+        .unwrap_or_else(|| quote::quote!(::std::format!("unknown {} {:?}", #label, s)));
     let n = arms.len();
     let (wires, idents): (Vec<_>, Vec<_>) = arms.into_iter().unzip();
     Ok(quote::quote! {
@@ -449,7 +484,10 @@ mod tests {
         .to_string();
         assert!(!out.contains("getter") && out.contains("inline"), "{out}");
         let item = quote! { pub fn f(x: u8) -> u8 { x } };
-        assert_eq!(super::expand_host(quote!(export), item.clone(), false).to_string(), item.to_string());
+        assert_eq!(
+            super::expand_host(quote!(export), item.clone(), false).to_string(),
+            item.to_string()
+        );
         let out = super::expand_host(quote!(object), quote! { pub fn f() {} }, false).to_string();
         assert!(out.contains("compile_error"), "{out}");
         let out = super::expand_host(quote!(export), quote! { struct S; }, false).to_string();
@@ -498,7 +536,10 @@ mod tests {
         .to_string();
         assert!(out.contains("Mode :: OnAir => \"on-air\""), "{out}");
         assert!(out.contains("Mode :: SlowStart => \"slow_start\""), "{out}");
-        assert!(out.contains("\"on-air\" => :: core :: option :: Option :: Some (Mode :: OnAir)"), "{out}");
+        assert!(
+            out.contains("\"on-air\" => :: core :: option :: Option :: Some (Mode :: OnAir)"),
+            "{out}"
+        );
         assert!(out.contains("pub const ALL : [Mode ; 2usize]"), "{out}");
         assert!(out.contains("unknown {} {:?}") && out.contains("IntoPyObject"), "{out}");
         assert!(!out.contains("# [host"), "the variant markers are stripped: {out}");
@@ -508,7 +549,10 @@ mod tests {
             true,
         )
         .to_string();
-        assert!(out.contains("type Err = Bad") && out.contains("ok_or_else (|| Bad (s . to_owned ()))"), "{out}");
+        assert!(
+            out.contains("type Err = Bad") && out.contains("ok_or_else (|| Bad (s . to_owned ()))"),
+            "{out}"
+        );
         assert!(!out.contains("IntoPyObject"), "wire_strs binds nothing: {out}");
         let input: syn::DeriveInput = syn::parse_quote! {
             // Spaced so the layout check does not read the fixture as a declaration.
@@ -517,7 +561,8 @@ mod tests {
         };
         let out = super::derive_host(&input).expect("expands").to_string();
         assert!(out.contains("Mode :: A => \"a\"") && out.contains("unknown mode {s:?}"), "{out}");
-        let out = super::expand_host(quote!(wire_enum), quote! { enum E { A(u8) } }, false).to_string();
+        let out =
+            super::expand_host(quote!(wire_enum), quote! { enum E { A(u8) } }, false).to_string();
         assert!(out.contains("compile_error") && out.contains("carries no data"), "{out}");
         let out = super::expand_host(
             quote!(wire_enum),
@@ -527,5 +572,4 @@ mod tests {
         .to_string();
         assert!(out.contains("compile_error") && out.contains("two variants"), "{out}");
     }
-
 }

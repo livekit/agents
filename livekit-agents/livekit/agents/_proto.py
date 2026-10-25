@@ -7,7 +7,7 @@ every path that puts a ChatItem on the wire can share one implementation.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from google.protobuf.message import Message
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -34,6 +34,8 @@ ROLES = {
     "user": _pb.USER,
     "assistant": _pb.ASSISTANT,
 }
+
+ROLE_NAMES = {v: k for k, v in ROLES.items()}
 
 # which ModelUsage variant each usage type fills, and the proto carrying it
 USAGE_VARIANTS: tuple[tuple[type, str, type[Message]], ...] = (
@@ -98,7 +100,11 @@ def encode_chat_item(item: ChatItem) -> _pb.ChatContext.ChatItem:
             )
         )
     elif item.type == "function_call":
-        return _pb.ChatContext.ChatItem(function_call=encode_by_name(_pb.FunctionCall, item))
+        return _pb.ChatContext.ChatItem(
+            function_call=encode_by_name(
+                _pb.FunctionCall, item, extra={k: str(v) for k, v in item.extra.items()}
+            )
+        )
     elif item.type == "function_call_output":
         return _pb.ChatContext.ChatItem(
             function_call_output=encode_by_name(_pb.FunctionCallOutput, item)
@@ -114,6 +120,84 @@ def encode_chat_item(item: ChatItem) -> _pb.ChatContext.ChatItem:
             )
         )
     return _pb.ChatContext.ChatItem()
+
+
+def decode_chat_item(pb: _pb.ChatContext.ChatItem) -> ChatItem:
+    from .llm.chat_context import (
+        AgentConfigUpdate,
+        AgentHandoff,
+        ChatMessage,
+        FunctionCall,
+        FunctionCallOutput,
+    )
+
+    kind = pb.WhichOneof("item")
+    if kind == "message":
+        m = pb.message
+        return ChatMessage(
+            id=m.id,
+            role=ROLE_NAMES[m.role],
+            content=[c.text for c in m.content if c.HasField("text")],
+            interrupted=m.interrupted,
+            transcript_confidence=(
+                m.transcript_confidence if m.HasField("transcript_confidence") else None
+            ),
+            extra=dict(m.extra),
+            metrics=cast(Any, _decode_fields(m.metrics)),
+            **_created_at(m),
+        )
+    if kind == "function_call":
+        f = pb.function_call
+        return FunctionCall(
+            id=f.id,
+            call_id=f.call_id,
+            arguments=f.arguments,
+            name=f.name,
+            extra=dict(f.extra),
+            **_created_at(f),
+        )
+    if kind == "function_call_output":
+        o = pb.function_call_output
+        return FunctionCallOutput(
+            id=o.id,
+            name=o.name,
+            call_id=o.call_id,
+            output=o.output,
+            is_error=o.is_error,
+            **_created_at(o),
+        )
+    if kind == "agent_handoff":
+        h = pb.agent_handoff
+        return AgentHandoff(
+            id=h.id,
+            old_agent_id=h.old_agent_id if h.HasField("old_agent_id") else None,
+            new_agent_id=h.new_agent_id,
+            **_created_at(h),
+        )
+    if kind == "agent_config_update":
+        c = pb.agent_config_update
+        return AgentConfigUpdate(
+            id=c.id,
+            instructions=c.instructions if c.HasField("instructions") else None,
+            tools_added=list(c.tools_added) or None,
+            tools_removed=list(c.tools_removed) or None,
+            **_created_at(c),
+        )
+    raise ValueError("a chat item without an item")
+
+
+def _created_at(msg: Any) -> dict[str, float]:
+    return (
+        {"created_at": msg.created_at.ToNanoseconds() / 1e9} if msg.HasField("created_at") else {}
+    )
+
+
+def _decode_fields(msg: Message) -> dict[str, Any]:
+    """The fields ``msg`` has set, Timestamps as seconds since the epoch."""
+    return {
+        fd.name: v.ToNanoseconds() / 1e9 if isinstance(v, Timestamp) else v
+        for fd, v in msg.ListFields()
+    }
 
 
 def encode_session_usage(usage: AgentSessionUsage) -> _pb.AgentSessionUsage:

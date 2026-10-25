@@ -13,7 +13,10 @@ use syn::spanned::Spanned as _;
 #[cfg(test)]
 pub use exposed::exposed;
 pub use exposed::{aliases, exposed_with, global_aliases};
-use meta::{flag, has_host_derive, head_of, host_attr_strict, meta_str, metas, rust_arg, str_arg, str_args, unprefixed};
+use meta::{
+    flag, has_host_derive, head_of, host_attr_strict, meta_str, metas, rust_arg, str_arg, str_args,
+    unprefixed,
+};
 
 pub type Res<T> = Result<T, String>;
 
@@ -74,7 +77,6 @@ fn items(
     Ok(())
 }
 
-
 /// `#[crate::host(group(path, kind, typed_dict_from, total, node))]` on an inline `mod`: shared
 /// defaults. `path` is the public module; the generated one is it under `livekit.agents.` with
 /// `.` -> `_`. `node` gives every Python target a same-named Node twin.
@@ -101,7 +103,9 @@ fn group_of(label: &str, attrs: &[syn::Attribute], parent: Option<&Group>) -> Re
         if !out.iter().any(|m| m.key.starts_with("group.")) {
             continue;
         }
-        let get = |k: &str| out.iter().find(|m| m.key == format!("group.{k}")).and_then(|m| m.value.clone());
+        let get = |k: &str| {
+            out.iter().find(|m| m.key == format!("group.{k}")).and_then(|m| m.value.clone())
+        };
         let own_path = get("path");
         let module = get("module")
             .or_else(|| {
@@ -113,29 +117,34 @@ fn group_of(label: &str, attrs: &[syn::Attribute], parent: Option<&Group>) -> Re
             .or_else(|| parent.map(|p| p.module.clone()).filter(|m| !m.is_empty()))
             .unwrap_or_default();
         let path = own_path.or_else(|| parent.and_then(|p| p.path.clone()));
-        let kind = match get("kind") {
-            None => parent.and_then(|p| p.kind),
-            Some(k) => Some(
-                KIND_WORDS
-                    .iter()
-                    .find(|(w, _)| *w == k)
-                    .map(|(_, kind)| *kind)
-                    .ok_or_else(|| format!("{label}: group kind = \"{k}\" is not a kind word"))?,
-            ),
-        };
+        let kind =
+            match get("kind") {
+                None => parent.and_then(|p| p.kind),
+                Some(k) => Some(
+                    KIND_WORDS.iter().find(|(w, _)| *w == k).map(|(_, kind)| *kind).ok_or_else(
+                        || format!("{label}: group kind = \"{k}\" is not a kind word"),
+                    )?,
+                ),
+            };
         let total = match get("total").as_deref() {
             None => parent.and_then(|p| p.total),
             Some("True") => Some(true),
             Some("False") => Some(false),
-            Some(other) => return Err(format!("{label}: group total = \"{other}\"; write \"True\" or \"False\"")),
+            Some(other) => {
+                return Err(format!(
+                    "{label}: group total = \"{other}\"; write \"True\" or \"False\""
+                ));
+            }
         };
         return Ok(Some(Group {
             module,
             path,
             kind,
-            typed_dict_from: get("typed_dict_from").or_else(|| parent.and_then(|p| p.typed_dict_from.clone())),
+            typed_dict_from: get("typed_dict_from")
+                .or_else(|| parent.and_then(|p| p.typed_dict_from.clone())),
             total,
-            node: out.iter().any(|m| m.key == "group.node" && m.value.is_none()) || parent.is_some_and(|p| p.node),
+            node: out.iter().any(|m| m.key == "group.node" && m.value.is_none())
+                || parent.is_some_and(|p| p.node),
             rust_module: Vec::new(),
         }));
     }
@@ -156,10 +165,15 @@ fn file_defaults(label: &str, items: &[syn::Item]) -> Res<Option<Group>> {
         if found.is_some() {
             return Err(format!("{label}: two #[host(file(..))] defaults"));
         }
-        if let Some(k) = m.iter().find(|x| !["file.module", "file.path"].contains(&x.key.as_str())) {
-            return Err(format!("{label}: #[host(file(..))] takes module and path, not `{}`", k.key));
+        if let Some(k) = m.iter().find(|x| !["file.module", "file.path"].contains(&x.key.as_str()))
+        {
+            return Err(format!(
+                "{label}: #[host(file(..))] takes module and path, not `{}`",
+                k.key
+            ));
         }
-        let module = meta_str(&m, "file.module").ok_or_else(|| format!("{label}: #[host(file(..))] needs module = \"..\""))?;
+        let module = meta_str(&m, "file.module")
+            .ok_or_else(|| format!("{label}: #[host(file(..))] needs module = \"..\""))?;
         found = Some(Group { module, path: meta_str(&m, "file.path"), ..Group::default() });
     }
     Ok(found)
@@ -194,7 +208,12 @@ fn bare_target(host: Host, kind: Kind, module: &str, name: &str, path: Option<St
 
 /// `pub const DEEPGRAM_MODELS: &[&str] = &[..];` in a group: `DeepgramModels = Literal[..]`
 /// (or `#[host(name = "..")]`). With `#[host(union = "A, B")]`: `A | B | Literal[..]`.
-fn literal(label: &str, section: Option<String>, c: &syn::ItemConst, g: &Group) -> Res<Option<Decl>> {
+fn literal(
+    label: &str,
+    section: Option<String>,
+    c: &syn::ItemConst,
+    g: &Group,
+) -> Res<Option<Decl>> {
     let meta = metas(&c.attrs);
     let owner = c.ident.to_string();
     let bad = || format!("{label}: {owner} must be a `&[&str]` of string literals");
@@ -204,48 +223,64 @@ fn literal(label: &str, section: Option<String>, c: &syn::ItemConst, g: &Group) 
     if !is_str_slice {
         return Ok(None);
     }
-    let name = meta.iter().find(|m| m.key == "name").and_then(|m| m.value.clone()).unwrap_or_else(|| {
-        owner
-            .split('_')
-            .filter(|w| !w.is_empty())
-            .map(|w| {
-                let lower = w.to_lowercase();
-                let mut cs = lower.chars();
-                cs.next().map(|c| c.to_uppercase().chain(cs).collect::<String>()).unwrap_or_default()
-            })
-            .collect()
-    });
+    let name =
+        meta.iter().find(|m| m.key == "name").and_then(|m| m.value.clone()).unwrap_or_else(|| {
+            owner
+                .split('_')
+                .filter(|w| !w.is_empty())
+                .map(|w| {
+                    let lower = w.to_lowercase();
+                    let mut cs = lower.chars();
+                    cs.next()
+                        .map(|c| c.to_uppercase().chain(cs).collect::<String>())
+                        .unwrap_or_default()
+                })
+                .collect()
+        });
     let syn::Expr::Reference(r) = &*c.expr else { return Err(bad()) };
     let syn::Expr::Array(arr) = &*r.expr else { return Err(bad()) };
     let mut values = Vec::new();
     for e in &arr.elems {
-        let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(v), .. }) = e else { return Err(bad()) };
+        let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(v), .. }) = e else {
+            return Err(bad());
+        };
         values.push(v.value());
     }
     let key = |n: &str| format!("py:{}:{n}", g.module);
-    let (body, kind, node_kind) =
-        match meta.iter().find(|m| m.key == "union").and_then(|m| m.value.clone()) {
-            None => (
-                Body::Unit(values.into_iter().map(|value| UnitVariant { value, doc: Vec::new() }).collect()),
-                Kind::Literal,
-                Kind::Enum,
+    let (body, kind, node_kind) = match meta
+        .iter()
+        .find(|m| m.key == "union")
+        .and_then(|m| m.value.clone())
+    {
+        None => (
+            Body::Unit(
+                values.into_iter().map(|value| UnitVariant { value, doc: Vec::new() }).collect(),
             ),
-            Some(members) => {
-                let mut out = Vec::new();
-                for m in members.split(',').map(str::trim).filter(|m| !m.is_empty()) {
-                    let ty = match m {
-                        "str" | "int" | "float" | "bool" => foreign(m, ts_builtin(m)),
-                        _ => Ty::Declared(key(m)),
-                    };
-                    out.push(Variant { rust_name: m.to_owned(), ty, twin: None, dispatch: None, kind: None });
-                }
-                for v in values {
-                    let ty = foreign(&format!("Literal[\"{v}\"]"), &format!("'{v}'"));
-                    out.push(Variant { rust_name: v, ty, twin: None, dispatch: None, kind: None });
-                }
-                (Body::Union(out), Kind::Union, Kind::Union)
+            Kind::Literal,
+            Kind::Enum,
+        ),
+        Some(members) => {
+            let mut out = Vec::new();
+            for m in members.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+                let ty = match m {
+                    "str" | "int" | "float" | "bool" => foreign(m, ts_builtin(m)),
+                    _ => Ty::Declared(key(m)),
+                };
+                out.push(Variant {
+                    rust_name: m.to_owned(),
+                    ty,
+                    twin: None,
+                    dispatch: None,
+                    kind: None,
+                });
             }
-        };
+            for v in values {
+                let ty = foreign(&format!("Literal[\"{v}\"]"), &format!("'{v}'"));
+                out.push(Variant { rust_name: v, ty, twin: None, dispatch: None, kind: None });
+            }
+            (Body::Union(out), Kind::Union, Kind::Union)
+        }
+    };
     let mut targets = vec![bare_target(Host::Python, kind, &g.module, &name, None)];
     if g.node {
         targets.push(bare_target(Host::Node, node_kind, &g.module, &name, None));
@@ -326,7 +361,6 @@ fn consts(file: &syn::File) -> Vec<(String, String)> {
     out
 }
 
-
 /// `// --- <title> ---` banners as `(line, title)`, from the raw text: the lexer drops comments.
 fn sections(text: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
@@ -346,7 +380,6 @@ fn section_at(marks: &[(usize, String)], line: usize) -> Option<String> {
     marks.iter().rev().find(|(at, _)| *at <= line).map(|(_, t)| t.clone())
 }
 
-
 fn strukt(
     label: &str,
     section: Option<String>,
@@ -363,7 +396,8 @@ fn strukt(
             ));
         }
     };
-    let inherit = lk_agents_bindgen::RecordDefaults::of(&s.attrs).map_err(|e| format!("{label}: {rust_name}: {e}"))?;
+    let inherit = lk_agents_bindgen::RecordDefaults::of(&s.attrs)
+        .map_err(|e| format!("{label}: {rust_name}: {e}"))?;
     let mut fields = Vec::new();
     for f in &named.named {
         fields.push(field(label, &rust_name, f, inherit)?);
@@ -382,7 +416,12 @@ fn strukt(
     })
 }
 
-fn enom(label: &str, section: Option<String>, e: &syn::ItemEnum, group: Option<&Group>) -> Res<Decl> {
+fn enom(
+    label: &str,
+    section: Option<String>,
+    e: &syn::ItemEnum,
+    group: Option<&Group>,
+) -> Res<Decl> {
     let rust_name = e.ident.to_string();
     let all_unit = e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit));
     let body = if all_unit {
@@ -417,14 +456,18 @@ fn enom(label: &str, section: Option<String>, e: &syn::ItemEnum, group: Option<&
                     v.ident
                 ));
             }
-            let dispatch = match (flag(&v.attrs, "python", "event"), flag(&v.attrs, "python", "ignored")) {
-                (true, true) => {
-                    return Err(format!("{label}: {rust_name}::{} is both an event and ignored", v.ident));
-                }
-                (true, false) => Some(Dispatch::Event),
-                (false, true) => Some(Dispatch::Ignored),
-                (false, false) => None,
-            };
+            let dispatch =
+                match (flag(&v.attrs, "python", "event"), flag(&v.attrs, "python", "ignored")) {
+                    (true, true) => {
+                        return Err(format!(
+                            "{label}: {rust_name}::{} is both an event and ignored",
+                            v.ident
+                        ));
+                    }
+                    (true, false) => Some(Dispatch::Event),
+                    (false, true) => Some(Dispatch::Ignored),
+                    (false, false) => None,
+                };
             members.push(Variant {
                 rust_name: v.ident.to_string(),
                 ty: t,
@@ -438,11 +481,15 @@ fn enom(label: &str, section: Option<String>, e: &syn::ItemEnum, group: Option<&
     let dispatch = str_arg(&e.attrs, "python", "dispatch")?;
     let dispatch_also = str_args(&e.attrs, "python", "dispatch_also")?;
     if !dispatch_also.is_empty() && dispatch.is_none() {
-        return Err(format!("{label}: {rust_name} names #[python(dispatch_also)] but no #[python(dispatch = \"..\")] module"));
+        return Err(format!(
+            "{label}: {rust_name} names #[python(dispatch_also)] but no #[python(dispatch = \"..\")] module"
+        ));
     }
     let routed = matches!(&body, Body::Union(ms) if ms.iter().any(|m| m.dispatch.is_some()));
     if routed && dispatch.is_none() {
-        return Err(format!("{label}: {rust_name} routes members (`#[python(event|ignored)]`) but names no #[python(dispatch = \"..\")] module"));
+        return Err(format!(
+            "{label}: {rust_name} routes members (`#[python(event|ignored)]`) but names no #[python(dispatch = \"..\")] module"
+        ));
     }
     Ok(Decl {
         targets: targets(label, &rust_name, &e.attrs, &[], group)?,
@@ -470,7 +517,12 @@ fn unit_variant(label: &str, owner: &str, v: &syn::Variant) -> Res<UnitVariant> 
     Ok(UnitVariant { value, doc: doc(&v.attrs) })
 }
 
-fn field(label: &str, owner: &str, f: &syn::Field, inherit: lk_agents_bindgen::RecordDefaults) -> Res<Field> {
+fn field(
+    label: &str,
+    owner: &str,
+    f: &syn::Field,
+    inherit: lk_agents_bindgen::RecordDefaults,
+) -> Res<Field> {
     let rust_name = f.ident.as_ref().expect("named fields only").to_string();
     let name = unprefixed(&f.attrs, "rename").unwrap_or_else(|| rust_name.clone());
     let literal = str_arg(&f.attrs, "python", "literal")?;
@@ -484,7 +536,8 @@ fn field(label: &str, owner: &str, f: &syn::Field, inherit: lk_agents_bindgen::R
         ));
     }
     let rust_ty = quote(&f.ty).replace(' ', "");
-    let default = str_arg(&f.attrs, "python", "default")?.or_else(|| zero_default(inherit, &ty, &f.attrs, literal.is_some()));
+    let default = str_arg(&f.attrs, "python", "default")?
+        .or_else(|| zero_default(inherit, &ty, &f.attrs, literal.is_some()));
     Ok(Field {
         rust_ty,
         rust_name,
@@ -509,20 +562,27 @@ fn field(label: &str, owner: &str, f: &syn::Field, inherit: lk_agents_bindgen::R
     })
 }
 
-
 /// `#[python(zero_defaults)]` ([`lk_agents_bindgen::RecordDefaults`]): a number or `Option` field
 /// with no default of its own defaults to its zero, unless `#[python(required)]`.
-fn zero_default(inherit: lk_agents_bindgen::RecordDefaults, ty: &Ty, attrs: &[syn::Attribute], literal: bool) -> Option<String> {
+fn zero_default(
+    inherit: lk_agents_bindgen::RecordDefaults,
+    ty: &Ty,
+    attrs: &[syn::Attribute],
+    literal: bool,
+) -> Option<String> {
     let factory = str_arg(attrs, "python", "default_factory").ok().flatten();
     if !inherit.zero || literal || factory.is_some() || flag(attrs, "python", "required") {
         return None;
     }
-    Some(match ty {
-        Ty::Int => "0",
-        Ty::Float => "0.0",
-        Ty::Option(_) => "None",
-        _ => return None,
-    }.to_owned())
+    Some(
+        match ty {
+            Ty::Int => "0",
+            Ty::Float => "0.0",
+            Ty::Option(_) => "None",
+            _ => return None,
+        }
+        .to_owned(),
+    )
 }
 
 fn ty(label: &str, owner: &str, t: &syn::Type, attrs: &[syn::Attribute]) -> Res<Ty> {
@@ -624,7 +684,6 @@ fn total(
     }
 }
 
-
 fn targets(
     label: &str,
     rust_name: &str,
@@ -637,7 +696,8 @@ fn targets(
         [(Host::Python, "python"), (Host::Node, "node"), (Host::Binding, "binding")]
     {
         let mut kinds = kinds_of(attrs, outer);
-        if let (Host::Python, true, Some(k)) = (host, kinds.is_empty(), group.and_then(|g| g.kind)) {
+        if let (Host::Python, true, Some(k)) = (host, kinds.is_empty(), group.and_then(|g| g.kind))
+        {
             kinds.push(k);
         }
         if kinds.is_empty() {
@@ -650,9 +710,11 @@ fn targets(
             (Some(m), _) => m,
             (None, Some(g)) if !g.module.is_empty() => g.module.clone(),
             (None, _) if host == Host::Binding => String::new(),
-            (None, _) if host == Host::Node && python.is_some() => python.as_ref().expect("checked").module.clone(),
+            (None, _) if host == Host::Node && python.is_some() => {
+                python.as_ref().expect("checked").module.clone()
+            }
             (None, _) => {
-                return Err(format!("{label}: {rust_name}'s {outer} target needs module = \"..\""))
+                return Err(format!("{label}: {rust_name}'s {outer} target needs module = \"..\""));
             }
         };
         // Binding targets use the Rust identifier; Node uses the Python name unless it says its own.
@@ -671,7 +733,8 @@ fn targets(
                 tag: tag(label, rust_name, attrs, outer, consts)?,
                 tag_after: str_arg(attrs, outer, "tag_after")?,
                 host_fields: host_fields(attrs, outer),
-                path: str_arg(attrs, outer, "path")?.or_else(|| grouped.and_then(|g| g.path.clone())),
+                path: str_arg(attrs, outer, "path")?
+                    .or_else(|| grouped.and_then(|g| g.path.clone())),
                 base: str_arg(attrs, outer, "base")?,
                 nested_in: str_arg(attrs, outer, "nested_in")?,
                 post_init: str_arg(attrs, outer, "post_init")?,
@@ -691,7 +754,11 @@ fn targets(
                 // Read for every kind; `binding.rs` rejects it where it means nothing.
                 order: str_arg(attrs, outer, "order")?
                     .map(|o| {
-                        o.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect()
+                        o.split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned)
+                            .collect()
                     })
                     .unwrap_or_default(),
                 typed_dict_from: str_arg(attrs, outer, "typed_dict_from")?

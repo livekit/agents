@@ -672,17 +672,16 @@ impl Driver {
             handle.add_task(Arc::new(abort));
         }
 
-        // `thinking` when the generation exists, only for a committed reply (`say()` goes straight
-        // to `speaking`; a discarded preemptive generation never showed thinking).
-        if is_reply && kind.scheduled() && !past_edge {
-            self.mark_thinking(cycle);
-        }
-
         // Announced, recorded and scheduled in `request`, the one place every speech passes.
-        if self.schedule_speech(now, &handle, kind, spec.add_to_chat_ctx, spec.host_asked, cycle)
-            && kind.scheduled()
-        {
+        let admitted =
+            self.schedule_speech(now, &handle, kind, spec.add_to_chat_ctx, spec.host_asked, cycle);
+        if admitted && kind.scheduled() {
             handle.mark_scheduled();
+        }
+        // `thinking` when the generation exists, only for an admitted reply (`say()` goes straight
+        // to `speaking`; a refused or discarded preemptive generation never showed thinking).
+        if admitted && is_reply && kind.scheduled() && !past_edge {
+            self.mark_thinking(cycle);
         }
         // The open run's, when the speech is the session's own kind.
         self.run_own_created(id, kind, cycle);

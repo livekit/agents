@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { InDrawer } from "./chrome/panel";
 
 /** The debug drawer's views: the session's database in the plan's words, and what the page talks to. */
-export type View = "lanes" | "tasks" | "journal" | "inbox" | "stream" | "info";
+export type View = "lanes" | "tasks" | "journal" | "inbox" | "stream" | "sql" | "info";
 
 export const VIEWS: { id: View; name: string; tip: string }[] = [
   { id: "lanes", name: "Lanes", tip: "One per agent in the conversation, and who holds its lease" },
@@ -12,12 +12,15 @@ export const VIEWS: { id: View; name: string; tip: string }[] = [
   { id: "journal", name: "Journal", tip: "What happened, in order" },
   { id: "inbox", name: "Inbox", tip: "Messages that waited for a turn" },
   { id: "stream", name: "Stream", tip: "A reply, frame by frame" },
+  { id: "sql", name: "SQL", tip: "The conversation's database, queried in SQL" },
   { id: "info", name: "Info", tip: "What the page talks to" },
 ];
 
 const VIEW_KEY = "console.drawer.view";
 const HEIGHT_KEY = "console.drawer.height";
 const DEFAULT_HEIGHT = 320;
+/** The SQL view holds an editor over a table: its own height, two thirds of the window at first. */
+const SQL_SHARE = 0.66;
 const MIN_HEIGHT = 160;
 /** Never more of the window than this: the conversation stays the page. */
 const MAX_SHARE = 0.7;
@@ -36,10 +39,14 @@ export function useDrawer() {
     /* The stream view needs a selected task, which is not persisted. */
     return isView(saved) && saved !== "stream" ? saved : null;
   });
-  const [height, setHeightState] = useState(() => {
-    if (typeof window === "undefined") return DEFAULT_HEIGHT;
-    return clampHeight(Number(window.localStorage.getItem(HEIGHT_KEY)) || DEFAULT_HEIGHT);
+  const [heights, setHeights] = useState(() => {
+    if (typeof window === "undefined") return { views: DEFAULT_HEIGHT, sql: DEFAULT_HEIGHT };
+    return {
+      views: clampHeight(Number(window.localStorage.getItem(HEIGHT_KEY)) || DEFAULT_HEIGHT),
+      sql: clampHeight(Number(window.localStorage.getItem(`${HEIGHT_KEY}.sql`)) || Math.floor(window.innerHeight * SQL_SHARE)),
+    };
   });
+  const which = view === "sql" ? "sql" : "views";
   /* The view Cmd+. reopens: the last one open. */
   const last = useRef<View>(view ?? "tasks");
   const setView = useCallback((next: View | null) => {
@@ -47,11 +54,14 @@ export function useDrawer() {
     setViewState(next);
     window.localStorage.setItem(VIEW_KEY, next ?? "closed");
   }, []);
-  const setHeight = useCallback((next: number) => {
-    const clamped = clampHeight(next);
-    setHeightState(clamped);
-    window.localStorage.setItem(HEIGHT_KEY, String(clamped));
-  }, []);
+  const setHeight = useCallback(
+    (next: number) => {
+      const clamped = clampHeight(next);
+      setHeights((current) => ({ ...current, [which]: clamped }));
+      window.localStorage.setItem(which === "sql" ? `${HEIGHT_KEY}.sql` : HEIGHT_KEY, String(clamped));
+    },
+    [which],
+  );
   /* A click on the open view's tab closes the drawer. */
   const toggle = useCallback((next: View) => setView(view === next ? null : next), [setView, view]);
 
@@ -66,7 +76,7 @@ export function useDrawer() {
     return () => window.removeEventListener("keydown", onKey);
   }, [setView, view]);
 
-  return { view, height, setView, setHeight, toggle };
+  return { view, height: heights[which], setView, setHeight, toggle };
 }
 
 /**

@@ -38,7 +38,8 @@ classes; the Python voice pipeline does not call them.
 | `lk-agents-inference`   | The `Native*` inference-gateway clients (STT, TTS, LLM, realtime, VAD, end of turn, AMD, interruption), the fallback adapters, the MCP client. The socket appears only in `transport` and `native`.                                                                                                                                |
 | `lk-agents-voice`       | The voice session driver. Directories mirror the Python voice modules (`agent_session/`, `agent_activity/`, `generation/`, `audio_recognition/`, `room_io/`); `trace.rs` is the `Step` journal.                                                                                                                                    |
 | `lk-agents-worker`      | The worker control plane: `Worker`, `WorkerHost`, the sans-IO `WorkerState`, the transports, `EndpointStream`.                                                                                                                                                                                                                     |
-| `lk-agents-storage`     | The thread storage client: `wsdb`, `schema`, `statements`, `run`, `turn`, `streams`, `grpc`, `threads`, `token`. See [storage.md](storage.md).                                                                                                                                                                                           |
+| `lk-agents-storage`     | The thread storage client: `conn` (wsdb), `schema`, `db`, `run`, `streams`. See [storage.md](storage.md).                                                                                                                                                                                                                        |
+| `lk-agents-a2a`         | The A2A text door's turn engine: one message through its policy on a lane of `lk-agents-storage`, the handler on the host.                                                                                                                                                                                                       |
 | `lk-agents-fuzz`        | The voice behavioural suite (see "Testing").                                                                                                                                                                                                                                                                                       |
 | `lk-agents-py`          | `livekit.agents._core`, the pyo3 extension. A shell.                                                                                                                                                                                                                                                                               |
 | `lk-agents-node`        | `@livekit/agents-core`, the napi-rs binding.                                                                                                                                                                                                                                                                                       |
@@ -51,6 +52,7 @@ lk-agents-fuzz                                  tests the voice driver
 lk-agents-voice      -> rtc, media, abi
 lk-agents-inference  -> media, abi
 lk-agents-worker, lk-agents-rtc, lk-agents-media -> abi
+lk-agents-a2a        -> storage
 lk-agents-storage    -> host-derive
 lk-agents-abi        -> host-derive -> bindgen
 lk-agents-codegen    -> bindgen                 (a build tool, not linked)
@@ -58,7 +60,8 @@ lk-agents-codegen    -> bindgen                 (a build tool, not linked)
 
 `lk-agents-abi` is the bottom of the product crates: it cannot see voice or
 inference, so nothing that needs them lives there. `lk-agents-storage` is
-host-neutral and depends on no other product crate. The workspace builds
+host-neutral and depends on no other product crate; `lk-agents-a2a`, also host-neutral, only
+on it. The workspace builds
 from the sibling `livekit/rust-sdks` checkout for `livekit-protocol` (the
 `livekit.agent` protobuf package and the worker wire) and `livekit-token`.
 
@@ -79,7 +82,7 @@ The core calls into Python in three shapes, all generated:
 | ------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | provider proxy     | a bare `#[host(proxy(host = "livekit.agents.llm.LLM"))]` on the abi trait | a Python STT, TTS, LLM, VAD or realtime model driven by the core               |
 | `open(kind, args)` | one bridge for every kind, returning an awaitable                         | `WorkerHost`: `job_request`, `launch_job`, `terminate_job`, `load`, `endpoint` |
-| host trait         | a Rust trait a Python object implements                                   | `TurnHost`: `handle`, `on_update`, `on_token`                                  |
+| stream proxy       | `#[host(proxy)]` on a trait whose method returns a sink and a source     | `TurnHost`: `handle` returns the turn's events, checkpoints answered by verdicts |
 
 A call is scheduled on the event loop that built the Rust object; its result
 comes back on a channel; dropping the Rust future cancels the Python task.
@@ -163,7 +166,7 @@ fork guard re-export). The hand-written exceptions are
 | ------------------- | -------------------------------------------------------- | ----------------------------------- |
 | crate unit tests    | each crate's rules, with a negative case per rule        | `cargo test`                        |
 | `lk-agents-fuzz`    | the voice driver against behavioural contracts           | `cargo test -p lk-agents-fuzz`      |
-| storage crate tests | statements, the run and the turn against a real agent-db | `cargo test -p lk-agents-storage`   |
+| storage crate tests | the statements, the run and the turn against a real agent-db | `cargo test -p lk-agents-storage`   |
 | binding tests       | the `_core` surface (`core_names.json`), host bridging   | `cargo nextest run -p lk-agents-py` |
 | Python tests        | the package over the built `_core`                       | `uv run pytest --unit`              |
 

@@ -1,11 +1,11 @@
-//! Chaos mode: the table, uniformly.
+//! A uniform move: any legal row of the table, no actor behind it.
 //!
 //! Every legal row is as likely as every other, with two judgements only: reach for a kind the
 //! run is not holding, and let time pass between steps -- aimed, half the time, at a deadline the
 //! driver has armed, because boundary races are where a driver breaks and uniform delays never
-//! land on one. Shallow everywhere by construction: this mode is the check that every row applies
-//! and every declared open is real, not the search. The search is conversation mode.
-use std::{collections::BTreeMap, time::Instant};
+//! land on one. The conversation sends these at a per-run rate; at the bottom of the dial a run
+//! is nothing else, which is what the search's uniform sampler used to be on its own.
+use std::collections::BTreeMap;
 
 use fastrand::Rng;
 use lk_agents_abi::Ts;
@@ -15,8 +15,7 @@ use lk_agents_voice::{
 };
 
 use crate::{
-    drive::{Case, Outcome, Run, Setup},
-    input::{DELAYS_MS, Input, Millis, Sampler},
+    input::{DELAYS_MS, Input, Millis, RoomIn, Sampler},
     record::Recording,
 };
 
@@ -40,7 +39,7 @@ const AIM_AT_TIMER: u8 = 50;
 /// arms is then crossed by a single thirty-second leap and never approached. Time is a dimension of
 /// the space, not one input among many, so it is sampled between steps rather than competing with
 /// them.
-const TICK: u8 = 50;
+pub const TICK: u8 = 50;
 
 /// Time passing between two steps: aimed at an armed deadline when there is one, a stock delay
 /// otherwise.
@@ -58,7 +57,13 @@ pub fn tick(record: &Recording, rng: &mut Rng) -> Input {
 pub fn sample_next(record: &Recording, rng: &mut Rng) -> Option<Input> {
     let live = record.live();
     let mut sampler = Sampler::new(live, rng);
-    let sendable = Input::available(&mut sampler);
+    // How the call ends is its own dial; a uniform move never ends it.
+    let sendable: Vec<Input> = Input::available(&mut sampler)
+        .into_iter()
+        .filter(|i| {
+            !matches!(i, Input::Close { .. } | Input::Room { event: RoomIn::Closed | RoomIn::Unlinked })
+        })
+        .collect();
     if sendable.is_empty() {
         return None;
     }
@@ -80,7 +85,7 @@ pub fn sample_next(record: &Recording, rng: &mut Rng) -> Option<Input> {
 }
 
 /// A delay that lands just before, on, or just after a deadline the driver still has armed.
-fn aim_at_armed_timer(record: &Recording, sampler: &mut Sampler<'_>) -> Option<Millis> {
+pub fn aim_at_armed_timer(record: &Recording, sampler: &mut Sampler<'_>) -> Option<Millis> {
     let mut armed: BTreeMap<TurnTimer, Ts> = BTreeMap::new();
     for (_, step) in record.journal() {
         match step {
@@ -105,39 +110,4 @@ fn aim_at_armed_timer(record: &Recording, sampler: &mut Sampler<'_>) -> Option<M
     let deadline = *sampler.pick(&pending);
     let offset = *sampler.pick(&[-1i64, 0, 1]);
     Some(Millis(((deadline - now_ms) as i64 + offset).max(1) as u64))
-}
-
-/// Explore from a seed: sample inputs until the budget runs out, then close the session down.
-///
-/// The case is built as it is applied, because an input is only legal against what the run holds
-/// at that moment, which is unknowable without having run the earlier ones.
-pub fn explore(setup: Setup, seed: u64, budget: usize) -> Outcome {
-    crate::drive::simulate_with(seed, explore_in(setup, seed, budget))
-}
-
-async fn explore_in(setup: Setup, seed: u64, budget: usize) -> Outcome {
-    let started = Instant::now();
-    let mut rng = Rng::with_seed(seed);
-    let mut run = Run::start(&setup).await;
-    let mut outcome =
-        Outcome { case: Case { setup, inputs: Vec::new(), schedule: seed }, ..Outcome::default() };
-
-    for _ in 0..budget {
-        let Some(input) = sample_next(&run.record, &mut rng) else { break };
-        // Recorded before it is applied, so a case that ends in a panic still says what caused it.
-        outcome.case.inputs.push(input.clone());
-        run.apply(&input).await;
-        if let Some(found) = crate::drive::guard(&run, &mut outcome, started) {
-            return found;
-        }
-        if rng.u8(0..100) < TICK {
-            let advance = tick(&run.record, &mut rng);
-            outcome.case.inputs.push(advance.clone());
-            run.apply(&advance).await;
-            if let Some(found) = crate::drive::guard(&run, &mut outcome, started) {
-                return found;
-            }
-        }
-    }
-    crate::drive::finish(run, outcome, started).await
 }

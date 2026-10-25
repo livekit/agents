@@ -1,5 +1,9 @@
 # Tools and toolsets
 
+> Implementation examples below still use deps/state. The target API uses
+> [typed application context](state-and-deps.md) and `ctx.context`; migration
+> is tracked in [TODO.md](TODO.md).
+
 A tool is a function the model can call. Its first parameter is the
 `RunContext`, the rest are its arguments, and its Google-style docstring
 feeds the schema.
@@ -51,7 +55,7 @@ a module-level agent. A subclass declares its tools as methods with
 | an `Agent` | a handoff: the next model request runs that agent on the same history; see [multi-agent.md](multi-agent.md) |
 | `InputRequired(question)` | the turn waits for the person; see [human-in-the-loop.md](human-in-the-loop.md) |
 | `Failed(error)`, `Rejected(reason)` | the model reads the text as an error output and replies |
-| `Completed(value)` | the value is the call's output and the model continues; only a task's tool ends a task with it; see [agent-tasks.md](agent-tasks.md) |
+| `Completed(value)` | existing transition: ordinary call output, or completion of the legacy AgentTask; target durable executions complete through accepted output_type/output functions instead; see [agent-tasks.md](agent-tasks.md) |
 
 ## Approval
 

@@ -66,7 +66,7 @@ cd console && pnpm install && pnpm dev       # http://localhost:3000
 
 - [Docs](docs/README.md), one feature per page
 - [Migrating from v1](skills/migrate-to-v2/SKILL.md): `npx skills add livekit/agents --skill migrate-to-v2`
-- From source: `git clone --recurse-submodules`, then `uv sync --all-packages` (needs Rust);
+- From source: `git clone`, then `uv sync --all-packages` (needs Rust);
   `make check`, `uv run pytest --unit`
 - Issues with the `v2` label; licensed [Apache-2.0](LICENSE)
 

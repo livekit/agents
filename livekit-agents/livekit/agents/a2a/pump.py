@@ -15,12 +15,11 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from .._core import Boundary, Streams
-from .._generated.storage_turn import HandlerOutput, TurnContext
+from .._core import Streams
 from ..log import logger
-from ..storage.context import TokenHook, TurnHost, UpdateHook
+from ..storage.context import TokenHook, TurnHost, TurnStream, UpdateHook
 from ..utils import shortuuid
 from .codec import (
     StreamEvent,
@@ -105,7 +104,7 @@ class ResponsePump(Generic[T]):
 
 
 class WireHost(Generic[S]):
-    """The host of a wire turn: the handler behind ``handle``, acknowledged on its first call
+    """The host of a wire turn: the handler behind ``_core_handle``, acknowledged when it opens
     (the ``submitted`` row is durable by then), and the live response's frames behind the
     hooks."""
 
@@ -129,9 +128,9 @@ class WireHost(Generic[S]):
         self._started = time.monotonic()
         self._marks: dict[str, int] = {}
 
-    async def handle(self, ctx: TurnContext, boundary: Boundary) -> HandlerOutput:
+    def _core_handle(self, ctx: dict[str, Any]) -> TurnStream:
         self._ack(self._task_id, self._context_id)
-        return await self._host.handle(ctx, boundary)
+        return self._host._core_handle(ctx)
 
     async def on_update(self, task_id: str, text: str) -> None:
         if task_id != self._task_id:
@@ -161,9 +160,9 @@ class WireHost(Generic[S]):
         """The frames after the commit: the acknowledgment when no row of this request's own
         was run here (a resend, a merge), the answer's last chunk, the final status."""
         record = outcome.result.task
-        self._ack(record.id, outcome.context_id)
+        self._ack(record.task_id, outcome.context_id)
         artifacts = record.data.artifacts
-        if record.id == self._task_id and artifacts:
+        if record.task_id == self._task_id and artifacts:
             self._pump.emit(self._answer(outcome, str(artifacts[0]["artifactId"])))
         self._pump.emit(final_event(record, outcome.context_id, exts=self._exts))
         self._mark("doneMs")

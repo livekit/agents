@@ -1,14 +1,22 @@
 //! The `#[napi]` classes: `#[host(object)]` impls with their methods (sync, async, reply), and
 //! `#[host(stream)]` push/recv classes.
 
-use super::functions::{body, err_map, napi_attr, params, ret, P};
+use super::functions::{P, body, err_map, napi_attr, params, ret};
 use super::records::collect_deps;
 use super::types::{from_js, n_of_rty, napi_ty, to_js, ts};
-use super::{arg, doc_line, linked, on_hand_written, push_unique, raw, snake, summary, Cx, ERROR_WITH, HAND_WRITTEN, NATIVE_INTS};
+use super::{
+    Cx, ERROR_WITH, HAND_WRITTEN, NATIVE_INTS, arg, doc_line, linked, on_hand_written, push_unique,
+    raw, snake, summary,
+};
 use crate::ir::*;
 use crate::node::camel;
 
-pub(super) fn object(cx: &Cx, o: &Object, wanted: &mut Vec<String>, gaps: &mut Vec<(String, String)>) -> Result<String, String> {
+pub(super) fn object(
+    cx: &Cx,
+    o: &Object,
+    wanted: &mut Vec<String>,
+    gaps: &mut Vec<(String, String)>,
+) -> Result<String, String> {
     linked(&o.core_path)?;
     if !o.consts.is_empty() {
         return Err("not yet: class constants".to_owned());
@@ -82,22 +90,47 @@ fn method(cx: &Cx, o: &Object, m: &Method, wanted: &mut Vec<String>) -> Result<S
             };
             b.push_str(&format!("{pad}#[napi(constructor)]\n"));
             let expr = format!("{} {{ inner: {wrap} }}", o.name);
-            b.push_str(&body(cx, "new", None, &ps, &[], &format!("{core}::{}({list})", m.rust_name), &m.sig, "Self", &expr, pad)?);
+            b.push_str(&body(
+                cx,
+                "new",
+                None,
+                &ps,
+                &[],
+                &format!("{core}::{}({list})", m.rust_name),
+                &m.sig,
+                "Self",
+                &expr,
+                pad,
+            )?);
             return Ok(b);
         }
         MethodKind::Static => {
             let (ret_ty, ts_ret, ret_expr) = ret(cx, &m.sig.ret, wanted)?;
             b.push_str(&napi_attr("", &js, ts_ret.as_deref(), pad));
-            b.push_str(&body(cx, &raw(&m.name), None, &ps, &[], &format!("{core}::{}({list})", m.rust_name), &m.sig, &ret_ty, &ret_expr, pad)?);
+            b.push_str(&body(
+                cx,
+                &raw(&m.name),
+                None,
+                &ps,
+                &[],
+                &format!("{core}::{}({list})", m.rust_name),
+                &m.sig,
+                &ret_ty,
+                &ret_expr,
+                pad,
+            )?);
             return Ok(b);
         }
         MethodKind::Setter if m.sig.params.len() != 1 || m.sig.ret != RTy::Unit => {
             return Err("#[host(setter)] takes one value and returns nothing".to_owned());
         }
-        MethodKind::Getter if !m.sig.params.is_empty() => return Err("#[host(getter)] takes no arguments".to_owned()),
+        MethodKind::Getter if !m.sig.params.is_empty() => {
+            return Err("#[host(getter)] takes no arguments".to_owned());
+        }
         _ => {}
     }
-    let recv = if o.cell == Cell::Plain && m.receiver == Receiver::Mut { "&mut self" } else { "&self" };
+    let recv =
+        if o.cell == Cell::Plain && m.receiver == Receiver::Mut { "&mut self" } else { "&self" };
     if let Some(reply) = &m.reply {
         let (ret_ty, ts_ret, ret_expr) = ret(cx, &reply.ret, wanted)?;
         return reply_method(cx, o, m, &ps, &ret_ty, ts_ret.as_deref(), &ret_expr);
@@ -107,7 +140,8 @@ fn method(cx: &Cx, o: &Object, m: &Method, wanted: &mut Vec<String>) -> Result<S
         return async_method(cx, m, &ps, &ret_ty, ts_ret.as_deref(), &ret_expr);
     }
     // napi derives C symbols from the ident, which `r#type` cannot be; fall back to the Rust name.
-    let ident = |name: &str| if raw(name).starts_with("r#") { m.rust_name.clone() } else { raw(name) };
+    let ident =
+        |name: &str| if raw(name).starts_with("r#") { m.rust_name.clone() } else { raw(name) };
     let (kind, ident) = match m.kind {
         MethodKind::Getter => ("getter", ident(&m.name)),
         MethodKind::Setter => ("setter", format!("set_{}", m.name)),
@@ -130,11 +164,22 @@ fn method(cx: &Cx, o: &Object, m: &Method, wanted: &mut Vec<String>) -> Result<S
 
 /// `command(reply)`: send on the JS thread (a refusal throws there), await on napi's runtime,
 /// convert back on the JS thread.
-fn reply_method(cx: &Cx, o: &Object, m: &Method, ps: &[P], ret_ty: &str, ts_ret: Option<&str>, ret_expr: &str) -> Result<String, String> {
+fn reply_method(
+    cx: &Cx,
+    o: &Object,
+    m: &Method,
+    ps: &[P],
+    ret_ty: &str,
+    ts_ret: Option<&str>,
+    ret_expr: &str,
+) -> Result<String, String> {
     let pad = "    ";
     let reply = m.reply.as_ref().expect("a reply method");
     let sent_err = err_map(cx, &m.sig)?;
-    let reply_err = err_map(cx, &Sig { err: reply.err.clone(), err_ty: reply.err_ty.clone(), ..m.sig.clone() })?;
+    let reply_err = err_map(
+        cx,
+        &Sig { err: reply.err.clone(), err_ty: reply.err_ty.clone(), ..m.sig.clone() },
+    )?;
     let mut b = String::new();
     let inner_ts = match (ts_ret, &reply.ret) {
         (Some(t), _) => t.to_owned(),
@@ -152,7 +197,9 @@ fn reply_method(cx: &Cx, o: &Object, m: &Method, ps: &[P], ret_ty: &str, ts_ret:
     ));
     let list = ps.iter().map(|p| p.call.as_str()).collect::<Vec<_>>().join(", ");
     let this = match o.cell {
-        Cell::Mutex => "self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)".to_owned(),
+        Cell::Mutex => {
+            "self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)".to_owned()
+        }
         Cell::Plain | Cell::Arc => "self.inner".to_owned(),
     };
     b.push_str(&format!("{pad}    let reply = crate::host_error::run(env, || {{\n"));
@@ -176,11 +223,19 @@ fn reply_method(cx: &Cx, o: &Object, m: &Method, ps: &[P], ret_ty: &str, ts_ret:
 
 /// `async` on an `arc` cell: convert on the JS thread, run on napi's tokio runtime, convert back on
 /// the JS thread, where a `HostError` can become a JS `Error` (it needs an `Env`).
-fn async_method(cx: &Cx, m: &Method, ps: &[P], ret_ty: &str, ts_ret: Option<&str>, ret_expr: &str) -> Result<String, String> {
+fn async_method(
+    cx: &Cx,
+    m: &Method,
+    ps: &[P],
+    ret_ty: &str,
+    ts_ret: Option<&str>,
+    ret_expr: &str,
+) -> Result<String, String> {
     let pad = "    ";
     let err = err_map(cx, &m.sig)?;
     let mut b = String::new();
-    let ts = format!("Promise<{}>", ts_ret.map(str::to_owned).unwrap_or_else(|| ts_of_napi(ret_ty)));
+    let ts =
+        format!("Promise<{}>", ts_ret.map(str::to_owned).unwrap_or_else(|| ts_of_napi(ret_ty)));
     b.push_str(&napi_attr("", &camel(&m.name), Some(&ts), pad));
     let js = if m.sig.params.iter().any(|p| p.name == "env") { "js_env" } else { "env" };
     let mut args = vec!["&self".to_owned(), format!("{js}: &'env Env")];
@@ -192,7 +247,10 @@ fn async_method(cx: &Cx, m: &Method, ps: &[P], ret_ty: &str, ts_ret: Option<&str
     ));
     let names: Vec<String> = m.sig.params.iter().map(|p| arg(&p.name)).collect();
     if !names.is_empty() {
-        b.push_str(&format!("{pad}    let ({},) = crate::host_error::run({js}, || {{\n", names.join(", ")));
+        b.push_str(&format!(
+            "{pad}    let ({},) = crate::host_error::run({js}, || {{\n",
+            names.join(", ")
+        ));
         for p in ps.iter().flat_map(|p| &p.prelude) {
             b.push_str(&format!("{pad}        {p}\n"));
         }
@@ -221,13 +279,19 @@ fn ts_of_napi(t: &str) -> String {
 }
 
 fn stream_err(cx: &Cx, name: &str) -> Result<String, String> {
-    let e = cx.x.errors.iter().find(|e| e.name == name).ok_or_else(|| format!("error = \"{name}\" is not a #[host(error)] type"))?;
+    let e =
+        cx.x.errors
+            .iter()
+            .find(|e| e.name == name)
+            .ok_or_else(|| format!("error = \"{name}\" is not a #[host(error)] type"))?;
     if e.with.is_some() || ERROR_WITH.iter().any(|(n, _)| *n == e.name) {
         return ERROR_WITH
             .iter()
             .find(|(n, _)| *n == e.name)
             .map(|(_, f)| (*f).to_owned())
-            .ok_or_else(|| format!("`{}` maps through a pyo3 converter with no Node counterpart", e.name));
+            .ok_or_else(|| {
+                format!("`{}` maps through a pyo3 converter with no Node counterpart", e.name)
+            });
     }
     push_unique(&mut cx.errors.borrow_mut(), &e.name);
     Ok(format!("crate::generated::errors::{}_to_node", snake(&e.name)))
@@ -251,13 +315,20 @@ pub(super) fn stream(cx: &Cx, s: &Stream, wanted: &mut Vec<String>) -> Result<St
         b.push_str(&doc_line(&l, ""));
     }
     let sink_field = s.sink_ty.as_ref().map(|t| {
-        if s.optional_sink.is_some() { format!("Option<std::sync::Arc<{t}>>") } else { format!("std::sync::Arc<{t}>") }
+        if s.optional_sink.is_some() {
+            format!("Option<std::sync::Arc<{t}>>")
+        } else {
+            format!("std::sync::Arc<{t}>")
+        }
     });
     b.push_str(&format!("#[napi(js_name = \"{n}\")]\npub struct {n} {{\n"));
     if let Some(f) = &sink_field {
         b.push_str(&format!("    pub(crate) sink: {f},\n"));
     }
-    b.push_str(&format!("    pub(crate) source: std::sync::Arc<tokio::sync::Mutex<Option<{}>>>,\n}}\n\n", s.source_ty));
+    b.push_str(&format!(
+        "    pub(crate) source: std::sync::Arc<tokio::sync::Mutex<Option<{}>>>,\n}}\n\n",
+        s.source_ty
+    ));
     let source_new = "source: std::sync::Arc::new(tokio::sync::Mutex::new(Some(source)))";
     b.push_str(&format!("impl {n} {{\n"));
     match (&s.sink_ty, &s.optional_sink) {
@@ -304,7 +375,10 @@ pub(super) fn stream(cx: &Cx, s: &Stream, wanted: &mut Vec<String>) -> Result<St
     ));
     let end = match (&s.sink_ty, s.close_ends_input, &s.optional_sink) {
         (Some(_), true, None) => "        self.sink.end_input();\n".to_owned(),
-        (Some(_), true, Some(_)) => "        if let Some(sink) = &self.sink {\n            sink.end_input();\n        }\n".to_owned(),
+        (Some(_), true, Some(_)) => {
+            "        if let Some(sink) = &self.sink {\n            sink.end_input();\n        }\n"
+                .to_owned()
+        }
         _ => String::new(),
     };
     let close = if s.boxed { "src.close" } else { "Box::new(src).close" };

@@ -1,5 +1,9 @@
 # Voice
 
+> Implementation examples below still use deps/state. The target API uses
+> [typed application context](state-and-deps.md) and `ctx.context`; migration
+> is tracked in [TODO.md](TODO.md).
+
 A call runs on a `LiveSession`: the runtime a room attaches to, with the
 models, turn detection and audio. It runs an `Agent`, and it runs it in the
 same thread a text endpoint uses, so a call and a text in one thread
@@ -97,10 +101,13 @@ the same memory.
 
 ## Structured results in voice
 
-A voice turn's reply is speech, so a typed result comes from an awaited
-`AgentTask[T]`: the task takes the conversation, collects what it needs, and
-returns the value to the tool that awaited it. See
-[agent-tasks.md](agent-tasks.md).
+A voice turn's reply is speech. The end-state design separates that
+intermediate conversation from a child's typed final output: Call(agent,
+state=...) starts a durable agent execution whose result fills the parent's
+pending tool call. No AgentTask subclass or restored Python await is needed.
+See [agent-tasks.md](agent-tasks.md); the existing awaited AgentTask examples
+still need migration. Voice/text final-output integration must implement the
+same completion contract while preserving realtime speech behavior.
 
 See `examples/use-cases/01_appointments_by_phone_and_text.py`,
 `03_insurance_eligibility.py` and `07_hospital_main_line.py`.

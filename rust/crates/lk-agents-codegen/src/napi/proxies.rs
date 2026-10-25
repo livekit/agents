@@ -3,7 +3,7 @@
 
 use super::records::collect_deps;
 use super::types::{n_of_syn, to_js};
-use super::{linked, snake, Cx};
+use super::{Cx, linked, snake};
 use crate::ir::*;
 
 /// `#[host(proxy)]` over a JS object via `crate::bridge`. `soon` is fire-and-forget; `await`
@@ -14,7 +14,9 @@ use crate::ir::*;
 pub(super) fn proxy(cx: &Cx, p: &Proxy, wanted: &mut Vec<String>) -> Result<String, String> {
     linked(&p.trait_path)?;
     if p.host.is_some() {
-        return Err("not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)".to_owned());
+        return Err(
+            "not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)".to_owned()
+        );
     }
     let name = &p.name;
     let fields: Vec<(String, String)> = p.state.to_vec();
@@ -39,7 +41,8 @@ pub(super) fn proxy(cx: &Cx, p: &Proxy, wanted: &mut Vec<String>) -> Result<Stri
     let params: Vec<String> = std::iter::once("bridge: crate::bridge::NodeBridge".to_owned())
         .chain(fields.iter().map(|(n, t)| format!("{n}: {t}")))
         .collect();
-    let all: Vec<String> = std::iter::once("bridge".to_owned()).chain(fields.iter().map(|(n, _)| n.clone())).collect();
+    let all: Vec<String> =
+        std::iter::once("bridge".to_owned()).chain(fields.iter().map(|(n, _)| n.clone())).collect();
     b.push_str(&format!(
         "    impl {name} {{\n        pub fn from_bridge({}) -> Self {{\n            {name} {{ {} }}\n        }}\n    }}\n\n",
         params.join(", "),
@@ -67,7 +70,8 @@ type SigTypes = (Vec<(String, syn::Type)>, Option<syn::Type>);
 
 /// Read off the verbatim signature.
 fn sig_types(sig: &str) -> Result<SigTypes, String> {
-    let s: syn::Signature = syn::parse_str(sig).map_err(|e| format!("the signature does not parse: {e}"))?;
+    let s: syn::Signature =
+        syn::parse_str(sig).map_err(|e| format!("the signature does not parse: {e}"))?;
     let params = s
         .inputs
         .iter()
@@ -86,22 +90,26 @@ fn sig_types(sig: &str) -> Result<SigTypes, String> {
     Ok((params, ret))
 }
 
-
 fn is_unit(t: &syn::Type) -> bool {
     matches!(t, syn::Type::Tuple(tt) if tt.elems.is_empty())
 }
 
-
-fn js_args(cx: &Cx, params: &[(String, syn::Type)], wanted: &mut Vec<String>) -> Result<String, String> {
+fn js_args(
+    cx: &Cx,
+    params: &[(String, syn::Type)],
+    wanted: &mut Vec<String>,
+) -> Result<String, String> {
     let mut out = Vec::new();
     for (n, t) in params {
         let nt = n_of_syn(cx, t, None).map_err(|e| format!("parameter `{n}`: {e}"))?;
         collect_deps(&nt, wanted);
-        out.push(format!("crate::bridge::JsArg::new({})", to_js(cx, &nt, n, false).map_err(|e| format!("parameter `{n}`: {e}"))?));
+        out.push(format!(
+            "crate::bridge::JsArg::new({})",
+            to_js(cx, &nt, n, false).map_err(|e| format!("parameter `{n}`: {e}"))?
+        ));
     }
     Ok(format!("vec![{}]", out.join(", ")))
 }
-
 
 fn proxy_method(cx: &Cx, m: &ProxyMethod, wanted: &mut Vec<String>) -> Result<String, String> {
     let (params, ret) = sig_types(&m.sig)?;

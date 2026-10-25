@@ -3,6 +3,20 @@
 version = 4
 
 [[package]]
+name = "a2a-lf"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9bdc39f79399c01ec4df5da3b653e31b3bac52214ca3d8331d6f059c273b5b8"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -248,8 +262,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -375,7 +391,7 @@ checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 [[package]]
 name = "device-info"
 version = "0.1.1"
-source = "git+https://github.com/livekit/rust-sdks?branch=main#04cacaad133471ef814ee8f0baf32ae54f773b11"
+source = "git+https://github.com/livekit/rust-sdks?branch=theo%2Fthread-schema-v2#2a5f994603253b76204375785370e8eaf6f8dd89"
 dependencies = [
  "core-foundation",
  "jni 0.21.1",
@@ -1197,8 +1213,8 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "livekit-api"
-version = "0.8.2"
-source = "git+https://github.com/livekit/rust-sdks?branch=main#04cacaad133471ef814ee8f0baf32ae54f773b11"
+version = "0.9.1"
+source = "git+https://github.com/livekit/rust-sdks?branch=theo%2Fthread-schema-v2#2a5f994603253b76204375785370e8eaf6f8dd89"
 dependencies = [
  "chrono",
  "http",
@@ -1224,16 +1240,16 @@ dependencies = [
 
 [[package]]
 name = "livekit-common"
-version = "0.1.4"
-source = "git+https://github.com/livekit/rust-sdks?branch=main#04cacaad133471ef814ee8f0baf32ae54f773b11"
+version = "0.1.6"
+source = "git+https://github.com/livekit/rust-sdks?branch=theo%2Fthread-schema-v2#2a5f994603253b76204375785370e8eaf6f8dd89"
 dependencies = [
  "livekit-protocol",
 ]
 
 [[package]]
 name = "livekit-net"
-version = "0.1.3"
-source = "git+https://github.com/livekit/rust-sdks?branch=main#04cacaad133471ef814ee8f0baf32ae54f773b11"
+version = "0.1.4"
+source = "git+https://github.com/livekit/rust-sdks?branch=theo%2Fthread-schema-v2#2a5f994603253b76204375785370e8eaf6f8dd89"
 dependencies = [
  "async-trait",
  "http",
@@ -1247,8 +1263,8 @@ dependencies = [
 
 [[package]]
 name = "livekit-protocol"
-version = "0.8.0"
-source = "git+https://github.com/livekit/rust-sdks?branch=main#04cacaad133471ef814ee8f0baf32ae54f773b11"
+version = "0.8.2"
+source = "git+https://github.com/livekit/rust-sdks?branch=theo%2Fthread-schema-v2#2a5f994603253b76204375785370e8eaf6f8dd89"
 dependencies = [
  "pbjson",
  "pbjson-types",
@@ -1259,15 +1275,15 @@ dependencies = [
 [[package]]
 name = "livekit-region"
 version = "0.1.1"
-source = "git+https://github.com/livekit/rust-sdks?branch=main#04cacaad133471ef814ee8f0baf32ae54f773b11"
+source = "git+https://github.com/livekit/rust-sdks?branch=theo%2Fthread-schema-v2#2a5f994603253b76204375785370e8eaf6f8dd89"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "livekit-signaling"
-version = "0.1.5"
-source = "git+https://github.com/livekit/rust-sdks?branch=main#04cacaad133471ef814ee8f0baf32ae54f773b11"
+version = "0.1.7"
+source = "git+https://github.com/livekit/rust-sdks?branch=theo%2Fthread-schema-v2#2a5f994603253b76204375785370e8eaf6f8dd89"
 dependencies = [
  "base64 0.21.7",
  "device-info",
@@ -1289,8 +1305,8 @@ dependencies = [
 
 [[package]]
 name = "livekit-token"
-version = "0.2.1"
-source = "git+https://github.com/livekit/rust-sdks?branch=main#04cacaad133471ef814ee8f0baf32ae54f773b11"
+version = "0.3.1"
+source = "git+https://github.com/livekit/rust-sdks?branch=theo%2Fthread-schema-v2#2a5f994603253b76204375785370e8eaf6f8dd89"
 dependencies = [
  "hmac",
  "jsonwebtoken 10.4.0",
@@ -1299,6 +1315,24 @@ dependencies = [
  "sha2",
  "signature",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "lk-agents-a2a"
+version = "0.1.0"
+dependencies = [
+ "a2a-lf",
+ "async-trait",
+ "livekit-protocol",
+ "lk-agents-abi",
+ "lk-agents-host-derive",
+ "lk-agents-storage",
+ "log",
+ "pyo3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
@@ -1429,13 +1463,17 @@ name = "lk-agents-py"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "livekit-protocol",
+ "lk-agents-a2a",
  "lk-agents-abi",
+ "lk-agents-host-derive",
  "lk-agents-inference",
  "lk-agents-media",
  "lk-agents-rtc",
  "lk-agents-storage",
  "lk-agents-voice",
  "lk-agents-worker",
+ "pbjson-types",
  "pyo3",
  "pyo3-log",
  "serde",
@@ -1458,11 +1496,10 @@ dependencies = [
 name = "lk-agents-storage"
 version = "0.1.0"
 dependencies = [
+ "a2a-lf",
  "async-trait",
- "base64 0.22.1",
  "bytes",
  "futures-util",
- "hmac",
  "livekit-api",
  "livekit-protocol",
  "lk-agents-host-derive",
@@ -1474,7 +1511,6 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.30.0",
@@ -3479,6 +3515,17 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
+
+[[package]]
+name = "uuid"
+version = "1.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "valuable"

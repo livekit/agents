@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# The session storage client (plan 13.2, 13.5): the `wsdb` data-plane client, the session schema
+# The session storage client: the `wsdb` data-plane client, the session schema
 # as `#[derive(Host)]` records, every SQL statement a session database sees, the `/v1/streams`
 # client and the Public API's threads and databases. Host-neutral: no pyo3 here; `lk-agents-py/src/storage.rs`
 # is the Python face. Below the purity line by design (tokio, TLS, prost, reqwest).
@@ -24,6 +24,7 @@ pbjson-types.workspace = true
 prost.workspace = true
 # Threads and databases through public-api-server, the one way to agentstore.
 livekit-api.workspace = true
+a2a.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
 thiserror.workspace = true
@@ -36,11 +37,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 bytes = "1"
-# The agent-db token is HS256 over claims `livekit-token` does not model (`agent.databaseAdmin`),
-# so it is signed here: hmac + sha2 are already in the graph through `livekit-token`.
-hmac = "0.12"
-sha2 = "0.10"
-base64.workspace = true
 url = "2"
 # `shortuuid` for lease tokens, task, message and artifact ids: six random bytes as hex.
 rand = "0.9"

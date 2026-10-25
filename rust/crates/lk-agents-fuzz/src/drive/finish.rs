@@ -227,6 +227,9 @@ pub struct Outcome {
     pub opened: BTreeMap<&'static str, BTreeSet<Kind>>,
     /// The run stopped because a contract failed, rather than because it finished.
     pub stopped_early: bool,
+    /// `(input, phase)`: which inputs landed in which phase of the conversation, read off the
+    /// journal as it stood when each input was applied. COVERAGE.md's operation x phase table.
+    pub cells: BTreeSet<(&'static str, &'static str)>,
 }
 
 impl Outcome {
@@ -349,6 +352,73 @@ fn record_outcome(run: &Run, outcome: &mut Outcome) {
     let names: Vec<String> = run.record.journal().iter().map(|(_, s)| step_name(s)).collect();
     outcome.edges = names.windows(2).map(|w| (w[0].clone(), w[1].clone())).collect();
     outcome.opened = opened_by_input(&run.record);
+    outcome.cells = cells_by_input(&run.record);
+}
+
+/// The phases of a conversation, in COVERAGE.md's column order.
+pub const PHASES: [&str; 14] = [
+    "starting", "idle", "listening", "person_speaking", "away", "thinking", "speaking", "overlap",
+    "tool_running", "turn_hook", "draining", "on_exit", "on_enter", "closing",
+];
+
+/// For each input, every phase the conversation was in when it was applied.
+fn cells_by_input(record: &Recording) -> BTreeSet<(&'static str, &'static str)> {
+    use lk_agents_abi::voice::events::{AgentState, UserState};
+    use lk_agents_voice::agent_session::HookKind;
+    use lk_agents_voice::events::SessionEvent;
+    use lk_agents_voice::trace::{CloseStep, HandoffStep, ToolStep};
+
+    let (mut agent, mut user) = (AgentState::Initializing, UserState::Listening);
+    let (mut tools, mut turn_hooks, mut on_exit, mut on_enter) = (0i32, 0i32, 0i32, 0i32);
+    let (mut draining, mut closing) = (false, false);
+    let mut journal = record.journal().iter().peekable();
+    let mut out = BTreeSet::new();
+    for applied in record.applied() {
+        while let Some((_, step)) = journal.next_if(|(at, _)| at.seq < applied.at.seq) {
+            match step {
+                Step::Emitted(SessionEvent::AgentStateChanged { new, .. }) => agent = *new,
+                Step::Emitted(SessionEvent::UserStateChanged { new, .. }) => user = *new,
+                Step::Tool(ToolStep::CallStarted { .. }) => tools += 1,
+                Step::Tool(ToolStep::CallEnded { .. }) => tools -= 1,
+                Step::Handoff(HandoffStep::DrainStarted { .. }) => draining = true,
+                Step::Handoff(HandoffStep::Drained { .. }) => draining = false,
+                Step::Handoff(HandoffStep::HookIssued { kind, .. }) => match kind {
+                    HookKind::OnExit => on_exit += 1,
+                    HookKind::OnEnter => on_enter += 1,
+                    HookKind::OnUserTurnCompleted => turn_hooks += 1,
+                    _ => {}
+                },
+                Step::Handoff(HandoffStep::HookFinished { kind, .. }) => match kind {
+                    HookKind::OnExit => on_exit -= 1,
+                    HookKind::OnEnter => on_enter -= 1,
+                    HookKind::OnUserTurnCompleted => turn_hooks -= 1,
+                    _ => {}
+                },
+                Step::Close(CloseStep::Requested { .. }) => closing = true,
+                _ => {}
+            }
+        }
+        let person = user == UserState::Speaking;
+        let phases = [
+            agent == AgentState::Initializing,
+            agent == AgentState::Idle,
+            agent == AgentState::Listening && !person,
+            person,
+            user == UserState::Away,
+            agent == AgentState::Thinking,
+            agent == AgentState::Speaking,
+            person && agent == AgentState::Speaking,
+            tools > 0,
+            turn_hooks > 0,
+            draining,
+            on_exit > 0,
+            on_enter > 0,
+            closing,
+        ];
+        let name = applied.input.name();
+        out.extend(PHASES.iter().zip(phases).filter(|(_, on)| *on).map(|(p, _)| (name, *p)));
+    }
+    out
 }
 
 /// For each input the case sent, the kinds it opened *directly*, by exact stamp.

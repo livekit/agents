@@ -42,7 +42,7 @@ The agent facing the person words what reaches them.
 | `ToolResult(text, verbatim=True)`, `Completed(value, verbatim=True)` | delivers the text as written; the model reads `delivered to the person as written: ...` and continues, unless `reply_required=False` ends the turn there | the same, and the exact text leads the answer, flagged `livekit/verbatim` |
 
 A run is another agent's when its turn's messages carry
-`livekit/kind: delegation`. An agent with no model, a graph or a code task,
+`livekit/kind: delegation`. An agent with no model or a code task,
 asks as written. `result.verbatim` is the part of the answer or the question
 that was exact; the door puts it on the task as `livekit/verbatim`, and the
 delegate delivers that part as written and hands the rest to its model.
@@ -82,23 +82,21 @@ message answers it. The body runs only when the model repeats the same call
 after that answer; the schema has no approval flag the model could set. See
 [tools.md](tools.md).
 
-## From a task
+## Conversational agent tasks
 
-An `AgentTask` on a call makes the same transitions from `on_enter` or one
-of its tools:
+The end-state [agent execution API](agent-tasks.md) uses shared Agent
+configuration, persisted draft state, and typed final output. Every human
+wait is represented as InputRequired on both calls and text:
 
-| Transition | In a task |
-|---|---|
-| `Completed(value)` | ends the task; `value` is what the awaiting code receives |
-| `Failed(error)`, `Rejected(reason)` | ends the task; the awaiting code receives an exception carrying the text |
-| `InputRequired(question)` | speaks the question; the person's next turn is the call's output and the task's model continues |
-| `Working(message=)` | records the status; the task stays where it is |
+- Intermediate model text saves an agent-loop receiver. The next human
+  message resumes that agent without an invented tool call.
+- Tool-returned InputRequired saves the real pending call. The person's
+  reply fills its output, then the agent continues; the tool is not recalled.
 
-A task with a model completes only through a tool that returns `Completed`;
-text from its model goes to the person. See [agent-tasks.md](agent-tasks.md).
+Neither needs a Python callback. Typed final output or an accepted output
+function result completes the execution; a conversational question does not.
+A parent receives its child's result as tool output, then its LLM resumes.
+The separate Completed wrapper in existing AgentTask code is being retired
+from this authoring model; current implementation gaps are in [TODO.md](TODO.md).
 
-Waiting on a system, naming the tool that takes the answer, deadlines and
-answers that call a tool with no model are designed in
-[planned-agent-tasks.md](planned-agent-tasks.md).
-
-See `examples/use-cases/04_a_claim_with_a_photo.py`.
+Graph steps, code-workflow waits, and external-service wake-ups are deferred.

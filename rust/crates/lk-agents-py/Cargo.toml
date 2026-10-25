@@ -33,6 +33,13 @@ lk-agents-worker = { path = "../lk-agents-worker", features = ["python"] }
 # The session storage client (plan 13.4). Host-neutral: its Python face is `src/storage.rs` here,
 # hand-written pyo3 over its typed methods, registered on `_core` like every other class.
 lk-agents-storage = { path = "../lk-agents-storage" }
+# The A2A turn engine; its Python face is `src/turn.rs` here.
+lk-agents-a2a = { path = "../lk-agents-a2a", features = ["python"] }
+# The threads and databases requests the binding hands `livekit-api`'s clients, and the thread
+# records Python reads them as (`#[derive(Host)]`, their pydantic models from `lk-agents-codegen`).
+livekit-protocol.workspace = true
+pbjson-types.workspace = true
+lk-agents-host-derive = { path = "../lk-agents-host-derive" }
 # `TurnHost` is an async trait; `src/turn.rs` implements it over a Python object.
 async-trait.workspace = true
 serde.workspace = true
@@ -46,3 +53,8 @@ extension-module = ["pyo3/extension-module"]
 # The audio decoder's ffmpeg path and the ogg/opus recorder. Enabled by maturin (pyproject.toml
 # `features`), never by the workspace build.
 ffmpeg = ["lk-agents-media/ffmpeg"]
+
+# `#[derive(Host)]` on a unit enum expands its pyo3 conversions under `cfg(feature = "python")`,
+# a feature this crate does not have: name the value so check-cfg does not warn.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("python"))'] }

@@ -20,6 +20,7 @@ members = ["crates/*"]
 # and so still unifies: the node addon it produces links libpython. Build the node addon on its own
 # (`cargo build -p lk-agents-node`, or `napi build` from node/) whenever the artifact matters.
 default-members = [
+    "crates/lk-agents-a2a",
     "crates/lk-agents-abi",
     "crates/lk-agents-bindgen",
     "crates/lk-agents-codegen",
@@ -42,6 +43,8 @@ license = "Apache-2.0"
 # --- pure tier (§6: no tokio, reqwest, prost, pyo3, no C++) ---
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
+# The A2A v1 types, from a2aproject/a2a-rs: they serialize as v1 protobuf JSON.
+a2a          = { package = "a2a-lf", version = "=0.4.2" }
 thiserror    = "2"
 smallvec     = "1"
 ordered-float = "5"
@@ -55,15 +58,15 @@ tokio        = { version = "1", features = ["rt", "sync", "macros", "time"] }
 # `lk-agents-inference/src/eot/proto.rs` were the two copies).
 #
 # A git dependency, because rust-sdks `main` is not released yet.
-livekit-protocol = { git = "https://github.com/livekit/rust-sdks", branch = "main" }
+livekit-protocol = { git = "https://github.com/livekit/rust-sdks", branch = "theo/thread-schema-v2" }
 # The access token, from the same repository: `AccessToken`/`TokenVerifier`/`Claims` over HS256.
 # The worker's `/agent` credential and a simulated job's participant token need `VideoGrants.agent`
 # and `Claims.kind`.
-livekit-token = { git = "https://github.com/livekit/rust-sdks", branch = "main" }
+livekit-token = { git = "https://github.com/livekit/rust-sdks", branch = "theo/thread-schema-v2" }
 # `livekit-api`, from the same repository: its `ThreadClient` and `DatabaseClient` are the only way
 # to agentstore's threads and databases. Its rustls is
 # pinned to `ring`, the workspace's one crypto provider.
-livekit-api = { git = "https://github.com/livekit/rust-sdks", branch = "main", default-features = false, features = ["services", "rustls-tls-native-roots"] }
+livekit-api = { git = "https://github.com/livekit/rust-sdks", branch = "theo/thread-schema-v2", default-features = false, features = ["services", "rustls-tls-native-roots"] }
 # `livekit-protocol`'s prost, and therefore the workspace's: prost-derive emits `::prost::` paths,
 # so every crate that names a `Message` from that package must see the same major, 0.14 since
 # livekit/rust-sdks#1447.

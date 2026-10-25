@@ -48,7 +48,7 @@ state allows it: the agent itself never changes.
 
 `capabilities=[...]` on the agent attaches bundles of hooks and tools.
 `Tasks()` is the default capability that lets an agent see and steer its
-background tasks; see [planned-agent-tasks.md](planned-agent-tasks.md).
+background tasks; see [agent-tasks.md](agent-tasks.md).
 `capabilities=[]` removes them.
 
 See `examples/use-cases/planned-06_card_servicing_toolsets.py`.

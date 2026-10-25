@@ -24,15 +24,23 @@ impl Meta {
     /// The value as Rust source (`defaults(..)`, `stream(sink = ..)`).
     pub(super) fn rust(&self) -> Option<String> {
         let v = self.value.clone()?;
-        if self.quoted { lk_agents_bindgen::meta::rust_of(&lk_agents_bindgen::Value::Text(v)) } else { Some(v) }
+        if self.quoted {
+            lk_agents_bindgen::meta::rust_of(&lk_agents_bindgen::Value::Text(v))
+        } else {
+            Some(v)
+        }
     }
 }
 
 /// Every `host`/`python`/`node`/`binding` attribute, flattened: `host` keys unprefixed, others
 /// under their name. A malformed attribute already failed the expansion; here it reads as empty.
 pub(super) fn metas(attrs: &[syn::Attribute]) -> Vec<Meta> {
-    let mut out: Vec<Meta> =
-        lk_agents_bindgen::Metas::of(attrs).unwrap_or_default().0.into_iter().map(|m| Meta::from_bindgen(m, "")).collect();
+    let mut out: Vec<Meta> = lk_agents_bindgen::Metas::of(attrs)
+        .unwrap_or_default()
+        .0
+        .into_iter()
+        .map(|m| Meta::from_bindgen(m, ""))
+        .collect();
     for outer in ["python", "node", "binding"] {
         let flat = lk_agents_bindgen::Metas::named(attrs, outer).unwrap_or_default();
         out.extend(flat.0.into_iter().map(|m| Meta::from_bindgen(m, &format!("{outer}."))));
@@ -92,14 +100,20 @@ pub(super) fn host_attr_strict(label: &str, attrs: &[syn::Attribute]) -> Res<Opt
 
 /// A type may carry two `stream(..)`s.
 pub(super) fn host_attrs_strict(label: &str, attrs: &[syn::Attribute]) -> Res<Vec<Vec<Meta>>> {
-    let each = lk_agents_bindgen::Metas::each(attrs).map_err(|e| format!("{label}: #[host(..)]: {e}"))?;
-    Ok(each.into_iter().map(|m| m.0.into_iter().map(|m| Meta::from_bindgen(m, "")).collect()).collect())
+    let each =
+        lk_agents_bindgen::Metas::each(attrs).map_err(|e| format!("{label}: #[host(..)]: {e}"))?;
+    Ok(each
+        .into_iter()
+        .map(|m| m.0.into_iter().map(|m| Meta::from_bindgen(m, "")).collect())
+        .collect())
 }
 
 pub(super) fn want_head(at: &str, m: &[Meta], want: &str) -> Res<()> {
     match m.first().map(|x| x.key.split('.').next().unwrap_or("")) {
         Some(h) if h == want => Ok(()),
-        other => Err(format!("{at}: expected #[host({want}..)], found #[host({})]", other.unwrap_or(""))),
+        other => {
+            Err(format!("{at}: expected #[host({want}..)], found #[host({})]", other.unwrap_or("")))
+        }
     }
 }
 

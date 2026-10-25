@@ -97,8 +97,8 @@ _FINAL_RESULT_PROMPT = (
 class RunHooks:
     """What a door installs around the ``agent.run()`` calls made inside its turn.
 
-    ``boundary`` is awaited before each model call; ``True`` makes the run yield there with what
-    ran so far and no reply (the ``interrupt`` policy of plan 3.3.4). ``on_result`` receives every
+    ``checkpoint`` is awaited before each model call; ``True`` makes the run yield there with what
+    ran so far and no reply (a newer message waits for the lane, or a client canceled the task). ``on_result`` receives every
     result, so the door can commit what the run added without the handler forwarding it.
     ``on_update`` receives a tool's ``ctx.update(text)``: the door forwards it as progress, a
     ``working`` frame on the text door, speech on a call. ``on_token`` receives the model's text
@@ -112,7 +112,7 @@ class RunHooks:
     the agent facing the person does.
     """
 
-    boundary: Callable[[], Awaitable[bool]] | None = None
+    checkpoint: Callable[[], Awaitable[bool]] | None = None
     on_result: Callable[[RunResult[Any]], None] | None = None
     on_update: Callable[[str], Any] | None = None
     on_token: Callable[[str], Awaitable[None]] | None = None
@@ -466,7 +466,7 @@ class AgentRun(Generic[Run_T]):
         answer_tool = hooks.answer_tool if hooks is not None else None
 
         for _ in range(self._max_steps):
-            if hooks is not None and hooks.boundary is not None and await hooks.boundary():
+            if hooks is not None and hooks.checkpoint is not None and await hooks.checkpoint():
                 # a newer message waits for the lane: stop here, what ran is kept, no reply
                 return finish(None, interrupted=True)
             agent = self._agent

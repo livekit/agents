@@ -9,7 +9,8 @@ point of view.
 
 ## How to read this folder
 
-- A document with no prefix describes what is built on this branch.
+- A document with no prefix describes the target API; the table below marks
+  built features and end-state designs whose implementation is still in progress.
 - A document named `planned-<topic>.md` describes design that is not built
   yet. It extends the built document of the same topic.
 - [TODO.md](TODO.md) lists the places where the code still differs from a
@@ -24,12 +25,12 @@ point of view.
 - No `Any` in the public API: every function, class and callback is fully
   typed, user code passes mypy strict and pyright, and the Node package
   ships `.d.ts` files with no `any`.
-- Generics carry the types: `Agent[Deps, State, Output]`,
-  `RunContext[Deps, State]`, `RunResult[Output]`, `AgentTask[Output, TaskState]`. A
-  typo in `ctx.deps.x` is a type error.
-- Data at every boundary is a validated type: saved state, deps, output and
-  tool arguments are pydantic models or dataclasses in Python and typed in
-  Node, never raw dicts.
+- Generics carry the types: `Agent[Context]`,
+  `RunContext[Context]` and typed run results. A typo in `ctx.context.x` is a
+  type error. Context/output inference signatures are implementation work.
+- Data at every boundary is a validated type: persisted application data, output and tool arguments are validated schemas
+  in Python and typed in Node. Local context can be an arbitrary Python object
+  and is not automatically serialized.
 - The wire is typed: A2A frames, grants, threads service calls and extension
   metadata are records generated from one declaration and shared by Python
   and Node.
@@ -40,14 +41,13 @@ point of view.
 
 | Document | Status | Feature |
 | --- | --- | --- |
-| [agents.md](agents.md) | built | `Agent`: stateless definition, `run()`, `RunContext`, structured output, validators |
+| [agents.md](agents.md) | target plus implementation notes | `Agent`: stateless definition, `run()`, `RunContext`, structured output, validators |
 | [planned-agents.md](planned-agents.md) | planned | `run_stream`, `iter`, `toolsets=`, history processors, model-call hooks, capabilities |
 | [tools.md](tools.md) | built | `@agent.tool`, `@function_tool`, toolsets, MCP, approvals, errors |
-| [state-and-deps.md](state-and-deps.md) | built | what is saved with the thread and what is built per run |
+| [state-and-deps.md](state-and-deps.md) | end-state design | typed context; automatic persisted fields with field-name storage, scopes, and fresh runtime dependencies |
 | [human-in-the-loop.md](human-in-the-loop.md) | built | `InputRequired`, approvals, and the other transitions |
-| [agent-tasks.md](agent-tasks.md) | built | `AgentTask` awaited on a call and in text, its state and arguments on the lane's stack |
-| [planned-agent-tasks.md](planned-agent-tasks.md) | planned | `AgentTask` in the background: a delegation not awaited, the clock, started from outside |
-| [graphs.md](graphs.md) | built | a graph is a class and an `AgentTask`: run inline, or awaited and waiting on the person at a node; mermaid |
+| [agent-tasks.md](agent-tasks.md) | end-state design | conversational tasks: draft state, automatic input waits, typed final output |
+| [code-workflows.md](code-workflows.md) | deferred | future graphs/workflows: requirements and extension points, no committed authoring API |
 | [threads.md](threads.md) | built | what a thread is, how it is found, what it holds, `ctx.thread`, lifecycle |
 | [lanes.md](lanes.md) | built | one agent's part of a thread: history, state, the lease, run order |
 | [storage.md](storage.md) | built | what is saved, the backends, the unit of work |

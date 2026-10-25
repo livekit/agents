@@ -1,5 +1,9 @@
 # Text endpoints
 
+> Implementation examples below still use deps/state. The target API uses
+> [typed application context](state-and-deps.md) and `ctx.context`; migration
+> is tracked in [TODO.md](TODO.md).
+
 A text endpoint is a door into a thread over the A2A protocol. Web chats,
 API clients and partner agents all come through it, and the handler never
 knows which.
@@ -190,8 +194,9 @@ await client.cancel(task_id, thread_id=thread_id)
 
 Thin over the stock `a2a-sdk`; any A2A client works without it.
 
-Background tasks, a delegation not awaited or a `livekit/task` message, are planned;
-see [planned-agent-tasks.md](planned-agent-tasks.md).
+[Agent tasks](agent-tasks.md) cover conversational input and child results.
+Durable execution, external wake-ups, and [code workflows](code-workflows.md)
+are deferred.
 
 See `examples/use-cases/01_appointments_by_phone_and_text.py` and
 `04_a_claim_with_a_photo.py`.

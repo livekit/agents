@@ -15,6 +15,7 @@ import { InfoPanel } from "./panels/info";
 import { InboxPanel } from "./panels/inbox";
 import { JournalPanel } from "./panels/journal";
 import { LanesPanel } from "./panels/lanes";
+import { SqlPanel } from "./panels/sql";
 import { sessionTitle } from "./panels/sessions";
 import { Chips } from "./chips";
 import { Swatches } from "./chrome/swatches";
@@ -218,6 +219,8 @@ export function Room() {
         return <InboxPanel inbox={database?.inbox ?? null} lanes={database?.lanes ?? []} now={now} empty={empty} />;
       case "stream":
         return <StreamPanel taskId={selectedTask} available={streamsOk} />;
+      case "sql":
+        return <SqlPanel key={chat.sessionId} sessionId={chat.sessionId} />;
       case "info":
         return <InfoPanel grant={chat.grant} streamsOk={streamsOk} />;
       default:
@@ -232,9 +235,6 @@ export function Room() {
           <div className="absolute top-4 left-4 z-10">
             <Swatches />
           </div>
-          <div className="absolute top-4 right-4 z-10">
-            <ExamplePicker examples={chat.examples} selected={chat.example} onSelect={(chosen) => void chat.selectExample(chosen)} />
-          </div>
           <main className="min-h-0 min-w-0 flex-1" data-pane="conversation">
             <ConversationPanel
               entries={chat.entries}
@@ -243,6 +243,7 @@ export function Room() {
               busy={chat.busy}
               ready={ready}
               agentName={stopped ? stopped.name : agentId}
+              title={<ExamplePicker examples={chat.examples} selected={chat.example} fallback={agentId} onSelect={(chosen) => void chat.selectExample(chosen)} />}
               note={note}
               command={stopped ? `cd ${stopped.dir} && ${stopped.start}` : undefined}
               call={call}
@@ -259,7 +260,10 @@ export function Room() {
           <Drawer
             view={panel.view}
             height={panel.height}
-            disabled={selectedTask ? {} : { stream: "Select a task in Tasks to open its stream" }}
+            disabled={{
+              ...(selectedTask ? {} : { stream: "Select a task in Tasks to open its stream" }),
+              ...(chat.sessionId ? {} : { sql: "Start a conversation to query its database" }),
+            }}
             onToggle={panel.toggle}
             onHeight={panel.setHeight}
             onDragging={setSplitting}

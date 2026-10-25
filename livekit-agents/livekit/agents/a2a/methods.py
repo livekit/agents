@@ -34,9 +34,8 @@ from google.protobuf import json_format
 from pydantic import JsonValue
 
 from .. import _core
-from .._core import ThreadDb
 from .._generated.storage import StreamInfo, TaskData
-from .._generated.storage_run import TaskRecord
+from .._generated.storage_run import TaskRow
 from .._generated.storage_turn import TurnResult
 from ..log import logger
 from ..storage.agentdb import AgentDBStorage
@@ -56,6 +55,7 @@ from .codec import (
     final_event,
     message_from_wire,
     metadata_from_wire,
+    state_from_pb,
     submitted_task,
     task_to_pb,
     to_stream_response,
@@ -270,7 +270,7 @@ class A2AService(Generic[S]):
         thread_id = await self._resolve(message, call)
         if thread_id is None:
             record, context_id = self._unknown_session(message, call)
-            yield submitted_task(record.id, context_id)
+            yield submitted_task(record.task_id, context_id)
             yield final_event(record, context_id, exts=call.extensions)
             return
 
@@ -292,7 +292,7 @@ class A2AService(Generic[S]):
         except StorageError as e:
             record, context_id = self._unsaved(thread_id, message, e)
             if not announced:
-                yield submitted_task(record.id, context_id)
+                yield submitted_task(record.task_id, context_id)
             yield final_event(record, context_id, exts=call.extensions)
 
     async def turn(
@@ -318,8 +318,8 @@ class A2AService(Generic[S]):
             raise ThreadNotFound(f"thread {thread_id} does not exist")
 
         host = self._host(resolved, on_update=on_update, on_token=on_token)
-        db = await self._storage.open(resolved)
-        return await self._run(resolved, message, host, task_id, db)
+        thread = await self._storage.open(resolved)
+        return await self._run(resolved, message, host, task_id, thread)
 
     def _next_stream(self) -> asyncio.Task[StreamInfo]:
         """An answer stream created ahead of the request, so a turn does not wait for one;
@@ -339,10 +339,10 @@ class A2AService(Generic[S]):
             continued, created = await asyncio.gather(
                 self._continued(thread_id, message), self._next_stream()
             )
-            db = await opening
+            thread = await opening
         except BaseException:
             # a request that fails before its turn leaves no connection open behind it
-            def close(f: asyncio.Future[ThreadDb]) -> None:
+            def close(f: asyncio.Future[_core.Thread]) -> None:
                 if not f.cancelled() and f.exception() is None:
                     f.result().close()
 
@@ -363,7 +363,7 @@ class A2AService(Generic[S]):
 
         async def produce() -> None:
             try:
-                outcome = await self._run(thread_id, message, wire, stream_id, db)
+                outcome = await self._run(thread_id, message, wire, stream_id, thread)
             except Exception as e:
                 await pump.fail(e)
                 return
@@ -397,15 +397,14 @@ class A2AService(Generic[S]):
         message: StoredMessage,
         host: _core.TurnHostProtocol,
         task_id: str | None,
-        db: ThreadDb,
+        thread: _core.Thread,
     ) -> TurnOutcome:
-        """One message through ``_core.Turn`` on ``db``, the thread's database, closed after."""
-        core = _core.Thread(db, self._storage.holder)
+        """One message through ``_core.Turn`` on the open ``thread``, closed after."""
         try:
-            turn = _core.Turn(core, self.lane, host, self._endpoint.turn_options)
+            turn = _core.Turn(thread, self.lane, host, self._endpoint.turn_options)
             result = await turn.run(message, task_id)
         finally:
-            core.close()
+            thread.close()
 
         return TurnOutcome(result=result, context_id=thread_id)
 
@@ -426,7 +425,7 @@ class A2AService(Generic[S]):
             )
         return continued
 
-    def _unknown_session(self, message: StoredMessage, call: CallContext) -> tuple[TaskRecord, str]:
+    def _unknown_session(self, message: StoredMessage, call: CallContext) -> tuple[TaskRow, str]:
         """Plan 5.12: an id the threads service does not know fails the task ``thread-not-found``."""
         context_id = str(message.get("contextId") or "")
         record = _failed_record(shortuuid("AST_"), self.lane, message, REASON_THREAD_NOT_FOUND)
@@ -434,7 +433,7 @@ class A2AService(Generic[S]):
 
     def _unsaved(
         self, thread_id: str, message: StoredMessage, error: StorageError
-    ) -> tuple[TaskRecord, str]:
+    ) -> tuple[TaskRow, str]:
         """The turn's save could not be written: the task fails ``storage-unavailable`` in the
         answer, unpersisted, and the client resends (docs/a2a.md)."""
         logger.warning(
@@ -463,41 +462,41 @@ class A2AService(Generic[S]):
 
     async def list_tasks(self, params: Params, call: CallContext) -> pb.ListTasksResponse:
         thread_id = await self._context_for_tasks(params, call, flag="read")
-        records = await self._tasks(thread_id)
-
-        wanted = str(params.get("status") or "")
-        if wanted and wanted != "TASK_STATE_UNSPECIFIED":
-            records = [
-                r
-                for r in records
-                if wanted in (r.status, "TASK_STATE_" + r.status.upper().replace("-", "_"))
-            ]
-
-        page_size = int(str(params.get("pageSize") or 50))
-        page_token = str(params.get("pageToken") or "")
-        start_at = int(page_token) if page_token.isdigit() else 0
+        try:
+            request = json_format.ParseDict(
+                dict(params), pb.ListTasksRequest(), ignore_unknown_fields=True
+            )
+        except json_format.ParseError as e:
+            raise InvalidParamsError(message=str(e)) from e
+        status = None
+        if request.status != pb.TaskState.TASK_STATE_UNSPECIFIED:
+            status = state_from_pb(request.status)
+        page = await Thread(self._storage, thread_id, agent_name=self.lane).list_tasks(
+            status=status,
+            updated_after=request.status_timestamp_after.ToMilliseconds(),
+            page_size=request.page_size or 50,
+            page_token=request.page_token or None,
+        )
         length = params.get("historyLength")
-        response = pb.ListTasksResponse(
+        return pb.ListTasksResponse(
             tasks=[
                 task_to_pb(
                     r,
                     thread_id,
                     exts=call.extensions,
                     history_length=length if isinstance(length, int) else 0,
-                    include_artifacts=bool(params.get("includeArtifacts", False)),
+                    include_artifacts=request.include_artifacts,
                 )
-                for r in records[start_at : start_at + page_size]
+                for r in page.tasks
             ],
-            page_size=page_size,
-            total_size=len(records),
+            next_page_token=page.next_page_token,
+            page_size=page.page_size,
+            total_size=page.total_size,
         )
-        if start_at + page_size < len(records):
-            response.next_page_token = str(start_at + page_size)
-        return response
 
     async def cancel_task(self, params: Params, call: CallContext) -> pb.Task:
         """``tasks/cancel``: the row goes ``canceled`` now; a running turn yields at its next
-        boundary and writes nothing over it (plan 5.5)."""
+        checkpoint and writes nothing over it."""
         thread_id = await self._context_for_tasks(params, call, flag="write")
         task_id = str(params.get("id") or "")
         record = await self._find_task(thread_id, task_id)
@@ -601,15 +600,8 @@ class A2AService(Generic[S]):
                 raise Forbidden(f"the grant does not {flag} this thread")
         return thread_id
 
-    async def _tasks(self, thread_id: str) -> list[TaskRecord]:
-        return await Thread(self._storage, thread_id, agent_name=self.lane).all_tasks()
-
-    async def _find_task(self, thread_id: str, task_id: str) -> TaskRecord | None:
-        for record in await self._tasks(thread_id):
-            if record.id == task_id:
-                return record
-
-        return None
+    async def _find_task(self, thread_id: str, task_id: str) -> TaskRow | None:
+        return await Thread(self._storage, thread_id, agent_name=self.lane).task(task_id)
 
 
 def _message_of(params: Params) -> StoredMessage:
@@ -623,24 +615,27 @@ def _message_of(params: Params) -> StoredMessage:
     return message
 
 
-def _failed_record(task_id: str, lane: str, message: StoredMessage, reason: str) -> TaskRecord:
+def _failed_record(task_id: str, lane: str, message: StoredMessage, reason: str) -> TaskRow:
     """A ``failed`` task the worker could not write, with ``reason`` on its status message."""
-    return TaskRecord(
-        id=task_id,
+    return TaskRow(
+        task_id=task_id,
         lane=lane,
         seq=0,
         name=None,
         message_id=str(message.get("messageId") or ""),
         status="failed",
-        status_message={
-            "messageId": shortuuid("msg_"),
-            "role": "agent",
-            "parts": [{"kind": "text", "text": f"the task failed: {reason}"}],
-            "metadata": {REASON: reason},
-        },
-        updated_at=int(time.time()),
-        data=TaskData(history=[dict(message)], metadata={REASON: reason}),
-        internal=None,
+        updated_at=int(time.time() * 1000),
+        data=TaskData(
+            history=[dict(message)],
+            metadata={REASON: reason},
+            status_message={
+                "messageId": shortuuid("msg_"),
+                "role": "ROLE_AGENT",
+                "parts": [{"text": f"the task failed: {reason}"}],
+                "metadata": {REASON: reason},
+            },
+        ),
+        ask=None,
     )
 
 

@@ -22,11 +22,16 @@ use crate::python::Out;
 use functions::{error_fn, function};
 use objects::{object, stream};
 use proxies::proxy;
-use records::{emit_rec, rec, Rec};
+use records::{Rec, emit_rec, rec};
 
 /// An item from any other crate is a gap, not a compile error.
-pub const LINKED: &[&str] =
-    &["lk_agents_abi", "lk_agents_voice", "lk_agents_inference", "lk_agents_worker", "lk_agents_media"];
+pub const LINKED: &[&str] = &[
+    "lk_agents_abi",
+    "lk_agents_voice",
+    "lk_agents_inference",
+    "lk_agents_worker",
+    "lk_agents_media",
+];
 
 /// `#[host(object)]` classes whose methods land on a hand-written napi class, by path.
 const ON_HAND_WRITTEN: &[(&str, &str)] = &[("AgentSession", "crate::session::AgentSession")];
@@ -64,7 +69,13 @@ const HAND_TYPES: &[(&str, &str, &str, &str, &str)] = &[
         "crate::providers::host::audio_frame_to_js({x})",
         "crate::providers::host::audio_frame_from_js({v})",
     ),
-    ("LanguageCode", "String", "string", "({x}).as_str().to_owned()", "lk_agents_abi::LanguageCode::new(&{v})"),
+    (
+        "LanguageCode",
+        "String",
+        "string",
+        "({x}).as_str().to_owned()",
+        "lk_agents_abi::LanguageCode::new(&{v})",
+    ),
     (
         "Role",
         "String",
@@ -119,7 +130,13 @@ enum Dir {
 }
 
 pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Out>, String> {
-    let cx = Cx { decls, x, recs: RefCell::new(Vec::new()), errors: RefCell::new(Vec::new()), in_params: std::cell::Cell::new(false) };
+    let cx = Cx {
+        decls,
+        x,
+        recs: RefCell::new(Vec::new()),
+        errors: RefCell::new(Vec::new()),
+        in_params: std::cell::Cell::new(false),
+    };
     let mut gaps: Vec<(String, String)> = Vec::new();
     let mut wanted: Vec<String> = Vec::new();
 
@@ -155,7 +172,10 @@ pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Out>, String> {
         }
     }
     for k in x.kwargs.iter().filter(|k| k.client) {
-        gaps.push((k.path.clone(), "not yet: a #[host(client)] constructor lands on a hand-written pyclass".to_owned()));
+        gaps.push((
+            k.path.clone(),
+            "not yet: a #[host(client)] constructor lands on a hand-written pyclass".to_owned(),
+        ));
     }
     let mut proxies = Vec::new();
     for p in &x.proxies {
@@ -184,7 +204,11 @@ pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Out>, String> {
     for h in USED_BY_HAND.iter().filter(|h| decls.iter().any(|d| &d.rust_name == *h)) {
         match rec(&cx, h) {
             Ok(_) => push_unique(&mut order, h),
-            Err(e) => return Err(format!("`{h}` is used by hand-written lk-agents-node code but cannot be generated: {e}")),
+            Err(e) => {
+                return Err(format!(
+                    "`{h}` is used by hand-written lk-agents-node code but cannot be generated: {e}"
+                ));
+            }
         }
     }
     let mut i = 0;
@@ -199,7 +223,10 @@ pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Out>, String> {
     for name in &order {
         let r = rec(&cx, name).expect("planned");
         if class_names.contains(&r.ident) {
-            return Err(format!("{}: record `{}` and a generated class share one napi name", r.decl, r.ident));
+            return Err(format!(
+                "{}: record `{}` and a generated class share one napi name",
+                r.decl, r.ident
+            ));
         }
         records.push(emit_rec(&cx, &r));
     }
@@ -217,7 +244,9 @@ pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Out>, String> {
         if items.is_empty() {
             return;
         }
-        let mut b = format!("{HEADER}\n#![allow(clippy::all, dead_code, non_snake_case, unused_imports, unused_variables, unused_mut)]\n\n{prelude}");
+        let mut b = format!(
+            "{HEADER}\n#![allow(clippy::all, dead_code, non_snake_case, unused_imports, unused_variables, unused_mut)]\n\n{prelude}"
+        );
         for i in items {
             b.push('\n');
             b.push_str(&i);
@@ -225,7 +254,11 @@ pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Out>, String> {
         out.push(Out { path: format!("{name}.rs"), text: b });
         modules.push(name.to_owned());
     };
-    file("records", records, "use napi::bindgen_prelude::JsObjectValue as _;\nuse napi_derive::napi;\n");
+    file(
+        "records",
+        records,
+        "use napi::bindgen_prelude::JsObjectValue as _;\nuse napi_derive::napi;\n",
+    );
     file("functions", fns, "use napi::Env;\nuse napi_derive::napi;\n");
     file("objects", objects, "use napi::Env;\nuse napi_derive::napi;\n");
     file("errors", errors, "use crate::host_error::JsError;\n");
@@ -260,14 +293,17 @@ fn push_unique(v: &mut Vec<String>, s: &str) {
 /// share a host name, since `index.d.ts` is one namespace.
 pub(crate) fn js_name(all: &[Decl], d: &Decl) -> String {
     let base = host_name(d);
-    let clash = all.iter().any(|o| key(o) != key(d) && !matches!(o.body, Body::Unit(_)) && host_name(o) == base);
+    let clash = all
+        .iter()
+        .any(|o| key(o) != key(d) && !matches!(o.body, Body::Unit(_)) && host_name(o) == base);
     if !(clash || HAND_WRITTEN.contains(&base.as_str())) {
         return base;
     }
     match d.rust_module.last() {
         Some(m) if d.rust_name == base => {
             let mut cs = m.chars();
-            cs.next().map(|c| c.to_uppercase().chain(cs).collect::<String>()).unwrap_or_default() + &base
+            cs.next().map(|c| c.to_uppercase().chain(cs).collect::<String>()).unwrap_or_default()
+                + &base
         }
         _ => d.rust_name.clone(),
     }
@@ -275,7 +311,11 @@ pub(crate) fn js_name(all: &[Decl], d: &Decl) -> String {
 
 /// Rust name under its inline modules: two `group` modules may each declare a `CartesiaOptions`.
 pub(crate) fn key(d: &Decl) -> String {
-    if d.rust_module.is_empty() { d.rust_name.clone() } else { format!("{}::{}", d.rust_module.join("::"), d.rust_name) }
+    if d.rust_module.is_empty() {
+        d.rust_name.clone()
+    } else {
+        format!("{}::{}", d.rust_module.join("::"), d.rust_name)
+    }
 }
 
 fn by_key<'a>(decls: &'a [Decl], k: &str) -> Option<&'a Decl> {
@@ -285,7 +325,9 @@ fn by_key<'a>(decls: &'a [Decl], k: &str) -> Option<&'a Decl> {
 fn host_name(d: &Decl) -> String {
     d.target(Host::Node)
         .map(|t| t.name.clone())
-        .or_else(|| d.targets_for(Host::Binding).find(|t| t.kind == Kind::Class).map(|t| t.name.clone()))
+        .or_else(|| {
+            d.targets_for(Host::Binding).find(|t| t.kind == Kind::Class).map(|t| t.name.clone())
+        })
         .unwrap_or_else(|| d.rust_name.clone())
 }
 
@@ -296,7 +338,11 @@ fn summary(doc: &[String]) -> Vec<String> {
 
 fn linked(path: &str) -> Result<(), String> {
     let krate = path.split("::").next().unwrap_or_default();
-    if LINKED.contains(&krate) { Ok(()) } else { Err(format!("`{krate}` is not linked by lk-agents-node")) }
+    if LINKED.contains(&krate) {
+        Ok(())
+    } else {
+        Err(format!("`{krate}` is not linked by lk-agents-node"))
+    }
 }
 
 /// A blank doc line is `///`, not `/// `: rustfmt would flag the trailing space.
@@ -331,7 +377,8 @@ fn snake(s: &str) -> String {
     let mut out = String::new();
     for (i, c) in chars.iter().enumerate() {
         if c.is_ascii_uppercase() {
-            let prev_lower = i > 0 && (chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit());
+            let prev_lower =
+                i > 0 && (chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit());
             let next_lower = i + 1 < chars.len() && chars[i + 1].is_ascii_lowercase();
             let prev_upper = i > 0 && chars[i - 1].is_ascii_uppercase();
             if i > 0 && (prev_lower || (prev_upper && next_lower)) {

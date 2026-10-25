@@ -157,12 +157,36 @@ export type Delegation = {
 /** What every entry carries: its id, and when it happened (ms), so voice turns interleave with text. */
 type Stamped = { id: string; at: number };
 
+/** Milliseconds from the send: the acknowledgment, the first piece of the reply, the end. */
+export type Timing = { ack?: number; first?: number; done?: number };
+
 /** The conversation as the stage shows it: one entry per thing that happened. */
 export type Entry =
   | (Stamped & { kind: "user"; text: string; voice?: boolean })
-  | (Stamped & { kind: "agent"; text: string; taskId?: string; streaming?: boolean; voice?: boolean; interrupted?: boolean })
-  | (Stamped & { kind: "tool"; name: string; args?: string; output?: string; isError?: boolean })
+  | (Stamped & {
+      kind: "agent";
+      text: string;
+      taskId?: string;
+      streaming?: boolean;
+      voice?: boolean;
+      interrupted?: boolean;
+      timing?: Timing;
+    })
+  | (Stamped & {
+      kind: "tool";
+      name: string;
+      args?: string;
+      output?: string;
+      isError?: boolean;
+    })
   | (Stamped & { kind: "progress"; text: string })
   | (Stamped & { kind: "question"; text: string })
   | (Stamped & { kind: "delegation" } & Delegation)
-  | (Stamped & { kind: "status"; text: string; taskId?: string; state?: string; meta?: string; failed?: boolean });
+  | (Stamped & {
+      kind: "status";
+      text: string;
+      taskId?: string;
+      state?: string;
+      meta?: string;
+      failed?: boolean;
+    });

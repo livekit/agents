@@ -23,7 +23,7 @@ from a2a.utils.constants import PROTOCOL_VERSION_1_0, TransportProtocol
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from livekit.agents import Agent, AgentServer, InputRequired, RunContext, _core, llm
+from livekit.agents import Agent, AgentServer, InputRequired, RunContext, llm
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.extension import KIND
 from livekit.agents.delegation import A2ADelegate, DelegationFailed
@@ -47,10 +47,9 @@ from .test_a2a_server import (
 
 
 async def lanes_of(storage: AgentDBStorage, thread_id: str) -> set[str]:
-    db = await storage.open(thread_id)
-    core = _core.Thread(db, storage.holder)
+    core = await storage.open(thread_id)
     try:
-        return {lane.name for lane in await core.lanes()}
+        return {lane.lane for lane in await core.lanes()}
     finally:
         core.close()
 
@@ -103,7 +102,7 @@ async def test_a2a_delegate_against_a_livekit_expert(agentdb_storage: AgentDBSto
         "Thanks for calling, goodbye.",
     ]
     tasks = await Thread(storage, caller_session, agent_name=AGENT).tasks()
-    assert {t.id for t in tasks} == {result.task_id, goodbye.task_id}
+    assert {t.task_id for t in tasks} == {result.task_id, goodbye.task_id}
     # the message went as a delegation
     assert all(t.data.history[0]["metadata"][KIND] == "delegation" for t in tasks)
     assert goodbye.output == "Thanks for calling, goodbye."

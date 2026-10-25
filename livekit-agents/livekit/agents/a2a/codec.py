@@ -1,10 +1,8 @@
 """Between the storage layer's JSON and the A2A wire, in both directions.
 
-Inside the worker a message is the dict the storage layer takes (``messageId``, ``role``,
-``parts`` tagged with ``kind``, ``metadata`` under short keys). On the wire it is the A2A 1.0
-JSON of the protobuf types; :func:`message_from_wire` accepts the 1.0 shape and the 0.3 shape
-alike. The server writes the extension's keys (``livekit/``) per request, when the echoed
-``A2A-Extensions`` activated them; the client side reads them when a server wrote them.
+Both sides speak A2A v1. A stored message, task history entry or artifact is its v1 protobuf
+JSON with the extension's metadata keys short (``livekit/``); on the wire the keys are the
+extension's own, written per request when the echoed ``A2A-Extensions`` activated them.
 """
 
 from __future__ import annotations
@@ -14,10 +12,10 @@ from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from google.protobuf import timestamp_pb2
+from google.protobuf import json_format, timestamp_pb2
 from pydantic import JsonValue
 
-from .._generated.storage_run import TaskRecord
+from .._generated.storage_run import TaskRow
 from ..llm.chat_context import ChatContext
 from ..utils import shortuuid
 from .extension import (
@@ -29,21 +27,20 @@ from .extension import (
     as_dict,
     pb,
     shorten,
-    struct,
-    value,
     widen,
 )
 
-StoredMessage = dict[str, Any]  # typed by the _core stub: TaskRecord.status_message, history items
-"""A message as the storage layer holds it; the codec reads and builds it, the stub owns it."""
+StoredMessage = dict[str, Any]
+"""A message as the storage layer holds it: v1 protobuf JSON, metadata under short keys."""
 
-StoredPart = dict[str, Any]  # typed by the _core stub: one entry of a stored message's parts
-"""One part of a stored message, tagged with ``kind``."""
+StoredPart = dict[str, Any]
+"""One part of a stored message, v1 protobuf JSON."""
 
 StreamEvent = pb.Task | pb.Message | pb.TaskStatusUpdateEvent | pb.TaskArtifactUpdateEvent
 """What a server yields on ``message/stream``, before it is wrapped in a ``StreamResponse``."""
 
 _WithMetadata = pb.Message | pb.Artifact | pb.Task | pb.TaskStatusUpdateEvent
+
 
 _STATE_TO_PB: dict[str, pb.TaskState] = {
     "submitted": pb.TaskState.TASK_STATE_SUBMITTED,
@@ -54,13 +51,13 @@ _STATE_TO_PB: dict[str, pb.TaskState] = {
     "canceled": pb.TaskState.TASK_STATE_CANCELED,
     "rejected": pb.TaskState.TASK_STATE_REJECTED,
 }
+"""The framework's task states, as A2A's."""
 _STATE_FROM_PB: dict[pb.TaskState, str] = {v: k for k, v in _STATE_TO_PB.items()}
 _STATE_FROM_PB[pb.TaskState.TASK_STATE_AUTH_REQUIRED] = "auth-required"
-_STATE_FROM_PB[pb.TaskState.TASK_STATE_UNSPECIFIED] = "working"
 
 
-def state_to_pb(state: str) -> pb.TaskState:
-    return _STATE_TO_PB.get(state, pb.TaskState.TASK_STATE_WORKING)
+def state_to_pb(status: str) -> pb.TaskState:
+    return _STATE_TO_PB.get(status, pb.TaskState.TASK_STATE_WORKING)
 
 
 def state_from_pb(state: pb.TaskState) -> str:
@@ -92,105 +89,26 @@ def _meta(message: _WithMetadata) -> Metadata:
     return metadata_from_wire(as_dict(message.metadata))
 
 
+def _rekey(obj: Mapping[str, Any], keys: Any) -> dict[str, Any]:
+    """``obj`` with its ``metadata`` and its parts' ``metadata`` keys mapped by ``keys``."""
+    out = dict(obj)
+    if isinstance(out.get("metadata"), Mapping):
+        out["metadata"] = keys(out["metadata"])
+    if isinstance(out.get("parts"), list):
+        out["parts"] = [_rekey(p, keys) if isinstance(p, Mapping) else p for p in out["parts"]]
+    return out
+
+
 # -- parts and messages --
 
 
-def _part_from_wire(raw: Mapping[str, Any]) -> StoredPart:
-    """One part, 1.0 or 0.3 shaped, to the internal ``kind``-tagged dict."""
-    kind = raw.get("kind")
-    out: StoredPart
-    if "text" in raw and kind in (None, "text"):
-        out = {"kind": "text", "text": str(raw.get("text") or "")}
-    elif "data" in raw and kind in (None, "data"):
-        out = {"kind": "data", "data": raw.get("data")}
-    elif kind == "file" or "url" in raw or "raw" in raw or "file" in raw:
-        out = {"kind": "file", "file": _file_from_wire(raw)}
-    else:
-        out = {"kind": "text", "text": str(raw.get("text") or "")}
-
-    metadata = metadata_from_wire(raw.get("metadata"))
-    if metadata:
-        out["metadata"] = metadata
-    return out
-
-
-def _file_from_wire(raw: Mapping[str, Any]) -> dict[str, Any]:
-    """The 1.0 flat file fields over the 0.3 ``file`` object, the 0.3 names kept inside."""
-    file_info: dict[str, Any] = dict(raw.get("file") or {})
-
-    renamed = (("url", "uri"), ("raw", "bytes"), ("mediaType", "mimeType"), ("filename", "name"))
-    for wire_name, stored_name in renamed:
-        if raw.get(wire_name) is not None:
-            file_info[stored_name] = raw[wire_name]
-    return file_info
-
-
-def _part_to_pb(part: StoredPart, exts: Extensions | None) -> pb.Part:
-    kind = part.get("kind", "text")
-    out: pb.Part
-    if kind == "data":
-        out = pb.Part(data=value(part.get("data")))
-    elif kind == "file":
-        out = _file_to_pb(part.get("file") or {})
-    else:
-        out = pb.Part(text=str(part.get("text") or ""))
-
-    metadata = metadata_to_wire(part.get("metadata"))
-    if metadata:
-        out.metadata.CopyFrom(struct(metadata))
-    return out
-
-
-def _file_to_pb(file_info: Mapping[str, Any]) -> pb.Part:
-    out = pb.Part()
-    if file_info.get("uri"):
-        out.url = str(file_info["uri"])
-    elif file_info.get("bytes"):
-        raw = file_info["bytes"]
-        out.raw = raw if isinstance(raw, bytes) else str(raw).encode()
-
-    if file_info.get("mimeType"):
-        out.media_type = str(file_info["mimeType"])
-    if file_info.get("name"):
-        out.filename = str(file_info["name"])
-    return out
-
-
-def _parts_to_pb(parts: Iterable[StoredPart], exts: Extensions | None) -> list[pb.Part]:
-    """The internal parts to the wire; typed items ride only where the extension is active."""
-    out: list[pb.Part] = []
-    for part in parts:
-        if _tagged(part, KIND_CHAT_CTX) and not _active(exts):
-            continue
-        out.append(_part_to_pb(part, exts))
-    return out
-
-
 def message_from_wire(raw: Mapping[str, Any]) -> StoredMessage:
-    """An A2A ``Message`` (1.0 or 0.3 JSON) as the storage layer's dict."""
-    agent = raw.get("role") in ("ROLE_AGENT", "agent", "assistant", pb.Role.ROLE_AGENT)
-    parts = raw.get("parts") or []
-    out: StoredMessage = {
-        "messageId": str(raw.get("messageId") or raw.get("message_id") or ""),
-        "role": "agent" if agent else "user",
-        "parts": [_part_from_wire(part) for part in parts if isinstance(part, Mapping)],
-    }
-
-    metadata = metadata_from_wire(raw.get("metadata"))
-    if metadata:
-        out["metadata"] = metadata
-
-    context_id = raw.get("context_id") or raw.get("contextId")
-    if context_id:
-        out["contextId"] = str(context_id)
-    task_id = raw.get("task_id") or raw.get("taskId")
-    if task_id:
-        out["taskId"] = str(task_id)
-
-    refs = raw.get("referenceTaskIds") or raw.get("reference_task_ids")
-    if refs:
-        out["referenceTaskIds"] = [str(ref) for ref in refs]
-    return out
+    """An A2A v1 ``Message`` from the wire as the storage layer's dict."""
+    try:
+        msg = json_format.ParseDict(dict(raw), pb.Message(), ignore_unknown_fields=True)
+    except json_format.ParseError as e:
+        raise ValueError(f"an A2A v1 message: {e}") from e
+    return _rekey(json_format.MessageToDict(msg), metadata_from_wire)
 
 
 def message_to_pb(
@@ -200,32 +118,21 @@ def message_to_pb(
     context_id: str | None = None,
     task_id: str | None = None,
 ) -> pb.Message:
-    agent = str(msg.get("role") or "user") in ("agent", "assistant", "ROLE_AGENT")
-    out = pb.Message(
-        message_id=str(msg.get("messageId") or shortuuid("msg_")),
-        role=pb.Role.ROLE_AGENT if agent else pb.Role.ROLE_USER,
-        parts=_parts_to_pb(list(msg.get("parts") or []), exts),
-        context_id=str(context_id or msg.get("contextId") or ""),
-        task_id=str(task_id or msg.get("taskId") or ""),
-    )
-
-    if msg.get("referenceTaskIds"):
-        out.reference_task_ids.extend(str(ref) for ref in msg["referenceTaskIds"])
-
-    metadata = metadata_to_wire(msg.get("metadata"))
-    if metadata:
-        out.metadata.CopyFrom(struct(metadata))
+    wire = _rekey(msg, metadata_to_wire)
+    if not _active(exts):
+        wire["parts"] = [p for p in wire.get("parts") or [] if not _tagged(p, KIND_CHAT_CTX)]
+    out = json_format.ParseDict(wire, pb.Message(), ignore_unknown_fields=True)
+    out.message_id = out.message_id or shortuuid("msg_")
+    out.context_id = context_id or out.context_id
+    out.task_id = task_id or out.task_id
     return out
 
 
 def text_of(msg: StoredMessage | None) -> str:
-    """The text parts of a storage-shaped message, joined."""
+    """The text parts of a stored message, joined."""
     if not msg:
         return ""
-
-    parts = msg.get("parts") or []
-    texts = [str(part.get("text") or "") for part in parts if part.get("kind", "text") == "text"]
-    return "\n".join(texts)
+    return "\n".join(str(p["text"]) for p in msg.get("parts") or [] if "text" in p)
 
 
 def _text(parts: Iterable[pb.Part]) -> str:
@@ -238,51 +145,48 @@ def _text(parts: Iterable[pb.Part]) -> str:
 
 def chat_ctx_part(chat_ctx: ChatContext) -> StoredPart:
     """The caller's conversation as a ``chat_ctx`` data part (a delegation outside the session)."""
-    return {
-        "kind": "data",
-        "data": chat_ctx.to_dict(exclude_timestamp=False),
-        "metadata": {KIND: KIND_CHAT_CTX},
-    }
+    return {"data": chat_ctx.to_dict(exclude_timestamp=False), "metadata": {KIND: KIND_CHAT_CTX}}
 
 
-def _tagged(part: StoredPart, kind: str) -> bool:
-    """Whether the part's metadata carries ``livekit/kind: <kind>``."""
-    return (part.get("metadata") or {}).get(KIND) == kind
+def _tagged(part: Mapping[str, Any], kind: str) -> bool:
+    """Whether the part's metadata carries ``livekit/kind: <kind>`` (short or wire key)."""
+    metadata = part.get("metadata") or {}
+    return kind in (metadata.get(KIND), metadata.get(widen(KIND)))
 
 
 # -- the task object and the events the server sends --
 
 
-def _timestamp(seconds: int | float | None) -> timestamp_pb2.Timestamp:
+def _timestamp(ms: int | None) -> timestamp_pb2.Timestamp:
+    """Unix milliseconds, now when ``None``."""
     stamp = timestamp_pb2.Timestamp()
-    stamp.FromMilliseconds(int((seconds if seconds else time.time()) * 1000))
+    stamp.FromMilliseconds(ms if ms else int(time.time() * 1000))
     return stamp
 
 
 def _artifact_to_pb(artifact: Mapping[str, Any], exts: Extensions | None) -> pb.Artifact:
-    out = pb.Artifact(
-        artifact_id=str(artifact.get("artifactId") or shortuuid("art_")),
-        name=str(artifact.get("name") or ANSWER_ARTIFACT_NAME),
-        parts=_parts_to_pb(list(artifact.get("parts") or []), exts),
-    )
-
-    metadata = metadata_to_wire(artifact.get("metadata"))
-    if metadata:
-        out.metadata.CopyFrom(struct(metadata))
+    wire = _rekey(artifact, metadata_to_wire)
+    if not _active(exts):
+        wire["parts"] = [p for p in wire.get("parts") or [] if not _tagged(p, KIND_CHAT_CTX)]
+    out = json_format.ParseDict(wire, pb.Artifact(), ignore_unknown_fields=True)
+    out.artifact_id = out.artifact_id or shortuuid("art_")
+    out.name = out.name or ANSWER_ARTIFACT_NAME
     return out
 
 
 def _status_message_to_pb(
-    record: TaskRecord, context_id: str, exts: Extensions | None
+    record: TaskRow, context_id: str, exts: Extensions | None
 ) -> pb.Message | None:
-    if not isinstance(record.status_message, dict):
+    if record.data.status_message is None:
         return None
-    return message_to_pb(record.status_message, exts=exts, context_id=context_id, task_id=record.id)
+    return message_to_pb(
+        record.data.status_message, exts=exts, context_id=context_id, task_id=record.task_id
+    )
 
 
-def _history_window(record: TaskRecord, history_length: int | None) -> list[StoredMessage]:
+def _history_window(record: TaskRow, history_length: int | None) -> list[StoredMessage]:
     """The last ``history_length`` messages, all of them when it is ``None``."""
-    history = [item for item in record.data.history if isinstance(item, dict)]
+    history = record.data.history
     if history_length is None or history_length < 0:
         return history
     if history_length == 0:
@@ -291,7 +195,7 @@ def _history_window(record: TaskRecord, history_length: int | None) -> list[Stor
 
 
 def task_to_pb(
-    record: TaskRecord,
+    record: TaskRow,
     context_id: str,
     *,
     exts: Extensions | None = None,
@@ -301,7 +205,7 @@ def task_to_pb(
     """The task row as the A2A ``Task`` object: id, the thread as context, the status from its
     columns, then history, artifacts and metadata from ``data``."""
     task = pb.Task(
-        id=record.id,
+        id=record.task_id,
         context_id=context_id,
         status=pb.TaskStatus(
             state=state_to_pb(record.status), timestamp=_timestamp(record.updated_at)
@@ -314,16 +218,15 @@ def task_to_pb(
 
     for item in _history_window(record, history_length):
         task.history.append(
-            message_to_pb(item, exts=exts, context_id=context_id, task_id=record.id)
+            message_to_pb(item, exts=exts, context_id=context_id, task_id=record.task_id)
         )
 
     if include_artifacts:
-        artifacts = [a for a in record.data.artifacts or [] if isinstance(a, Mapping)]
-        task.artifacts.extend(_artifact_to_pb(a, exts) for a in artifacts)
+        task.artifacts.extend(_artifact_to_pb(a, exts) for a in record.data.artifacts or [])
 
     metadata = metadata_to_wire(record.data.metadata)
     if metadata:
-        task.metadata.CopyFrom(struct(metadata))
+        task.metadata.update(metadata)
     return task
 
 
@@ -344,9 +247,9 @@ def working_event(
     exts: Extensions,
 ) -> pb.TaskStatusUpdateEvent:
     """``ctx.update(text)``: a ``working`` status with the progress as its message."""
-    msg: StoredMessage = {"messageId": shortuuid("msg_"), "role": "agent", "parts": []}
+    msg: StoredMessage = {"messageId": shortuuid("msg_"), "role": "ROLE_AGENT", "parts": []}
     if text:
-        msg["parts"].append({"kind": "text", "text": text})
+        msg["parts"].append({"text": text})
 
     return pb.TaskStatusUpdateEvent(
         task_id=task_id,
@@ -383,12 +286,10 @@ def artifact_event(
     )
 
 
-def final_event(
-    record: TaskRecord, context_id: str, *, exts: Extensions
-) -> pb.TaskStatusUpdateEvent:
+def final_event(record: TaskRow, context_id: str, *, exts: Extensions) -> pb.TaskStatusUpdateEvent:
     """The terminal status event, built from the committed row so a replay says the same."""
     event = pb.TaskStatusUpdateEvent(
-        task_id=record.id,
+        task_id=record.task_id,
         context_id=context_id,
         status=pb.TaskStatus(
             state=state_to_pb(record.status), timestamp=_timestamp(record.updated_at)
@@ -404,7 +305,7 @@ def final_event(
 
     metadata = metadata_to_wire(record.data.metadata)
     if metadata:
-        event.metadata.CopyFrom(struct(metadata))
+        event.metadata.update(metadata)
     return event
 
 

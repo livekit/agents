@@ -1,28 +1,35 @@
-"""What an ``a2a_session`` handler receives (plan 7.3, 7.6.1), and the host the Rust turn calls.
+"""What an ``a2a_session`` handler receives, and the host the Rust turn drives.
 
-``_core.Turn`` runs the policies and the commit; what it hands over is the ``TurnContext`` model
-and a ``Boundary``, and what it reads back is a ``HandlerOutput``. ``TurnHost`` is the one object
-it calls into (plan 13.8): ``handle`` builds the ``A2ASessionContext`` the developer's handler
-takes, runs it with the run hooks of ``Agent.run()`` installed, and reports the output;
-``on_update`` and ``on_token`` are the door's wire hooks, forwarded as they are.
+``_core.Turn`` runs the policies and the commit. It opens the handler through
+``TurnHost._core_handle`` on the ``TurnContext`` and reads the turn's events back: each
+checkpoint the run reaches, which ``_core`` answers ``continue`` or ``yield``, then the
+``HandlerOutput``. The handler's progress and tokens go straight to the door's live response.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import AsyncIterable, Awaitable, Callable
-from typing import Generic, cast
+from typing import Any, Generic, cast
 
 from pydantic import JsonValue
 from typing_extensions import TypeVar
 
-from .._core import Boundary
-from .._generated.storage_run import RunUsage, TaskRecord
+from .._generated.storage_run import RunUsage, TaskRow
 from .._generated.storage_turn import HandlerOutput, HostEvent, Message, PendingCall, TurnContext
 from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunResult
-from .protocol import StorageError, dump_state, history_of, item_to_payload, load_state
+from .protocol import (
+    StorageError,
+    dump_state,
+    history_of,
+    item_to_payload,
+    load_state,
+    payload_to_item,
+)
 from .resolve import AgentRegistry, Thread
 
 S = TypeVar("S", default=None)  # a door declared with no state: ``A2ASessionContext``
@@ -48,20 +55,20 @@ class A2ASessionContext(Generic[S]):
     def __init__(
         self,
         turn: TurnContext,
-        boundary: Boundary,
+        checkpoint: Callable[[], Awaitable[bool]],
         *,
         state: S,
         thread: Thread,
         on_update: UpdateHook | None,
         on_token: TokenHook | None,
     ) -> None:
-        self.message = ChatMessage.model_validate(turn.message)
+        self.message = cast(ChatMessage, payload_to_item(turn.message))
         self.messages: list[Message] = list(turn.batch)
         self.message_history: ChatContext = history_of(turn.history)
         self.state = state
         self.thread = thread
         self.task_id = turn.task_id
-        self.tasks: list[TaskRecord] = list(turn.tasks)
+        self.tasks: list[TaskRow] = list(turn.tasks)
         self.caller_history: ChatContext | None = (
             ChatContext.from_dict(turn.caller_history) if turn.caller_history is not None else None
         )
@@ -71,7 +78,7 @@ class A2ASessionContext(Generic[S]):
         """What the turn appends to the journal (docs/journal.md): each ``update`` here, the
         tool calls from the runs' results."""
         self.interrupted = False
-        self._boundary = boundary
+        self._checkpoint = checkpoint
         self._on_update = on_update
         self._on_token = on_token
 
@@ -87,8 +94,8 @@ class A2ASessionContext(Generic[S]):
             await self._on_token(self.task_id, delta)
 
     async def stream(self, source: AsyncIterable[str]) -> str:
-        """Forward tokens as they arrive; the boundary is checked once before the first one."""
-        if await self._boundary.check():
+        """Forward tokens as they arrive, after a checkpoint before the first one."""
+        if await self._checkpoint():
             self.interrupted = True
             return ""
 
@@ -100,17 +107,18 @@ class A2ASessionContext(Generic[S]):
 
         return "".join(parts)
 
-    async def task(self, task_id: str) -> TaskRecord | None:
+    async def task(self, task_id: str) -> TaskRow | None:
         """One task row of the lane, as it is now."""
         for record in await self.thread.tasks():
-            if record.id == task_id:
+            if record.task_id == task_id:
                 return record
 
         return None
 
 
 class TurnHost(Generic[S]):
-    """What ``_core.Turn`` calls back into for one door: the handler, and the wire hooks."""
+    """What ``_core.Turn`` drives for one door: the handler, its progress and tokens to the
+    door's wire hooks."""
 
     def __init__(
         self,
@@ -129,11 +137,18 @@ class TurnHost(Generic[S]):
         self._on_update = on_update
         self._on_token = on_token
 
-    async def handle(self, ctx: TurnContext, boundary: Boundary) -> HandlerOutput:
+    def _core_handle(self, ctx: dict[str, Any]) -> TurnStream:
+        """The handler opened on one turn, as the stream of its events."""
+        turn = TurnContext.model_validate(ctx)
+        return TurnStream(lambda checkpoint: self._run(turn, checkpoint))
+
+    async def _run(
+        self, ctx: TurnContext, checkpoint: Callable[[], Awaitable[bool]]
+    ) -> HandlerOutput:
         """The developer's handler on one turn, the run hooks installed around it."""
         context = A2ASessionContext(
             ctx,
-            boundary,
+            checkpoint,
             state=self._load_state(ctx.state),
             thread=self._thread,
             on_update=self._on_update,
@@ -141,7 +156,7 @@ class TurnHost(Generic[S]):
         )
         results: list[RunResult[object]] = []
         hooks = RunHooks(
-            boundary=boundary.check,
+            checkpoint=checkpoint,
             on_result=results.append,
             on_update=context.update,
             on_token=context.token,
@@ -177,14 +192,6 @@ class TurnHost(Generic[S]):
             reset_run_hooks(token)
 
         return self._output(context, output, results)
-
-    async def on_update(self, task_id: str, text: str) -> None:
-        if self._on_update is not None:
-            await self._on_update(task_id, text)
-
-    async def on_token(self, task_id: str, delta: str) -> None:
-        if self._on_token is not None:
-            await self._on_token(task_id, delta)
 
     def _load_state(self, stored: JsonValue) -> S:
         if self._state_type is None:
@@ -228,6 +235,61 @@ class TurnHost(Generic[S]):
         )
 
 
+class TurnStream:
+    """One turn's events to ``_core``: ``{"kind": "checkpoint"}`` each time the run reaches one,
+    answered through ``_core_push`` (``"continue"`` or ``"yield"``), then ``{"kind": "output"}``
+    with the ``HandlerOutput``. The run starts on the first ``__anext__``; ``aclose`` cancels it."""
+
+    def __init__(
+        self, run: Callable[[Callable[[], Awaitable[bool]]], Awaitable[HandlerOutput]]
+    ) -> None:
+        self._run = run
+        self._events: asyncio.Queue[dict[str, Any] | BaseException | None] = asyncio.Queue()
+        self._verdict: asyncio.Future[str] | None = None
+        self._task: asyncio.Task[None] | None = None
+
+    def __aiter__(self) -> TurnStream:
+        return self
+
+    async def __anext__(self) -> dict[str, Any]:
+        if self._task is None:
+            self._task = asyncio.ensure_future(self._drive())
+        event = await self._events.get()
+        if event is None:
+            raise StopAsyncIteration
+        if isinstance(event, BaseException):
+            raise event
+        return event
+
+    def _core_push(self, verdict: str) -> None:
+        if self._verdict is not None and not self._verdict.done():
+            self._verdict.set_result(verdict)
+
+    async def aclose(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+
+    async def _checkpoint(self) -> bool:
+        self._verdict = asyncio.get_running_loop().create_future()
+        self._events.put_nowait({"kind": "checkpoint"})
+        return await self._verdict == "yield"
+
+    async def _drive(self) -> None:
+        try:
+            output = await self._run(self._checkpoint)
+        except asyncio.CancelledError as e:
+            self._events.put_nowait(e)
+            raise
+        except Exception as e:
+            # a storage error the handler met; its own errors are already the output's
+            self._events.put_nowait(e)
+            return
+        self._events.put_nowait({"kind": "output", "output": output.model_dump(mode="json")})
+        self._events.put_nowait(None)
+
+
 def _tool_events(results: list[RunResult[object]]) -> list[HostEvent]:
     """Each call's start and end as the runs' results hold them (docs/journal.md)."""
     events: list[HostEvent] = []
@@ -257,4 +319,4 @@ def _usage(results: list[RunResult[object]]) -> RunUsage:
     return usage
 
 
-__all__ = ["A2ASessionContext", "Handler", "TokenHook", "TurnHost", "UpdateHook"]
+__all__ = ["A2ASessionContext", "Handler", "TokenHook", "TurnHost", "TurnStream", "UpdateHook"]

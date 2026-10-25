@@ -168,7 +168,6 @@ fn default(f: &Field) -> Option<String> {
     )
 }
 
-
 #[derive(Clone, Copy)]
 struct Cx<'a> {
     decls: &'a [Decl],
@@ -197,17 +196,39 @@ fn items(decls: &[Decl], x: &Exposed) -> Result<Vec<String>, String> {
         }
         for m in &o.methods {
             let d = match m.kind {
-                MethodKind::New => def(cx, "    ", "", "__init__", &Sig { ret: RTy::Unit, ..m.sig.clone() }, true)?,
-                MethodKind::Getter => format!("    @property\n{}", def(cx, "    ", "", &m.name, &m.sig, true)?),
-                MethodKind::Setter => format!("    @{}.setter\n{}", m.name, def(cx, "    ", "", &m.name, &m.sig, true)?),
+                MethodKind::New => {
+                    def(cx, "    ", "", "__init__", &Sig { ret: RTy::Unit, ..m.sig.clone() }, true)?
+                }
+                MethodKind::Getter => {
+                    format!("    @property\n{}", def(cx, "    ", "", &m.name, &m.sig, true)?)
+                }
+                MethodKind::Setter => format!(
+                    "    @{}.setter\n{}",
+                    m.name,
+                    def(cx, "    ", "", &m.name, &m.sig, true)?
+                ),
                 MethodKind::Static => {
-                    let own = RTy::Declared { name: o.core_path.rsplit("::").next().unwrap_or_default().to_owned(), by_ref: false };
-                    let sig = if m.sig.ret == RTy::SelfTy { Sig { ret: own, ..m.sig.clone() } } else { m.sig.clone() };
+                    let own = RTy::Declared {
+                        name: o.core_path.rsplit("::").next().unwrap_or_default().to_owned(),
+                        by_ref: false,
+                    };
+                    let sig = if m.sig.ret == RTy::SelfTy {
+                        Sig { ret: own, ..m.sig.clone() }
+                    } else {
+                        m.sig.clone()
+                    };
                     format!("    @staticmethod\n{}", def(cx, "    ", "", &m.name, &sig, false)?)
                 }
                 MethodKind::Async => def(cx, "    ", "async ", &m.name, &m.sig, true)?,
                 MethodKind::Method => match &m.reply {
-                    Some(r) => def(cx, "    ", "async ", &m.name, &Sig { ret: r.ret.clone(), ..m.sig.clone() }, true)?,
+                    Some(r) => def(
+                        cx,
+                        "    ",
+                        "async ",
+                        &m.name,
+                        &Sig { ret: r.ret.clone(), ..m.sig.clone() },
+                        true,
+                    )?,
                     None => def(cx, "    ", "", &m.name, &m.sig, true)?,
                 },
             };
@@ -224,7 +245,10 @@ fn items(decls: &[Decl], x: &Exposed) -> Result<Vec<String>, String> {
             b.push('\n');
         }
         if s.sink_ty.is_some() {
-            b.push_str(&format!("    def {}(self, {}: {}) -> None: ...\n", s.push, s.arg, s.input_py));
+            b.push_str(&format!(
+                "    def {}(self, {}: {}) -> None: ...\n",
+                s.push, s.arg, s.input_py
+            ));
             b.push_str("    def flush(self) -> None: ...\n");
             if s.end_input {
                 b.push_str("    def end_input(self) -> None: ...\n");
@@ -233,7 +257,9 @@ fn items(decls: &[Decl], x: &Exposed) -> Result<Vec<String>, String> {
         for l in s.stub_extra.iter().flat_map(|l| l.lines()) {
             b.push_str(&format!("    {l}\n"));
         }
-        b.push_str("    async def recv(self) -> Any: ...\n    async def aclose(self) -> None: ...\n");
+        b.push_str(
+            "    async def recv(self) -> Any: ...\n    async def aclose(self) -> None: ...\n",
+        );
         out.push(b);
     }
     Ok(out)
@@ -242,7 +268,12 @@ fn items(decls: &[Decl], x: &Exposed) -> Result<Vec<String>, String> {
 /// In order, once each.
 fn imports(x: &Exposed) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for l in x.objects.iter().flat_map(|o| &o.stub_imports).chain(x.streams.iter().flat_map(|s| &s.stub_imports)) {
+    for l in x
+        .objects
+        .iter()
+        .flat_map(|o| &o.stub_imports)
+        .chain(x.streams.iter().flat_map(|s| &s.stub_imports))
+    {
         if !out.contains(l) {
             out.push(l.clone());
         }
@@ -250,7 +281,14 @@ fn imports(x: &Exposed) -> Vec<String> {
     out
 }
 
-fn def(cx: Cx, pad: &str, prefix: &str, name: &str, sig: &Sig, method: bool) -> Result<String, String> {
+fn def(
+    cx: Cx,
+    pad: &str,
+    prefix: &str,
+    name: &str,
+    sig: &Sig,
+    method: bool,
+) -> Result<String, String> {
     let mut parts: Vec<String> = if method { vec!["self".to_owned()] } else { Vec::new() };
     for (stub, star) in args(cx, sig)? {
         if star {
@@ -282,7 +320,8 @@ fn args(cx: Cx, sig: &Sig) -> Result<Vec<(String, bool)>, String> {
         if p.ambient.is_some() {
             continue;
         }
-        let star = sig.kw_only == KwOnly::All && i == 0 || sig.kw_only == KwOnly::From(p.name.clone());
+        let star =
+            sig.kw_only == KwOnly::All && i == 0 || sig.kw_only == KwOnly::From(p.name.clone());
         let explicit = sig.defaults.iter().find(|(k, _)| k == &p.name).map(|(_, v)| v.clone());
         if let RTy::Declared { name, .. } = &p.ty
             && let Some(k) = cx.x.kwargs.iter().find(|k| &k.name == name)
@@ -321,7 +360,11 @@ fn py_default(v: &str) -> String {
         "false" => "False".to_owned(),
         "None" => "None".to_owned(),
         _ if v.replace('_', "").parse::<f64>().is_ok() => v.replace('_', ""),
-        _ if v.starts_with('"') => v.strip_suffix(".to_owned()").or_else(|| v.strip_suffix(".into()")).unwrap_or(v).to_owned(),
+        _ if v.starts_with('"') => v
+            .strip_suffix(".to_owned()")
+            .or_else(|| v.strip_suffix(".into()"))
+            .unwrap_or(v)
+            .to_owned(),
         _ => "...".to_owned(),
     }
 }
@@ -343,7 +386,8 @@ fn declared<'a>(cx: Cx<'a>, name: &str) -> DeclKind<'a> {
     }
     // Two declarations may share a Rust name; the one with a binding twin crosses.
     let named = || cx.decls.iter().filter(|d| d.rust_name == name);
-    match named().find(|d| d.targets_for(Host::Binding).next().is_some()).or_else(|| named().next()) {
+    match named().find(|d| d.targets_for(Host::Binding).next().is_some()).or_else(|| named().next())
+    {
         None => DeclKind::Opaque,
         Some(d) => match d.body {
             Body::Unit(_) => DeclKind::Unit,
@@ -354,7 +398,8 @@ fn declared<'a>(cx: Cx<'a>, name: &str) -> DeclKind<'a> {
 
 /// A `#[binding(class)]` record with no dict twin of `kind` crosses as that class.
 fn class_twin(d: &Decl, kind: Kind) -> bool {
-    !d.targets_for(Host::Binding).any(|t| t.kind == kind) && d.targets_for(Host::Binding).any(|t| t.kind == Kind::Class)
+    !d.targets_for(Host::Binding).any(|t| t.kind == kind)
+        && d.targets_for(Host::Binding).any(|t| t.kind == Kind::Class)
 }
 
 /// A side-table key (`MediaRef`, `HostRef`): the host object itself.
@@ -373,9 +418,14 @@ fn py_ty(cx: Cx, t: &RTy, arg: bool) -> Result<String, String> {
         RTy::Bytes => "bytes".to_owned(),
         RTy::Vec(i) if !arg && matches!(&**i, RTy::Prim(p) if p == "u8") => "bytes".to_owned(),
         RTy::Option(i) => format!("{} | None", py_ty(cx, i, arg)?),
-        RTy::Vec(i) | RTy::Slice(i) | RTy::Iter(i) | RTy::IntoIter(i) => format!("list[{}]", py_ty(cx, i, arg)?),
+        RTy::Vec(i) | RTy::Slice(i) | RTy::Iter(i) | RTy::IntoIter(i) => {
+            format!("list[{}]", py_ty(cx, i, arg)?)
+        }
         RTy::Tuple(items) => {
-            format!("tuple[{}]", items.iter().map(|i| py_ty(cx, i, arg)).collect::<Result<Vec<_>, _>>()?.join(", "))
+            format!(
+                "tuple[{}]",
+                items.iter().map(|i| py_ty(cx, i, arg)).collect::<Result<Vec<_>, _>>()?.join(", ")
+            )
         }
         RTy::Json { .. } => "Any".to_owned(),
         RTy::JsonMap { .. } => "dict[str, Any]".to_owned(),
@@ -383,7 +433,9 @@ fn py_ty(cx: Cx, t: &RTy, arg: bool) -> Result<String, String> {
         RTy::Duration | RTy::SystemTime => "float".to_owned(),
         RTy::Dyn(_) | RTy::HostRef | RTy::StreamHalf { .. } => "Any".to_owned(),
         RTy::Maybe(i) => format!("NotGivenOr[{}]", py_ty(cx, i, arg)?),
-        RTy::Shared(name) => exposed_object(cx, name).map(|o| o.name.clone()).unwrap_or_else(|| "Any".to_owned()),
+        RTy::Shared(name) => {
+            exposed_object(cx, name).map(|o| o.name.clone()).unwrap_or_else(|| "Any".to_owned())
+        }
         RTy::Declared { .. } if host_key(t) => "Any".to_owned(),
         RTy::Declared { name, .. } => {
             if let Some(k) = cx.x.kwargs.iter().find(|k| &k.name == name) {
@@ -394,11 +446,14 @@ fn py_ty(cx: Cx, t: &RTy, arg: bool) -> Result<String, String> {
             }
             match declared(cx, name) {
                 DeclKind::Unit => "str".to_owned(),
-                DeclKind::Record(d) if class_twin(d, if arg { Kind::Extract } else { Kind::Emit }) => d
-                    .targets_for(Host::Binding)
-                    .find(|t| t.kind == Kind::Class)
-                    .map(|t| t.name.clone())
-                    .expect("a class twin"),
+                DeclKind::Record(d)
+                    if class_twin(d, if arg { Kind::Extract } else { Kind::Emit }) =>
+                {
+                    d.targets_for(Host::Binding)
+                        .find(|t| t.kind == Kind::Class)
+                        .map(|t| t.name.clone())
+                        .expect("a class twin")
+                }
                 DeclKind::Record(_) if arg => "Any".to_owned(),
                 DeclKind::Record(_) => "dict[str, Any]".to_owned(),
                 DeclKind::Opaque => "Any".to_owned(),

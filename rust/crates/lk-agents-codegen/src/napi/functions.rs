@@ -2,8 +2,8 @@
 //! mapping, the return, the `#[napi]` body; plus the `e_to_node` error converters.
 
 use super::records::collect_deps;
-use super::types::{exposed_object, from_js, n_of_rty, napi_ty, to_js, ts_override, N};
-use super::{arg, doc_line, linked, push_unique, raw, snake, summary, Cx, ERROR_WITH, NATIVE_INTS};
+use super::types::{N, exposed_object, from_js, n_of_rty, napi_ty, to_js, ts_override};
+use super::{Cx, ERROR_WITH, NATIVE_INTS, arg, doc_line, linked, push_unique, raw, snake, summary};
 use crate::ir::*;
 use crate::node::camel;
 
@@ -15,14 +15,24 @@ pub(super) struct P {
 }
 
 /// Each parameter's napi declaration, conversion, and core call argument.
-pub(super) fn params(cx: &Cx, sig: &Sig, owned_only: bool, wanted: &mut Vec<String>) -> Result<Vec<P>, String> {
+pub(super) fn params(
+    cx: &Cx,
+    sig: &Sig,
+    owned_only: bool,
+    wanted: &mut Vec<String>,
+) -> Result<Vec<P>, String> {
     cx.in_params.set(true);
     let out = params_inner(cx, sig, owned_only, wanted);
     cx.in_params.set(false);
     out
 }
 
-fn params_inner(cx: &Cx, sig: &Sig, owned_only: bool, wanted: &mut Vec<String>) -> Result<Vec<P>, String> {
+fn params_inner(
+    cx: &Cx,
+    sig: &Sig,
+    owned_only: bool,
+    wanted: &mut Vec<String>,
+) -> Result<Vec<P>, String> {
     let mut out = Vec::new();
     for p in &sig.params {
         let label = p.label.as_deref().unwrap_or(&p.name);
@@ -31,10 +41,13 @@ fn params_inner(cx: &Cx, sig: &Sig, owned_only: bool, wanted: &mut Vec<String>) 
         // `extract().unwrap_or_default()`.
         if p.lenient {
             let nt = n_of_rty(cx, &p.ty).map_err(|e| format!("parameter `{label}`: {e}"))?;
-            if !matches!(nt, N::Bool | N::Float(_) | N::Str) && !matches!(&nt, N::Int(w) if NATIVE_INTS.contains(&w.as_str()))
+            if !matches!(nt, N::Bool | N::Float(_) | N::Str)
+                && !matches!(&nt, N::Int(w) if NATIVE_INTS.contains(&w.as_str()))
                 && !matches!(&nt, N::Option(i) if matches!(**i, N::Bool | N::Float(_) | N::Str))
             {
-                return Err(format!("parameter `{label}`: #[host(lenient)] reads a plain value (a number, a string, an Option of one)"));
+                return Err(format!(
+                    "parameter `{label}`: #[host(lenient)] reads a plain value (a number, a string, an Option of one)"
+                ));
             }
             let napi = napi_ty(cx, &nt)?;
             out.push(P {
@@ -50,16 +63,24 @@ fn params_inner(cx: &Cx, sig: &Sig, owned_only: bool, wanted: &mut Vec<String>) 
             && let Some(o) = exposed_object(cx, name)
         {
             if owned_only {
-                return Err(format!("parameter `{label}` is borrowed from JS, which an async method cannot hold across an await"));
+                return Err(format!(
+                    "parameter `{label}` is borrowed from JS, which an async method cannot hold across an await"
+                ));
             }
             let class = format!("crate::generated::objects::{}", o.name);
             let (prelude, call) = match (o.cell, by_ref) {
                 (Cell::Mutex, true) => (
-                    vec![format!("let {n} = {n}.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);")],
+                    vec![format!(
+                        "let {n} = {n}.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);"
+                    )],
                     format!("&{n}"),
                 ),
                 (_, true) => (Vec::new(), format!("&{n}.inner")),
-                _ => return Err(format!("parameter `{label}`: an exposed `{name}` is lent, never moved; take `&{name}`")),
+                _ => {
+                    return Err(format!(
+                        "parameter `{label}`: an exposed `{name}` is lent, never moved; take `&{name}`"
+                    ));
+                }
             };
             out.push(P { decl: format!("{n}: &{class}"), prelude, call, fallible: false });
             continue;
@@ -70,14 +91,25 @@ fn params_inner(cx: &Cx, sig: &Sig, owned_only: bool, wanted: &mut Vec<String>) 
             RTy::Slice(i) if **i == RTy::StrRef => (RTy::Vec(Box::new(RTy::Str)), "strs"),
             RTy::Slice(i) => (RTy::Vec(i.clone()), "&"),
             RTy::Option(i) if **i == RTy::StrRef => (RTy::Option(Box::new(RTy::Str)), "as_deref"),
-            RTy::Option(i) if matches!(**i, RTy::Json { by_ref: true } | RTy::JsonMap { by_ref: true } | RTy::Declared { by_ref: true, .. }) => {
+            RTy::Option(i)
+                if matches!(
+                    **i,
+                    RTy::Json { by_ref: true }
+                        | RTy::JsonMap { by_ref: true }
+                        | RTy::Declared { by_ref: true, .. }
+                ) =>
+            {
                 (RTy::Option(Box::new(unref(i))), "as_ref")
             }
-            t @ (RTy::Json { by_ref: true } | RTy::JsonMap { by_ref: true } | RTy::Declared { by_ref: true, .. }) => (unref(t), "&"),
+            t @ (RTy::Json { by_ref: true }
+            | RTy::JsonMap { by_ref: true }
+            | RTy::Declared { by_ref: true, .. }) => (unref(t), "&"),
             t => (t.clone(), ""),
         };
         if owned_only && !lend.is_empty() {
-            return Err(format!("parameter `{label}` is borrowed, which an async method cannot hold across an await; take it owned"));
+            return Err(format!(
+                "parameter `{label}` is borrowed, which an async method cannot hold across an await; take it owned"
+            ));
         }
         let nt = if lend == "bytes" {
             None
@@ -96,7 +128,9 @@ fn params_inner(cx: &Cx, sig: &Sig, owned_only: bool, wanted: &mut Vec<String>) 
         let conv = |v: &str| -> Result<String, String> {
             match &nt {
                 None => Ok(v.to_owned()),
-                Some(nt) => from_js(cx, nt, v, label).map_err(|e| format!("parameter `{label}`: {e}")),
+                Some(nt) => {
+                    from_js(cx, nt, v, label).map_err(|e| format!("parameter `{label}`: {e}"))
+                }
             }
         };
         let is_option = matches!(owned, RTy::Option(_) | RTy::Maybe(_));
@@ -136,7 +170,9 @@ fn params_inner(cx: &Cx, sig: &Sig, owned_only: bool, wanted: &mut Vec<String>) 
             "as_deref" => format!("{n}.as_deref()"),
             "as_ref" => format!("{n}.as_ref()"),
             "strs" => {
-                prelude.push(format!("let {n}: Vec<&str> = {n}.iter().map(String::as_str).collect();"));
+                prelude.push(format!(
+                    "let {n}: Vec<&str> = {n}.iter().map(String::as_str).collect();"
+                ));
                 format!("&{n}")
             }
             _ => n.clone(),
@@ -160,29 +196,50 @@ fn unref(t: &RTy) -> RTy {
 pub(super) fn err_map(cx: &Cx, sig: &Sig) -> Result<Option<String>, String> {
     Ok(match &sig.err {
         None => None,
-        Some(ErrMap::Kind(k)) => Some(format!("|e| crate::host_error::JsError::new({k:?}, e.to_string())")),
-        Some(ErrMap::Auto) => match sig.err_ty.as_deref().and_then(|n| cx.x.errors.iter().find(|e| e.name == n)) {
-            Some(e) if e.with.is_some() || ERROR_WITH.iter().any(|(n, _)| *n == e.name) => match ERROR_WITH.iter().find(|(n, _)| *n == e.name) {
-                Some((_, f)) => Some((*f).to_owned()),
-                None => return Err(format!("`{}` maps through a pyo3 converter with no Node counterpart", e.name)),
-            },
-            Some(e) => {
-                push_unique(&mut cx.errors.borrow_mut(), &e.name);
-                Some(format!("crate::generated::errors::{}_to_node", snake(&e.name)))
+        Some(ErrMap::Kind(k)) => {
+            Some(format!("|e| crate::host_error::JsError::new({k:?}, e.to_string())"))
+        }
+        Some(ErrMap::Auto) => {
+            match sig.err_ty.as_deref().and_then(|n| cx.x.errors.iter().find(|e| e.name == n)) {
+                Some(e) if e.with.is_some() || ERROR_WITH.iter().any(|(n, _)| *n == e.name) => {
+                    match ERROR_WITH.iter().find(|(n, _)| *n == e.name) {
+                        Some((_, f)) => Some((*f).to_owned()),
+                        None => {
+                            return Err(format!(
+                                "`{}` maps through a pyo3 converter with no Node counterpart",
+                                e.name
+                            ));
+                        }
+                    }
+                }
+                Some(e) => {
+                    push_unique(&mut cx.errors.borrow_mut(), &e.name);
+                    Some(format!("crate::generated::errors::{}_to_node", snake(&e.name)))
+                }
+                // `ValueError(str(e))`, pyo3's default.
+                None => Some(
+                    "|e| crate::host_error::JsError::new(\"ValueError\", e.to_string())".to_owned(),
+                ),
             }
-            // `ValueError(str(e))`, pyo3's default.
-            None => Some("|e| crate::host_error::JsError::new(\"ValueError\", e.to_string())".to_owned()),
-        },
+        }
     })
 }
 
-pub(super) fn ret(cx: &Cx, t: &RTy, wanted: &mut Vec<String>) -> Result<(String, Option<String>, String), String> {
+pub(super) fn ret(
+    cx: &Cx,
+    t: &RTy,
+    wanted: &mut Vec<String>,
+) -> Result<(String, Option<String>, String), String> {
     if *t == RTy::Unit {
         return Ok(("()".to_owned(), None, "()".to_owned()));
     }
     let n = n_of_rty(cx, t).map_err(|e| format!("return: {e}"))?;
     collect_deps(&n, wanted);
-    Ok((napi_ty(cx, &n)?, ts_override(cx, &n)?, to_js(cx, &n, "out", false).map_err(|e| format!("return: {e}"))?))
+    Ok((
+        napi_ty(cx, &n)?,
+        ts_override(cx, &n)?,
+        to_js(cx, &n, "out", false).map_err(|e| format!("return: {e}"))?,
+    ))
 }
 
 /// The signature line and body. `call` is the core call, `pre` binds what it names.
@@ -237,7 +294,10 @@ pub(super) fn body(
         b.push_str(&format!("{inner}{}\n", if fallible { format!("Ok({e})") } else { e }));
     } else {
         b.push_str(&format!("{inner}let out = {call};\n"));
-        b.push_str(&format!("{inner}{}\n", if fallible { format!("Ok({ret_expr})") } else { ret_expr.to_owned() }));
+        b.push_str(&format!(
+            "{inner}{}\n",
+            if fallible { format!("Ok({ret_expr})") } else { ret_expr.to_owned() }
+        ));
     }
     if fallible {
         b.push_str(&format!("{pad}    }})\n"));
@@ -263,7 +323,15 @@ pub(super) fn function(cx: &Cx, f: &ExportFn, wanted: &mut Vec<String>) -> Resul
     let mut mine = Vec::new();
     let ps = params(cx, &f.sig, false, &mut mine)?;
     let (ret_ty, ts_ret, ret_expr) = ret(cx, &f.sig.ret, &mut mine)?;
-    let call = if f.is_const { f.rust_path.clone() } else { format!("{}({})", f.rust_path, ps.iter().map(|p| p.call.as_str()).collect::<Vec<_>>().join(", ")) };
+    let call = if f.is_const {
+        f.rust_path.clone()
+    } else {
+        format!(
+            "{}({})",
+            f.rust_path,
+            ps.iter().map(|p| p.call.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    };
     let mut b = String::new();
     for l in summary(&f.doc) {
         b.push_str(&doc_line(&l, ""));
@@ -286,6 +354,9 @@ pub(super) fn error_fn(e: &ErrorType) -> String {
     for (v, pat, k) in &e.variants {
         b.push_str(&format!("        {}::{v}{pat} => {k:?},\n", e.path));
     }
-    b.push_str(&format!("        _ => {:?},\n    }};\n    JsError::new(kind, e.to_string())\n}}\n", e.kind));
+    b.push_str(&format!(
+        "        _ => {:?},\n    }};\n    JsError::new(kind, e.to_string())\n}}\n",
+        e.kind
+    ));
     b
 }

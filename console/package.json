@@ -14,6 +14,13 @@
     "check": "pnpm typecheck && pnpm lint && pnpm guard && pnpm test"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.14",
+    "@lezer/highlight": "^1.2.5",
     "@livekit/components-react": "^2.9.24",
     "livekit-client": "^2.22.3",
     "livekit-server-sdk": "^2.19.1",

@@ -6,21 +6,23 @@
 //! of inputs should not change with it. Running a case and judging it is `drive.rs`, so a smarter
 //! search cannot break a replayed one.
 //!
-//! Three files, three subjects. [`setup`] draws what a session is built with, from arms that
-//! learn from seed to seed which switches keep finding new ground. [`chaos`] samples the table
-//! uniformly: the check that every row applies, shallow everywhere. [`conversation`] is the
-//! search: a person on a phone, drawn once per run, talking turn by turn to the agent.
+//! Two files, two subjects. [`setup`] draws what a session is built with, from arms that learn
+//! from seed to seed which switches keep finding new ground. [`conversation`] is the search: a
+//! person on a phone talking turn by turn to the agent, the developer calling the API, and the
+//! models, outputs and room behaving and failing as real ones do. One mode since 2026-10-22: a
+//! uniform sampler over the whole table ran beside it, and what only it reached (drains, model
+//! failures, room events, output resets, camera frames) became behaviours of the conversation's
+//! actors, and its "anything at any time" became the labelled glitch.
 //!
 //! Every change to any of them is measured on the survey's yardstick -- variants reached,
 //! distinct edges, distinct findings, at 64 seeds on three windows and at 256 -- and kept only
 //! if it wins; `tests/survey.rs` says how.
 
-mod chaos;
 mod conversation;
 mod setup;
+mod uniform;
 
-pub use chaos::{explore, sample_next, tick};
-pub use conversation::explore_conversation;
+pub use conversation::{Dials, explore, explore_at, randomness};
 pub use setup::{Drawn, SetupArms, sample_setup};
 
 #[cfg(test)]
@@ -34,44 +36,17 @@ mod tests {
         record::Kind,
     };
 
-    /// A short exploration from a fixed seed closes cleanly and reaches real driver states. This
-    /// is the smoke test for the whole path: table, sampler, driver, fakes and contracts.
-    #[test]
-    fn an_explored_run_closes_cleanly() {
-        {
-            let outcome = explore(Setup::default(), 1, 120);
-            assert!(!outcome.reached.is_empty(), "explored run produced no journal at all");
-            assert!(outcome.case.inputs.len() > 20, "explored run sent almost nothing");
-        }
-    }
-
     /// A session with a microphone and all three observers of the person on it.
     fn listening() -> Setup {
         Setup { stt: true, vad: true, eot: true, ..Setup::default() }
     }
 
-    /// One seed drives one conversation: the same inputs in the same order, twice.
-    #[test]
-    fn the_same_seed_converses_the_same_case() {
-        let first = explore_conversation(listening(), 7, 150);
-        let second = explore_conversation(listening(), 7, 150);
-        assert_eq!(
-            first.case.inputs, second.case.inputs,
-            "one seed sampled two different conversations"
-        );
-        assert_eq!(
-            first.failures.iter().map(|f| (&f.contract, &f.subject)).collect::<Vec<_>>(),
-            second.failures.iter().map(|f| (&f.contract, &f.subject)).collect::<Vec<_>>(),
-            "one seed produced two different verdicts"
-        );
-    }
-
     /// A conversation is a conversation: the person speaks, the detector and the recogniser both
-    /// close the speech, and the driver decides the turn. The chaos sampler reaches this in one
-    /// run out of ten; this mode must reach it every time it has the legs to.
+    /// close the speech, and the driver decides the turn. A uniform sampler reaches this in one
+    /// run out of ten; the search must reach it every time it has the legs to.
     #[test]
     fn a_conversation_reaches_a_decided_turn() {
-        let outcome = explore_conversation(listening(), 3, 150);
+        let outcome = explore_at(listening(), 3, 150, Dials::conversation());
         let names = |name: &str| outcome.case.inputs.iter().filter(|i| i.name() == name).count();
         assert!(
             names("VadEnd") >= 1 && names("SttFinal") >= 1,
@@ -93,7 +68,7 @@ mod tests {
         use crate::record::{Applied, Tag};
         for seed in 0..8u64 {
             let setup = Setup { stt: true, ..sample_setup(&mut Rng::with_seed(seed)) };
-            let case = explore_conversation(setup, seed, 150).case;
+            let case = explore_at(setup, seed, 150, Dials::conversation()).case;
             let run = crate::drive::simulate(async {
                 let mut run = Run::start(&case.setup).await;
                 for input in &case.inputs {

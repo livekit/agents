@@ -13,30 +13,11 @@ from collections.abc import Awaitable
 from enum import Enum
 from typing import Any, Protocol
 
-from ._generated import storage_turn
 from ._generated._core_classes import *  # noqa: F401, F403
-from ._generated.storage import (
-    AcquireRequest,
-    ChatItemRow,
-    CommitRequest,
-    CommitResult,
-    DatabaseInfo,
-    DrainCheck,
-    Duplicate,
-    EventRow,
-    InboxRow,
-    LaneRow,
-    Loaded,
-    Received,
-    ReceiveRequest,
-    RunEndedRequest,
-    StreamInfo,
-    SubmittedTask,
-    TaskRow,
-)
-from ._generated.storage_run import Item, LaneInfo, TaskRecord
+from ._generated.storage import DatabaseInfo, EventRow, InboxRow, StreamInfo
+from ._generated.storage_run import ItemRow, LaneRow, TaskPage, TaskRow
 from ._generated.storage_threads import ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
-from ._generated.storage_turn import HandlerOutput, Policy, TurnOptions, TurnResult
+from ._generated.storage_turn import Policy, TurnOptions, TurnResult
 
 # --- runtime.rs ----------------------------------------------------------------------------------
 
@@ -90,14 +71,15 @@ class Worker:
 
 class Storage:
     """The root: credentials and the agentstore URL (plan 13.4), the public API every request
-    goes through, derived from ``LIVEKIT_URL``; ``api_key`` and ``api_secret`` default to ``LIVEKIT_API_KEY`` and
-    ``LIVEKIT_API_SECRET``. Lease timing is in seconds, ``None`` for the Rust defaults."""
+    goes through, derived from the project ``url`` (``LIVEKIT_URL``). Lease timing is in seconds,
+    ``None`` for the Rust defaults."""
 
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        api_secret: str | None = None,
+        url: str,
+        api_key: str,
+        api_secret: str,
         lease_ttl: float | None = None,
         renew_interval: float | None = None,
     ) -> None: ...
@@ -105,8 +87,9 @@ class Storage:
     def url(self) -> str:
         """The public API agentstore is reached through."""
 
-    def open(self, database_id: str) -> Awaitable[ThreadDb]:
-        """One connection to the session's database, with its schema version read."""
+    def open(self, database_id: str, holder: str) -> Awaitable[Thread]:
+        """One connection to a thread's database; its leases and waiter marks carry ``holder``
+        plus a handle id of their own."""
 
     @property
     def streams(self) -> Streams: ...
@@ -116,79 +99,6 @@ class Storage:
         """``DatabaseService.CreateDatabase``, for development and tests."""
 
     def delete_database(self, database_id: str) -> Awaitable[None]: ...
-
-class ThreadDb:
-    """One session's database over one connection; the typed statements of plan 13.5. Every
-    later call after ``close()`` raises ``StorageUnavailable``."""
-
-    @property
-    def database_id(self) -> str: ...
-    @property
-    def tip(self) -> int:
-        """The durable commit sequence last observed on this connection."""
-
-    def close(self) -> None: ...
-    def acquire(self, request: AcquireRequest) -> Awaitable[Loaded | None]:
-        """The acquire and the load, one batch (plan 3.3.2); ``None`` when another holder has
-        the lease."""
-
-    def release(self, lane: str, lease_token: str) -> Awaitable[bool]: ...
-    def renew(self, lane: str, holder: str, lease_token: str) -> Awaitable[bool]:
-        """One renewal; ``False`` when the lease is no longer this holder's."""
-
-    def start_renewal(self, lane: str, holder: str, lease_token: str) -> Lease: ...
-    def commit(self, request: CommitRequest) -> Awaitable[CommitResult]:
-        """The fenced commit (plan 5.2); raises ``VersionConflict`` when the fence matched no
-        row. A ``None`` fence is the ``concurrent`` policy's append-only commit."""
-
-    def run_ended(self, request: RunEndedRequest) -> Awaitable[None]: ...
-    def receive(self, request: ReceiveRequest) -> Awaitable[Received | Duplicate]:
-        """The inbox receive (plan 3.3.4)."""
-
-    def insert_submitted_task(self, task: SubmittedTask) -> Awaitable[bool]:
-        """``True`` when inserted, ``False`` when the task or the message already had a row."""
-
-    def drain_check(self, lane: str, lease_token: str) -> Awaitable[DrainCheck]: ...
-    def set_waiter(self, lane: str, waiter: str) -> Awaitable[bool]:
-        """``False`` when the lease is free (acquire instead)."""
-
-    def waiter(self, lane: str) -> Awaitable[str | None]: ...
-    def pickup_task(self, lane: str, task_id: str) -> Awaitable[str | None]:
-        """The status the row had (``working``: a dead holder had it), or ``None`` when it was
-        not runnable."""
-
-    def mark_orphan_failed(
-        self, lane: str, task_id: str, status_message: Any
-    ) -> Awaitable[bool]: ...
-    def events(self, after_id: int = 0, limit: int = 100) -> Awaitable[list[EventRow]]: ...
-    def lane_events(self, lane: str, after_id: int = 0) -> Awaitable[list[EventRow]]: ...
-    def lanes(self) -> Awaitable[list[LaneRow]]: ...
-    def lane(self, lane: str) -> Awaitable[LaneRow | None]: ...
-    def history(self, lane: str) -> Awaitable[list[ChatItemRow]]: ...
-    def tasks(
-        self, lane: str, status: str | None = None, limit: int = 50
-    ) -> Awaitable[list[TaskRow]]:
-        """Newest first."""
-
-    def orphans(self, lane: str) -> Awaitable[list[TaskRow]]: ...
-    def inbox(self, lane: str) -> Awaitable[list[InboxRow]]: ...
-    def inbox_pending(self, lane: str) -> Awaitable[list[InboxRow]]: ...
-
-class Lease:
-    """A held lease with its renewal timer (plan 3.3.2)."""
-
-    @property
-    def lane(self) -> str: ...
-    @property
-    def holder(self) -> str: ...
-    @property
-    def token(self) -> str: ...
-    @property
-    def is_lost(self) -> bool: ...
-    def lost(self) -> Awaitable[None]:
-        """Pending while the lease is held; raises ``StorageUnavailable`` once it is lost."""
-
-    def stop(self) -> None: ...
 
 class Streams:
     """The answer streams (plan 6) over ``/v1/streams``."""
@@ -283,54 +193,90 @@ class RunRejected(StorageError):
 # --- turn.rs -------------------------------------------------------------------------------------
 
 class Thread:
-    """The run module's handle over an open database (plan 5.2): leases and waiter marks carry
+    """One open thread (plan 5.2), from ``Storage.open``: leases and waiter marks carry
     ``holder`` plus a handle id of their own."""
 
-    def __init__(self, db: ThreadDb, holder: str) -> None: ...
     @property
     def id(self) -> str: ...
     @property
     def holder(self) -> str: ...
     @property
-    def now_ms(self) -> int: ...
-    def lanes(self) -> Awaitable[list[LaneInfo]]: ...
+    def tip(self) -> int:
+        """The durable commit sequence last observed on the connection."""
+
+    def lanes(self) -> Awaitable[list[LaneRow]]: ...
     def events(self, after_id: int = 0, limit: int = 100) -> Awaitable[list[EventRow]]: ...
-    def history(self, lane: str) -> Awaitable[list[Item]]:
+    def history(self, lane: str) -> Awaitable[list[ItemRow]]:
         """A lane's history as stored, in order."""
 
-    def tasks(self, lane: str, limit: int = 50) -> Awaitable[list[TaskRecord]]:
+    def tasks(self, lane: str, limit: int = 50) -> Awaitable[list[TaskRow]]:
         """A lane's task rows as records, newest first."""
+
+    def task(self, task_id: str) -> Awaitable[TaskRow | None]:
+        """One task, whichever lane it is on; ``None`` when the thread has none of that id."""
+
+    def list_tasks(
+        self,
+        status: str | None = None,
+        updated_after: int = 0,
+        page_size: int = 50,
+        page_token: str | None = None,
+    ) -> Awaitable[TaskPage]:
+        """One page of every lane's tasks, last updated first (A2A ``tasks/list``)."""
+
+    def lane_info(self, lane: str) -> Awaitable[LaneRow | None]:
+        """A lane's row, ``None`` before its first run."""
+
+    def inbox(self, lane: str, pending: bool = False) -> Awaitable[list[InboxRow]]:
+        """A lane's inbox rows in arrival order: every one, or the pending ones."""
+
+    def cancel_task(
+        self, lane: str, task_id: str, metadata: dict[str, Any]
+    ) -> Awaitable[TaskRow | None]:
+        """``tasks/cancel`` (plan 5.5): the row ``canceled`` with ``metadata`` merged in;
+        ``None`` when the task is not the lane's."""
+
+    def open_run(
+        self,
+        lane: str,
+        run_id: str,
+        *,
+        channel: str | None = None,
+        wait_timeout: float | None = None,
+    ) -> Awaitable[Run]:
+        """Takes the lane for one run (plan 5.2), waiting up to ``wait_timeout`` seconds for
+        another holder's lease."""
 
     def close(self) -> None: ...
 
-class Boundary:
-    """The handler's boundary: ask before each model call and once more before the answer
-    streams; ``True`` once means ``True`` from then on."""
+class Run:
+    """One run the host drives itself (the voice lane): what it loaded, then one ``commit`` of
+    the history and state it ends with, or ``abandon``."""
 
     @property
-    def task_id(self) -> str: ...
+    def version(self) -> int:
+        """The version loaded: the commit's fence."""
+
     @property
-    def tripped(self) -> bool: ...
+    def closed(self) -> bool:
+        """The run's id already committed: ``commit`` only releases."""
+
     @property
-    def client_canceled(self) -> bool: ...
-    def check(self) -> Awaitable[bool]: ...
+    def history(self) -> list[ItemRow]: ...
+    @property
+    def state(self) -> Any: ...
+    def commit(self, history: list[ItemRow], state: Any = None) -> Awaitable[int]:
+        """Writes what changed since the load (``None`` state keeps the stored one), then
+        releases; the version after."""
+
+    def abandon(self, outcome: str, reason: str) -> Awaitable[None]:
+        """``run_ended`` with ``outcome`` and ``reason``, and the release."""
 
 class TurnHostProtocol(Protocol):
-    """What ``Turn`` calls back into: the handler and the wire, one object (plan 13.8).
+    """What ``Turn`` calls back into: ``_core_handle`` receives a ``storage_turn.TurnContext``
+    dict and returns the turn's event stream (``storage.context.TurnStream``)."""
 
-    ``handle`` receives the ``storage_turn.TurnContext`` model (``_core.TurnContext`` is the
-    turn detector's class of the same name) and the ``Boundary`` it polls, and returns a
-    ``HandlerOutput`` (a dict in its shape is accepted too). An exception it raises is the
-    handler's error, ``"<TypeName>: <text>"`` on the failed row; ``asyncio.CancelledError`` ends
-    the run ``canceled``. The coroutines run on the loop that constructed the ``Turn`` and are
-    cancelled when Rust drops the operation.
-    """
-
-    def handle(
-        self, ctx: storage_turn.TurnContext, boundary: Boundary
-    ) -> Awaitable[HandlerOutput]: ...
-    def on_update(self, task_id: str, text: str) -> Awaitable[None]: ...
-    def on_token(self, task_id: str, delta: str) -> Awaitable[None]: ...
+    def _core_handle(self, ctx: dict[str, Any]) -> Any: ...
 
 class Turn:
     """One text door's turns (``TurnRunner``); ``options`` left out or ``None`` is the Rust

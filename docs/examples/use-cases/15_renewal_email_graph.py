@@ -120,5 +120,5 @@ async def draft(ctx: A2ASessionContext) -> Email:
 #
 # A graph is for code steps whose edges are known before anything runs: agents called as
 # functions, branches and loops in code, a typed End. Run inline, as here, it finishes in the
-# turn; awaited from a tool, a node can wait on the person (docs/graphs.md). It is not the
+# turn; awaited from a tool, a node can wait on the person (docs/code-workflows.md). It is not the
 # conversation, whose next step the model picks.

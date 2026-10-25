@@ -53,7 +53,7 @@ await thread.submit(agent="sales", task=FollowUp(lead_id=lead.id), delay=timedel
 ```
 
 Submitting from outside comes with background tasks
-([planned-agent-tasks.md](planned-agent-tasks.md)).
+([agent-tasks.md](agent-tasks.md)).
 
 ## Webhooks
 
