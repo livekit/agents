@@ -221,8 +221,6 @@ pub struct SpeechData {
     pub confidence: Option<f64>,
     #[napi(ts_type = "string | null")]
     pub speaker_id: Option<String>,
-    #[napi(ts_type = "boolean | null")]
-    pub is_primary_speaker: Option<bool>,
     #[napi(ts_type = "string[] | null")]
     pub words: Option<Vec<crate::generated::records::TimedString>>,
     /// the source languages spoken by the user. populated by STT services that support translation,
@@ -262,7 +260,6 @@ impl From<&lk_agents_abi::SpeechData> for SpeechData {
             end_time: Some(v.end_time),
             confidence: Some(v.confidence),
             speaker_id: v.speaker_id.as_ref().map(|v| v.to_string()),
-            is_primary_speaker: v.is_primary_speaker,
             words: v.words.as_ref().map(|v| v.iter().map(|v| crate::generated::records::TimedString::from(v)).collect::<Vec<_>>()),
             source_languages: v.source_languages.as_ref().map(|v| v.iter().map(|v| (v).as_str().to_owned()).collect::<Vec<_>>()),
             source_texts: v.source_texts.as_ref().map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<_>>()),
@@ -284,7 +281,6 @@ impl TryFrom<SpeechData> for lk_agents_abi::SpeechData {
             end_time: match v.end_time { Some(v) => v, None => 0.0_f64 },
             confidence: match v.confidence { Some(v) => v, None => 0.0_f64 },
             speaker_id: v.speaker_id,
-            is_primary_speaker: v.is_primary_speaker,
             words: v.words.map(|v| Ok::<_, crate::host_error::JsError>(v.into_iter().map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).collect::<Result<Vec<_>, _>>()?)).transpose()?,
             source_languages: v.source_languages.map(|v| v.into_iter().map(|v| lk_agents_abi::LanguageCode::new(&v)).collect::<Vec<_>>()),
             source_texts: v.source_texts,

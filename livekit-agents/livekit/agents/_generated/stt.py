@@ -64,7 +64,6 @@ class SpeechData:
     end_time: float = 0.0
     confidence: float = 0.0
     speaker_id: str | None = None
-    is_primary_speaker: bool | None = None
     words: list[TimedString] | None = None
     source_languages: list[LanguageCode] | None = None
     """the source languages spoken by the user. populated by STT services that support translation,

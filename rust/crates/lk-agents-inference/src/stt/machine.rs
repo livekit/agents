@@ -202,7 +202,6 @@ impl TranscriptMachine {
             end_time: start + duration,
             confidence: num("confidence").unwrap_or(1.0),
             speaker_id: data.get("speaker_id").and_then(Value::as_str).map(str::to_owned),
-            is_primary_speaker: None,
             // An absent `words` is an empty list, not `None`.
             words: Some(words),
             source_languages: None,

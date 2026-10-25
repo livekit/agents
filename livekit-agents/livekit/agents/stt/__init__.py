@@ -1,5 +1,4 @@
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
-from .multi_speaker_adapter import MultiSpeakerAdapter
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .stt import (
     STT,
@@ -29,7 +28,6 @@ __all__ = [
     "AvailabilityChangedEvent",
     "STTError",
     "SpeakerContext",
-    "MultiSpeakerAdapter",
 ]
 
 # Cleanup docs of unexported modules

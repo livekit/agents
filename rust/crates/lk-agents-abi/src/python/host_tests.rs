@@ -56,7 +56,7 @@ class SpeechData:
         self.language = kw.get('language', 'en-US'); self.text = kw.get('text', '')
         self.start_time = kw.get('start_time', 0.0); self.end_time = kw.get('end_time', 0.0)
         self.confidence = kw.get('confidence', 0.0)
-        self.speaker_id = kw.get('speaker_id'); self.is_primary_speaker = kw.get('is_primary_speaker')
+        self.speaker_id = kw.get('speaker_id')
         self.words = kw.get('words'); self.source_languages = kw.get('source_languages')
         self.source_texts = kw.get('source_texts'); self.target_languages = kw.get('target_languages')
         self.target_texts = kw.get('target_texts'); self.metadata = kw.get('metadata')
@@ -342,7 +342,7 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
             assert_eq!(
                 keys,
                 [
-                    "confidence", "end_time", "is_primary_speaker", "language", "metadata",
+                    "confidence", "end_time", "language", "metadata",
                     "source_languages", "source_texts", "speaker_id", "start_time",
                     "target_languages", "target_texts", "text", "words",
                 ]
