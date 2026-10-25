@@ -296,6 +296,20 @@ async def test_horizontal_rule(text: str, expected: str, chunk_size: int):
     assert await _filtered(text, chunk_size) == expected
 
 
+LINK_CASES = [
+    ("see [this](https://example.com) now", "see this now"),
+    # a destination may hold balanced parentheses, as Wikipedia URLs often do
+    ("read [Python](https://en.wikipedia.org/wiki/Python_(language)) first", "read Python first"),
+    ("![the logo](img_(1).png) here", "the logo here"),
+]
+
+
+@pytest.mark.parametrize("text,expected", LINK_CASES)
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 50])
+async def test_link_text_kept(text: str, expected: str, chunk_size: int):
+    assert await _filtered(text, chunk_size) == expected
+
+
 # --- streaming invariant ---
 
 
@@ -304,7 +318,8 @@ async def test_horizontal_rule(text: str, expected: str, chunk_size: int):
     [t for t, _ in EMPHASIS_CASES]
     + PRESERVE_CASES
     + STRAY_DELIMITER_CASES
-    + [t for t, _ in HORIZONTAL_RULE_CASES],
+    + [t for t, _ in HORIZONTAL_RULE_CASES]
+    + [t for t, _ in LINK_CASES],
 )
 async def test_output_independent_of_chunking(text: str):
     """Buffering must not change the result: every chunk size yields one output."""

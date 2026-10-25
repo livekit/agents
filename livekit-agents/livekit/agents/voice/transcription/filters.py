@@ -61,9 +61,9 @@ FULL_LINE_PATTERNS = [
 
 INLINE_PATTERNS = [
     # images: keep alt text ![alt](url) -> alt
-    (re.compile(r"!\[([^\]]*)\]\([^)]*\)"), r"\1"),
-    # links: keep text part [text](url) -> text
-    (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),
+    (re.compile(r"!\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)"), r"\1"),
+    # links: keep text part [text](url) -> text; url may hold balanced parens
+    (re.compile(r"\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)"), r"\1"),
     # emphasis: remove the delimiters, keep the body. Runs before the code and
     # strikethrough patterns, which would otherwise consume the body and strand
     # the delimiters around it (``**~~text~~**``).
@@ -90,7 +90,7 @@ _ASTERISK_OPENER = re.compile(rf"(?<!{_INTRAWORD})(?<!\*)\*{{1,3}}(?![\s*])")
 _UNDERSCORE_OPENER = re.compile(r"(?<!\w)_{1,3}(?![\s_])")
 
 # a link or image still being written; ``[1]`` followed by text is not one
-_PENDING_LINK = re.compile(r"\[[^\]]*(?:\]|\]\([^)]*)?$")
+_PENDING_LINK = re.compile(r"\[[^\]]*(?:\]|\]\((?:[^()]|\([^()]*\))*(?:\([^()]*)?)?$")
 
 
 def _pending_emphasis(buffer: str) -> bool:
