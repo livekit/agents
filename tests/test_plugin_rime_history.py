@@ -369,3 +369,128 @@ async def test_omitted_new_options_preserve_existing_text_history_requests():
             {"type": "message", "role": "user", "text": "seed"},
             {"type": "message", "role": "assistant", "text": "appended history"},
         ]
+
+
+async def test_rebuild_validates_completed_live_tool_pair_before_mutation():
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.update_instructions("Help")
+        pending = session.generate_reply()
+        response = await peer.start(await peer.next())
+        generation = await pending
+        await peer.emit(
+            "response.function_call_arguments.done",
+            response_id=response,
+            item_id="live-tool",
+            call_id="live-call",
+            name="lookup",
+            arguments="{}",
+        )
+        call = await asyncio.wait_for(anext(generation.function_stream), 3)
+        await peer.end(response)
+        assert [item async for item in generation.function_stream] == []
+        completed = session.chat_ctx
+        completed.items.append(
+            llm.FunctionCallOutput(
+                call_id=call.call_id, name=call.name, output="done", is_error=False
+            )
+        )
+        await session.update_chat_ctx(completed)
+        before = len(peer.history_operations)
+        invalid = session.chat_ctx
+        invalid.items.insert(1, llm.ChatMessage(role="system", content=["between"]))
+        with pytest.raises(llm.RealtimeError, match="immediately follow"):
+            await session.update_chat_ctx(invalid)
+        assert len(peer.history_operations) == before
+        assert session.chat_ctx.is_equivalent(completed)
+        valid = session.chat_ctx
+        valid.items.insert(0, llm.ChatMessage(role="system", content=["before"]))
+        await session.update_chat_ctx(valid)
+        assert session.chat_ctx.is_equivalent(valid)
+        assert [type(item) for item in await model.get_history()] == [
+            r.HistoryMessage,
+            r.HistoryFunctionCall,
+            r.HistoryFunctionResult,
+        ]
+
+
+async def test_chat_snapshot_changes_do_not_mutate_acknowledged_history():
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.update_chat_ctx(messages("original"))
+        snapshot = session.chat_ctx
+        snapshot.items[0].content[:] = ["edited"]
+        snapshot.items[0].extra["local"] = True
+        assert session.chat_ctx.items[0].text_content == "original"
+        assert session.chat_ctx.items[0].extra == {}
+        before = len(peer.history_operations)
+        await session.update_chat_ctx(snapshot)
+        assert len(peer.history_operations) == before + 2
+        assert (await model.get_history())[0].text == "edited"
+        snapshot.items[0].content[:] = ["changed again"]
+        assert session.chat_ctx.items[0].text_content == "edited"
+
+
+async def test_nonblocking_tool_annotation_is_read_from_execution_context():
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.update_instructions("Help")
+        pending = session.generate_reply()
+        response = await peer.start(await peer.next())
+        generation = await pending
+        await peer.emit(
+            "response.function_call_arguments.done",
+            response_id=response,
+            item_id="live-tool",
+            call_id="live-call",
+            name="lookup",
+            arguments="{}",
+        )
+        call = await asyncio.wait_for(anext(generation.function_stream), 3)
+        await peer.end(response)
+        assert [item async for item in generation.function_stream] == []
+        call.extra["__livekit_agents_tool_non_blocking"] = True
+        target = llm.ChatContext(
+            [
+                call,
+                llm.FunctionCallOutput(
+                    call_id=call.call_id, name=call.name, output="working", is_error=False
+                ),
+            ]
+        )
+        before = len(peer.history_operations)
+        with pytest.raises(llm.RealtimeError, match="tool progress"):
+            await session.update_chat_ctx(target)
+        assert len(peer.history_operations) == before
+        assert session.chat_ctx.items[0].extra == {}
+
+
+async def test_partial_history_failure_does_not_submit_a_queued_edit():
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        original = messages("old")
+        await session.update_chat_ctx(original)
+        before = len(peer.history_operations)
+        peer.block_history_at = peer.fail_history_at = before + 2
+        peer.history_release.clear()
+        first = asyncio.create_task(session.update_chat_ctx(messages("replacement")))
+        queued = None
+        try:
+            await wait_until(lambda: len(peer.history_operations) == before + 2)
+            queued = asyncio.create_task(session.update_chat_ctx(messages("queued")))
+            await asyncio.sleep(0)
+            peer.history_release.set()
+            with pytest.raises(llm.RealtimeError, match="partially applied"):
+                await first
+            results = await asyncio.gather(queued, return_exceptions=True)
+            assert isinstance(results[0], (llm.RealtimeError, asyncio.CancelledError))
+            await session.aclose()
+            assert len(peer.history_operations) == before + 2
+        finally:
+            peer.history_release.set()
+            first.cancel()
+            tasks = [first]
+            if queued is not None:
+                queued.cancel()
+                tasks.append(queued)
+            await asyncio.gather(*tasks, return_exceptions=True)

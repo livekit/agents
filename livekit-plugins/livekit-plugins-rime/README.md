@@ -208,6 +208,8 @@ the session because its configuration is uncertain.
 These operations are not atomic. An automatic speech response that starts during
 the temporary change can also receive no tools. This applies at LiveKit's tool-step
 limit and during handoff when LiveKit requests a final reply without tools.
+When Prism supplies a settings revision, each response keeps the tool policy of
+that revision, even if it arrives after a later settings update.
 Required or named tool choices remain unsupported. The plugin does not advertise
 native per-response tool selection.
 
@@ -287,3 +289,14 @@ Truncation is available only for retained output references.
 Local WebSocket peer tests cover the SDK and ordinary AgentSession. They do not
 establish production endpoint compatibility or model quality for history-based
 text replies.
+
+Run the Rime regression tests from the repository root:
+
+```sh
+uv run pytest tests/test_plugin_rime_*.py --unit
+```
+
+The tests include response settings revisions, completed tool history rebuilds,
+history snapshot isolation, and cancellation during acknowledged updates.
+Validate typed replies and audio playback against the target Prism deployment
+separately. Caller-interruption checks require a speech fixture with nonzero audio.

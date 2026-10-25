@@ -731,3 +731,54 @@ async def test_ordinary_session_application_stop_truncates_without_completion_re
             assert truncate["item_id"] == item
             assert peer.cancel_received.is_set()
             assert peer.receipts.empty()
+
+
+@pytest.mark.parametrize("revision", ["older", "suppressed", "missing"])
+async def test_automatic_reply_uses_its_own_tool_settings_during_suppression(revision):
+    @function_tool
+    async def lookup() -> str:
+        """Look up a value."""
+        return "42"
+
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.update_tools([lookup])
+        old_revision = peer.revision
+        generations = asyncio.Queue()
+        errors = asyncio.Queue()
+        session.on("generation_created", generations.put_nowait)
+        session.on("error", errors.put_nowait)
+        pending = session.generate_reply(tool_choice="none")
+        try:
+            request = await peer.next()
+            response = {"id": "early-speech", "metadata": {"prism_cause": "user_audio"}}
+            if revision != "missing":
+                response["prism_settings_revision"] = (
+                    old_revision if revision == "older" else peer.revision
+                )
+            await peer.emit("response.created", response=response)
+            generation = await asyncio.wait_for(generations.get(), 3)
+            await peer.emit(
+                "response.function_call_arguments.done",
+                response_id="early-speech",
+                item_id="early-tool",
+                call_id="early-call",
+                name="lookup",
+                arguments="{}",
+            )
+            if revision == "older":
+                call = await asyncio.wait_for(anext(generation.function_stream), 3)
+                assert call.name == "lookup"
+                assert errors.empty()
+                await peer.end("early-speech")
+                response_id = await peer.start(request)
+                await peer.end(response_id)
+                await asyncio.wait_for(pending, 3)
+                assert peer.settings["tools"][0]["function"]["name"] == "lookup"
+            else:
+                error = await asyncio.wait_for(errors.get(), 3)
+                assert isinstance(error.error, PrismUnsupported)
+                assert not error.recoverable
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)

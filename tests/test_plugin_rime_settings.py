@@ -85,7 +85,8 @@ async def test_settings_updates_and_rejection_preserve_session():
         assert peer.connections == 1
 
 
-async def test_cancelled_update_waits_for_acknowledged_settings():
+@pytest.mark.parametrize("cancellations", [1, 2])
+async def test_cancelled_update_waits_for_acknowledged_settings(cancellations):
     async with peer_model() as (peer, model, _):
         session = model.session()
         await session._update_session(instructions="Original")
@@ -93,14 +94,50 @@ async def test_cancelled_update_waits_for_acknowledged_settings():
         peer.update_release.clear()
         change = asyncio.create_task(session.update_tools([lookup]))
         await asyncio.wait_for(peer.update_started.wait(), 3)
-        change.cancel()
-        await asyncio.sleep(0)
-        assert not change.done()
+        for _ in range(cancellations):
+            change.cancel()
+            await asyncio.sleep(0)
+            assert not change.done()
         peer.update_release.set()
         with pytest.raises(asyncio.CancelledError):
             await change
         assert "lookup" in session.tools.function_tools
         assert peer.settings["tools"][0]["function"]["name"] == "lookup"
+
+
+@pytest.mark.parametrize("operation", ["settings", "history"])
+async def test_session_shutdown_settles_an_update_waiting_for_acknowledgment(operation):
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.update_instructions("Original")
+        if operation == "settings":
+            started, release = peer.update_started, peer.update_release
+            update = session.update_tools([lookup])
+        else:
+            started, release = peer.history_started, peer.history_release
+            target = session.chat_ctx
+            target.add_message(role="user", content="pending")
+            update = session.update_chat_ctx(target)
+        started.clear()
+        release.clear()
+        change = asyncio.create_task(update)
+        closing = None
+        try:
+            await asyncio.wait_for(started.wait(), 3)
+            closing = asyncio.create_task(session.aclose())
+            await wait_until(lambda: session._closed)
+            # The SDK settles an already submitted request before propagating
+            # cancellation, including during shutdown.
+            release.set()
+            await asyncio.wait_for(closing, 3)
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(change, 3)
+        finally:
+            release.set()
+            change.cancel()
+            await asyncio.gather(change, return_exceptions=True)
+            if closing is not None:
+                await asyncio.gather(closing, return_exceptions=True)
 
 
 async def test_metadata_refusal_preserves_acknowledged_voice():
