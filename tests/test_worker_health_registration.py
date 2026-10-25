@@ -114,13 +114,11 @@ async def test_health_ok_when_unregistered() -> None:
             await run_task
 
 
-@pytest.mark.asyncio
-async def test_health_returns_503_during_reconnect_backoff() -> None:
-    """After RegisterWorkerResponse, a dropped WS must keep GET / at 503 during retry sleep."""
+async def _run_reconnect_scenario(fake_port: int, health_port: int) -> list[int]:
+    """Register once, drop the WS, then never register again. Returns health statuses
+    polled for ~2s after the drop."""
     from livekit.protocol import agent
 
-    fake_port = 18883
-    health_port = 18884
     phase = {"n": 0}
 
     async def agent_ws(request: web.Request) -> web.WebSocketResponse:
@@ -129,8 +127,7 @@ async def test_health_returns_503_during_reconnect_backoff() -> None:
         phase["n"] += 1
         if phase["n"] == 1:
             # Accept registration once, then drop the socket so the worker retries.
-            async for raw in ws:
-                _ = raw  # RegisterWorkerRequest
+            async for _raw in ws:
                 reply = agent.ServerMessage()
                 reply.register.worker_id = "W_test_reconnect"
                 await ws.send_bytes(reply.SerializeToString())
@@ -167,32 +164,39 @@ async def test_health_returns_503_during_reconnect_backoff() -> None:
     server.on("worker_registered", lambda *_: registered.set())
     run_task = asyncio.create_task(server.run(devmode=False))
 
+    statuses: list[int] = []
     try:
         await asyncio.wait_for(registered.wait(), timeout=10)
-        # Allow the fake server close to propagate into the worker's retry backoff.
+        # Allow the fake server close to propagate into the worker's retry loop.
         await asyncio.sleep(0.5)
-        # During retry sleep (up to 10s) GET / must stay 503, not 200.
-        saw_503 = False
-        for _ in range(30):
+        for _ in range(20):
             try:
                 async with aiohttp.ClientSession() as http:
                     async with http.get(f"http://127.0.0.1:{health_port}/") as resp:
-                        body = await resp.text()
-                        if resp.status == 200:
-                            raise AssertionError(
-                                f"health returned 200 while disconnected: {body!r}"
-                            )
-                        if resp.status == 503:
-                            saw_503 = True
-                            assert "not connected" in body.lower() or "failed" in body.lower()
-                            break
+                        statuses.append(resp.status)
             except (aiohttp.ClientError, OSError):
                 pass
             await asyncio.sleep(0.1)
-        assert saw_503, "expected 503 during reconnect backoff after registered WS drop"
     finally:
         await server.aclose()
         run_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await run_task
         await runner.cleanup()
+    return statuses
+
+
+@pytest.mark.asyncio
+async def test_health_ok_during_short_reconnect() -> None:
+    """A registered worker that briefly loses its WS must stay healthy (no pod restart)."""
+    statuses = await _run_reconnect_scenario(18883, 18884)
+    assert statuses and all(s == 200 for s in statuses), statuses
+
+
+@pytest.mark.asyncio
+async def test_health_returns_503_after_reconnect_grace_period() -> None:
+    """Once disconnected for longer than the grace period, GET / must report 503."""
+    with patch("livekit.agents.worker.HEALTH_RECONNECT_GRACE_PERIOD", 0.5):
+        statuses = await _run_reconnect_scenario(18885, 18886)
+    assert 503 in statuses, statuses
+    assert statuses[-1] == 503, statuses

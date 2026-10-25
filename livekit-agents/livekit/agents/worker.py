@@ -61,6 +61,9 @@ ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+# how long a previously registered worker may stay disconnected (e.g. while it
+# reconnects after a websocket interruption) before the health check reports 503
+HEALTH_RECONNECT_GRACE_PERIOD = 30.0
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
 
@@ -388,6 +391,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             False,
             False,
         )
+        # monotonic time when a registered connection was lost, cleared on re-register
+        self._disconnected_at: float | None = None
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -661,10 +666,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     if self._connection_failed:
                         return web.Response(status=503, text="failed to connect to livekit")
 
-                    # Docs / Node SDK: 503 until RegisterWorkerResponse (and while reconnecting).
+                    # 503 until the first RegisterWorkerResponse (docs / Node SDK).
                     # unregistered=True workers never connect; keep / as a liveness probe.
-                    if not unregistered and (self._connecting or self._id == "unregistered"):
-                        return web.Response(status=503, text="not connected to livekit")
+                    if not unregistered:
+                        if self._id == "unregistered":
+                            return web.Response(status=503, text="not connected to livekit")
+
+                        # a short reconnect after a websocket interruption is expected;
+                        # only report unhealthy once it has lasted longer than the grace period
+                        disconnected_at = self._disconnected_at
+                        if (
+                            disconnected_at is not None
+                            and time.monotonic() - disconnected_at > HEALTH_RECONNECT_GRACE_PERIOD
+                        ):
+                            return web.Response(status=503, text="not connected to livekit")
 
                     return web.Response(text="OK")
 
@@ -1158,6 +1173,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                 self._handle_register(msg.register)
                 self._connecting = False
+                self._disconnected_at = None
 
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
@@ -1165,16 +1181,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 try:
                     await self._run_ws(ws)
                 finally:
-                    # WS ended: not ready for jobs until we re-register. Set before any
-                    # retry backoff so / returns 503 while the socket is down.
-                    self._connecting = True
+                    # registered connection lost: start the health check grace period
+                    if self._disconnected_at is None:
+                        self._disconnected_at = time.monotonic()
             except Exception as e:
                 if self._closed:
                     break
-
-                # Ensure health is 503 during backoff even if we never reached _run_ws
-                # (e.g. register failed after _connecting was cleared only post-register).
-                self._connecting = True
 
                 if retry_count >= self._max_retry:
                     self._connection_failed = True
