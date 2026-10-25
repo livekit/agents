@@ -335,7 +335,9 @@ impl Driver {
         }
         out.signal(Signal::CloseProgress);
         self.answer_close_drains(out);
-        let _ = self.shared.closing.send(true);
+        // `send_replace`: `send` stores nothing while no task subscribes, so a later one would
+        // never see the close.
+        self.shared.closing.send_replace(true);
         out.machine().close_turn_detector();
         if let Some(rt) = rt {
             out.machine().push(Effect::Provider(ProviderCall::CloseRealtime(rt)));

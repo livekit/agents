@@ -916,7 +916,9 @@ impl Run {
     /// loop is: an unbounded loop here is a hang, not a slow run, and a driver that keeps
     /// spawning while closing is a result worth reporting rather than waiting on forever.
     ///
-    /// Each batch is raced against a deadline a budget away. The clock is paused and moves only
+    /// Each batch is raced against a deadline a budget away, the session stepped meanwhile as its
+    /// own loop would be: a close is a chain of bounded phases that can outlast `AwaitExit`, and a
+    /// session frozen mid-close would hold every task it ends. The clock is paused and moves only
     /// when nothing can run, so the deadline passes exactly when the tasks still pending can never
     /// finish: those are recorded as stuck and aborted, and the run completes.
     pub async fn join_tasks(&mut self) {
@@ -932,14 +934,20 @@ impl Run {
             }
             let deadline = self.budget();
             for Spawned { at, site, mut task } in batch {
-                let end = tokio::select! {
-                    joined = &mut task => match joined {
-                        Err(error) if error.is_panic() => {
-                            TaskEnd::Panicked(panic_message(&*error.into_panic()))
-                        }
-                        _ => TaskEnd::Finished,
+                let joined = match self.drive(Some(deadline), &mut task).await {
+                    Some(joined) => Some(joined),
+                    // The session has exited: only its tasks are left to run.
+                    None => tokio::select! {
+                        joined = &mut task => Some(joined),
+                        () = self.time.wait_until(deadline) => None,
                     },
-                    () = self.time.wait_until(deadline) => {
+                };
+                let end = match joined {
+                    Some(Err(error)) if error.is_panic() => {
+                        TaskEnd::Panicked(panic_message(&*error.into_panic()))
+                    }
+                    Some(_) => TaskEnd::Finished,
+                    None => {
                         task.abort();
                         TaskEnd::Stuck
                     }

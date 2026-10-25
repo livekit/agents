@@ -1,10 +1,10 @@
 //! Every task the session spawned finishes, without panicking, once the session has closed.
 //!
-//! The run joins each task after the driver exits. A task still pending when no other work is
-//! left anywhere is waiting on something only it, or nothing, can end: it would hold whatever it
-//! owns for the life of the process. The runner stops waiting on it and records it as stuck. A
-//! task that panicked died with whatever it was doing half done. Either way the report names the
-//! line that spawned it.
+//! The run joins each task once the close was asked, stepping the session until it exits. A task
+//! still pending when no other work is left anywhere is waiting on something only it, or nothing,
+//! can end: it would hold whatever it owns for the life of the process. The runner stops waiting
+//! on it and records it as stuck. A task that panicked died with whatever it was doing half done.
+//! Either way the report names the line that spawned it.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},

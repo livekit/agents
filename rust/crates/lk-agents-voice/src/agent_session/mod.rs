@@ -370,8 +370,8 @@ pub struct SessionShared {
     /// Unbounded: a task must never block on the loop draining it, and there are only a handful per
     /// turn.
     pub events: crate::agent_session::Tx<GenEvent>,
-    /// Flips once, in `begin_closing`. Provider drains select on it, or one parked on an idle STT
-    /// or VAD would never call `aclose()`.
+    /// Flips once, when the legs close or the runtime is dropped: every forwarder, drain, pump and
+    /// reader selects on it, or one parked on an idle source would outlive the session.
     pub closing: tokio::sync::watch::Sender<bool>,
     /// A drain close while tools run: outputs are committed and no follow-up step is planned.
     pub draining: tokio::sync::watch::Sender<bool>,

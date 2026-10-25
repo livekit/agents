@@ -192,6 +192,14 @@ impl Runtime {
     }
 }
 
+/// A runtime dropped before its close (an aborted loop, a panic) still ends every task that
+/// selects on `closing`: the tasks sharing the session's state keep its sender alive.
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        self.driver.shared.closing.send_replace(true);
+    }
+}
+
 /// The microphone's reader: every frame to the queue owner, until the track ends or the session
 /// closes. The input is the host's, not a `HostStream`: nothing to close, so no `Closed`.
 async fn read_audio(
