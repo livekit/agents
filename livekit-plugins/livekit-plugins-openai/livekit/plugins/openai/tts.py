@@ -100,8 +100,9 @@ class TTS(tts.TTS):
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
 
-        ``sample_rate`` is the sample rate of the provider's PCM output, in Hz. The audio is not
-        resampled.
+        ``sample_rate`` is the output sample rate, in Hz. Encoded audio, including the default MP3
+        format, is decoded and resampled to this rate. For raw PCM, it must match the provider's
+        sample rate; raw PCM is not resampled.
         """
         if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate < 10:
             raise ValueError(
