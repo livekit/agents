@@ -1361,7 +1361,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self.emit("close", CloseEvent(error=error, reason=reason))
 
                 if self._session_host:
-                    self._session_host.unregister_session()
+                    if self._session_host.session is self:
+                        self._session_host.unregister_session()
                     if self._owns_session_host:
                         await self._session_host.aclose()
                     self._session_host = None
