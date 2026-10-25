@@ -437,11 +437,15 @@ impl Driver {
         &mut self,
         now: Ts,
         hook: HookId,
-        text: Option<String>,
-        spoke: bool,
+        answered: Option<(Option<String>, bool)>,
         out: &mut Out,
     ) {
         let Some((id, step)) = self.activity.tools.filler_answered(hook) else { return };
+        // The reference's loop dies on the callable's exception, which ends the filler.
+        let Some((text, spoke)) = answered else {
+            self.end_filler(id, FillerEnd::Refused, out);
+            return;
+        };
         self.fire_filler(now, id, step, text, spoke, out);
     }
 

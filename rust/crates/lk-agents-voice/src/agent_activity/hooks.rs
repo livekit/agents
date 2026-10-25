@@ -264,18 +264,19 @@ impl Driver {
                 };
                 self.on_tool_reply_rendered(now, id, text, out)
             }
-            // The filler's callable: text, a speech it made itself, or nothing; raising skips.
+            // The filler's callable: text, a speech it made itself, or nothing; `None` when it
+            // raised or its bound passed.
             HookKind::FillerSource => {
-                let (text, spoke) = match outcome {
-                    Filler { text, spoke } => (text, spoke),
-                    Failed
-                    | Returned
+                let answered = match outcome {
+                    Filler { text, spoke } => Some((text, spoke)),
+                    Failed => None,
+                    Returned
                     | Turn(_)
                     | Described(_)
                     | Rendered(_)
-                    | FunctionToolsExecuted { .. } => (None, false),
+                    | FunctionToolsExecuted { .. } => Some((None, false)),
                 };
-                self.on_filler_source(now, id, text, spoke, out)
+                self.on_filler_source(now, id, answered, out)
             }
             // What the handlers left; unanswered, the event stands as issued.
             HookKind::FunctionToolsExecuted => {
