@@ -20,7 +20,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use lk_agents_abi::voice::io::{AudioOutput, TextOutput};
@@ -309,6 +309,7 @@ pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T
     if schedule != 0 {
         seed.extend_from_slice(&schedule.to_le_bytes());
     }
+    let _watchdog = watchdog(schedule);
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .start_paused(true)
@@ -320,6 +321,42 @@ pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T
         .expect("simulation runtime")
         .block_on(body)
 }
+
+/// Real seconds one simulation may take before the watchdog ends the process; `VOICE_HANG_S`
+/// overrides it. Ten times the slowest run measured (a soak call in a debug build), because it
+/// must never fire on a run that is merely slow.
+const HANG_S: u64 = 600;
+
+/// What no step count can see: a product task that never yields, or a lock that never comes back,
+/// blocks the run's only thread, so nothing on it can notice. A thread beside it can, and the only
+/// thing it can do about it is end the process loudly, naming the schedule, rather than leave a
+/// campaign parked forever. Disarmed when the returned sender is dropped, with the simulation.
+fn watchdog(schedule: u64) -> std::sync::mpsc::Sender<()> {
+    use std::io::Write;
+    let limit = std::env::var("VOICE_HANG_S").ok().and_then(|s| s.parse().ok()).unwrap_or(HANG_S);
+    let (disarm, armed) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+            armed.recv_timeout(Duration::from_secs(limit))
+        {
+            // Straight to the stream: the test harness captures `eprintln!` and loses it on abort.
+            let _ = writeln!(
+                std::io::stderr(),
+                "HANG: the simulation of schedule {schedule} (the survey's seed) is still running \
+                 after {limit}s of real time: a step or a task is blocked or never yields. \
+                 Rerun that seed with VOICE_TRACE=1 to see the input it stopped on."
+            );
+            std::process::abort();
+        }
+    });
+    disarm
+}
+
+/// Steps one virtual instant may hold, in the journal or in the run's own loop, before the run
+/// counts as a livelock. The busiest instant measured (1024-seed survey and soak, 2026-10-25) took
+/// 503 journal steps and 127 turns of the loop: twenty times that is a session feeding itself,
+/// and waiting longer only spends real time before the same verdict.
+const NO_PROGRESS_STEPS: u32 = 10_000;
 
 /// Retains real Tokio joins, so a task the driver detached cannot disappear from the test, each
 /// with when and from which line it was spawned, so a task that never finishes can be placed in
@@ -391,6 +428,8 @@ pub struct Run {
     /// Journal steps the observer stamped, waiting to be absorbed. The observer runs under the
     /// driver's own lock and cannot touch the recording, so it parks them here.
     steps: Arc<Mutex<Vec<(Observed, Step)>>>,
+    /// Set by the observer when it stopped a step for journaling without bound at one instant.
+    livelock: Arc<Mutex<Option<String>>>,
     pending: BTreeMap<u32, Pending>,
     streams: BTreeMap<u32, Feeding>,
     handles: BTreeMap<u64, Arc<SpeechHandle>>,

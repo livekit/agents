@@ -5,9 +5,6 @@
 //! a frame, a history, a patch -- the live objects a command carries, built from the case's terms.
 use super::*;
 
-/// Journal steps one virtual instant may hold before the run counts as a livelock.
-const NO_PROGRESS_STEPS: u32 = 100_000;
-
 impl Run {
     /// Start a real driver with the fakes attached, and record what it opens on the way up.
     ///
@@ -190,8 +187,9 @@ impl Run {
         registry.attach_api(session.api.clone());
 
         let steps: Arc<Mutex<Vec<(Observed, Step)>>> = Arc::default();
+        let livelock: Arc<Mutex<Option<String>>> = Arc::default();
         {
-            let (steps, stamps) = (steps.clone(), stamps.clone());
+            let (steps, stamps, livelock) = (steps.clone(), stamps.clone(), livelock.clone());
             let mut trace = session.trace.lock().unwrap();
             // What the driver wrote while it was being built -- the config it resolved, the wall
             // epoch, the realtime socket's opening -- is journal too, and came before anyone
@@ -200,17 +198,23 @@ impl Run {
             for step in trace.steps() {
                 steps.lock().unwrap().push((stamps.next(), step));
             }
-            // Virtual time only advances when every task is idle, so a driver that keeps feeding
-            // itself at one instant never returns control to the case: fail the run by name.
+            // A step that journals forever never returns to the run's loop, which counts its own
+            // iterations: the observer is the only one that sees it, and stops it the only way
+            // anything can stop a step, by unwinding out of it.
             let mut instant = (tokio::time::Instant::now(), 0u32);
             trace.observe(Box::new(move |step| {
                 let now = tokio::time::Instant::now();
                 instant = if now == instant.0 { (now, instant.1 + 1) } else { (now, 0) };
-                assert!(
-                    instant.1 < NO_PROGRESS_STEPS,
-                    "no progress: {NO_PROGRESS_STEPS} journal steps without virtual time moving, last {step:?}"
-                );
                 let at = stamps.next();
+                if instant.1 >= NO_PROGRESS_STEPS {
+                    let detail = format!(
+                        "{NO_PROGRESS_STEPS} journal steps at {} ms without virtual time moving, \
+                         the last {step:?}",
+                        at.at_ms
+                    );
+                    *livelock.lock().unwrap() = Some(detail.clone());
+                    panic!("{detail}");
+                }
                 steps.lock().unwrap().push((at, step.clone()));
             }));
         }
@@ -246,6 +250,7 @@ impl Run {
             controls: BTreeMap::new(),
             segments: BTreeMap::new(),
             steps,
+            livelock,
             pending: BTreeMap::new(),
             streams: BTreeMap::new(),
             handles: BTreeMap::new(),

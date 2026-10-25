@@ -275,6 +275,12 @@ impl Authored {
         self
     }
 
+    /// The run stopped the session for working without bound at one instant.
+    pub fn livelocked(mut self, detail: &str) -> Self {
+        self.recording.set_livelock(detail.to_owned());
+        self
+    }
+
     pub fn driver_panicked(mut self, panic: &str) -> Self {
         self.recording.set_driver_panic(panic.to_owned());
         self.driver_finished()

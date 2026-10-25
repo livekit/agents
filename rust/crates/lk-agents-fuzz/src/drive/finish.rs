@@ -202,12 +202,6 @@ const QUIET_ROUNDS: u32 = 2;
 /// Reaching this is a finding, not a limit to raise.
 const MAX_RELEASE_ROUNDS: u32 = 100;
 
-/// Wall-clock seconds one run may take before the runner declares it broken.
-///
-/// The product's clock is virtual and paused, so real seconds elapsing can only mean spinning or
-/// blocking. Not a performance budget: a run that approaches this is already wrong.
-const WALL_CLOCK_LIMIT_S: u64 = 30;
-
 /// What one run found.
 ///
 /// `expectations` separates a contract that passed from one that never applied. A report that
@@ -225,7 +219,8 @@ pub struct Outcome {
     /// For each input the run sent, the kinds it was actually observed to open. Checked against
     /// what the table declares, so a wrong row cannot hide.
     pub opened: BTreeMap<&'static str, BTreeSet<Kind>>,
-    /// The run stopped because a contract failed, rather than because it finished.
+    /// The run stopped before its close: the session livelocked, or never went quiet. What a
+    /// run never reached cannot be judged, so a reader of what is left live must not read it.
     pub stopped_early: bool,
     /// `(input, phase)`: which inputs landed in which phase of the conversation, read off the
     /// journal as it stood when each input was applied. COVERAGE.md's operation x phase table.
@@ -248,24 +243,23 @@ pub fn run(case: Case) -> Outcome {
 }
 
 async fn run_in(case: Case) -> Outcome {
-    let started = Instant::now();
     let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
     let mut outcome = Outcome { case: case.clone(), ..Outcome::default() };
 
     for input in &case.inputs {
         run.apply(input).await;
-        if let Some(found) = guard(&run, &mut outcome, started) {
+        if let Some(found) = guard(&run, &mut outcome) {
             return found;
         }
     }
-    finish(run, outcome, started).await
+    finish(run, outcome).await
 }
 
 /// Let everything in flight finish, then close the session and join its tasks.
 ///
 /// Most of the interesting driver states are on the far side of a run's armed deadlines and owed
 /// answers, so stopping mid-turn would never reach them.
-pub async fn finish(mut run: Run, mut outcome: Outcome, started: Instant) -> Outcome {
+pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
     let mut quiet = 0;
     let mut rounds = 0;
     while quiet < QUIET_ROUNDS {
@@ -297,7 +291,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome, started: Instant) -> Out
         for input in offered {
             outcome.case.inputs.push(input.clone());
             run.apply(&input).await;
-            if let Some(found) = guard(&run, &mut outcome, started) {
+            if let Some(found) = guard(&run, &mut outcome) {
                 return found;
             }
         }
@@ -306,7 +300,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome, started: Instant) -> Out
     for input in [Input::Settle {}, Input::Close { drain: true }, Input::AwaitExit {}] {
         outcome.case.inputs.push(input.clone());
         run.apply(&input).await;
-        if let Some(found) = guard(&run, &mut outcome, started) {
+        if let Some(found) = guard(&run, &mut outcome) {
             return found;
         }
     }
@@ -322,22 +316,16 @@ pub async fn finish(mut run: Run, mut outcome: Outcome, started: Instant) -> Out
 /// at the end, over the whole recording -- they read the whole recording anyway, and run after
 /// every input they were most of a survey's wall time and a case stopped at its first finding,
 /// which cost the rest of what that run would have reached.
-pub fn guard(run: &Run, outcome: &mut Outcome, started: Instant) -> Option<Outcome> {
-    if started.elapsed().as_secs() >= WALL_CLOCK_LIMIT_S {
-        record_outcome(run, outcome);
-        outcome.failures.push(Failure {
-            contract: "run_terminates".into(),
-            subject: Subject::Session,
-            detail: format!(
-                "still running after {WALL_CLOCK_LIMIT_S}s of real time and {} inputs, with the \
-                 product's own clock paused: the run is spinning or blocked",
-                outcome.case.inputs.len()
-            ),
-        });
-        outcome.stopped_early = true;
-        return Some(std::mem::take(outcome));
-    }
-    None
+///
+/// Moving is counted in steps at one virtual instant, never in real seconds, so a slow machine
+/// cannot change a verdict. A livelocked session was stopped, and nothing applied after it would
+/// reach it: the run ends there. What can block without stepping at all -- a task that never
+/// yields -- is the watchdog's (`simulate_with`), which aborts rather than judges.
+pub fn guard(run: &Run, outcome: &mut Outcome) -> Option<Outcome> {
+    run.record.livelock()?;
+    record_outcome(run, outcome);
+    outcome.stopped_early = true;
+    Some(std::mem::take(outcome))
 }
 
 fn record_outcome(run: &Run, outcome: &mut Outcome) {
@@ -446,6 +434,23 @@ fn opened_by_input(record: &Recording) -> BTreeMap<&'static str, BTreeSet<Kind>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A task that wakes itself forever never lets the clock move: the run stops the session as
+    /// a livelock instead of spinning with it.
+    #[test]
+    fn a_task_spinning_at_one_instant_is_a_livelock() {
+        let livelock = simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Policy::default()).await;
+            tokio::spawn(async {
+                loop {
+                    tokio::task::yield_now().await;
+                }
+            });
+            run.apply(&Input::Advance { ms: Millis(20) }).await;
+            run.record.livelock().map(str::to_owned)
+        });
+        assert!(livelock.is_some(), "a spinning task was not reported");
+    }
 
     /// A joined task names the product line that spawned it, not the spawner's: without
     /// `#[track_caller]` through `Spawner::spawn` every stuck task would point at the harness.

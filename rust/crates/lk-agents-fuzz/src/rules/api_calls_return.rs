@@ -31,7 +31,7 @@ impl Rule for ApiCallsReturn {
 
     fn on_complete(r: &Recording, check: &mut Check) {
         // A run the driver never exited cannot judge a call; `session_settles` and
-        // `run_terminates` report those runs.
+        // `virtual_time_advances` report those runs.
         if !r.driver_finished() {
             return;
         }

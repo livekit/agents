@@ -799,11 +799,26 @@ impl Run {
         done: impl std::future::Future<Output = T>,
     ) -> Option<T> {
         let mut done = std::pin::pin!(done);
+        // Iterations at one virtual instant: an event, a wake, frames or a task's turn each.
+        let mut instant = (self.time.now(), 0u32);
         loop {
             tokio::select! {
                 biased;
                 value = &mut done => return Some(value),
                 () = std::future::ready(()) => {}
+            }
+            let now = self.time.now();
+            instant = if now == instant.0 { (now, instant.1 + 1) } else { (now, 0) };
+            let counted = (instant.1 >= NO_PROGRESS_STEPS).then(|| {
+                format!(
+                    "{NO_PROGRESS_STEPS} steps of the session at {} ms without virtual time moving",
+                    self.stamps.now().at_ms
+                )
+            });
+            let observed = self.livelock.lock().unwrap().take();
+            if let Some(detail) = observed.or(counted) {
+                self.record.set_livelock(detail);
+                self.drop_runtime();
             }
             let Some(runtime) = &mut self.runtime else { return None };
             while let Ok(event) = runtime.queue.try_recv() {
@@ -872,7 +887,10 @@ impl Run {
         let Some(runtime) = &mut self.runtime else { return };
         let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(runtime)));
         self.settle_answers();
-        if let Err(panic) = called {
+        // The observer unwound out of a livelocked step: the loop reports it, not as a panic.
+        if self.livelock.lock().unwrap().is_some() {
+            self.drop_runtime();
+        } else if let Err(panic) = called {
             self.record.set_driver_panic(panic_message(&*panic));
             self.drop_runtime();
         }
@@ -902,6 +920,11 @@ impl Run {
     /// when nothing can run, so the deadline passes exactly when the tasks still pending can never
     /// finish: those are recorded as stuck and aborted, and the run completes.
     pub async fn join_tasks(&mut self) {
+        // A livelocked session may have left a task spinning, which no deadline would outrun: the
+        // livelock is the finding, and the tasks are aborted with the run.
+        if self.record.livelock().is_some() {
+            return;
+        }
         for _ in 0..MAX_JOIN_ROUNDS {
             let batch = std::mem::take(&mut *self.tasks.spawned.lock().unwrap());
             if batch.is_empty() {

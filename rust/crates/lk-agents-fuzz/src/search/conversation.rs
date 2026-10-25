@@ -24,7 +24,6 @@
 use std::{
     collections::BTreeSet,
     ops::{Range, RangeInclusive},
-    time::Instant,
 };
 
 use fastrand::Rng;
@@ -438,7 +437,6 @@ impl Dials {
 }
 
 async fn converse_in(setup: Setup, seed: u64, budget: usize, dials: Dials) -> Outcome {
-    let started = Instant::now();
     let mut talk = Talk {
         run: Run::start(&setup, seed, Policy::of(seed)).await,
         outcome: Outcome {
@@ -446,7 +444,6 @@ async fn converse_in(setup: Setup, seed: u64, budget: usize, dials: Dials) -> Ou
             ..Outcome::default()
         },
         rng: Rng::with_seed(seed),
-        started,
         budget,
         unanswered: BTreeSet::new(),
         heard: BTreeSet::new(),
@@ -468,7 +465,7 @@ async fn converse_in(setup: Setup, seed: u64, budget: usize, dials: Dials) -> Ou
     match talk.converse().await {
         Err(Halt::Found(found)) => *found,
         Ok(()) | Err(Halt::Spent | Halt::Ended) => {
-            crate::drive::finish(talk.run, talk.outcome, started).await
+            crate::drive::finish(talk.run, talk.outcome).await
         }
     }
 }
@@ -486,7 +483,6 @@ struct Talk {
     run: Run,
     outcome: Outcome,
     rng: Rng,
-    started: Instant,
     budget: usize,
     /// Predictions the predictor will never answer, so the driver's timeout runs on them.
     unanswered: BTreeSet<u32>,
@@ -547,7 +543,7 @@ impl Talk {
         }
         self.outcome.case.inputs.push(input.clone());
         self.run.apply(&input).await;
-        match crate::drive::guard(&self.run, &mut self.outcome, self.started) {
+        match crate::drive::guard(&self.run, &mut self.outcome) {
             Some(found) => Err(Halt::Found(Box::new(found))),
             None => Ok(()),
         }

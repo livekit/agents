@@ -515,6 +515,8 @@ pub struct Recording {
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
     driver_panic: Option<String>,
+    /// Why the session was stopped for working without bound at one virtual instant.
+    livelock: Option<String>,
     /// Every task the session spawned, and how the end-of-run join found it.
     tasks: Vec<Task>,
     live: Live,
@@ -574,6 +576,10 @@ impl Recording {
 
     pub fn driver_panic(&self) -> Option<&str> {
         self.driver_panic.as_deref()
+    }
+
+    pub fn livelock(&self) -> Option<&str> {
+        self.livelock.as_deref()
     }
 
     pub fn tasks(&self) -> &[Task] {
@@ -762,6 +768,10 @@ impl Recording {
 
     pub fn set_driver_panic(&mut self, panic: String) {
         self.driver_panic = Some(panic);
+    }
+
+    pub fn set_livelock(&mut self, detail: String) {
+        self.livelock = Some(detail);
     }
 
     pub fn record_task(&mut self, task: Task) {
