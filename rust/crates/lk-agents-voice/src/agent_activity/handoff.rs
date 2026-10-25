@@ -9,7 +9,7 @@ use crate::agent_session::effects::Out;
 use crate::agent_session::signals::{Cx, PauseResult, Signal};
 use crate::agent_session::{
     AgentUpdate, Answer, Driver, HandoffRefused, HookCall, HookId, HookKind, NewActivity,
-    PreviousActivity,
+    PreviousActivity, SpeechCommand,
 };
 use crate::audio_recognition::EndOfTurnInfo;
 use crate::run_result::Owned;
@@ -30,6 +30,10 @@ pub(crate) struct Handoff {
     queue: VecDeque<Queued>,
     /// A user turn decided while a switch runs, delivered to the arriving agent once.
     pub(crate) held_user_turn: Option<HeldUserTurn>,
+    /// The host's `say()` / `generate_reply()` asked while the leaving agent drains, in order: the
+    /// reference schedules them on `_next_activity`. Replayed on the agent the switch leaves
+    /// driving, or into the close's refusal.
+    pub(crate) held_speech: Vec<SpeechCommand>,
 }
 
 struct InProgress {
@@ -123,6 +127,7 @@ impl Handoff {
                 // Refused: the agent that blocked the held turn takes it, so it is kept exactly
                 // once, and a drain that joined the switch runs on it. Under a close it drops.
                 let Some((id, update)) = self.take_in_progress() else { return };
+                out.signal(Signal::ReplayHeldSpeech);
                 if cx.closing {
                     return refuse(Some(id), update, HandoffRefused::Closing, out);
                 }
@@ -137,12 +142,18 @@ impl Handoff {
                 }
                 self.refuse_queued(out);
                 self.held_user_turn = None;
+                out.signal(Signal::ReplayHeldSpeech);
             }
         }
     }
 
     pub(crate) fn switching(&self) -> bool {
         self.in_progress.is_some()
+    }
+
+    /// The leaving agent drains: its scheduling is paused until the swap.
+    pub(crate) fn draining(&self) -> bool {
+        matches!(self.in_progress, Some(InProgress { phase: Phase::Draining, .. }))
     }
 
     /// The agent a host (not an inline task's) switch in progress installs.
@@ -284,6 +295,7 @@ impl Driver {
             return;
         };
         if self.session.closing.is_some() && update.next == NewActivity::Start {
+            self.replay_held_speech(now, out);
             self.refuse_handoff(Some(id), update, HandoffRefused::Closing, out);
             self.activity.handoff.refuse_queued(out);
             return;
@@ -311,6 +323,8 @@ impl Driver {
                 NewActivity::Resume => self.on_task_frame_popped(now, task, out),
             }
         }
+        // Before `on_enter`, whose speech comes after what was asked during the switch.
+        self.replay_held_speech(now, out);
         if next == NewActivity::Start {
             self.issue_on_enter(now, out);
         }
@@ -327,6 +341,14 @@ impl Driver {
     /// arriving agent.
     pub(crate) fn in_window(&self) -> bool {
         self.activity.handoff.switching() || self.activity.hooks.describing()
+    }
+
+    /// The host's speech held over the drain, asked again of the agent now driving: scheduled, or
+    /// refused as any speech is under a close.
+    pub(crate) fn replay_held_speech(&mut self, now: Ts, out: &mut Out) {
+        for cmd in std::mem::take(&mut self.activity.handoff.held_speech) {
+            self.on_speech(now, cmd, out);
+        }
     }
 
     pub(crate) fn deliver_held_turn(&mut self, now: Ts, out: &mut Out) {

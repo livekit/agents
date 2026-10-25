@@ -86,6 +86,15 @@ impl SpeechSpec {
 
 impl Driver {
     pub(crate) fn on_speech(&mut self, now: Ts, cmd: SpeechCommand, out: &mut Out) {
+        // The host's speech during the drain is the arriving agent's (`_next_activity`); the
+        // leaving agent's own tools and hooks are refused by the paused scheduler, as before.
+        if matches!(cmd, SpeechCommand::Say { .. } | SpeechCommand::GenerateReply { .. })
+            && self.command_origin == Origin::Host
+            && self.session.closing.is_none()
+            && self.activity.handoff.draining()
+        {
+            return self.activity.handoff.held_speech.push(cmd);
+        }
         match cmd {
             // A realtime session answers on its own socket. These arms must come *before* the
             // pipeline arms: a guarded arm after its unguarded twin is dead code.

@@ -33,6 +33,8 @@ pub(crate) enum Signal {
     AgentStays,
     /// Outside a switch, a held user turn reaches the agent.
     DeliverHeldTurn,
+    /// The switch ended without a swap: the host's held speech goes to the agent left driving.
+    ReplayHeldSpeech,
     NextHandoff,
     /// What the close's phase waits for may be over: a phase began, the trailing commit ended,
     /// the legs closed or their bound passed.
@@ -93,6 +95,7 @@ impl Driver {
             }
             Signal::AgentStays => self.drain_step(DrainEvent::AgentStays, out),
             Signal::DeliverHeldTurn => self.deliver_held_turn(now, out),
+            Signal::ReplayHeldSpeech => self.replay_held_speech(now, out),
             Signal::NextHandoff => {
                 self.handoff_step(HandoffEvent::Next, out);
                 self.pump_schedule(now, out);

@@ -3,6 +3,8 @@
 use super::*;
 use crate::agent_session::commands::{ActivityCommand, HookId, HookOutcome, TurnCommand};
 use crate::agent_session::host_events::{HookCall, HookKind};
+use crate::agent_session::{HandoffRefused, SpeechId};
+use crate::speech_handle::SpeechHandle;
 use lk_agents_abi::voice::events::CloseReason;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -292,4 +294,177 @@ async fn a_drain_during_the_close_is_answered_by_the_closes_drain() {
     assert_eq!(drain.await.expect("answered"), Ok(()), "joined the close, not refused");
     assert_eq!(on_exits(&api, None), 1, "one on_exit for the frame, the close's");
     api.close(CloseReason::UserInitiated, false, None).await;
+}
+
+/// A `say(audio=)` from `origin`, its frames held by the returned sender, and its answer.
+fn say_from(
+    api: &SessionApi,
+    origin: Origin,
+) -> (
+    tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>,
+    tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>,
+) {
+    let (words, rx) = tokio::sync::mpsc::channel(4);
+    let (call, answer) = api.call(Answer::speech).expect("the loop runs");
+    let text = SayText::Audio { text: "Hello there.".into(), rx };
+    let say = SpeechCommand::Say {
+        text,
+        allow_interruptions: None,
+        add_to_chat_ctx: true,
+        call: Some(call),
+    };
+    api.send_from(origin, say).expect("the loop runs");
+    (words, answer)
+}
+
+/// A host handoff whose drain waits on a speech still being said: the window a switch holds the
+/// host's speech in. Dropping the returned sender ends that speech, and the swap follows.
+async fn handoff_draining(
+    api: &SessionApi,
+    exits: &mut tokio::sync::mpsc::UnboundedReceiver<HookId>,
+) -> (
+    tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>,
+    tokio::sync::oneshot::Receiver<Result<(), HandoffRefused>>,
+) {
+    let (words, _) = say_from(api, Origin::Host);
+    settle().await;
+    let (call, swap) = api.call(Answer::handoff).expect("the loop runs");
+    let mut update = AgentUpdate::frame("next", Instructions::plain("You are next."));
+    update.call = Some(call);
+    api.send(ActivityCommand::Update(Box::new(update))).expect("the loop runs");
+    let exit = exits.recv().await.expect("the handoff issues the frame's on_exit");
+    answer_exit(api, exit);
+    settle().await;
+    (words, swap)
+}
+
+fn position(api: &SessionApi, step: impl Fn(&Step) -> bool) -> Option<usize> {
+    api.steps().iter().position(step)
+}
+
+fn rejected(
+    api: &SessionApi,
+    speech: SpeechId,
+) -> Option<crate::agent_activity::scheduling::Rejected> {
+    api.steps().iter().find_map(|s| match s {
+        Step::Speech(crate::trace::SpeechStep::ScheduleRejected { speech: s, reason })
+            if *s == speech =>
+        {
+            Some(*reason)
+        }
+        _ => None,
+    })
+}
+
+// Catches: a host `say()` during a switch refused as draining; the reference schedules it on
+// `_next_activity`, so the arriving agent speaks it, before its `on_enter`.
+#[tokio::test(start_paused = true)]
+async fn a_host_say_during_a_handoff_is_spoken_by_the_arriving_agent_before_its_on_enter() {
+    let (api, mut exits) = session_holding_exits().await;
+    let (words, swap) = handoff_draining(&api, &mut exits).await;
+    let (_held, mut answer) = say_from(&api, Origin::Host);
+    settle().await;
+    assert!(
+        matches!(answer.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
+        "the say was created on the leaving agent: {:#?}",
+        api.steps()
+    );
+
+    drop(words);
+    assert_eq!(swap.await.expect("answered"), Ok(()), "the handoff lands");
+    let speech = answer.await.expect("answered at the swap").id();
+    settle().await;
+    assert_eq!(rejected(&api, speech), None, "{:#?}", api.steps());
+    let updated = position(&api, |s| {
+        matches!(s, Step::Handoff(crate::trace::HandoffStep::AgentUpdated { .. }))
+    });
+    let created = position(
+        &api,
+        |s| matches!(s, Step::Speech(crate::trace::SpeechStep::ReplyCreated { speech: s }) if *s == speech),
+    );
+    let on_enter = position(&api, |s| {
+        matches!(
+            s,
+            Step::Handoff(crate::trace::HandoffStep::HookIssued {
+                kind: HookKind::OnEnter, agent: Some(a), ..
+            }) if a == "next"
+        )
+    });
+    assert!(updated.is_some() && updated < created, "created before the swap: {:#?}", api.steps());
+    assert!(created < on_enter, "the arriving agent's on_enter went first: {:#?}", api.steps());
+    api.close(CloseReason::UserInitiated, false, None).await;
+}
+
+// Catches: the leaving agent's own speech (a tool's, a hook's) carried to the arriving agent; it
+// is still refused by the paused scheduler, as in the reference.
+#[tokio::test(start_paused = true)]
+async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
+    let (api, mut exits) = session_holding_exits().await;
+    let (_words, _swap) = handoff_draining(&api, &mut exits).await;
+    for origin in [Origin::Tool { call_id: "call_1".into() }, Origin::Hook] {
+        let (_held, answer) = say_from(&api, origin.clone());
+        let handle = answer.await.expect("answered at once");
+        assert_eq!(
+            rejected(&api, handle.id()),
+            Some(crate::agent_activity::scheduling::Rejected::Draining),
+            "{origin:?}: {:#?}",
+            api.steps()
+        );
+        assert!(handle.interrupted(), "{origin:?}");
+    }
+    api.close(CloseReason::UserInitiated, false, None).await;
+}
+
+// Catches: a held say the host interrupted before the swap played on the arriving agent anyway;
+// the interrupt is kept and lands as the speech is created.
+#[tokio::test(start_paused = true)]
+async fn a_held_say_interrupted_before_the_swap_does_not_play() {
+    let (api, mut exits) = session_holding_exits().await;
+    let (words, swap) = handoff_draining(&api, &mut exits).await;
+    let (_held, answer) = say_from(&api, Origin::Host);
+    let host = crate::speech_handle::HostSpeech::pending(api.api().expect("runs"), answer, None);
+    let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
+    host.interrupt(false, spawner).expect("an interruptible say");
+    assert!(host.interrupted(), "the interrupt is the handle's at once");
+
+    drop(words);
+    assert_eq!(swap.await.expect("answered"), Ok(()), "the handoff lands");
+    settle().await;
+    let handle = host.peek().expect("created at the swap");
+    assert!(handle.interrupted() && handle.done(), "{:#?}", api.steps());
+    let played = position(
+        &api,
+        |s| matches!(s, Step::Playout(crate::trace::PlayoutStep::PlaybackStarted { speech, .. }) if *speech == handle.id()),
+    );
+    assert_eq!(played, None, "{:#?}", api.steps());
+    api.close(CloseReason::UserInitiated, false, None).await;
+}
+
+// Catches: a held say left unanswered when the close refuses the switch it waited on: the host
+// awaiting it hung. It is refused as any speech into a closing session is.
+#[tokio::test(start_paused = true)]
+async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
+    for drain in [true, false] {
+        let (api, mut exits) = session_holding_exits().await;
+        let (words, swap) = handoff_draining(&api, &mut exits).await;
+        let (_held, answer) = say_from(&api, Origin::Host);
+        settle().await;
+        let close = Close { drain, ..Close::default() };
+        api.send(Command::Close(close)).expect("the loop runs");
+        settle().await;
+        drop(words);
+        let handle = answer.await.expect("answered, not hung");
+        assert_eq!(swap.await.expect("answered"), Err(HandoffRefused::Closing), "drain={drain}");
+        settle().await;
+        assert!(rejected(&api, handle.id()).is_some(), "drain={drain}: {:#?}", api.steps());
+        assert!(handle.interrupted(), "drain={drain}");
+        let closing = api.close(CloseReason::UserInitiated, false, None);
+        tokio::pin!(closing);
+        loop {
+            tokio::select! {
+                _ = &mut closing => break,
+                Some(id) = exits.recv() => answer_exit(&api, id),
+            }
+        }
+    }
 }
