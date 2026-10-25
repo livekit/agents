@@ -12,7 +12,7 @@ use crate::agent_activity::false_interruption::InterruptOutcome;
 use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
-use crate::agent_session::effects::{Effect, Out, ProviderCall, Timer, TimerOp};
+use crate::agent_session::effects::{Effect, Out, ProviderCall, Timer};
 use crate::agent_session::signals::Signal;
 use crate::agent_session::{
     ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
@@ -567,8 +567,8 @@ impl Driver {
                 .peek()
                 .iter()
                 .filter_map(|e| match e {
-                    Effect::Timer(TimerOp::Cancel(t)) => Some(*t),
-                    Effect::Timer(TimerOp::Arm(..))
+                    Effect::Cancel(t) => Some(*t),
+                    Effect::Arm(..)
                     | Effect::Provider(_)
                     | Effect::Emit(_)
                     | Effect::Decision(_)

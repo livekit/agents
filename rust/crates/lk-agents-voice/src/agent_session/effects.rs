@@ -78,17 +78,14 @@ impl Out {
     /// instant it was decided. Called after every transition, so the journal reads in causal
     /// order; `perform` records nothing.
     pub fn absorb(&mut self) {
-        use crate::agent_session::effects::TimerOp;
         for effect in self.machine.take() {
             match &effect {
                 // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
                 Effect::Emit(ev) => self.record(Step::Emitted(ev.journal_form())),
-                Effect::Timer(TimerOp::Arm(t, at)) => {
+                Effect::Arm(t, at) => {
                     self.record(Step::Core(CoreStep::TimerArmed { timer: (*t).into(), at: *at }))
                 }
-                Effect::Timer(TimerOp::Cancel(t)) => {
-                    self.record(Step::Core(CoreStep::TimerCancelled((*t).into())))
-                }
+                Effect::Cancel(t) => self.record(Step::Core(CoreStep::TimerCancelled((*t).into()))),
                 Effect::Provider(call) => {
                     self.record(Step::Input(InputStep::ProviderCalled(*call)))
                 }
@@ -151,12 +148,11 @@ impl Out {
     /// after the loop's timer pass, so without this a deadline cancelled by an earlier fire in the
     /// same instant would still be popped (`Driver::on_timers`).
     pub fn timers_touched(&mut self) -> Vec<crate::agent_session::effects::Timer> {
-        use crate::agent_session::effects::TimerOp;
         self.absorb();
         self.todo
             .iter()
             .filter_map(|e| match e {
-                Effect::Timer(TimerOp::Arm(t, _) | TimerOp::Cancel(t)) => Some(*t),
+                Effect::Arm(t, _) | Effect::Cancel(t) => Some(*t),
                 Effect::Emit(_)
                 | Effect::Provider(_)
                 | Effect::Detector(_)
@@ -173,8 +169,8 @@ impl Out {
     pub fn arms(&mut self, timer: Timer) -> Option<bool> {
         self.absorb();
         self.todo.iter().rev().find_map(|e| match e {
-            Effect::Timer(TimerOp::Arm(t, _)) if *t == timer => Some(true),
-            Effect::Timer(TimerOp::Cancel(t)) if *t == timer => Some(false),
+            Effect::Arm(t, _) if *t == timer => Some(true),
+            Effect::Cancel(t) if *t == timer => Some(false),
             _ => None,
         })
     }
@@ -184,7 +180,10 @@ impl Out {
 /// reference, where these ran inline in exactly this order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
-    Timer(TimerOp),
+    /// Arming an armed timer *replaces* it ([`TimerSet`](lk_agents_abi::TimerSet)).
+    Arm(Timer, Ts),
+    /// Idempotent: cancelling an unarmed timer is a no-op, so cleanup paths cancel unconditionally.
+    Cancel(Timer),
     /// Buffered because reaching it needs `&mut` on the driver.
     Provider(ProviderCall),
     Emit(SessionEvent),
@@ -200,13 +199,6 @@ pub enum Effect {
         call_id: String,
         runner: crate::tool_executor::RunnerRef,
     },
-}
-
-#[cfg(test)]
-impl Effect {
-    pub fn cancel(timer: Timer) -> Effect {
-        Effect::Timer(TimerOp::Cancel(timer))
-    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -239,11 +231,11 @@ impl Effects {
     }
 
     pub fn arm(&mut self, timer: Timer, at: Ts) {
-        self.push(Effect::Timer(TimerOp::Arm(timer, at)));
+        self.push(Effect::Arm(timer, at));
     }
 
     pub fn cancel(&mut self, timer: Timer) {
-        self.push(Effect::Timer(TimerOp::Cancel(timer)));
+        self.push(Effect::Cancel(timer));
     }
 
     pub fn emit(&mut self, ev: SessionEvent) {
@@ -274,14 +266,6 @@ impl Effects {
     pub fn close_turn_detector(&mut self) {
         self.push(Effect::Detector(DetectorCall::Close));
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimerOp {
-    /// Arming an armed timer *replaces* it ([`TimerSet`](lk_agents_abi::TimerSet)).
-    Arm(Timer, Ts),
-    /// Idempotent: cancelling an unarmed timer is a no-op, so cleanup paths cancel unconditionally.
-    Cancel(Timer),
 }
 
 /// Every deadline of the session, fired by the driver's one [`TimerSet`](lk_agents_abi::TimerSet).
@@ -592,14 +576,14 @@ impl Driver {
     ) {
         use crate::agent_session::effects::{
             AudioInterruptGuard, AudioOp, Decision, DetectorCall as D, Effect as E, GateOp,
-            ProviderCall as P, TimerOp,
+            ProviderCall as P,
         };
         // Journalled already: `Out::absorb` recorded every effect when the machine produced it.
         match effect {
-            E::Timer(TimerOp::Arm(t, at)) => {
+            E::Arm(t, at) => {
                 self.timers.arm(t, at);
             }
-            E::Timer(TimerOp::Cancel(t)) => {
+            E::Cancel(t) => {
                 self.timers.cancel(t);
             }
             // Not traced here: `Out::absorb` journalled it where it was decided.

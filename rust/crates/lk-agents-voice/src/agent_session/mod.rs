@@ -497,7 +497,7 @@ pub struct ActivitySnapshot {
 #[cfg(test)]
 mod label_tests {
     use super::*;
-    use crate::agent_session::effects::{Effect, TimerOp};
+    use crate::agent_session::effects::Effect;
     use crate::events::SessionEvent;
     use lk_agents_abi::Ts;
 
@@ -512,7 +512,7 @@ mod label_tests {
         eff.as_slice()
             .iter()
             .filter_map(|e| match e {
-                Effect::Timer(TimerOp::Arm(Timer::AecWarmup, at)) => Some(*at),
+                Effect::Arm(Timer::AecWarmup, at) => Some(*at),
                 _ => None,
             })
             .collect()
@@ -566,7 +566,7 @@ mod label_tests {
         assert!(s.aec.armed());
 
         let eff = s.aec.set(None);
-        assert_eq!(eff.as_slice(), &[Effect::cancel(Timer::AecWarmup)]);
+        assert_eq!(eff.as_slice(), &[Effect::Cancel(Timer::AecWarmup)]);
         assert!(!s.aec.armed());
         assert_eq!(s.aec.remaining(), Duration::ZERO);
 
