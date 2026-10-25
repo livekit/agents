@@ -8,7 +8,7 @@ use lk_agents_abi::{
     errors::ProviderError,
     utils::stream::{Closed, StreamSource},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 use super::{Control, Forward, Registry, Slot};
 use crate::{
@@ -33,6 +33,7 @@ struct Detection {
     slot: Slot,
     registry: Arc<Registry>,
     events: mpsc::UnboundedReceiver<Result<VadEvent, ProviderError>>,
+    ended: Arc<Notify>,
 }
 
 #[async_trait::async_trait]
@@ -47,10 +48,11 @@ impl Vad for FakeVad {
 
     async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError> {
         let (sender, events) = mpsc::unbounded_channel();
+        let ended = Arc::new(Notify::new());
         let slot = self.registry.register(Kind::Vad, Detail::None, Control::Vad(sender));
         Ok((
-            Box::new(Forward { slot, registry: self.registry.clone() }),
-            Box::new(Detection { slot, registry: self.registry.clone(), events }),
+            Box::new(Forward { slot, registry: self.registry.clone(), ended: Some(ended.clone()) }),
+            Box::new(Detection { slot, registry: self.registry.clone(), events, ended }),
         ))
     }
 }
@@ -58,7 +60,13 @@ impl Vad for FakeVad {
 #[async_trait::async_trait]
 impl StreamSource<VadEvent> for Detection {
     async fn next(&mut self) -> Result<Option<VadEvent>, ProviderError> {
-        self.events.recv().await.transpose()
+        // A real stream ends once its input has: what was already produced first, then the end.
+        // Without it a stream the driver replaced stays open, and a case keeps speaking into it.
+        tokio::select! {
+            biased;
+            event = self.events.recv() => event.transpose(),
+            () = self.ended.notified() => Ok(None),
+        }
     }
 
     fn cancel_safe(&self) -> bool {

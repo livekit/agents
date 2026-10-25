@@ -366,17 +366,17 @@ impl Run {
                 ActivityCommand::UpdateTools(toolset(&registry, tools)).into()
             }
             Input::SetAudioInput { attach } => {
+                // A new microphone replaces the old one as a detach does: nothing said into the
+                // old one reaches the session any more.
+                for (nth, _) in std::mem::take(&mut self.mics) {
+                    self.record.close(at, Kind::Mic, nth);
+                }
                 let source = attach.then(|| {
                     let (mic, frames) = fakes::FakeAudioInput::new();
                     let nth = self.registry.new_mic();
                     self.mics.insert(nth, (frames, 0));
                     HostAudio(mic as _)
                 });
-                if !attach {
-                    for (nth, _) in std::mem::take(&mut self.mics) {
-                        self.record.close(at, Kind::Mic, nth);
-                    }
-                }
                 ActivityCommand::SetAudioInput(source).into()
             }
             Input::SetVideoInput { attach } => {
@@ -579,7 +579,7 @@ pub(super) enum Feeding {
 
 impl Run {
     /// Close every utterance still open on a recognition stream.
-    fn end_utterances_on(&mut self, at: Observed, stt: u32) {
+    pub(super) fn end_utterances_on(&mut self, at: Observed, stt: u32) {
         let open: Vec<u32> = self
             .utterances
             .iter()

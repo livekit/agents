@@ -97,6 +97,10 @@ impl Run {
                     if self.record.live().has(slot.kind, slot.nth) {
                         self.record.close(at, slot.kind, slot.nth);
                     }
+                    // Nothing more can be said on a closed recognition stream.
+                    if slot.kind == Kind::Stt {
+                        self.end_utterances_on(at, slot.nth);
+                    }
                 }
                 Record::Produced { at, tts, chunk, text } => {
                     self.record.record_produced(at, tts, chunk, text);

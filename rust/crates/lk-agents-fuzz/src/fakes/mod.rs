@@ -437,6 +437,8 @@ impl Registry {
 pub(super) struct Forward {
     pub(super) slot: Slot,
     pub(super) registry: Arc<Registry>,
+    /// Told on `end_input`, for a stream whose events end with its input.
+    pub(super) ended: Option<Arc<tokio::sync::Notify>>,
 }
 
 /// The origin tags a frame carries, one per sample.
@@ -453,5 +455,9 @@ impl StreamSink<AudioFrame> for Forward {
     fn flush(&self) -> Result<(), ProviderError> {
         Ok(())
     }
-    fn end_input(&self) {}
+    fn end_input(&self) {
+        if let Some(ended) = &self.ended {
+            ended.notify_one();
+        }
+    }
 }

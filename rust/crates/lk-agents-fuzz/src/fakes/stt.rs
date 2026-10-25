@@ -9,7 +9,7 @@ use lk_agents_abi::{
     errors::ProviderError,
     utils::stream::{Closed, StreamSource},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 use super::{Control, Forward, Registry, Slot};
 use crate::{
@@ -35,6 +35,7 @@ struct Recognition {
     slot: Slot,
     registry: Arc<Registry>,
     events: mpsc::UnboundedReceiver<Result<SpeechEvent, ProviderError>>,
+    ended: Arc<Notify>,
 }
 
 #[async_trait::async_trait]
@@ -64,12 +65,13 @@ impl Stt for FakeStt {
             tokio::time::sleep(self.connect).await;
         }
         let (sender, events) = mpsc::unbounded_channel();
+        let ended = Arc::new(Notify::new());
         let opened = self.registry.now();
         let slot =
             self.registry.register(Kind::Stt, Detail::None, Control::Stt(sender, opened, None));
         Some(Ok((
-            Box::new(Forward { slot, registry: self.registry.clone() }),
-            Box::new(Recognition { slot, registry: self.registry.clone(), events }),
+            Box::new(Forward { slot, registry: self.registry.clone(), ended: Some(ended.clone()) }),
+            Box::new(Recognition { slot, registry: self.registry.clone(), events, ended }),
         )))
     }
 }
@@ -77,7 +79,13 @@ impl Stt for FakeStt {
 #[async_trait::async_trait]
 impl StreamSource<SpeechEvent> for Recognition {
     async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        self.events.recv().await.transpose()
+        // A real stream ends once its input has: what was already produced first, then the end.
+        // Without it a stream the driver replaced stays open, and a case keeps speaking into it.
+        tokio::select! {
+            biased;
+            event = self.events.recv() => event.transpose(),
+            () = self.ended.notified() => Ok(None),
+        }
     }
 
     fn cancel_safe(&self) -> bool {
