@@ -21,11 +21,23 @@ use std::path::{Path, PathBuf};
 const SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/voice/events.rs", "lk_agents_abi::voice::events"),
     ("rust/crates/lk-agents-abi/src/metrics/base.rs", "lk_agents_abi::metrics::base"),
-    ("rust/crates/lk-agents-abi/src/metrics/usage/records.rs", "lk_agents_abi::metrics::usage::records"),
-    ("rust/crates/lk-agents-abi/src/metrics/usage_collector/records.rs", "lk_agents_abi::metrics::usage_collector::records"),
+    (
+        "rust/crates/lk-agents-abi/src/metrics/usage/records.rs",
+        "lk_agents_abi::metrics::usage::records",
+    ),
+    (
+        "rust/crates/lk-agents-abi/src/metrics/usage_collector/records.rs",
+        "lk_agents_abi::metrics::usage_collector::records",
+    ),
     ("rust/crates/lk-agents-abi/src/voice/amd.rs", "lk_agents_abi::voice::amd"),
-    ("rust/crates/lk-agents-abi/src/voice/session_options.rs", "lk_agents_abi::voice::session_options"),
-    ("rust/crates/lk-agents-abi/src/voice/session_effects.rs", "lk_agents_abi::voice::session_effects"),
+    (
+        "rust/crates/lk-agents-abi/src/voice/session_options.rs",
+        "lk_agents_abi::voice::session_options",
+    ),
+    (
+        "rust/crates/lk-agents-abi/src/voice/session_effects.rs",
+        "lk_agents_abi::voice::session_effects",
+    ),
     ("rust/crates/lk-agents-abi/src/worker/worker.rs", "lk_agents_abi::worker::worker"),
     ("rust/crates/lk-agents-abi/src/stt/stt.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/llm/chat_context.rs", "lk_agents_abi"),
@@ -36,12 +48,18 @@ const SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/turn/events.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/llm/events.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/llm/llm.rs", "lk_agents_abi"),
-    ("rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs", "lk_agents_abi::llm::provider_format::tools"),
+    (
+        "rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs",
+        "lk_agents_abi::llm::provider_format::tools",
+    ),
     ("rust/crates/lk-agents-abi/src/tts/tts.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/llm/mcp.rs", "lk_agents_abi::llm::mcp"),
     ("rust/crates/lk-agents-abi/src/telemetry/report.rs", "lk_agents_abi::telemetry::report"),
     ("rust/crates/lk-agents-abi/src/voice/room_io.rs", "lk_agents_abi::voice::room_io"),
-    ("rust/crates/lk-agents-abi/src/llm/provider_format/image.rs", "lk_agents_abi::llm::provider_format"),
+    (
+        "rust/crates/lk-agents-abi/src/llm/provider_format/image.rs",
+        "lk_agents_abi::llm::provider_format",
+    ),
     ("rust/crates/lk-agents-abi/src/turn/keyterms.rs", "lk_agents_abi::turn::keyterms"),
     ("rust/crates/lk-agents-abi/src/llm/tool_executor.rs", "lk_agents_abi::llm::tool_executor"),
     ("rust/crates/lk-agents-abi/src/voice/run_result.rs", "lk_agents_abi::voice::run_result"),
@@ -53,7 +71,10 @@ const SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/types/identity.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/voice/rtc.rs", "lk_agents_abi::voice::rtc"),
     ("rust/crates/lk-agents-abi/src/voice/calls.rs", "lk_agents_abi::voice::calls"),
-    ("rust/crates/lk-agents-abi/src/worker/remote_session.rs", "lk_agents_abi::worker::remote_session"),
+    (
+        "rust/crates/lk-agents-abi/src/worker/remote_session.rs",
+        "lk_agents_abi::worker::remote_session",
+    ),
     ("rust/crates/lk-agents-abi/src/llm/fallback.rs", "lk_agents_abi::llm::fallback"),
     ("rust/crates/lk-agents-abi/src/inference/fallback.rs", "lk_agents_abi::inference::fallback"),
     ("rust/crates/lk-agents-abi/src/tts/markup/steering.rs", "lk_agents_abi::tts::markup"),
@@ -84,9 +105,15 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/tts/markup/transcript.rs", "lk_agents_abi::tts::markup"),
     ("rust/crates/lk-agents-abi/src/tts/markup/summarize.rs", "lk_agents_abi::tts::markup"),
     ("rust/crates/lk-agents-abi/src/llm/schema/openai.rs", "lk_agents_abi::llm::schema"),
-    ("rust/crates/lk-agents-abi/src/llm/provider_format/strict.rs", "lk_agents_abi::llm::provider_format"),
+    (
+        "rust/crates/lk-agents-abi/src/llm/provider_format/strict.rs",
+        "lk_agents_abi::llm::provider_format",
+    ),
     ("rust/crates/lk-agents-abi/src/telemetry/report.rs", "lk_agents_abi::telemetry::report"),
-    ("rust/crates/lk-agents-voice/src/workflows/builtins/credit_card.rs", "lk_agents_voice::workflows::builtins::credit_card"),
+    (
+        "rust/crates/lk-agents-voice/src/workflows/builtins/credit_card.rs",
+        "lk_agents_voice::workflows::builtins::credit_card",
+    ),
     ("rust/crates/lk-agents-voice/src/tool_executor.rs", "lk_agents_voice::tool_executor"),
     ("rust/crates/lk-agents-voice/src/ivr/ivr_activity.rs", "lk_agents_voice::ivr::ivr_activity"),
     ("rust/crates/lk-agents-worker/src/auth.rs", "lk_agents_worker"),
@@ -95,18 +122,36 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-voice/src/keyterm_detection.rs", "lk_agents_voice::keyterm_detection"),
     ("rust/crates/lk-agents-voice/src/amd/classifier.rs", "lk_agents_voice::amd::classifier"),
     ("rust/crates/lk-agents-voice/src/turn.rs", "lk_agents_voice::turn"),
-    ("rust/crates/lk-agents-voice/src/agent_activity/options.rs", "lk_agents_voice::agent_activity::options"),
+    (
+        "rust/crates/lk-agents-voice/src/agent_activity/options.rs",
+        "lk_agents_voice::agent_activity::options",
+    ),
     ("rust/crates/lk-agents-voice/src/workflows/handle.rs", "lk_agents_voice::workflows"),
     ("rust/crates/lk-agents-voice/src/speech_handle.rs", "lk_agents_voice::speech_handle"),
-    ("rust/crates/lk-agents-voice/src/workflows/builtins/mod.rs", "lk_agents_voice::workflows::builtins"),
-    ("rust/crates/lk-agents-voice/src/workflows/builtins/dtmf.rs", "lk_agents_voice::workflows::builtins::dtmf"),
-    ("rust/crates/lk-agents-voice/src/workflows/builtins/warm_transfer.rs", "lk_agents_voice::workflows::builtins::warm_transfer"),
+    (
+        "rust/crates/lk-agents-voice/src/workflows/builtins/mod.rs",
+        "lk_agents_voice::workflows::builtins",
+    ),
+    (
+        "rust/crates/lk-agents-voice/src/workflows/builtins/dtmf.rs",
+        "lk_agents_voice::workflows::builtins::dtmf",
+    ),
+    (
+        "rust/crates/lk-agents-voice/src/workflows/builtins/warm_transfer.rs",
+        "lk_agents_voice::workflows::builtins::warm_transfer",
+    ),
     ("rust/crates/lk-agents-abi/src/voice/workflows.rs", "lk_agents_abi::voice::workflows"),
     ("rust/crates/lk-agents-abi/src/voice/host_policy.rs", "lk_agents_abi::voice::host_policy"),
     ("rust/crates/lk-agents-inference/src/llm/models.rs", "lk_agents_inference::llm::models"),
     ("rust/crates/lk-agents-inference/src/llm/mod.rs", "lk_agents_inference::llm"),
-    ("rust/crates/lk-agents-voice/src/workflows/builtins/prompts.rs", "lk_agents_voice::workflows::builtins::prompts"),
-    ("rust/crates/lk-agents-voice/src/workflows/builtins/task_group.rs", "lk_agents_voice::workflows::builtins::task_group"),
+    (
+        "rust/crates/lk-agents-voice/src/workflows/builtins/prompts.rs",
+        "lk_agents_voice::workflows::builtins::prompts",
+    ),
+    (
+        "rust/crates/lk-agents-voice/src/workflows/builtins/task_group.rs",
+        "lk_agents_voice::workflows::builtins::task_group",
+    ),
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.
     ("rust/crates/lk-agents-voice/src/agent_session/mod.rs", "lk_agents_voice::agent_session"),
@@ -129,7 +174,10 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-inference/src/eot/options.rs", "lk_agents_inference::eot::options"),
     ("rust/crates/lk-agents-abi/src/worker/job.rs", "lk_agents_abi::worker::job"),
     ("rust/crates/lk-agents-voice/src/remote_session.rs", "lk_agents_voice::remote_session"),
-    ("rust/crates/lk-agents-voice/src/remote_session/driver.rs", "lk_agents_voice::remote_session::driver"),
+    (
+        "rust/crates/lk-agents-voice/src/remote_session/driver.rs",
+        "lk_agents_voice::remote_session::driver",
+    ),
     ("rust/crates/lk-agents-abi/src/errors/host.rs", "lk_agents_abi::errors"),
     ("rust/crates/lk-agents-abi/src/errors/api.rs", "lk_agents_abi::errors"),
     ("rust/crates/lk-agents-abi/src/tts/markup/mod.rs", "lk_agents_abi::tts::markup"),
@@ -139,10 +187,17 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/metrics/otel.rs", "lk_agents_abi::metrics"),
     ("rust/crates/lk-agents-abi/src/types/connect.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-voice/src/generation/mod.rs", "lk_agents_voice::generation"),
-    ("rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs", "lk_agents_abi::llm::provider_format::tools"),
-    ("rust/crates/lk-agents-abi/src/llm/provider_format/host.rs", "lk_agents_abi::llm::provider_format::host"),
+    (
+        "rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs",
+        "lk_agents_abi::llm::provider_format::tools",
+    ),
+    (
+        "rust/crates/lk-agents-abi/src/llm/provider_format/host.rs",
+        "lk_agents_abi::llm::provider_format::host",
+    ),
     ("rust/crates/lk-agents-abi/src/tokenize/thinking.rs", "lk_agents_abi::tokenize::thinking"),
     ("rust/crates/lk-agents-abi/src/tokenize/search.rs", "lk_agents_abi::tokenize::search"),
+    ("rust/crates/lk-agents-abi/src/voice/io.rs", "lk_agents_abi::voice::io"),
     ("rust/crates/lk-agents-voice/src/io.rs", "lk_agents_voice::io"),
     ("rust/crates/lk-agents-abi/src/vad/vad.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-rtc/src/traits.rs", "lk_agents_rtc"),
@@ -151,9 +206,15 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-rtc/src/lib.rs", "lk_agents_rtc"),
     ("rust/crates/lk-agents-abi/src/voice/rtc.rs", "lk_agents_abi::voice::rtc"),
     ("rust/crates/lk-agents-voice/src/room_io/_output.rs", "lk_agents_voice::room_io::_output"),
-    ("rust/crates/lk-agents-voice/src/room_io/_output/transcription.rs", "lk_agents_voice::room_io::_output::transcription"),
+    (
+        "rust/crates/lk-agents-voice/src/room_io/_output/transcription.rs",
+        "lk_agents_voice::room_io::_output::transcription",
+    ),
     ("rust/crates/lk-agents-voice/src/room_io/rooms.rs", "lk_agents_voice::room_io::rooms"),
-    ("rust/crates/lk-agents-voice/src/transcription/text_transforms.rs", "lk_agents_voice::transcription::text_transforms"),
+    (
+        "rust/crates/lk-agents-voice/src/transcription/text_transforms.rs",
+        "lk_agents_voice::transcription::text_transforms",
+    ),
     ("rust/crates/lk-agents-voice/src/background_audio.rs", "lk_agents_voice::background_audio"),
     ("rust/crates/lk-agents-abi/src/errors/provider.rs", "lk_agents_abi::errors"),
     ("rust/crates/lk-agents-abi/src/tts/tts.rs", "lk_agents_abi"),
@@ -169,7 +230,10 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-inference/src/fallback/stt.rs", "lk_agents_inference::fallback"),
     ("rust/crates/lk-agents-inference/src/fallback/tts.rs", "lk_agents_inference::fallback"),
     ("rust/crates/lk-agents-inference/src/fallback/realtime.rs", "lk_agents_inference::fallback"),
-    ("rust/crates/lk-agents-inference/src/fallback/realtime_policy.rs", "lk_agents_inference::fallback"),
+    (
+        "rust/crates/lk-agents-inference/src/fallback/realtime_policy.rs",
+        "lk_agents_inference::fallback",
+    ),
     ("rust/crates/lk-agents-inference/src/stt/mod.rs", "lk_agents_inference::stt"),
     ("rust/crates/lk-agents-inference/src/vad/mod.rs", "lk_agents_inference::vad"),
     ("rust/crates/lk-agents-inference/src/tts/mod.rs", "lk_agents_inference::tts"),
@@ -178,10 +242,22 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-inference/src/realtime/dialect.rs", "lk_agents_inference::realtime"),
     ("rust/crates/lk-agents-inference/src/stt/options.rs", "lk_agents_inference::stt::options"),
     ("rust/crates/lk-agents-inference/src/tts/wire.rs", "lk_agents_inference::tts::wire"),
-    ("rust/crates/lk-agents-inference/src/interruption/event.rs", "lk_agents_inference::interruption"),
-    ("rust/crates/lk-agents-inference/src/interruption/options.rs", "lk_agents_inference::interruption"),
-    ("rust/crates/lk-agents-abi/src/tokenize/language/code.rs", "lk_agents_abi::tokenize::language"),
-    ("rust/crates/lk-agents-abi/src/utils/connection_pool.rs", "lk_agents_abi::utils::connection_pool"),
+    (
+        "rust/crates/lk-agents-inference/src/interruption/event.rs",
+        "lk_agents_inference::interruption",
+    ),
+    (
+        "rust/crates/lk-agents-inference/src/interruption/options.rs",
+        "lk_agents_inference::interruption",
+    ),
+    (
+        "rust/crates/lk-agents-abi/src/tokenize/language/code.rs",
+        "lk_agents_abi::tokenize::language",
+    ),
+    (
+        "rust/crates/lk-agents-abi/src/utils/connection_pool.rs",
+        "lk_agents_abi::utils::connection_pool",
+    ),
     ("rust/crates/lk-agents-voice/src/room_io/_input.rs", "lk_agents_voice::room_io::_input"),
     ("rust/crates/lk-agents-media/src/images/encode.rs", "lk_agents_media::images"),
     ("rust/crates/lk-agents-abi/src/tokenize/word.rs", "lk_agents_abi::tokenize"),
@@ -191,8 +267,14 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-worker/src/hw/cgroup.rs", "lk_agents_worker"),
     ("rust/crates/lk-agents-abi/src/llm/tool_arguments.rs", "lk_agents_abi::llm::tool_arguments"),
     ("rust/crates/lk-agents-media/src/blingfire.rs", "lk_agents_media::blingfire"),
-    ("rust/crates/lk-agents-voice/src/transcription/filters.rs", "lk_agents_voice::transcription::filters"),
-    ("rust/crates/lk-agents-voice/src/transcription/synchronizer.rs", "lk_agents_voice::transcription::synchronizer"),
+    (
+        "rust/crates/lk-agents-voice/src/transcription/filters.rs",
+        "lk_agents_voice::transcription::filters",
+    ),
+    (
+        "rust/crates/lk-agents-voice/src/transcription/synchronizer.rs",
+        "lk_agents_voice::transcription::synchronizer",
+    ),
     ("rust/crates/lk-agents-abi/src/llm/schema/defaults.rs", "lk_agents_abi::llm::schema"),
     ("rust/crates/lk-agents-abi/src/tts/emitter/mod.rs", "lk_agents_abi::tts::emitter"),
     ("rust/crates/lk-agents-media/src/images/serialize.rs", "lk_agents_media::images"),
@@ -252,7 +334,8 @@ fn run(check: bool) -> Result<usize, String> {
     }
     let mut all_aliases = Vec::new();
     for (src, _) in SOURCES {
-        all_aliases.extend(parse::aliases(&std::fs::read_to_string(root.join(src)).unwrap_or_default()));
+        all_aliases
+            .extend(parse::aliases(&std::fs::read_to_string(root.join(src)).unwrap_or_default()));
     }
     for (_, _, text) in &texts {
         all_aliases.extend(parse::aliases(text));
@@ -321,7 +404,8 @@ fn put(path: &Path, text: &str, check: bool) -> Result<usize, String> {
 fn resolve(decls: &[ir::Decl]) -> Result<(), String> {
     for d in decls {
         // Only rendered types must be declared: binding-only fields cross by their own converters.
-        let renders_types = d.targets.iter().any(|t| matches!(t.host, ir::Host::Python | ir::Host::Node));
+        let renders_types =
+            d.targets.iter().any(|t| matches!(t.host, ir::Host::Python | ir::Host::Node));
         if !renders_types {
             continue;
         }

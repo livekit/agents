@@ -17,11 +17,11 @@ use crate::generation::Instructions;
 use crate::trace::{CoreStep, RealtimeStep, Step, Trace};
 use lk_agents_abi::turn::detector::DetectorLeg;
 use lk_agents_abi::utils::frame::FrameTable;
+use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::{
     FrameId, Llm, Spawner, SpawnerExt, SpeechEvent, Stt, TimerSet, Ts, Tts, Vad, VadEvent,
 };
 use lk_agents_rtc::RoomEvent;
-use lk_agents_voice::io::{AudioInput, AudioOutput, TextOutput};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -54,7 +54,7 @@ pub struct DriverBuilder {
     pub keyterms: Option<crate::keyterm_detection::KeytermSetup>,
     pub vad: Option<Arc<dyn Vad>>,
     pub audio_in: Option<Arc<dyn AudioInput>>,
-    pub video_in: Option<Arc<dyn lk_agents_voice::io::VideoInput>>,
+    pub video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     pub recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
     pub audio_out: Option<Arc<dyn AudioOutput>>,
     pub tts_text_transforms: Vec<lk_agents_voice::transcription::text_transforms::TransformSpec>,

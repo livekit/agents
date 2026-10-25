@@ -14,8 +14,8 @@ use crate::turn::InterruptionOptions;
 use lk_agents_abi::Ts;
 use lk_agents_abi::tokenize::{WordTokenizerOptions, count_words};
 use lk_agents_abi::voice::events::AgentState;
+use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_voice::io::{AudioOutput, AudioOutputExt};
 use std::time::Duration;
 
 pub use paused_speech::PausedSpeech;

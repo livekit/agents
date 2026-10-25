@@ -23,6 +23,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use lk_agents_abi::voice::io::{AudioOutput, TextOutput};
 use lk_agents_abi::{
     AudioFrame, BoxFuture, ChatItem, ChatMessage, HostRef, ImageContent, ImageSource, Maybe,
     MediaRef, Realtime, Spawner, Ts,
@@ -58,7 +59,6 @@ use lk_agents_voice::{
     events::SessionEvent,
     filler_scheduler::FillerId,
     generation::Instructions,
-    io::{AudioOutput, TextOutput},
     keyterm_detection::{KeytermDetection, KeytermSetup},
     room_io::RoomIoEvent,
     room_io::link::RoomLinkConfig,

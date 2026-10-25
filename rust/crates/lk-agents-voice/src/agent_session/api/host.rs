@@ -23,8 +23,8 @@ use crate::generation::Instructions;
 use crate::trace::Step;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::HostWire;
+use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::{Llm, Maybe, Spawner, Stt, Tts, Vad};
-use lk_agents_voice::io::{AudioInput, AudioOutput, TextOutput};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -95,7 +95,7 @@ impl SessionApi {
         // The host's own io legs, replacing the room's (which `agent_session.py` has turned off).
         host_audio_input: Option<Arc<dyn AudioInput>>,
         host_audio_output: Option<Arc<dyn AudioOutput>>,
-        host_video_input: Option<Arc<dyn lk_agents_voice::io::VideoInput>>,
+        host_video_input: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
         // `VoiceActivityVideoSampler(speaking_fps, silent_fps)`'s two rates; `None`: every frame.
         video_sampler: Option<(f64, f64)>,
         // A custom `video_sampler` callable: the host pumps and gates; the driver reads no camera.
@@ -293,7 +293,9 @@ impl SessionApi {
                 None
             } else {
                 host_video_input.or_else(|| {
-                    room_io.video_input().map(|v| v as Arc<dyn lk_agents_voice::io::VideoInput>)
+                    room_io
+                        .video_input()
+                        .map(|v| v as Arc<dyn lk_agents_abi::voice::io::VideoInput>)
                 })
             },
             recorder: None,
@@ -514,7 +516,7 @@ impl SessionApi {
     #[host(method(send = ActivityCommand::SetVideoInput(source.map(HostVideo))))]
     pub fn set_video_input(
         &self,
-        #[host(required)] source: Option<Arc<dyn lk_agents_voice::io::VideoInput>>,
+        #[host(required)] source: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     ) -> Result<(), SessionRefused>;
 
     /// `session.output.audio = ..` after `start()`: the next speech plays into the new sink, one

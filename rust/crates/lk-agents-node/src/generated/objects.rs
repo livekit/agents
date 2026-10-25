@@ -1582,14 +1582,14 @@ impl BM25Index {
 /// its own `time.time()` stamps and float seconds.
 #[napi(js_name = "PlaybackTracker")]
 pub struct PlaybackTracker {
-    pub(crate) inner: std::sync::Arc<lk_agents_voice::io::PlaybackTracker>,
+    pub(crate) inner: std::sync::Arc<lk_agents_abi::voice::io::PlaybackTracker>,
 }
 
 #[napi]
 impl PlaybackTracker {
     #[napi(constructor)]
     pub fn new() -> Self {
-        PlaybackTracker { inner: std::sync::Arc::new(lk_agents_voice::io::PlaybackTracker::new()) }
+        PlaybackTracker { inner: std::sync::Arc::new(lk_agents_abi::voice::io::PlaybackTracker::new()) }
     }
 
     #[napi(js_name = "playbackStarted")]

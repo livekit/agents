@@ -271,10 +271,10 @@ impl Run {
 pub(super) type Stt = dyn lk_agents_abi::Stt;
 pub(super) type Llm = dyn lk_agents_abi::Llm;
 pub(super) type Tts = dyn lk_agents_abi::Tts;
-pub(super) type AudioIn = dyn lk_agents_voice::io::AudioInput;
+pub(super) type AudioIn = dyn lk_agents_abi::voice::io::AudioInput;
 pub(super) type VadLeg = dyn lk_agents_abi::Vad;
 pub(super) type EotDet = dyn lk_agents_abi::EotDetector;
-pub(super) type VideoIn = dyn lk_agents_voice::io::VideoInput;
+pub(super) type VideoIn = dyn lk_agents_abi::voice::io::VideoInput;
 
 /// `Maybe` spells "not mentioned" and "set to nothing" differently, and a leg the case did not
 /// name must be the former: `Given(None)` would tear the provider out.

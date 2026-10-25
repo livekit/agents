@@ -18,8 +18,6 @@ pub use fake::{
 };
 /// Re-exported so the 50 fps audio legs need no copy at this boundary.
 pub use lk_agents_abi::AudioFrame;
-pub use playout::PlayoutLedger;
-pub use server::SipParticipantReq;
 pub use lk_agents_abi::voice::rtc::{
     AudioStreamOptions, AudioTrackFeature, ConnectionState, DEFAULT_QUEUE_SIZE_MS,
     DisconnectReason, ParticipantIdentity, ParticipantKind, PlaybackInfo, StreamInfo,
@@ -27,6 +25,8 @@ pub use lk_agents_abi::voice::rtc::{
     TranscriptionSegment, UnknownDisconnectReason, UnknownWireValue, VIDEO_QUEUE_FRAMES,
     VideoFrameRef, frame_duration, silence_frame,
 };
+pub use playout::PlayoutLedger;
+pub use server::SipParticipantReq;
 pub use traits::{
     AudioSource, LocalParticipant, RemoteParticipant, RtcHost, RtcRoom, TextStreamWriter,
     TrackPublication,
@@ -90,5 +90,15 @@ impl lk_agents_abi::python::FromHostErr for RtcError {
 impl RtcError {
     pub fn host(message: impl Into<String>) -> Self {
         RtcError::Host(lk_agents_abi::errors::HostError::new(message))
+    }
+}
+
+/// A host failure keeps the host's exception; any other room failure is its message.
+impl From<RtcError> for lk_agents_abi::voice::io::IoError {
+    fn from(e: RtcError) -> Self {
+        match e {
+            RtcError::Host(host) => lk_agents_abi::voice::io::IoError::Host(host),
+            other => lk_agents_abi::voice::io::IoError::Rtc(other.to_string()),
+        }
     }
 }

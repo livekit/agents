@@ -11,9 +11,9 @@ use crate::io::RealtimeAudioNode;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{NextStep, StepDecision};
 use lk_agents_abi::llm::realtime::Event;
+use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, ChatItem, llm::realtime as rt};
-use lk_agents_voice::io::{AudioOutput, PlaybackTracker};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -246,7 +246,7 @@ impl AudioOutput for NodeOutput<'_> {
         self.out.sample_rate()
     }
 
-    async fn capture(&self, frame: &AudioFrame) -> lk_agents_voice::io::Result<()> {
+    async fn capture(&self, frame: &AudioFrame) -> lk_agents_abi::voice::io::Result<()> {
         self.node.push(frame).await;
         Ok(())
     }

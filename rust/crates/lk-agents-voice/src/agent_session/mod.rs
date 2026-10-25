@@ -9,8 +9,8 @@ use crate::audio::LaunchGate;
 use crate::generation::GenEvent;
 use crate::io::RealtimeAudioNode;
 use lk_agents_abi::voice::events::AgentState;
+use lk_agents_abi::voice::io::{AudioOutput, TextOutput};
 use lk_agents_abi::{Maybe, Spawner, Ts};
-use lk_agents_voice::io::{AudioOutput, TextOutput};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -352,7 +352,8 @@ pub struct SessionShared {
     /// `session.output`.
     pub output: AgentOutput,
     pub recorder: Arc<std::sync::RwLock<Option<crate::recorder_io::RecorderTap>>>,
-    pub recorder_observer: std::sync::Mutex<Option<Arc<dyn crate::io::PlaybackObserver>>>,
+    pub recorder_observer:
+        std::sync::Mutex<Option<Arc<dyn lk_agents_abi::voice::io::PlaybackObserver>>>,
     /// Published by the loop every iteration, read by `perform_audio_forwarding` before its first
     /// push.
     pub launch: LaunchGate,

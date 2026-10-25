@@ -1,15 +1,16 @@
 use crate::transcription::Heard;
 use async_trait::async_trait;
-use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::tts::markup::TranscriptMarkupStripper;
 use lk_agents_abi::tokenize::{
     TokenBuffer, TokenBufferOptions, WordTokenizerOptions, Words, split_words,
 };
-use lk_agents_abi::{AudioFrame, Clock, Monotone, Spawner, SpawnerExt, TimedString};
-use lk_agents_voice::io::{
-    AudioOutput, AudioOutputExt, AudioSinkProxy, PlaybackEvent, PlaybackFinished, PlaybackObserver,
+use lk_agents_abi::tts::markup::TranscriptMarkupStripper;
+use lk_agents_abi::voice::io::{
+    AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver,
     PlaybackTracker, Result, TextOutput,
 };
+use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
+use lk_agents_abi::{AudioFrame, Clock, Monotone, Spawner, SpawnerExt, TimedString};
+use lk_agents_voice::io::AudioSinkProxy;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
@@ -33,12 +34,20 @@ pub const SEGMENT_ACLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum PaceEvent {
     /// One text delta, raw. `start_time` is the TTS's alignment for it, when the TTS aligns.
-    Text { raw: String, start_time: Option<f64> },
+    Text {
+        raw: String,
+        start_time: Option<f64>,
+    },
     TextEnd,
-    Audio { secs: f64 },
+    Audio {
+        secs: f64,
+    },
     AudioEnd,
     Position(Duration),
-    PlaybackFinished { position: Duration, interrupted: bool },
+    PlaybackFinished {
+        position: Duration,
+        interrupted: bool,
+    },
     Close,
 }
 
@@ -46,7 +55,10 @@ pub enum PaceEvent {
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum PaceEffect {
     /// One raw token for the text output, stamped with where its audio ends.
-    Forward { word: String, end_time: f64 },
+    Forward {
+        word: String,
+        end_time: f64,
+    },
     Flush,
     /// Exactly once per segment.
     Heard(Heard),
@@ -248,7 +260,13 @@ impl Pacer {
 
     fn plan_word(&mut self, word: String, visible: String) {
         let hyphens = self.hyphens(&visible);
-        self.queue.push_back(Planned { word, visible, hyphens, offset: self.offset, base: self.base });
+        self.queue.push_back(Planned {
+            word,
+            visible,
+            hyphens,
+            offset: self.offset,
+            base: self.base,
+        });
         self.offset += hyphens;
         self.planned_hyphens += hyphens;
     }

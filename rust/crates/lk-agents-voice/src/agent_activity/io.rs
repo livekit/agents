@@ -9,8 +9,8 @@ use crate::audio::{
 };
 use crate::room_io::{InputProviders, Opened, StreamOpened};
 use crate::trace::{CoreStep, InputKind, InputStep, OutputKind, Step, TurnStep};
+use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{ChatMessage, Maybe, Role, Ts};
-use lk_agents_voice::io::AudioInput;
 use std::sync::Arc;
 
 impl Driver {

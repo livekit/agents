@@ -9,8 +9,8 @@ use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use crate::workflows::{TaskHandle, TaskId};
 use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{ChatContext, Maybe};
-use lk_agents_voice::io::AudioInput;
 use std::sync::Arc;
 
 /// Enqueueing a command does not mean the operation was accepted or completed.
@@ -484,7 +484,7 @@ pub enum RecorderCommand {
 
 pub struct HostRecorder(pub Arc<dyn lk_agents_media::recorder::AudioRecorder>);
 
-pub struct HostVideo(pub Arc<dyn lk_agents_voice::io::VideoInput>);
+pub struct HostVideo(pub Arc<dyn lk_agents_abi::voice::io::VideoInput>);
 
 /// Video input is handled at the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -495,9 +495,9 @@ pub enum IoKind {
     Transcription,
 }
 
-pub struct HostAudioOut(pub Arc<dyn lk_agents_voice::io::AudioOutput>);
+pub struct HostAudioOut(pub Arc<dyn lk_agents_abi::voice::io::AudioOutput>);
 
-pub struct HostTextOut(pub Arc<dyn lk_agents_voice::io::TextOutput>);
+pub struct HostTextOut(pub Arc<dyn lk_agents_abi::voice::io::TextOutput>);
 
 /// Scheduling pauses are the driver's own, never a command.
 #[derive(Debug, lk_agents_abi::Vocabulary)]

@@ -4,12 +4,12 @@ use crate::agent_session::effects::Out;
 use crate::agent_session::{DriverError, Timebase, Tx};
 use crate::trace::{ChannelEndCause, InputStep};
 use lk_agents_abi::voice::events::AgentState;
+use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{
     AudioByteStream, AudioFrame, Closed, Spawner, SpawnerExt, StreamSink, StreamSource,
 };
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use lk_agents_rtc::silence_frame;
-use lk_agents_voice::io::AudioInput;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -738,7 +738,7 @@ pub(super) struct VideoForwarderParts {
 }
 
 impl VideoForwarderParts {
-    pub(super) async fn pump(self, input: Arc<dyn lk_agents_voice::io::VideoInput>) {
+    pub(super) async fn pump(self, input: Arc<dyn lk_agents_abi::voice::io::VideoInput>) {
         let mut p = self;
         let cause = loop {
             let frame = tokio::select! {

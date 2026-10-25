@@ -1,11 +1,11 @@
-use crate::io::AudioInput;
-#[cfg(feature = "python")]
-use crate::io::VideoInput;
 use crate::room_io::_pre_connect_audio::PreConnectAudioHandler;
 use crate::room_io::decide_track;
 use crate::room_io::types::{AUDIO_INPUT_SOURCES, AudioInputConfig};
 use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
+use lk_agents_abi::voice::io::AudioInput;
+#[cfg(feature = "python")]
+use lk_agents_abi::voice::io::VideoInput;
 use lk_agents_abi::{AudioFrame, BoundedLossy, LossyTx, Pushed, Spawner, SpawnerExt, Ts};
 use lk_agents_media::{AudioFormat, FrameResampler, Quality};
 use lk_agents_rtc::{
@@ -33,8 +33,8 @@ pub struct ParticipantVideoInput {
 #[lk_agents_abi::host(object(name = "RoomVideoInput", cell = "arc", as_dyn(VideoInput = as_video_input)))]
 impl ParticipantVideoInput {
     /// The leg itself where a session takes an `Arc<dyn VideoInput>`, never proxied back.
-    pub fn as_video_input(self: &Arc<Self>) -> Arc<dyn crate::io::VideoInput> {
-        Arc::clone(self) as Arc<dyn crate::io::VideoInput>
+    pub fn as_video_input(self: &Arc<Self>) -> Arc<dyn lk_agents_abi::voice::io::VideoInput> {
+        Arc::clone(self) as Arc<dyn lk_agents_abi::voice::io::VideoInput>
     }
 
     pub fn new(room: Arc<dyn RtcRoom>, spawner: Arc<dyn Spawner>) -> Arc<Self> {
@@ -133,7 +133,7 @@ impl ParticipantVideoInput {
 
 /// The room's camera as the driver's video source (`ActivityCommand::SetVideoInput`, the pump).
 #[async_trait::async_trait]
-impl crate::io::VideoInput for ParticipantVideoInput {
+impl lk_agents_abi::voice::io::VideoInput for ParticipantVideoInput {
     fn label(&self) -> &str {
         "RoomIO"
     }

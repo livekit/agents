@@ -23,7 +23,9 @@
 
 use std::sync::Arc;
 
-use napi::bindgen_prelude::{FromNapiValue, JsValue, JsValuesTupleIntoVec, Promise, ToNapiValue, Unknown};
+use napi::bindgen_prelude::{
+    FromNapiValue, JsValue, JsValuesTupleIntoVec, Promise, ToNapiValue, Unknown,
+};
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Env, Status, sys};
 
@@ -87,14 +89,23 @@ impl NodeBridge {
     /// Fire and forget, in FIFO order behind everything already queued on this object. `Ok` means
     /// handed over, not accepted -- `call_soon_threadsafe`'s contract.
     pub fn soon(&self, name: &'static str, args: Vec<JsArg>) -> napi::Result<()> {
-        match self.dispatch.call(JsCall { op: "soon", name, args }, ThreadsafeFunctionCallMode::NonBlocking) {
+        match self
+            .dispatch
+            .call(JsCall { op: "soon", name, args }, ThreadsafeFunctionCallMode::NonBlocking)
+        {
             Status::Ok => Ok(()),
-            status => Err(napi::Error::new(status, format!("`{name}` could not be handed to the host"))),
+            status => {
+                Err(napi::Error::new(status, format!("`{name}` could not be handed to the host")))
+            }
         }
     }
 
     /// Call `name`, awaiting the Promise it returns (if it returns one), and read the result as `R`.
-    pub async fn call<R: FromNapiValue + Send + 'static>(&self, name: &'static str, args: Vec<JsArg>) -> napi::Result<R> {
+    pub async fn call<R: FromNapiValue + Send + 'static>(
+        &self,
+        name: &'static str,
+        args: Vec<JsArg>,
+    ) -> napi::Result<R> {
         self.ask("call", name, args).await
     }
 
@@ -103,7 +114,12 @@ impl NodeBridge {
         self.ask("anext", "", Vec::new()).await
     }
 
-    async fn ask<R: FromNapiValue + Send + 'static>(&self, op: &'static str, name: &'static str, args: Vec<JsArg>) -> napi::Result<R> {
+    async fn ask<R: FromNapiValue + Send + 'static>(
+        &self,
+        op: &'static str,
+        name: &'static str,
+        args: Vec<JsArg>,
+    ) -> napi::Result<R> {
         let (tx, rx) = tokio::sync::oneshot::channel::<Reply<R>>();
         let status = self.dispatch.call_with_return_value(
             JsCall { op, name, args },
@@ -130,12 +146,17 @@ impl NodeBridge {
             },
         );
         if status != Status::Ok {
-            return Err(napi::Error::new(status, format!("`{name}` could not be handed to the host")));
+            return Err(napi::Error::new(
+                status,
+                format!("`{name}` could not be handed to the host"),
+            ));
         }
         match rx.await {
             Ok(Reply::Done(r)) => r,
             Ok(Reply::Later(p)) => p.await,
-            Err(_) => Err(napi::Error::new(Status::Closing, "the host environment stopped responding")),
+            Err(_) => {
+                Err(napi::Error::new(Status::Closing, "the host environment stopped responding"))
+            }
         }
     }
 }
@@ -156,15 +177,20 @@ impl FromJsErr for lk_agents_abi::errors::HostError {
     }
 }
 
-impl FromJsErr for lk_agents_voice::io::IoError {
+impl FromJsErr for lk_agents_abi::voice::io::IoError {
     fn from_js(err: napi::Error) -> Self {
-        lk_agents_voice::io::IoError::Host(host_error(&err))
+        lk_agents_abi::voice::io::IoError::Host(host_error(&err))
     }
 }
 
 impl FromJsErr for lk_agents_abi::errors::ProviderError {
     fn from_js(err: napi::Error) -> Self {
-        lk_agents_abi::errors::ProviderError::Host { error: host_error(&err), api_kind: None, retryable: false, status_code: None }
+        lk_agents_abi::errors::ProviderError::Host {
+            error: host_error(&err),
+            api_kind: None,
+            retryable: false,
+            status_code: None,
+        }
     }
 }
 

@@ -12,8 +12,8 @@ use crate::trace::{CoreStep, InputStep, InterruptStep, RealtimeStep, Step, Trace
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::voice::events::UserState;
+use lk_agents_abi::voice::io::AudioOutputExt;
 use lk_agents_abi::{FrameId, Ts};
-use lk_agents_voice::io::AudioOutputExt;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

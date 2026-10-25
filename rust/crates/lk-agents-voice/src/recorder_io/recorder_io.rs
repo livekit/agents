@@ -1,8 +1,8 @@
 use crate::agent_session::Driver;
 use crate::agent_session::effects::{Out, TurnTimer};
-use crate::io::{AudioOutput, PlaybackEvent, PlaybackObserver};
 use crate::room_io::RECORDER_FLUSH;
 use crate::trace::PlayoutStep;
+use lk_agents_abi::voice::io::{AudioOutput, PlaybackEvent, PlaybackObserver};
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_media::recorder::AudioRecorder;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ impl RecorderTap {
     }
 }
 
-/// Forwards one [`crate::io::PlaybackTracker`]'s events to a recorder. Via the tracker because it
+/// Forwards one [`lk_agents_abi::voice::io::PlaybackTracker`]'s events to a recorder. Via the tracker because it
 /// suppresses over-reports, which would close a segment still being filled.
 pub struct RecorderPlaybackObserver(pub RecorderTap);
 
@@ -100,7 +100,7 @@ impl Driver {
             prev.tracker().unobserve(&old);
         }
         if let Some(out) = self.shared.output.audio() {
-            let observer: Arc<dyn crate::io::PlaybackObserver> =
+            let observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
                 Arc::new(crate::recorder_io::RecorderPlaybackObserver(tap));
             out.tracker().observe(observer.clone());
             *slot = Some(observer);

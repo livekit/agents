@@ -1,10 +1,11 @@
 //! `voice/room_io/_output.py`: `_ParticipantAudioOutput`, the agent's audio on its published track,
 //! and its host object; the transcription output is [`transcription`].
 
-use crate::io::{AudioOutput, IoError, PlaybackFinished, PlaybackTracker, Result};
 use crate::room_io::types::AudioOutputConfig;
 use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
+use lk_agents_abi::voice::io::Result;
+use lk_agents_abi::voice::io::{AudioOutput, IoError, PlaybackFinished, PlaybackTracker};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Monotone, Spawner, SpawnerExt, Ts};
 use lk_agents_rtc::{AudioSource, PlaybackInfo, RtcRoom, TrackSource, frame_duration};
@@ -640,12 +641,6 @@ impl AudioOutput for ParticipantAudioOutput {
     }
 }
 
-impl From<lk_agents_media::ResampleError> for IoError {
-    fn from(e: lk_agents_media::ResampleError) -> Self {
-        IoError::Resample(e.to_string())
-    }
-}
-
 // The session's own leg (`of`, one `Arc`, so assigning it back swaps nothing), or a standalone leg
 // over a host room built by the constructor.
 
@@ -655,7 +650,7 @@ pub struct RoomAudioLeg {
     /// The concrete leg when the constructor built it: `start`/`aclose` are its.
     owned: Option<Arc<ParticipantAudioOutput>>,
     anchor: lk_agents_abi::WallAnchor,
-    listener: Mutex<Option<Arc<dyn crate::io::PlaybackObserver>>>,
+    listener: Mutex<Option<Arc<dyn lk_agents_abi::voice::io::PlaybackObserver>>>,
 }
 
 impl RoomAudioLeg {
@@ -721,18 +716,18 @@ impl RoomAudioLeg {
 
     #[host(getter)]
     pub fn can_pause(&self) -> bool {
-        crate::io::AudioOutputExt::can_pause(&*self.inner)
+        lk_agents_abi::voice::io::AudioOutputExt::can_pause(&*self.inner)
     }
 
     /// One frame, downstream. Awaited: the leg blocks on the track's own backpressure.
     #[host(method)]
     pub async fn capture_frame(&self, frame: AudioFrame) -> std::result::Result<(), IoError> {
-        crate::io::AudioOutputExt::capture_frame(&*self.inner, &frame).await
+        lk_agents_abi::voice::io::AudioOutputExt::capture_frame(&*self.inner, &frame).await
     }
 
     #[host(method)]
     pub fn flush(&self) {
-        crate::io::AudioOutputExt::flush(&*self.inner);
+        lk_agents_abi::voice::io::AudioOutputExt::flush(&*self.inner);
     }
 
     #[host(method)]
@@ -753,9 +748,9 @@ impl RoomAudioLeg {
     /// Hand the leg's playback events to `listener` (the wrapper re-emits them as its own). One
     /// subscription: a second replaces the first.
     #[host(method)]
-    pub fn subscribe(&self, listener: Arc<dyn crate::io::PlaybackListener>) {
-        let observer: Arc<dyn crate::io::PlaybackObserver> =
-            Arc::new(crate::io::ListenerObserver { listener, anchor: self.anchor });
+    pub fn subscribe(&self, listener: Arc<dyn lk_agents_abi::voice::io::PlaybackListener>) {
+        let observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
+            Arc::new(lk_agents_abi::voice::io::ListenerObserver { listener, anchor: self.anchor });
         let mut slot = self.listener.lock().unwrap();
         if let Some(old) = slot.take() {
             self.inner.tracker().unobserve(&old);

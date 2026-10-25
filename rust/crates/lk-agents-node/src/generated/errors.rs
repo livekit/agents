@@ -98,8 +98,8 @@ pub fn ready_error_to_node(e: lk_agents_voice::remote_session::driver::ReadyErro
     JsError::new(kind, e.to_string())
 }
 
-/// `IoError` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/io.rs`).
-pub fn io_error_to_node(e: lk_agents_voice::io::IoError) -> JsError {
+/// `IoError` as a host error (`#[host(error)]` in `rust/crates/lk-agents-abi/src/voice/io.rs`).
+pub fn io_error_to_node(e: lk_agents_abi::voice::io::IoError) -> JsError {
     JsError::new("RuntimeError", e.to_string())
 }
 
