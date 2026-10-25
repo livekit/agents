@@ -18,6 +18,52 @@ from livekit import rtc
 from .test_plugin_rime_realtime import peer_model
 
 
+@pytest.mark.parametrize("clear", [False, True])
+async def test_audio_before_connection_is_buffered_and_can_be_cleared(clear):
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+
+        def frame(sample):
+            return rtc.AudioFrame(
+                data=sample.to_bytes(2, "little") * 640,
+                sample_rate=16000,
+                num_channels=1,
+                samples_per_channel=640,
+            )
+
+        first, fresh = frame(1), frame(2)
+        session.push_audio(first)
+        if clear:
+            session.clear_audio()
+            session.push_audio(fresh)
+        assert session._sdk is None
+        assert session._failure is None
+        event = await peer.next("input_audio_buffer.append")
+        expected = fresh if clear else first
+        assert base64.b64decode(event["audio"]) == bytes(expected.data)
+        await session._update_session(instructions="test")
+        reply = session.generate_reply()
+        response_id = await peer.start(await peer.next())
+        await peer.end(response_id)
+        assert (await asyncio.wait_for(reply, 3)).response_id == response_id
+        assert peer.requests.empty()
+
+
+async def test_audio_overflow_during_handshake_closes_the_late_connection():
+    async with peer_model() as (peer, model, _):
+        peer.update_release.clear()
+        session = model.session()
+        await asyncio.wait_for(peer.update_started.wait(), 3)
+        frame = rtc.AudioFrame.create(16000, 1, 640)
+        for _ in range(101):
+            session.push_audio(frame)
+        assert isinstance(session._failure, asyncio.QueueFull)
+        peer.update_release.set()
+        await asyncio.wait_for(peer.socket.wait_closed(), 3)
+        assert session._shutdown_task is not None
+        await asyncio.wait_for(session.aclose(), 3)
+
+
 @pytest.mark.parametrize("sample_rate,channels", [(44100, 1), (44100, 2), (44100, 4), (48000, 4)])
 async def test_audio_converts_formats_outside_sdk_support(sample_rate, channels):
     async with peer_model() as (peer, model, _):

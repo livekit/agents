@@ -243,3 +243,62 @@ async def test_cancelled_history_edit_commits_after_acknowledgment(monkeypatch) 
         finally:
             release.set()
             await asyncio.gather(edit, return_exceptions=True)
+
+
+@pytest.mark.parametrize("existing_edit", ["unchanged", "replace", "remove"])
+async def test_history_edit_merges_concurrent_existing_transcript(
+    monkeypatch, existing_edit: str
+) -> None:
+    model = FakeRealtimeModel()
+    history = llm.ChatContext(
+        [llm.ChatMessage(id="speech", role="user", content=["Original transcript"])]
+    )
+    async with AgentSession(llm=model) as session:
+        agent = Agent(instructions="Help", chat_ctx=history)
+        await session.start(agent)
+        target = agent.chat_ctx.copy()
+        if existing_edit == "replace":
+            target._upsert_item(
+                llm.ChatMessage(id="speech", role="user", content=["Explicit replacement"])
+            )
+        elif existing_edit == "remove":
+            target.items[:] = [item for item in target.items if item.id != "speech"]
+        target.add_message(role="system", content="Other edit")
+        started = asyncio.Event()
+        release = asyncio.Event()
+        update = model.active_session.update_chat_ctx
+
+        async def delayed(context: llm.ChatContext) -> None:
+            started.set()
+            await release.wait()
+            await update(context)
+
+        monkeypatch.setattr(model.active_session, "update_chat_ctx", delayed)
+        edit = asyncio.create_task(agent.update_chat_ctx(target))
+        try:
+            await asyncio.wait_for(started.wait(), 3)
+            model.active_session.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id="speech", transcript="Completed transcript", is_final=True
+                ),
+            )
+            release.set()
+            await edit
+            item = agent.chat_ctx.get_by_id("speech")
+            if existing_edit == "remove":
+                assert item is None
+            else:
+                assert isinstance(item, llm.ChatMessage)
+                assert item.text_content == (
+                    "Completed transcript"
+                    if existing_edit == "unchanged"
+                    else "Explicit replacement"
+                )
+            assert any(
+                item.type == "message" and item.text_content == "Other edit"
+                for item in agent.chat_ctx.items
+            )
+        finally:
+            release.set()
+            await asyncio.gather(edit, return_exceptions=True)

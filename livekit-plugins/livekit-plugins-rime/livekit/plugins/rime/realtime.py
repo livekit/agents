@@ -265,7 +265,7 @@ class RealtimeSession(llm.RealtimeSession):
         if self._failure:
             raise self._failure
         if self._sdk is None or self._closed:
-            raise self._unsupported("Prism session is not open")
+            raise llm.RealtimeError("Prism session is not open")
         return self._sdk
 
     async def _connect(self) -> None:
@@ -283,6 +283,11 @@ class RealtimeSession(llm.RealtimeSession):
                 response_metadata=self._model._response_metadata,
             )
             self._sdk = await self._connection.__aenter__()
+            if self._failure is not None:
+                # A startup failure can occur while the handshake is pending,
+                # before _fatal has an SDK connection to close.
+                self._shutdown_task = asyncio.create_task(self._shutdown())
+                return
             self._history = PrismHistory(self._sdk, self._chat, self._calls)
             self._record_settings()
             self._spawn(self._read_events())
@@ -453,7 +458,8 @@ class RealtimeSession(llm.RealtimeSession):
             raise asyncio.CancelledError
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        self._require()
+        if self._failure is not None or self._closed:
+            self._require()
         try:
             source_format = (frame.sample_rate, frame.num_channels)
             if source_format != self._audio_format:
@@ -509,10 +515,16 @@ class RealtimeSession(llm.RealtimeSession):
         raise self._unsupported("Prism commits speech through server turn detection")
 
     def clear_audio(self) -> None:
+        if self._failure is not None or self._closed:
+            self._require()
         self._audio_resampler = None
         self._audio_format = None
         while not self._audio.empty():
             self._audio.get_nowait()
+        # Before connection, audio exists only in the local queue. The sender
+        # starts after the SDK handshake, so no server clear is needed yet.
+        if self._sdk is None:
+            return
         # The SDK holds its audio lock across sends and clears, so an in-flight
         # chunk finishes before this clear reaches the server.
         self._spawn(self._require().clear_audio())

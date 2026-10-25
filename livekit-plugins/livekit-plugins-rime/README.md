@@ -217,6 +217,9 @@ instructions, history, and tools are separate updates. There is no atomic handof
 Use `await model.update_session(voice="...")` for the voice or
 `await model.update_session(response_metadata={"step": "2"})` for response labels.
 `model.session_info` reports acknowledged settings and the provider request ID.
+When one call changes both settings and response labels, it sends two separate
+requests. If the label update fails, the earlier accepted settings remain applied
+and are reflected in `model.session_info`.
 
 Tool fillers are optional. Pass
 `tool_fillers={"lookup": PrismFiller(type="text", text="Checking your order.")}`,

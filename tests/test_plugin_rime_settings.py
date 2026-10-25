@@ -103,6 +103,24 @@ async def test_cancelled_update_waits_for_acknowledged_settings():
         assert peer.settings["tools"][0]["function"]["name"] == "lookup"
 
 
+async def test_metadata_refusal_preserves_acknowledged_voice():
+    async with peer_model(response_metadata={"step": "1"}) as (peer, model, _):
+        session = model.session()
+        await session.update_instructions("Help")
+
+        def refuse_next_update(info):
+            if info.voice == "new-voice":
+                peer.refusals["session.update"] = ("invalid_session", "event")
+
+        model.on("session_updated", refuse_next_update)
+        with pytest.raises(PrismError, match="invalid_session"):
+            await model.update_session(voice="new-voice", response_metadata={"step": "2"})
+
+        assert model.session_info.voice == model._voice == peer.settings["voice"] == "new-voice"
+        assert model.session_info.response_metadata == model._response_metadata == {"step": "1"}
+        assert session._failure is None
+
+
 async def test_agent_handoff_reuses_conversation_and_updates_tools():
     async with peer_model() as (peer, model, _):
         async with AgentSession(llm=model) as session:

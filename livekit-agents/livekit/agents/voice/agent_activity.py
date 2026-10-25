@@ -811,17 +811,28 @@ class AgentActivity(RecognitionHooks):
             async def apply() -> None:
                 assert self._rt_session is not None
                 async with self._rt_chat_ctx_lock:
-                    previous_ids = {item.id for item in self._agent._chat_ctx.items}
+                    previous = {item.id: item for item in self._agent._chat_ctx.items}
+                    unchanged = {
+                        item.id for item in chat_ctx.items if item == previous.get(item.id)
+                    }
                     await self._rt_session.update_chat_ctx(chat_ctx)
-                    # Commit only accepted edits. Keep items that arrived while the
-                    # provider acknowledged the update.
+                    # Commit only accepted edits. Keep new items and updates to
+                    # untouched items received while awaiting the provider. Explicit
+                    # edits and removals still take precedence over concurrent events.
                     target_ids = {item.id for item in chat_ctx.items}
+                    current = {item.id: item for item in self._agent._chat_ctx.items}
                     arrived = [
                         item
-                        for item in self._agent._chat_ctx.items
-                        if item.id not in previous_ids and item.id not in target_ids
+                        for item in current.values()
+                        if item.id not in previous and item.id not in target_ids
                     ]
-                    self._agent._chat_ctx = llm.ChatContext([*chat_ctx.items, *arrived])
+                    self._agent._chat_ctx = llm.ChatContext(
+                        [
+                            current.get(item.id, item) if item.id in unchanged else item
+                            for item in chat_ctx.items
+                        ]
+                        + arrived
+                    )
 
             task = asyncio.create_task(apply())
             cancelled = False
