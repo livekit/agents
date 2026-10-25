@@ -2,8 +2,11 @@
 //! swap, in the order the switches were asked for, with the user turn held across it.
 
 use crate::agent::TurnEdit;
+use crate::agent_activity::drain::DrainEvent;
+use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
 use crate::agent_session::effects::Out;
+use crate::agent_session::signals::{Cx, PauseResult, Signal};
 use crate::agent_session::{
     AgentUpdate, Answer, Driver, HandoffRefused, HookCall, HookId, HookKind, NewActivity,
     PreviousActivity,
@@ -17,22 +20,16 @@ use std::collections::VecDeque;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HandoffId(pub u64);
 
-/// The switches asked for and the one in progress, the user turn held while one runs, and the
-/// `on_exit` each agent owes (`_on_exit_task`).
+/// The switches asked for and the one in progress, and the user turn held while one runs.
 #[derive(Default)]
 pub(crate) struct Handoff {
     next: u64,
     in_progress: Option<InProgress>,
     /// The order switches were asked for, which is the order they land in (each `update_agent`
     /// chains behind the one before).
-    pub(crate) queue: VecDeque<Queued>,
+    queue: VecDeque<Queued>,
     /// A user turn decided while a switch runs, delivered to the arriving agent once.
     pub(crate) held_user_turn: Option<HeldUserTurn>,
-    /// The driving agent's `on_exit`, created once by whichever of `drain()`, a handoff or the
-    /// close gets there first.
-    pub(crate) exit: OnExitState,
-    /// The exits of agents paused under an inline task, innermost last.
-    paused_exits: Vec<OnExitState>,
 }
 
 struct InProgress {
@@ -42,14 +39,14 @@ struct InProgress {
 }
 
 enum Phase {
-    /// The leaving agent may still speak its goodbye (`None`: it owes no `on_exit`).
-    Exiting { hook: Option<HookId> },
-    /// `PauseScheduling { cause: Handoff }` in effect; `settled` answers when every speech not
-    /// blocked on an inline task has finished, or closes when the pause was refused.
-    Draining { settled: tokio::sync::oneshot::Receiver<()> },
+    /// The leaving agent may still speak its goodbye.
+    Exiting { hook: HookId },
+    /// `PauseScheduling { cause: Handoff }` asked: the swap lands once every speech not blocked
+    /// on an inline task has finished.
+    Draining,
 }
 
-pub(crate) enum Queued {
+enum Queued {
     /// Waiting for the switch in progress.
     Ready { id: HandoffId, update: Box<AgentUpdate> },
     /// A tool's handoff holds its place while the host describes the agent, so a host
@@ -64,54 +61,84 @@ pub(crate) struct HeldUserTurn {
     pub(crate) edits: Option<Vec<TurnEdit>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum OnExitState {
-    #[default]
-    Running,
-    Exiting(HookId),
-    Exited,
-}
-
-impl OnExitState {
-    /// The `on_exit` running now.
-    pub(crate) fn exiting(self) -> Option<HookId> {
-        match self {
-            OnExitState::Exiting(hook) => Some(hook),
-            OnExitState::Running | OnExitState::Exited => None,
-        }
-    }
-}
-
-/// The `on_exit` an agent owes when it is left: issued now, already running, or none (it ran).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Exit {
-    Issue(HookId),
-    Wait(HookId),
-    Done,
-}
-
-impl Exit {
-    pub(crate) fn hook(self) -> Option<HookId> {
-        match self {
-            Exit::Issue(hook) | Exit::Wait(hook) => Some(hook),
-            Exit::Done => None,
-        }
-    }
-}
-
-/// Where a switch's drain is.
-pub(crate) enum Poll {
-    Waiting,
-    /// The swap is due now.
-    Settled,
-    /// The pause was refused: the switch, taken.
-    Refused(HandoffId, Box<AgentUpdate>),
+pub(crate) enum HandoffEvent {
+    /// `update_agent()`: by the host, an inline task, or a tool whose agent was described.
+    Asked(Box<AgentUpdate>),
+    /// A tool's handoff takes its place in the order while the host describes the agent.
+    Describing(HookId),
+    Described(HookId, Box<AgentUpdate>),
+    DescribeDropped(HookId),
+    OnExitEnded(HookId),
+    Paused(PauseResult),
+    /// The swap landed, or a describe gave up its place: the next queued switch begins.
+    Next,
+    /// The close: the switch in progress and every queued one refused, and a held turn dropped,
+    /// since no agent arrives.
+    Closing,
 }
 
 impl Handoff {
-    pub(crate) fn mint(&mut self) -> HandoffId {
-        self.next += 1;
-        HandoffId(self.next)
+    pub(crate) fn handle(&mut self, ev: HandoffEvent, mut cx: Cx<'_>, out: &mut Out) {
+        match ev {
+            HandoffEvent::Asked(update) => self.asked(update, &mut cx, out),
+            HandoffEvent::Describing(hook) => self.queue.push_back(Queued::Describing(hook)),
+            HandoffEvent::Described(hook, update) => {
+                let Some(place) = self.place_of(hook) else {
+                    // No place held (the close emptied the queue): asked for now.
+                    return self.asked(update, &mut cx, out);
+                };
+                let id = self.mint();
+                if cx.closing && update.next == NewActivity::Start {
+                    self.queue.remove(place);
+                    return refuse(Some(id), update, HandoffRefused::Closing, out);
+                }
+                out.signal(Signal::RunOwn(Owned::Handoff(id)));
+                self.queue[place] = Queued::Ready { id, update };
+                self.start_next(&mut cx, out);
+            }
+            // The asking agent takes the held turn, and what waited behind goes ahead.
+            HandoffEvent::DescribeDropped(hook) => {
+                if let Some(place) = self.place_of(hook) {
+                    self.queue.remove(place);
+                }
+                out.signal(Signal::DeliverHeldTurn);
+                out.signal(Signal::NextHandoff);
+            }
+            HandoffEvent::OnExitEnded(hook) => {
+                if let Some(InProgress { phase: phase @ Phase::Exiting { .. }, .. }) =
+                    &mut self.in_progress
+                    && matches!(phase, Phase::Exiting { hook: h } if *h == hook)
+                {
+                    *phase = Phase::Draining;
+                    out.signal(Signal::PauseScheduling(PauseCause::Handoff));
+                }
+            }
+            HandoffEvent::Paused(result) => {
+                if !matches!(self.in_progress, Some(InProgress { phase: Phase::Draining, .. })) {
+                    return;
+                }
+                if result == PauseResult::Settled {
+                    return out.signal(Signal::Swap);
+                }
+                // Refused: the agent that blocked the held turn takes it, so it is kept exactly
+                // once, and a drain that joined the switch runs on it. Under a close it drops.
+                let Some((id, update)) = self.take_in_progress() else { return };
+                if cx.closing {
+                    return refuse(Some(id), update, HandoffRefused::Closing, out);
+                }
+                refuse(Some(id), update, HandoffRefused::DrainRefused, out);
+                out.signal(Signal::DeliverHeldTurn);
+                out.signal(Signal::AgentStays);
+            }
+            HandoffEvent::Next => self.start_next(&mut cx, out),
+            HandoffEvent::Closing => {
+                if let Some((id, update)) = self.take_in_progress() {
+                    refuse(Some(id), update, HandoffRefused::Closing, out);
+                }
+                self.refuse_queued(out);
+                self.held_user_turn = None;
+            }
+        }
     }
 
     pub(crate) fn switching(&self) -> bool {
@@ -125,69 +152,86 @@ impl Handoff {
             .map(|h| h.update.agent.as_str())
     }
 
+    /// The switch in progress.
+    pub(crate) fn in_progress(&self) -> Option<&AgentUpdate> {
+        self.in_progress.as_ref().map(|h| &*h.update)
+    }
+
     pub(crate) fn take_in_progress(&mut self) -> Option<(HandoffId, Box<AgentUpdate>)> {
         self.in_progress.take().map(|InProgress { id, update, phase: _ }| (id, update))
     }
 
-    /// The switch begins, waiting on the leaving agent's `on_exit` `hook`.
-    fn start(&mut self, id: HandoffId, update: Box<AgentUpdate>, hook: Option<HookId>) {
-        self.in_progress = Some(InProgress { id, update, phase: Phase::Exiting { hook } });
+    /// Every queued switch refused as closing (a held describe just goes).
+    pub(crate) fn refuse_queued(&mut self, out: &mut Out) {
+        while let Some(queued) = self.queue.pop_front() {
+            if let Queued::Ready { id, update } = queued {
+                refuse(Some(id), update, HandoffRefused::Closing, out);
+            }
+        }
     }
 
-    /// The next switch to begin: none while one is in progress or a describe holds the head.
-    fn next_ready(&mut self) -> Option<(HandoffId, Box<AgentUpdate>)> {
-        if self.in_progress.is_some() {
-            return None;
-        }
-        let Some(Queued::Ready { .. }) = self.queue.front() else { return None };
-        match self.queue.pop_front() {
-            Some(Queued::Ready { id, update }) => Some((id, update)),
-            Some(Queued::Describing(_)) | None => None,
-        }
+    fn mint(&mut self) -> HandoffId {
+        self.next += 1;
+        HandoffId(self.next)
     }
 
     fn place_of(&self, hook: HookId) -> Option<usize> {
         self.queue.iter().position(|q| matches!(q, Queued::Describing(h) if *h == hook))
     }
 
-    /// Has the switch's drain settled? A refused pause takes the switch with it.
-    fn poll(&mut self) -> Poll {
-        let Some(InProgress { phase: Phase::Draining { settled }, .. }) = &mut self.in_progress
-        else {
-            return Poll::Waiting;
+    /// Refused when closing (a resume is not), queued behind a switch in progress or a pending
+    /// describe, begun otherwise.
+    fn asked(&mut self, update: Box<AgentUpdate>, cx: &mut Cx<'_>, out: &mut Out) {
+        let id = self.mint();
+        // A task's resume completes the current transition before a queued host switch: queued
+        // behind it, the task's old parent would overwrite the host's agent.
+        let resuming_task = update.task.is_some() && update.next == NewActivity::Resume;
+        let queued = self.switching() || (!self.queue.is_empty() && !resuming_task);
+        if cx.closing && update.next == NewActivity::Start {
+            return refuse(Some(id), update, HandoffRefused::Closing, out);
+        }
+        // An open run owns every switch asked for while it is open.
+        out.signal(Signal::RunOwn(Owned::Handoff(id)));
+        if queued {
+            self.queue.push_back(Queued::Ready { id, update });
+            return;
+        }
+        self.start(id, update, cx, out);
+    }
+
+    /// The next switch, unless one is in progress or a describe holds the head.
+    fn start_next(&mut self, cx: &mut Cx<'_>, out: &mut Out) {
+        if self.switching() || !matches!(self.queue.front(), Some(Queued::Ready { .. })) {
+            return;
+        }
+        if let Some(Queued::Ready { id, update }) = self.queue.pop_front() {
+            self.start(id, update, cx, out);
+        }
+    }
+
+    /// The first phase: `on_exit` on the agent being left (`Close`), or straight to the drain
+    /// (`Pause`: an awaited `AgentTask`'s parent runs no `on_exit`).
+    fn start(&mut self, id: HandoffId, update: Box<AgentUpdate>, cx: &mut Cx<'_>, out: &mut Out) {
+        // The parent is captured now that the entry starts (it may have changed while queued).
+        out.signal(Signal::HandoffStarted);
+        let exit = match update.previous {
+            PreviousActivity::Pause => Exit::Done,
+            PreviousActivity::Close => cx.leave.claim(),
         };
-        match settled.try_recv() {
-            Ok(()) => Poll::Settled,
-            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => Poll::Waiting,
-            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => match self.take_in_progress()
-            {
-                Some((id, update)) => Poll::Refused(id, update),
-                None => Poll::Waiting,
-            },
+        let phase = match exit.hook() {
+            Some(hook) => Phase::Exiting { hook },
+            None => Phase::Draining,
+        };
+        self.in_progress = Some(InProgress { id, update, phase });
+        if exit == Exit::Done {
+            out.signal(Signal::PauseScheduling(PauseCause::Handoff));
         }
     }
+}
 
-    /// The `on_exit` `hook` ended: every agent's exit it was is over.
-    pub(crate) fn exit_ended(&mut self, hook: HookId) {
-        for exit in std::iter::once(&mut self.exit).chain(self.paused_exits.iter_mut()) {
-            if *exit == OnExitState::Exiting(hook) {
-                *exit = OnExitState::Exited;
-            }
-        }
-    }
-
-    /// The swap: a paused agent keeps its exit beneath the arriving one and gets it back on
-    /// resume.
-    fn swapped(&mut self, previous: PreviousActivity, next: NewActivity) {
-        match (previous, next) {
-            (PreviousActivity::Pause, NewActivity::Start) => {
-                let paused = std::mem::take(&mut self.exit);
-                self.paused_exits.push(paused);
-            }
-            (PreviousActivity::Close, NewActivity::Start) => self.exit = OnExitState::Running,
-            (_, NewActivity::Resume) => self.exit = self.paused_exits.pop().unwrap_or_default(),
-        }
-    }
+/// `id` is the handoff's when it was begun (`None` for a command refused before it was).
+fn refuse(id: Option<HandoffId>, update: Box<AgentUpdate>, cause: HandoffRefused, out: &mut Out) {
+    out.signal(Signal::RefuseHandoff { id, update, cause });
 }
 
 impl Driver {
@@ -202,72 +246,11 @@ impl Driver {
         let id = self.activity.hooks.mint();
         let wait = self.hook_wait();
         if self.issue_hook(now, HookCall::DescribeAgent { id, agent, speech }, Some(wait), out) {
-            self.activity.handoff.queue.push_back(Queued::Describing(id));
+            self.handoff_step(HandoffEvent::Describing(id), out);
         }
     }
 
-    /// Refused when closing (a resume is not), queued behind a switch in progress or a pending
-    /// describe, begun otherwise.
-    pub(crate) fn begin_handoff(&mut self, now: Ts, update: Box<AgentUpdate>, out: &mut Out) {
-        let handoff = &mut self.activity.handoff;
-        let id = handoff.mint();
-        // A task's resume completes the current transition before a queued host switch: queued
-        // behind it, the task's old parent would overwrite the host's agent.
-        let resuming_task = update.task.is_some() && update.next == NewActivity::Resume;
-        let queued = handoff.switching() || (!handoff.queue.is_empty() && !resuming_task);
-        if self.session.closing.is_some() && update.next == NewActivity::Start {
-            self.refuse_handoff(Some(id), update, HandoffRefused::Closing, out);
-            return;
-        }
-        // An open run owns every switch asked for while it is open.
-        self.run_own(Owned::Handoff(id), out);
-        if queued {
-            self.activity.handoff.queue.push_back(Queued::Ready { id, update });
-            return;
-        }
-        self.start_handoff(now, id, update, out);
-    }
-
-    pub(super) fn describe_answered(
-        &mut self,
-        now: Ts,
-        hook: HookId,
-        update: Box<AgentUpdate>,
-        out: &mut Out,
-    ) {
-        let Some(place) = self.activity.handoff.place_of(hook) else {
-            // No place held (the close emptied the queue): asked for now, and refused as closing.
-            self.begin_handoff(now, update, out);
-            return;
-        };
-        let id = self.activity.handoff.mint();
-        if self.session.closing.is_some() && update.next == NewActivity::Start {
-            self.activity.handoff.queue.remove(place);
-            self.refuse_handoff(Some(id), update, HandoffRefused::Closing, out);
-            return;
-        }
-        self.run_own(Owned::Handoff(id), out);
-        self.activity.handoff.queue[place] = Queued::Ready { id, update };
-        self.pump_queue(now, out);
-    }
-
-    /// A describe that will not be answered gives up its place: the asking agent takes the parked
-    /// turn, and what waited behind goes ahead.
-    pub(super) fn drop_describe(&mut self, now: Ts, hook: HookId, out: &mut Out) {
-        if let Some(place) = self.activity.handoff.place_of(hook) {
-            self.activity.handoff.queue.remove(place);
-        }
-        self.deliver_parked_turn(now, out);
-        self.pump_queue(now, out);
-    }
-
-    fn pump_queue(&mut self, now: Ts, out: &mut Out) {
-        if let Some((id, update)) = self.activity.handoff.next_ready() {
-            self.start_handoff(now, id, update, out);
-        }
-    }
-
-    /// `id` is the handoff's when it was begun (`None` for a command refused before it was).
+    /// The caller answered and the run lets go; an inline task's entry or exit tells the task.
     pub(crate) fn refuse_handoff(
         &mut self,
         id: Option<HandoffId>,
@@ -278,131 +261,22 @@ impl Driver {
         if let Some(id) = id {
             self.run_release(Owned::Handoff(id), out);
         }
-        self.answer(update.call.take(), Answer::Handoff(Err(cause)));
-        // An inline task's entry or exit: the task is told.
+        out.answer(update.call.take(), Answer::Handoff(Err(cause)));
         if let Some(task) = update.task {
             let now = self.step.now;
             self.on_task_handoff_refused(now, task, update.next, out);
         }
     }
 
-    /// Every queued switch refused as closing (a held describe just goes).
-    pub(crate) fn refuse_queued_handoffs(&mut self, out: &mut Out) {
-        while let Some(queued) = self.activity.handoff.queue.pop_front() {
-            if let Queued::Ready { id, update } = queued {
-                self.refuse_handoff(Some(id), update, HandoffRefused::Closing, out);
-            }
-        }
-    }
-
-    /// The close: the switch in progress and every queued one refused, and a turn parked for the
-    /// arriving agent dropped, since none arrives.
-    pub(crate) fn refuse_handoffs(&mut self, out: &mut Out) {
-        if let Some((id, update)) = self.activity.handoff.take_in_progress() {
-            self.refuse_handoff(Some(id), update, HandoffRefused::Closing, out);
-        }
-        self.refuse_queued_handoffs(out);
-        self.activity.handoff.held_user_turn = None;
-    }
-
-    /// The first phase: `on_exit` on the agent being left (`Close`), or straight to the drain
-    /// (`Pause`: an awaited `AgentTask`'s parent runs no `on_exit`).
-    fn start_handoff(&mut self, now: Ts, id: HandoffId, update: Box<AgentUpdate>, out: &mut Out) {
-        // The parent is captured now that the entry starts (it may have changed while queued).
-        if let Some(task) = update.task.clone()
-            && update.next == NewActivity::Start
-        {
-            self.capture_task_parent(task, &update);
-        }
-        let exit = match update.previous {
-            PreviousActivity::Pause => Exit::Done,
-            PreviousActivity::Close => self.frame_exit(),
-        };
-        self.activity.handoff.start(id, update, exit.hook());
-        if self.issue_exit(now, exit, out) {
-            self.drain_handoff(now, out);
-        }
-    }
-
-    /// The `on_exit` the driving agent owes. It runs once: minted to issue while the agent runs,
-    /// waited for while it exits, none once it ran.
-    pub(crate) fn frame_exit(&mut self) -> Exit {
-        match self.activity.handoff.exit {
-            OnExitState::Running => Exit::Issue(self.activity.hooks.mint()),
-            OnExitState::Exiting(hook) if self.activity.hooks.is_pending(hook) => Exit::Wait(hook),
-            OnExitState::Exiting(_) | OnExitState::Exited => Exit::Done,
-        }
-    }
-
-    /// `true` when the exit is over: none owed, or issued with no host.
-    pub(crate) fn issue_exit(&mut self, now: Ts, exit: Exit, out: &mut Out) -> bool {
-        match exit {
-            Exit::Done => true,
-            Exit::Wait(_) => false,
-            Exit::Issue(hook) => self.issue_on_exit(now, hook, out),
-        }
-    }
-
-    /// `true` when there is no host and it is over.
-    pub(crate) fn issue_on_exit(&mut self, now: Ts, hook: HookId, out: &mut Out) -> bool {
-        let call = HookCall::OnExit { id: hook, agent: self.activity.agent.clone() };
-        let wait = self.hook_wait();
-        !self.issue_hook(now, call, Some(wait), out)
-    }
-
-    /// The `on_exit` `hook` ended: the switch waiting on it drains.
-    pub(crate) fn handoff_exit_done(&mut self, now: Ts, hook: HookId, out: &mut Out) {
-        if let Some(InProgress { phase: Phase::Exiting { hook: Some(h) }, .. }) =
-            &self.activity.handoff.in_progress
-            && *h == hook
-        {
-            self.drain_handoff(now, out);
-        }
-    }
-
-    /// The second phase: the drain, through the scheduling task; the swap lands in the settling
-    /// cycle.
-    fn drain_handoff(&mut self, now: Ts, out: &mut Out) {
-        let Some(in_progress) = &mut self.activity.handoff.in_progress else { return };
-        let (done, settled) = tokio::sync::oneshot::channel();
-        in_progress.phase = Phase::Draining { settled };
-        self.pause_scheduling(now, PauseCause::Handoff, done, out);
-    }
-
-    /// `true` means the swap is due now. A refused pause ends the handoff as refused, and the
-    /// agent that blocked the parked turn takes it in that cycle, so it is kept exactly once.
-    /// Under a close it drops.
-    pub(crate) fn handoff_ready(&mut self, out: &mut Out) -> bool {
-        match self.activity.handoff.poll() {
-            Poll::Settled => true,
-            Poll::Waiting => false,
-            Poll::Refused(id, update) => {
-                let cause = if self.session.closing.is_some() {
-                    HandoffRefused::Closing
-                } else {
-                    HandoffRefused::DrainRefused
-                };
-                self.refuse_handoff(Some(id), update, cause, out);
-                if cause == HandoffRefused::DrainRefused {
-                    let now = self.step.now;
-                    self.deliver_parked_turn(now, out);
-                    // The agent stays: a drain that joined the switch runs on it.
-                    self.rebind_joined_drain(now, out);
-                }
-                false
-            }
-        }
-    }
-
     /// The swap: the closing re-check, the agent installed with its two records, the caller
-    /// answered, `on_enter` issued, the parked turn delivered, the next queued switch begun.
+    /// answered, `on_enter` issued, the held turn delivered, the next queued switch begun.
     pub(crate) fn perform_handoff(&mut self, now: Ts, out: &mut Out) {
         let Some((id, mut update)) = self.activity.handoff.take_in_progress() else {
             return;
         };
         if self.session.closing.is_some() && update.next == NewActivity::Start {
             self.refuse_handoff(Some(id), update, HandoffRefused::Closing, out);
-            self.refuse_queued_handoffs(out);
+            self.activity.handoff.refuse_queued(out);
             return;
         }
         let call = update.call.take();
@@ -412,15 +286,15 @@ impl Driver {
         // A drain bound to an agent an inline task pauses runs that agent's `on_exit` first; one
         // on an agent left for good is settled once it is no longer driving.
         if previous == PreviousActivity::Pause {
-            self.settle_drain_at_swap(now, previous, out);
+            self.drain_step(DrainEvent::Leaving(previous), out);
         }
         self.update_agent(now, *update, out);
         if previous == PreviousActivity::Close {
-            self.settle_drain_at_swap(now, previous, out);
+            self.drain_step(DrainEvent::Leaving(previous), out);
         }
-        self.activity.handoff.swapped(previous, next);
+        self.activity.on_exit.swapped(previous, next);
         self.activity.hooks.stop_describing();
-        self.answer(call, Answer::Handoff(Ok(())));
+        out.answer(call, Answer::Handoff(Ok(())));
         // The task's step precedes its `on_enter`, as `AgentUpdated` does.
         if let Some(task) = task {
             match next {
@@ -433,10 +307,10 @@ impl Driver {
         }
         // The run's `on_enter`, owned above, keeps the run open.
         self.run_release(Owned::Handoff(id), out);
-        self.deliver_parked_turn(now, out);
+        out.signal(Signal::DeliverHeldTurn);
         // Unless this swap began a switch itself (a task whose handle settled before its agent
         // landed hands back at once): starting the queued one over it would lose the exit.
-        self.pump_queue(now, out);
+        out.signal(Signal::NextHandoff);
     }
 
     /// The transition window: from a tool's handoff request (`_new_turns_blocked` is set in
@@ -446,7 +320,7 @@ impl Driver {
         self.activity.handoff.switching() || self.activity.hooks.describing()
     }
 
-    fn deliver_parked_turn(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn deliver_held_turn(&mut self, now: Ts, out: &mut Out) {
         if self.in_window() {
             return;
         }
@@ -462,12 +336,11 @@ impl Driver {
     pub(crate) fn abandon_handoffs(&mut self, out: &mut Out) {
         // A drain still waiting on its `on_exit` is refused as closing; one already pausing is
         // answered by the pause's refusal.
-        if self.activity.drain.exiting() {
-            self.finish_drain(Some(crate::agent_session::DrainRefused::Closing), out);
-        }
+        self.drain_step(DrainEvent::Closing, out);
         // A DTMF collection ends with the session: its answer, if still owed, is `Stopped`.
         self.dtmf_stop(out);
-        self.refuse_handoffs(out);
+        self.handoff_step(HandoffEvent::Closing, out);
+        self.activity.on_exit.abandon();
         self.activity.tools.abandon_replies();
         // All abandoned before any is let go: the run reads what is still pending.
         let pending = self.activity.hooks.take_all();

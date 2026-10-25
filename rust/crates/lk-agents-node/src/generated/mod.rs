@@ -207,9 +207,9 @@
 //! - `TextInput (record TextInputEvent)`: field `participant`: `ParticipantIdentity` has no Node shape (not a declared record, enum or JSON)
 //! - `GetDOBResult (record GetDOBResult)`: field `date_of_birth`: `Date` has no Node shape (not a declared record, enum or JSON)
 
-pub mod errors;
+pub mod records;
 pub mod functions;
 pub mod objects;
+pub mod errors;
 pub mod proxies;
-pub mod records;
 pub mod streams;

@@ -3,7 +3,8 @@
 
 use crate::agent_activity::false_interruption::{AudioInterruptTrigger, TurnSettled};
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::{Driver, HostEvent};
+use crate::agent_session::signals::Signal;
+use crate::agent_session::{Answer, Driver, HostEvent, RequestId};
 use crate::audio::AudioChannel;
 use crate::audio_recognition::{EndOfTurnInfo, InterruptionSignal, TurnDetectionMode};
 use crate::events::SessionEvent;
@@ -12,6 +13,7 @@ use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::voice::events::UserState;
 use lk_agents_abi::{FrameId, Ts};
 use lk_agents_voice::io::AudioOutputExt;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 pub struct Out {
@@ -20,6 +22,8 @@ pub struct Out {
     todo: Vec<Effect>,
     /// What a machine writes into. Drained into `todo` by [`Out::absorb`].
     machine: Effects,
+    signals: VecDeque<Signal>,
+    answers: Vec<(RequestId, Answer)>,
     trace: Arc<Mutex<Trace>>,
 }
 
@@ -33,7 +37,29 @@ impl std::fmt::Debug for Out {
 impl Out {
     /// `frame` is the driver's `current` at the moment the event was dequeued.
     pub fn new(frame: FrameId, trace: Arc<Mutex<Trace>>) -> Self {
-        Out { frame, todo: Vec::new(), machine: Effects::new(), trace }
+        Out {
+            frame,
+            todo: Vec::new(),
+            machine: Effects::new(),
+            signals: VecDeque::new(),
+            answers: Vec::new(),
+            trace,
+        }
+    }
+
+    pub(crate) fn signal(&mut self, signal: Signal) {
+        self.signals.push_back(signal);
+    }
+
+    /// A host call answered, sent when the cycle is performed.
+    pub(crate) fn answer(&mut self, call: Option<RequestId>, answer: Answer) {
+        if let Some(call) = call {
+            self.answers.push((call, answer));
+        }
+    }
+
+    pub(crate) fn take_answers(&mut self) -> Vec<(RequestId, Answer)> {
+        std::mem::take(&mut self.answers)
     }
 
     pub fn frame(&self) -> FrameId {
@@ -402,19 +428,27 @@ impl Driver {
         let _scope = frames.enter(out.frame());
         let now = self.step.now;
 
-        // A performed decision may ask for more, so drain until nothing is left, in order.
+        // A performed decision or a signal may ask for more, so drain until nothing is left, in
+        // order: the effects raised, then the next signal.
         loop {
-            let effects = out.take();
-            if effects.is_empty() {
-                // The current speech is read last, so `FloorChanged` is the cycle's last emit;
-                // announcing it may itself be an effect to perform, hence the `continue`.
-                if self.publish_current_speech(&mut out) {
-                    continue;
-                }
-                break;
+            for (call, answer) in out.take_answers() {
+                self.answer(Some(call), answer);
             }
-            for effect in effects {
-                self.perform(now, effect, &mut out);
+            let effects = out.take();
+            if !effects.is_empty() {
+                for effect in effects {
+                    self.perform(now, effect, &mut out);
+                }
+                continue;
+            }
+            if let Some(signal) = out.signals.pop_front() {
+                self.dispatch(signal, &mut out);
+                continue;
+            }
+            // The current speech is read last, so `FloorChanged` is the cycle's last emit;
+            // announcing it may itself be an effect to perform, hence the `continue`.
+            if !self.publish_current_speech(&mut out) {
+                break;
             }
         }
     }

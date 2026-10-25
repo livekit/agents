@@ -24,6 +24,7 @@ pub mod driver;
 pub mod effects;
 pub mod host_events;
 pub(crate) mod idle;
+pub(crate) mod signals;
 pub mod time;
 
 // The paths the activity files, the fuzz harness and the napi binding name the session's items by.

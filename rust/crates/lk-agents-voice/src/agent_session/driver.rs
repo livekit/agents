@@ -367,7 +367,10 @@ impl Driver {
                 self.refuse_command(command, &mut out);
             }
         }
-        drop(out);
+        // Only the refusals are sent: nothing else takes effect once the loop stopped.
+        for (call, answer) in out.take_answers() {
+            self.answer(Some(call), answer);
+        }
         self.run_close_at_end();
         let mut out = self.out();
         if let Some((reason, error)) =
@@ -458,21 +461,12 @@ impl Driver {
         // Scheduled in the same cycle as the wake that changed it.
         self.pump_schedule(now, &mut out);
         self.execute(out);
-        // The handoff's drain settled: the swap lands now, at the same instant. A loop: the swap
-        // may begin another frame change whose drain settles at once.
-        let mut out = self.out();
-        while self.handoff_ready(&mut out) {
-            self.perform_handoff(now, &mut out);
-            self.pump_schedule(now, &mut out);
-        }
         // The run's settle check, after the wake's own effects; a re-prompt is scheduled in
         // this cycle.
+        let mut out = self.out();
         if self.run_check(now, &mut out) {
             self.pump_schedule(now, &mut out);
         }
-        self.drain_ready(&mut out);
-        // The close's drain settled in this wake: the hard edge lands now, in its own cycle.
-        self.close_ready(now, &mut out);
         self.settle_waiters(now, &mut out);
         self.execute(out);
         // The close's next phases, each in its own cycle (the socket's `aclose` awaited here).

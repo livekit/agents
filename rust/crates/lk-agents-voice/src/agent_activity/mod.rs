@@ -7,6 +7,7 @@ pub mod false_interruption;
 pub mod handoff;
 pub mod hooks;
 pub mod io;
+pub(crate) mod on_exit;
 pub mod options;
 pub mod realtime;
 pub mod recognition;
@@ -73,8 +74,10 @@ pub(crate) struct AgentActivity {
     pub(crate) hook_bound: Option<Duration>,
     /// The developer's callbacks in flight.
     pub(crate) hooks: crate::agent_activity::hooks::Hooks,
-    /// `update_agent()`: the switches asked for and in progress, and each agent's `on_exit`.
+    /// `update_agent()`: the switches asked for and in progress.
     pub(crate) handoff: crate::agent_activity::handoff::Handoff,
+    /// The `on_exit` each agent owes.
+    pub(crate) on_exit: crate::agent_activity::on_exit::OnExit,
     /// The host's `drain()`.
     pub(crate) drain: crate::agent_activity::drain::Drain,
     /// `GetDtmfTask` while it runs.
@@ -155,6 +158,7 @@ impl AgentActivity {
             hook_bound,
             hooks: Default::default(),
             handoff: Default::default(),
+            on_exit: Default::default(),
             drain: Default::default(),
             dtmf: None,
             tasks: Default::default(),
@@ -376,7 +380,9 @@ impl Driver {
     pub(crate) fn on_frame(&mut self, now: Ts, cmd: ActivityCommand, out: &mut Out) {
         match cmd {
             // A sequence: `on_exit`, the drain, then the swap.
-            ActivityCommand::Update(update) => self.begin_handoff(now, update, out),
+            ActivityCommand::Update(update) => {
+                self.handoff_step(crate::agent_activity::handoff::HandoffEvent::Asked(update), out)
+            }
             ActivityCommand::UpdateInstructions(next) => {
                 self.activity.instructions = next.clone();
                 // "Record the configuration change" (`AgentActivity.update_instructions`), on the
@@ -448,7 +454,7 @@ impl Driver {
             ActivityCommand::SetIoEnabled { leg, enabled } => {
                 self.set_io_enabled(now, leg, enabled, out)
             }
-            ActivityCommand::Drain { call } => self.drain(now, call.into_iter().collect(), out),
+            ActivityCommand::Drain { call } => self.drain(call.into_iter().collect(), out),
             ActivityCommand::SetAudioOutput(output) => {
                 let audio = output.is_some();
                 // Dropped here: a segment in flight holds its own `Arc`; an unstarted speech reads

@@ -2,6 +2,7 @@
 //! block.
 
 use crate::agent_activity::false_interruption::InterruptOutcome;
+use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Out;
 use crate::agent_session::{
@@ -429,12 +430,16 @@ impl Driver {
         frame.task = Some(handle.id());
         let merge = ContextMerge::for_task(preserve_function_call_history);
         self.activity.tasks.enter(handle, speech, agent, merge);
-        self.begin_handoff(now, Box::new(frame), out);
+        self.handoff_step(HandoffEvent::Asked(Box::new(frame)), out);
     }
 
-    /// The entry handoff is starting: capture the parent now, since the entry may have queued
-    /// behind a host handoff.
-    pub(crate) fn capture_task_parent(&mut self, task: TaskId, entering: &AgentUpdate) {
+    /// A task's entry handoff is starting: capture the parent now, since the entry may have
+    /// queued behind a host handoff.
+    pub(crate) fn capture_task_parent(&mut self) {
+        let Some(entering) = self.activity.handoff.in_progress() else { return };
+        let (Some(task), NewActivity::Start) = (entering.task.clone(), entering.next) else {
+            return;
+        };
         let restore = AgentUpdate {
             agent: self.activity.agent.clone(),
             instructions: self.activity.instructions.clone(),
@@ -598,7 +603,7 @@ impl Driver {
             return self.leave_parent_slot(now, out);
         };
         debug_assert_eq!(restore.task, Some(task));
-        self.begin_handoff(now, Box::new(restore), out);
+        self.handoff_step(HandoffEvent::Asked(Box::new(restore)), out);
     }
 
     /// An orphaned task's awaiting speech, cut whole (its outputs still commit).

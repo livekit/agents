@@ -9,7 +9,8 @@ use lk_agents_abi::voice::events::CloseReason;
 use super::{HookId, RequestId};
 
 use crate::agent_activity::false_interruption::InterruptOutcome;
-use crate::agent_activity::handoff::Exit;
+use crate::agent_activity::handoff::HandoffEvent;
+use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
 use crate::agent_session::effects::{Effect, Out, TimerOp, TurnTimer};
 use crate::agent_session::{
@@ -44,7 +45,6 @@ pub(crate) struct Closing {
     pub(crate) reason: CloseReason,
     pub(crate) error: Option<ProviderError>,
     pub(crate) phase: ClosePhase,
-    settled: Option<tokio::sync::oneshot::Receiver<()>>,
     /// Host `drain()`s answered by the close's own drain (the reference's drain waits on the
     /// activity lock `_aclose_impl` holds). Answered `Ok` once the edge has settled.
     drains: Vec<RequestId>,
@@ -110,7 +110,7 @@ impl Closing {
         drains: Vec<RequestId>,
     ) -> Self {
         let phase = ClosePhase::Unwinding { deadline: Some(deadline) };
-        Closing { reason, error, phase, settled: None, drains, drains_answered: false }
+        Closing { reason, error, phase, drains, drains_answered: false }
     }
 
     /// A second request joins the close: a drain asked for again restarts its bound.
@@ -118,23 +118,6 @@ impl Closing {
         if let (true, ClosePhase::Draining { deadline: bound }) = (drain, &mut self.phase) {
             *bound = deadline;
         }
-    }
-
-    /// The close's drain runs until `deadline`, settled when `settled` answers.
-    pub(crate) fn drain(&mut self, deadline: Ts, settled: tokio::sync::oneshot::Receiver<()>) {
-        self.phase = ClosePhase::Draining { deadline };
-        self.settled = Some(settled);
-    }
-
-    /// The scheduling task answered or refused the close's pause: `true` when that ends the drain
-    /// now.
-    pub(crate) fn drain_settled(&mut self) -> bool {
-        let Some(settled) = &mut self.settled else { return false };
-        if let Err(tokio::sync::oneshot::error::TryRecvError::Empty) = settled.try_recv() {
-            return false;
-        }
-        self.settled = None;
-        matches!(self.phase, ClosePhase::Draining { .. })
     }
 
     /// Whether a caller of `drain()` can still wait on the close's own drain.
@@ -197,42 +180,40 @@ impl Driver {
         }
     }
 
-    /// Pending handoffs are refused; the frame's `on_exit` runs once: lent by a handoff that
+    /// Pending handoffs are refused; the agent's `on_exit` runs once: lent by a handoff that
     /// already issued it, skipped if it ran, otherwise issued here.
     fn plan_exit(&mut self, out: &mut Out) -> Exit {
-        self.refuse_handoffs(out);
-        self.frame_exit()
+        self.handoff_step(HandoffEvent::Closing, out);
+        let exit = self.leave().claim();
+        self.issue_claimed_exits(out);
+        exit
     }
 
-    /// The remaining frame's `on_exit`, then the drain.
+    /// The remaining agent's `on_exit`, then the drain.
     fn close_on_exit(&mut self, now: Ts, exit: Exit, out: &mut Out) {
         let Some(hook) = exit.hook() else { return self.close_drain(now, out) };
         if let Some(closing) = &mut self.session.closing {
             closing.phase = ClosePhase::Exiting { hook };
         }
-        if matches!(exit, Exit::Issue(_)) && self.issue_on_exit(now, hook, out) {
-            self.close_exit_done(now, hook, out);
-        }
     }
 
-    /// The `on_exit` hook `id` ended (answered, timed out, or abandoned).
+    /// The `on_exit` hook `id` ended (answered, timed out, or with nobody to ask).
     pub(crate) fn close_exit_done(&mut self, now: Ts, id: HookId, out: &mut Out) {
         if self.session.close_phase() == Some(ClosePhase::Exiting { hook: id }) {
             self.close_drain(now, out);
         }
     }
 
-    /// `PauseScheduling { cause: Close }`, bounded by [`DRAIN_BOUND`].
+    /// `PauseScheduling { cause: Close }`, bounded by [`DRAIN_BOUND`]; settled or refused, the hard
+    /// edge follows.
     fn close_drain(&mut self, now: Ts, out: &mut Out) {
         let deadline = now.saturating_add(DRAIN_BOUND);
-        // No reply plans a follow-up once the close began.
-        let (done, settled) = tokio::sync::oneshot::channel();
         if let Some(closing) = &mut self.session.closing {
-            closing.drain(deadline, settled);
+            closing.phase = ClosePhase::Draining { deadline };
         }
+        // No reply plans a follow-up once the close began.
         self.shared.draining.send_replace(true);
-        self.pause_scheduling(now, PauseCause::Close, done, out);
-        self.close_ready(now, out);
+        self.pause_scheduling(now, PauseCause::Close, out);
     }
 
     fn force_cut_open(&mut self, now: Ts, out: &mut Out) {
@@ -257,15 +238,16 @@ impl Driver {
         if waiters.is_empty() {
             return;
         }
-        let exit_hook = self.activity.handoff.exit.exiting();
+        let exit_hook = self.activity.on_exit.exiting();
         if let Some(closing) = self.session.closing.as_mut().filter(|c| c.drains_open()) {
             out.trace(HandoffStep::DrainStarted { exit_hook });
             closing.join_drains(waiters);
         } else {
             // Answered already, or no close is running (the loop is ending).
             let refused = self.session.closing.is_none().then_some(DrainRefused::Closing);
-            for done in waiters {
-                self.answer_drain(Some(done), refused, out);
+            for call in waiters {
+                out.trace(HandoffStep::Drained { refused });
+                out.answer(Some(call), Answer::Drain(refused.map_or(Ok(()), Err)));
             }
         }
     }
@@ -278,14 +260,6 @@ impl Driver {
         out.trace(HandoffStep::Drained { refused: None });
         for call in waiters {
             self.answer(Some(call), Answer::Drain(Ok(())));
-        }
-    }
-
-    /// Read after every cycle: the scheduling task answering or refusing the close's pause ends the
-    /// drain.
-    pub(crate) fn close_ready(&mut self, now: Ts, out: &mut Out) {
-        if self.session.closing.as_mut().is_some_and(Closing::drain_settled) {
-            self.close_edge(now, out);
         }
     }
 
@@ -546,7 +520,7 @@ impl Driver {
     /// is open interrupted; after it only the close's own steps happen. The close moves on once
     /// every cut speech has reported `SpeechDone`, as the reference awaits `current_speech`, or
     /// [`EDGE_BOUND`] releases them.
-    fn close_edge(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn close_edge(&mut self, now: Ts, out: &mut Out) {
         if let Some(closing) = &mut self.session.closing {
             closing.phase = ClosePhase::Edge { until: now.saturating_add(EDGE_BOUND) };
         }

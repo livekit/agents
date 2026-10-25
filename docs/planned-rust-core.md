@@ -318,7 +318,10 @@ project after step 5.
 
 Each step rewrites its area as small machines, each owning its state and
 answering `handle(event) -> Effects`; the driver only routes events and
-concatenates effects, with one effect type. Python is the behaviour reference
+concatenates effects, with one effect type. Machines tell each other what
+happened through one `Signal` enum, dispatched in the order raised until none is
+left; the fuzzer reorders events, never signals. Handoff, drain and `on_exit`
+are the first; the other areas follow one per commit. Python is the behaviour reference
 through the fuzz rules, not the shape of the code; comments keep a Python name
 only where the behaviour would surprise without it.
 

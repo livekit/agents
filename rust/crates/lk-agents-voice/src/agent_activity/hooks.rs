@@ -3,8 +3,9 @@
 //! `function_tools_executed` handlers), and how long each is waited on.
 
 use crate::agent::TurnEdit;
-use crate::agent_activity::handoff::OnExitState;
+use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_session::effects::Out;
+use crate::agent_session::signals::Signal;
 use crate::agent_session::{Driver, HookCall, HookId, HookKind, HookOutcome, HostEvent};
 use crate::audio_recognition::PendingTurn;
 use crate::run_result::Owned;
@@ -103,12 +104,6 @@ impl Driver {
         out.trace(HandoffStep::HookIssued { hook: id, kind, agent, speech, turn, at_tail });
         let hosted =
             self.activity.hook_bound.is_some() && self.events.send(HostEvent::Hook(call)).is_ok();
-        // Every `OnExit` is the driving agent's: its exit now runs while a host answers it, else
-        // it is over.
-        if kind == HookKind::OnExit {
-            self.activity.handoff.exit =
-                if hosted { OnExitState::Exiting(id) } else { OnExitState::Exited };
-        }
         if !hosted {
             out.trace(HandoffStep::HookFinished { hook: id, kind, how: HookEnd::NoHost });
             return false;
@@ -226,23 +221,18 @@ impl Driver {
             out.trace(CoreStep::PortFailure("hook outcome does not match the call it answers"));
         }
         match kind {
-            // In this order: the handoff waiting on it drains, a host drain pauses, the close
-            // moves on.
-            HookKind::OnExit => {
-                self.handoff_exit_done(now, id, out);
-                self.activity.handoff.exit_ended(id);
-                self.drain_exit_done(now, id, out);
-                self.close_exit_done(now, id, out);
-            }
+            HookKind::OnExit => out.signal(Signal::OnExitEnded(id)),
             HookKind::OnEnter => {}
             HookKind::DescribeAgent => match outcome {
-                Described(update) => self.describe_answered(now, id, update, out),
+                Described(update) => self.handoff_step(HandoffEvent::Described(id, update), out),
                 Failed
                 | Returned
                 | Turn(_)
                 | Rendered(_)
                 | Filler { .. }
-                | FunctionToolsExecuted { .. } => self.drop_describe(now, id, out),
+                | FunctionToolsExecuted { .. } => {
+                    self.handoff_step(HandoffEvent::DescribeDropped(id), out)
+                }
             },
             // "error occurred during on_user_turn_completed": return, no reply.
             HookKind::OnUserTurnCompleted => {

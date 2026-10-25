@@ -3,6 +3,7 @@
 
 use crate::agent_session::Driver;
 use crate::agent_session::effects::Out;
+use crate::agent_session::signals::{PauseResult, Signal};
 use crate::events::SessionEvent;
 use crate::speech_handle::{INTERRUPTION_TIMEOUT, SpeechHandle};
 use crate::trace::{CloseAct, CloseStep, InterruptCause, InterruptStep, SpeechStep, TurnStep};
@@ -38,7 +39,8 @@ mod speech_scheduler {
     #[derive(Debug)]
     struct Pause {
         cause: PauseCause,
-        acks: Vec<tokio::sync::oneshot::Sender<()>>,
+        /// Every cause asked for it, answered together.
+        callers: Vec<PauseCause>,
     }
 
     /// Where `_scheduling_task`'s loop is: waiting for `_speech_q`, sleeping out
@@ -422,28 +424,26 @@ mod speech_scheduler {
 
         /// `_pause_scheduling_task`: one more promise; the close's drain outranks the pause it
         /// joins.
-        pub(super) fn pause(&mut self, cause: PauseCause, done: tokio::sync::oneshot::Sender<()>) {
+        pub(super) fn pause(&mut self, cause: PauseCause) {
             match &mut self.paused {
                 Some(pause) => {
-                    pause.acks.push(done);
+                    pause.callers.push(cause);
                     if cause == PauseCause::Close {
                         pause.cause = PauseCause::Close;
                     }
                 }
-                None => self.paused = Some(Pause { cause, acks: vec![done] }),
+                None => self.paused = Some(Pause { cause, callers: vec![cause] }),
             }
         }
 
         /// The pause a frame change or a host drain caused, lifted: its callers.
-        pub(super) fn resume_activity_pause(
-            &mut self,
-        ) -> Option<Vec<tokio::sync::oneshot::Sender<()>>> {
+        pub(super) fn resume_activity_pause(&mut self) -> Option<Vec<PauseCause>> {
             let caused = |p: &mut Pause| matches!(p.cause, PauseCause::Handoff | PauseCause::Drain);
-            self.paused.take_if(caused).map(|p| p.acks)
+            self.paused.take_if(caused).map(|p| p.callers)
         }
 
-        pub(super) fn take_pause(&mut self) -> Option<Vec<tokio::sync::oneshot::Sender<()>>> {
-            self.paused.take().map(|p| p.acks)
+        pub(super) fn take_pause(&mut self) -> Option<Vec<PauseCause>> {
+            self.paused.take().map(|p| p.callers)
         }
 
         /// The close: every watchdog disarmed (the speeches whose went), and an owed or held
@@ -506,14 +506,14 @@ mod speech_scheduler {
         pub(super) fn settle_pause(
             &mut self,
             blocked: &crate::agent_activity::tasks::DrainBlocked,
-        ) -> Vec<tokio::sync::oneshot::Sender<()>> {
+        ) -> Vec<PauseCause> {
             let Some(pause) = &mut self.paused else { return Vec::new() };
             let outstanding = (self.speeches.iter())
                 .any(|(id, e)| !(blocked.contains(*id) && e.status == Status::Working));
             if outstanding {
                 return Vec::new();
             }
-            std::mem::take(&mut pause.acks)
+            std::mem::take(&mut pause.callers)
         }
 
         /// `_cancel_preemptive_generation`: the preflight goes; the live preemptive generation, if
@@ -957,25 +957,22 @@ impl Driver {
             self.set_agent_state(now, AgentState::Listening, out);
         }
         self.settle_scheduling_pause(out);
+        if self.activity.speech_scheduler.is_empty() {
+            out.signal(Signal::Quiet);
+        }
     }
 
     /// `_pause_scheduling_task`: new speech is refused (tool replies excepted) and queued speech
-    /// still plays; `done` is answered once nothing outstanding remains, the speeches blocked on
+    /// still plays; its caller is answered once nothing outstanding remains, the speeches blocked on
     /// an inline task excepted. Journalled with the speeches it waits for. Two pauses before the
     /// drain completes are two promises; a closing session refuses (drops) it.
-    pub(crate) fn pause_scheduling(
-        &mut self,
-        now: Ts,
-        cause: PauseCause,
-        done: tokio::sync::oneshot::Sender<()>,
-        out: &mut Out,
-    ) {
+    pub(crate) fn pause_scheduling(&mut self, now: Ts, cause: PauseCause, out: &mut Out) {
         let except = self.activity.drain_blocked.speeches().collect();
         out.trace(SpeechStep::SchedulingPaused { except });
         if self.session.closing_past_edge() {
-            return refuse_pause(vec![done], CLOSING, out);
+            return refuse_pause(vec![cause], CLOSING, out);
         }
-        self.activity.speech_scheduler.pause(cause, done);
+        self.activity.speech_scheduler.pause(cause);
         self.activity.speech_scheduler.park_if_blocked(&self.activity.drain_blocked);
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
         self.settle_scheduling_pause(out);
@@ -985,8 +982,8 @@ impl Driver {
     /// discarded, and only the pause the frame change (or the host's drain) caused is lifted.
     pub(crate) fn resume_scheduling_task(&mut self, now: Ts, out: &mut Out) {
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
-        if let Some(acks) = self.activity.speech_scheduler.resume_activity_pause() {
-            refuse_pause(acks, HANDOFF, out);
+        if let Some(callers) = self.activity.speech_scheduler.resume_activity_pause() {
+            refuse_pause(callers, HANDOFF, out);
         }
     }
 
@@ -1002,8 +999,8 @@ impl Driver {
             out.trace(SpeechStep::FloorReleased);
         }
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
-        if let Some(acks) = self.activity.speech_scheduler.take_pause() {
-            refuse_pause(acks, CLOSING, out);
+        if let Some(callers) = self.activity.speech_scheduler.take_pause() {
+            refuse_pause(callers, CLOSING, out);
         }
     }
 
@@ -1023,9 +1020,8 @@ impl Driver {
     /// Answer every pending pause once nothing it waits on is outstanding (released, tools
     /// included). A blocked speech is excepted once `Working`: the pause came from inside its tool.
     pub(super) fn settle_scheduling_pause(&mut self, out: &mut Out) {
-        for done in self.activity.speech_scheduler.settle_pause(&self.activity.drain_blocked) {
-            // A dropped receiver is a caller that stopped waiting: ordinary.
-            let _ = done.send(());
+        for cause in self.activity.speech_scheduler.settle_pause(&self.activity.drain_blocked) {
+            out.signal(Signal::Paused(cause, PauseResult::Settled));
             out.trace(SpeechStep::SchedulingPauseSettled);
         }
     }
@@ -1094,11 +1090,11 @@ impl Driver {
     }
 }
 
-/// A pause that can no longer complete truthfully: its callers are released (the channel drops)
-/// and the journal has the reason.
-fn refuse_pause(acks: Vec<tokio::sync::oneshot::Sender<()>>, cause: &'static str, out: &mut Out) {
-    for done in acks {
-        drop(done);
+/// A pause that can no longer complete truthfully: its callers are refused and the journal has
+/// the reason.
+fn refuse_pause(callers: Vec<PauseCause>, cause: &'static str, out: &mut Out) {
+    for caller in callers {
+        out.signal(Signal::Paused(caller, PauseResult::Refused));
         out.trace(SpeechStep::SchedulingPauseRefused { cause });
     }
 }
