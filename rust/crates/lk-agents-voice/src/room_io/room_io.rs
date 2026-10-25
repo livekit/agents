@@ -35,9 +35,10 @@ pub struct StreamOpened {
 }
 
 pub enum Opened {
-    /// The stream's sink registered in the session's resources, and its source.
-    Stt(lk_agents_abi::resources::ResourceId, lk_agents_abi::SttSource),
-    Vad(lk_agents_abi::resources::ResourceId, lk_agents_abi::VadSource),
+    /// The stream's two sides. The core registers the sink only if it takes the stream, so one
+    /// never delivered leaves nothing in the session's resources.
+    Stt(lk_agents_abi::SttSink, lk_agents_abi::SttSource),
+    Vad(lk_agents_abi::VadSink, lk_agents_abi::VadSource),
 }
 
 /// The legs a frame has after `reopen_legs`: given, or the table's row where none was given.

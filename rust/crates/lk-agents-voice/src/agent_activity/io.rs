@@ -14,13 +14,20 @@ use lk_agents_abi::{ChatMessage, Maybe, Role, Ts};
 use std::sync::Arc;
 
 impl Driver {
-    /// Put `sink` on `channel`; the data plane ends the sink it replaces.
-    fn install_sink(&mut self, channel: AudioChannel, sink: ResourceId, out: &mut Out) {
+    /// Register `sink` and put it on `channel`; the data plane ends the sink it replaces.
+    fn install_sink(
+        &mut self,
+        channel: AudioChannel,
+        sink: lk_agents_abi::SttSink,
+        out: &mut Out,
+    ) -> ResourceId {
+        let sink = self.shared.resources.register_audio_sink(Arc::from(sink));
         self.input.sinks.insert(channel, sink);
         if channel == AudioChannel::Stt {
             self.input.live_stt = Some(sink);
         }
         out.machine().push(Effect::Forwarder(ForwarderCommand::Install { channel, sink }));
+        sink
     }
 
     /// Take `channel`'s sink down, its input ended. `Agent(stt=None)`: this agent does not listen.
@@ -126,7 +133,7 @@ impl Driver {
                 // A different recogniser is told the full list.
                 let same_stt = self.input.stt_open_same();
                 self.keyterms_on_stt_swap(now, same_stt, out);
-                self.install_sink(AudioChannel::Stt, sink, out);
+                let sink = self.install_sink(AudioChannel::Stt, sink, out);
                 spawn_drain(
                     &self.shared.spawner,
                     self.shared.time.clone(),
@@ -139,7 +146,7 @@ impl Driver {
                 out.trace(InputStep::StreamOpened { leg: AudioChannel::Stt.label() });
             }
             (Ok(Opened::Vad(sink, source)), true) => {
-                self.install_sink(AudioChannel::Vad, sink, out);
+                let sink = self.install_sink(AudioChannel::Vad, sink, out);
                 spawn_drain(
                     &self.shared.spawner,
                     self.shared.time.clone(),
@@ -155,18 +162,16 @@ impl Driver {
     }
 
     /// A stream nobody wants: closed on a bounded task (dropping a host stream doesn't cancel it).
-    fn discard_open(&self, stream: Opened) {
+    pub(crate) fn discard_open(&self, stream: Opened) {
         let time = self.shared.time.clone();
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         match stream {
-            Opened::Stt(sink, source) => {
-                self.shared.resources.release(sink);
+            Opened::Stt(_, source) => {
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     let _ = source.close(deadline).await;
                 });
             }
-            Opened::Vad(sink, source) => {
-                self.shared.resources.release(sink);
+            Opened::Vad(_, source) => {
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     let _ = source.close(deadline).await;
                 });

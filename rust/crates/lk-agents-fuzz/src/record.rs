@@ -18,7 +18,7 @@ use std::{
     },
 };
 
-use lk_agents_abi::Ts;
+use lk_agents_abi::{Ts, resources::ResourceId};
 use lk_agents_voice::{
     agent_activity::false_interruption::InterruptRefusal,
     agent_activity::scheduling::{SpeechId, SpeechKind},
@@ -515,6 +515,8 @@ pub struct Recording {
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
     driver_panic: Option<String>,
+    /// What the session's resource table still held when last looked at, by id and kind.
+    resources_left: Vec<(ResourceId, &'static str)>,
     /// Why the session was stopped for working without bound at one virtual instant.
     livelock: Option<String>,
     /// Every task the session spawned, and how the end-of-run join found it.
@@ -580,6 +582,10 @@ impl Recording {
         let asked = self.inputs_view().close_asked_at();
         let own = self.internal_view().close_requested().map(|(at, _)| at);
         asked.into_iter().chain(own).min()
+    }
+
+    pub fn resources_left(&self) -> &[(ResourceId, &'static str)] {
+        &self.resources_left
     }
 
     pub fn driver_panic(&self) -> Option<&str> {
@@ -772,6 +778,10 @@ impl Recording {
 
     pub fn set_driver_finished(&mut self, finished: bool) {
         self.driver_finished = finished;
+    }
+
+    pub fn set_resources_left(&mut self, left: Vec<(ResourceId, &'static str)>) {
+        self.resources_left = left;
     }
 
     pub fn set_driver_panic(&mut self, panic: String) {

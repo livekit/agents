@@ -524,8 +524,11 @@ impl Run {
 
         // A command the driver never received made no call: the loop is gone, the input is
         // refused, and nothing is opened for it. Only a command the driver has opens the stream it
-        // feeds and the call it will answer.
+        // feeds and the call it will answer. What it handed over is released, as the host API
+        // does.
+        let handed = command.resources();
         if self.session.api.send(command).is_err() {
+            handed.into_iter().for_each(|id| self.resources.release(id));
             return false;
         }
         if let Some((audio, feeding)) = stream {

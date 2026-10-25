@@ -699,14 +699,12 @@ impl Driver {
                 };
                 let Some(pending) = pending else { return };
                 let tx = self.leg_opens.clone();
-                let resources = resources.clone();
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     use crate::room_io::Opened;
                     use crate::room_io::StreamOpened;
-                    let register = |sink| resources.register_audio_sink(Arc::from(sink));
                     let outcome = match pending {
                         Pending::Stt(stt) => match stt.stream(None, None).await {
-                            Some(Ok((sink, source))) => Ok(Opened::Stt(register(sink), source)),
+                            Some(Ok((sink, source))) => Ok(Opened::Stt(sink, source)),
                             Some(Err(e)) => Err(e),
                             None => Err(lk_agents_abi::errors::ProviderError::Local(
                                 lk_agents_abi::errors::ApiError::new(
@@ -714,10 +712,9 @@ impl Driver {
                                 ),
                             )),
                         },
-                        Pending::Vad(vad) => vad
-                            .stream()
-                            .await
-                            .map(|(sink, source)| Opened::Vad(register(sink), source)),
+                        Pending::Vad(vad) => {
+                            vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
+                        }
                     };
                     let _ = tx.send(StreamOpened { open, leg, outcome });
                 });

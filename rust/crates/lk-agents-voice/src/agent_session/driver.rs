@@ -13,6 +13,7 @@ use crate::agent_session::time::Now;
 use crate::audio::ChannelEnd;
 use crate::events::SessionEvent;
 use crate::generation::GenEvent;
+use crate::room_io::StreamOpened;
 use crate::speech_handle::{InputDetails, SpeechHandle};
 use crate::trace::{
     CloseAct, CloseStep, CoreStep, HandoffStep, PlayoutStep, RoomStep, SpeechStep, Step, Trace,
@@ -342,9 +343,16 @@ impl Driver {
         let mut out = self.out();
         for input in undelivered {
             match input {
-                // Only a host command carries a promise somebody awaits.
-                Input::Host(Sent { origin: _, command }) => self.refuse_command(command, &mut out),
+                // Only a host command carries a promise somebody awaits. What it hands over is
+                // released with what the core held.
+                Input::Host(Sent { origin: _, command }) => {
+                    self.session.providers.extend(command.resources());
+                    self.refuse_command(command, &mut out)
+                }
                 Input::InputCensus(census) => self.on_input_census(census, &mut out),
+                Input::StreamOpened(StreamOpened { outcome: Ok(stream), .. }) => {
+                    self.discard_open(stream)
+                }
                 _ => {}
             }
         }

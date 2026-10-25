@@ -174,6 +174,12 @@ impl AudioForwarder {
         effects
     }
 
+    /// The session ended: every sink still installed has its input ended.
+    pub fn close(&mut self) -> Vec<ForwarderEffect> {
+        let sinks = self.slots.iter_mut().filter_map(|slot| slot.sink.take());
+        sinks.map(ForwarderEffect::EndInput).collect()
+    }
+
     /// One microphone frame to every installed sink on its feed side: silence to the substituted
     /// channels while the gate discards, the frame to the rest.
     pub fn on_frame(&mut self, frame: AudioFrame, now: Ts) -> Vec<ForwarderEffect> {

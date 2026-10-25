@@ -218,13 +218,19 @@ impl SessionApi {
     }
 
     pub fn send(&self, cmd: impl Into<Command>) -> Result<(), SessionRefused> {
-        let cmd = cmd.into();
-        self.running(|r| r.api.send(cmd).map_err(|_| SessionRefused::LoopEnded))
+        self.send_from(Origin::Host, cmd)
     }
 
+    /// A command the loop never takes releases the providers it hands over.
     pub fn send_from(&self, origin: Origin, cmd: impl Into<Command>) -> Result<(), SessionRefused> {
         let cmd = cmd.into();
-        self.running(|r| r.api.send_from(origin, cmd).map_err(|_| SessionRefused::LoopEnded))
+        let handed = cmd.resources();
+        let sent =
+            self.running(|r| r.api.send_from(origin, cmd).map_err(|_| SessionRefused::LoopEnded));
+        if sent.is_err() {
+            handed.into_iter().for_each(|id| self.resources.release(id));
+        }
+        sent
     }
 
     /// `AMD._run`. One per session; the verdict comes back as `amd_result`.

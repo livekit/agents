@@ -46,6 +46,7 @@ impl Run {
             );
         }
         self.record.set_driver_finished(self.runtime.is_none());
+        self.record.set_resources_left(self.resources.live());
         self.record.set_now(now);
     }
 

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 impl Driver {
     /// What the core holds now.
-    fn providers_held(&self) -> BTreeSet<ResourceId> {
+    pub(crate) fn providers_held(&self) -> BTreeSet<ResourceId> {
         let s = &self.session;
         let slots = [
             s.llm.as_ref().map(|r| r.id),

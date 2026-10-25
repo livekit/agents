@@ -69,6 +69,8 @@ impl Runtime {
                 },
             }
         }
+        // Closed first, so a command sent from now on is refused to its sender rather than lost.
+        self.queue.close();
         let undelivered = std::iter::from_fn(|| self.queue.try_recv().ok()).collect();
         self.finish(undelivered);
     }
@@ -112,6 +114,17 @@ impl Runtime {
             }
         }
         self.driver.finish(inputs);
+        self.release();
+    }
+
+    /// The session is over: every sink the data plane still feeds has its input ended, and the
+    /// microphone is let go (its reader ends on the close).
+    fn release(&mut self) {
+        let effects = self.forwarder.close();
+        self.perform(effects);
+        if let Some((source, _)) = self.source.take() {
+            self.driver.shared.resources.release(source);
+        }
     }
 
     fn command(&mut self, command: ForwarderCommand) {
@@ -193,10 +206,13 @@ impl Runtime {
 }
 
 /// A runtime dropped before its close (an aborted loop, a panic) still ends every task that
-/// selects on `closing`: the tasks sharing the session's state keep its sender alive.
+/// selects on `closing`: the tasks sharing the session's state keep its sender alive. It still
+/// releases everything both cores hold, as its finish would have.
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.driver.shared.closing.send_replace(true);
+        self.release();
+        self.driver.release_all_providers();
     }
 }
 

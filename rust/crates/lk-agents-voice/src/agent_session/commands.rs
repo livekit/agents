@@ -612,7 +612,7 @@ fn handed<R>(arg: &Maybe<Option<R>>, id: impl Fn(&R) -> ResourceId) -> Option<Re
 
 impl Command {
     /// The providers it hands the core.
-    pub(crate) fn resources(&self) -> Vec<ResourceId> {
+    pub fn resources(&self) -> Vec<ResourceId> {
         match self {
             Command::Activity(ActivityCommand::Update(update))
             | Command::HookDone { outcome: HookOutcome::Described(update), .. } => {

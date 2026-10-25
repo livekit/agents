@@ -391,6 +391,8 @@ impl DriverBuilder {
             stopped: false,
             opened: false,
         };
+        // What the session opens with is released like anything handed over later.
+        driver.session.providers = driver.providers_held();
         // The opening cycles run at the instant the session is built.
         driver.step.set(self.time.read());
         driver.publish_activity();

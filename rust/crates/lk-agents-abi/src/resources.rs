@@ -214,6 +214,23 @@ impl Resources {
         }
     }
 
+    /// What the table still holds, by id and kind: nothing once the session has ended.
+    pub fn live(&self) -> Vec<(ResourceId, &'static str)> {
+        let table = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let kind = |r: &Resource| match r {
+            Resource::Stt(_) => "stt",
+            Resource::Vad(_) => "vad",
+            Resource::Llm(_) => "llm",
+            Resource::Tts(_) => "tts",
+            Resource::Realtime(_) => "realtime",
+            Resource::AudioOutput(_) => "audio output",
+            Resource::TextOutput(_) => "text output",
+            Resource::AudioInput(_) => "audio input",
+            Resource::AudioSink(_) => "audio sink",
+        };
+        table.live.iter().map(|(id, r)| (*id, kind(r))).collect()
+    }
+
     /// Whoever holds a clone (a stream or a reply in flight) keeps the provider alive.
     pub fn release(&self, id: ResourceId) {
         let mut table = self.0.lock().unwrap_or_else(|p| p.into_inner());

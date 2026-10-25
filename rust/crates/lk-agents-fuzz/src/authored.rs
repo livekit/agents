@@ -275,6 +275,14 @@ impl Authored {
         self
     }
 
+    /// The session's resource table still held this one when the run last looked.
+    pub fn resource_left(mut self, id: u64, kind: &'static str) -> Self {
+        let mut left = self.recording.resources_left().to_vec();
+        left.push((lk_agents_abi::resources::ResourceId(id), kind));
+        self.recording.set_resources_left(left);
+        self
+    }
+
     /// The run stopped the session for working without bound at one instant.
     pub fn livelocked(mut self, detail: &str) -> Self {
         self.recording.set_livelock(detail.to_owned());
