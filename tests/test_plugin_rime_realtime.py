@@ -514,6 +514,42 @@ async def test_expired_tool_continuation_reports_result_without_reexecution(code
                 assert peer.requests.empty()
 
 
+@pytest.mark.parametrize("tool_choice", ["auto", "none"])
+async def test_connection_failure_cancels_reply_waiting_for_adapter_observation(
+    monkeypatch, tool_choice
+):
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session._update_session(instructions="test")
+        observed = session._on_event
+
+        def delay_response_started(event):
+            # The SDK has accepted the response, but the adapter has not yet
+            # registered its generation when the connection fails.
+            if not isinstance(event.payload, r.ResponseStarted):
+                observed(event)
+
+        monkeypatch.setattr(session, "_on_event", delay_response_started)
+        waiting = asyncio.Event()
+        wait = session._generation_ready.wait
+
+        async def mark_waiting():
+            waiting.set()
+            return await wait()
+
+        monkeypatch.setattr(session._generation_ready, "wait", mark_waiting)
+        reply = session.generate_reply(tool_choice=tool_choice)
+        await peer.start(await peer.next())
+        await asyncio.wait_for(waiting.wait(), 3)
+        assert not reply.done()
+        await peer.socket.close()
+        done, _ = await asyncio.wait([reply], timeout=3)
+        assert reply in done
+        assert reply.cancelled()
+        assert session._failure is not None
+        await asyncio.wait_for(session.aclose(), 3)
+
+
 @pytest.mark.parametrize("wrapped", [False, True])
 async def test_standard_session_text_and_empty_replies_need_no_playback_receipts(wrapped):
     async with peer_model() as (peer, model, _):

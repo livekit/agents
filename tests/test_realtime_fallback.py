@@ -5,7 +5,12 @@ import asyncio
 import pytest
 
 from livekit import rtc
-from livekit.agents.llm import ChatContext, RealtimeModelFallbackAdapter
+from livekit.agents.llm import (
+    ChatContext,
+    RealtimeError,
+    RealtimeModelFallbackAdapter,
+    function_tool,
+)
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
@@ -728,15 +733,21 @@ async def test_cancelled_update_keeps_initialized_child(monkeypatch) -> None:
         await session._update_session(instructions="Original")
         child = primary.active_session
         entered = asyncio.Event()
+        release = asyncio.Event()
+        update_instructions = child.update_instructions
 
-        async def pending(chat_ctx: ChatContext) -> None:
+        async def pending(instructions: str) -> None:
             entered.set()
-            await asyncio.Future()
+            await release.wait()
+            await update_instructions(instructions)
 
-        monkeypatch.setattr(child, "update_chat_ctx", pending)
-        update = asyncio.create_task(session._update_session(chat_ctx=ChatContext.empty()))
+        monkeypatch.setattr(child, "update_instructions", pending)
+        update = asyncio.create_task(session._update_session(instructions="Accepted"))
         await asyncio.wait_for(entered.wait(), 3)
         update.cancel()
+        await asyncio.sleep(0)
+        assert not update.done()
+        release.set()
         with pytest.raises(asyncio.CancelledError):
             await update
 
@@ -744,5 +755,41 @@ async def test_cancelled_update_keeps_initialized_child(monkeypatch) -> None:
         assert backup.created_sessions == []
         session.generate_reply()
         assert child.generate_reply_calls == 1
+        await session.restart(switch_model=True)
+        assert backup.active_session.updated_instructions == "Accepted"
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize("rejected_field", ["instructions", "tools"])
+async def test_restart_replays_only_accepted_settings(monkeypatch, rejected_field) -> None:
+    @function_tool
+    async def original_tool() -> str:
+        """Original tool."""
+        return "original"
+
+    @function_tool
+    async def replacement_tool() -> str:
+        """Replacement tool."""
+        return "replacement"
+
+    primary, backup = FakeRealtimeModel(), FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary, backup]).session()
+    try:
+        await session._update_session(instructions="Original", tools=[original_tool])
+
+        async def reject(value) -> None:
+            raise RealtimeError("Rejected update")
+
+        monkeypatch.setattr(primary.active_session, f"update_{rejected_field}", reject)
+        await session._update_session(instructions="Replacement", tools=[replacement_tool])
+        await session.restart(switch_model=True)
+
+        assert backup.active_session.updated_instructions == (
+            "Original" if rejected_field == "instructions" else "Replacement"
+        )
+        assert set(backup.active_session.tools.function_tools) == {
+            "original_tool" if rejected_field == "tools" else "replacement_tool"
+        }
     finally:
         await session.aclose()

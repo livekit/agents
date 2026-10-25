@@ -378,18 +378,31 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
-        if is_given(instructions):
-            self._instructions = instructions
-        if is_given(tools):
-            self._tools = tools
         async with self._swap_lock:
             if self._initialized:
                 # Agent handoffs reuse an initialized child. A rejected or cancelled
                 # update must not close it; fatal error events still trigger a swap.
-                await self._active._update_session(
-                    instructions=instructions, chat_ctx=chat_ctx, tools=tools
+                # Use the public hooks so each accepted setting updates the replay
+                # cache, even when a later setting is rejected.
+                task = asyncio.create_task(
+                    super()._update_session(
+                        instructions=instructions, chat_ctx=chat_ctx, tools=tools
+                    )
                 )
+                cancelled = False
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                task.result()
+                if cancelled:
+                    raise asyncio.CancelledError
                 return
+            if is_given(instructions):
+                self._instructions = instructions
+            if is_given(tools):
+                self._tools = tools
             self._swapping = True
             try:
                 error = await self._initialize_child(
@@ -483,8 +496,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         return self._active.tools
 
     async def update_instructions(self, instructions: str) -> None:
-        self._instructions = instructions
         await self._active.update_instructions(instructions)
+        self._instructions = instructions
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         if self._swapping:
@@ -493,8 +506,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         await self._active.update_chat_ctx(chat_ctx)
 
     async def update_tools(self, tools: list[Tool]) -> None:
-        self._tools = tools
         await self._active.update_tools(tools)
+        self._tools = tools
 
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
         self._tool_choice = tool_choice
