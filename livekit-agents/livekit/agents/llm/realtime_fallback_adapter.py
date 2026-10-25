@@ -198,9 +198,6 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         # audio during a swap is dropped; replaying it would lag the model behind realtime
         self._swapping = False
-        self._initialized = False
-        self._initializing = False
-        self._initialization_error: Exception | None = None
 
         self._active_index = 0
         self._active_bound = False
@@ -260,9 +257,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             ),
         )
 
-    def _next_available_index(
-        self, *, exclude_current: bool = False, exclude: set[int] | None = None
-    ) -> int | None:
+    def _next_available_index(self, *, exclude_current: bool = False) -> int | None:
         # re-enable models whose cooldown expired, then pick the first available (primary preferred)
         now = time.time()
         for i, deadline in enumerate(self._cooldown_deadline):
@@ -270,8 +265,6 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 self._set_available(i, True)
 
         for i in range(len(self._adapter._models)):
-            if exclude is not None and i in exclude:
-                continue
             if exclude_current and i == self._active_index:
                 continue
             if self._available[i]:
@@ -286,9 +279,6 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         )
 
     def _on_child_error(self, error: RealtimeModelError) -> None:
-        if self._initializing and not error.recoverable:
-            self._initialization_error = error.error
-            return
         if error.recoverable:
             # surface it and let the plugin's own reconnect handle it
             self.emit("error", error)
@@ -339,6 +329,30 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             else:
                 chat_ctx = self._active.chat_ctx
 
+            # bring up a fresh child on ``index``; on failure clean it up, cool it down, and
+            # return the error so the caller can try the next model
+            async def _bring_up(index: int) -> Exception | None:
+                try:
+                    self._active = self._adapter._models[index].session(
+                        turn_detection_disabled=self._turn_detection_disabled
+                    )
+                    self._active_index = index
+                    self._bind(self._active)
+                    await self._active._update_session(
+                        instructions=self._instructions, chat_ctx=chat_ctx, tools=self._tools
+                    )
+                    if is_given(self._tool_choice):
+                        self._active.update_options(tool_choice=self._tool_choice)
+                    self._adapter._active_instance = self._adapter._models[index]
+                    return None
+                except Exception as e:
+                    logger.exception("failed to start realtime model on swap, trying next")
+                    self._unbind(self._active)
+                    with contextlib.suppress(Exception):
+                        await self._active.aclose()
+                    self._set_available(index, False)
+                    return e
+
             self._swapping = True
             try:
                 # close the old child; best-effort since the provider may already be dead
@@ -346,18 +360,28 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 with contextlib.suppress(Exception):
                     await self._active.aclose()
 
-                error = await self._initialize_child(
-                    target_index,
-                    instructions=self._instructions,
-                    chat_ctx=chat_ctx,
-                    tools=self._tools,
-                    reuse_active=False,
-                )
+                # cascade to further models if one fails to start
+                error = await _bring_up(target_index)
+                while error is not None:
+                    nxt = self._next_available_index()
+                    if nxt is None:
+                        break
+                    error = await _bring_up(nxt)
             finally:
                 self._swapping = False
 
             if error is not None:
-                # Initialization already reported exhaustion.
+                # every model failed to start; escalate so AgentSession can close instead of
+                # continuing on a broken session
+                self.emit(
+                    "error",
+                    RealtimeModelError(
+                        timestamp=time.time(),
+                        label=self._adapter.label,
+                        error=error,
+                        recoverable=False,
+                    ),
+                )
                 return
 
             # a swap is a reconnect from the caller's perspective
@@ -370,117 +394,6 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 and self._agent_session is not None
             ):
                 self._agent_session.generate_reply()
-
-    async def _update_session(
-        self,
-        *,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
-        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
-        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
-    ) -> None:
-        async with self._swap_lock:
-            if self._initialized:
-                # Agent handoffs reuse an initialized child. A rejected or cancelled
-                # update must not close it; fatal error events still trigger a swap.
-                # Use the public hooks so each accepted setting updates the replay
-                # cache, even when a later setting is rejected.
-                task = asyncio.create_task(
-                    super()._update_session(
-                        instructions=instructions, chat_ctx=chat_ctx, tools=tools
-                    )
-                )
-                cancelled = False
-                while not task.done():
-                    try:
-                        await asyncio.shield(task)
-                    except asyncio.CancelledError:
-                        cancelled = True
-                task.result()
-                if cancelled:
-                    raise asyncio.CancelledError
-                return
-            if is_given(instructions):
-                self._instructions = instructions
-            if is_given(tools):
-                self._tools = tools
-            self._swapping = True
-            try:
-                error = await self._initialize_child(
-                    self._active_index,
-                    instructions=instructions,
-                    chat_ctx=chat_ctx,
-                    tools=tools,
-                    reuse_active=True,
-                )
-                if error is not None:
-                    raise error
-            finally:
-                self._swapping = False
-
-    async def _initialize_child(
-        self,
-        index: int,
-        *,
-        instructions: NotGivenOr[str],
-        chat_ctx: NotGivenOr[ChatContext],
-        tools: NotGivenOr[list[Tool]],
-        reuse_active: bool,
-    ) -> Exception | None:
-        # Save history before a failed candidate can partially apply an edit.
-        history = (chat_ctx if is_given(chat_ctx) else self._active.chat_ctx).copy()
-        attempted: set[int] = set()
-        self._initializing = True
-        try:
-            while True:
-                self._initialization_error = None
-                replacing = not reuse_active or bool(attempted)
-                attempted.add(index)
-                try:
-                    if replacing:
-                        self._active_index = index
-                        self._active = self._adapter._models[index].session(
-                            turn_detection_disabled=self._turn_detection_disabled
-                        )
-                        self._bind(self._active)
-                        instructions, chat_ctx, tools = self._instructions, history, self._tools
-                    await self._active._update_session(
-                        instructions=instructions, chat_ctx=chat_ctx, tools=tools
-                    )
-                    if self._initialization_error is not None:
-                        raise self._initialization_error
-                    if replacing and is_given(self._tool_choice):
-                        self._active.update_options(tool_choice=self._tool_choice)
-                    self._adapter._active_instance = self._adapter._models[index]
-                    self._initialized = True
-                    return None
-                except Exception as error:
-                    self._unbind(self._active)
-                    with contextlib.suppress(Exception):
-                        await self._active.aclose()
-                    self._set_available(index, False)
-                    # An expired or zero cooldown must not retry a failed
-                    # candidate forever during the same startup operation.
-                    target = self._next_available_index(exclude=attempted)
-                    self.emit(
-                        "error",
-                        RealtimeModelError(
-                            timestamp=time.time(),
-                            label=self._adapter.label,
-                            error=error,
-                            recoverable=target is not None,
-                        ),
-                    )
-                    if target is None:
-                        return error
-                    index = target
-        except asyncio.CancelledError:
-            self._unbind(self._active)
-            with contextlib.suppress(Exception):
-                await self._active.aclose()
-            raise
-        finally:
-            self._initializing = False
-            self._initialization_error = None
 
     @property
     def capabilities(self) -> RealtimeCapabilities:
@@ -496,8 +409,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         return self._active.tools
 
     async def update_instructions(self, instructions: str) -> None:
-        await self._active.update_instructions(instructions)
         self._instructions = instructions
+        await self._active.update_instructions(instructions)
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         if self._swapping:
@@ -506,8 +419,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         await self._active.update_chat_ctx(chat_ctx)
 
     async def update_tools(self, tools: list[Tool]) -> None:
-        await self._active.update_tools(tools)
         self._tools = tools
+        await self._active.update_tools(tools)
 
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
         self._tool_choice = tool_choice

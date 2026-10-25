@@ -239,7 +239,8 @@ Append and deletion preserve retained turns. Replacing or reordering history
 rebuilds completed items with new server IDs. A rebuild requires no active reply
 or pending tool call. Prism has no atomic history replacement: replies can see
 intermediate context between operations. A failure after partial application
-ends the session; standard fallback can restore the last accepted agent context.
+ends the session. Standard fallback replays the current agent context, which can
+already contain the requested edit even when Prism rejected it.
 `await model.get_history()` returns completed server items. Running replies may
 be absent from that snapshot.
 
@@ -255,6 +256,13 @@ Standard LiveKit fallback can restart with supported history. It cannot restore
 an active tool round. Set `regenerate_on_swap=False` when an automatic replacement
 reply is unwanted. Text input submitted again is another history insertion.
 Unknown request outcomes fail the SDK session; they are not retried.
+
+This plugin uses unchanged LiveKit core. Core records requested agent history
+before the provider acknowledges it, so rejected or cancelled edits can leave
+agent and provider history different. Fallback startup can also return before a
+backup is ready, and a failed restart can emit more than one reconnect event.
+Use a known valid history when starting a replacement session after these errors;
+the plugin does not add its own history rollback or startup failover logic.
 
 ### Events and limits
 

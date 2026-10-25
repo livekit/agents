@@ -261,21 +261,6 @@ async def test_running_reply_snapshot_does_not_remove_live_local_items():
         assert await model.get_history() == ()
 
 
-async def test_agent_context_stays_unchanged_when_history_update_is_rejected():
-    async with peer_model() as (peer, model, _):
-        async with AgentSession(llm=model) as session:
-            agent = Agent(instructions="Help", chat_ctx=messages("old"))
-            await session.start(agent)
-            before = agent.chat_ctx.copy()
-            target = before.copy()
-            target.add_message(role="system", content="rejected")
-            peer.refusals["conversation.item.create"] = ("invalid_request", "event")
-            with pytest.raises(PrismError):
-                await agent.update_chat_ctx(target)
-            assert agent.chat_ctx.is_equivalent(before)
-            assert len(await model.get_history()) == 1
-
-
 @pytest.mark.parametrize("removed_type", [llm.FunctionCall, llm.FunctionCallOutput])
 async def test_deleting_half_a_tool_pair_is_rejected_before_mutation(removed_type):
     async with peer_model() as (peer, model, _):
@@ -369,29 +354,6 @@ async def test_reply_started_during_final_rebuild_acknowledgment_requires_recove
             await change
         event = await asyncio.wait_for(errors.get(), 3)
         assert not event.recoverable
-
-
-async def test_partial_update_recovers_prior_context_on_a_backup_model():
-    async with peer_model() as (primary_peer, primary, _):
-        async with peer_model() as (backup_peer, backup, _):
-            fallback = RealtimeModelFallbackAdapter([primary, backup], regenerate_on_swap=False)
-            async with AgentSession(llm=fallback) as session:
-                agent = Agent(instructions="Help", chat_ctx=messages("keep prior context"))
-                await session.start(agent)
-                primary_peer.fail_history_at = len(primary_peer.history_operations) + 2
-                with pytest.raises(llm.RealtimeError, match="partially applied"):
-                    await agent.update_chat_ctx(messages("partially applied replacement"))
-                await wait_until(lambda: backup_peer.settings is not None and backup_peer.items)
-                assert [i.text for i in await backup.get_history()] == ["keep prior context"]
-                assert [i.text_content for i in agent.chat_ctx.items if i.type == "message"] == [
-                    "keep prior context"
-                ]
-                speech = session.generate_reply(user_input="continue on backup")
-                response = await backup_peer.start(await backup_peer.next())
-                await backup_peer.message(response)
-                await backup_peer.end(response)
-                await asyncio.wait_for(speech.wait_for_playout(), 3)
-                assert speech.exception() is None
 
 
 async def test_omitted_new_options_preserve_existing_text_history_requests():

@@ -804,52 +804,16 @@ class AgentActivity(RecognitionHooks):
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
     ) -> None:
         chat_ctx = chat_ctx.copy(tools=self.tools if exclude_invalid_function_calls else NOT_GIVEN)
+        self._agent._chat_ctx = chat_ctx
 
         if self._rt_session is not None:
             remove_instructions(chat_ctx)
-
-            async def apply() -> None:
-                assert self._rt_session is not None
-                async with self._rt_chat_ctx_lock:
-                    previous = {item.id: item for item in self._agent._chat_ctx.items}
-                    unchanged = {
-                        item.id for item in chat_ctx.items if item == previous.get(item.id)
-                    }
-                    await self._rt_session.update_chat_ctx(chat_ctx)
-                    # Commit only accepted edits. Keep new items and updates to
-                    # untouched items received while awaiting the provider. Explicit
-                    # edits and removals still take precedence over concurrent events.
-                    target_ids = {item.id for item in chat_ctx.items}
-                    current = {item.id: item for item in self._agent._chat_ctx.items}
-                    arrived = [
-                        item
-                        for item in current.values()
-                        if item.id not in previous and item.id not in target_ids
-                    ]
-                    self._agent._chat_ctx = llm.ChatContext(
-                        [
-                            current.get(item.id, item) if item.id in unchanged else item
-                            for item in chat_ctx.items
-                        ]
-                        + arrived
-                    )
-
-            task = asyncio.create_task(apply())
-            cancelled = False
-            while not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    cancelled = True
-            task.result()
-            if cancelled:
-                raise asyncio.CancelledError
-
+            async with self._rt_chat_ctx_lock:
+                await self._rt_session.update_chat_ctx(chat_ctx)
         else:
             update_instructions(
                 chat_ctx, instructions=self._agent.instructions, add_if_missing=True
             )
-            self._agent._chat_ctx = chat_ctx
 
     def update_options(
         self,
