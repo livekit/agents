@@ -252,6 +252,12 @@ async fn run_in(case: Case) -> Outcome {
             return found;
         }
     }
+    // `Settle` is never sampled: only `finish` sends it, so a case holding one is a whole run,
+    // its release rounds and ending included, as a campaign saves it. Finishing it again would
+    // replay a different run.
+    if case.inputs.contains(&Input::Settle {}) {
+        return join(run, outcome).await;
+    }
     finish(run, outcome).await
 }
 
@@ -310,7 +316,11 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
             return found;
         }
     }
+    join(run, outcome).await
+}
 
+/// Join the session's tasks and judge the run.
+async fn join(mut run: Run, mut outcome: Outcome) -> Outcome {
     run.join_tasks().await;
     // What the tasks did on their way out is part of the run.
     run.collect();
