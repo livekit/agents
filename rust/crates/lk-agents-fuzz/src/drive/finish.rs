@@ -281,11 +281,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
             return outcome;
         }
         let mut offered = run.releases();
-        if offered.is_empty() {
-            quiet += 1;
-        } else {
-            quiet = 0;
-        }
+        let releases = offered.len();
         // Advance regardless, so an armed deadline with nothing else to do still fires.
         offered.push(run.release_advance());
         for input in offered {
@@ -294,6 +290,16 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
             if let Some(found) = guard(&run, &mut outcome) {
                 return found;
             }
+        }
+        // Once the driver has exited, a release it refuses is one nothing will ever take: what is
+        // left of a dead session is `nothing_left_live`'s to judge, not work still to do.
+        let applied = run.record.applied();
+        let taken =
+            applied[applied.len() - 1 - releases..applied.len() - 1].iter().any(|a| a.accepted);
+        if releases == 0 || (run.record.driver_finished() && !taken) {
+            quiet += 1;
+        } else {
+            quiet = 0;
         }
     }
 
