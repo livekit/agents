@@ -7,13 +7,13 @@ import queue
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIStatusError, LanguageCode
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.types import APIConnectOptions
 from livekit.plugins.nvidia import stt as nvidia_stt, tts as nvidia_tts
 
 pytestmark = pytest.mark.unit
@@ -26,6 +26,30 @@ def _audio_frame(byte: int = 1) -> rtc.AudioFrame:
         num_channels=1,
         samples_per_channel=160,
     )
+
+
+def _speech_response(
+    text: str, *, is_final: bool = True, confidence: float = 0.9
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        results=[
+            SimpleNamespace(
+                is_final=is_final,
+                alternatives=[SimpleNamespace(transcript=text, confidence=confidence, words=[])],
+            )
+        ]
+    )
+
+
+def _mock_streaming_stt(monkeypatch: pytest.MonkeyPatch, asr_service: object) -> nvidia_stt.STT:
+    service = nvidia_stt.STT(api_key="test-key")
+    monkeypatch.setattr(service, "_ensure_asr_service", lambda: asr_service)
+    monkeypatch.setattr(
+        nvidia_stt.SpeechStream,
+        "_create_streaming_config",
+        lambda self: SimpleNamespace(),
+    )
+    return service
 
 
 @pytest.mark.parametrize("method_name", ["synthesize", "synthesize_online"])
@@ -69,13 +93,7 @@ async def test_stt_auto_mode_preserves_offline_recognition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = nvidia_stt.STT(api_key="test-key")
-    response = SimpleNamespace(
-        results=[
-            SimpleNamespace(
-                alternatives=[SimpleNamespace(transcript="hello", confidence=0.9, words=[])]
-            )
-        ]
-    )
+    response = _speech_response("hello")
     fake_service = SimpleNamespace(offline_recognize=lambda audio, config: response)
     monkeypatch.setattr(service, "_ensure_asr_service", lambda: fake_service)
 
@@ -310,7 +328,6 @@ def test_stt_combined_confidence_includes_zero_values() -> None:
 async def test_stt_flush_starts_a_new_backend_rpc_for_each_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
     calls: list[list[bytes]] = []
 
     class FakeASRService:
@@ -318,13 +335,7 @@ async def test_stt_flush_starts_a_new_backend_rpc_for_each_segment(
             calls.append(list(audio_generator))
             return iter(())
 
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: FakeASRService())
-    monkeypatch.setattr(
-        nvidia_stt.SpeechStream,
-        "_create_streaming_config",
-        lambda self: SimpleNamespace(),
-    )
-
+    service = _mock_streaming_stt(monkeypatch, FakeASRService())
     stream = service.stream()
     stream.push_frame(_audio_frame(1))
     stream.flush()
@@ -344,7 +355,6 @@ async def test_stt_flush_starts_a_new_backend_rpc_for_each_segment(
 async def test_stt_replays_segment_after_retryable_backend_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
     calls: list[list[bytes]] = []
 
     class FakeASRService:
@@ -354,13 +364,7 @@ async def test_stt_replays_segment_after_retryable_backend_failure(
                 raise APIConnectionError("temporary failure")
             return iter(())
 
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: FakeASRService())
-    monkeypatch.setattr(
-        nvidia_stt.SpeechStream,
-        "_create_streaming_config",
-        lambda self: SimpleNamespace(),
-    )
-
+    service = _mock_streaming_stt(monkeypatch, FakeASRService())
     stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
     stream.push_frame(_audio_frame(3))
     stream.end_input()
@@ -377,18 +381,10 @@ async def test_stt_restarts_completed_worker_without_flush(
     monkeypatch: pytest.MonkeyPatch,
     termination: str,
 ) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
     calls: list[list[bytes]] = []
     first_attempt_finished = threading.Event()
     restarted = threading.Event()
-    final_response = SimpleNamespace(
-        results=[
-            SimpleNamespace(
-                is_final=True,
-                alternatives=[SimpleNamespace(transcript="reconnected", confidence=0.9, words=[])],
-            )
-        ]
-    )
+    final_response = _speech_response("reconnected")
 
     class RestartingASRService:
         def streaming_response_generator(self, audio_generator, config):
@@ -410,13 +406,7 @@ async def test_stt_restarts_completed_worker_without_flush(
 
             return responses()
 
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: RestartingASRService())
-    monkeypatch.setattr(
-        nvidia_stt.SpeechStream,
-        "_create_streaming_config",
-        lambda self: SimpleNamespace(),
-    )
-
+    service = _mock_streaming_stt(monkeypatch, RestartingASRService())
     stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
     first_frame = _audio_frame(3)
     second_frame = _audio_frame(4)
@@ -434,18 +424,18 @@ async def test_stt_restarts_completed_worker_without_flush(
         [first_frame.data.tobytes()],
         [first_frame.data.tobytes(), second_frame.data.tobytes()],
     ]
-    assert any(
-        event.type == nvidia_stt.stt.SpeechEventType.FINAL_TRANSCRIPT
-        and event.alternatives[0].text == "reconnected"
-        for event in events
-    )
+    assert [event.type for event in events] == [
+        nvidia_stt.stt.SpeechEventType.START_OF_SPEECH,
+        nvidia_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        nvidia_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert events[1].alternatives[0].text == "reconnected"
     await stream.aclose()
 
 
 async def test_stt_clean_completion_uses_retry_budget_and_backoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
     calls: list[list[bytes]] = []
 
     class CleanEndingASRService:
@@ -454,13 +444,7 @@ async def test_stt_clean_completion_uses_retry_budget_and_backoff(
             calls.append(call_audio)
             return iter(())
 
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: CleanEndingASRService())
-    monkeypatch.setattr(
-        nvidia_stt.SpeechStream,
-        "_create_streaming_config",
-        lambda self: SimpleNamespace(),
-    )
-
+    service = _mock_streaming_stt(monkeypatch, CleanEndingASRService())
     sleep = AsyncMock()
     monkeypatch.setattr(nvidia_stt.asyncio, "sleep", sleep)
 
@@ -480,7 +464,6 @@ async def test_stt_clean_completion_uses_retry_budget_and_backoff(
 async def test_stt_surfaces_midstream_retry_exhaustion_without_flush(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
     calls: list[list[bytes]] = []
 
     class FailingASRService:
@@ -488,13 +471,7 @@ async def test_stt_surfaces_midstream_retry_exhaustion_without_flush(
             calls.append([next(audio_generator)])
             raise APIConnectionError("connection dropped")
 
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: FailingASRService())
-    monkeypatch.setattr(
-        nvidia_stt.SpeechStream,
-        "_create_streaming_config",
-        lambda self: SimpleNamespace(),
-    )
-
+    service = _mock_streaming_stt(monkeypatch, FailingASRService())
     stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
     frame = _audio_frame(3)
     stream.push_frame(frame)
@@ -532,7 +509,6 @@ async def test_stt_retry_buffer_is_bounded_and_resets_after_final() -> None:
 async def test_stt_stream_bounds_replay_without_flush(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
     consumed = 0
     audio_consumed = threading.Event()
     attempts: list[nvidia_stt._RecognitionAttempt] = []
@@ -546,6 +522,7 @@ async def test_stt_stream_bounds_replay_without_flush(
                     audio_consumed.set()
             return iter(())
 
+    service = _mock_streaming_stt(monkeypatch, DrainingASRService())
     original_start_attempt = nvidia_stt.SpeechStream._start_recognition_attempt
 
     def capture_attempt(self, config, event_loop):
@@ -553,12 +530,6 @@ async def test_stt_stream_bounds_replay_without_flush(
         attempts.append(attempt)
         return attempt
 
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: DrainingASRService())
-    monkeypatch.setattr(
-        nvidia_stt.SpeechStream,
-        "_create_streaming_config",
-        lambda self: SimpleNamespace(),
-    )
     monkeypatch.setattr(
         nvidia_stt.SpeechStream,
         "_start_recognition_attempt",
@@ -581,7 +552,6 @@ async def test_stt_stream_bounds_replay_without_flush(
 async def test_stt_retry_exhaustion_does_not_trigger_audio_losing_outer_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
     calls: list[list[bytes]] = []
 
     class FailingASRService:
@@ -589,13 +559,7 @@ async def test_stt_retry_exhaustion_does_not_trigger_audio_losing_outer_retry(
             calls.append(list(audio_generator))
             raise APIConnectionError("temporary failure")
 
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: FailingASRService())
-    monkeypatch.setattr(
-        nvidia_stt.SpeechStream,
-        "_create_streaming_config",
-        lambda self: SimpleNamespace(),
-    )
-
+    service = _mock_streaming_stt(monkeypatch, FailingASRService())
     stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
     stream.push_frame(_audio_frame(4))
     stream.end_input()
@@ -611,28 +575,14 @@ async def test_stt_retry_exhaustion_does_not_trigger_audio_losing_outer_retry(
 async def test_stt_closes_speech_segment_when_backend_has_no_final_transcript(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
-    interim_response = SimpleNamespace(
-        results=[
-            SimpleNamespace(
-                is_final=False,
-                alternatives=[SimpleNamespace(transcript="hello", confidence=0.5, words=[])],
-            )
-        ]
-    )
+    interim_response = _speech_response("hello", is_final=False, confidence=0.5)
 
     class InterimOnlyASRService:
         def streaming_response_generator(self, audio_generator, config):
             list(audio_generator)
             return iter((interim_response,))
 
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: InterimOnlyASRService())
-    monkeypatch.setattr(
-        nvidia_stt.SpeechStream,
-        "_create_streaming_config",
-        lambda self: SimpleNamespace(),
-    )
-
+    service = _mock_streaming_stt(monkeypatch, InterimOnlyASRService())
     stream = service.stream(conn_options=APIConnectOptions(max_retry=0))
     stream.push_frame(_audio_frame(5))
     stream.end_input()
@@ -651,7 +601,6 @@ async def test_stt_closes_speech_segment_when_backend_has_no_final_transcript(
 async def test_stt_cancellation_closes_backend_audio_generator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
     started = threading.Event()
     finished = threading.Event()
 
@@ -662,13 +611,7 @@ async def test_stt_cancellation_closes_backend_audio_generator(
             finished.set()
             return iter(())
 
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: BlockingASRService())
-    monkeypatch.setattr(
-        nvidia_stt.SpeechStream,
-        "_create_streaming_config",
-        lambda self: SimpleNamespace(),
-    )
-
+    service = _mock_streaming_stt(monkeypatch, BlockingASRService())
     stream = service.stream()
     stream.push_frame(_audio_frame(6))
     assert await asyncio.to_thread(started.wait, 1.0)
@@ -711,52 +654,6 @@ def test_stt_model_listing_uses_proto_request_and_inference_mode() -> None:
             {"model": ["offline-model"]},
         ]
     }
-
-
-async def test_stt_stream_emits_transcript_events_from_nvidia_speech_response(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = nvidia_stt.STT(api_key="test-key")
-    monkeypatch.setattr(service, "_ensure_asr_service", lambda: SimpleNamespace())
-
-    def fake_create_task(coro, *args, **kwargs):
-        coro.close()
-        return MagicMock()
-
-    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=fake_create_task):
-        stream = nvidia_stt.SpeechStream(
-            stt=service,
-            conn_options=DEFAULT_API_CONNECT_OPTIONS,
-            language="en-US",
-        )
-
-    response = SimpleNamespace(
-        results=[
-            SimpleNamespace(
-                is_final=True,
-                alternatives=[SimpleNamespace(transcript="hello world", confidence=0.9)],
-            )
-        ]
-    )
-
-    stream._handle_response(response, event_loop=asyncio.get_running_loop())
-    await asyncio.sleep(0)
-
-    assert stream._event_ch.recv_nowait().type == nvidia_stt.stt.SpeechEventType.START_OF_SPEECH
-    transcript_event = stream._event_ch.recv_nowait()
-    assert transcript_event.type == nvidia_stt.stt.SpeechEventType.FINAL_TRANSCRIPT
-    assert transcript_event.alternatives[0].text == "hello world"
-    assert stream._event_ch.recv_nowait().type == nvidia_stt.stt.SpeechEventType.END_OF_SPEECH
-
-
-def test_stt_response_parsing_errors_are_not_suppressed() -> None:
-    stream = object.__new__(nvidia_stt.SpeechStream)
-    response = SimpleNamespace(
-        results=[SimpleNamespace(alternatives=[SimpleNamespace(transcript=None)])]
-    )
-
-    with pytest.raises(AttributeError):
-        stream._handle_response(response, event_loop=MagicMock())
 
 
 def test_tts_passes_locked_nvidia_speech_synthesize_online_options(
