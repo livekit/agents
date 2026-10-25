@@ -338,6 +338,8 @@ impl Driver {
         // `send_replace`: `send` stores nothing while no task subscribes, so a later one would
         // never see the close.
         self.shared.closing.send_replace(true);
+        // The activity's `aclose()` cancels its tools before it closes the models.
+        self.cancel_running_tools(now, out);
         out.machine().close_turn_detector();
         if let Some(rt) = rt {
             out.machine().push(Effect::Provider(ProviderCall::CloseRealtime(rt)));
@@ -599,7 +601,8 @@ impl Driver {
                     | Effect::Realtime(_)
                     | Effect::Audio(_)
                     | Effect::Detector(_)
-                    | Effect::Forwarder(_) => None,
+                    | Effect::Forwarder(_)
+                    | Effect::CancelTool { .. } => None,
                 })
                 .collect();
             for t in [

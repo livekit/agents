@@ -95,8 +95,14 @@ mod tools {
             output_id: String,
             speech: SpeechId,
             step: u32,
+            runner: RunnerRef,
         ) {
-            self.running.push(Running { call, output_id, speech, step, updates: 0 });
+            self.running.push(Running { call, output_id, speech, step, updates: 0, runner });
+        }
+
+        /// Every call still running, out of the set, in start order.
+        pub(crate) fn take_all(&mut self) -> Vec<Running> {
+            std::mem::take(&mut self.running)
         }
 
         /// `speech`'s call `call_id` ended: detached, it stays with its first update counted; otherwise
@@ -332,6 +338,8 @@ pub(crate) struct Running {
     step: u32,
     /// Progress updates sent so far, the first (the step's answer) included.
     updates: u32,
+    /// What runs the body: its cancel goes there.
+    runner: RunnerRef,
 }
 
 impl Running {
@@ -345,6 +353,14 @@ impl Running {
 
     pub(crate) fn step(&self) -> u32 {
         self.step
+    }
+
+    pub(crate) fn detached(&self) -> bool {
+        self.updates > 0
+    }
+
+    pub(crate) fn runner(&self) -> &RunnerRef {
+        &self.runner
     }
 }
 
@@ -609,6 +625,27 @@ pub trait ToolRunner: Send + Sync {
         speech: SpeechId,
         step: u32,
     ) -> crate::tool_executor::ToolAnswer;
+
+    /// `_ToolExecutor.cancel`, unconditionally as its `aclose()` does: the body running under
+    /// `call_id` is cancelled. Fire-and-forget: the driver has already told the call's end.
+    fn cancel(&self, call_id: &str);
+}
+
+/// A running call's [`ToolRunner`], kept so its cancel reaches the runner that ran it. Compared by
+/// identity.
+#[derive(Clone)]
+pub struct RunnerRef(pub Arc<dyn ToolRunner>);
+
+impl PartialEq for RunnerRef {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for RunnerRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ToolRunner")
+    }
 }
 
 /// `voice/tool_executor.py`'s `_ToolExecutor`: runs one call and reports the marshal's dict. A
@@ -622,6 +659,8 @@ pub trait HostToolRunner: Send + Sync {
         speech_id: u64,
         step: u32,
     ) -> Result<lk_agents_abi::llm::tool_executor::RawToolAnswer, lk_agents_abi::errors::HostError>;
+
+    fn cancel(&self, call_id: &str);
 }
 
 /// The driver's [`ToolRunner`](crate::tool_executor::ToolRunner) over a host executor. Every
@@ -641,6 +680,10 @@ impl crate::tool_executor::ToolRunner for HostTools {
                 "the tool executor failed outside the tool's own error handling: {e}");
             ToolAnswer::Raised(ToolRaise::Internal)
         })
+    }
+
+    fn cancel(&self, call_id: &str) {
+        self.0.cancel(call_id);
     }
 }
 

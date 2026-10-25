@@ -700,12 +700,12 @@ pub enum GenEvent {
         step: u32,
         error: Option<crate::trace::FailureClass>,
     },
-    /// `hosted`, or answered by the driver itself (an unadvertised name).
+    /// Hosted on `runner`, or answered by the driver itself (an unadvertised name).
     ToolCallStarted {
         speech: SpeechId,
         step: u32,
         call: Box<lk_agents_abi::FunctionCall>,
-        hosted: bool,
+        runner: Option<crate::tool_executor::RunnerRef>,
     },
     /// `None` when there is nothing to say.
     ToolCallEnded {

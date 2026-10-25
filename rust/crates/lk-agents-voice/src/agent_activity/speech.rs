@@ -827,8 +827,8 @@ impl Driver {
                     self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
                 }
             }
-            GenEvent::ToolCallStarted { speech, step, call, hosted } => {
-                self.on_tool_started(now, speech, step, *call, hosted, out);
+            GenEvent::ToolCallStarted { speech, step, call, runner } => {
+                self.on_tool_started(now, speech, step, *call, runner, out);
             }
             GenEvent::ToolCallEnded { speech, call_id, end, message } => {
                 self.on_tool_ended(now, speech, call_id, end, message, out);

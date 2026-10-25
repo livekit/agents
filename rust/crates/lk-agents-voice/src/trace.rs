@@ -336,6 +336,10 @@ pub enum ToolStep {
     UpdateRefused {
         call_id: String,
     },
+    /// The runner was told to cancel the body running under `call_id`.
+    Cancelled {
+        call_id: String,
+    },
     StepStarted {
         speech: SpeechId,
         step: u32,
@@ -841,6 +845,7 @@ impl Step {
                 | ToolStep::ReplyDone { speech, .. } => Some(*speech),
                 ToolStep::Updated { .. }
                 | ToolStep::UpdateRefused { .. }
+                | ToolStep::Cancelled { .. }
                 | ToolStep::ToolsetUpdated { .. }
                 | ToolStep::SessionToolsExtended { .. } => None,
             },

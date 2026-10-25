@@ -5,14 +5,14 @@ use crate::agent::{Source, Visibility};
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::closing::SESSION_CLOSING;
-use crate::agent_session::effects::{Out, TurnTimer};
+use crate::agent_session::effects::{Effect, Out, TurnTimer};
 use crate::agent_session::{Driver, FillerSource, HookCall, HookId, ToolUpdate};
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::{ReplySource, TurnInstructions};
 use crate::tool_executor::{
-    Batch, HANDOFF_AFTER_UPDATE, Running, ToolAnswer, ToolEnd, ToolOutcome, answer, decide,
-    default_reply_instructions, emit_ended, pair_for,
+    Batch, HANDOFF_AFTER_UPDATE, RunnerRef, Running, ToolAnswer, ToolEnd, ToolOutcome, answer,
+    decide, default_reply_instructions, emit_ended, pair_for,
 };
 use crate::trace::{
     CoreStep, FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep,
@@ -30,18 +30,16 @@ impl Driver {
         speech: SpeechId,
         step: u32,
         call: FunctionCall,
-        hosted: bool,
+        runner: Option<RunnerRef>,
         out: &mut Out,
     ) {
         out.trace(TraceToolStep::CallStarted {
             speech,
             call_id: call.call_id.clone(),
             name: call.name.clone(),
-            hosted,
+            hosted: runner.is_some(),
         });
-        if !hosted {
-            return;
-        }
+        let Some(runner) = runner else { return };
         let closing = self.session.closing_past_edge();
         out.machine().append(self.session.states.on_tool_call_started(now, closing));
         // The call is the run's once it runs, whichever run is open when it is committed.
@@ -55,7 +53,7 @@ impl Driver {
         out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
             call: call.clone(),
         }));
-        self.activity.tools.start(call, output_id, speech, step);
+        self.activity.tools.start(call, output_id, speech, step, runner);
     }
 
     /// A blocking call leaves the running set; a detached one stays until its `ToolUpdate::Final`.
@@ -99,7 +97,8 @@ impl Driver {
     }
 
     /// Settle blocking calls whose reply task was forcefully stopped (closing or the watchdog),
-    /// each end before its pair, in start order.
+    /// each end before its pair, in start order. Their bodies are cancelled too: one may have
+    /// detached at the host before the driver heard its answer, and would outlive its told end.
     pub(crate) fn end_live_tools(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
         let live = self.activity.tools.live(speech);
         if live.is_empty() {
@@ -108,6 +107,8 @@ impl Driver {
         let wall = self.step.wall();
         let mut pairs = Vec::with_capacity(live.len());
         for r in &live {
+            let (call_id, runner) = (r.call().call_id.clone(), r.runner().clone());
+            out.machine().push(Effect::CancelTool { call_id, runner });
             let outcome = if self.session.closing.is_some() {
                 ToolOutcome::Error(SESSION_CLOSING.to_owned())
             } else {
@@ -137,6 +138,25 @@ impl Driver {
                 Visibility::Both,
                 out,
             );
+        }
+        self.publish_activity();
+    }
+
+    /// `_ToolExecutor.aclose()`: every body still running at the host, a detached one by now, is
+    /// cancelled and its end told as its own cancellation would tell it.
+    pub(crate) fn cancel_running_tools(&mut self, now: Ts, out: &mut Out) {
+        let running = self.activity.tools.take_all();
+        if running.is_empty() {
+            return;
+        }
+        for r in running {
+            let call_id = r.call().call_id.clone();
+            let id = if r.detached() { format!("{call_id}_final") } else { call_id.clone() };
+            let runner = r.runner().clone();
+            out.machine().push(Effect::CancelTool { call_id: call_id.clone(), runner });
+            let closing = self.session.closing_past_edge();
+            out.machine().append(self.session.states.on_tool_call_ended(now, closing));
+            emit_ended(out, id, call_id, None, ToolEndStatus::Cancelled);
         }
         self.publish_activity();
     }

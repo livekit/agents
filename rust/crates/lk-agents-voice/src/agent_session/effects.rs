@@ -8,7 +8,9 @@ use crate::agent_session::{Answer, Driver, HostEvent, RequestId};
 use crate::audio::AudioChannel;
 use crate::audio_recognition::{EndOfTurnInfo, InterruptionSignal, TurnDetectionMode};
 use crate::events::SessionEvent;
-use crate::trace::{CoreStep, InputStep, InterruptStep, RealtimeStep, Step, Trace, TurnStep};
+use crate::trace::{
+    CoreStep, InputStep, InterruptStep, RealtimeStep, Step, ToolStep, Trace, TurnStep,
+};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::voice::events::UserState;
@@ -116,6 +118,9 @@ impl Out {
                     kind: send.0.kind(),
                     req_id: send.0.req_id().map(str::to_owned),
                 })),
+                Effect::CancelTool { call_id, .. } => {
+                    self.record(Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() }))
+                }
             }
             self.todo.push(effect);
         }
@@ -158,7 +163,8 @@ impl Out {
                 | Effect::Audio(_)
                 | Effect::Decision(_)
                 | Effect::Realtime(_)
-                | Effect::Forwarder(_) => None,
+                | Effect::Forwarder(_)
+                | Effect::CancelTool { .. } => None,
             })
             .collect()
     }
@@ -179,6 +185,11 @@ pub enum Effect {
     Detector(DetectorCall),
     /// Sent to the data plane through the queue.
     Forwarder(crate::data_plane::ForwarderCommand),
+    /// The body running under `call_id` is cancelled; the driver has told its end.
+    CancelTool {
+        call_id: String,
+        runner: crate::tool_executor::RunnerRef,
+    },
 }
 
 #[cfg(test)]
@@ -787,6 +798,7 @@ impl Driver {
                     session.send(cmd);
                 }
             }
+            E::CancelTool { call_id, runner } => runner.0.cancel(&call_id),
             E::Decision(Decision::EndpointingDelayUpdated { min_delay: _ }) => {}
             // Journal-only: the owner's declaration, read by the rules.
             E::Decision(Decision::TurnDeclared { owner: _ }) => {}

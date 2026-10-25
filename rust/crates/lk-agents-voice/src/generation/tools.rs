@@ -62,10 +62,13 @@ impl ToolStep {
             (false, true, Some(runner)) => Some(Ok(runner)),
         };
         // Hosted calls enter the loop's running set; driver-answered ones never run.
-        let hosted = matches!(work, Some(Ok(_)));
+        let runner = match &work {
+            Some(Ok(runner)) => Some(crate::tool_executor::RunnerRef(Arc::clone(runner))),
+            Some(Err(_)) | None => None,
+        };
         let (speech, step) = (handle.id(), handle.num_steps());
         let started =
-            GenEvent::ToolCallStarted { speech, step, call: Box::new(call.clone()), hosted };
+            GenEvent::ToolCallStarted { speech, step, call: Box::new(call.clone()), runner };
         let deferred = if handle.scheduled() {
             shared.report(started);
             None

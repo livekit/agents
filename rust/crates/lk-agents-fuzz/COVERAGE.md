@@ -164,7 +164,7 @@ was a driver bug).
 | P1 | `virtual_time_advances` | the session never does unbounded work at one virtual instant (a livelock) | 0 / 0 / 0 |
 | P1 | `every_task_finishes` | every task the session spawned finishes, without panicking, once it closed; a report names the spawning line | 0 / 0 / 0 |
 | P1 | harness: `session_settles` | the run goes quiet once everything is released | 0 / 11 / 21 (2026-10-25; was 23 / 145 / 127 while a dead driver's refused releases counted as work) |
-| P5 | `nothing_left_live` | once the driver exited, no hold, tool, hook call, filler, segment, utterance, prediction, realtime turn or say stream is still open | 15 / 77 / 60 (new 2026-10-25: holds in most, a detached tool in 14 of 1,024 seeds, a hook call in 2) |
+| P5 | `nothing_left_live` | once the driver exited, no hold, tool, hook call, filler, segment, utterance, prediction, realtime turn or say stream is still open | 0 / 0 / 0 (2026-10-25; was 15 / 77 / 60: holds, hook calls, then a detached tool the driver could not cancel) |
 | P2 | `interruption_has_cause` | every interruption matches an input that allows it | 22 / 87 / 140 |
 | P2 | `interrupted_handle_is_journalled` | every interrupted handle has its `Interrupted` step | 5 / 45 / 46 |
 | P2 | `playback_requires_authorization` | nothing speculative is played before it is authorised | 0 / 0 / 0 |

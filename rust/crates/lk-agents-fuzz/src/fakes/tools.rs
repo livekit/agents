@@ -1,6 +1,7 @@
 //! Tool bodies: every call the product hands to the runner is an invocation with the actual
 //! `call_id`, name, speech and step; the body waits for whatever the case delivers.
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::FunctionCall;
 use lk_agents_voice::{
@@ -10,7 +11,7 @@ use lk_agents_voice::{
 };
 use tokio::sync::oneshot;
 
-use super::{Control, Registry};
+use super::{Control, Registry, Slot};
 use crate::{
     input::{AgentText, Input, ToolAnswer as Answer},
     record::{Detail, Kind},
@@ -18,11 +19,13 @@ use crate::{
 
 pub struct FakeTools {
     registry: Arc<Registry>,
+    /// The bodies that answered `Detached` and run on, by call id: what a cancel ends.
+    detached: Mutex<BTreeMap<String, Slot>>,
 }
 
 impl FakeTools {
     pub fn new(registry: Arc<Registry>) -> Arc<Self> {
-        Arc::new(FakeTools { registry })
+        Arc::new(FakeTools { registry, detached: Mutex::default() })
     }
 }
 
@@ -37,7 +40,7 @@ pub enum Body {
 impl ToolRunner for FakeTools {
     async fn run(&self, call: FunctionCall, speech: SpeechId, _step: u32) -> ToolAnswer {
         let (sender, receiver) = oneshot::channel();
-        self.registry.register(
+        let slot = self.registry.register(
             Kind::Tool,
             Detail::Tool {
                 call_id: call.call_id.clone(),
@@ -47,7 +50,12 @@ impl ToolRunner for FakeTools {
             Control::Tool(sender),
         );
         match receiver.await {
-            Ok(Body::Answer(answer)) => answer,
+            Ok(Body::Answer(answer)) => {
+                if let ToolAnswer::Detached { .. } = answer {
+                    self.detached.lock().unwrap().insert(call.call_id.clone(), slot);
+                }
+                answer
+            }
             Ok(Body::AfterIdle(answer)) => {
                 // The body asks from its own origin, as the binding stamps a tool's commands;
                 // the driver's answer -- idle, or refused by the close -- ends the wait either way.
@@ -63,6 +71,12 @@ impl ToolRunner for FakeTools {
                 answer
             }
             Err(_) => ToolAnswer::Cancelled,
+        }
+    }
+
+    fn cancel(&self, call_id: &str) {
+        if let Some(slot) = self.detached.lock().unwrap().remove(call_id) {
+            self.registry.mark_closed(slot);
         }
     }
 }

@@ -332,7 +332,7 @@ impl Registry {
         self.write(Record::Forwarded { at, slot, tags });
     }
 
-    fn mark_closed(&self, slot: Slot) {
+    pub(super) fn mark_closed(&self, slot: Slot) {
         let at = self.stamps.next();
         self.write(Record::Closed { at, slot });
     }
