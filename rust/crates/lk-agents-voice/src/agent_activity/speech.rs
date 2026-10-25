@@ -965,12 +965,17 @@ impl Driver {
         }
         // A close ending a speech with blocking tools still running: they are answered with the
         // closing error before the speech's own `SpeechDone`; nothing is journalled after `close`.
+        // Their bodies are cancelled, as the reference's close cancels its tool tasks
+        // (`_ToolExecutor.aclose`): answered already, nothing would ever hear their end.
         if self.session.closing.is_some()
             && self.activity.speech_scheduler.contains(speech)
             && self.activity.tools.live_blocking(speech) > 0
             && self.session.close_phase() != Some(ClosePhase::Closed)
         {
             self.end_live_tools(now, speech, out);
+            if let Some(h) = self.activity.speech_scheduler.handle(speech) {
+                h.cancel_tasks();
+            }
         }
         if let Some(h) = self.activity.speech_scheduler.handle(speech) {
             // The host learns of the end only here, with the handle already `done()` (idempotent).

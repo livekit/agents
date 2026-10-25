@@ -664,19 +664,20 @@ impl SpeechHandle {
     /// The watchdog body (`SpeechHandle._cancel`): cancel every linked task, then mark done.
     /// Returns whether it fired.
     pub fn on_interruption_timeout(&self) -> bool {
-        let tasks = {
-            let mut inner = self.inner.lock().unwrap();
-            if !inner.watchdog_armed {
-                return false;
-            }
-            inner.watchdog_armed = false;
-            std::mem::take(&mut inner.tasks)
-        };
+        if !std::mem::replace(&mut self.inner.lock().unwrap().watchdog_armed, false) {
+            return false;
+        }
+        self.cancel_tasks();
+        self.mark_done(None);
+        true
+    }
+
+    /// Cancel every linked task, as `_cancel` does, without marking the speech done.
+    pub(crate) fn cancel_tasks(&self) {
+        let tasks = std::mem::take(&mut self.inner.lock().unwrap().tasks);
         for task in &tasks {
             task.cancel();
         }
-        self.mark_done(None);
-        true
     }
 
     /// `speech_handle._tasks.append(task)`. The handle only cancels these; done-when-all-done is

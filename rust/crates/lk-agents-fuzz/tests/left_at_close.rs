@@ -1,6 +1,7 @@
-//! What a closing session cut short ends with it: a hook it issued.
+//! What a closing session cut short ends with it: a tool body it answered for, a hook it issued.
 use lk_agents_fuzz::drive::{Run, Setup, simulate};
-use lk_agents_fuzz::input::{Input, Millis, Ref, ToolArgs};
+use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
+use lk_agents_fuzz::record::Kind;
 use lk_agents_voice::agent_session::HookKind;
 use lk_agents_voice::trace::{HandoffStep, HookEnd, Step};
 
@@ -12,6 +13,36 @@ fn run(setup: &Setup, inputs: &[Input]) -> Run {
         }
         run
     })
+}
+
+// Catches: a blocking tool the close's bound answered with "session closing" left running at the
+// host. The reference's close cancels its tool tasks (`_ToolExecutor.aclose`); here the body
+// outlived the session and took a late answer (survey seed 189).
+#[test]
+fn a_tool_the_close_answered_is_cancelled() {
+    let inputs = [
+        Input::GenerateReply { user_input: None, instructions: None, allow: None },
+        Input::Advance { ms: Millis(20) },
+        Input::LlmToolCall {
+            chat: Ref::new(0),
+            name: "lookup".into(),
+            args: ToolArgs("{}".into()),
+        },
+        Input::LlmEnd { chat: Ref::new(0) },
+        Input::Advance { ms: Millis(20) },
+        Input::Close { drain: false },
+        Input::Advance { ms: Millis(20_000) },
+        Input::ToolAnswered {
+            tool: Ref::new(0),
+            answer: ToolAnswer::Return,
+            text: AgentText(String::new()),
+        },
+    ];
+    let run = run(&Setup::default(), &inputs);
+    assert!(run.record.driver_finished(), "the session closed");
+    let answered = run.record.applied().last().expect("the late answer was applied");
+    assert!(!answered.accepted, "the body was cancelled with the session");
+    assert!(!run.record.live().has(Kind::Tool, 0), "nothing of the tool is left");
 }
 
 // Catches: a cut step's `function_tools_executed` issued past the edge, after the edge abandoned

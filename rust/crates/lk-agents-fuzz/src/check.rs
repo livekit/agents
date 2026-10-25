@@ -100,8 +100,8 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "interrupted_handle_is_journalled",
     "interruption_has_cause",
     "no_premature_completion",
-    // New on 2026-10-25: a floor hold, a detached tool or a hook call still open when the
-    // session closes.
+    // New on 2026-10-25: a detached tool still running at the host when the session closes;
+    // the driver has no way to cancel one.
     "nothing_left_live",
     "output_replacement_is_clean",
     "provider_failure_is_accounted",

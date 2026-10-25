@@ -820,7 +820,18 @@ impl Run {
                 self.record.set_livelock(detail);
                 self.drop_runtime();
             }
-            let Some(runtime) = &mut self.runtime else { return None };
+            let Some(runtime) = &mut self.runtime else {
+                // The host's loop outlives the session's: what is ready still runs, so a task the
+                // driver cancelled on its way out is gone before the case sends anything else.
+                // Bounded, as the session's own instants are: a task left spinning never stops.
+                for _ in 0..NO_PROGRESS_STEPS {
+                    if !tasks_runnable() {
+                        break;
+                    }
+                    one_task_turn().await;
+                }
+                return None;
+            };
             while let Ok(event) = runtime.queue.try_recv() {
                 self.queue.push(event);
             }
