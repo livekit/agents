@@ -572,7 +572,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         await self._duplex._update_instructions(instructions)
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        from ..voice.generation import remove_instructions
+        from ..voice.tool_output import remove_instructions
 
         chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
         remove_instructions(chat_ctx)

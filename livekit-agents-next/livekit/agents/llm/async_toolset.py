@@ -4,17 +4,10 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ..log import logger
-from ..utils.misc import is_given
-from ..voice.tool_executor import (
-    ToolHandlingOptions,
-    _resolve_async_tool_options,
-    _ToolExecutor,
-)
+from ..voice.tool_executor import ToolHandlingOptions
 from .tool_context import DuplicateMode, Tool, Toolset
 
 if TYPE_CHECKING:
-    from ..voice.agent_activity import AgentActivity
-    from ..voice.agent_session import LiveSession
     from ..voice.events import RunContext as AsyncRunContext  # noqa: F401
 
 # AsyncRunContext is a deprecated alias for RunContext kept for one release so user
@@ -73,22 +66,3 @@ class AsyncToolset(Toolset):
         self._async_tool_options_override = (
             tool_handling.get("async_options") if tool_handling is not None else None
         )
-        self._executor = _ToolExecutor(owning_activity=None)
-
-    def _attach_activity(self, *, activity: AgentActivity | None, session: LiveSession) -> None:
-        """Bind this toolset to a scope. ``activity=None`` makes it session-scoped
-        (replies survive handoff); otherwise replies stay with ``activity``'s agent."""
-        self._executor.set_owning_activity(activity)
-
-        if self._async_tool_options_override is not None:
-            resolved = _resolve_async_tool_options(self._async_tool_options_override)
-        elif activity is not None and is_given(activity._agent._async_tool_options):
-            resolved = _resolve_async_tool_options(activity._agent._async_tool_options)
-        else:
-            resolved = session._async_tool_options
-        self._executor.set_tool_options(resolved)
-
-    async def aclose(self) -> None:
-        await super().aclose()
-        await self._executor.drain()
-        await self._executor.aclose()

@@ -91,7 +91,6 @@ from .voice import (
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     AgentTask,
-    AudioRecognition,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
@@ -117,15 +116,9 @@ from .voice import (
     UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
-    avatar,
     io,
     room_io,
     text_transforms,
-)
-from .voice.amd import (
-    AMD,
-    AMDCategory,
-    AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.keyterm_detection import (
@@ -133,7 +126,7 @@ from .voice.keyterm_detection import (
     KeytermsOptions,
     STTContextOptions,
 )
-from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
+from .voice.room_io import RoomInputOptions, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
     ChatMessageEvent,
@@ -183,9 +176,9 @@ def __getattr__(name: str) -> typing.Any:
 
     if name == "AgentSession":
         # deprecated alias, kept one release
-        from .voice import agent_session
+        from .voice.agent_session import LiveSession
 
-        return agent_session.AgentSession
+        return LiveSession
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -212,7 +205,6 @@ __all__ = [
     "ChatContext",
     "ChatItem",
     "room_io",
-    "RoomIO",
     "RoomInputOptions",
     "RoomOutputOptions",
     "ChatMessage",
@@ -262,7 +254,6 @@ __all__ = [
     "SimulationVerdict",
     "LiveSession",
     "AgentSession",
-    "AudioRecognition",
     "ExpressiveOptions",
     "NonverbalOptions",
     "SpeechSteeringOptions",
@@ -292,7 +283,6 @@ __all__ = [
     "FlushSentinel",
     "LanguageCode",
     "io",
-    "avatar",
     "cli",
     "ipc",
     "llm",
@@ -316,9 +306,6 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
-    "AMD",
-    "AMDCategory",
-    "AMDPredictionEvent",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",

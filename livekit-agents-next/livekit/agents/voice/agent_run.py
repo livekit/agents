@@ -1,6 +1,6 @@
 """``agent.run()``: the slow brain, one input to one result over a given history.
 
-An ``AgentRun`` is the second binding over an ``Agent``, next to the voice ``AgentActivity``:
+An ``AgentRun`` is the second binding over an ``Agent``, next to the voice session:
 it sets the same contextvar so hooks, tools and the pipeline nodes resolve the agent the same
 way, runs the model and tool loop until the answer or an ``InputRequired``, and holds nothing
 after it returns. It knows nothing about rooms, audio or where the message came from.
@@ -69,15 +69,15 @@ from ..llm.utils import answer_arguments, prepare_function_arguments
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import is_given
-from .agent import AgentTask, ModelSettings, TaskAwaited
+from .agent import AgentTask, ModelSettings, TaskAwaited, _BindingContextVar
 from .events import RunContext
-from .generation import (
+from .run_result import RunResult, RunUsage
+from .tool_output import (
     ToolExecutionOutput,
     _serialize_output,
     make_tool_output,
     update_instructions,
 )
-from .run_result import RunResult, RunUsage
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -136,16 +136,12 @@ _HooksToken = tuple[contextvars.Token[RunHooks | None], contextvars.Token[Any]]
 def set_run_hooks(hooks: RunHooks | None) -> _HooksToken:
     """Installs the door's hooks for a turn. The turn is a root: a door reached in process
     from another run's tool, as a test does, is not nested in it."""
-    from .agent_activity import _AgentActivityContextVar
-
-    return _run_hooks.set(hooks), _AgentActivityContextVar.set(None)
+    return _run_hooks.set(hooks), _BindingContextVar.set(None)
 
 
 def reset_run_hooks(token: _HooksToken) -> None:
-    from .agent_activity import _AgentActivityContextVar
-
     _run_hooks.reset(token[0])
-    _AgentActivityContextVar.reset(token[1])
+    _BindingContextVar.reset(token[1])
 
 
 class AgentRun(Generic[Run_T]):
@@ -255,22 +251,20 @@ class AgentRun(Generic[Run_T]):
     # -- the loop --
 
     async def _run(self) -> RunResult[Run_T]:
-        from .agent_activity import _AgentActivityContextVar
-
         # a run started inside another run's tool is a delegation: a fresh conversation the
         # door never sees, on no stack and with no boundary (docs/multi-agent.md)
-        self._nested = isinstance(_AgentActivityContextVar.get(None), AgentRun)
+        self._nested = isinstance(_BindingContextVar.get(None), AgentRun)
         hooks = None if self._nested else _run_hooks.get()
         if hooks is not None:
             self._stack = self._resolve_stack(hooks)
             if self._stack:
                 self._agent = self._stack[-1]
 
-        token = _AgentActivityContextVar.set(self)
+        token = _BindingContextVar.set(self)
         try:
             result = await self._run_bound()
         finally:
-            _AgentActivityContextVar.reset(token)
+            _BindingContextVar.reset(token)
         self._result = result
         if hooks is not None and hooks.on_result is not None:
             hooks.on_result(result)

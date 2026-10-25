@@ -3,11 +3,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ..llm import ChatContext
 from ..metrics import ModelUsage
 from ..version import __version__
-from .agent_session import AgentSessionOptions
 from .events import AgentEvent
 
 
@@ -16,7 +16,8 @@ class SessionReport:
     job_id: str
     room_id: str
     room: str
-    options: AgentSessionOptions
+    options: dict[str, Any] | None
+    """The resolved session options (``session.options``)."""
     events: list[AgentEvent]
     chat_history: ChatContext
     audio_recording_path: Path | None = None
@@ -50,21 +51,7 @@ class SessionReport:
                 str(self.audio_recording_path.absolute()) if self.audio_recording_path else None
             ),
             "audio_recording_started_at": self.audio_recording_started_at,
-            "options": {
-                "allow_interruptions": self.options.interruption["enabled"],
-                "discard_audio_if_uninterruptible": self.options.interruption[
-                    "discard_audio_if_uninterruptible"
-                ],
-                "min_interruption_duration": self.options.interruption["min_duration"],
-                "min_interruption_words": self.options.interruption["min_words"],
-                "min_endpointing_delay": self.options.endpointing["min_delay"],
-                "max_endpointing_delay": self.options.endpointing["max_delay"],
-                "max_tool_steps": self.options.max_tool_steps,
-                "user_away_timeout": self.options.user_away_timeout,
-                "min_consecutive_speech_delay": self.options.min_consecutive_speech_delay,
-                "preemptive_generation": dict(self.options.preemptive_generation),
-                "recording_options": dict(self.options.recording_options),
-            },
+            "options": self.options,
             "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
             "timestamp": self.timestamp,
             "usage": self._usage_to_dict() if self.model_usage else None,

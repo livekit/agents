@@ -96,7 +96,7 @@ def _split_instructions(items: Sequence[ChatItem]) -> tuple[list[ChatItem], list
     ``update_chat_ctx``) is sent in place by chat-completion providers, so it belongs to
     the conversation. A context without that message (a standalone ``llm.chat()``) takes
     the system message it starts with, if any, as its instructions."""
-    from ..voice.generation import INSTRUCTIONS_MESSAGE_ID
+    from ..voice.tool_output import INSTRUCTIONS_MESSAGE_ID
 
     for i, item in enumerate(items):
         if item.id == INSTRUCTIONS_MESSAGE_ID and _is_system_message(item):

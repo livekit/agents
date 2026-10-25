@@ -12,7 +12,6 @@ from ..job import JobExecutorType
 from ..log import logger
 from ..telemetry import loop_monitor
 from ..voice import LiveSession, io
-from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, WorkerOptions
 from . import proto
 from .log import setup_logging
@@ -94,11 +93,6 @@ class AgentsConsole:
             assert self._tcp_audio_output is not None
             self._io_audio_input = self._tcp_audio_input
             self._io_audio_output = self._tcp_audio_output
-
-            self._io_transcription_sync = TranscriptSynchronizer(
-                next_in_chain_audio=self._io_audio_output,
-                next_in_chain_text=None,
-            )
             self._io_acquired_event.set()
             self._io_session = session
 
@@ -107,8 +101,7 @@ class AgentsConsole:
                 session,
                 self.console_mode,
                 self._io_audio_input,
-                self._io_transcription_sync.audio_output,
-                self._io_transcription_sync.text_output,
+                self._io_audio_output,
             )
 
     @property
@@ -174,8 +167,7 @@ class AgentsConsole:
                 self.io_session,
                 mode,
                 self._io_audio_input,
-                self._io_transcription_sync.audio_output,
-                self._io_transcription_sync.text_output,
+                self._io_audio_output,
             )
 
     def _update_sess_io(
@@ -184,7 +176,6 @@ class AgentsConsole:
         mode: ConsoleMode,
         audio_input: io.AudioInput,
         audio_output: io.AudioOutput,
-        text_output: io.TextOutput,
     ) -> None:
         if asyncio.get_running_loop() != self.io_loop:
             raise RuntimeError("_update_sess_io must be executed on the io_loop")
@@ -199,11 +190,9 @@ class AgentsConsole:
             if mode == "text":
                 sess.input.audio = None
                 sess.output.audio = None
-                sess.output.transcription = None
             else:
                 sess.input.audio = audio_input
                 sess.output.audio = audio_output
-                sess.output.transcription = text_output
 
 
 def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = False) -> None:

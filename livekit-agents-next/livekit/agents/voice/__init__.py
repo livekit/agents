@@ -1,6 +1,6 @@
 from typing import Any
 
-from . import io, run_result
+from . import io, room_io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
     ExpressiveOptions,
@@ -10,7 +10,6 @@ from .agent_session import (
     SpeechSteeringOptions,
     VoiceActivityVideoSampler,
 )
-from .audio_recognition import AudioRecognition
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -34,24 +33,13 @@ from .events import (
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
-from .keyterm_detection import (
-    KeytermDetectionOptions,
-    KeytermsOptions,
-    STTContextOptions,
-)
-from .remote_session import RemoteSession
-from .room_io import (
-    _ParticipantAudioOutput,
-    _ParticipantStreamTranscriptionOutput,
-    _ParticipantTranscriptionOutput,
-)
+from .keyterm_detection import KeytermDetectionOptions, KeytermsOptions, STTContextOptions
 from .run_result import RunOutputOptions
 from .speech_handle import SpeechHandle
-from .transcription import TranscriptSynchronizer, text_transforms
+from .transcription import text_transforms
 
 __all__ = [
     "LiveSession",
-    "AgentSession",
     "ExpressiveOptions",
     "NonverbalOptions",
     "RecordingOptions",
@@ -77,7 +65,6 @@ __all__ = [
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
-    "RemoteSession",
     "ToolExecutionUpdatedEvent",
     "ToolCallStarted",
     "ToolCallUpdated",
@@ -87,32 +74,17 @@ __all__ = [
     "KeytermsOptions",
     "KeytermDetectionOptions",
     "STTContextOptions",
-    "TranscriptSynchronizer",
     "io",
     "room_io",
     "run_result",
-    "_ParticipantAudioOutput",
-    "_ParticipantTranscriptionOutput",
-    "_ParticipantStreamTranscriptionOutput",
     "text_transforms",
-    "AudioRecognition",
 ]
-
-# Cleanup docs of unexported modules
-_module = dir()
-NOT_IN_ALL = [m for m in _module if m not in __all__]
-
-__pdoc__ = {}
-
-for n in NOT_IN_ALL:
-    __pdoc__[n] = False
 
 
 def __getattr__(name: str) -> Any:
     if name == "AgentSession":
         # deprecated alias, kept one release
-        from . import agent_session
+        from .agent_session import LiveSession
 
-        return agent_session.AgentSession
-
+        return LiveSession
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

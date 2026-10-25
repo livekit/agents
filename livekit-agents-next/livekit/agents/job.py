@@ -343,11 +343,6 @@ class JobContext:
 
         c = AgentsConsole.get_instance()
 
-        # in case LiveSession.aclose() was cancelled due to timeout
-        if (recorder_io := session._recorder_io) and recorder_io.recording:
-            logger.warning("recorder_io is still recording at session end, closing it")
-            await recorder_io.aclose()
-
         report = self.make_session_report(session)
 
         # console recording, dump data to a local file
@@ -369,7 +364,7 @@ class JobContext:
 
         has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)
-        if (recording_enabled(report.options.recording_options) or has_evals) and obs_url:
+        if (recording_enabled(session._recording_options) or has_evals) and obs_url:
             try:
                 await _upload_session_report(
                     agent_name=self._info.job.agent_name,
@@ -448,32 +443,16 @@ class JobContext:
         if not session:
             raise RuntimeError("Cannot prepare report, no LiveSession was found")
 
-        recorder_io = session._recorder_io
-
-        if recorder_io and recorder_io.recording:
-            raise RuntimeError(
-                "Cannot create the LiveSession report, the RecorderIO is still recording"
-            )
-
         sr = SessionReport(
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
             options=session.options,
-            audio_recording_path=recorder_io.output_path if recorder_io else None,
-            audio_recording_started_at=recorder_io.recording_started_at if recorder_io else None,
             started_at=session._started_at,
             events=session._recorded_events,
             chat_history=session.history.copy(),
             model_usage=session.usage.model_usage,
         )
-
-        if recorder_io:
-            if recorder_io.output_path:
-                sr.audio_recording_path = recorder_io.output_path
-            if recorder_io.recording_started_at:
-                sr.audio_recording_started_at = recorder_io.recording_started_at
-                sr.duration = sr.timestamp - sr.audio_recording_started_at
 
         return sr
 

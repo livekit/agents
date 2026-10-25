@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import dataclasses
 import inspect
 import sys
-import time
 from collections.abc import (
-    AsyncGenerator,
-    AsyncIterable,
     Awaitable,
     Callable,
-    Coroutine,
     Generator,
     Sequence,
 )
@@ -20,6 +17,7 @@ from typing import (
     Any,
     Generic,
     Literal,
+    NamedTuple,
     cast,
     get_args,
     get_origin,
@@ -30,9 +28,8 @@ from typing import (
 from pydantic import TypeAdapter
 from typing_extensions import ParamSpec, TypeVar
 
-from livekit import rtc
-
-from .. import inference, llm, stt, tokenize, tts, utils, vad
+from .. import _core, inference, llm, stt, tts, vad
+from .._generated.tool_executor import ToolHandlingOptions
 from ..llm import (
     LLM,
     DuplexModel,
@@ -42,7 +39,6 @@ from ..llm import (
     find_function_tools,
 )
 from ..llm.chat_context import Instructions
-from ..llm.duplex_adapter import _DuplexRealtimeSession
 from ..llm.tool_context import (
     DuplicateMode,
     DuplicateScope,
@@ -54,22 +50,17 @@ from ..llm.tool_context import (
     function_tool,
 )
 from ..log import logger
-from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
+from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given, misc
 from .events import Deps_T, State_T, UserTurnExceededEvent
-from .speech_handle import SpeechHandle
-from .tool_executor import ToolHandlingOptions
-from .turn import TurnHandlingOptions, _migrate_turn_handling
+from .turn import TurnHandlingOptions
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
-    from .agent_activity import AgentActivity
     from .agent_run import AgentRun
     from .agent_session import ExpressiveOptions, LiveSession
-    from .audio_recognition import AudioRecognition
     from .events import RunContext
-    from .io import TimedString
     from .run_result import RunResult, RunUsage
     from .turn import TurnDetectionMode
 
@@ -83,6 +74,19 @@ _OutputValidatorFn = Callable[["RunContext", Any], Any]
 Output_T = TypeVar("Output_T", default=Any)
 
 DEFAULT_AGENT_ID = "default_agent"
+
+# what runs the agents of this context: a voice session, or a text run
+_BindingContextVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_agent_binding")
+
+
+class _VoiceBinding(NamedTuple):
+    """The voice session running ``agent``'s hook or tool, and what its commands are sent as."""
+
+    session: LiveSession
+    agent: Agent
+    origin: str | None = None
+    # the core's id of the speech whose tool is running
+    speech_id: int | None = None
 
 
 class _OnEnterHook:
@@ -170,7 +174,7 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
                 self._id = misc.camel_to_snake_case(type(self).__name__)
 
         turn_handling = (
-            _migrate_turn_handling(
+            _core.migrate_turn_handling(
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
                 turn_detection=turn_detection,
@@ -293,25 +297,12 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         Raises:
             RuntimeError: If the agent is not running in this context.
         """
-        return self._get_binding_or_raise().chat_ctx
+        binding = self._get_binding_or_raise()
+        return binding.session.history if isinstance(binding, _VoiceBinding) else binding.chat_ctx
 
     @property
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
         return self._interruption_detection
-
-    @property
-    def audio_recognition(self) -> AudioRecognition:
-        """Access the audio recognition system for this agent.
-
-        The only public member is ``stt_context`` — live speaker metadata from the
-        STT stream.
-
-        Raises:
-            RuntimeError: If the agent is not running.
-        """
-        activity = self._get_activity_or_raise()
-        assert activity._audio_recognition is not None
-        return activity._audio_recognition
 
     def update_options(
         self,
@@ -350,26 +341,20 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         if isinstance(llm, DuplexModel):
             llm = DuplexRealtimeAdapter(llm)
 
-        activity = self._bound_activity()
-        if activity is None:
-            # not running in this context: replace stored config, applied on the next start
-            if is_given(stt):
-                self._stt = stt
-            if is_given(vad):
-                self._vad = vad
-            if is_given(llm):
-                self._llm = llm
-            if is_given(tts):
-                self._tts = tts
-            if is_given(expressive):
-                self._expressive = expressive
-            return
-
-        activity._update_models(new_stt=stt, new_vad=vad, new_llm=llm, new_tts=tts)
+        if is_given(stt):
+            self._stt = stt
+        if is_given(vad):
+            self._vad = vad
+        if is_given(llm):
+            self._llm = llm
+        if is_given(tts):
+            self._tts = tts
         if is_given(expressive):
-            # after _update_models so a rejected model swap leaves expressive untouched;
-            # resolved per turn (agent value over session), no live plumbing needed
             self._expressive = expressive
+        session = self._bound_session()
+        if session is not None:
+            given = {"stt": stt, "vad": vad, "llm": llm, "tts": tts}
+            session._running.update_models(**{k: v for k, v in given.items() if is_given(v)})
 
     @property
     def deps_type(self) -> type[Deps_T] | None:
@@ -655,149 +640,23 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
             tool_choice="none",
         )
 
-    def stt_node(
-        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
-    ) -> (
-        AsyncIterable[stt.SpeechEvent | str]
-        | Coroutine[Any, Any, AsyncIterable[stt.SpeechEvent | str]]
-        | Coroutine[Any, Any, None]
-    ):
+    def _bound_binding(self) -> _VoiceBinding | AgentRun[Any] | None:
+        """What runs this agent in the current context: a voice session or a run (internal).
+
+        Resolved through the contextvar both set around every hook and tool, so one shared
+        instance serving several sessions reads the right one.
         """
-        A node in the processing pipeline that transcribes audio frames into speech events.
-
-        By default, this node uses a Speech-To-Text (STT) capability from the current agent.
-        If the STT implementation does not support streaming natively, a VAD (Voice Activity
-        Detection) mechanism is required to wrap the STT.
-
-        You can override this node with your own implementation for more flexibility (e.g.,
-        custom pre-processing of audio, additional buffering, or alternative STT strategies).
-
-        Args:
-            audio (AsyncIterable[rtc.AudioFrame]): An asynchronous stream of audio frames.
-            model_settings (ModelSettings): Configuration and parameters for model execution.
-
-        Yields:
-            stt.SpeechEvent: An event containing transcribed text or other STT-related data.
-        """
-        return Agent.default.stt_node(self, audio, model_settings)
-
-    def llm_node(
-        self,
-        chat_ctx: llm.ChatContext,
-        tools: list[llm.Tool],
-        model_settings: ModelSettings,
-    ) -> (
-        AsyncIterable[llm.ChatChunk | str | FlushSentinel]
-        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | FlushSentinel]]
-        | Coroutine[Any, Any, str]
-        | Coroutine[Any, Any, llm.ChatChunk]
-        | Coroutine[Any, Any, None]
-    ):
-        """
-        A node in the processing pipeline that processes text generation with an LLM.
-
-        By default, this node uses the agent's LLM to process the provided context. It may yield
-        plain text (as `str`) for straightforward text generation, or `llm.ChatChunk` objects that
-        can include text and optional tool calls. `ChatChunk` is helpful for capturing more complex
-        outputs such as function calls, usage statistics, or other metadata.
-
-        You can override this node to customize how the LLM is used or how tool invocations
-        and responses are handled.
-
-        Args:
-            chat_ctx (llm.ChatContext): The context for the LLM (the conversation history).
-            tools (list[FunctionTool]): A list of callable tools that the LLM may invoke.
-            model_settings (ModelSettings): Configuration and parameters for model execution.
-
-        Yields/Returns:
-            str: Plain text output from the LLM.
-            llm.ChatChunk: An object that can contain both text and optional tool calls.
-        """
-        return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
-
-    def transcription_node(
-        self, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
-    ) -> (
-        AsyncIterable[str | TimedString]
-        | Coroutine[Any, Any, AsyncIterable[str | TimedString]]
-        | Coroutine[Any, Any, None]
-    ):
-        """
-        A node in the processing pipeline that finalizes transcriptions from text segments.
-
-        This node can be used to adjust or post-process text coming from an LLM (or any other
-        source) into a final transcribed form. For instance, you might clean up formatting, fix
-        punctuation, or perform any other text transformations here.
-
-        You can override this node to customize post-processing logic according to your needs.
-
-        Args:
-            text (AsyncIterable[str | TimedString]): An asynchronous stream of text segments.
-            model_settings (ModelSettings): Configuration and parameters for model execution.
-
-        Yields:
-            str: Finalized or post-processed text segments.
-        """
-        return Agent.default.transcription_node(self, text, model_settings)
-
-    def tts_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> (
-        AsyncIterable[rtc.AudioFrame]
-        | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
-        | Coroutine[Any, Any, None]
-    ):
-        """
-        A node in the processing pipeline that synthesizes audio from text segments.
-
-        By default, this node converts incoming text into audio frames using the Text-To-Speech
-        from the agent.
-        If the TTS implementation does not support streaming natively, it uses a sentence tokenizer
-        to split text for incremental synthesis.
-
-        You can override this node to provide different text chunking behavior, a custom TTS engine,
-        or any other specialized processing.
-
-        Args:
-            text (AsyncIterable[str]): An asynchronous stream of text segments to be synthesized.
-            model_settings (ModelSettings): Configuration and parameters for model execution.
-
-        Yields:
-            rtc.AudioFrame: Audio frames synthesized from the provided text.
-        """
-        return Agent.default.tts_node(self, text, model_settings)
-
-    def realtime_audio_output_node(
-        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
-    ) -> (
-        AsyncIterable[rtc.AudioFrame]
-        | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
-        | Coroutine[Any, Any, None]
-    ):
-        """A node processing the audio from the realtime LLM session before it is played out."""
-        return Agent.default.realtime_audio_output_node(self, audio, model_settings)
-
-    def _bound_binding(self) -> AgentActivity | AgentRun[Any] | None:
-        """What runs this agent in the current context: a voice activity or a run (internal).
-
-        Resolved through the contextvar both set around every hook, tool and pipeline node,
-        so one shared instance serving several sessions reads the right one.
-        """
-        from .agent_activity import _AgentActivityContextVar
-
-        binding = _AgentActivityContextVar.get(None)
+        binding = _BindingContextVar.get(None)
         if binding is None or binding.agent is not self:
             return None
-        return binding
+        return binding  # type: ignore[no-any-return]
 
-    def _bound_activity(self) -> AgentActivity | None:
-        """The voice activity running this agent in the current context, if any (internal)."""
-        from .agent_activity import AgentActivity
-
+    def _bound_session(self) -> LiveSession | None:
+        """The voice session running this agent in the current context, if any (internal)."""
         binding = self._bound_binding()
-        return binding if isinstance(binding, AgentActivity) else None
+        return binding.session if isinstance(binding, _VoiceBinding) else None
 
-    def _get_binding_or_raise(self) -> AgentActivity | AgentRun[Any]:
+    def _get_binding_or_raise(self) -> _VoiceBinding | AgentRun[Any]:
         binding = self._bound_binding()
         if binding is None:
             raise RuntimeError(
@@ -806,202 +665,13 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
             )
         return binding
 
-    def _get_activity_or_raise(self) -> AgentActivity:
-        """Get the current voice activity for this agent (internal)"""
-        from .agent_activity import AgentActivity
-
+    def _get_session_or_raise(self) -> LiveSession:
         binding = self._get_binding_or_raise()
-        if not isinstance(binding, AgentActivity):
+        if not isinstance(binding, _VoiceBinding):
             raise RuntimeError(
                 f"agent `{self.id}` is running in agent.run(), which has no live session"
             )
-        return binding
-
-    class default:
-        @staticmethod
-        async def stt_node(
-            agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
-        ) -> AsyncGenerator[stt.SpeechEvent, None]:
-            """Default implementation for `Agent.stt_node`"""
-            activity = agent._get_activity_or_raise()
-            assert activity.stt is not None, "stt_node called but no STT node is available"
-
-            wrapped_stt = activity.stt
-            temporary_adapter: stt.StreamAdapter | None = None
-
-            if not activity.stt.capabilities.streaming:
-                if not activity.vad:
-                    raise RuntimeError(
-                        f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"  # noqa: E501
-                        "Or manually wrap your STT in a stt.StreamAdapter"
-                    )
-
-                temporary_adapter = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
-                wrapped_stt = temporary_adapter
-
-            try:
-                conn_options = activity.session.conn_options.stt_conn_options
-                async with wrapped_stt.stream(conn_options=conn_options) as stream:
-                    _audio_input_started_at: float = (
-                        activity._audio_recognition._input_started_at
-                        if activity._audio_recognition is not None
-                        and activity._audio_recognition._input_started_at is not None
-                        else (
-                            activity.session._recorder_io.recording_started_at
-                            if activity.session._recorder_io
-                            and activity.session._recorder_io.recording_started_at
-                            else activity.session._started_at
-                            if activity.session._started_at
-                            else time.time()
-                        )
-                    )
-                    stream.start_time_offset = time.time() - _audio_input_started_at
-
-                    @utils.log_exceptions(logger=logger)
-                    async def _forward_input() -> None:
-                        async for frame in audio:
-                            stream.push_frame(frame)
-
-                    forward_task = asyncio.create_task(_forward_input())
-                    try:
-                        async for event in stream:
-                            yield event
-                    finally:
-                        await utils.aio.cancel_and_wait(forward_task)
-            finally:
-                if temporary_adapter is not None:
-                    await temporary_adapter.aclose()
-
-        @staticmethod
-        async def llm_node(
-            agent: Agent,
-            chat_ctx: llm.ChatContext,
-            tools: list[llm.Tool],
-            model_settings: ModelSettings,
-        ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
-            """Default implementation for `Agent.llm_node`"""
-            binding = agent._get_binding_or_raise()
-            assert binding.llm is not None, "llm_node called but no LLM node is available"
-            assert isinstance(binding.llm, llm.LLM), (
-                "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
-            )
-
-            tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
-            activity_llm = binding.llm
-
-            conn_options = binding.llm_conn_options
-            async with activity_llm.chat(
-                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
-            ) as stream:
-                async for chunk in stream:
-                    yield chunk
-
-        @staticmethod
-        async def tts_node(
-            agent: Agent,
-            text: AsyncIterable[str],
-            model_settings: ModelSettings,
-        ) -> AsyncGenerator[rtc.AudioFrame, None]:
-            """Default implementation for `Agent.tts_node`"""
-            activity = agent._get_activity_or_raise()
-            if activity.tts is None:
-                raise RuntimeError(
-                    "`tts_node` called but no TTS node is available. If audio output is not needed, disable it using "
-                    "`session.output.set_audio_enabled(False)`."
-                )
-
-            expressive_active = activity._resolve_expressive_options() is not None
-            wrapped_tts = activity.tts
-            temporary_adapter: tts.StreamAdapter | None = None
-
-            if not activity.tts.capabilities.streaming:
-                temporary_adapter = tts.StreamAdapter(
-                    tts=wrapped_tts,
-                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
-                        retain_format=True,
-                        # markup only exists in the stream when expressive is active
-                        xml_aware=expressive_active,
-                    ),
-                )
-                wrapped_tts = temporary_adapter
-
-            try:
-                # Mark whether expressive is active for this synthesis, synchronously
-                # just before stream() snapshots it. Doing it here (the single synthesis
-                # choke point for both generate_reply and say()) scopes it to this turn
-                # rather than leaving stale state on the instance. The provider's chunk
-                # defaults then drive the TTS's input tokenizer.
-                activity.tts._set_expressive(expressive_active)
-
-                conn_options = activity.session.conn_options.tts_conn_options
-                async with wrapped_tts.stream(conn_options=conn_options) as stream:
-
-                    async def _forward_input() -> None:
-                        async for chunk in text:
-                            stream.push_text(chunk)
-
-                        stream.end_input()
-
-                    forward_task = asyncio.create_task(_forward_input())
-                    try:
-                        async for ev in stream:
-                            yield ev.frame
-                    finally:
-                        await utils.aio.cancel_and_wait(forward_task)
-            finally:
-                if temporary_adapter is not None:
-                    await temporary_adapter.aclose()
-
-        @staticmethod
-        async def transcription_node(
-            agent: Agent, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
-        ) -> AsyncGenerator[str | TimedString, None]:
-            """Default implementation for `Agent.transcription_node`"""
-            async for delta in text:
-                yield delta
-
-        @staticmethod
-        async def realtime_audio_output_node(
-            agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
-        ) -> AsyncGenerator[rtc.AudioFrame, None]:
-            """Default implementation for `Agent.realtime_audio_output_node`"""
-            activity = agent._get_activity_or_raise()
-            assert activity.realtime_llm_session is not None, (
-                "realtime_audio_output_node called but no realtime LLM session is available"
-            )
-
-            async for frame in audio:
-                yield frame
-
-    @property
-    def realtime_llm_session(self) -> llm.RealtimeSession:
-        """
-        Retrieve the realtime LLM session associated with the current agent.
-
-        Raises:
-            RuntimeError: If the agent is not running or the realtime LLM session is not available
-        """
-        if (rt_session := self._get_activity_or_raise().realtime_llm_session) is None:
-            raise RuntimeError("no realtime LLM session")
-
-        return rt_session
-
-    @property
-    def duplex_session(self) -> llm.DuplexSession:
-        """
-        Retrieve the duplex session of the current agent, for provider-specific APIs.
-
-        A duplex model is driven through an adapter that presents it as a realtime session; this
-        returns the plugin's own session, where a provider puts what the abstraction does not carry.
-
-        Raises:
-            RuntimeError: If the agent is not running, or is not running on a duplex model
-        """
-        rt_session = self._get_activity_or_raise().realtime_llm_session
-        if not isinstance(rt_session, _DuplexRealtimeSession):
-            raise RuntimeError("no duplex session, this agent is not running a DuplexModel")
-
-        return rt_session.duplex_session
+        return binding.session
 
     @property
     def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:
@@ -1020,8 +690,8 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
     def turn_detection(self, value: TurnDetectionMode | None) -> None:
         self._turn_detection = value
 
-        if (activity := self._bound_activity()) is not None:
-            activity.update_options(turn_detection=value)
+        if (session := self._bound_session()) is not None:
+            session.update_options(turn_detection=value)
 
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:
@@ -1173,7 +843,7 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         Raises:
             RuntimeError: If the agent is not running
         """
-        return self._get_activity_or_raise().session
+        return self._get_session_or_raise()
 
 
 TaskResult_T = TypeVar("TaskResult_T")
@@ -1234,7 +904,7 @@ class AgentTask(Agent, Generic[TaskResult_T, TaskState_T]):
     ) -> None:
         tools = tools or []
         turn_handling = (
-            _migrate_turn_handling(
+            _core.migrate_turn_handling(
                 turn_detection=turn_detection,
                 allow_interruptions=allow_interruptions,
                 min_endpointing_delay=min_endpointing_delay,
@@ -1256,13 +926,9 @@ class AgentTask(Agent, Generic[TaskResult_T, TaskState_T]):
 
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
-        self.__inactive_ev = asyncio.Event()
-        self.__inactive_ev.set()  # set when the agent is not awaited or activity is closed
         self._preserve_function_call_history = preserve_function_call_history
-
-        # the activity this task paused, and its own; both bound in __await_impl
-        self._old_activity: AgentActivity | None = None
-        self._task_activity: AgentActivity | None = None
+        # the core's handle while the task runs on a call
+        self._handle: _core.TaskHandle | None = None
 
         # the task's own state, and the call of the agent below that awaits it in text
         state_type = _task_state_type(type(self))
@@ -1317,255 +983,78 @@ class AgentTask(Agent, Generic[TaskResult_T, TaskState_T]):
         A task is instantiated per use, so its tool list is its own; a shared ``Agent`` is
         configuration and does not change after import.
         """
-        activity = self._bound_activity()
-        if activity is None:
-            self._tools = list({tool.id: tool for tool in tools}.values())
-            return
-        await activity.update_tools(tools)
+        from .._core_view import tool_specs
+        from .tool_executor import ToolRunner
+
+        self._tools = list({tool.id: tool for tool in tools}.values())
+        if (session := self._bound_session()) is not None:
+            pool = session._pool(self)
+            session._running.update_tools(
+                tool_specs(pool), tools_host=pool, tool_runner=ToolRunner(session, self, pool)
+            )
 
     def cancel(self) -> None:
-        if self._task_activity:
-            self._task_activity.interrupt(force=True)
-        if self.__fut.done():
-            return
-        self._complete(ToolError(f"AgentTask {self.id} is cancelled"))
+        if self._handle is not None:
+            self._handle.cancel(self.id)
+        if not self.__fut.done():
+            self._complete(ToolError(f"AgentTask {self.id} is cancelled"))
 
     def _complete(self, result: TaskResult_T | Exception) -> None:
         """End the task with its result (internal): a tool returns ``Completed(value)``."""
         if self.__fut.done():
             raise RuntimeError(f"{self.__class__.__name__} is already done")
-
         if isinstance(result, Exception):
             self.__fut.set_exception(result)
+            self.__fut.exception()  # silence exc not retrieved warnings
         else:
             self.__fut.set_result(result)
-
-        self.__fut.exception()  # silence exc not retrieved warnings
-
-        from .agent_activity import _SpeechHandleContextVar
-
-        speech_handle = _SpeechHandleContextVar.get(None)
-
-        if speech_handle:
-            speech_handle._maybe_run_final_output = result
-
-        # if not self.__inline_mode:
-        #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
+        if self._handle is not None and not self._handle.done:
+            if isinstance(result, Exception):
+                self._handle.fail(str(result), class_name=type(result).__name__)
+            else:
+                self._handle.complete(result)
 
     async def __await_impl(self) -> TaskResult_T:
         if self.__started:
             raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
-
         self.__started = True
 
-        current_task = asyncio.current_task()
-        if current_task is None:
-            raise RuntimeError(
-                f"{self.__class__.__name__} must be executed inside an async context"
-            )
-
-        # imported at call time: agent_activity imports Agent at module scope, so the reverse can't
-        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
-
-        task_info = _get_activity_task_info(current_task)
-
-        speech_handle = _SpeechHandleContextVar.get(None)
-        old_activity = _AgentActivityContextVar.get(None)
-        from .agent_activity import AgentActivity
-
-        if old_activity is not None and not isinstance(old_activity, AgentActivity):
+        binding = _BindingContextVar.get(None)
+        if binding is not None and not isinstance(binding, _VoiceBinding):
             # in text the run takes it from here: the call stays pending, the task is pushed on
             # the lane's agent stack, and the value comes back on a later turn
             raise TaskAwaited(self)
-        if old_activity is None or not task_info or not task_info.inline_task:
+        if binding is None:
             raise RuntimeError(
-                f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
-            )
-        old_agent = old_activity.agent
-        session = old_activity.session
-        self._old_activity = old_activity
-
-        def _handle_task_done(_: asyncio.Task[Any]) -> None:
-            if self.__fut.done():
-                return
-
-            # if the asyncio.Task running the InlineTask completes before the InlineTask itself, log
-            # an error and attempt to recover by terminating the InlineTask.
-            logger.error(
-                f"The asyncio.Task finished before {self.__class__.__name__} was completed."
+                f"{self.__class__.__name__} should only be awaited inside tool_functions or the "
+                "on_enter/on_exit methods of an Agent"
             )
 
-            self._complete(
-                RuntimeError(
-                    f"The asyncio.Task finished before {self.__class__.__name__} was completed."
-                )
-            )
-
-        blocked_tasks = [current_task]
-        if (
-            old_activity._on_enter_task
-            and not old_activity._on_enter_task.done()
-            and current_task is not old_activity._on_enter_task
-        ):
-            blocked_tasks.append(old_activity._on_enter_task)
-
-        async with old_activity._inline_task_slot(
-            speech_handle=speech_handle, blocked_tasks=blocked_tasks
-        ):
-            current_task.add_done_callback(_handle_task_done)
-
-            if (
-                task_info.function_call
-                and isinstance(old_activity.llm, RealtimeModel)
-                and not old_activity.llm.capabilities.manual_function_calls
-            ):
-                logger.error(
-                    f"Realtime model '{old_activity.llm.label}' does not support resuming function calls from chat context, "
-                    "using AgentTask inside a function tool may have unexpected behavior."
-                )
-
-            # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
-            self.__inactive_ev.clear()
-            suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
-            pending_on_enter_task: asyncio.Task[None] | None = None
-            try:
-                # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
-                # AgentTasks that require user input, but session.run() can't return until
-                # all watched handles complete — creating a circular wait.
-                await session._update_activity(
-                    self,
-                    previous_activity="pause",
-                    blocked_tasks=blocked_tasks,
-                    wait_on_enter=False,
-                )
-                self._task_activity = session._activity_of(self)
-
-                if not self._task_activity and not self.done():
-                    self._complete(
-                        ToolError(
-                            f"activity doesn't start for {self.id}, likely due to session closing"
-                        )
-                    )
-
-                run_state = session._global_run_state
-
-                if self._task_activity and (on_enter_task := self._task_activity._on_enter_task):
-                    if run_state and not run_state.done():
-                        # watch the on_enter task as a guard so RunResult won't complete
-                        # before on_enter has registered its own speech handles
-                        run_state._watch_handle(on_enter_task)
-                        pending_on_enter_task = on_enter_task
-                    else:
-                        # no active run to guard — just wait for on_enter directly
-                        await asyncio.shield(on_enter_task)
-
-                # now unwatch the parent speech handle and blocked tasks that belong to the
-                # old activity — they can't complete while this AgentTask is running, and
-                # keeping them watched would block RunResult from completing. A foreground
-                # hold waiting on this task is in the same position, so its guard suspends too.
-                if run_state and not run_state.done():
-                    if speech_handle and run_state._unwatch_handle(speech_handle):
-                        suspended_handles.append(speech_handle)
-                    for blocked in [*blocked_tasks, *session._foreground_guards]:
-                        if run_state._unwatch_handle(blocked):
-                            suspended_handles.append(blocked)
-                    if suspended_handles:
-                        run_state._mark_done_if_needed(None)
-            # asyncio.CancelledError derives from BaseException, not Exception
-            except BaseException:
-                self.__inactive_ev.set()
-                raise
-
-            try:
-                return await asyncio.shield(self.__fut)
-
-            finally:
-                # run_state could have changed after self.__fut
-                run_state = session._global_run_state
-
-                # re-watch the suspended handles so the resumed parent activity
-                # is tracked by the current RunResult again
-                if run_state and not run_state.done():
-                    for handle in [*suspended_handles, current_task]:
-                        run_state._watch_handle(handle)
-
-                if pending_on_enter_task:
-                    try:
-                        await asyncio.shield(pending_on_enter_task)
-                    except BaseException:
-                        logger.exception("error in on_enter task of agent %s", self.id)
-
-                task_activity = self._task_activity
-                if session._closing and task_activity is None:
-                    # the activity never started (session closing), skip the handoff;
-                    # the close path owns the previous activity
-                    pass
-                elif session.current_agent != self:
-                    logger.warning(
-                        f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
-                        "Ignoring handoff to the previous agent, likely due to `LiveSession.update_agent` being invoked."
-                    )
-                    await old_activity.aclose()
-                else:
-                    # the task worked on the session's history: what it added since the pause
-                    # stays, filtered of its function calls unless they are to be kept
-                    if task_activity is not None:
-                        merged_chat_ctx = old_activity._chat_ctx.copy().merge(
-                            task_activity._chat_ctx,
-                            exclude_function_call=not self._preserve_function_call_history,
-                            exclude_instructions=True,
-                        )
-                        # set directly, `session._update_activity` syncs it to the rt_session if needed
-                        old_activity._chat_ctx.items[:] = merged_chat_ctx.items
-
-                    await session._update_activity(
-                        old_agent, new_activity="resume", wait_on_enter=False
-                    )
-                self.__inactive_ev.set()
+        session = binding.session
+        self._handle = handle = _core.TaskHandle()
+        session._running.enter_task(
+            handle,
+            **session._frame(self),
+            speech_id=binding.speech_id,
+            preserve_function_call_history=self._preserve_function_call_history,
+            parent=binding.agent.id,
+            origin=binding.origin,
+        )
+        session._agent = self
+        try:
+            await handle.joined()
+        except Exception:
+            # a failure is the one `_complete` set; a close leaves the task unsettled
+            pass
+        finally:
+            handle.abandon()
+            session._agent = binding.agent
+        if not self.__fut.done():
+            self._complete(ToolError(f"AgentTask {self.id} ended before it completed"))
+        return await self.__fut
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
-
-    async def _wait_for_inactive(self) -> None:
-        await self.__inactive_ev.wait()
-
-
-@dataclass
-class _ActivityTaskInfo:
-    function_call: llm.FunctionCall | None = None
-    speech_handle: SpeechHandle | None = None
-    inline_task: bool = False
-
-
-def _set_activity_task_info(
-    task: asyncio.Task[Any],
-    *,
-    function_call: NotGivenOr[llm.FunctionCall | None] = NOT_GIVEN,
-    speech_handle: NotGivenOr[SpeechHandle | None] = NOT_GIVEN,
-    inline_task: NotGivenOr[bool] = NOT_GIVEN,
-) -> None:
-    info = _get_activity_task_info(task) or _ActivityTaskInfo()
-
-    if is_given(function_call):
-        info.function_call = function_call
-
-    if is_given(speech_handle):
-        info.speech_handle = speech_handle
-
-    if is_given(inline_task):
-        info.inline_task = inline_task
-
-    setattr(task, "__livekit_agents_activity_task", info)
-
-
-def _get_activity_task_info(task: asyncio.Task[Any]) -> _ActivityTaskInfo | None:
-    return getattr(task, "__livekit_agents_activity_task", None)
-
-
-def _pass_through_activity_task_info(task: asyncio.Task[Any]) -> None:
-    current_task = asyncio.current_task()
-    if current_task and (info := _get_activity_task_info(current_task)):
-        setattr(task, "__livekit_agents_activity_task", info)
 
 
 class _InstructionsText(str):
