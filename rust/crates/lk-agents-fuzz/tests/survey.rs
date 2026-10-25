@@ -29,6 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[allow(unused_imports)]
 use lk_agents_fuzz::{
+    check::KNOWN_FINDINGS,
     drive::{Outcome, PHASES, Setup},
     input::Input,
     record::Kind,
@@ -300,6 +301,22 @@ fn campaign(window: &Window) {
         println!("       none");
     }
 
+    // The gate: a contract outside the known findings is new, whatever window found it.
+    let new: Vec<&String> =
+        found.keys().filter(|contract| !KNOWN_FINDINGS.contains(&contract.as_str())).collect();
+    println!("\nfindings outside the known ones (check::KNOWN_FINDINGS):");
+    for contract in &new {
+        let (seed, what) = &example[*contract];
+        println!("  NEW {contract}: seed {seed}: {what}");
+    }
+    if new.is_empty() {
+        println!("  none");
+    }
+    let unseen: Vec<&&str> = KNOWN_FINDINGS.iter().filter(|k| !found.contains_key(**k)).collect();
+    if !unseen.is_empty() {
+        println!("known findings this window did not reach: {unseen:?}");
+    }
+
     // Only the sound direction: a row that opens something directly without declaring it.
     // The reverse cannot be checked, because a speech arrives from the driver later and no
     // timing rule can say which earlier input caused it.
@@ -329,4 +346,5 @@ fn campaign(window: &Window) {
             println!("{input}\t{}", row.join("\t"));
         }
     }
+    assert!(new.is_empty(), "new findings: {new:?}");
 }

@@ -90,6 +90,29 @@ impl Check {
     }
 }
 
+/// The contracts with open findings: what the launch gate tolerates (COVERAGE.md, section 12).
+/// A finding of any other contract anywhere in the gate fails it, so a new kind of defect cannot
+/// hide among the known ones; a contract whose findings are all fixed comes off the list.
+/// `session_settles` is the release phase's own verdict, not a rule.
+pub const KNOWN_FINDINGS: &[&str] = &[
+    "forwarded_while_enabled",
+    "idle_respects_holds",
+    "interrupted_handle_is_journalled",
+    "interruption_has_cause",
+    "no_premature_completion",
+    "output_replacement_is_clean",
+    "provider_failure_is_accounted",
+    "provider_streams_closed",
+    "session_settles",
+    "speech_done_once",
+    "speech_error_is_injected",
+    "speech_settles",
+    "synthesized_speech_is_played",
+    "text_conservation",
+    "tool_call_reaches_runner",
+    "tool_lifecycle",
+];
+
 /// One guarantee the driver must keep.
 ///
 /// A rule is told once, when the run is complete -- after the test's inputs, the release rounds,
