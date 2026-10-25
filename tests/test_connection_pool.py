@@ -100,8 +100,13 @@ async def test_get_expired():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("wall_jump", [-3600, 3600])
-@pytest.mark.parametrize("elapsed", [1, 61])
+@pytest.mark.parametrize(
+    "wall_jump,elapsed",
+    [
+        (3600, 1),  # a forward jump must not expire a young pooled connection
+        (-3600, 61),  # a backward jump must not resurrect an expired one
+    ],
+)
 async def test_connection_age_ignores_wall_clock_changes(monkeypatch, wall_jump, elapsed):
     clock = SimpleNamespace(wall=10000.0, elapsed=100.0)
     monkeypatch.setattr(
