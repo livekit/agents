@@ -3,10 +3,10 @@
 //!
 //! The reference's `AgentActivity.drain()` awaits `on_exit`, then `_pause_scheduling_task()`,
 //! which waits for every speech task to finish, tools included. The driver answers at its
-//! `Drained{refused: None}` step, so at that point of its journal the `on_exit` the drain issued
-//! (`DrainStarted{exit_hook}`) has finished, and every speech the host was told about
-//! (`Emitted(SpeechCreated)`) has been told done (`Emitted(SpeechDone)`). An `Ok` with no such
-//! step behind it is an call the driver never decided.
+//! `Drained{refused: None}` step, so at that point of its journal the `on_exit` of the agent it
+//! drains has finished (`HookFinished`, whoever issued it), and every speech the host was told
+//! about (`Emitted(SpeechCreated)`) has been told done (`Emitted(SpeechDone)`). An `Ok` with no
+//! such step behind it is an call the driver never decided.
 use lk_agents_voice::{
     agent_activity::scheduling::{SpeechId, SpeechKind},
     agent_session::{HookId, HookKind},
@@ -29,7 +29,7 @@ impl Rule for DrainAnswersOnceSettled {
     const CONTRACT: Contract = Contract {
         id: "drain_answers_once_settled",
         guarantee: "drain() answers Ok only after its on_exit ended and every announced speech was announced done.",
-        examples: &[settled_then_answered],
+        examples: &[settled_then_answered, answered_while_next_agent_exits],
         counterexamples: &[answered_without_step, answered_while_speaking, answered_before_exit],
         probe: Some(drain_while_speaking),
     };
@@ -56,14 +56,29 @@ impl Rule for DrainAnswersOnceSettled {
             let Some(decided) = decided else { continue };
             let before = &steps[..decided];
 
-            // Its `on_exit` ended before it: the drain that issued it is the last one started.
-            // (`None`: the frame's `on_exit` had already run before this drain.)
-            if let Some(Some(hook)) = before.iter().rev().find_map(|(_, step)| match step {
-                Step::Handoff(HandoffStep::DrainStarted { exit_hook }) => Some(*exit_hook),
-                _ => None,
-            }) {
+            // Its agent's `on_exit` ended before it, whichever of the drain, a handoff or the
+            // close issued it. The drain is bound to the agent driving when it is asked: the frame
+            // (the steps between two `AgentUpdated`) it arrived in. An agent swapped in since may
+            // have its own drain waiting on its own exit.
+            let swap =
+                |step: &Step| matches!(step, Step::Handoff(HandoffStep::AgentUpdated { .. }));
+            let asked = steps.partition_point(|(when, _)| *when < call.called_at());
+            let frame = steps[..asked].iter().filter(|(_, s)| swap(s)).count();
+            let mut at_frame = 0;
+            for (_, step) in before {
+                if swap(step) {
+                    at_frame += 1;
+                }
+                let Step::Handoff(HandoffStep::HookIssued { hook, kind: HookKind::OnExit, .. }) =
+                    step
+                else {
+                    continue;
+                };
+                if at_frame != frame {
+                    continue;
+                }
                 let ended = before.iter().any(|(_, step)| {
-                    matches!(step, Step::Handoff(HandoffStep::HookFinished { hook: h, kind: HookKind::OnExit, .. }) if *h == hook)
+                    matches!(step, Step::Handoff(HandoffStep::HookFinished { hook: h, kind: HookKind::OnExit, .. }) if h == hook)
                 });
                 check.expect(
                     &call,
@@ -96,8 +111,15 @@ fn drain() -> Authored {
         .sent_opening(Input::Drain { wait: true }, &[(Kind::Answer, crate::record::Detail::None)])
 }
 
-fn started() -> Step {
-    Step::Handoff(HandoffStep::DrainStarted { exit_hook: Some(HookId(2)) })
+fn exit_issued(hook: u64) -> Step {
+    Step::Handoff(HandoffStep::HookIssued {
+        hook: HookId(hook),
+        kind: HookKind::OnExit,
+        agent: Some("agent".into()),
+        speech: None,
+        turn: None,
+        at_tail: None,
+    })
 }
 
 fn exit_finished() -> Step {
@@ -115,7 +137,26 @@ fn drained() -> Step {
 /// The exit ended, the frame drained, then the call.
 fn settled_then_answered() -> Recording {
     drain()
-        .journal(started())
+        .journal(exit_issued(2))
+        .journal(exit_finished())
+        .journal(drained())
+        .result(0, Answer::DrainOk)
+        .done()
+}
+
+/// A drain asked of an agent an inline task then paused: answered once that agent's exit ended,
+/// while the task's agent runs the exit its own drain asked for.
+fn answered_while_next_agent_exits() -> Recording {
+    let swapped = Step::Handoff(HandoffStep::AgentUpdated {
+        tools: 0,
+        chat_ctx: false,
+        reopened: "",
+        legs: Default::default(),
+    });
+    drain()
+        .journal(exit_issued(2))
+        .journal(swapped)
+        .journal(exit_issued(4))
         .journal(exit_finished())
         .journal(drained())
         .result(0, Answer::DrainOk)
@@ -124,7 +165,7 @@ fn settled_then_answered() -> Recording {
 
 /// An `Ok` the driver never decided.
 fn answered_without_step() -> Recording {
-    drain().journal(started()).result(0, Answer::DrainOk).done()
+    drain().journal(exit_issued(2)).result(0, Answer::DrainOk).done()
 }
 
 /// A speech announced and never announced done, yet the drain says the frame is quiet.
@@ -137,7 +178,7 @@ fn answered_while_speaking() -> Recording {
         user_initiated: true,
     });
     drain()
-        .journal(started())
+        .journal(exit_issued(2))
         .journal(announced)
         .journal(exit_finished())
         .journal(drained())
@@ -147,7 +188,7 @@ fn answered_while_speaking() -> Recording {
 
 /// Drained while its own `on_exit` never ended.
 fn answered_before_exit() -> Recording {
-    drain().journal(started()).journal(drained()).result(0, Answer::DrainOk).done()
+    drain().journal(exit_issued(2)).journal(drained()).result(0, Answer::DrainOk).done()
 }
 
 /// Prerequisite: a drain asked while a `say()` is still being spoken, on a session whose host runs
