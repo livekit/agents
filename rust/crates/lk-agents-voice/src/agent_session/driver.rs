@@ -214,6 +214,8 @@ pub enum Input {
     ChannelEnded(ChannelEnd),
     StreamOpened(crate::room_io::StreamOpened),
     Video(lk_agents_rtc::VideoFrameRef),
+    /// A cleared buffer's answer: where playback stopped.
+    PlaybackFinished(SpeechId, lk_agents_abi::voice::io::PlaybackFinished),
 }
 
 /// What the queue owner hands [`Driver::handle`]: an input in arrival order, or time reaching
@@ -244,6 +246,7 @@ pub struct Driver {
     pub(crate) watch: WatchHub,
     /// So a player's `ToolsDone` is ordered with the socket's events.
     pub(crate) realtime_tx: Tx<crate::agent_activity::realtime::RealtimeWake>,
+    pub(crate) playback_tx: Tx<(SpeechId, lk_agents_abi::voice::io::PlaybackFinished)>,
     pub(crate) stt_tx: Tx<crate::audio::Tagged<SpeechEvent>>,
     pub(crate) vad_tx: Tx<VadEvent>,
     pub(crate) leg_opens: Tx<crate::room_io::StreamOpened>,
@@ -459,6 +462,9 @@ impl Driver {
             Event::Input(Input::ChannelEnded(end)) => self.on_leg_ended(now, end, &mut out),
             Event::Input(Input::StreamOpened(opened)) => self.on_leg_opened(now, opened, &mut out),
             Event::Input(Input::Video(frame)) => self.on_video_frame(now, frame, &mut out),
+            Event::Input(Input::PlaybackFinished(speech, finished)) => {
+                self.on_playback_cleared(speech, finished, &mut out)
+            }
         }
         // Scheduled in the same cycle as the wake that changed it.
         self.pump_schedule(now, &mut out);

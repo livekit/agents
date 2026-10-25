@@ -103,7 +103,6 @@ fn host_interrupt_then_journal() -> Recording {
             speech: SpeechId(3),
             cause: InterruptCause::Host,
             force: false,
-            position: None,
         }))
         .done()
 }
@@ -117,7 +116,6 @@ fn sink_swap_then_journal() -> Recording {
             speech: SpeechId(3),
             cause: InterruptCause::Host,
             force: true,
-            position: None,
         }))
         .done()
 }
@@ -130,7 +128,6 @@ fn host_cause_without_host_call() -> Recording {
             speech: SpeechId(3),
             cause: InterruptCause::Host,
             force: false,
-            position: None,
         }))
         .done()
 }

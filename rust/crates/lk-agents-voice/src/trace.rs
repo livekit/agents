@@ -223,7 +223,6 @@ pub enum InterruptStep {
         speech: SpeechId,
         cause: InterruptCause,
         force: bool,
-        position: Option<std::time::Duration>,
     },
     /// The interruption watchdog fired: tasks cancelled and the speech marked done
     /// (`SpeechHandle._cancel`).

@@ -221,13 +221,12 @@ impl Driver {
         let open: Vec<SpeechId> = self.activity.speech_scheduler.speech_ids().collect();
         for speech in open {
             match self.interrupt_speech(now, speech, InterruptCause::Closing, true, out) {
-                Ok(InterruptOutcome::Now { .. }) => {}
+                Ok(InterruptOutcome::Now) => {}
                 // Already stopped: the journal still carries the close's own step for it.
                 Ok(InterruptOutcome::Already) => out.trace(InterruptStep::Interrupted {
                     speech,
                     cause: InterruptCause::Closing,
                     force: true,
-                    position: None,
                 }),
                 // Unreachable: `force` overrides the hold. Said rather than swallowed.
                 Err(_) => out.trace(CoreStep::PortFailure("a forced close interrupt was refused")),

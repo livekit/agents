@@ -105,7 +105,10 @@ impl Out {
                 // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
                 Effect::Audio(
                     crate::agent_session::effects::AudioOp::SetInput
-                    | crate::agent_session::effects::AudioOp::SetVideoInput,
+                    | crate::agent_session::effects::AudioOp::SetVideoInput
+                    | crate::agent_session::effects::AudioOp::SetAudioOutput(_)
+                    | crate::agent_session::effects::AudioOp::SetTranscriptionOutput(_)
+                    | crate::agent_session::effects::AudioOp::SetOutputEnabled { .. },
                 ) => {}
                 Effect::Decision(d) => self.record(Step::Decided(d.clone())),
                 Effect::Realtime(send) => self.record(Step::Realtime(RealtimeStep::Sent {
@@ -370,13 +373,23 @@ pub enum AudioOp {
     /// The old pump stops first.
     SetInput,
     SetVideoInput,
+    /// A reply in flight keeps the sink it started with.
+    SetAudioOutput(Option<ResourceId>),
+    SetTranscriptionOutput(Option<ResourceId>),
+    /// The output stays installed; its chain is told.
+    SetOutputEnabled {
+        output: crate::trace::OutputKind,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateOp {
     Pause,
     Resume,
-    Clear,
+    /// `clear_buffer()`, after a flush that closes the segment; answered with where playback
+    /// stopped.
+    ClearBuffer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -717,15 +730,47 @@ impl Driver {
                     leg.close();
                 }
             }
-            E::Audio(AudioOp::Gate { speech: _, op, cause: _ }) => {
-                if let Some(out) = self.shared.output.audio() {
-                    match op {
-                        GateOp::Pause => out.pause(),
-                        GateOp::Resume => out.resume(),
-                        GateOp::Clear => out.cut(),
+            E::Audio(AudioOp::Gate { speech, op, cause: _ }) => {
+                let Some(sink) = self.shared.output.audio() else { return };
+                match op {
+                    GateOp::Pause => sink.pause(),
+                    GateOp::Resume => sink.resume(),
+                    // `cut`, never a bare `clear_buffer`: the flush closes the segment in the
+                    // trackers, or the next speech's wait resolves on this clear's event.
+                    GateOp::ClearBuffer => {
+                        sink.cut();
+                        let finished = lk_agents_abi::voice::io::PlaybackFinished {
+                            playback_position: sink.tracker().position(),
+                            interrupted: true,
+                            synchronized_transcript: None,
+                        };
+                        let _ = self.playback_tx.send((speech, finished));
                     }
                 }
             }
+            E::Audio(AudioOp::SetAudioOutput(id)) => {
+                let sink = id.and_then(|id| self.shared.resources.audio_output(id));
+                let previous = self.shared.output.set_audio(sink);
+                self.observe_recorder(previous.as_deref());
+            }
+            E::Audio(AudioOp::SetTranscriptionOutput(id)) => {
+                let sink = id.and_then(|id| self.shared.resources.text_output(id));
+                self.shared.output.set_transcription(sink);
+            }
+            E::Audio(AudioOp::SetOutputEnabled { output, enabled }) => match output {
+                crate::trace::OutputKind::Audio => {
+                    self.shared.output.set_audio_enabled(enabled);
+                    if let Some(sink) = self.shared.output.audio() {
+                        if enabled { sink.on_attached() } else { sink.on_detached() }
+                    }
+                }
+                crate::trace::OutputKind::Transcription => {
+                    self.shared.output.set_transcription_enabled(enabled);
+                    if let Some(sink) = self.shared.output.transcription() {
+                        if enabled { sink.on_attached() } else { sink.on_detached() }
+                    }
+                }
+            },
             // Abort the old pump first: two sources on one table look like the user talking over
             // themselves.
             E::Audio(AudioOp::SetInput) => self.input.swap_audio_forwarder(&*self.shared.spawner),

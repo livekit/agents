@@ -47,10 +47,9 @@ use lk_agents_voice::{
     agent_session::{
         ActivityCommand, AgentUpdate, Answer as DriverAnswer, Close, Command, CommitSuperseded,
         DrainRefused, Driver, DtmfCommand, Event, FillerSource, HandoffRefused, HoldId, HookId,
-        HookOutcome, HostAudio, HostAudioOut, HostEvent, HostRecorder, HostTextOut, HostVideo,
-        IdleRefused, IvrCommand, NewActivity, PreviousActivity, RecorderCommand, SayText,
-        SpeechCommand, TaskCommand, TaskEntry, Timebase, ToolUpdate, TurnCommand,
-        effects::Decision,
+        HookOutcome, HostAudio, HostEvent, HostRecorder, HostVideo, IdleRefused, IvrCommand,
+        NewActivity, PreviousActivity, RecorderCommand, SayText, SpeechCommand, TaskCommand,
+        TaskEntry, Timebase, ToolUpdate, TurnCommand, effects::Decision,
     },
     amd::{
         classifier::{AmdConfig, In as AmdIn, Start as AmdStart},

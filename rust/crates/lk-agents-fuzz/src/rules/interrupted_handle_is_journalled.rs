@@ -46,7 +46,6 @@ fn interrupted_and_journalled() -> Recording {
             speech: SpeechId(3),
             cause: InterruptCause::Host,
             force: false,
-            position: None,
         }))
         .done()
 }

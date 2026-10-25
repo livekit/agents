@@ -24,6 +24,7 @@ pub mod driver;
 pub mod effects;
 pub mod host_events;
 pub(crate) mod idle;
+pub(crate) mod outputs;
 pub(crate) mod providers;
 pub(crate) mod signals;
 pub mod time;
@@ -65,6 +66,8 @@ pub(crate) struct LiveSession {
     pub(crate) stt: Option<lk_agents_abi::resources::SttRef>,
     /// Restored to a task's parent on exit.
     pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
+    /// `session.output` as the core decides with it.
+    pub(crate) outputs: outputs::Outputs,
     /// `AgentSession._tools`, and the hosts that run them.
     pub(crate) tools: crate::tool_executor::SessionTools,
     pub(crate) tool_hosts: Vec<lk_agents_abi::HostRef>,
@@ -88,6 +91,7 @@ pub(crate) struct SessionParts {
     pub(crate) tts: Option<lk_agents_abi::resources::TtsRef>,
     pub(crate) stt: Option<lk_agents_abi::resources::SttRef>,
     pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
+    pub(crate) outputs: outputs::Outputs,
     pub(crate) max_unrecoverable_errors: u32,
     pub(crate) start_options: StartOptions,
     pub(crate) room_link: Option<crate::room_io::link::RoomLinkConfig>,
@@ -113,6 +117,7 @@ impl LiveSession {
             tts,
             stt,
             vad,
+            outputs,
             max_unrecoverable_errors,
             start_options,
             room_link,
@@ -137,6 +142,7 @@ impl LiveSession {
             tts,
             stt,
             vad,
+            outputs,
             tools: Default::default(),
             tool_hosts: Vec::new(),
             keyterms: None,

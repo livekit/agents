@@ -13,8 +13,8 @@ use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::DriverBuilder;
 use crate::agent_session::commands::{
     ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId, HookId, HookOutcome,
-    HostAudio, HostAudioOut, HostTextOut, HostVideo, IdleRefused, IoKind, IvrCommand, Origin,
-    SayText, SpeechCommand, TaskCommand, TaskEntry, ToolUpdate, TurnCommand,
+    HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand,
+    TaskCommand, TaskEntry, ToolUpdate, TurnCommand,
 };
 use crate::agent_session::time::Timebase;
 use crate::agent_session::{Answer, CommitSuperseded};
@@ -533,16 +533,20 @@ impl SessionApi {
             }
             sink.tracker().anchor_to(self.anchor);
         }
-        self.send(ActivityCommand::SetAudioOutput(sink.map(HostAudioOut)))
+        let sink = sink.map(|s| self.resources.register_audio_output(s));
+        self.send(ActivityCommand::SetAudioOutput(sink))
     }
 
     /// `session.output.transcription = ..` after `start()`: the next reply forwards into the new
     /// leg; one in flight keeps the leg it started with.
-    #[host(method(send = ActivityCommand::SetTranscriptionOutput(sink.map(HostTextOut))))]
+    #[host(method)]
     pub fn set_transcription_output(
         &self,
         #[host(required)] sink: Option<Arc<dyn TextOutput>>,
-    ) -> Result<(), SessionRefused>;
+    ) -> Result<(), SessionRefused> {
+        let sink = sink.map(|s| self.resources.register_text_output(s));
+        self.send(ActivityCommand::SetTranscriptionOutput(sink))
+    }
 
     /// `Agent.update_tools()` on a running agent. All three parts go together: the runner is
     /// per-agent. The reference's follow-up `update_chat_ctx(chat_ctx.copy(tools=tools))` stays on

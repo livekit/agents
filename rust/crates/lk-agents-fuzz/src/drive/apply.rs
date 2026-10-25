@@ -397,12 +397,16 @@ impl Run {
             Input::SetAudioOutput { attach } => {
                 let out = attach.then(|| {
                     let pausable = self.setup.pausable_output;
-                    HostAudioOut(fakes::FakeAudioOutput::new(registry.clone(), pausable))
+                    let sink = fakes::FakeAudioOutput::new(registry.clone(), pausable);
+                    self.resources.register_audio_output(sink)
                 });
                 ActivityCommand::SetAudioOutput(out).into()
             }
             Input::SetTranscriptionOutput { attach } => {
-                let out = attach.then(|| HostTextOut(fakes::FakeTextOutput::new(registry.clone())));
+                let out = attach.then(|| {
+                    let sink = fakes::FakeTextOutput::new(registry.clone());
+                    self.resources.register_text_output(sink)
+                });
                 ActivityCommand::SetTranscriptionOutput(out).into()
             }
             Input::UpdateModels { models } => {

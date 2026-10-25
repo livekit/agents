@@ -60,6 +60,9 @@ pub(crate) mod realtime_state {
         pub(super) cancelled_requests: BTreeSet<String>,
         /// A generation answering a request already settled: its `GenerationDone` is dropped.
         pub(super) discarded: Option<String>,
+        /// The playing speech's message, truncated to what was heard once its cleared buffer
+        /// reports where playback stopped.
+        pub(super) truncate_on_clear: Option<(SpeechId, String)>,
         /// The generation whose foreign deltas were warned about; reset when a generation opens.
         foreign: Option<String>,
         pub(super) closing: bool,
@@ -1039,11 +1042,8 @@ impl Driver {
         if self.activity.realtime_state.ended() {
             return self.settle_all(Settled::Ended, false, out);
         }
-        // What the user heard, only while speaking: otherwise the tracker holds the previous
-        // speech's mark.
-        let played = (self.session.states.agent_state() == AgentState::Speaking)
-            .then(|| self.shared.output.audio().map(|out| out.tracker().position()))
-            .flatten();
+        // What the user heard is only known while speaking.
+        let speaking = self.session.states.agent_state() == AgentState::Speaking;
         // Only a generation whose speech stopped: the cancel is session-wide, and a speech that
         // plays on keeps its response.
         let current = self.activity.speech_scheduler.current_speech();
@@ -1061,20 +1061,37 @@ impl Driver {
         let truncation = self.activity.realtime_state.caps.message_truncation;
         for (cmd, speech, message_id) in interrupts {
             self.rt_send(cmd, out);
-            // Only what was heard, and only when something was: the playing speech's message.
-            if let Some(message_id) = message_id.filter(|_| speech.is_some() && speech == current)
-                && let Some(played) = played.filter(|p| !p.is_zero() && truncation)
+            // Only the playing speech's message, once its clear says what was heard.
+            if let Some(message_id) = message_id.filter(|_| speaking && truncation)
+                && let Some(speech) = speech.filter(|s| Some(*s) == current)
             {
-                let truncate = rt::Truncate {
-                    message_id,
-                    has_audio: true,
-                    audio_end_ms: u64::try_from(played.as_millis()).unwrap_or(u64::MAX),
-                    audio_transcript: None,
-                };
-                self.rt_send(RealtimeCommand::Truncate(truncate), out);
+                self.activity.realtime_state.truncate_on_clear = Some((speech, message_id));
             }
         }
         self.settle_all(Settled::Interrupted, true, out);
+    }
+
+    /// The cleared buffer reports where playback stopped: the interrupted message is truncated to
+    /// it, when something was heard.
+    pub(crate) fn on_playback_cleared(
+        &mut self,
+        speech: SpeechId,
+        finished: lk_agents_abi::voice::io::PlaybackFinished,
+        out: &mut Out,
+    ) {
+        let pending = &mut self.activity.realtime_state.truncate_on_clear;
+        let Some((_, message_id)) = pending.take_if(|(s, _)| *s == speech) else { return };
+        let played = finished.playback_position;
+        if played.is_zero() || self.session.closing_past_edge() {
+            return;
+        }
+        let truncate = rt::Truncate {
+            message_id,
+            has_audio: true,
+            audio_end_ms: u64::try_from(played.as_millis()).unwrap_or(u64::MAX),
+            audio_transcript: None,
+        };
+        self.rt_send(RealtimeCommand::Truncate(truncate), out);
     }
 
     /// The session closes: every pending request settles `Closing`; every open generation is

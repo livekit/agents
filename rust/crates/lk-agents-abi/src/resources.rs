@@ -4,6 +4,7 @@
 //! The table resolves an id to the provider for whoever performs those effects.
 
 use crate::llm::realtime::RealtimeCapabilities;
+use crate::voice::io::{AudioOutput, AudioOutputCapabilities, AudioOutputExt, TextOutput};
 use crate::{
     Llm, ProviderId, RealtimeSession, Stt, SttCapabilities, Tts, TtsCapabilities, Vad,
     VadCapabilities,
@@ -52,12 +53,29 @@ pub struct RealtimeRef {
     pub capabilities: RealtimeCapabilities,
 }
 
+/// The agent's audio output: what it said about itself when handed over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioOutputRef {
+    pub id: ResourceId,
+    pub label: String,
+    /// Taken over its whole chain: `pause` only if every link can pause.
+    pub capabilities: AudioOutputCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextOutputRef {
+    pub id: ResourceId,
+    pub label: String,
+}
+
 enum Resource {
     Stt(Arc<dyn Stt>),
     Vad(Arc<dyn Vad>),
     Llm(Arc<dyn Llm>),
     Tts(Arc<dyn Tts>),
     Realtime(Arc<dyn RealtimeSession>),
+    AudioOutput(Arc<dyn AudioOutput>),
+    TextOutput(Arc<dyn TextOutput>),
 }
 
 #[derive(Default)]
@@ -121,6 +139,25 @@ impl Resources {
         self.get(id, |r| if let Resource::Realtime(s) = r { Some(Arc::clone(s)) } else { None })
     }
 
+    pub fn register_audio_output(&self, out: Arc<dyn AudioOutput>) -> AudioOutputRef {
+        let label = out.label().to_owned();
+        let capabilities = AudioOutputCapabilities { pause: out.can_pause() };
+        AudioOutputRef { id: self.insert(Resource::AudioOutput(out)), label, capabilities }
+    }
+
+    pub fn register_text_output(&self, out: Arc<dyn TextOutput>) -> TextOutputRef {
+        let label = out.label().to_owned();
+        TextOutputRef { id: self.insert(Resource::TextOutput(out)), label }
+    }
+
+    pub fn audio_output(&self, id: ResourceId) -> Option<Arc<dyn AudioOutput>> {
+        self.get(id, |r| if let Resource::AudioOutput(o) = r { Some(Arc::clone(o)) } else { None })
+    }
+
+    pub fn text_output(&self, id: ResourceId) -> Option<Arc<dyn TextOutput>> {
+        self.get(id, |r| if let Resource::TextOutput(o) = r { Some(Arc::clone(o)) } else { None })
+    }
+
     pub fn stt(&self, id: ResourceId) -> Option<Arc<dyn Stt>> {
         self.get(id, |r| if let Resource::Stt(s) = r { Some(Arc::clone(s)) } else { None })
     }
@@ -144,7 +181,8 @@ impl Resources {
             Some(Resource::Vad(v)) => v.prewarm(),
             Some(Resource::Llm(l)) => l.prewarm(),
             Some(Resource::Tts(t)) => t.prewarm(),
-            Some(Resource::Realtime(_)) | None => {}
+            Some(Resource::Realtime(_) | Resource::AudioOutput(_) | Resource::TextOutput(_))
+            | None => {}
         }
     }
 

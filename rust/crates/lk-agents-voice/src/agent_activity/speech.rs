@@ -188,7 +188,7 @@ impl Driver {
                 // exists. `say(audio=)` is exempt; a detached or disabled output speaks as text.
                 if !matches!(text, SayText::Audio { .. })
                     && self.session.tts.is_none()
-                    && self.shared.output.plays_audio()
+                    && self.session.outputs.plays_audio()
                 {
                     out.trace(SpeechStep::SayRefused { why: SAY_WITHOUT_TTS_REFUSED });
                     self.fail_waiter(call, SAY_WITHOUT_TTS_REFUSED);
@@ -290,14 +290,13 @@ impl Driver {
                         speech: id,
                         cause: InterruptCause::Host,
                         force,
-                        position: None,
                     });
                     false
                 } else {
                     // Current or queued. The refusal is the same one by name.
                     match self.interrupt_speech(now, id, InterruptCause::Host, force, out) {
                         // The socket too, once, for a pipeline speech on a realtime session.
-                        Ok(InterruptOutcome::Now { .. }) => !self.is_realtime_speech(id),
+                        Ok(InterruptOutcome::Now) => !self.is_realtime_speech(id),
                         // Already interrupted or done: a no-op, so another speech's live
                         // generation is not cancelled under it.
                         Ok(InterruptOutcome::Already) => false,
@@ -555,8 +554,8 @@ impl Driver {
             tools: turn_toolset.specs.clone(),
             on_enter: spec.on_enter,
             running_tool_calls: self.activity.tools.running_tool_calls(),
-            audio_output_enabled: self.shared.output.plays_audio(),
-            text_output_enabled: self.shared.output.shows_transcription(),
+            audio_output_enabled: self.session.outputs.plays_audio(),
+            text_output_enabled: self.session.outputs.shows_transcription(),
         };
         let request = match &spec.source {
             ReplySource::Llm
@@ -569,7 +568,7 @@ impl Driver {
                 chat_ctx: record,
                 tools: turn_toolset.specs.clone(),
                 tts_enabled: false,
-                text_output_enabled: self.shared.output.shows_transcription(),
+                text_output_enabled: self.session.outputs.shows_transcription(),
                 instructions_hash: crate::generation::stable_hash(&instructions),
             },
         };
@@ -999,7 +998,7 @@ impl Driver {
         next: AgentState,
         out: &mut Out,
     ) -> Option<AgentState> {
-        let audio_output_ready = self.shared.output.plays_audio();
+        let audio_output_ready = self.session.outputs.plays_audio();
         let (old, eff) = self.session.update_agent_state(now, next, audio_output_ready);
         out.machine().append(eff);
         old

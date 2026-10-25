@@ -1,7 +1,7 @@
 //! The activity's IO: the STT and VAD legs (reopened by a handoff or `update_models`), audio and
 //! video input, and output enablement.
 
-use crate::agent_session::effects::{Effect, ProviderCall};
+use crate::agent_session::effects::{AudioOp, Effect, ProviderCall};
 use crate::agent_session::effects::{Out, StreamKind};
 use crate::agent_session::{Driver, IoKind};
 use crate::audio::{
@@ -249,16 +249,23 @@ impl Driver {
         let changed = match leg {
             IoKind::AudioInput => self.input.set_audio_enabled(enabled),
             IoKind::AudioOutput => {
-                let changed = self.shared.output.set_audio_enabled(enabled);
-                if changed && let Some(out) = self.shared.output.audio() {
-                    if enabled { out.on_attached() } else { out.on_detached() }
+                let changed =
+                    std::mem::replace(&mut self.session.outputs.audio_enabled, enabled) != enabled;
+                if changed {
+                    let output = OutputKind::Audio;
+                    out.machine()
+                        .push(Effect::Audio(AudioOp::SetOutputEnabled { output, enabled }));
                 }
                 changed
             }
             IoKind::Transcription => {
-                let changed = self.shared.output.set_transcription_enabled(enabled);
-                if changed && let Some(out) = self.shared.output.transcription() {
-                    if enabled { out.on_attached() } else { out.on_detached() }
+                let changed =
+                    std::mem::replace(&mut self.session.outputs.transcription_enabled, enabled)
+                        != enabled;
+                if changed {
+                    let output = OutputKind::Transcription;
+                    out.machine()
+                        .push(Effect::Audio(AudioOp::SetOutputEnabled { output, enabled }));
                 }
                 changed
             }

@@ -415,7 +415,7 @@ impl Driver {
     pub(crate) fn interrupt_for_user_turn(&mut self, now: Ts, out: &mut Out) {
         let Some(current) = self.current_handle().filter(|h| h.interruptible()) else { return };
         match self.interrupt_speech(now, current.id(), InterruptCause::UserTurn, false, out) {
-            Ok(InterruptOutcome::Now { .. } | InterruptOutcome::Already) => {}
+            Ok(InterruptOutcome::Now | InterruptOutcome::Already) => {}
             // A hold taken since the guard was read: the handle's to keep, said by name.
             Err(_) => {
                 out.trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed))
@@ -447,7 +447,7 @@ impl Driver {
         });
         let Some(speech) = unheard else { return };
         match self.interrupt_speech(now, speech, InterruptCause::Superseded, true, out) {
-            Ok(InterruptOutcome::Now { .. } | InterruptOutcome::Already) => {}
+            Ok(InterruptOutcome::Now | InterruptOutcome::Already) => {}
             // Unreachable: `force` overrides the hold. Said rather than swallowed.
             Err(_) => out.trace(CoreStep::PortFailure("a forced supersede was refused")),
         }

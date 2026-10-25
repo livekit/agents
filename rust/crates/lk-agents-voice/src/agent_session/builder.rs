@@ -2,7 +2,7 @@
 //! spawns the pumps that feed it.
 
 use super::driver::*;
-use crate::agent_activity::false_interruption::{PausedSpeech, sink_facts};
+use crate::agent_activity::false_interruption::PausedSpeech;
 use crate::agent_activity::scheduling::SpeechScheduler;
 use crate::agent_activity::{ActivityParts, DriverConfig, GateSnapshot, PIPELINE_SAMPLE_RATE};
 use crate::agent_session::LiveSession;
@@ -108,6 +108,9 @@ impl DriverBuilder {
         > = Tx::new(queue_tx.clone(), Input::Overlap);
         let rt_tx: Tx<crate::agent_activity::realtime::RealtimeWake> =
             Tx::new(queue_tx.clone(), Input::Realtime);
+        let playback_tx = Tx::new(queue_tx.clone(), |(speech, finished)| {
+            Input::PlaybackFinished(speech, finished)
+        });
         let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
         let (answers_tx, answers_rx) = tokio::sync::mpsc::unbounded_channel();
         let watch = WatchHub::new();
@@ -295,13 +298,17 @@ impl DriverBuilder {
         let tts = self.tts.clone().map(|t| resources.register_tts(t));
         let stt = self.stt.clone().map(|s| resources.register_stt(s));
         let vad = self.vad.clone().map(|v| resources.register_vad(v));
+        let outputs = crate::agent_session::outputs::Outputs::new(
+            self.audio_out.clone().map(|o| resources.register_audio_output(o)),
+            self.text_out.clone().map(|o| resources.register_text_output(o)),
+        );
 
         let config = self.config.clone();
         let mut audio_recognition =
             AudioRecognition::new(&config.effective, &config.legs, self.thresholds);
         let paused_speech = {
             // The sink's facts at start; re-read at every pause decision.
-            let (sink, audio_enabled) = sink_facts(self.audio_out.as_deref());
+            let (sink, audio_enabled) = outputs.pause_facts();
             PausedSpeech::new(&config.effective, sink, audio_enabled)
         };
         let speech_scheduler =
@@ -320,6 +327,7 @@ impl DriverBuilder {
                 tts,
                 stt,
                 vad,
+                outputs,
                 max_unrecoverable_errors: self.max_unrecoverable_errors,
                 start_options: crate::agent_session::StartOptions {
                     recorder: self.recorder,
@@ -384,6 +392,7 @@ impl DriverBuilder {
             trace: Arc::clone(&trace),
             watch: watch.clone(),
             realtime_tx: rt_tx,
+            playback_tx,
             stt_tx,
             vad_tx,
             leg_opens,

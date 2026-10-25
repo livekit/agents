@@ -4,6 +4,7 @@
 use crate::agent_activity::options::SessionConfig;
 use crate::agent_activity::scheduling::{SpeechId, Status};
 use crate::agent_session::effects::Out;
+use crate::agent_session::effects::{AudioOp, Effect};
 use crate::agent_session::effects::{GateCause, GateOp, TurnTimer};
 use crate::agent_session::{Answer, Driver, RequestId};
 use crate::audio_recognition::TurnDetectionMode;
@@ -14,7 +15,6 @@ use crate::turn::InterruptionOptions;
 use lk_agents_abi::Ts;
 use lk_agents_abi::tokenize::{WordTokenizerOptions, count_words};
 use lk_agents_abi::voice::events::AgentState;
-use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use std::time::Duration;
 
@@ -177,18 +177,10 @@ pub struct InterruptReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub enum InterruptOutcome {
-    /// Interrupted now. `position` is where its output had reached at the clear, if anywhere.
-    Now { position: Option<Duration> },
+    /// Interrupted now; a speech in the sink has its buffer cleared.
+    Now,
     /// Already interrupted, already finished, or already released: nothing to do, nothing said.
     Already,
-}
-
-/// The pause facts off the driver's sink: its `can_pause` and whether there is one.
-pub fn sink_facts(out: Option<&dyn AudioOutput>) -> (AudioOutputCapabilities, bool) {
-    match out {
-        Some(o) => (AudioOutputCapabilities { pause: o.can_pause() }, true),
-        None => (AudioOutputCapabilities::default(), false),
-    }
 }
 
 // The port is `lk-agents-abi`'s; the host supplies the object (`lk-agents-inference` cannot be
@@ -304,17 +296,12 @@ impl Driver {
             return Ok(InterruptOutcome::Already);
         }
         // Only a speech whose audio is in the sink has anything to clear; clearing for a queued
-        // speech would cut the current one. The clear precedes any `Resume`; the position is read
-        // after it. `cut`, never a bare `clear_buffer`: the flush closes the segment in the
-        // trackers, or the next speech's wait resolves on this cut's event.
+        // speech would cut the current one. The clear precedes any `Resume`; the data plane
+        // answers it with where playback stopped.
         let in_the_sink = self.activity.speech_scheduler.current_speech() == Some(speech)
             || self.activity.paused_speech.paused_handle() == Some(speech);
-        let audio_out = in_the_sink.then(|| self.shared.output.audio()).flatten();
-        let position = audio_out.as_deref().map(|out| {
-            out.cut();
-            out.tracker().position()
-        });
-        out.trace(InterruptStep::Interrupted { speech, cause, force, position });
+        let clears = in_the_sink && self.session.outputs.audio.is_some();
+        out.trace(InterruptStep::Interrupted { speech, cause, force });
         // A filler dies with the interruption of the speech that owns its tool.
         self.fillers_speech_ended(speech, out);
         // A tool's `foreground()` / `wait_for_idle()` ask is refused too when the cut lands during
@@ -323,9 +310,10 @@ impl Driver {
         if !step_only && !self.activity.tools_in_flight.contains(&speech) {
             self.withdraw_idle_asks(speech, out);
         }
-        if audio_out.is_some() {
-            let (op, cause) = (GateOp::Clear, GateCause::Interrupted);
-            out.trace(InterruptStep::PlayoutGate { speech, op, cause });
+        if clears {
+            let gate =
+                AudioOp::Gate { speech, op: GateOp::ClearBuffer, cause: GateCause::Interrupted };
+            out.machine().push(Effect::Audio(gate));
         }
         let realtime = self.is_realtime_speech(speech);
         // Never authorized now; the watchdog is armed on the session clock. Nothing fires after
@@ -338,15 +326,14 @@ impl Driver {
         if realtime {
             self.realtime_interrupt(out);
         }
-        Ok(InterruptOutcome::Now { position })
+        Ok(InterruptOutcome::Now)
     }
 
     /// The one place the loop moves the playout sink, journalled as `PlayoutGate{speech, op,
     /// cause}`. No sink, no op, no step.
     fn gate_op(&self, out: &mut Out, speech: SpeechId, op: GateOp, cause: GateCause) {
-        if self.shared.output.audio().is_some() {
-            let gate = crate::agent_session::effects::AudioOp::Gate { speech, op, cause };
-            out.machine().push(crate::agent_session::effects::Effect::Audio(gate));
+        if self.session.outputs.audio.is_some() {
+            out.machine().push(Effect::Audio(AudioOp::Gate { speech, op, cause }));
         }
     }
 
@@ -662,8 +649,7 @@ impl Driver {
     /// copy. A change that no longer permits the pause **releases** it; the user speaking at the
     /// change interrupts the parked speech first, or resuming would play it into the user.
     pub(crate) fn refresh_pause_facts(&mut self, now: Ts, out: &mut Out) {
-        let (sink, present) = sink_facts(self.shared.output.audio().as_deref());
-        let audio_enabled = present && self.shared.output.plays_audio();
+        let (sink, audio_enabled) = self.session.outputs.pause_facts();
         let Some(paused) = self.activity.paused_speech.refresh_facts(sink, audio_enabled) else {
             return;
         };
@@ -734,16 +720,14 @@ impl Driver {
             })
             .collect();
         for id in working {
-            if let Ok(InterruptOutcome::Now { .. }) =
-                self.stop_speech(now, id, cause, force, false, out)
-            {
+            if let Ok(InterruptOutcome::Now) = self.stop_speech(now, id, cause, force, false, out) {
                 reached.push(id);
             }
         }
         // In pop order: the first refusal keeps that speech and all behind it (the reference breaks).
         for id in self.activity.speech_scheduler.speech_q().clone() {
             match self.stop_speech(now, id, cause, force, false, out) {
-                Ok(InterruptOutcome::Now { .. }) => reached.push(id),
+                Ok(InterruptOutcome::Now) => reached.push(id),
                 Ok(InterruptOutcome::Already) => {}
                 Err(_) => {
                     out.trace(InterruptStep::InterruptWalkStopped { speech: id });
@@ -764,7 +748,7 @@ impl Driver {
         out: &mut Out,
     ) -> Result<bool, InterruptRefusal> {
         match self.stop_speech(now, id, cause, force, false, out) {
-            Ok(outcome) => Ok(matches!(outcome, InterruptOutcome::Now { .. })),
+            Ok(outcome) => Ok(matches!(outcome, InterruptOutcome::Now)),
             Err(_) => {
                 let refusal = InterruptRefusal::NotAllowed;
                 out.trace(InterruptStep::ByAudioActivityRefused(refusal));

@@ -16,6 +16,8 @@ impl Driver {
             s.stt.as_ref().map(|r| r.id),
             s.vad.as_ref().map(|r| r.id),
             self.activity.rt_session.as_ref().map(|r| r.id),
+            s.outputs.audio.as_ref().map(|r| r.id),
+            s.outputs.transcription.as_ref().map(|r| r.id),
         ];
         let updates = self.activity.handoff.updates().chain(self.activity.tasks.frames());
         slots.into_iter().flatten().chain(updates.flat_map(|u| u.resources())).collect()

@@ -471,8 +471,6 @@ macro_rules! host_handle_debug {
 host_handle_debug!(HostAudio);
 host_handle_debug!(HostRecorder);
 host_handle_debug!(HostVideo labelled);
-host_handle_debug!(HostAudioOut labelled);
-host_handle_debug!(HostTextOut labelled);
 
 #[derive(Debug)]
 pub enum RecorderCommand {
@@ -494,10 +492,6 @@ pub enum IoKind {
     AudioOutput,
     Transcription,
 }
-
-pub struct HostAudioOut(pub Arc<dyn lk_agents_abi::voice::io::AudioOutput>);
-
-pub struct HostTextOut(pub Arc<dyn lk_agents_abi::voice::io::TextOutput>);
 
 /// Scheduling pauses are the driver's own, never a command.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
@@ -526,9 +520,9 @@ pub enum ActivityCommand {
     UpdateChatCtx(Vec<lk_agents_abi::ChatItem>),
     /// A playing speech is **interrupted** (nobody can hear it); the pause facts are re-read at
     /// once.
-    SetAudioOutput(Option<HostAudioOut>),
+    SetAudioOutput(Option<lk_agents_abi::resources::AudioOutputRef>),
     /// A reply in flight keeps its leg.
-    SetTranscriptionOutput(Option<HostTextOut>),
+    SetTranscriptionOutput(Option<lk_agents_abi::resources::TextOutputRef>),
     /// **Not a handoff**: only the providers change; the streaming legs reopen as a handoff reopens
     /// them.
     UpdateModels {
@@ -628,6 +622,8 @@ impl Command {
                 update.resources().collect()
             }
             Command::Task(TaskCommand::Enter(entry)) => entry.frame.resources().collect(),
+            Command::Activity(ActivityCommand::SetAudioOutput(Some(out))) => vec![out.id],
+            Command::Activity(ActivityCommand::SetTranscriptionOutput(Some(out))) => vec![out.id],
             Command::Activity(ActivityCommand::UpdateModels { stt, vad, llm, tts }) => [
                 handed(stt, |r| r.id),
                 handed(vad, |r| r.id),

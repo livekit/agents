@@ -20,10 +20,8 @@ use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_activity::false_interruption::{InterruptOutcome, PausedSpeech};
 use crate::agent_activity::options::{ConfigStack, LegSet, SessionConfig};
 use crate::agent_activity::scheduling::{SpeechId, SpeechScheduler};
-use crate::agent_session::effects::Out;
-use crate::agent_session::{
-    ActivityCommand, Driver, HostAudio, HostAudioOut, HostTextOut, HostVideo,
-};
+use crate::agent_session::effects::{AudioOp, Effect, Out};
+use crate::agent_session::{ActivityCommand, Driver, HostAudio, HostVideo};
 use crate::audio::{GateInputs, audio_gate};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, InterruptCause, PlayoutStep, ToolStep};
@@ -457,9 +455,11 @@ impl Driver {
             ActivityCommand::Drain { call } => self.drain(call.into_iter().collect(), out),
             ActivityCommand::SetAudioOutput(output) => {
                 let audio = output.is_some();
-                // Dropped here: a segment in flight holds its own `Arc`; an unstarted speech reads
-                // the new sink at its next segment.
-                let _previous = self.shared.output.set_audio(output.map(|HostAudioOut(sink)| sink));
+                // A segment in flight keeps the sink it started with; an unstarted speech reads the
+                // new one at its next segment.
+                let id = output.as_ref().map(|o| o.id);
+                self.session.outputs.audio = output;
+                out.machine().push(Effect::Audio(AudioOp::SetAudioOutput(id)));
                 let now = self.step.now;
                 let playing = self.session.states.agent_state() == AgentState::Speaking;
                 if !audio || playing {
@@ -475,7 +475,7 @@ impl Driver {
                                 true,
                                 out,
                             ) {
-                                Ok(InterruptOutcome::Now { .. }) => realtime,
+                                Ok(InterruptOutcome::Now) => realtime,
                                 Ok(InterruptOutcome::Already) | Err(_) => false,
                             }
                         }
@@ -487,10 +487,9 @@ impl Driver {
                 }
                 // `can_pause` and "audio enabled" are the new sink's; release a pause it can't hold.
                 self.refresh_pause_facts(now, out);
-                self.observe_recorder(_previous.as_deref());
                 out.trace(PlayoutStep::OutputReplaced {
                     audio,
-                    transcription: self.shared.output.shows_transcription(),
+                    transcription: self.session.outputs.shows_transcription(),
                 });
             }
             ActivityCommand::SetSpeakerFilter(config) => {
@@ -499,10 +498,11 @@ impl Driver {
             }
             ActivityCommand::SetTranscriptionOutput(output) => {
                 let transcription = output.is_some();
-                let _previous =
-                    self.shared.output.set_transcription(output.map(|HostTextOut(sink)| sink));
+                let id = output.as_ref().map(|o| o.id);
+                self.session.outputs.transcription = output;
+                out.machine().push(Effect::Audio(AudioOp::SetTranscriptionOutput(id)));
                 out.trace(PlayoutStep::OutputReplaced {
-                    audio: self.shared.output.plays_audio(),
+                    audio: self.session.outputs.plays_audio(),
                     transcription,
                 });
             }
