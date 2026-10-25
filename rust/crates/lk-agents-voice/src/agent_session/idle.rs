@@ -89,6 +89,11 @@ impl IdleHolds {
         self.holds.remove(&hold)
     }
 
+    /// Every hold still held.
+    pub(crate) fn take_holds(&mut self) -> BTreeSet<HoldId> {
+        std::mem::take(&mut self.holds)
+    }
+
     /// `hold` is still asked for or held: its `foreground()` scope has not exited.
     pub(crate) fn live(&self, hold: HoldId) -> bool {
         self.holds.contains(&hold) || self.waiters.iter().any(|w| w.grant == Some(hold))

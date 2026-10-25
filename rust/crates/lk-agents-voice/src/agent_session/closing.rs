@@ -548,6 +548,12 @@ impl Driver {
         let reason =
             self.session.closing.as_ref().map(|c| c.reason).unwrap_or(CloseReason::UserInitiated);
         self.session.on_close_edge();
+        // A hold the host has not released ends with the session: past the edge its release is
+        // dropped.
+        for hold in self.session.idle.take_holds() {
+            out.trace(SpeechStep::IdleHoldReleased { hold });
+            self.run_release(crate::run_result::Owned::Hold(hold), out);
+        }
         // A run still open ends here, `Closed`, before the close's own last event.
         self.run_close(out);
         // Detach the microphone: the recogniser hears only the commit's silence flush.
