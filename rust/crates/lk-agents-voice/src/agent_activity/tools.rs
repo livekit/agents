@@ -454,8 +454,8 @@ impl Driver {
         spoke: bool,
         out: &mut Out,
     ) {
-        let speech = text.map(|text| {
-            let handle = self.start_speech(
+        let said = text.map(|text| {
+            self.start_speech(
                 now,
                 SpeechSpec::new(
                     SpeechKind::Say,
@@ -463,11 +463,18 @@ impl Driver {
                     self.session.config.effective.turn.interruption.enabled,
                 ),
                 out,
-            );
-            handle.id()
+            )
         });
+        let speech = said.as_ref().map(|handle| handle.id());
         let produced = spoke || speech.is_some();
         out.trace(GenerationStep::FillerFired { filler: id, step, spoke: produced, speech });
+        // A say refused while scheduling drains is interrupted at birth and leaves the session
+        // idle, so the next fire would come in the same instant. The reference's `say` raises
+        // there, which ends the filler.
+        if said.is_some_and(|handle| handle.interrupted()) {
+            self.end_filler(id, FillerEnd::Refused, out);
+            return;
+        }
         let Some(action) = self.activity.tools.filler_fired(id, now, produced) else {
             return;
         };
