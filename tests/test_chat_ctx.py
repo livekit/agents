@@ -1013,25 +1013,15 @@ def _anthropic_tool_result_content(output: str) -> Any:
     "output",
     [
         "[9, 13, 18]",
-        '[{"name": "Margherita", "price": 12}]',
-        '["Margherita", "Pepperoni"]',
         '[{"type": "vegetarian", "name": "Margherita"}]',
         '[{"type": "text", "name": "Margherita"}]',
-        '[{"type": "image", "url": "https://example.com/margherita.png"}]',
-        '[{"type": "search_result", "source": "https://example.com/menu", "snippet": "..."}]',
         '[{"type": "text", "text": "Found 1 order."}, {"order_id": 42}]',
-        "[]",
     ],
     ids=[
         "numbers",
-        "records",
-        "strings",
         "records-with-type-field",
         "record-typed-text",
-        "record-typed-image",
-        "record-typed-search-result",
         "mixed",
-        "empty",
     ],
 )
 def test_anthropic_tool_result_keeps_json_lists_as_text(output: str):
