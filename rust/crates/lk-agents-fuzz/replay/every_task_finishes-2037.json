@@ -1,0 +1,8145 @@
+{
+  "case": {
+    "setup": {
+      "stt": true,
+      "vad": false,
+      "eot": true,
+      "interruption": true,
+      "dynamic_endpointing": true,
+      "turn": "Stt",
+      "preemptive": true,
+      "tools": [],
+      "max_tool_steps": 2,
+      "instructions": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+      "max_unrecoverable_errors": 0,
+      "hook_bound_ms": 15000,
+      "realtime": null,
+      "ivr": true,
+      "amd": true,
+      "keyterms": [
+        "sip_1",
+        "sip_1"
+      ],
+      "room": {
+        "close_on_disconnect": false,
+        "delete_room_on_close": true
+      },
+      "pausable_output": true,
+      "speech_gap_ms": null,
+      "user_turn_max_words": 1,
+      "user_turn_max_ms": 50,
+      "transcription_timeout_ms": null,
+      "backchannel_threshold": 34,
+      "tts": true,
+      "connect_ms": null,
+      "video": true,
+      "sync_transcription": true
+    },
+    "inputs": [
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 109
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 8
+        }
+      },
+      {
+        "Advance": {
+          "ms": 73
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 8
+        }
+      },
+      {
+        "Advance": {
+          "ms": 81
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 103
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 7
+        }
+      },
+      {
+        "Advance": {
+          "ms": 73
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 15
+        }
+      },
+      {
+        "Advance": {
+          "ms": 141
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 13
+        }
+      },
+      {
+        "Advance": {
+          "ms": 137
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 6
+        }
+      },
+      {
+        "Advance": {
+          "ms": 53
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 6
+        }
+      },
+      {
+        "Advance": {
+          "ms": 62
+        }
+      },
+      {
+        "SttStart": {
+          "stt": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 12
+        }
+      },
+      {
+        "Advance": {
+          "ms": 122
+        }
+      },
+      {
+        "PushVideo": {}
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 6
+        }
+      },
+      {
+        "Advance": {
+          "ms": 64
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 15
+        }
+      },
+      {
+        "Advance": {
+          "ms": 146
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 0,
+          "text": "my",
+          "speaker": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 13
+        }
+      },
+      {
+        "Advance": {
+          "ms": 130
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 15
+        }
+      },
+      {
+        "Advance": {
+          "ms": 151
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 0,
+          "text": "my number",
+          "speaker": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 9
+        }
+      },
+      {
+        "Advance": {
+          "ms": 94
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 106
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 0,
+          "text": "my number is",
+          "speaker": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 97
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 9
+        }
+      },
+      {
+        "Advance": {
+          "ms": 90
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 110
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 0,
+          "text": "my number is five five",
+          "speaker": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 5
+        }
+      },
+      {
+        "Advance": {
+          "ms": 56
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 6
+        }
+      },
+      {
+        "Advance": {
+          "ms": 58
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 13
+        }
+      },
+      {
+        "Advance": {
+          "ms": 125
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 99
+        }
+      },
+      {
+        "Ivr": {
+          "input": "Close",
+          "silence": 120,
+          "text": "yeah hi um I'm calling about my order"
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 0,
+          "text": "my number is five five five,",
+          "speaker": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 15
+        }
+      },
+      {
+        "Advance": {
+          "ms": 150
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 9
+        }
+      },
+      {
+        "Advance": {
+          "ms": 92
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 0,
+          "text": "my number is five five five, oh",
+          "speaker": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 9
+        }
+      },
+      {
+        "Advance": {
+          "ms": 90
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 13
+        }
+      },
+      {
+        "Advance": {
+          "ms": 131
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 12
+        }
+      },
+      {
+        "Advance": {
+          "ms": 121
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 0,
+          "text": "my number is five five five, oh one",
+          "speaker": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 101
+        }
+      },
+      {
+        "Handoff": {
+          "agent": "agent-2",
+          "instructions": "",
+          "tools": [
+            "billing_agent"
+          ],
+          "pause_previous": false,
+          "resume": false
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 6
+        }
+      },
+      {
+        "Advance": {
+          "ms": 63
+        }
+      },
+      {
+        "HookDone": {
+          "hook": 0,
+          "answer": "Returned",
+          "text": "I'm sorry, I didn't catch that. Could you say the last four digits again?"
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 8
+        }
+      },
+      {
+        "Advance": {
+          "ms": 80
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 20,
+          "stt_flush": 5000,
+          "skip_reply": true
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 102
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 6
+        }
+      },
+      {
+        "Advance": {
+          "ms": 62
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 8
+        }
+      },
+      {
+        "Advance": {
+          "ms": 80
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 116
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 6
+        }
+      },
+      {
+        "Advance": {
+          "ms": 60
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 106
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 14
+        }
+      },
+      {
+        "Advance": {
+          "ms": 141
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 14
+        }
+      },
+      {
+        "Advance": {
+          "ms": 140
+        }
+      },
+      {
+        "SttPreflight": {
+          "utterance": 0,
+          "text": "my number is five five five, oh one four seven",
+          "speaker": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 15
+        }
+      },
+      {
+        "Advance": {
+          "ms": 148
+        }
+      },
+      {
+        "WaitForIdleAndHold": {}
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 12
+        }
+      },
+      {
+        "Advance": {
+          "ms": 123
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 13
+        }
+      },
+      {
+        "Advance": {
+          "ms": 131
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 12
+        }
+      },
+      {
+        "Advance": {
+          "ms": 113
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 118
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 13
+        }
+      },
+      {
+        "Advance": {
+          "ms": 131
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 13
+        }
+      },
+      {
+        "Advance": {
+          "ms": 122
+        }
+      },
+      {
+        "SttFinal": {
+          "utterance": 0,
+          "text": "my number is five five five, oh one four seven",
+          "speaker": 0
+        }
+      },
+      {
+        "SttEnd": {
+          "utterance": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 5200
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 0,
+          "name": "save_prediction",
+          "args": "{\"label\":\"human\"}"
+        }
+      },
+      {
+        "LlmEnd": {
+          "chat": 0
+        }
+      },
+      {
+        "HookDone": {
+          "hook": 1,
+          "answer": "TurnStop",
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1767
+        }
+      },
+      {
+        "Ivr": {
+          "input": "Close",
+          "silence": 50,
+          "text": "yeah hi um I'm calling about my order"
+        }
+      },
+      {
+        "HookDone": {
+          "hook": 2,
+          "answer": "Returned",
+          "text": "That's outside what I can do here, so I'll pass you to someone who can."
+        }
+      },
+      {
+        "HookDone": {
+          "hook": 3,
+          "answer": "Returned",
+          "text": "Sure, I can help with that."
+        }
+      },
+      {
+        "Advance": {
+          "ms": 8032
+        }
+      },
+      {
+        "LlmText": {
+          "chat": 1,
+          "text": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14."
+        }
+      },
+      {
+        "LlmEnd": {
+          "chat": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1503
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1420
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4003
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": true
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 116
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 96
+        }
+      },
+      {
+        "Configure": {
+          "knob": "UserAway",
+          "mode": "Manual",
+          "ms": 15000,
+          "on": false,
+          "words": 2
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 99
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 8
+        }
+      },
+      {
+        "Advance": {
+          "ms": 84
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 9
+        }
+      },
+      {
+        "Advance": {
+          "ms": 92
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 102
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 12
+        }
+      },
+      {
+        "Advance": {
+          "ms": 115
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 111
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 9
+        }
+      },
+      {
+        "Advance": {
+          "ms": 89
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 9
+        }
+      },
+      {
+        "Advance": {
+          "ms": 87
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 8
+        }
+      },
+      {
+        "Advance": {
+          "ms": 88
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 103
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 8
+        }
+      },
+      {
+        "Advance": {
+          "ms": 86
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 12
+        }
+      },
+      {
+        "Advance": {
+          "ms": 112
+        }
+      },
+      {
+        "SttStart": {
+          "stt": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1000
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 11
+        }
+      },
+      {
+        "Advance": {
+          "ms": 114
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 9
+        }
+      },
+      {
+        "Advance": {
+          "ms": 93
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 7
+        }
+      },
+      {
+        "Advance": {
+          "ms": 66
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 141
+        }
+      },
+      {
+        "SttStart": {
+          "stt": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 24
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 2,
+          "text": "WAIT",
+          "speaker": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 2,
+          "text": "WAIT stop",
+          "speaker": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 2,
+          "text": "WAIT stop stop",
+          "speaker": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 9
+        }
+      },
+      {
+        "Advance": {
+          "ms": 90
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "SttPreflight": {
+          "utterance": 2,
+          "text": "WAIT stop stop stop",
+          "speaker": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SttFinal": {
+          "utterance": 2,
+          "text": "WAIT stop stop stop",
+          "speaker": 1
+        }
+      },
+      {
+        "SttEnd": {
+          "utterance": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 5122
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "HookDone": {
+          "hook": 4,
+          "answer": "Returned",
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text."
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1130
+        }
+      },
+      {
+        "LlmText": {
+          "chat": 2,
+          "text": "Ref #A1B2-C3D4; ETA ~15 min; cost is EUR 12.50 (approx. USD 13.60)."
+        }
+      },
+      {
+        "LlmEnd": {
+          "chat": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1166
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetAllowInterruptions": {
+          "speech": 1,
+          "allow": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Say": {
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 15000
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "WaitForIdleAndHold": {}
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SttStart": {
+          "stt": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 500
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "WaitForIdleAndHold": {}
+      },
+      {
+        "Advance": {
+          "ms": 1000
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "InterruptSpeech": {
+          "speech": 2,
+          "force": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 992
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "UpdateModels": {
+          "models": "Tts"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "Transcription",
+          "enabled": true
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Task": {
+          "agent": "caller",
+          "speech": null
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetAudioOutput": {
+          "attach": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Handoff": {
+          "agent": "caller",
+          "instructions": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "tools": [
+            "billing_agent",
+            "transfer",
+            "lookup_order"
+          ],
+          "pause_previous": true,
+          "resume": false
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3132
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "WaitForIdleAndHold": {}
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetTranscriptionOutput": {
+          "attach": true
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 406
+        }
+      },
+      {
+        "UpdateInstructions": {
+          "text": "Let me pull up your account -- one moment."
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 50
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Dtmf": {
+          "input": "Digit",
+          "key": "Star",
+          "digits": 2,
+          "confirm": true,
+          "timeout": 10
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 5
+        }
+      },
+      {
+        "Advance": {
+          "ms": 49
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Recorder": {
+          "attach": true
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SttStart": {
+          "stt": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 4,
+          "text": "WAIT",
+          "speaker": null
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "SttInterim": {
+          "utterance": 4,
+          "text": "WAIT stop",
+          "speaker": null
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 6
+        }
+      },
+      {
+        "Advance": {
+          "ms": 66
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "FeedAudio": {
+          "stream": 0,
+          "chunks": 0
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "MicFrames": {
+          "mic": 0,
+          "chunks": 10
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SttFinal": {
+          "utterance": 4,
+          "text": "WAIT stop stop stop",
+          "speaker": null
+        }
+      },
+      {
+        "SttEnd": {
+          "utterance": 4
+        }
+      },
+      {
+        "Advance": {
+          "ms": 35
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 445
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "InterruptSpeech": {
+          "speech": 1,
+          "force": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "I'm sorry, I didn't catch that. Could you say the last four digits again?",
+          "allow": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Say": {
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "UpdateInstructions": {
+          "text": ""
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 0
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioInput",
+          "enabled": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetTranscriptionOutput": {
+          "attach": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "HookDoneLate": {
+          "hook": 3,
+          "answer": "Filler",
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12."
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "HookDoneLate": {
+          "hook": 3,
+          "answer": "TurnStop",
+          "text": "That's outside what I can do here, so I'll pass you to someone who can."
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetStaticKeyterms": {
+          "terms": [
+            "caller"
+          ]
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetTranscriptionOutput": {
+          "attach": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1354
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Say": {
+          "text": "Okay. I've cancelled the 2:30 and moved you to Friday. You'll get a confirmation by text.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Say": {
+          "text": "Sure, I can help with that.",
+          "input": "Words",
+          "allow": null,
+          "to_ctx": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Dtmf": {
+          "input": "Start",
+          "key": "Pound",
+          "digits": 3,
+          "confirm": true,
+          "timeout": 2500
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "WaitForIdleAndHold": {}
+      },
+      {
+        "Advance": {
+          "ms": 399
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1401
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "CommitTurn": {
+          "skip_reply": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "FeedText": {
+          "stream": 2,
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?"
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "HostMetrics": {}
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetStaticKeyterms": {
+          "terms": []
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetAudioInput": {
+          "attach": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "CommitUserTurn": {
+          "transcript_timeout": 50,
+          "stt_flush": 120,
+          "skip_reply": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14.",
+          "allow": null
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "can you hear me",
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetAudioOutput": {
+          "attach": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": true
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "InterruptSpeech": {
+          "speech": 1,
+          "force": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": true
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4427
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2087
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Run": {
+          "user_input": null,
+          "expects_output": true,
+          "retries": 1
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3067
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 629
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4619
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1591
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2066
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3515
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 997
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4893
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4569
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "UpdateTools": {
+          "tools": [
+            "caller",
+            "lookup_order"
+          ]
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2267
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1407
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3769
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1399
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3943
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2213
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetAudioOutput": {
+          "attach": true
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2552
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1426
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4749
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4436
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2780
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3240
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4449
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1871
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1300
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4289
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1269
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4543
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3063
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "UpdateModels": {
+          "models": "Llm"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "PauseAuthorization": {}
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetAllowInterruptions": {
+          "speech": 8,
+          "allow": true
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3913
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": null,
+          "instructions": null,
+          "allow": null
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1672
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3849
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1661
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 797
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 3,
+          "name": "billing_agent",
+          "args": "{\"label\":\"human\"}"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1735
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4767
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3503
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 697
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Run": {
+          "user_input": null,
+          "expects_output": false,
+          "retries": 3
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3118
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2500
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2987
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2126
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4411
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1636
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4785
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "UpdateInstructions": {
+          "text": "I found three appointments: Tuesday at 9, Wednesday at 2:30, and Friday at 11 a.m. Which works best?"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4578
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Task": {
+          "agent": "lookup_order",
+          "speech": null
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3757
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3840
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetRunOutput": {
+          "speech": 6,
+          "ok": false
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2110
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "SttStart": {
+          "stt": 0
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 655
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 650
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1864
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Configure": {
+          "knob": "MinInterruptionWords",
+          "mode": "Manual",
+          "ms": 500,
+          "on": false,
+          "words": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1486
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "ClearTurn": {}
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4661
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4680
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2908
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2400
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Configure": {
+          "knob": "MinInterruptionWords",
+          "mode": "Default",
+          "ms": 15000,
+          "on": false,
+          "words": 3
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 874
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1276
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "PushVideo": {}
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2493
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4983
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4295
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2686
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2136
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "UpdateModels": {
+          "models": "Stt"
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Say": {
+          "text": "Let me pull up your account -- one moment.",
+          "input": "TextStream",
+          "allow": null,
+          "to_ctx": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioOutput",
+          "enabled": false
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1189
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "FeedAudio": {
+          "stream": 1,
+          "chunks": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2575
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Task": {
+          "agent": "transfer",
+          "speech": 5
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3648
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2511
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1983
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3402
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2758
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2364
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Run": {
+          "user_input": null,
+          "expects_output": false,
+          "retries": 0
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4509
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 5,
+          "name": "transfer",
+          "args": "{\"label\":\"machine-vm\"}"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "PushVideo": {}
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "HookDoneLate": {
+          "hook": 0,
+          "answer": "TurnInstructions",
+          "text": "Your balance is $1,204.55 as of today, and the next payment of $87.20 is due on 03/14."
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4805
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4209
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3112
+        }
+      },
+      {
+        "LlmToolCall": {
+          "chat": 3,
+          "name": "caller",
+          "args": "{\"label\":\"machine-vm\"}"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1321
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Configure": {
+          "knob": "MinInterruptionWords",
+          "mode": "Default",
+          "ms": 10,
+          "on": false,
+          "words": 1
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3319
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3251
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "WaitForIdle": {
+          "hold": null
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetIoEnabled": {
+          "leg": "AudioOutput",
+          "enabled": true
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 947
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4077
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1615
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2266
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2893
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1909
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetVideoInput": {
+          "attach": false
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3267
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "SetAllowInterruptions": {
+          "speech": 5,
+          "allow": false
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 2
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2221
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Dtmf": {
+          "input": "Stop",
+          "key": "Nine",
+          "digits": 1,
+          "confirm": false,
+          "timeout": 50
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4113
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 4196
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3092
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 3549
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 822
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 1
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "GenerateReply": {
+          "user_input": "what",
+          "instructions": null,
+          "allow": true
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2217
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1913
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "HookDoneLate": {
+          "hook": 2,
+          "answer": "TurnStop",
+          "text": "Dr. Alvarez is at 1600 Pennsylvania Ave. NW, Ste. 200 -- call (202) 555-0147 ext. 12."
+        }
+      },
+      {
+        "VideoFrames": {
+          "video": 0,
+          "frames": 3
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2545
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Room": {
+          "event": "Unlinked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 1505
+        }
+      },
+      {
+        "Room": {
+          "event": "Linked"
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "WaitForIdle": {
+          "hold": null
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "Advance": {
+          "ms": 100
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 1
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 2
+        }
+      },
+      {
+        "FeedEnd": {
+          "stream": 3
+        }
+      },
+      {
+        "LlmEnd": {
+          "chat": 3
+        }
+      },
+      {
+        "LlmEnd": {
+          "chat": 4
+        }
+      },
+      {
+        "LlmEnd": {
+          "chat": 5
+        }
+      },
+      {
+        "HookDone": {
+          "hook": 5,
+          "answer": "Returned",
+          "text": ""
+        }
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "ResumeAuthorization": {}
+      },
+      {
+        "Advance": {
+          "ms": 384
+        }
+      },
+      {
+        "PlayoutFinished": {
+          "segment": 1
+        }
+      },
+      {
+        "HookDone": {
+          "hook": 6,
+          "answer": "Returned",
+          "text": ""
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2500
+        }
+      },
+      {
+        "LlmEnd": {
+          "chat": 6
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2500
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2500
+        }
+      },
+      {
+        "Advance": {
+          "ms": 2500
+        }
+      },
+      {
+        "Settle": {}
+      },
+      {
+        "Close": {
+          "drain": true
+        }
+      },
+      {
+        "AwaitExit": {}
+      }
+    ],
+    "schedule": 2037,
+    "random": [
+      183,
+      184,
+      308,
+      309,
+      336,
+      337,
+      339,
+      340,
+      729,
+      730,
+      1074,
+      1151,
+      1312,
+      1341,
+      1342
+    ],
+    "policy": "Pos"
+  },
+  "expect": {
+    "Fails": {
+      "contract": "every_task_finishes",
+      "subject": "Session"
+    }
+  }
+}
