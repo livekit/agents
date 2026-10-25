@@ -772,6 +772,18 @@ impl SpeechHandle {
         Ok(self.inner.lock().unwrap().error.clone())
     }
 
+    /// How a done speech ended, as `SpeechDone` reports it.
+    pub fn outcome(&self) -> crate::events::SpeechOutcome {
+        use crate::events::SpeechOutcome;
+        if matches!(self.exception(), Ok(Some(_))) {
+            SpeechOutcome::Failed
+        } else if self.interrupted() {
+            SpeechOutcome::Interrupted
+        } else {
+            SpeechOutcome::Completed
+        }
+    }
+
     /// `wait_for_playout()`, and so `__await__`. The self-wait guard is the binding shim's.
     pub async fn wait_for_playout(&self) {
         self.wait_for_done().await;

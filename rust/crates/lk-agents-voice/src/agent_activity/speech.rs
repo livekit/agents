@@ -117,7 +117,9 @@ impl Driver {
                     ));
                     self.fail_waiter(
                         call,
+                        SpeechKind::GenerateReply,
                         "generate_reply(chat_ctx=, tools=) is not supported on a realtime model",
+                        out,
                     );
                     return;
                 }
@@ -140,7 +142,9 @@ impl Driver {
                     out.trace(CoreStep::PortFailure(SAY_SHAPE_REFUSED_ON_REALTIME));
                     self.fail_waiter(
                         call,
+                        SpeechKind::Say,
                         "say(stream) / say(audio=) is not supported on a realtime model",
+                        out,
                     );
                     return;
                 };
@@ -200,7 +204,7 @@ impl Driver {
                     && self.session.outputs.plays_audio()
                 {
                     out.trace(SpeechStep::SayRefused { why: SAY_WITHOUT_TTS_REFUSED });
-                    self.fail_waiter(call, SAY_WITHOUT_TTS_REFUSED);
+                    self.fail_waiter(call, SpeechKind::Say, SAY_WITHOUT_TTS_REFUSED, out);
                     return;
                 }
                 let h = self.start_speech(
@@ -982,14 +986,7 @@ impl Driver {
             if !h.done() {
                 h.mark_done(None);
             }
-            let outcome = if matches!(h.exception(), Ok(Some(_))) {
-                crate::events::SpeechOutcome::Failed
-            } else if h.interrupted() {
-                crate::events::SpeechOutcome::Interrupted
-            } else {
-                crate::events::SpeechOutcome::Completed
-            };
-            out.machine().emit(SessionEvent::SpeechDone { speech, outcome });
+            out.machine().emit(SessionEvent::SpeechDone { speech, outcome: h.outcome() });
             // The run that owned it lets it go, and its verdict moves to this speech.
             let h = Arc::clone(h);
             self.run_speech_ended(&h, out);

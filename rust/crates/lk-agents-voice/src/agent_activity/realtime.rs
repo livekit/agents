@@ -546,7 +546,7 @@ impl Driver {
     ) {
         let t = &self.activity.realtime_state;
         if t.ended() {
-            return self.settle(request, call, Settled::Ended);
+            return self.settle(request, call, Settled::Ended, out);
         }
         if t.closing {
             // Closing: a turn's own actuation still goes out whole and settles at once; a caller's
@@ -557,12 +557,12 @@ impl Driver {
                 }
                 self.rt_send(bare_reply(&req_id), out);
             }
-            return self.settle(request, call, Settled::Closing);
+            return self.settle(request, call, Settled::Closing, out);
         }
         let cmd = match &request {
             Request::Say { .. } if !t.caps.supports_say => {
                 let error = RealtimeError::new("say() on a realtime model that has no say");
-                return self.settle(request, call, Settled::Failed(error));
+                return self.settle(request, call, Settled::Failed(error), out);
             }
             Request::Say { text, add_to_chat_ctx } => RealtimeCommand::Say(rt::Say {
                 req_id: req_id.clone(),
@@ -597,12 +597,17 @@ impl Driver {
         Some(pending)
     }
 
-    fn settle(&mut self, request: Request, call: Option<RequestId>, how: Settled) {
-        // A follow-up that will never come: the player finishes with what it has.
-        if let Request::ToolFollowUp { speech, .. } = request {
-            self.activity.realtime_players.remove(&speech);
-        }
-        self.answer_waiter(call, how);
+    fn settle(&mut self, request: Request, call: Option<RequestId>, how: Settled, out: &mut Out) {
+        let kind = match request {
+            Request::Say { .. } => SpeechKind::Say,
+            // A follow-up that will never come: the player finishes with what it has.
+            Request::ToolFollowUp { speech, .. } => {
+                self.activity.realtime_players.remove(&speech);
+                return;
+            }
+            Request::GenerateReply { .. } | Request::UserTurn { .. } => SpeechKind::GenerateReply,
+        };
+        self.answer_waiter(call, kind, how, out);
     }
 
     /// Every pending request leaves through exactly one settlement; `cancel` also sends
@@ -616,7 +621,7 @@ impl Driver {
                 self.activity.realtime_state.cancelled_requests.insert(req_id.clone());
                 self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
             }
-            self.settle(request, call, how.clone());
+            self.settle(request, call, how.clone(), out);
         }
     }
 
@@ -639,7 +644,7 @@ impl Driver {
         let error = RealtimeError::new(format!(
             "generate_reply timed out: no generation was created within {REQUEST_TIMEOUT:?}"
         ));
-        self.settle(request, call, Settled::TimedOut(error));
+        self.settle(request, call, Settled::TimedOut(error), out);
     }
 
     fn fail_request(&mut self, req_id: &str, error: RealtimeError, out: &mut Out) {
@@ -647,7 +652,7 @@ impl Driver {
         let _ = self.activity.realtime_state.cancelled_requests.remove(req_id);
         // Unknown: already claimed by a `GenerationCreated`, or cancelled by the driver.
         if let Some(Pending { request, call, .. }) = self.take_pending(req_id, out) {
-            self.settle(request, call, Settled::Failed(error));
+            self.settle(request, call, Settled::Failed(error), out);
         }
     }
 
@@ -805,7 +810,7 @@ impl Driver {
             self.report_error(now, source, true, reported, None, out);
             if let Some(Pending { key, request, call, .. }) = pending {
                 out.machine().cancel(Timer::RealtimeRequest(key));
-                self.settle(request, call, Settled::Failed(error));
+                self.settle(request, call, Settled::Failed(error), out);
             }
             return;
         }
@@ -821,7 +826,7 @@ impl Driver {
         }
         for (_, Pending { key, request, call, .. }) in pending {
             out.machine().cancel(Timer::RealtimeRequest(key));
-            self.settle(request, call, Settled::Failed(error.clone()));
+            self.settle(request, call, Settled::Failed(error.clone()), out);
         }
         if close {
             self.close_on_realtime_failure(now, out);
@@ -875,12 +880,25 @@ impl Driver {
         }
     }
 
-    pub(crate) fn fail_waiter(&mut self, call: Option<RequestId>, message: &str) {
-        self.answer_waiter(call, Settled::Failed(RealtimeError::new(message)));
+    pub(crate) fn fail_waiter(
+        &mut self,
+        call: Option<RequestId>,
+        kind: SpeechKind,
+        message: &str,
+        out: &mut Out,
+    ) {
+        self.answer_waiter(call, kind, Settled::Failed(RealtimeError::new(message)), out);
     }
 
-    /// A handle never in the speech queue, minted only when a caller awaits it.
-    pub(crate) fn answer_waiter(&mut self, call: Option<RequestId>, how: Settled) {
+    /// A handle never in the speech queue, minted only when a caller awaits it. The host holds
+    /// it, so it is announced and ended on the host stream like every other speech.
+    pub(crate) fn answer_waiter(
+        &mut self,
+        call: Option<RequestId>,
+        kind: SpeechKind,
+        how: Settled,
+        out: &mut Out,
+    ) {
         if call.is_none() {
             return;
         }
@@ -900,6 +918,9 @@ impl Driver {
                 handle.mark_done(None);
             }
         }
+        let speech = Arc::clone(&handle);
+        out.machine().emit(SessionEvent::SpeechCreated { speech, kind, user_initiated: true });
+        out.machine().emit(SessionEvent::SpeechDone { speech: id, outcome: handle.outcome() });
         self.answer(call, Answer::Speech(handle));
     }
     /// The server's turn detection was fixed at the open. After a re-resolution the mode is
