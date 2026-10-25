@@ -56,10 +56,18 @@ impl<T: TimerId> TimerSet<T> {
     where
         T: Ord,
     {
+        self.pop_due_where(now, |_| true)
+    }
+
+    /// [`Self::pop_due`] among the timers `pick` accepts.
+    pub fn pop_due_where(&mut self, now: Ts, pick: impl Fn(T) -> bool) -> Option<T>
+    where
+        T: Ord,
+    {
         let key = self
             .armed
             .iter()
-            .filter(|&(_, &at)| at <= now)
+            .filter(|&(&t, &at)| at <= now && pick(t))
             .min_by(|(ka, a), (kb, b)| a.cmp(b).then_with(|| ka.cmp(kb)))
             .map(|(k, _)| *k)?;
         self.armed.remove(&key);
@@ -107,7 +115,6 @@ mod tests {
         assert_eq!(t.cancel(T::EndpointingDelay), None);
         assert!(t.is_empty());
     }
-
 
     // Catches: `is_armed` and `is_empty` answering a constant.
     #[test]

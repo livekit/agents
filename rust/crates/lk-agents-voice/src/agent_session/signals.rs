@@ -72,7 +72,7 @@ impl Driver {
             }
             // Settled or refused, the close's drain is over.
             Signal::Paused(PauseCause::Close, _) => {
-                if matches!(self.session.close_phase(), Some(ClosePhase::Draining { .. })) {
+                if matches!(self.session.close_phase(), Some(ClosePhase::Draining)) {
                     self.close_edge(now, out);
                 }
             }

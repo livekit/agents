@@ -84,10 +84,10 @@ impl Out {
                 // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
                 Effect::Emit(ev) => self.record(Step::Emitted(ev.journal_form())),
                 Effect::Timer(TimerOp::Arm(t, at)) => {
-                    self.record(Step::Core(CoreStep::TimerArmed { timer: *t, at: *at }))
+                    self.record(Step::Core(CoreStep::TimerArmed { timer: (*t).into(), at: *at }))
                 }
                 Effect::Timer(TimerOp::Cancel(t)) => {
-                    self.record(Step::Core(CoreStep::TimerCancelled(*t)))
+                    self.record(Step::Core(CoreStep::TimerCancelled((*t).into())))
                 }
                 Effect::Provider(call) => {
                     self.record(Step::Input(InputStep::ProviderCalled(*call)))
@@ -150,7 +150,7 @@ impl Out {
     /// The timers a pending `Arm` or `Cancel` of this cycle touches, in order. Timer effects run
     /// after the loop's timer pass, so without this a deadline cancelled by an earlier fire in the
     /// same instant would still be popped (`Driver::on_timers`).
-    pub fn timers_touched(&mut self) -> Vec<crate::agent_session::effects::TurnTimer> {
+    pub fn timers_touched(&mut self) -> Vec<crate::agent_session::effects::Timer> {
         use crate::agent_session::effects::TimerOp;
         self.absorb();
         self.todo
@@ -167,6 +167,16 @@ impl Out {
                 | Effect::CancelTool { .. } => None,
             })
             .collect()
+    }
+
+    /// Whether this cycle's last `Arm` or `Cancel` of `timer` arms it; `None` when it touches none.
+    pub fn arms(&mut self, timer: Timer) -> Option<bool> {
+        self.absorb();
+        self.todo.iter().rev().find_map(|e| match e {
+            Effect::Timer(TimerOp::Arm(t, _)) if *t == timer => Some(true),
+            Effect::Timer(TimerOp::Cancel(t)) if *t == timer => Some(false),
+            _ => None,
+        })
     }
 }
 
@@ -194,7 +204,7 @@ pub enum Effect {
 
 #[cfg(test)]
 impl Effect {
-    pub fn cancel(timer: TurnTimer) -> Effect {
+    pub fn cancel(timer: Timer) -> Effect {
         Effect::Timer(TimerOp::Cancel(timer))
     }
 }
@@ -228,11 +238,11 @@ impl Effects {
         self.effects.extend(returned.effects);
     }
 
-    pub fn arm(&mut self, timer: TurnTimer, at: Ts) {
+    pub fn arm(&mut self, timer: Timer, at: Ts) {
         self.push(Effect::Timer(TimerOp::Arm(timer, at)));
     }
 
-    pub fn cancel(&mut self, timer: TurnTimer) {
+    pub fn cancel(&mut self, timer: Timer) {
         self.push(Effect::Timer(TimerOp::Cancel(timer)));
     }
 
@@ -269,15 +279,26 @@ impl Effects {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimerOp {
     /// Arming an armed timer *replaces* it ([`TimerSet`](lk_agents_abi::TimerSet)).
-    Arm(TurnTimer, Ts),
+    Arm(Timer, Ts),
     /// Idempotent: cancelling an unarmed timer is a no-op, so cleanup paths cancel unconditionally.
-    Cancel(TurnTimer),
+    Cancel(Timer),
 }
 
+/// Every deadline of the session, fired by the driver's one [`TimerSet`](lk_agents_abi::TimerSet).
 /// `arm` on an armed timer replaces it (the reference's `handle.cancel(); handle =
-/// call_later(..)`).
+/// call_later(..)`). Deadlines due at one instant fire in declaration order: the close's bound,
+/// a waiting commit, the parked turn, the callbacks, then the rest. The scheduler's two, last,
+/// fire in the scheduling pass, wherever it runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TurnTimer {
+pub enum Timer {
+    /// The current close phase's bound.
+    Close,
+    /// `commit_user_turn`'s `transcript_timeout`: the commit promotes a held interim.
+    Commit,
+    /// The end-of-turn hook's bound: the parked turn proceeds with no edits.
+    UserTurnCompleted,
+    /// A callback the driver waits on: past it, the callback counts as failed.
+    Hook(crate::agent_session::HookId),
     /// `audio_recognition._bounce_eou_task`.
     EotPredictionTimeout,
     /// `audio_recognition._bounce_eou_task`.
@@ -295,19 +316,20 @@ pub enum TurnTimer {
     /// From the first speech onset since the agent last spoke; fires `UserTurnExceeded` once per
     /// crossing.
     UserTurnDuration,
-    /// `IVRActivity._debounced_silence`.
-    IvrSilence,
     /// `RecorderIO._write_task`'s 2.5 s.
     RecorderFlush,
     /// `keyterm_detection.timeout`.
     KeytermTimeout,
-    Amd(crate::amd::classifier::AmdTimer),
     /// No `GenerationCreated` (or failure) back yet; on firing it fails with a timeout.
     RealtimeRequest(crate::agent_activity::realtime::RequestKey),
     /// `RunContext.with_filler`.
     Filler(crate::filler_scheduler::FillerId),
     /// Re-armed by every digit, cancelled while either side speaks.
     DtmfDebounce,
+    /// An interrupted speech that never reported its end is released (`SpeechHandle._cancel`).
+    InterruptionTimeout(SpeechId),
+    /// `min_consecutive_speech_delay` ran out.
+    ConsecutiveSpeechDelay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

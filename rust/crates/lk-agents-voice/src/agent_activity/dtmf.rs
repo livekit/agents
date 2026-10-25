@@ -2,7 +2,7 @@
 //! optional read-back to confirm them.
 
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::effects::{Out, TurnTimer};
+use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::signals::Signal;
 use crate::agent_session::{Answer, Driver, DtmfCommand, RequestId};
 use crate::events::SessionEvent;
@@ -21,7 +21,7 @@ struct Collection {
     collector: DtmfCollector,
     /// Answered once with the first outcome, or `Stopped`.
     call: Option<RequestId>,
-    /// Whether `TurnTimer::DtmfDebounce` is armed, so a cancel is never a cancel of nothing.
+    /// Whether `Timer::DtmfDebounce` is armed, so a cancel is never a cancel of nothing.
     armed: bool,
     /// The confirm arm's read-back: the collector's guard is held until this speech is done.
     confirm: Option<SpeechId>,
@@ -109,7 +109,7 @@ impl Dtmf {
         let Some(mut dtmf) = self.running.take() else { return };
         dtmf.collector.finish_reply();
         if dtmf.armed {
-            out.machine().cancel(TurnTimer::DtmfDebounce);
+            out.machine().cancel(Timer::DtmfDebounce);
         }
         out.answer(dtmf.call, Answer::Dtmf(DtmfOutcome::Stopped));
     }
@@ -121,12 +121,12 @@ impl Dtmf {
             // `schedule()` replaces a pending timer: one arm, which the timer set replaces.
             DtmfAction::Schedule { at } => {
                 dtmf.armed = true;
-                out.machine().arm(TurnTimer::DtmfDebounce, at);
+                out.machine().arm(Timer::DtmfDebounce, at);
             }
             // `Debounced.run()`: the pending timer cancelled, the body now.
             DtmfAction::Cancel | DtmfAction::RunNow => {
                 if std::mem::take(&mut dtmf.armed) {
-                    out.machine().cancel(TurnTimer::DtmfDebounce);
+                    out.machine().cancel(Timer::DtmfDebounce);
                 }
                 if matches!(action, DtmfAction::RunNow) {
                     self.reply(out);

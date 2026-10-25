@@ -2,10 +2,10 @@
 //! driver's scheduling, authorization, pause and `_current_speech` queries.
 
 use crate::agent_session::Driver;
-use crate::agent_session::effects::Out;
+use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::signals::{PauseResult, Signal};
 use crate::events::SessionEvent;
-use crate::speech_handle::{INTERRUPTION_TIMEOUT, SpeechHandle};
+use crate::speech_handle::SpeechHandle;
 use crate::trace::{CloseAct, CloseStep, InterruptCause, InterruptStep, SpeechStep, TurnStep};
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::AgentState;
@@ -26,7 +26,7 @@ const HANDOFF: &str = "a handoff resumed scheduling before the drain completed";
 
 const CLOSING: &str = "the session is closing";
 
-use speech_scheduler::{Finished, NextSpeech, Requeue, SchedulingPass};
+use speech_scheduler::{NextSpeech, Requeue, SchedulingPass};
 pub use speech_scheduler::{SpeechScheduler, Status};
 
 /// The scheduling state: the speeches, the queue and the step keep their invariants behind
@@ -49,11 +49,10 @@ mod speech_scheduler {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum SchedulingStep {
         Idle,
-        /// `min_consecutive_speech_delay` still owed: a deadline, not a sleep. `next` is `None`
-        /// once that candidate finished early; the gap still stands.
+        /// `min_consecutive_speech_delay` still owed, until [`Timer::ConsecutiveSpeechDelay`]
+        /// fires. `next` is `None` once that candidate finished early; the gap still stands.
         Delaying {
             next: Option<SpeechId>,
-            until: Ts,
         },
         /// The head is chosen but authorization is held (AMD's `_authorization_paused`).
         AuthorizationPaused {
@@ -92,7 +91,6 @@ mod speech_scheduler {
         status: Status,
         /// An interrupted candidate is never authorized.
         interrupted: bool,
-        watchdog: Option<Ts>,
     }
 
     /// `AgentActivity`'s scheduling state (`_speech_q`, `_current_speech`, `_scheduling_paused`,
@@ -196,17 +194,6 @@ mod speech_scheduler {
             self.speeches.get(&speech).is_none_or(|e| e.add_to_chat_ctx)
         }
 
-        pub fn next_deadline(&self) -> Option<Ts> {
-            let delay = match self.step {
-                SchedulingStep::Delaying { until, .. } => Some(until),
-                SchedulingStep::Idle
-                | SchedulingStep::AuthorizationPaused { .. }
-                | SchedulingStep::Current(_) => None,
-            };
-            let watchdog = self.speeches.values().filter_map(|e| e.watchdog).min();
-            [delay, watchdog].into_iter().flatten().min()
-        }
-
         fn consecutive_speech_delay(&self, now: Ts) -> Option<Duration> {
             if self.min_consecutive_speech_delay.is_zero() {
                 return None;
@@ -263,8 +250,7 @@ mod speech_scheduler {
             status: Status,
         ) {
             let speech = handle.id();
-            let entry =
-                Entry { handle, kind, add_to_chat_ctx, status, interrupted: false, watchdog: None };
+            let entry = Entry { handle, kind, add_to_chat_ctx, status, interrupted: false };
             self.speeches.insert(speech, entry);
         }
 
@@ -277,17 +263,6 @@ mod speech_scheduler {
             self.speech_q.push_back(speech);
         }
 
-        /// The interruption watchdogs due by `now`, disarmed.
-        pub(super) fn take_due_watchdogs(&mut self, now: Ts) -> Vec<SpeechId> {
-            (self.speeches.iter_mut())
-                .filter(|(_, e)| e.watchdog.is_some_and(|at| at <= now))
-                .map(|(speech, e)| {
-                    e.watchdog = None;
-                    *speech
-                })
-                .collect()
-        }
-
         /// `_scheduling_task`'s pass: the owed gap expires where it is read, a parked speech
         /// no longer blocked becomes current again before the queue, and the head is authorized,
         /// armed behind the gap, or held for AMD.
@@ -295,6 +270,7 @@ mod speech_scheduler {
             &mut self,
             now: Ts,
             blocked: &crate::agent_activity::tasks::DrainBlocked,
+            gap_elapsed: bool,
         ) -> SchedulingPass {
             let mut released = false;
             let candidate = loop {
@@ -302,11 +278,10 @@ mod speech_scheduler {
                     SchedulingStep::Current(_) => {
                         return SchedulingPass { released, next: NextSpeech::Stay };
                     }
-                    SchedulingStep::Delaying { until, .. } if until > now => {
+                    SchedulingStep::Delaying { .. } if !gap_elapsed => {
                         return SchedulingPass { released, next: NextSpeech::Stay };
                     }
-                    // Expired only here, where it is read; `<=`, since a virtual clock only moves
-                    // on demand. A candidate that finished during the gap: the queue is looked at.
+                    // A candidate that finished during the gap: the queue is looked at.
                     SchedulingStep::Delaying { next, .. } => {
                         released = true;
                         let Some(next) = next else {
@@ -343,9 +318,8 @@ mod speech_scheduler {
             };
             if let Some(delay) = self.consecutive_speech_delay(now) {
                 let until = now.saturating_add(delay);
-                let traced = matches!(self.step, SchedulingStep::Delaying { until: was, .. } if was == until);
-                self.step = SchedulingStep::Delaying { next: Some(candidate), until };
-                return SchedulingPass { released, next: NextSpeech::Delayed { until, traced } };
+                self.step = SchedulingStep::Delaying { next: Some(candidate) };
+                return SchedulingPass { released, next: NextSpeech::Delayed { until } };
             }
             // AMD's hold keeps the head chosen and unauthorized.
             if self.authorization_paused {
@@ -357,17 +331,12 @@ mod speech_scheduler {
             SchedulingPass { released, next: NextSpeech::Authorized(candidate) }
         }
 
-        /// The speech was interrupted: never authorized now. The watchdog is armed once (`arm`: not
-        /// past the close): its deadline.
-        pub(crate) fn interrupted(&mut self, speech: SpeechId, now: Ts, arm: bool) -> Option<Ts> {
-            let entry = self.speeches.get_mut(&speech)?;
+        /// The speech was interrupted: never authorized now. `false` when the queue no longer
+        /// holds it.
+        pub(crate) fn interrupted(&mut self, speech: SpeechId) -> bool {
+            let Some(entry) = self.speeches.get_mut(&speech) else { return false };
             entry.interrupted = true;
-            if entry.watchdog.is_none() && arm {
-                let at = now.saturating_add(INTERRUPTION_TIMEOUT);
-                entry.watchdog = Some(at);
-                return Some(at);
-            }
-            None
+            true
         }
 
         /// A `Working` speech's next step: back on the queue, its step-scoped interruption cleared;
@@ -382,18 +351,17 @@ mod speech_scheduler {
                 entry.status = Status::Discarded;
                 return Requeue::Refused;
             }
-            // The step boundary ends a step-scoped interruption: its latch and watchdog are
-            // cleared.
+            // The step boundary ends a step-scoped interruption.
             entry.interrupted = false;
             entry.status = Status::Queued;
-            let watchdog_cleared = entry.watchdog.take().is_some();
             self.speech_q.push_back(speech);
-            Requeue::Requeued { watchdog_cleared }
+            Requeue::Requeued
         }
 
         /// The speech is over: its entry (and handle) go, the current speech and its gap move.
-        pub(super) fn finish(&mut self, speech: SpeechId, now: Ts) -> Option<Finished> {
-            let entry = self.speeches.remove(&speech)?;
+        /// `Some(quiet)`: no current speech and nothing in its tools (`listening`).
+        pub(super) fn finish(&mut self, speech: SpeechId, now: Ts) -> Option<bool> {
+            self.speeches.remove(&speech)?;
             // A preemptive generation that wound down on its own before the turn committed.
             if self.preemptive_generation.as_ref().is_some_and(|(held, _)| *held == speech) {
                 self.preemptive_generation = None;
@@ -405,8 +373,8 @@ mod speech_scheduler {
                     SchedulingStep::Idle
                 }
                 // The gap owed to a finished speech stands for whoever is behind.
-                SchedulingStep::Delaying { next: Some(next), until } if next == speech => {
-                    SchedulingStep::Delaying { next: None, until }
+                SchedulingStep::Delaying { next: Some(next) } if next == speech => {
+                    SchedulingStep::Delaying { next: None }
                 }
                 SchedulingStep::AuthorizationPaused { next } if next == speech => {
                     SchedulingStep::Idle
@@ -414,12 +382,13 @@ mod speech_scheduler {
                 step => step,
             };
             let working = self.speeches.values().any(|e| e.status == Status::Working);
-            let quiet = !working
-                && matches!(
-                    self.step,
-                    SchedulingStep::Idle | SchedulingStep::Delaying { next: None, .. }
-                );
-            Some(Finished { watchdog: entry.watchdog.is_some(), quiet })
+            Some(
+                !working
+                    && matches!(
+                        self.step,
+                        SchedulingStep::Idle | SchedulingStep::Delaying { next: None, .. }
+                    ),
+            )
         }
 
         /// `_pause_scheduling_task`: one more promise; the close's drain outranks the pause it
@@ -446,16 +415,9 @@ mod speech_scheduler {
             self.paused.take().map(|p| p.callers)
         }
 
-        /// The close: every watchdog disarmed (the speeches whose went), and an owed or held
-        /// next speech freed (`true` when an owed gap was released).
-        pub(super) fn close(&mut self) -> (Vec<SpeechId>, bool) {
-            let mut cleared = Vec::new();
-            for (speech, entry) in &mut self.speeches {
-                if entry.watchdog.take().is_some() {
-                    cleared.push(*speech);
-                }
-            }
-            let released = match self.step {
+        /// The close: an owed or held next speech freed (`true` when an owed gap was released).
+        pub(super) fn close(&mut self) -> bool {
+            match self.step {
                 SchedulingStep::Delaying { .. } => {
                     self.step = SchedulingStep::Idle;
                     true
@@ -465,8 +427,7 @@ mod speech_scheduler {
                     false
                 }
                 SchedulingStep::Idle | SchedulingStep::Current(_) => false,
-            };
-            (cleared, released)
+            }
         }
 
         /// A blocked current speech is parked: it stays current while its step plays.
@@ -601,8 +562,6 @@ mod speech_scheduler {
                     "a preemptive generation outlived Closing"
                 );
                 debug_assert!(self.paused.is_none(), "a pause outlived Closing");
-                let watchdog = self.speeches.values().any(|e| e.watchdog.is_some());
-                debug_assert!(!watchdog, "a watchdog outlived Closing");
             }
             if self.paused.is_some() {
                 debug_assert!(
@@ -623,10 +582,9 @@ mod speech_scheduler {
     pub(super) enum NextSpeech {
         /// A current speech, a gap owed, nothing queued, or held for AMD: nothing to authorize.
         Stay,
-        /// The gap is owed until `until`; `traced` when that deadline was already armed.
+        /// The gap is owed until `until`.
         Delayed {
             until: Ts,
-            traced: bool,
         },
         Authorized(SpeechId),
     }
@@ -635,16 +593,7 @@ mod speech_scheduler {
         NotWorking,
         /// Closing: discarded, to be refused.
         Refused,
-        Requeued {
-            watchdog_cleared: bool,
-        },
-    }
-
-    pub(super) struct Finished {
-        /// Its watchdog was armed.
-        pub(super) watchdog: bool,
-        /// No current speech and nothing in its tools: `listening`.
-        pub(super) quiet: bool,
+        Requeued,
     }
 }
 
@@ -880,11 +829,12 @@ impl Driver {
         }
     }
 
-    /// `_scheduling_task`: due interruption watchdogs, then the current speech. The
-    /// `min_consecutive_speech_delay` gap is a deadline on the main `select!`, not a sleep.
+    /// `_scheduling_task`: due interruption watchdogs, then the current speech. Its timers fire
+    /// here, wherever the pass runs, as `_scheduling_task` wakes between the loop's callbacks: a
+    /// watchdog due in the instant another timer fires goes off in that timer's pass.
     fn run_scheduling_pass(&mut self, now: Ts, out: &mut Out) {
-        let due = self.activity.speech_scheduler.take_due_watchdogs(now);
-        for speech in due {
+        let watchdog = |t| matches!(t, Timer::InterruptionTimeout(_));
+        while let Some(Timer::InterruptionTimeout(speech)) = self.pop_due(now, out, watchdog) {
             out.trace(SpeechStep::WatchdogCleared { speech });
             // `SpeechHandle._cancel`: cancel, mark done and release, since the aborted task will
             // never report `Done`.
@@ -904,17 +854,21 @@ impl Driver {
         if self.session.closing_past_edge() {
             return;
         }
-        let SchedulingPass { released, next } =
-            self.activity.speech_scheduler.scheduling_pass(now, &self.activity.drain_blocked);
+        let gap_elapsed = self.pop_due(now, out, |t| t == Timer::ConsecutiveSpeechDelay).is_some();
+        let SchedulingPass { released, next } = self.activity.speech_scheduler.scheduling_pass(
+            now,
+            &self.activity.drain_blocked,
+            gap_elapsed,
+        );
         if released {
             out.trace(SpeechStep::FloorReleased);
         }
         let candidate = match next {
             NextSpeech::Stay => return,
-            NextSpeech::Delayed { until, traced: false } => {
+            NextSpeech::Delayed { until } => {
+                out.machine().arm(Timer::ConsecutiveSpeechDelay, until);
                 return out.trace(SpeechStep::FloorArmed { until });
             }
-            NextSpeech::Delayed { traced: true, .. } => return,
             NextSpeech::Authorized(candidate) => candidate,
         };
         let Some(handle) = self.activity.speech_scheduler.handle(candidate).cloned() else {
@@ -933,8 +887,9 @@ impl Driver {
         match self.activity.speech_scheduler.requeue(speech, closing) {
             Requeue::NotWorking => {}
             Requeue::Refused => self.reject_speech(now, speech, Rejected::Stopped, out),
-            Requeue::Requeued { watchdog_cleared } => {
-                if watchdog_cleared {
+            // The step boundary ends the interruption's watchdog too.
+            Requeue::Requeued => {
+                if self.disarm(Timer::InterruptionTimeout(speech), out) {
                     out.trace(SpeechStep::WatchdogCleared { speech });
                 }
             }
@@ -944,11 +899,8 @@ impl Driver {
     /// The speech is over (`Done`, `Failed` or the watchdog): the current speech and its gap, then
     /// `_on_pipeline_reply_done`'s `listening` when nothing speaks and nothing is in its tools.
     pub(super) fn speech_finished(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
-        let Some(Finished { watchdog, quiet }) = self.activity.speech_scheduler.finish(speech, now)
-        else {
-            return;
-        };
-        if watchdog {
+        let Some(quiet) = self.activity.speech_scheduler.finish(speech, now) else { return };
+        if self.disarm(Timer::InterruptionTimeout(speech), out) {
             out.trace(SpeechStep::WatchdogCleared { speech });
         }
         // A self-replying realtime model is still composing the reply its tools asked for: the
@@ -991,11 +943,14 @@ impl Driver {
     /// preemptive generation discarded, a drain-waiting pause refused, and nothing is authorized
     /// again.
     pub(crate) fn close_scheduling(&mut self, now: Ts, out: &mut Out) {
-        let (cleared, delay_released) = self.activity.speech_scheduler.close();
-        for speech in cleared {
-            out.trace(SpeechStep::WatchdogCleared { speech });
+        let speeches: Vec<SpeechId> = self.activity.speech_scheduler.speech_ids().collect();
+        for speech in speeches {
+            if self.disarm(Timer::InterruptionTimeout(speech), out) {
+                out.trace(SpeechStep::WatchdogCleared { speech });
+            }
         }
-        if delay_released {
+        if self.activity.speech_scheduler.close() {
+            self.disarm(Timer::ConsecutiveSpeechDelay, out);
             out.trace(SpeechStep::FloorReleased);
         }
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);

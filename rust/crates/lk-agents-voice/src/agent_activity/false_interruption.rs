@@ -5,11 +5,11 @@ use crate::agent_activity::options::SessionConfig;
 use crate::agent_activity::scheduling::{SpeechId, Status};
 use crate::agent_session::effects::Out;
 use crate::agent_session::effects::{AudioOp, Effect};
-use crate::agent_session::effects::{GateCause, GateOp, TurnTimer};
+use crate::agent_session::effects::{GateCause, GateOp, Timer};
 use crate::agent_session::{Answer, Driver, RequestId};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
-use crate::speech_handle::SpeechError;
+use crate::speech_handle::{INTERRUPTION_TIMEOUT, SpeechError};
 use crate::trace::{InputStep, InterruptCause, InterruptStep, SpeechStep};
 use crate::turn::InterruptionOptions;
 use lk_agents_abi::Ts;
@@ -85,7 +85,7 @@ mod paused_speech {
             self.paused_speech.map(|p| p.timeout)
         }
 
-        /// The caller armed `TurnTimer::FalseInterruption`.
+        /// The caller armed `Timer::FalseInterruption`.
         pub fn false_interruption_timer_armed(&mut self) {
             self.false_interruption_timer = true;
         }
@@ -319,7 +319,13 @@ impl Driver {
         // Never authorized now; the watchdog is armed on the session clock. Nothing fires after
         // the close: every handle is interrupted there and the loop exits.
         let closing = self.session.closing_past_edge();
-        if let Some(at) = self.activity.speech_scheduler.interrupted(speech, now, !closing) {
+        let watchdog = Timer::InterruptionTimeout(speech);
+        if self.activity.speech_scheduler.interrupted(speech)
+            && !closing
+            && !self.armed(watchdog, out)
+        {
+            let at = now.saturating_add(INTERRUPTION_TIMEOUT);
+            out.machine().arm(watchdog, at);
             out.trace(SpeechStep::WatchdogArmed { speech, at });
         }
         // A realtime server keeps generating (into its own mirror) until told not to.
@@ -559,7 +565,7 @@ impl Driver {
     /// the pause itself in place.
     fn cancel_false_interruption_timer(&mut self, out: &mut Out) {
         if self.activity.paused_speech.cancel_false_interruption_timer() {
-            out.machine().cancel(TurnTimer::FalseInterruption);
+            out.machine().cancel(Timer::FalseInterruption);
         }
     }
 
@@ -589,7 +595,7 @@ impl Driver {
         let Some(timeout) = self.activity.paused_speech.paused_timeout() else { return };
         self.cancel_false_interruption_timer(out);
         self.activity.paused_speech.false_interruption_timer_armed();
-        out.machine().arm(TurnTimer::FalseInterruption, now.saturating_add(timeout));
+        out.machine().arm(Timer::FalseInterruption, now.saturating_add(timeout));
     }
 
     /// `_on_timeout`: the resume deadline passed. An open turn decision owns the paused speech: it

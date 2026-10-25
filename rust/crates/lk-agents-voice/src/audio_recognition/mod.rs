@@ -3,7 +3,7 @@
 
 use crate::agent_activity::false_interruption::count_min_words;
 use crate::agent_activity::options::{DetectorKind, LegSet, SessionConfig};
-use crate::agent_session::effects::{Effects, TurnTimer};
+use crate::agent_session::effects::{Effects, Timer};
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
 use crate::events::{AgentBackchannelOpportunityEvent, SessionEvent, UserTranscriptEvent};
@@ -97,7 +97,7 @@ pub struct AudioRecognition {
 
     // --- ids and dedup -----------------------------------------------------------------------
     /// The phase timer being handled: `set_phase` must not cancel it (it is no longer armed).
-    fired: Option<TurnTimer>,
+    fired: Option<Timer>,
     eot_seq: u64,
     turn_seq: u64,
     /// `self._last_emitted_prediction`: one prediction is announced once, compared by value.
@@ -191,11 +191,6 @@ impl AudioRecognition {
     /// A host `commit_user_turn()` waits for its transcript.
     pub(crate) fn commit_pending(&self) -> bool {
         self.pending_commit.is_some()
-    }
-
-    /// When the waiting commit's `transcript_timeout` runs out.
-    pub(crate) fn commit_deadline(&self) -> Option<Ts> {
-        self.pending_commit.as_ref().map(|c| c.deadline)
     }
 
     pub(crate) fn take_pending_commit(&mut self) -> Option<PendingCommit> {
@@ -330,7 +325,6 @@ pub(super) struct PendingTurn {
     pub(super) info: EndOfTurnInfo,
     /// `on_user_turn_completed_delay` is measured from here.
     pub(super) issued_at: Ts,
-    pub(super) deadline: Ts,
     /// `None` when no host runs hooks.
     pub(super) hook: Option<crate::agent_session::HookId>,
 }
@@ -354,7 +348,6 @@ pub(super) struct TurnEdits {
 pub(super) struct PendingCommit {
     pub(super) skip_reply: bool,
     pub(super) call: Option<crate::agent_session::RequestId>,
-    pub(super) deadline: Ts,
     pub(super) close: bool,
 }
 
@@ -656,18 +649,16 @@ pub enum Phase {
 }
 
 impl Phase {
-    fn timer(&self) -> Option<(TurnTimer, Ts)> {
+    fn timer(&self) -> Option<(Timer, Ts)> {
         match self {
             Phase::Idle
             | Phase::Speaking { .. }
             | Phase::Ended { .. }
             | Phase::Committed { .. } => None,
-            Phase::Awaiting { deadline: Some(at), .. } => {
-                Some((TurnTimer::EotPredictionTimeout, *at))
-            }
+            Phase::Awaiting { deadline: Some(at), .. } => Some((Timer::EotPredictionTimeout, *at)),
             Phase::Awaiting { deadline: None, .. } => None,
             Phase::Delaying { fire_at, .. } | Phase::ManualCommitted { fire_at, .. } => {
-                Some((TurnTimer::EndpointingDelay, *fire_at))
+                Some((Timer::EndpointingDelay, *fire_at))
             }
         }
     }

@@ -1,5 +1,5 @@
 use crate::agent_session::Driver;
-use crate::agent_session::effects::{Out, TurnTimer};
+use crate::agent_session::effects::{Out, Timer};
 use crate::room_io::RECORDER_FLUSH;
 use crate::trace::PlayoutStep;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackEvent, PlaybackObserver};
@@ -70,7 +70,7 @@ impl Driver {
         let tap = crate::recorder_io::RecorderTap::new(recorder, self.shared.time.clock());
         *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = Some(tap);
         self.observe_recorder(None);
-        out.machine().arm(TurnTimer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
+        out.machine().arm(Timer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
     }
 
     /// One last flush, observer off, timer cancelled.
@@ -86,7 +86,7 @@ impl Driver {
             out.tracker().unobserve(&observer);
         }
         *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = None;
-        out.machine().cancel(TurnTimer::RecorderFlush);
+        out.machine().cancel(Timer::RecorderFlush);
         out.trace(PlayoutStep::RecorderDetached);
     }
 
@@ -112,7 +112,7 @@ impl Driver {
         let ok = tap.recorder.flush(tap.now()).is_ok();
         out.trace(PlayoutStep::RecorderFlushed { ok });
         if rearm && !self.session.closing_past_edge() {
-            out.machine().arm(TurnTimer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
+            out.machine().arm(Timer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
         }
     }
 }

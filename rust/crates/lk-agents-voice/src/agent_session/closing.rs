@@ -12,7 +12,7 @@ use crate::agent_activity::false_interruption::InterruptOutcome;
 use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
-use crate::agent_session::effects::{Effect, Out, ProviderCall, TimerOp, TurnTimer};
+use crate::agent_session::effects::{Effect, Out, ProviderCall, Timer, TimerOp};
 use crate::agent_session::signals::Signal;
 use crate::agent_session::{
     ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
@@ -54,72 +54,43 @@ pub(crate) struct Closing {
     drains_answered: bool,
 }
 
+/// Unwinding, draining, the edge and the legs are bounded by [`Timer::Close`], armed as each
+/// begins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClosePhase {
     /// An inline task chain is being unwound, innermost first, before the remaining frame's
-    /// `on_exit`. `deadline` is `None` once the bound passed and the rest was abandoned.
-    Unwinding {
-        deadline: Option<Ts>,
-    },
+    /// `on_exit`.
+    Unwinding,
     Exiting {
         hook: HookId,
     },
-    Draining {
-        deadline: Ts,
-    },
-    /// The hard edge was performed; `until` bounds the cut speeches' reports.
-    Edge {
-        until: Ts,
-    },
-    Committing {
-        until: Ts,
-    },
-    /// The realtime socket's `aclose` was asked for; `until` bounds it, `closed` is its answer.
+    Draining,
+    /// The hard edge was performed; its bound releases the cut speeches that never reported.
+    Edge,
+    /// Bounded by the trailing commit's own timer.
+    Committing,
+    /// The realtime socket's `aclose` was asked for; `closed` once it answered or its bound passed.
     ClosingActivity {
-        until: Ts,
         closed: bool,
     },
     Closed,
 }
 
 impl ClosePhase {
-    pub(crate) fn deadline(self) -> Option<Ts> {
-        match self {
-            ClosePhase::Unwinding { deadline } => deadline,
-            ClosePhase::Draining { deadline } => Some(deadline),
-            ClosePhase::Edge { until }
-            | ClosePhase::Committing { until }
-            | ClosePhase::ClosingActivity { until, .. } => Some(until),
-            ClosePhase::Exiting { .. } | ClosePhase::Closed => None,
-        }
-    }
-
     /// Past the hard edge no command may take effect any more.
     pub(crate) fn past_edge(self) -> bool {
-        !matches!(
-            self,
-            ClosePhase::Unwinding { .. } | ClosePhase::Exiting { .. } | ClosePhase::Draining { .. }
-        )
+        !matches!(self, ClosePhase::Unwinding | ClosePhase::Exiting { .. } | ClosePhase::Draining)
     }
 }
 
 impl Closing {
-    /// Begins unwinding until `deadline`, answering `drains` with its drain.
+    /// Begins unwinding, answering `drains` with its drain.
     pub(crate) fn new(
         reason: CloseReason,
         error: Option<ProviderError>,
-        deadline: Ts,
         drains: Vec<RequestId>,
     ) -> Self {
-        let phase = ClosePhase::Unwinding { deadline: Some(deadline) };
-        Closing { reason, error, phase, drains, drains_answered: false }
-    }
-
-    /// A second request joins the close: a drain asked for again restarts its bound.
-    pub(crate) fn rejoin(&mut self, drain: bool, deadline: Ts) {
-        if let (true, ClosePhase::Draining { deadline: bound }) = (drain, &mut self.phase) {
-            *bound = deadline;
-        }
+        Closing { reason, error, phase: ClosePhase::Unwinding, drains, drains_answered: false }
     }
 
     /// Whether a caller of `drain()` can still wait on the close's own drain.
@@ -151,8 +122,10 @@ impl Driver {
     /// request joins the close in progress (a drain asked for again restarts its bound).
     pub(crate) fn begin_closing(&mut self, now: Ts, close: Close, out: &mut Out) {
         let Close { reason, drain, error } = close;
-        if let Some(closing) = &mut self.session.closing {
-            closing.rejoin(drain, now.saturating_add(DRAIN_BOUND));
+        if let Some(closing) = &self.session.closing {
+            if drain && closing.phase == ClosePhase::Draining {
+                out.machine().arm(Timer::Close, now.saturating_add(DRAIN_BOUND));
+            }
             return;
         }
         out.trace(CloseStep::Requested { reason, drain });
@@ -167,8 +140,7 @@ impl Driver {
         // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's,
         // and the caller is answered with the close's drain.
         let drains = self.activity.drain.take_waiters();
-        let deadline = now.saturating_add(DRAIN_BOUND);
-        self.session.closing = Some(Closing::new(reason, error, deadline, drains));
+        self.session.closing = Some(Closing::new(reason, error, drains));
         // A non-drain close: every open speech force-interrupted regardless of
         // `allow_interruptions`, a false-interruption pause released so a later turn never
         // resolves it as false, and every pending socket request settled `Closing`.
@@ -181,7 +153,30 @@ impl Driver {
         }
         match exit {
             Some(exit) => self.close_on_exit(now, exit, out),
-            None => self.close_unwind_step(now, out),
+            None => {
+                self.enter_close_phase(ClosePhase::Unwinding, Some(DRAIN_BOUND), now, out);
+                self.close_unwind_step(now, out)
+            }
+        }
+    }
+
+    /// The close moves to `phase`, bounded by `bound` from now; an unbounded phase cancels the
+    /// bound of the one it left.
+    fn enter_close_phase(
+        &mut self,
+        phase: ClosePhase,
+        bound: Option<Duration>,
+        now: Ts,
+        out: &mut Out,
+    ) {
+        if let Some(closing) = &mut self.session.closing {
+            closing.phase = phase;
+        }
+        match bound {
+            Some(bound) => out.machine().arm(Timer::Close, now.saturating_add(bound)),
+            None => {
+                self.disarm(Timer::Close, out);
+            }
         }
     }
 
@@ -197,9 +192,7 @@ impl Driver {
     /// The remaining agent's `on_exit`, then the drain.
     fn close_on_exit(&mut self, now: Ts, exit: Exit, out: &mut Out) {
         let Some(hook) = exit.hook() else { return self.close_drain(now, out) };
-        if let Some(closing) = &mut self.session.closing {
-            closing.phase = ClosePhase::Exiting { hook };
-        }
+        self.enter_close_phase(ClosePhase::Exiting { hook }, None, now, out);
     }
 
     /// The `on_exit` hook `id` ended (answered, timed out, or with nobody to ask).
@@ -212,10 +205,7 @@ impl Driver {
     /// `PauseScheduling { cause: Close }`, bounded by [`DRAIN_BOUND`]; settled or refused, the hard
     /// edge follows.
     fn close_drain(&mut self, now: Ts, out: &mut Out) {
-        let deadline = now.saturating_add(DRAIN_BOUND);
-        if let Some(closing) = &mut self.session.closing {
-            closing.phase = ClosePhase::Draining { deadline };
-        }
+        self.enter_close_phase(ClosePhase::Draining, Some(DRAIN_BOUND), now, out);
         // No reply plans a follow-up once the close began.
         self.shared.draining.send_replace(true);
         self.pause_scheduling(now, PauseCause::Close, out);
@@ -270,7 +260,7 @@ impl Driver {
     /// A task left the chain during unwinding: cancel the next innermost, or go on to the
     /// remaining frame's `on_exit`.
     pub(crate) fn close_unwind_step(&mut self, now: Ts, out: &mut Out) {
-        let unwinding = matches!(self.session.close_phase(), Some(ClosePhase::Unwinding { .. }));
+        let unwinding = matches!(self.session.close_phase(), Some(ClosePhase::Unwinding));
         if unwinding && !self.cancel_innermost_task(now, out) {
             let exit = self.plan_exit(out);
             self.close_on_exit(now, exit, out);
@@ -283,28 +273,26 @@ impl Driver {
     pub(crate) fn close_progress(&mut self, now: Ts, out: &mut Out) {
         let Some(Closing { phase, reason, .. }) = &self.session.closing else { return };
         match (*phase, *reason) {
-            (ClosePhase::Edge { .. }, reason) if self.activity.speech_scheduler.is_empty() => {
+            (ClosePhase::Edge, reason) if self.activity.speech_scheduler.is_empty() => {
                 let timeout = self.session.config.effective.timers.session_close_transcript_timeout;
                 if reason != CloseReason::Error && self.transcript_pending(now) {
-                    self.close_await_transcript(now, now.saturating_add(timeout), out);
+                    self.close_await_transcript(now, timeout, out);
                 } else {
                     self.close_legs_begin(now, out);
                 }
             }
-            (ClosePhase::Committing { .. }, _)
-                if !self.activity.audio_recognition.commit_pending() =>
-            {
+            (ClosePhase::Committing, _) if !self.activity.audio_recognition.commit_pending() => {
                 self.close_legs_begin(now, out);
             }
-            (ClosePhase::ClosingActivity { until, closed }, _) if closed || until <= now => {
-                self.close_legs(out);
+            (ClosePhase::ClosingActivity { closed: true }, _) => {
+                self.close_legs(now, out);
             }
             (
-                ClosePhase::Unwinding { .. }
+                ClosePhase::Unwinding
                 | ClosePhase::Exiting { .. }
-                | ClosePhase::Draining { .. }
-                | ClosePhase::Edge { .. }
-                | ClosePhase::Committing { .. }
+                | ClosePhase::Draining
+                | ClosePhase::Edge
+                | ClosePhase::Committing
                 | ClosePhase::ClosingActivity { .. }
                 | ClosePhase::Closed,
                 _,
@@ -313,14 +301,11 @@ impl Driver {
         self.pump_schedule(now, out);
     }
 
-    /// Flush the recogniser and wait for its final until `until`.
-    fn close_await_transcript(&mut self, now: Ts, until: Ts, out: &mut Out) {
-        if let Some(closing) = &mut self.session.closing {
-            closing.phase = ClosePhase::Committing { until };
-        }
+    /// Flush the recogniser and wait for its final for `timeout`.
+    fn close_await_transcript(&mut self, now: Ts, timeout: Duration, out: &mut Out) {
+        self.enter_close_phase(ClosePhase::Committing, None, now, out);
         out.signal(Signal::CloseProgress);
         self.answer_close_drains(out);
-        let timeout = until.saturating_duration_since(now);
         // Nobody awaits it: the commit's `EndOfTurn` and user item are the record.
         self.begin_commit(now, timeout, CLOSE_FLUSH, true, true, None, out);
     }
@@ -329,10 +314,8 @@ impl Driver {
     /// [`TEARDOWN_BOUND`]; its answer comes back as `RealtimeWake::Closed`.
     fn close_legs_begin(&mut self, now: Ts, out: &mut Out) {
         let rt = self.activity.rt_session.as_ref().map(|s| s.id);
-        let until = now.saturating_add(TEARDOWN_BOUND);
-        if let Some(closing) = &mut self.session.closing {
-            closing.phase = ClosePhase::ClosingActivity { until, closed: rt.is_none() };
-        }
+        let phase = ClosePhase::ClosingActivity { closed: rt.is_none() };
+        self.enter_close_phase(phase, rt.map(|_| TEARDOWN_BOUND), now, out);
         out.signal(Signal::CloseProgress);
         self.answer_close_drains(out);
         // `send_replace`: `send` stores nothing while no task subscribes, so a later one would
@@ -349,27 +332,21 @@ impl Driver {
     /// A close bound passed. `true` when the close moved to a later phase.
     pub(crate) fn close_tick(&mut self, now: Ts, out: &mut Out) -> bool {
         let Some(phase) = self.session.close_phase() else { return false };
-        if !phase.deadline().is_some_and(|d| d <= now) {
-            return false;
-        }
         match phase {
             // The unwind's bound: every pushed frame popped without a handoff, every awaiter
             // released, then the remaining frame's `on_exit`.
-            ClosePhase::Unwinding { .. } => {
-                if let Some(closing) = &mut self.session.closing {
-                    closing.phase = ClosePhase::Unwinding { deadline: None };
-                }
+            ClosePhase::Unwinding => {
                 self.abandon_tasks(out);
                 let exit = self.plan_exit(out);
                 self.close_on_exit(now, exit, out);
                 true
             }
-            ClosePhase::Draining { .. } => {
+            ClosePhase::Draining => {
                 self.close_edge(now, out);
                 true
             }
             // The edge's bound passed with a cut speech unreported: released by the close.
-            ClosePhase::Edge { .. } => {
+            ClosePhase::Edge => {
                 let open: Vec<SpeechId> = self.activity.speech_scheduler.speech_ids().collect();
                 for speech in open {
                     out.trace(CloseStep::Performed(CloseAct::Released { speech }));
@@ -379,21 +356,20 @@ impl Driver {
             }
             // The legs' bound: the session closes without them.
             ClosePhase::ClosingActivity { .. } => {
+                if let Some(closing) = &mut self.session.closing {
+                    closing.phase = ClosePhase::ClosingActivity { closed: true };
+                }
                 out.signal(Signal::CloseProgress);
                 false
             }
-            ClosePhase::Exiting { .. } | ClosePhase::Committing { .. } | ClosePhase::Closed => {
-                false
-            }
+            ClosePhase::Exiting { .. } | ClosePhase::Committing | ClosePhase::Closed => false,
         }
     }
 
     /// The legs closed or their bound passed: the session is closed.
     /// The loop stops here; [`Driver::finish`] sends the last event.
-    fn close_legs(&mut self, out: &mut Out) {
-        if let Some(closing) = &mut self.session.closing {
-            closing.phase = ClosePhase::Closed;
-        }
+    fn close_legs(&mut self, now: Ts, out: &mut Out) {
+        self.enter_close_phase(ClosePhase::Closed, None, now, out);
         // A callback issued past the edge (a cut step's `function_tools_executed`) is abandoned as
         // the edge abandoned the ones before it: once the loop stops, nobody would hear its answer.
         self.abandon_hooks(out);
@@ -548,9 +524,7 @@ impl Driver {
     /// every cut speech has reported `SpeechDone`, as the reference awaits `current_speech`, or
     /// [`EDGE_BOUND`] releases them.
     pub(crate) fn close_edge(&mut self, now: Ts, out: &mut Out) {
-        if let Some(closing) = &mut self.session.closing {
-            closing.phase = ClosePhase::Edge { until: now.saturating_add(EDGE_BOUND) };
-        }
+        self.enter_close_phase(ClosePhase::Edge, Some(EDGE_BOUND), now, out);
         out.signal(Signal::CloseProgress);
         let reason =
             self.session.closing.as_ref().map(|c| c.reason).unwrap_or(CloseReason::UserInitiated);
@@ -589,7 +563,7 @@ impl Driver {
         // Cancel the turn's armed timers through the cycle so each is journalled, skipping those
         // the turn machine just cancelled; the others are cancelled with what owns them.
         {
-            let already: Vec<TurnTimer> = out
+            let already: Vec<Timer> = out
                 .peek()
                 .iter()
                 .filter_map(|e| match e {
@@ -606,14 +580,14 @@ impl Driver {
                 })
                 .collect();
             for t in [
-                TurnTimer::EotPredictionTimeout,
-                TurnTimer::EndpointingDelay,
-                TurnTimer::TranscriptionTimeout,
-                TurnTimer::BackchannelBoundary,
-                TurnTimer::FalseInterruption,
-                TurnTimer::AecWarmup,
-                TurnTimer::UserAway,
-                TurnTimer::UserTurnDuration,
+                Timer::EotPredictionTimeout,
+                Timer::EndpointingDelay,
+                Timer::TranscriptionTimeout,
+                Timer::BackchannelBoundary,
+                Timer::FalseInterruption,
+                Timer::AecWarmup,
+                Timer::UserAway,
+                Timer::UserTurnDuration,
             ] {
                 if self.timers.is_armed(t) && !already.contains(&t) {
                     out.machine().cancel(t);

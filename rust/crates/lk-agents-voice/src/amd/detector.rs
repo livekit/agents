@@ -1,11 +1,12 @@
-use crate::agent_session::effects::TurnTimer;
 use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemGone, SystemTap};
 use crate::amd::classifier::{
     Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out,
     TranscriptSource, Verdict,
 };
 use crate::events::SessionEvent;
-use crate::trace::{ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step};
+use crate::trace::{
+    ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step, TimerName,
+};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::amd::{AMD_PROMPT, AmdCategory};
 use lk_agents_abi::{
@@ -332,7 +333,7 @@ impl AmdSystem {
     /// Fire the deadlines due at `now` in order; one cancelled by an earlier fire this pass is skipped.
     pub fn on_timers(&mut self, now: Ts) {
         while let Some(timer) = self.timers.pop_due(now) {
-            self.peer.journal(Step::Core(CoreStep::TimerFired(TurnTimer::Amd(timer), now)));
+            self.peer.journal(Step::Core(CoreStep::TimerFired(TimerName::Amd(timer), now)));
             self.step(now, In::Timeout(timer));
         }
     }
@@ -352,13 +353,13 @@ impl AmdSystem {
                 Effect::Arm(timer, at) => {
                     self.timers.arm(timer, at);
                     self.peer.journal(Step::Core(CoreStep::TimerArmed {
-                        timer: TurnTimer::Amd(timer),
+                        timer: TimerName::Amd(timer),
                         at,
                     }));
                 }
                 Effect::Cancel(timer) => {
                     self.timers.cancel(timer);
-                    self.peer.journal(Step::Core(CoreStep::TimerCancelled(TurnTimer::Amd(timer))));
+                    self.peer.journal(Step::Core(CoreStep::TimerCancelled(TimerName::Amd(timer))));
                 }
                 // The waiter is the host's (`execute()` awaits `amd_result`): nothing to wake here.
                 // `AMD.emit("amd_prediction")`; `_on_amd_prediction` then cancels the classification.

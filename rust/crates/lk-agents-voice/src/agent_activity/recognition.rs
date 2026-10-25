@@ -7,7 +7,7 @@ use crate::agent_activity::false_interruption::{
 };
 use crate::agent_activity::scheduling::{PreemptiveDiscard, PreemptiveRefusal, SpeechKind, Status};
 use crate::agent_activity::speech::SpeechSpec;
-use crate::agent_session::effects::Out;
+use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::{Answer, CommitSuperseded, Driver, RequestId, TurnCommand};
 use crate::audio::{AudioChannel, Tagged};
 use crate::audio_recognition::{
@@ -325,6 +325,7 @@ impl Driver {
         // The hook's seam: the user item is committed and the reply planned only once the host
         // answers or the bound passes. A newer turn ends the older one's wait, with no edits.
         if let Some(previous) = self.activity.pending_turn.take() {
+            self.disarm(Timer::UserTurnCompleted, out);
             if let Some(hook) = previous.hook {
                 self.activity.hooks.finish(hook);
                 out.trace(HandoffStep::HookFinished {
@@ -538,13 +539,13 @@ impl Driver {
         self.activity.audio_recognition.set_pending_commit(PendingCommit {
             skip_reply,
             call,
-            deadline: now.saturating_add(transcript_timeout),
             close,
         });
         if fresh || transcript_timeout.is_zero() {
             self.perform_pending_commit(now, out);
             return;
         }
+        out.machine().arm(Timer::Commit, now.saturating_add(transcript_timeout));
         // The reference flushes only when the mic is detached; that fact doesn't reach the driver,
         // so every awaited commit flushes (it is what makes the last final arrive).
         self.flush_stt_with_silence(stt_flush_duration.as_secs_f64(), out);
@@ -554,6 +555,7 @@ impl Driver {
         let Some(pending) = self.activity.audio_recognition.take_pending_commit() else {
             return;
         };
+        self.disarm(Timer::Commit, out);
         let transcript = self.activity.audio_recognition.current_transcript();
         // The final that ended the wait may have decided the turn already; don't commit twice.
         if !matches!(self.activity.audio_recognition.phase(), Phase::Committed { .. }) {

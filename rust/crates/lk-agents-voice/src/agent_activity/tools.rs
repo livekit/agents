@@ -5,7 +5,7 @@ use crate::agent::{Source, Visibility};
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::closing::SESSION_CLOSING;
-use crate::agent_session::effects::{Effect, Out, TurnTimer};
+use crate::agent_session::effects::{Effect, Out, Timer};
 use crate::agent_session::{Driver, FillerSource, HookCall, HookId, ToolUpdate};
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
@@ -405,11 +405,12 @@ impl Driver {
     pub(crate) fn end_filler(&mut self, id: FillerId, cause: FillerEnd, out: &mut Out) {
         let Some((armed, asking)) = self.activity.tools.close_filler(id) else { return };
         if armed {
-            out.machine().cancel(TurnTimer::Filler(id));
+            out.machine().cancel(Timer::Filler(id));
         }
         if let Some(hook) = asking
             && let Some(kind) = self.activity.hooks.finish(hook)
         {
+            self.disarm(Timer::Hook(hook), out);
             out.trace(HandoffStep::HookFinished { hook, kind, how: HookEnd::Abandoned });
         }
         out.trace(GenerationStep::FillerStopped { filler: id, cause });
@@ -520,10 +521,10 @@ impl Driver {
                 };
                 let Some(timer) = self.activity.tools.filler_wait(id, until) else { return };
                 if timer.cancel {
-                    out.machine().cancel(TurnTimer::Filler(id));
+                    out.machine().cancel(Timer::Filler(id));
                 }
                 if let Some(at) = timer.arm {
-                    out.machine().arm(TurnTimer::Filler(id), at);
+                    out.machine().arm(Timer::Filler(id), at);
                 }
             }
             FillerAction::Fire { step } => match self.activity.tools.filler_source(id) {

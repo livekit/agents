@@ -6,7 +6,7 @@ use crate::agent_activity::false_interruption::AudioInterruptTrigger;
 use crate::agent_activity::options::TurnDetection;
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
-use crate::agent_session::effects::{Out, TurnTimer};
+use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::{Answer, Close, ClosePhase, Closing, Driver, RequestId, Tx};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
@@ -225,7 +225,7 @@ pub(crate) mod realtime_state {
         }
 
         /// One key space for requests and the auto follow-up's wait: both time out on
-        /// `TurnTimer::RealtimeRequest`.
+        /// `Timer::RealtimeRequest`.
         fn mint_key(&mut self) -> RequestKey {
             self.next_key += 1;
             RequestKey(self.next_key - 1)
@@ -587,13 +587,13 @@ impl Driver {
         };
         let key = self.activity.realtime_state.register(req_id, request, call, allow_interruptions);
         self.rt_send(cmd, out);
-        out.machine().arm(TurnTimer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
+        out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
     }
 
     /// Its timer goes with it.
     fn take_pending(&mut self, req_id: &str, out: &mut Out) -> Option<Pending> {
         let pending = self.activity.realtime_state.pending.remove(req_id)?;
-        out.machine().cancel(TurnTimer::RealtimeRequest(pending.key));
+        out.machine().cancel(Timer::RealtimeRequest(pending.key));
         Some(pending)
     }
 
@@ -611,7 +611,7 @@ impl Driver {
         for (req_id, Pending { key, request, call, .. }) in
             std::mem::take(&mut self.activity.realtime_state.pending)
         {
-            out.machine().cancel(TurnTimer::RealtimeRequest(key));
+            out.machine().cancel(Timer::RealtimeRequest(key));
             if cancel && !self.activity.realtime_state.ended() {
                 self.activity.realtime_state.cancelled_requests.insert(req_id.clone());
                 self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
@@ -693,7 +693,7 @@ impl Driver {
             None => {
                 let follow_up = t.auto_follow_up.take();
                 if let Some((_, key)) = follow_up {
-                    out.machine().cancel(TurnTimer::RealtimeRequest(key));
+                    out.machine().cancel(Timer::RealtimeRequest(key));
                 }
                 (None, None, true, follow_up.map(|(reuse, _)| reuse))
             }
@@ -804,7 +804,7 @@ impl Driver {
                 .and_then(|id| self.activity.realtime_state.pending.remove(id));
             self.report_error(now, source, true, reported, None, out);
             if let Some(Pending { key, request, call, .. }) = pending {
-                out.machine().cancel(TurnTimer::RealtimeRequest(key));
+                out.machine().cancel(Timer::RealtimeRequest(key));
                 self.settle(request, call, Settled::Failed(error));
             }
             return;
@@ -820,7 +820,7 @@ impl Driver {
             self.rt_send(cmd, out);
         }
         for (_, Pending { key, request, call, .. }) in pending {
-            out.machine().cancel(TurnTimer::RealtimeRequest(key));
+            out.machine().cancel(Timer::RealtimeRequest(key));
             self.settle(request, call, Settled::Failed(error.clone()));
         }
         if close {
@@ -868,7 +868,7 @@ impl Driver {
             // The server replies on its own; it is given 5 s to start.
             let key = t.follow_up_with(speech, step);
             out.machine()
-                .arm(TurnTimer::RealtimeRequest(key), now.saturating_add(AUTO_TOOL_REPLY_TIMEOUT));
+                .arm(Timer::RealtimeRequest(key), now.saturating_add(AUTO_TOOL_REPLY_TIMEOUT));
         } else {
             let request = Request::ToolFollowUp { speech, step };
             self.send_request(now, req_id, request, None, None, out);
