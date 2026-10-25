@@ -93,7 +93,7 @@ fn pushed_never_authorized() -> Recording {
 ///
 /// The references count from the run's own history -- the first recognition stream, the utterance
 /// the start of speech opens on it, the chat request the guess plans -- so the sequence resolves
-/// the same way on replay and a reference that no longer exists is reported as drift.
+/// the same way every run.
 /// Reach a speculative reply: recognise a preflight transcript, let the driver start a guess on
 /// it, and only then end the turn.
 ///

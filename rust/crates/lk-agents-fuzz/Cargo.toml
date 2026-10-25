@@ -22,6 +22,5 @@ lk-agents-media = { path = "../lk-agents-media" }
 lk-agents-rtc = { path = "../lk-agents-rtc" }
 tokio = { workspace = true, features = ["test-util"] }
 async-trait.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 fastrand = "2"

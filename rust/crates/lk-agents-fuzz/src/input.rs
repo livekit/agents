@@ -7,7 +7,7 @@
 //! **Dependencies live in the field types.** A field typed `Ref<Filler>` needs a filler something
 //! earlier opened, and comes out `None` when none is live, so the input is simply unavailable and
 //! no availability rule is written twice. `Ref` counts from the run's own history, so a recorded
-//! case resolves the same way it was made and a stale reference is exactly a replay divergence.
+//! case resolves the same way every time it runs.
 use std::marker::PhantomData;
 
 use fastrand::Rng;
@@ -30,13 +30,10 @@ use crate::record::{Kind, Live};
 
 /// The n-th resource of kind `K` this run opened, counting from zero.
 ///
-/// An index rather than an identity so that a case is replayable: the driver mints a different
+/// An index rather than an identity so that a case reproduces: the driver mints a different
 /// `SpeechId` every run, but "the third speech this run opened" is the same thing both times.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(transparent, bound = "")]
 pub struct Ref<K> {
     pub nth: u32,
-    #[serde(skip)]
     kind: PhantomData<fn() -> K>,
 }
 
@@ -68,11 +65,8 @@ impl<K: Resource> std::fmt::Debug for Ref<K> {
 /// A host answers a hook after the driver stopped waiting for it -- the bound ran out, a newer
 /// turn superseded it, the close abandoned it -- and the driver has to take that in its stride.
 /// Drawn from what is gone, never from what is live, so the row means what it says.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(transparent, bound = "")]
 pub struct Gone<K> {
     pub nth: u32,
-    #[serde(skip)]
     kind: PhantomData<fn() -> K>,
 }
 
@@ -117,7 +111,7 @@ pub trait Resource {
 
 macro_rules! resources {
     ($($name:ident),* $(,)?) => {$(
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub struct $name;
         impl Resource for $name {
             const KIND: Kind = Kind::$name;
@@ -279,19 +273,19 @@ impl<T: Make> Make for Vec<T> {
 }
 
 /// Text an agent would say: replies, instructions, what a `say` speaks.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentText(pub String);
 
 /// Text a caller would say: transcripts, `user_input`.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct UserText(pub String);
 
 /// A duration in milliseconds, from the domain a case is allowed to ask for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Millis(pub u64);
 
 /// A small count: how many frames, how many retries, how many words.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Count(pub u32);
 
 impl Make for AgentText {
@@ -317,13 +311,13 @@ impl Make for Count {
 
 /// A detector's confidence, in percent. Sampled from a spread that straddles the thresholds a
 /// driver decides on, so hysteresis and flicker are reached rather than hoped for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Confidence(pub u8);
 
 /// The arguments a model hands a tool, as the JSON text on the wire. Drawn from the shapes the
 /// driver's own tools take -- the answering-machine classifier's `save_prediction(label)` and
 /// `postpone_termination(seconds)` -- and the empty object every host tool accepts here.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolArgs(pub String);
 
 impl Make for ToolArgs {
@@ -342,7 +336,7 @@ impl Make for ToolArgs {
 
 /// Who a recogniser says was speaking, when it diarises: a small id, the same person keeping the
 /// same one. `None` on an event is a recogniser that does not say.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Speaker(pub u8);
 
 impl Make for Speaker {
@@ -371,7 +365,7 @@ impl Make for IoKind {
 macro_rules! plain_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident),* $(,)? }) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Vocabulary)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Vocabulary)]
         pub enum $name { $($variant),* }
         impl Make for $name {
             fn make(s: &mut Sampler<'_>) -> Option<Self> {
@@ -511,7 +505,7 @@ macro_rules! inputs {
         ;
     )*) => {
         /// Everything the test can send the driver.
-        #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, Vocabulary)]
+        #[derive(Clone, Debug, PartialEq, Vocabulary)]
         pub enum Input {
             $($(#[$meta])* $name { $($field: $ty),* },)*
         }
@@ -538,7 +532,7 @@ macro_rules! inputs {
             }
 
             /// Every resource this input names. Empty means it depends on nothing, so it is
-            /// always available; a reference that no longer resolves is a replay divergence.
+            /// always available.
             pub fn needs(&self) -> Vec<(Kind, u32)> {
                 match self {
                     $(Input::$name { $($field),* } => {

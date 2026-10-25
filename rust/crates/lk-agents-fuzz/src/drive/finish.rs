@@ -1,9 +1,9 @@
 //! Releasing what a run owes, then reporting what it found.
 //!
-//! Beside the session it drives and not in `search`: replay needs exactly this and nothing of
-//! the campaign, so changing how the search picks inputs cannot break a saved case. The rules run
-//! once, over the finished recording; the only check between inputs is that the run is still
-//! moving.
+//! Beside the session it drives and not in `search`: a probe or a regression test needs exactly
+//! this and nothing of the campaign, so changing how the search picks inputs cannot change how a
+//! case ends. The rules run once, over the finished recording; the only check between inputs is
+//! that the run is still moving.
 use super::*;
 
 // ==============================================================================================
@@ -236,8 +236,8 @@ impl Outcome {
 /// Run one case to completion in its own simulation.
 ///
 /// One case, one runtime: the seeded scheduler is only reproducible from its start, so two cases
-/// sharing a runtime would each begin at a different point in the stream and neither would replay
-/// on its own.
+/// sharing a runtime would each begin at a different point in the stream and neither would
+/// reproduce on its own.
 pub fn run(case: Case) -> Outcome {
     simulate_with(case.schedule, run_in(case))
 }
@@ -251,12 +251,6 @@ async fn run_in(case: Case) -> Outcome {
         if let Some(found) = guard(&run, &mut outcome) {
             return found;
         }
-    }
-    // `Settle` is never sampled: only `finish` sends it, so a case holding one is a whole run,
-    // its release rounds and ending included, as a campaign saves it. Finishing it again would
-    // replay a different run.
-    if case.inputs.contains(&Input::Settle {}) {
-        return join(run, outcome).await;
     }
     finish(run, outcome).await
 }
@@ -316,11 +310,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
             return found;
         }
     }
-    join(run, outcome).await
-}
 
-/// Join the session's tasks and judge the run.
-async fn join(mut run: Run, mut outcome: Outcome) -> Outcome {
     run.join_tasks().await;
     // What the tasks did on their way out is part of the run.
     run.collect();

@@ -19,12 +19,11 @@
 //!   is three inputs and a reply takes seconds of beats; at 450 most runs ended before the agent
 //!   finished speaking, and 1500 took findings from 37 to 101 for thirteen seconds (2026-10-22).
 //! - `VOICE_FIRST_SEED` moves the seed window, which is how the noise floor is measured.
-//! - `VOICE_UNIFORM_SETUPS=1` draws every setup uniformly instead of from the arms that learn from
-//!   seed to seed; the baseline a search change is measured against.
-//! - `VOICE_FAMILY=Decided` opens one journal family variant by variant; `VOICE_DETAIL=1` adds the
-//!   first seed and detail behind each finding; `VOICE_SAVE=1` writes every failing seed's case
-//!   into `replay/`, where the replay test picks it up. A finding outside the known ones is always
-//!   saved there, and fails the survey.
+//! - `VOICE_SEED=4372` runs that one seed and prints its setup, every failure in full and the
+//!   journal variants it reached. A seed is the whole of a run: nothing carries over from the
+//!   seeds before it, so every finding is reported with the one-line command that reruns it.
+//! - `VOICE_FAMILY=Decided` opens one journal family variant by variant. A finding outside the
+//!   known ones fails the survey.
 //! - `VOICE_TRACE=1` (any run) narrates every input as it is applied.
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,7 +33,6 @@ use lk_agents_fuzz::{
     drive::{Outcome, PHASES, Setup},
     input::Input,
     record::Kind,
-    replay,
     rules::RULES,
     search,
 };
@@ -43,16 +41,49 @@ use lk_agents_fuzz::{
 #[ignore]
 fn survey() {
     let env = |key: &str| std::env::var(key).ok().and_then(|v| v.parse::<u64>().ok());
-    let seeds = env("VOICE_SEEDS").unwrap_or(32);
+    let single = env("VOICE_SEED");
+    let seeds = if single.is_some() { 1 } else { env("VOICE_SEEDS").unwrap_or(32) };
     // `VOICE_FIRST_SEED` moves the window: the same campaign over another set of seeds is how the
     // noise floor is measured, and a change is only a change if it beats that floor.
-    let first = env("VOICE_FIRST_SEED").unwrap_or(0);
-    let budget = env("VOICE_BUDGET").unwrap_or(1500) as usize;
-    // The setup arms learn from seed to seed unless `VOICE_UNIFORM_SETUPS=1`, under which every
-    // seed's setup is a uniform draw: the baseline every search change is measured against.
-    let learn = std::env::var_os("VOICE_UNIFORM_SETUPS").is_none();
-    let window = Window { first, seeds, budget, learn };
+    let first = single.or(env("VOICE_FIRST_SEED")).unwrap_or(0);
+    let budget = env("VOICE_BUDGET").unwrap_or(BUDGET as u64) as usize;
+    let window = Window { first, seeds, budget, single: single.is_some() };
     campaign(&window);
+}
+
+const BUDGET: usize = 1500;
+
+/// The one line that reruns a seed alone.
+fn rerun(seed: u64, budget: usize) -> String {
+    let budget = if budget == BUDGET { String::new() } else { format!("VOICE_BUDGET={budget} ") };
+    format!(
+        "{budget}VOICE_SEED={seed} cargo test -q --release -p lk-agents-fuzz --test survey -- \
+         --ignored --nocapture"
+    )
+}
+
+/// One seed, in full: what it was built with and everything it found and reached.
+fn detail(seed: u64, outcome: &Outcome) {
+    println!("\nseed {seed}: {:?}", outcome.case.setup);
+    println!(
+        "randomness {:.4}, policy {:?}, {} inputs{}",
+        search::randomness(seed),
+        outcome.case.policy,
+        outcome.case.inputs.len(),
+        if outcome.stopped_early { ", stopped early" } else { "" }
+    );
+    println!("failures:");
+    for f in &outcome.failures {
+        println!("  {} on {:?}: {}", f.contract, f.subject, f.detail);
+    }
+    if outcome.failures.is_empty() {
+        println!("  none");
+    }
+    println!("journal variants reached:");
+    let reached: BTreeSet<&String> = outcome.reached.iter().collect();
+    for variant in reached {
+        println!("  {variant}");
+    }
 }
 
 /// Decades of randomness the report breaks down by, from 1e-4 to 1e3.
@@ -122,7 +153,8 @@ struct Window {
     first: u64,
     seeds: u64,
     budget: usize,
-    learn: bool,
+    /// `VOICE_SEED`: one seed, reported in full.
+    single: bool,
 }
 
 fn campaign(window: &Window) {
@@ -140,33 +172,28 @@ fn campaign(window: &Window) {
     let mut policies: BTreeMap<String, Band> = BTreeMap::new();
     // Runs in which both observers closed a speech: the precondition of a decided turn.
     let mut both_closed = 0;
-    let save = std::env::var_os("VOICE_SAVE").is_some();
-    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("replay");
     // What each input was declared to open, and what it was seen to open.
     let mut declared: BTreeMap<&'static str, BTreeSet<Kind>> = BTreeMap::new();
     let mut observed: BTreeMap<&'static str, BTreeSet<Kind>> = BTreeMap::new();
     let started = std::time::Instant::now();
 
-    // The setup's switches are arms: a seed that reached new ground rewards the values it drew.
-    let mut arms = search::SetupArms::new();
     for seed in window.first..window.first + seeds {
-        // A fresh setup per seed, from the seed and what the campaign has learned so far: three
-        // journal families exist only under legs the default setup never builds, and no budget
-        // reaches them without one. Fresh every time: mutating the campaign's most novel cases
-        // instead was measured on 2026-09-23 and lost a fifth of the edges and a quarter of the
-        // findings at every scale -- a near-copy of a run is a run's worth of novelty forgone,
-        // and the generator, not a mutator, is where this search's novelty comes from.
-        let (setup, drawn) = arms.sample(&mut fastrand::Rng::with_seed(seed));
+        // A fresh setup per seed, from the seed alone: three journal families exist only under
+        // legs the default setup never builds, and no budget reaches them without one. Fresh
+        // every time: mutating the campaign's most novel cases instead was measured on 2026-09-23
+        // and lost a fifth of the edges and a quarter of the findings at every scale -- a
+        // near-copy of a run is a run's worth of novelty forgone, and the generator, not a
+        // mutator, is where this search's novelty comes from.
+        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
         let began = std::time::Instant::now();
         let outcome = search::explore(setup, seed, budget);
         let band_of = ((search::randomness(seed).log10() + 4.0) as usize).min(BANDS - 1);
         let took = began.elapsed();
         bands[band_of].absorb(&outcome, took);
         policies.entry(format!("{:?}", outcome.case.policy)).or_default().absorb(&outcome, took);
-        let known = reached.len();
         reached.extend(outcome.reached.iter().cloned());
-        if window.learn {
-            arms.learn(&drawn, reached.len() > known);
+        if window.single {
+            detail(seed, &outcome);
         }
         edges.extend(outcome.edges.iter().cloned());
         for cell in &outcome.cells {
@@ -190,37 +217,16 @@ fn campaign(window: &Window) {
                 if here.insert(&failure.contract) {
                     found.entry(failure.contract.clone()).or_default()[band_of] += 1;
                 }
-                let first = !example.contains_key(&failure.contract);
                 example
                     .entry(failure.contract.clone())
                     .or_insert_with(|| (seed, failure.detail.clone()));
-                // A new finding is saved at once, pinned to itself: a seed only reproduces inside
-                // its whole window, because the setup arms learn from the seeds before it, while
-                // the saved case replays anywhere.
-                if first && !KNOWN_FINDINGS.contains(&failure.contract.as_str()) {
-                    let path = corpus.join(format!("{}-{seed}.json", failure.contract));
-                    replay::save(&path, &outcome.case, replay::Expect::failing(failure))
-                        .expect("the corpus is writable");
-                    println!("saved {}", path.display());
-                }
-            }
-            if save {
-                let contract = &outcome.failures[0].contract;
-                let path = corpus.join(format!("{contract}-{seed}.json"));
-                replay::save(&path, &outcome.case, replay::Expect::of(&outcome))
-                    .expect("the corpus is writable");
             }
         }
     }
 
     let names = lk_agents_voice::trace::step_names();
     println!();
-    println!(
-        "{seeds} seeds from {} x {budget} inputs in {:.1?}{}",
-        window.first,
-        started.elapsed(),
-        if window.learn { "" } else { ", uniform setups" }
-    );
+    println!("{seeds} seeds from {} x {budget} inputs in {:.1?}", window.first, started.elapsed());
     println!(
         "reached {} of {} journal variants, {} distinct edges, {} distinct findings",
         reached.len(),
@@ -250,16 +256,6 @@ fn campaign(window: &Window) {
         println!("  {}  {contract}", rates.join("  "));
     }
     println!();
-    let leanings: Vec<String> = arms
-        .leanings()
-        .into_iter()
-        .filter(|(_, _, mean)| (mean - 0.5).abs() >= 0.15)
-        .map(|(switch, value, mean)| format!("{switch}={value} {mean:.2}"))
-        .collect();
-    println!(
-        "switch leanings: {}",
-        if leanings.is_empty() { "none".into() } else { leanings.join(", ") }
-    );
     println!("{both_closed} of {seeds} runs with both a VadEnd and an SttFinal\n");
 
     // Per family, because the two ways to miss a variant have different fixes: a family at zero
@@ -292,14 +288,11 @@ fn campaign(window: &Window) {
     if found.is_empty() {
         println!("  none");
     }
-    // `VOICE_DETAIL=1` adds the first seed and detail behind each finding.
-    let detail = std::env::var_os("VOICE_DETAIL").is_some();
     for (contract, by_band) in &found {
         let counts: Vec<String> = by_band.iter().map(|n| format!("{n:>6}")).collect();
         println!("  {}  {contract}", counts.join(""));
-        if detail && let Some((seed, what)) = example.get(contract) {
-            println!("       seed {seed}: {what}");
-        }
+        let (seed, _) = example[contract];
+        println!("       seed {seed}: {}", rerun(seed, budget));
     }
     println!("\ncontracts never exercised:");
     let mut idle = 0;
@@ -320,12 +313,13 @@ fn campaign(window: &Window) {
     for contract in &new {
         let (seed, what) = &example[*contract];
         println!("  NEW {contract}: seed {seed}: {what}");
+        println!("    rerun: {}", rerun(*seed, budget));
     }
     if new.is_empty() {
         println!("  none");
     }
     let unseen: Vec<&&str> = KNOWN_FINDINGS.iter().filter(|k| !found.contains_key(**k)).collect();
-    if !unseen.is_empty() {
+    if !unseen.is_empty() && !window.single {
         println!("known findings this window did not reach: {unseen:?}");
     }
 

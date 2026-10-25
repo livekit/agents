@@ -4,15 +4,16 @@
 //! what an input is and which ones are legal right now; it deliberately does not know which of
 //! them is interesting, because that judgement changes as the search gets smarter and the table
 //! of inputs should not change with it. Running a case and judging it is `drive.rs`, so a smarter
-//! search cannot break a replayed one.
+//! search cannot change how a case is judged.
 //!
-//! Two files, two subjects. [`setup`] draws what a session is built with, from arms that learn
-//! from seed to seed which switches keep finding new ground. [`conversation`] is the search: a
-//! person on a phone talking turn by turn to the agent, the developer calling the API, and the
-//! models, outputs and room behaving and failing as real ones do. One mode since 2026-10-22: a
-//! uniform sampler over the whole table ran beside it, and what only it reached (drains, model
-//! failures, room events, output resets, camera frames) became behaviours of the conversation's
-//! actors, and its "anything at any time" became the labelled glitch.
+//! Two files, two subjects. [`setup`] draws what a session is built with, from the seed alone.
+//! [`conversation`] is the search: a person on a phone talking turn by turn to the agent, the
+//! developer calling the API, and the models, outputs and room behaving and failing as real ones
+//! do. One mode since 2026-10-22: a uniform sampler over the whole table ran beside it, and what
+//! only it reached (drains, model failures, room events, output resets, camera frames) became
+//! behaviours of the conversation's actors, and its "anything at any time" became the labelled
+//! glitch. A seed is the whole of a run: its setup, its conversation and its schedule are all
+//! drawn from it, so the same seed on the same code is the same run.
 //!
 //! Every change to any of them is measured on the survey's yardstick -- variants reached,
 //! distinct edges, distinct findings, at 64 seeds on three windows and at 256 -- and kept only
@@ -23,7 +24,7 @@ mod setup;
 mod uniform;
 
 pub use conversation::{Dials, explore, explore_at, randomness};
-pub use setup::{Drawn, SetupArms, sample_setup};
+pub use setup::sample_setup;
 
 #[cfg(test)]
 mod tests {

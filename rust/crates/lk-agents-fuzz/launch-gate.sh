@@ -21,7 +21,7 @@ campaign() {
     local out
     if ! out=$(env "$@" cargo test -q --release -p lk-agents-fuzz --test "$test" -- --ignored \
         --nocapture 2>&1); then
-        grep -E "^  NEW " <<<"$out" || true
+        grep -E "^  NEW |^    rerun: " <<<"$out" || true
         printf '%s\n' "$out" | tail -40
         echo "FAILED: $name"
         exit 1
@@ -41,7 +41,7 @@ cargo check -q --workspace --all-targets
 step "voice core unit tests"
 cargo test -q -p lk-agents-voice
 
-step "fuzz suites: contract registry, probes, replay corpus, determinism, regressions"
+step "fuzz suites: contract registry, probes, determinism, regressions"
 cargo test -q --release -p lk-agents-fuzz
 
 campaign "survey, 1024 seeds" survey VOICE_SEEDS=1024

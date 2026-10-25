@@ -277,8 +277,8 @@ impl Host {
 /// How the models, the outputs and the room behave this run: how fast, how flaky, how they fail.
 /// Each failure kind has its own coin and its own stream off the seed, so some runs are clean and
 /// others full of one kind of trouble, and adding a kind never moves another's draw (agent-store's
-/// swarm hunt). The fakes stay dumb: this is what the case tells them, so a saved case is still
-/// the whole of what happened.
+/// swarm hunt). The fakes stay dumb: this is what the case tells them, so the case is still the
+/// whole of what happened.
 #[derive(Clone, Copy, Debug)]
 struct Providers {
     /// How slow every model answers, in percent of typical latencies.

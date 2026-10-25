@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// What a failed expectation is about.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Subject {
     /// The run as a whole.
     Session,
@@ -34,7 +34,7 @@ impl Subject {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Failure {
     pub contract: String,
     pub subject: Subject,
@@ -136,7 +136,7 @@ pub trait Rule {
 /// A `probe` reaches the rule's prerequisite deterministically, and carries a whole [`Case`]
 /// because some prerequisites are fixed when the session is built.
 pub struct Contract {
-    /// The rule's name in reports and the corpus: its file name.
+    /// The rule's name in reports: its file name.
     pub id: &'static str,
     /// The guarantee in one sentence, as a person would say it.
     pub guarantee: &'static str,

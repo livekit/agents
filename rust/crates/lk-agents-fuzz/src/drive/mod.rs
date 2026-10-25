@@ -112,25 +112,21 @@ use self::queue::Next;
 // ==============================================================================================
 
 /// What the session is built with: everything fixed for the life of a run. Everything a case can
-/// change afterwards is an [`Input`] instead, so a saved case says what it did rather than how the
+/// change afterwards is an [`Input`] instead, so a case says what it did rather than how the
 /// session was configured to let it.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Setup {
     /// A recognition leg listening to the microphone, so recognition events can be delivered. The
     /// microphone itself is always there: a voice call has one whether or not anything transcribes
     /// it.
     pub stt: bool,
     /// A voice-activity detector on the microphone leg: the second observer of the person.
-    #[serde(default)]
     pub vad: bool,
     /// An end-of-turn predictor on the microphone leg: the third observer of the person.
-    #[serde(default)]
     pub eot: bool,
     /// The adaptive interruption detector: judges whether an overlap is a interruption.
-    #[serde(default)]
     pub interruption: bool,
     /// Learn the endpointing delay from the conversation instead of a fixed one.
-    #[serde(default)]
     pub dynamic_endpointing: bool,
     pub turn: TurnMode,
     /// Preemptive generation on a preflight transcript, with preemptive TTS.
@@ -146,66 +142,47 @@ pub struct Setup {
     /// A realtime model instead of the LLM+TTS pair: the socket is the voice, and the whole
     /// `Realtime` journal family exists only under one. `Some` describes the server the session
     /// is built against.
-    #[serde(default)]
     pub realtime: Option<RealtimeSetup>,
     /// The IVR navigator: `None` starts none, `Some(detect)` starts one and navigates from the
     /// session's start when `detect`. Without one an `Ivr` command is relayed to nobody.
-    #[serde(default)]
     pub ivr: Option<bool>,
     /// Attach the answering-machine detector, as `await amd.execute()` does.
-    #[serde(default)]
     pub amd: bool,
     /// Static keyterms, which is also what makes the session have a keyterm pass at all.
-    #[serde(default)]
     pub keyterms: Vec<String>,
     /// Room legs: the room's events, the room io machine's, and the link's two switches.
-    #[serde(default)]
     pub room: Option<RoomSetup>,
     /// An audio output that can pause: what makes a false interruption resumable at all, and so
     /// the whole pause machine reachable. The fake pauses by recording that it was told to.
-    #[serde(default)]
     pub pausable_output: bool,
     /// `min_consecutive_speech_delay`: the floor the scheduler holds between two of the agent's
     /// speeches. `None` is the default of none.
-    #[serde(default)]
     pub speech_gap_ms: Option<u64>,
     /// `user_turn_limit`: the words and the duration after which a user turn is declared
     /// exceeded. `None` is no limit, the default.
-    #[serde(default)]
     pub user_turn_max_words: Option<u32>,
-    #[serde(default)]
     pub user_turn_max_ms: Option<u64>,
     /// `transcription_timeout`: how long after the detector's end of speech the driver waits for
     /// a transcript before giving up on one. `None` is the default of never.
-    #[serde(default)]
     pub transcription_timeout_ms: Option<u64>,
     /// The end-of-turn model's backchannel threshold, in percent: with one, a prediction whose
     /// backchannel probability clears it while the turn is not over is an opportunity to
     /// backchannel. `None` is no threshold, the default.
-    #[serde(default)]
     pub backchannel_threshold: Option<u8>,
     /// A TTS leg. Off, a pipeline session has an LLM and an audio output but no voice, which is
     /// the one configuration in which `say(words)` has nothing to speak with.
-    #[serde(default = "yes")]
     pub tts: bool,
     /// How long every provider stream takes to open, on the session's clock. `None` is at once.
-    #[serde(default)]
     pub connect_ms: Option<u64>,
     /// A camera attached from the start, for the case to feed frames into.
-    #[serde(default)]
     pub video: bool,
     /// The transcript synchroniser between the two outputs: the agent's words are shown paced
     /// against its audio rather than as they are generated, which is the default with a room.
-    #[serde(default)]
     pub sync_transcription: bool,
 }
 
-fn yes() -> bool {
-    true
-}
-
 /// The realtime server a session is built against: what it can do, as its capabilities say.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RealtimeSetup {
     /// The server detects the user's turns itself. The driver then has a choice the fake
     /// otherwise never offers it: to leave detection to the server or to switch it off.
@@ -214,7 +191,7 @@ pub struct RealtimeSetup {
 
 /// `RoomOptions`' two session-level switches. `Some` is a session with room io attached, which
 /// is what gives the `Room` family anything to journal.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RoomSetup {
     pub close_on_disconnect: bool,
     pub delete_room_on_close: bool,
@@ -225,24 +202,19 @@ pub struct RoomSetup {
 /// The setup is not optional detail. Some of what a rule needs cannot be reached by any input,
 /// because it is fixed when the session is constructed -- speculative generation, the turn mode,
 /// whether host hooks are bound. A probe that carried only inputs could never reach those rules,
-/// so a case carries both halves and a saved case replays both.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+/// so a case carries both halves.
+#[derive(Clone, Debug, Default)]
 pub struct Case {
     pub setup: Setup,
     pub inputs: Vec<Input>,
     /// The scheduler's seed: which interleaving of the driver's concurrent work this case ran
-    /// under. Part of the case because a finding may exist under one interleaving only, and a
-    /// replay that used another would not be a replay. Zero is the schedule of every case saved
-    /// before this was a dimension.
-    #[serde(default)]
+    /// under. Part of the case because a finding may exist under one interleaving only. Zero is
+    /// the schedule of a hand-written case.
     pub schedule: u64,
     /// Indices into `inputs` of the uniform moves: rows no actor had a reason to send. A failure
     /// in a case with none is one a real call produces with correct providers.
-    #[serde(default)]
     pub random: Vec<usize>,
-    /// How the run's queue picked the next pending event. Arrival order for every case saved
-    /// before the run owned its queue.
-    #[serde(default)]
+    /// How the run's queue picked the next pending event. Arrival order by default.
     pub policy: Policy,
 }
 
@@ -284,9 +256,8 @@ impl Default for Setup {
 // The simulation
 // ==============================================================================================
 
-/// The scheduler seed a run uses when its case names none: the one every case was run with
-/// before schedules were part of a case, so every saved case still reproduces. The bytes are the
-/// crate's former name; changing them would change every interleaving the corpus was saved under.
+/// The scheduler seed a run uses when its case names none. The bytes are the crate's former name;
+/// changing them would change every interleaving the hand-written regression tests run under.
 const SCHEDULER_SEED: &[u8] = b"lk-agents-voice-tests";
 
 /// Run one simulation under the schedule every case ran with before schedules were a dimension.
@@ -300,10 +271,9 @@ pub fn simulate<T>(body: impl std::future::Future<Output = T>) -> T {
 ///
 /// Tokio randomises unbiased `select!` branch order and task polling order per call, which is the
 /// interleaving of the driver's concurrent work: two events in one instant, a verdict against an
-/// overlap's close, a timer against a command. Pinning the seed is what makes a saved case
-/// reproduce; varying it across cases is what makes the campaign explore interleavings rather
-/// than walk one of them a thousand times. Zero is the schedule of every case saved before this
-/// was a dimension.
+/// overlap's close, a timer against a command. Pinning the seed is what makes a seed reproduce
+/// its run; varying it across cases is what makes the campaign explore interleavings rather than
+/// walk one of them a thousand times. Zero is the schedule of a hand-written case.
 pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T>) -> T {
     let mut seed = SCHEDULER_SEED.to_vec();
     if schedule != 0 {
@@ -344,7 +314,7 @@ fn watchdog(schedule: u64) -> std::sync::mpsc::Sender<()> {
                 std::io::stderr(),
                 "HANG: the simulation of schedule {schedule} (the survey's seed) is still running \
                  after {limit}s of real time: a step or a task is blocked or never yields. \
-                 Rerun that seed with VOICE_TRACE=1 to see the input it stopped on."
+                 Rerun it with VOICE_SEED={schedule} VOICE_TRACE=1 to see the input it stopped on."
             );
             std::process::abort();
         }

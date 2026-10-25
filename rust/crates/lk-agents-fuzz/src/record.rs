@@ -43,18 +43,7 @@ pub use views::*;
 /// Order by `seq`. It comes from one counter taken synchronously at each boundary, so on the
 /// current-thread runtime it is a real happens-before order across host events, fakes, the sink
 /// and the driver's own journal. `at_ms` is for deadlines and for reading.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Observed {
     pub seq: u64,
     pub at_ms: u64,
@@ -112,9 +101,7 @@ impl Stamps {
 // ==============================================================================================
 
 /// A kind of thing a run can open and point at.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kind {
     /// A speech, whether the case asked for it or the driver started it.
     Speech,
@@ -222,7 +209,7 @@ pub enum Detail {
 /// What the run still holds: the resources an input may point at right now.
 ///
 /// The counterpart of the `opened` log, which is everything the run ever opened. This is only
-/// what is still live, which is the one question the sampler and replay both ask.
+/// what is still live, which is the question the sampler asks.
 #[derive(Debug, Default)]
 pub struct Live {
     open: BTreeMap<Kind, BTreeSet<u32>>,
@@ -240,8 +227,7 @@ impl Live {
         self.opened.get(&kind).copied().unwrap_or(0)
     }
 
-    /// Whether this reference still resolves. Replay asks exactly this before applying a recorded
-    /// input, which is the same question the sampler asked when it drew one.
+    /// Whether this reference still resolves.
     pub fn has(&self, kind: Kind, nth: u32) -> bool {
         self.open.get(&kind).is_some_and(|open| open.contains(&nth))
     }

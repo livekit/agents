@@ -11,8 +11,8 @@ use fastrand::Rng;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_voice::agent_session::{Event, Input};
 
-/// How the next step is chosen, drawn per seed and saved with the case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+/// How the next step is chosen, drawn per seed and carried by the case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Policy {
     /// The channel's own order: the driver drains what is queued, and the tasks it spawned run
     /// when the queue is empty.

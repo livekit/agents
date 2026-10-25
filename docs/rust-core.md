@@ -186,9 +186,11 @@ priority within each source's order and interleaves task turns at random. The
 search (`src/search/`) plays the person, the developer's program
 and the providers, each acting on what it observed, with a per-seed dial of
 uniform moves from none to almost all. `rules/` holds one guarantee per file,
-each with its own examples; `replay/` holds saved cases. `cargo test` runs
-the rules' examples, the determinism check and the saved corpus; the search
-campaign is behind `--ignored` (`tests/survey.rs`, `tests/soak.rs`). The
+each with its own examples. `cargo test` runs the rules' examples, the
+determinism check and the regression tests; the search campaign is behind
+`--ignored` (`tests/survey.rs`, `tests/soak.rs`). A seed alone reproduces its
+run: `VOICE_SEED=<n>` reruns one, and a fixed finding becomes a hand-written
+regression test. The
 contracts are in `rust/crates/lk-agents-voice/TEST_STRATEGY.md`; what the
 search reaches and misses is in `rust/crates/lk-agents-fuzz/COVERAGE.md`.
 

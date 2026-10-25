@@ -296,7 +296,7 @@ the handle objects are written once, against the new boundary.
 | scheduling | partial-order sampling over the pending events (which source goes next, the hop between the two cores included), bursts delivered before the core settles, every same-instant order |
 | host API   | the fuzzer sends raw API arguments, so validation is fuzzed with everything else                                                     |
 | runtime    | small, each adapter against a fake socket under a deterministic executor                                                             |
-| production | a session's event log, recorded and replayed offline step by step; a failing call becomes a saved case                               |
+| production | a session's event log, recorded and replayed offline step by step; a failing call becomes a regression test                          |
 
 Partial-order sampling is the policy gosim measured at 2.6 times the bugs of
 uniform scheduling, with uniform still best on some programs, so the policy
@@ -307,8 +307,7 @@ subject, on the same seeds.
 ### Integration order
 
 Each step keeps the fuzz gate green and lowers neither the survey's reach nor
-its distinct findings. The saved corpus is re-recorded when the boundary
-changes.
+its distinct findings.
 
 Scheduler control comes first: after the boundary's resources by id, steps 1
 to 3 remove the spawned tasks, then the host view and validation finish step

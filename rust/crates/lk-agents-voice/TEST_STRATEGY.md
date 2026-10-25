@@ -22,8 +22,8 @@ pass, or depend on reference source files during new test execution.
 
 The suite that implements this document is the workspace crate `lk-agents-fuzz`
 (`rust/crates/lk-agents-fuzz`). Its module docs describe the layout; `cargo test -p
-lk-agents-fuzz` runs the contract registry, probes, saved cases and a bounded fresh
-campaign, and `cargo voice-report <artifacts dir>` prints what a campaign reached and found.
+lk-agents-fuzz` runs the contract registry, probes, determinism and regression tests,
+and `cargo voice-report <artifacts dir>` prints what a campaign reached and found.
 Compilation checks do not establish runtime correctness; the acceptance evidence in §9 does.
 Other crates' tests are outside this voice suite.
 

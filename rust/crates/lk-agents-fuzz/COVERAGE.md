@@ -113,7 +113,7 @@ a kind never moves another's draw (agent-store's swarm hunt).
 
 | Who | Drawn per seed |
 |---|---|
-| Setup | about 30 switches, each on in roughly half the seeds (the sampler learns toward values that found new journal variants): STT, VAD, end-of-turn model, interruption detector, endpointing, turn mode, preemptive generation, backchannel threshold, transcription timeout, user-turn limits, keyterms, pipeline or realtime (with or without server turn detection), tools, max tool steps, hooks, TTS, pausable output, synchronised transcription, gap between speeches, IVR, AMD, room legs, video, connect latency, scheduler seed |
+| Setup | about 30 switches, each a coin (a die for three-way ones) drawn from the seed alone: STT, VAD, end-of-turn model, interruption detector, endpointing, turn mode, preemptive generation, backchannel threshold, transcription timeout, user-turn limits, keyterms, pipeline or realtime (with or without server turn detection), tools, max tool steps, hooks, TTS, pausable output, synchronised transcription, gap between speeches, IVR, AMD, room legs, video, connect latency, scheduler seed |
 | The person | pace (40-250% of 120-210 words a minute), silence length (20-500%), how long they leave the agent to answer (20-500%), how long they sit in silence before speaking again (0.3-15 s), how often they pause first, hesitate, barge in (anywhere in a reply), backchannel (0-15% per beat while the agent speaks), make noise, have someone else speak, leave the call and come back |
 | The developer | how often it calls the API between turns, per beat, and per beat while the agent speaks (three in ten programs are busy ones), how often the model it prompts calls tools, how often it scopes fillers |
 | The call | average length, 30 s to 2 h flat over orders of magnitude, and how it ends |
@@ -603,8 +603,9 @@ Each is a choice the search makes for every run that a real call does not.
 - **One person, one microphone**, and the person always starts the conversation.
 - **The person is content-blind**: whether they barge in or backchannel does not depend on what
   the agent says, and what they say is one of nine sentences, never an answer to the agent.
-- **The setup sampler learns** toward switches that found new ground. It is measured against
-  `VOICE_UNIFORM_SETUPS=1`, which draws every setup uniformly.
+- **The setup is uniform**: every switch is a coin, whatever earlier seeds found. Learning
+  across seeds would make a seed's run depend on every seed before it in its window, so a
+  finding could not be rerun from its seed alone.
 
 ## 9. How to read the numbers honestly
 
@@ -636,7 +637,7 @@ Each is a choice the search makes for every run that a real call does not.
 
 ## 10. Code reached
 
-Line coverage of `lk-agents-voice` over the whole suite (gate, replay corpus, soak, 1,024-seed
+Line coverage of `lk-agents-voice` over the whole suite (gate, soak, 1,024-seed
 survey): **56.9% of 25,558 lines**.
 
 | Area | Lines | Reached | Note |
@@ -685,12 +686,27 @@ Measured nowhere here, and each a separate source of production risk:
 
 **The launch gate** is one command, `rust/crates/lk-agents-fuzz/launch-gate.sh`: the workspace
 build, the voice core's unit tests, the fuzz suites (every contract's examples, counterexamples
-and probe, the replay corpus, determinism, the regression tests), the 1,024-seed survey, a
+and probe, determinism, the regression tests), the 1,024-seed survey, a
 4,096-seed campaign on the next window (`VOICE_GATE_SEEDS`), and the soak. It fails on any
 finding of a contract not in `check::KNOWN_FINDINGS` (the open findings, listed so a new kind of
-defect cannot hide among them), on a soak residue, and on a campaign that did not run. A new
-finding's case is saved to `replay/` pinned to it, because a campaign seed only reproduces
-inside its whole window. About three minutes on a laptop.
+defect cannot hide among them), on a soak residue, and on a campaign that did not run. About
+three minutes on a laptop.
+
+**Reproducing a finding.** A seed is the whole of a run: its setup, its conversation, its
+providers' behaviour and its schedule are all drawn from it, and nothing carries over from the
+seeds before it. Every finding the survey reports comes with its seed and the line that reruns
+it alone:
+
+```bash
+cd rust
+VOICE_SEED=4372 cargo test -q --release -p lk-agents-fuzz --test survey -- --ignored --nocapture
+```
+
+which prints that run's setup, every failure in full and the journal variants it reached;
+`VOICE_TRACE=1` adds every input as it is applied. The seed reproduces its run on the same code
+only: once the finding is understood, it becomes a hand-written regression test under `tests/`
+that reaches the bug through the fewest inputs, fails before the fix and passes after it, and
+holds whatever the search later changes.
 
 What it can and cannot miss:
 
@@ -701,11 +717,12 @@ What it can and cannot miss:
   session exits (a virtual day without an exit is `close_finishes`), and every loop in rounds
   (release, join), so a slow machine cannot change a verdict. Every run that reaches its ending
   is judged closed or reported.
-- **A saved case replays its run.** A campaign saves the whole run, ending included; a case
-  holding `Settle` (which only the runner sends) is replayed without being finished again.
+- **A seed reproduces its run.** `tests/determinism.rs` checks that one seed explores one case
+  and that a case leaves the same recording twice.
 - **A real hang ends the process, loudly.** A product task that never yields blocks the run's
   only thread, where no step count can see it; a watchdog thread beside it (`VOICE_HANG_S`, 600 s)
-  aborts with the seed. It is a crash, not a verdict: rerun the seed with `VOICE_TRACE=1`.
+  aborts with the seed. It is a crash, not a verdict: rerun it with `VOICE_SEED=<seed>
+  VOICE_TRACE=1`.
 - **Leaks**: tasks (`every_task_finishes`, with the spawning line), speeches (`speech_settles`),
   answers (`api_calls_return`), provider streams (`provider_streams_closed`), turn-owned work
   (`nothing_left_live`), and growth over forty turns (the soak). Not checked: the provider table

@@ -5,11 +5,12 @@
 //! on a different speech each time. `drive::simulate_with` pins that RNG and gives each case its own
 //! runtime. Anything that reintroduces real nondeterminism -- a `HashMap` iterated for ordering,
 //! wall-clock time read as data, a fresh `select!` outside a seeded runtime -- fails here first,
-//! with a diff, instead of showing up months later as a corpus that stopped reproducing.
+//! with a diff, instead of showing up months later as a seed that no longer reproduces its run.
+use fastrand::Rng;
 use lk_agents_fuzz::{
     drive::{Run, simulate_with},
     record::Recording,
-    replay, search,
+    search,
 };
 
 /// Wall-clock stamps the product puts on its own data, and the one hash that covers them.
@@ -38,7 +39,7 @@ fn fingerprint(r: &Recording) -> String {
     out
 }
 
-fn replayed(case: &lk_agents_fuzz::drive::Case) -> String {
+fn rerun(case: &lk_agents_fuzz::drive::Case) -> String {
     simulate_with(case.schedule, async {
         let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
         for input in &case.inputs {
@@ -48,57 +49,41 @@ fn replayed(case: &lk_agents_fuzz::drive::Case) -> String {
     })
 }
 
-/// Every saved case leaves the same recording twice over, down to the last journal step.
+/// A case the search explored, ending included, leaves the same recording twice over, down to
+/// the last journal step.
 #[test]
-fn a_saved_case_replays_identically() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("replay");
-    let mut cases: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
-        .map(|entry| entry.expect("a readable directory entry").path())
-        .filter(|path| path.extension().is_some_and(|e| e == "json"))
-        .collect();
-    cases.sort();
-    assert!(!cases.is_empty(), "no saved cases to check determinism against");
-    let mut reproducible: Vec<(String, bool)> = Vec::new();
-
-    for path in cases {
-        let case = replay::load(&path).case;
-        let (first, second) = (replayed(&case), replayed(&case));
+fn an_explored_case_reruns_identically() {
+    let mut bad = 0;
+    for seed in 0..6 {
+        let case = search::explore(search::sample_setup(&mut Rng::with_seed(seed)), seed, 600).case;
+        let (first, second) = (rerun(&case), rerun(&case));
         if first != second {
-            reproducible.push((path.display().to_string(), false));
+            bad += 1;
             let at = first
                 .lines()
                 .zip(second.lines())
                 .position(|(a, b)| a != b)
                 .unwrap_or_else(|| first.lines().count().min(second.lines().count()));
+            let line = |text: &str| -> String {
+                text.lines().nth(at).unwrap_or("<end>").chars().collect()
+            };
             println!(
-                "NOT REPRODUCIBLE {} line {at}:\n  {}\n  {}",
-                path.display(),
-                &first.lines().nth(at).unwrap_or("<end>")
-                    [..140.min(first.lines().nth(at).unwrap_or("").len())],
-                &second.lines().nth(at).unwrap_or("<end>")
-                    [..140.min(second.lines().nth(at).unwrap_or("").len())],
+                "NOT REPRODUCIBLE seed {seed} line {at}:\n  {}\n  {}",
+                line(&first),
+                line(&second)
             );
-        } else {
-            reproducible.push((path.display().to_string(), true));
         }
         // A fingerprint that is nearly empty would make this test pass without checking anything.
-        assert!(
-            first.lines().count() > 50,
-            "{}: recording too small to be a real check",
-            path.display()
-        );
+        assert!(first.lines().count() > 50, "seed {seed}: recording too small to be a real check");
     }
-    let bad = reproducible.iter().filter(|(_, ok)| !ok).count();
-    println!("{} of {} cases reproduce", reproducible.len() - bad, reproducible.len());
-    assert_eq!(bad, 0, "{bad} saved cases are not reproducible");
+    assert_eq!(bad, 0, "{bad} explored cases are not reproducible");
 }
 
 /// The same seed explores the same case, so a campaign is repeatable end to end. Setup included:
 /// the survey samples one per seed, and a case is both halves.
 #[test]
 fn the_same_seed_explores_the_same_case() {
-    let setup = |seed| search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+    let setup = |seed| search::sample_setup(&mut Rng::with_seed(seed));
     assert_eq!(setup(7), setup(7), "one seed sampled two different setups");
     let first = search::explore(setup(7), 7, 300);
     let second = search::explore(setup(7), 7, 300);

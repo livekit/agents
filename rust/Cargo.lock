@@ -1384,7 +1384,6 @@ dependencies = [
  "lk-agents-media",
  "lk-agents-rtc",
  "lk-agents-voice",
- "serde",
  "serde_json",
  "tokio",
 ]
