@@ -13,7 +13,7 @@ pytest.importorskip("rimelabs_sdk.realtime")
 from rimelabs_sdk import RimeTimeoutError, realtime as r
 
 from livekit.agents import llm
-from livekit.plugins.rime.realtime import PrismError
+from livekit.plugins.rime.realtime import PrismError, PrismUnsupported
 
 from .test_plugin_rime_realtime import peer_model
 
@@ -24,6 +24,27 @@ async def _finish(peer, pending, request):
     generation = await asyncio.wait_for(pending, 3)
     assert [item async for item in generation.message_stream] == []
     return generation
+
+
+async def test_rejected_reply_instruction_preserves_staged_typed_turn():
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session._update_session()
+        message = await session.set_input_text("Keep this question")
+        staged = session._typed
+        errors = []
+        session.on("error", errors.append)
+        with pytest.raises(PrismUnsupported):
+            session.generate_reply(instructions="Conflicting instruction")
+        assert peer.requests.empty()
+        assert session.chat_ctx.get_by_id(message.id) is not None
+        assert session._typed is staged
+        assert [item.id for item in session.chat_ctx.items] == [message.id]
+        # Unsupported operations remain fatal. Preserving staged state must not
+        # turn this into an implicit retry or suppress the terminal error.
+        assert len(errors) == 1
+        assert errors[0].recoverable is False
+        assert isinstance(errors[0].error, PrismUnsupported)
 
 
 async def test_explicit_reply_reuses_a_typed_turn_after_zero_effect_refusal():

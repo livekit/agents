@@ -675,11 +675,11 @@ class RealtimeSession(BaseRealtimeSession):
         self.update_options(tool_choice=tool_choice)
         if is_given(tools):
             raise self._unsupported("Prism does not support per-reply tools")
+        instruction = instructions if is_given(instructions) and instructions else None
+        if self._typed is not None and instruction is not None:
+            raise self._unsupported("Prism cannot combine typed input with a reply instruction")
         typed, self._typed = self._typed, None
         self._typed_retry = False
-        instruction = instructions if is_given(instructions) and instructions else None
-        if typed is not None and instruction is not None:
-            raise self._unsupported("Prism cannot combine typed input with a reply instruction")
         parent, self._parent = self._parent, None
         report, self._report = self._report, None
         return self._spawn(self._reply(typed, instruction, parent, report), request=True)
