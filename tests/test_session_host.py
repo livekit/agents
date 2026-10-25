@@ -746,6 +746,19 @@ class TestSessionHostRequests:
         unsubscribed = {call.args[0] for call in session.off.call_args_list}
         assert unsubscribed == FORWARDED_EVENTS
 
+    def test_attach_replaces_the_attached_session(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        first = self._make_mock_session()
+        second = self._make_mock_session()
+        host.attach(first)
+        host.attach(second)
+        assert host.session is second
+        assert {call.args[0] for call in first.off.call_args_list} == FORWARDED_EVENTS
+        assert {call.args[0] for call in second.on.call_args_list} == FORWARDED_EVENTS
+
+        host.detach()
+        assert {call.args[0] for call in second.off.call_args_list} == FORWARDED_EVENTS
+
 
 class TestSessionHostWithoutSession:
     """The host outlives its session: it answers between sessions instead of going quiet."""

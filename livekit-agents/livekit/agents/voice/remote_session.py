@@ -368,8 +368,8 @@ class SessionHost:
         self._started = False
         self._recv_task: asyncio.Task[None] | None = None
         self._tasks = utils.aio.TaskSet()
+        # the attached session is exactly the one whose events are subscribed
         self._session: AgentSession | None = None
-        self._events_registered = False
         # events are emitted from sync callbacks and nobody awaits them, so they
         # queue here and one long-lived writer drains them in emission order.
         # Built here rather than in start() so events emitted between
@@ -385,26 +385,24 @@ class SessionHost:
 
     def attach(self, session: AgentSession) -> None:
         """Serve ``session``: forward its events and route session requests to it."""
+        self.detach()
         self._session = session
-        if not self._events_registered:
-            self._events_registered = True
-            session.on("agent_state_changed", self._on_agent_state_changed)
-            session.on("user_state_changed", self._on_user_state_changed)
-            session.on("conversation_item_added", self._on_conversation_item_added)
-            session.on("user_input_transcribed", self._on_user_input_transcribed)
-            session.on("function_tools_executed", self._on_function_tools_executed)
-            session.on("tool_execution_updated", self._on_tool_execution_updated)
-            session.on("session_usage_updated", self._on_session_usage_updated)
-            session.on("overlapping_speech", self._on_overlapping_speech)
-            session.on("agent_false_interruption", self._on_agent_false_interruption)
-            session.on("error", self._on_error)
-            session.on("debug_message", self._on_debug_message)
-            session.on("close", self._on_close)
+        session.on("agent_state_changed", self._on_agent_state_changed)
+        session.on("user_state_changed", self._on_user_state_changed)
+        session.on("conversation_item_added", self._on_conversation_item_added)
+        session.on("user_input_transcribed", self._on_user_input_transcribed)
+        session.on("function_tools_executed", self._on_function_tools_executed)
+        session.on("tool_execution_updated", self._on_tool_execution_updated)
+        session.on("session_usage_updated", self._on_session_usage_updated)
+        session.on("overlapping_speech", self._on_overlapping_speech)
+        session.on("agent_false_interruption", self._on_agent_false_interruption)
+        session.on("error", self._on_error)
+        session.on("debug_message", self._on_debug_message)
+        session.on("close", self._on_close)
 
     def detach(self) -> None:
         """Stop serving the attached session; the host itself stays up."""
-        if self._session and self._events_registered:
-            self._events_registered = False
+        if self._session:
             self._session.off("agent_state_changed", self._on_agent_state_changed)
             self._session.off("user_state_changed", self._on_user_state_changed)
             self._session.off("conversation_item_added", self._on_conversation_item_added)
