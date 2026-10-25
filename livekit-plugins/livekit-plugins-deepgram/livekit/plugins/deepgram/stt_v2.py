@@ -342,7 +342,7 @@ class SpeechStreamv2(stt.SpeechStream):
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconfigure_atask: asyncio.Task[None] | None = None
         # Configure fields that found no usable connection since the last query string was built
-        self._missed_configure: set[str] = set()
+        self._missed_configure: dict[str, Any] = {}
 
     def update_options(
         self,
@@ -448,37 +448,35 @@ class SpeechStreamv2(stt.SpeechStream):
             await asyncio.gather(prev, return_exceptions=True)
 
         ws = self._ws
+        fields = dict(options.get("thresholds", {}))
+        fields.update((name, value) for name, value in options.items() if name != "thresholds")
         if ws is not None and not ws.closed:
             try:
                 await ws.send_str(json.dumps({"type": "Configure", **options}))
+                # a newer value reached the server, so the replay must not resend an older one
+                for name in fields:
+                    self._missed_configure.pop(name, None)
                 return
             except Exception:
                 logger.debug("failed to send Configure to deepgram")
 
         # the next connection carries the latest options, unless its handshake has already
         # started: _run replays these fields once that connection is up
-        self._missed_configure.update(options.get("thresholds", {}))
-        self._missed_configure.update(name for name in options if name != "thresholds")
+        self._missed_configure.update(fields)
 
     async def _replay_missed_configure(self, prev: asyncio.Task[None] | None) -> None:
         if prev is not None:
             await asyncio.gather(prev, return_exceptions=True)
 
-        # read the values now rather than when they were missed, so a newer update that was
-        # sent in the meantime is not overridden
-        missed, self._missed_configure = self._missed_configure, set()
+        missed, self._missed_configure = self._missed_configure, {}
         thresholds = {
-            name: getattr(self._opts, name)
+            name: missed.pop(name)
             for name in ("eager_eot_threshold", "eot_threshold", "eot_timeout_ms")
             if name in missed
         }
-        options: dict[str, Any] = {}
+        options: dict[str, Any] = missed
         if thresholds:
             options["thresholds"] = thresholds
-        if "keyterms" in missed:
-            options["keyterms"] = self._opts.keyterm
-        if "language_hints" in missed:
-            options["language_hints"] = self._opts.language_hint
         if options:
             await self._send_configure(options, None)
 
@@ -571,7 +569,7 @@ class SpeechStreamv2(stt.SpeechStream):
 
         while True:
             try:
-                self._missed_configure = set()
+                self._missed_configure = {}
                 ws = await self._connect_ws()
                 # expose the connection for in-band Configure updates
                 self._ws = ws

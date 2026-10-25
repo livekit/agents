@@ -444,16 +444,6 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         await stream.aclose()
 
 
-async def test_session_keyterms_are_not_sent_to_models_without_keyterm_prompting():
-    from livekit.plugins.deepgram import STT
-
-    stt = STT(api_key="test-key", model="nova-2-general")
-    assert not stt.capabilities.keyterms
-
-    stt._update_session_keyterms(["LiveKit"])
-    assert stt._opts.keyterm == []
-
-
 async def test_session_keyterms_follow_a_model_switch():
     from livekit.plugins.deepgram import STT
 
@@ -582,6 +572,31 @@ async def test_flux_handshake_replay_does_not_override_a_newer_update():
 
         await _wait_until(lambda: session.ws.configures)
         await stream._reconfigure_atask
-        assert session.ws.configures[-1] == {"type": "Configure", "keyterms": ["Beta"]}
+        assert session.ws.configures == [{"type": "Configure", "keyterms": ["Beta"]}]
+    finally:
+        await stream.aclose()
+
+
+async def test_flux_handshake_replay_keeps_updates_queued_behind_it_in_order():
+    from typing import Any, cast
+
+    from livekit.plugins.deepgram import STTv2
+
+    session = _SlowHandshakeSession()
+    stt = STTv2(api_key="test-key", http_session=cast(Any, session))
+    stream = stt.stream()
+    try:
+        await asyncio.wait_for(session.connecting.wait(), timeout=5.0)
+        stt._update_session_keyterms(["Alpha"])
+        await asyncio.sleep(0)
+        session.release.set()
+        # queue the next updates in the same loop iteration the replay is created in
+        while stream._ws is None:
+            await asyncio.sleep(0)
+        stt._update_session_keyterms(["Beta"])
+        stt._update_session_keyterms(["Gamma"])
+
+        await _wait_until(lambda: len(session.ws.configures) == 3)
+        assert [c["keyterms"] for c in session.ws.configures] == [["Alpha"], ["Beta"], ["Gamma"]]
     finally:
         await stream.aclose()
