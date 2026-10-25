@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import time
 from collections import OrderedDict
 from collections.abc import Coroutine, Mapping
@@ -25,17 +24,8 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.agents.voice.generation import remove_instructions
 
-from ._realtime_fallback import RealtimeModelFallbackAdapter as RealtimeModelFallbackAdapter
 from ._realtime_history import HistoryUpdateError, PrismHistory
-from ._realtime_session import AgentSession as AgentSession
-from ._realtime_types import (
-    GenerationCreatedEvent,
-    InputSpeechHintEvent,
-    InputSpeechStartedEvent,
-    RealtimeSession as BaseRealtimeSession,
-)
 
 
 class PrismUnsupported(llm.RealtimeError):
@@ -55,7 +45,7 @@ class PrismError(llm.RealtimeError):
 
 
 @dataclass
-class PrismGenerationCreatedEvent(GenerationCreatedEvent):
+class PrismGenerationCreatedEvent(llm.GenerationCreatedEvent):
     """A LiveKit generation with Prism response diagnostics."""
 
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -80,9 +70,7 @@ class PrismModelError(llm.RealtimeModelError):
 
 class RealtimeModel(
     llm.RealtimeModel,
-    rtc.EventEmitter[
-        Literal["session_updated", "generation_created", "speech_stopped", "speech_hint"]
-    ],
+    rtc.EventEmitter[Literal["session_updated", "generation_created", "speech_stopped"]],
 ):
     """Prism for one AgentSession. Requires the Rime SDK realtime extra and Python 3.11.
 
@@ -101,17 +89,10 @@ class RealtimeModel(
         turn_detection: r.TurnDetection | None = None,
         truncation: r.Truncation | None = None,
         timeouts: r.RealtimeTimeouts | None = None,
-        interrupt_on_speech: bool = True,
         request_id: str | None = None,
         response_metadata: Mapping[str, str] | None = None,
         tool_fillers: Mapping[str, r.PrismFiller] | None = None,
-        speech_hint_gain: float = 0.25,
-        speech_hint_timeout: float = 0.6,
     ):
-        if not math.isfinite(speech_hint_gain) or not 0 <= speech_hint_gain <= 1:
-            raise ValueError("speech_hint_gain must be between 0 and 1")
-        if not math.isfinite(speech_hint_timeout) or speech_hint_timeout <= 0:
-            raise ValueError("speech_hint_timeout must be finite and positive")
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
@@ -131,12 +112,9 @@ class RealtimeModel(
         self._turn_detection = turn_detection
         self._truncation = truncation
         self._timeouts = timeouts or r.RealtimeTimeouts()
-        self._interrupt_on_speech = interrupt_on_speech
         self._request_id = request_id
         self._response_metadata = dict(response_metadata) if response_metadata is not None else None
         self._tool_fillers = dict(tool_fillers or {})
-        self._speech_hint_gain = speech_hint_gain
-        self._speech_hint_timeout = speech_hint_timeout
         self._client = client if client is not None else Rime()
         self._owns_client = client is None
         self._session: RealtimeSession | None = None
@@ -152,7 +130,6 @@ class RealtimeModel(
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        interrupt_on_speech: NotGivenOr[bool] = NOT_GIVEN,
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
         truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
@@ -162,7 +139,6 @@ class RealtimeModel(
             raise llm.RealtimeError("Prism session is not open")
         await self._session.update_session(
             voice=voice,
-            interrupt_on_speech=interrupt_on_speech,
             response_metadata=response_metadata,
             tool_fillers=tool_fillers,
             truncation=truncation,
@@ -203,13 +179,6 @@ class RealtimeModel(
             await self._client.close()
 
 
-@dataclass(frozen=True)
-class _TypedTurn:
-    text: str
-    item_id: str
-    revision: int
-
-
 @dataclass
 class _Message:
     output: r.OutputRef
@@ -220,7 +189,6 @@ class _Message:
     transcript: str = ""
     played_transcript: str | None = None
     discarded: bool = False
-    playback_ms: int | None = None
 
 
 @dataclass
@@ -231,17 +199,11 @@ class _Generation:
     functions: utils.aio.Chan[llm.FunctionCall]
     outputs: dict[str, _Message] = field(default_factory=dict)
     ended: bool = False
-    skipped_by_user: bool = False
     abandoned: bool = False
-    interrupt_on_speech: bool = True
-    playback_done: bool = False
-    response_playback_ms: int | None = None
-    response_stopped: bool = False
-    caller_interrupted: bool = False
-    cancel_requested: bool = False
+    tools_disabled: bool = False
 
 
-class RealtimeSession(BaseRealtimeSession):
+class RealtimeSession(llm.RealtimeSession):
     def __init__(self, model: RealtimeModel):
         super().__init__(model)
         self._model = model
@@ -249,7 +211,6 @@ class RealtimeSession(BaseRealtimeSession):
         self._connection: AbstractAsyncContextManager[r.RealtimeSession] | None = None
         self._initialized: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._initialized.add_done_callback(lambda f: None if f.cancelled() else f.exception())
-        self._started = False
         self._closed = False
         self._failure: Exception | None = None
         self._shutdown_task: asyncio.Task[None] | None = None
@@ -257,9 +218,6 @@ class RealtimeSession(BaseRealtimeSession):
         self._instructions: str | None = None
         self._tool_list: list[llm.Tool] = []
         self._chat = llm.ChatContext.empty()
-        self._typed: _TypedTurn | None = None
-        self._typed_revision = 0
-        self._typed_retry = False
         self._generations: OrderedDict[str, _Generation] = OrderedDict()
         self._generation_ready = asyncio.Condition()
         self._calls: OrderedDict[str, tuple[r.ToolCallRef, llm.FunctionCall]] = OrderedDict()
@@ -268,17 +226,20 @@ class RealtimeSession(BaseRealtimeSession):
         self._active: r.ResponseRef | None = None
         self._parent: r.ResponseRef | None = None
         self._report: r.ToolCallRef | None = None
-        self._caller_speaking = False
         self._audio: asyncio.Queue[r.AudioChunk] = asyncio.Queue(100)
         self._audio_format: tuple[int, int] | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._settings_lock = asyncio.Lock()
         self._tool_fillers = dict(model._tool_fillers)
-        self._interruption_policies: OrderedDict[int, bool] = OrderedDict()
+        self._tool_choice: Literal["auto", "none"] = "auto"
+        self._suppress_tools = False
+        self._suppressed_revisions: set[int] = set()
+        self._tool_policy_floor = 0
         self._transcript_deltas: dict[str, str] = {}
         self._history: PrismHistory | None = None
         self._history_lock = asyncio.Lock()
+        self._spawn(self._connect())
 
     def _sdk_tools(
         self, tools: list[llm.Tool], fillers: Mapping[str, r.PrismFiller]
@@ -290,34 +251,7 @@ class RealtimeSession(BaseRealtimeSession):
         return definitions
 
     def _record_settings(self) -> None:
-        info = self._require().info
-        if info.settings_revision is not None:
-            # Retain policy changes, not every settings revision. Voice, labels,
-            # and truncation updates must not evict an older reply's policy.
-            previous = next(reversed(self._interruption_policies.values()), None)
-            if previous is None or previous != info.interrupt_on_speech:
-                self._interruption_policies[info.settings_revision] = info.interrupt_on_speech
-                while len(self._interruption_policies) > 128:
-                    self._interruption_policies.popitem(last=False)
-        self._model.emit("session_updated", info)
-
-    def _response_policy(self, revision: int | None) -> bool:
-        if revision is not None:
-            for first, policy in reversed(self._interruption_policies.items()):
-                if first <= revision:
-                    # A newer revision may already be acknowledged by the SDK
-                    # before the update coroutine records it here.
-                    info = self._require().info
-                    if info.settings_revision is not None and info.settings_revision <= revision:
-                        return info.interrupt_on_speech
-                    return policy
-        return self._require().info.interrupt_on_speech
-
-    def _playback_interrupts(self) -> bool:
-        for generation in reversed(self._generations.values()):
-            if not generation.playback_done:
-                return generation.interrupt_on_speech
-        return self._require().info.interrupt_on_speech
+        self._model.emit("session_updated", self._require().info)
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -327,20 +261,6 @@ class RealtimeSession(BaseRealtimeSession):
     def tools(self) -> llm.ToolContext:
         return llm.ToolContext(self._tool_list)
 
-    def can_reuse(self, chat_ctx: llm.ChatContext) -> bool:
-        # LiveKit filters tools absent from the receiving agent. Keep Prism's
-        # original call references, including a tool awaiting an inline task.
-        def visible(ctx: llm.ChatContext) -> llm.ChatContext:
-            projected = ctx.copy(
-                exclude_handoff=True,
-                exclude_config_update=True,
-                exclude_function_call=True,
-            )
-            remove_instructions(projected)
-            return projected
-
-        return visible(self._chat).is_equivalent(visible(chat_ctx))
-
     def _require(self) -> r.RealtimeSession:
         if self._failure:
             raise self._failure
@@ -348,92 +268,47 @@ class RealtimeSession(BaseRealtimeSession):
             raise self._unsupported("Prism session is not open")
         return self._sdk
 
-    async def _update_session(
-        self,
-        *,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
-    ) -> None:
-        if self._failure:
-            self._fatal(self._failure)
-            raise self._failure
-        if self._started:
-            if is_given(chat_ctx):
-                if self.can_reuse(chat_ctx):
-                    # Handoff filters tools absent from the next agent. Keep their records.
-                    preserved = [
-                        i
-                        for i in self._chat.items
-                        if isinstance(i, (llm.FunctionCall, llm.FunctionCallOutput))
-                    ]
-                    chat_ctx = chat_ctx.copy()
-                    ids = {i.id for i in chat_ctx.items}
-                    chat_ctx.insert([i for i in preserved if i.id not in ids])
-                await self.update_chat_ctx(chat_ctx)
-            await self._apply_settings(instructions=instructions, tools=tools)
-            return
-        self._started = True
-        self._instructions = instructions if is_given(instructions) else self._instructions
-        self._tool_list = list(tools) if is_given(tools) else self._tool_list
+    async def _connect(self) -> None:
         try:
-            seed = chat_ctx if is_given(chat_ctx) else llm.ChatContext.empty()
-            PrismHistory.validate(seed)
+            if self._failure:
+                raise self._failure
             self._connection = self._model._client.realtime.connect(
                 endpoint=self._model._endpoint,
                 voice=self._model._voice,
-                # The SDK treats omitted instructions as the deployment default
-                # and rejects blank strings. Preserve LiveKit's value locally.
-                instructions=self._instructions
-                if self._instructions and self._instructions.strip()
-                else None,
-                tools=self._sdk_tools(self._tool_list, self._tool_fillers),
                 turn_detection=self._model._turn_detection,
                 truncation=self._model._truncation,
                 timeouts=self._model._timeouts,
-                interrupt_on_speech=self._model._interrupt_on_speech,
+                interrupt_on_speech=True,
                 request_id=self._model._request_id,
                 response_metadata=self._model._response_metadata,
             )
             self._sdk = await self._connection.__aenter__()
+            self._history = PrismHistory(self._sdk, self._chat, self._calls)
             self._record_settings()
             self._spawn(self._read_events())
-            self._history = PrismHistory(self._sdk, self._chat, self._calls)
-            await self._history.sync(seed)
             self._initialized.set_result(None)
             self._spawn(self._send_audio())
         except asyncio.CancelledError:
-            await self.aclose()
             raise
         except Exception as error:
             self._fatal(error)
-            await self.aclose()
-            raise
 
     async def update_instructions(self, instructions: str) -> None:
-        if not self._started:
-            self._instructions = instructions
-        else:
-            await self._apply_settings(instructions=instructions)
+        await self._apply_settings(instructions=instructions)
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
-        if not self._started:
-            self._tool_list = list(tools)
-        else:
-            await self._apply_settings(tools=tools)
+        await self._apply_settings(tools=tools)
 
     async def update_session(
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        interrupt_on_speech: NotGivenOr[bool] = NOT_GIVEN,
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
         truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
     ) -> None:
         await self._apply_settings(
             voice=voice,
-            interrupt_on_speech=interrupt_on_speech,
             response_metadata=response_metadata,
             tool_fillers=tool_fillers,
             truncation=truncation,
@@ -445,13 +320,15 @@ class RealtimeSession(BaseRealtimeSession):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        interrupt_on_speech: NotGivenOr[bool] = NOT_GIVEN,
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
         truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
     ) -> None:
         # A cancelled caller still waits for acknowledgment so local settings cannot
         # contradict an update the server accepted. No update is replayed.
+        await asyncio.shield(self._initialized)
+        self._require()
+
         async def apply() -> None:
             async with self._settings_lock:
                 sdk = self._require()
@@ -460,7 +337,11 @@ class RealtimeSession(BaseRealtimeSession):
                 if is_given(tools) and not is_given(tool_fillers):
                     names = {_tool(tool).name for tool in new_tools}
                     fillers = {name: filler for name, filler in fillers.items() if name in names}
-                definitions = self._sdk_tools(new_tools, fillers)
+                definitions = (
+                    self._sdk_tools(new_tools, fillers)
+                    if is_given(tools) or is_given(tool_fillers)
+                    else None
+                )
                 try:
                     if any(
                         is_given(v)
@@ -468,7 +349,6 @@ class RealtimeSession(BaseRealtimeSession):
                             instructions,
                             tools,
                             voice,
-                            interrupt_on_speech,
                             tool_fillers,
                             truncation,
                         )
@@ -482,9 +362,6 @@ class RealtimeSession(BaseRealtimeSession):
                             if is_given(tools) or is_given(tool_fillers)
                             else None,
                             voice=voice if is_given(voice) else None,
-                            interrupt_on_speech=interrupt_on_speech
-                            if is_given(interrupt_on_speech)
-                            else None,
                         )
                         if is_given(instructions):
                             self._instructions = instructions
@@ -493,8 +370,6 @@ class RealtimeSession(BaseRealtimeSession):
                         self._model._tool_fillers = dict(fillers)
                         if is_given(voice):
                             self._model._voice = voice
-                        if is_given(interrupt_on_speech):
-                            self._model._interrupt_on_speech = interrupt_on_speech
                         if is_given(truncation):
                             self._model._truncation = cast(r.Truncation, truncation)
                         self._record_settings()
@@ -521,41 +396,15 @@ class RealtimeSession(BaseRealtimeSession):
             raise asyncio.CancelledError
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
-        if is_given(tool_choice) and tool_choice not in (None, "auto"):
-            raise self._unsupported("Prism cannot force or disable tools for a reply")
-
-    async def set_input_text(
-        self, text: str, *, message_id: NotGivenOr[str] = NOT_GIVEN
-    ) -> llm.ChatMessage:
-        self._require()
-        if self._typed is not None and not self._typed_retry:
-            raise self._unsupported("A typed turn is already staged")
-        if not text.strip() or len(text) > 4000:
-            raise self._unsupported("Typed input must be nonblank and at most 4000 characters")
-        if self._typed is not None:
-            self._forget_unsent_turn(self._typed)
-        message = self._chat.add_message(role="user", content=text, id=message_id)
-        self._typed_revision += 1
-        self._typed = _TypedTurn(text, message.id, self._typed_revision)
-        self._typed_retry = False
-        return message.model_copy()
-
-    def _forget_unsent_turn(self, turn: _TypedTurn) -> None:
-        self._chat.items[:] = [item for item in self._chat.items if item.id != turn.item_id]
-
-    def _restore_unsent_turn(self, turn: _TypedTurn | None) -> None:
-        if turn is None or self._closed or self._failure is not None:
+        if not is_given(tool_choice):
             return
-        if self._typed_revision == turn.revision and self._typed is None:
-            # No automatic retry. Only a later explicit generate_reply can use it.
-            self._typed = turn
-            self._typed_retry = True
-        elif self._typed_revision != turn.revision:
-            # A newer explicit user turn supersedes this known-unsent question.
-            self._forget_unsent_turn(turn)
+        if tool_choice not in (None, "auto", "none"):
+            raise self._unsupported("Prism supports only tool_choice='auto' or 'none'")
+        self._tool_choice = "none" if tool_choice == "none" else "auto"
 
     async def get_history(self) -> tuple[r.HistoryItem, ...]:
         """Read Prism's completed history without changing LiveKit's conversation record."""
+        await asyncio.shield(self._initialized)
         async with self._history_lock:
             try:
                 return await self._require().get_history()
@@ -563,6 +412,8 @@ class RealtimeSession(BaseRealtimeSession):
                 raise PrismError(error.fault) from error
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        await asyncio.shield(self._initialized)
+
         async def apply() -> None:
             async with self._history_lock:
                 self._require()
@@ -648,7 +499,8 @@ class RealtimeSession(BaseRealtimeSession):
     async def _send_audio(self) -> None:
         sdk = self._require()
         while True:
-            await sdk.send_audio(await self._audio.get())
+            chunk = await self._audio.get()
+            await sdk.send_audio(chunk)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         raise self._unsupported("Prism does not accept video")
@@ -672,46 +524,89 @@ class RealtimeSession(BaseRealtimeSession):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        self.update_options(tool_choice=tool_choice)
         if is_given(tools):
             raise self._unsupported("Prism does not support per-reply tools")
-        instruction = instructions if is_given(instructions) and instructions else None
-        if self._typed is not None and instruction is not None:
-            raise self._unsupported("Prism cannot combine typed input with a reply instruction")
-        typed, self._typed = self._typed, None
-        self._typed_retry = False
+        self.update_options(tool_choice=tool_choice)
         parent, self._parent = self._parent, None
         report, self._report = self._report, None
-        return self._spawn(self._reply(typed, instruction, parent, report), request=True)
+        return self._spawn(
+            self._reply(
+                instructions if is_given(instructions) and instructions else None,
+                parent,
+                report,
+                self._tool_choice == "none",
+            ),
+            request=True,
+        )
 
     async def _reply(
         self,
-        typed: _TypedTurn | None,
         instruction: str | None,
         parent: r.ResponseRef | None,
         report: r.ToolCallRef | None,
+        disable_tools: bool,
     ) -> llm.GenerationCreatedEvent:
         await asyncio.shield(self._initialized)
-        # Wait for an edit already in progress, then release the lock before
-        # admission. Readiness can depend on tool results submitted through history.
+        # Do not hold the history lock during admission: a pending tool result
+        # may need that lock before Prism can admit another reply.
         async with self._history_lock:
             self._require()
-        return await self._reply_unlocked(typed, instruction, parent, report)
+        try:
+            if not disable_tools:
+                return await self._request_reply(instruction, parent, report)
+            async with self._settings_lock:
+                sdk = self._require()
+                restore = self._sdk_tools(self._tool_list, self._tool_fillers)
+                self._suppress_tools = True
+                try:
+                    info = await sdk.update(tools=[])
+                    if info.settings_revision is not None:
+                        self._suppressed_revisions.add(info.settings_revision)
+                        if len(self._suppressed_revisions) > 128:
+                            oldest = min(self._suppressed_revisions)
+                            self._suppressed_revisions.remove(oldest)
+                            self._tool_policy_floor = oldest + 1
+                    self._record_settings()
+                    # Shield admission through response creation. Restoring the tools
+                    # before an accepted late response starts changes its settings.
+                    task = self._spawn(
+                        self._request_reply(instruction, parent, report), request=True
+                    )
+                    try:
+                        return await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        try:
+                            created = await asyncio.shield(task)
+                            if created.response_id is not None:
+                                await self._abandon_reply(
+                                    self._generations[created.response_id].ref
+                                )
+                        finally:
+                            raise
+                finally:
+                    if not self._closed and self._failure is None:
+                        try:
+                            await sdk.update(tools=restore)
+                            self._record_settings()
+                        except BaseException:
+                            self._fatal(RuntimeError("Prism tool restoration did not complete"))
+                            raise
+                    self._suppress_tools = False
+        except r.RimeRealtimeError as error:
+            raise PrismError(error.fault) from error
+        except r.RealtimeAdmissionTimeout as error:
+            raise llm.RealtimeError(str(error), code="admission_timeout") from error
 
-    async def _reply_unlocked(
+    async def _request_reply(
         self,
-        typed: _TypedTurn | None,
         instruction: str | None,
         parent: r.ResponseRef | None,
         report: r.ToolCallRef | None,
     ) -> llm.GenerationCreatedEvent:
-        await asyncio.shield(self._initialized)
         sdk = self._require()
         ref: r.ResponseRef | None = None
         try:
-            if typed is not None:
-                ref = await sdk.send_text(typed.text)
-            elif instruction is not None:
+            if instruction is not None:
                 ref = await sdk.request_reply(instruction=instruction)
             elif parent is not None:
                 try:
@@ -722,9 +617,6 @@ class RealtimeSession(BaseRealtimeSession):
                         or error.fault.code != "tool_continuation_unavailable"
                     ):
                         raise
-                    # A new user turn can supersede the round between result acknowledgment
-                    # and this call, or the server's tool wait can expire. Reporting a
-                    # recorded result is a separate operation and never reruns the tool.
                     call = next(
                         (
                             c
@@ -743,56 +635,29 @@ class RealtimeSession(BaseRealtimeSession):
                     lambda: ref.response_id in self._generations or self._failure is not None
                 )
             self._require()
-            generation = self._generations[ref.response_id].event
-            if typed is not None and self._history is not None:
-                self._history.bind_typed(typed.item_id, generation.input_item_ids)
-            return generation
+            return self._generations[ref.response_id].event
+        except r.RimeRealtimeError as error:
+            raise PrismError(error.fault) from error
+        except r.RealtimeAdmissionTimeout as error:
+            raise llm.RealtimeError(str(error), code="admission_timeout") from error
         except asyncio.CancelledError:
             if ref is not None and not self._closed:
                 self._spawn(self._abandon_reply(ref))
             raise
-        except r.RealtimeAdmissionTimeout as error:
-            if ref is None:
-                self._restore_unsent_turn(typed)
-            raise llm.RealtimeError(str(error), code="admission_timeout") from error
-        except r.RimeRealtimeError as error:
-            fault = error.fault
-            if (
-                ref is None
-                and fault.scope == "event"
-                and fault.item_id is None
-                and fault.response_id is None
-                and fault.code not in ("typed_turn_superseded", "response_superseded")
-            ):
-                self._restore_unsent_turn(typed)
-            raise PrismError(fault) from error
 
     async def _abandon_reply(self, response: r.ResponseRef) -> None:
-        async with self._generation_ready:
-            await self._generation_ready.wait_for(
-                lambda: response.response_id in self._generations or self._failure is not None
-            )
-        if self._closed or self._failure is not None:
-            return
-        generation = self._generations[response.response_id]
-        if not generation.abandoned:
+        generation = self._generations.get(response.response_id)
+        if generation is not None:
             generation.abandoned = True
-            self.playback_finished(
-                response_id=response.response_id,
-                message_id=None,
-                audio_end_ms=0,
-                interrupted=True,
-                interrupted_by_user=False,
-            )
+            self._end(generation)
+        await self._cancel(response)
 
     def interrupt(self) -> None:
-        if (
-            not self._closed
-            and self._failure is None
-            and self._active is not None
-            and not (self._caller_speaking and self._playback_interrupts())
-        ):
+        if not self._closed and self._failure is None and self._active is not None:
+            generation = self._generations[self._active.response_id]
+            generation.abandoned = True
             self._spawn(self._cancel(self._active))
+            self._end(generation)
 
     def truncate(
         self,
@@ -802,135 +667,32 @@ class RealtimeSession(BaseRealtimeSession):
         audio_end_ms: int,
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        if self._closed or self._failure is not None:
+            return
         generation = next((g for g in self._generations.values() if message_id in g.outputs), None)
-        if generation is not None:
-            self.playback_finished(
-                response_id=generation.ref.response_id,
-                message_id=message_id,
-                audio_end_ms=audio_end_ms,
-                interrupted=True,
-                interrupted_by_user=self._caller_speaking,
-            )
-
-    def playback_finished(
-        self,
-        *,
-        response_id: str | None,
-        message_id: str | None,
-        audio_end_ms: int,
-        interrupted: bool,
-        interrupted_by_user: bool,
-        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
-        modalities: list[Literal["text", "audio"]] | None = None,
-    ) -> None:
-        if self._closed or self._failure is not None or response_id is None:
+        if generation is None:
             return
-        generation = self._generations.get(response_id)
-        if generation is None or generation.playback_done:
-            return
-        if message_id is not None:
-            message = generation.outputs.get(message_id)
-            if message is None or message.playback_ms is not None:
-                return
-            outputs = [message]
-            message.playback_ms = audio_end_ms
-        else:
-            if generation.response_playback_ms is not None:
-                return
-            generation.response_playback_ms = audio_end_ms
-            generation.response_stopped = interrupted
-            outputs = [m for m in generation.outputs.values() if m.playback_ms is None]
-            for message in outputs:
-                message.playback_ms = 0
-                if interrupted:
-                    # A response-wide stop has no remaining player, including
-                    # outputs announced before this callback reached the adapter.
-                    message.discarded = True
-                    message.played_transcript = ""
-                    message.text.close()
-                    message.audio.close()
-        if interrupted and interrupted_by_user:
-            generation.caller_interrupted = True
-            generation.response_stopped = True
-            generation.skipped_by_user = True
-            for message in outputs:
-                self._interrupt_output(
-                    generation, message, audio_end_ms, audio_transcript=audio_transcript
-                )
-            if message_id is not None:
-                # Caller speech stops the response's remaining outputs too. They
-                # may already be announced but have no player after interruption.
-                after_interrupted = False
-                for message in generation.outputs.values():
-                    if message.output.item_id == message_id:
-                        after_interrupted = True
-                    elif after_interrupted and message.playback_ms is None:
-                        message.playback_ms = 0
-                        self._interrupt_output(generation, message, 0)
-        elif interrupted:
-            generation.response_stopped = True
-            if message_id is not None:
-                after_interrupted = False
-                for message in generation.outputs.values():
-                    if message.output.item_id == message_id:
-                        after_interrupted = True
-                    elif after_interrupted and message.playback_ms is None:
-                        message.playback_ms = 0
-                        message.discarded = True
-                        message.played_transcript = ""
-                        message.text.close()
-                        message.audio.close()
-            if not generation.cancel_requested:
-                generation.cancel_requested = True
-                self._spawn(self._cancel(generation.ref))
-        self._maybe_finish_playback(generation)
-
-    def _interrupt_output(
-        self,
-        generation: _Generation,
-        message: _Message,
-        audio_end_ms: int,
-        *,
-        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
-    ) -> None:
+        message = generation.outputs[message_id]
         message.discarded = True
         message.text.close()
         message.audio.close()
         if is_given(audio_transcript) or audio_end_ms == 0:
             message.played_transcript = audio_transcript if is_given(audio_transcript) else ""
-            if generation.ended:
-                self._chat._upsert_item(
-                    llm.ChatMessage(
-                        id=message.output.item_id,
-                        role="assistant",
-                        content=[message.played_transcript],
-                    )
+            self._chat._upsert_item(
+                llm.ChatMessage(
+                    id=message_id,
+                    role="assistant",
+                    content=[message.played_transcript],
                 )
+            )
         self._spawn(
             self._report_playback(
-                r.PlaybackInterrupted(output=message.output, audio_end_ms=audio_end_ms)
+                r.PlaybackInterrupted(
+                    output=message.output,
+                    audio_end_ms=audio_end_ms,
+                )
             )
         )
-
-    def _maybe_finish_playback(self, generation: _Generation) -> None:
-        if generation.playback_done or not generation.ended:
-            return
-        if not generation.outputs and generation.response_playback_ms is None:
-            return
-        if any(message.playback_ms is None for message in generation.outputs.values()):
-            return
-        generation.playback_done = True
-        if generation.caller_interrupted:
-            # Caller interruption uses per-output truncations, not a response drain.
-            return
-        if generation.response_playback_ms is not None:
-            played_ms = generation.response_playback_ms
-        else:
-            played_ms = sum(message.playback_ms or 0 for message in generation.outputs.values())
-        self._spawn(self._finish_playback(generation.ref, played_ms))
-
-    async def _finish_playback(self, response: r.ResponseRef, played_ms: int) -> None:
-        await self._report_playback(r.PlaybackFinished(response=response, played_ms=played_ms))
 
     async def _cancel(self, response: r.ResponseRef) -> None:
         if self._closed or self._failure is not None:
@@ -941,7 +703,7 @@ class RealtimeSession(BaseRealtimeSession):
             if error.fault.scope != "event" or error.fault.code != "response_cancel_not_active":
                 raise
             # The response ended before cancellation reached the server. Playback
-            # completion still needs its receipt once response.done arrives.
+            # the server retains its playback estimate.
             self._emit_error(error, recoverable=True)
 
     async def _report_playback(self, report: r.PlaybackReport) -> None:
@@ -971,18 +733,7 @@ class RealtimeSession(BaseRealtimeSession):
         payload = event.payload
         if self._history is not None:
             self._history.observe(payload)
-        if isinstance(payload, r.SpeechHint):
-            if self._playback_interrupts():
-                hint = InputSpeechHintEvent(
-                    audio_start_ms=payload.audio_start_ms,
-                    gain=self._model._speech_hint_gain,
-                    timeout=self._model._speech_hint_timeout,
-                )
-                self.emit("input_speech_hint", hint)
-                self._model.emit("speech_hint", hint)
-        elif isinstance(payload, r.SpeechStarted):
-            interrupt_response = self._playback_interrupts()
-            self._caller_speaking = True
+        if isinstance(payload, r.SpeechStarted):
             self._latest = None
             self._parent = None
             self._turn_started[payload.item_id] = time.time()
@@ -990,10 +741,9 @@ class RealtimeSession(BaseRealtimeSession):
                 self._turn_started.popitem(last=False)
             self.emit(
                 "input_speech_started",
-                InputSpeechStartedEvent(interrupt_response=interrupt_response),
+                llm.InputSpeechStartedEvent(),
             )
         elif isinstance(payload, r.SpeechStopped):
-            self._caller_speaking = False
             stopped = PrismSpeechStoppedEvent(
                 user_transcription_enabled=True, end_reason=payload.end_reason
             )
@@ -1050,13 +800,16 @@ class RealtimeSession(BaseRealtimeSession):
             self._transcript_deltas.pop(payload.item_id, None)
             self._turn_started.pop(payload.item_id, None)
         elif isinstance(payload, r.ResponseStarted):
+            if (
+                payload.settings_revision is not None
+                and payload.settings_revision < self._tool_policy_floor
+            ):
+                raise RimeResourceLimitError("Prism response tool policy is no longer retained")
             if len(self._generations) >= 128:
                 oldest = next(iter(self._generations.values()))
-                if not oldest.playback_done:
-                    # The SDK also expires old response references at this limit.
-                    # Retaining the record cannot make its eventual receipt valid.
+                if not oldest.ended:
                     raise RimeResourceLimitError(
-                        "Prism generation limit reached with unresolved playback"
+                        "Prism generation limit reached with an active reply"
                     )
                 self._generations.popitem(last=False)
             messages = utils.aio.Chan[llm.MessageGeneration](maxsize=128)
@@ -1076,7 +829,8 @@ class RealtimeSession(BaseRealtimeSession):
                 created,
                 messages,
                 functions,
-                interrupt_on_speech=self._response_policy(payload.settings_revision),
+                tools_disabled=self._suppress_tools
+                or payload.settings_revision in self._suppressed_revisions,
             )
             self._latest = self._active = payload.response
             self._parent = self._report = None
@@ -1091,15 +845,6 @@ class RealtimeSession(BaseRealtimeSession):
                 return
             message = _Message(payload.output)
             generation.outputs[payload.output.item_id] = message
-            if generation.response_stopped:
-                message.playback_ms = 0
-                message.discarded = True
-                message.played_transcript = ""
-                message.text.close()
-                message.audio.close()
-                if generation.skipped_by_user:
-                    self._interrupt_output(generation, message, 0)
-                return
             modalities: asyncio.Future[list[Literal["text", "audio"]]] = (
                 asyncio.get_running_loop().create_future()
             )
@@ -1114,7 +859,7 @@ class RealtimeSession(BaseRealtimeSession):
             )
         elif isinstance(payload, (r.TextDelta, r.TextDone, r.AudioDelta, r.AudioDone)):
             generation = self._generations[payload.output.response.response_id]
-            if generation.abandoned or generation.skipped_by_user:
+            if generation.abandoned:
                 return
             message = generation.outputs[payload.output.item_id]
             if message.discarded:
@@ -1141,7 +886,10 @@ class RealtimeSession(BaseRealtimeSession):
             else:
                 message.audio.close()
         elif isinstance(payload, r.ToolCall):
-            if self._generations[payload.call.response_id].abandoned:
+            generation = self._generations[payload.call.response_id]
+            if generation.tools_disabled:
+                raise PrismUnsupported("Prism emitted a tool call during a tool-disabled reply")
+            if generation.abandoned:
                 return
             call = llm.FunctionCall(
                 id=payload.item_id,
@@ -1181,8 +929,6 @@ class RealtimeSession(BaseRealtimeSession):
             message.audio.close()
         generation.messages.close()
         generation.functions.close()
-        if self._failure is None and not self._closed:
-            self._maybe_finish_playback(generation)
 
     def _unsupported(self, message: str) -> PrismUnsupported:
         error = PrismUnsupported(message)
@@ -1248,9 +994,9 @@ class RealtimeSession(BaseRealtimeSession):
         tasks = list(self._tasks)
         for task in tasks:
             task.cancel()
-        if self._connection is not None:
-            await self._connection.__aexit__(None, None, None)
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self._connection is not None and self._sdk is not None:
+            await self._connection.__aexit__(None, None, None)
         for generation in self._generations.values():
             self._end(generation)
 

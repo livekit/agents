@@ -42,7 +42,7 @@ async def test_background_dependency_error_stops_the_session(monkeypatch):
         assert error.error is failure
         assert not error.recoverable
         with pytest.raises(llm.RealtimeError, match="background clear failed"):
-            await session.set_input_text("new turn")
+            await session.update_instructions("new turn")
         assert peer.requests.empty()
 
 

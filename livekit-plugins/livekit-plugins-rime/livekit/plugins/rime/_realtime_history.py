@@ -10,7 +10,6 @@ from typing import cast
 from rimelabs_sdk import realtime as r
 
 from livekit.agents import llm
-from livekit.agents.voice.generation import remove_instructions
 
 
 class HistoryUpdateError(llm.RealtimeError):
@@ -23,7 +22,6 @@ class HistoryUpdateError(llm.RealtimeError):
 
 def _items(ctx: llm.ChatContext) -> list[llm.ChatItem]:
     projected = ctx.copy(exclude_handoff=True, exclude_config_update=True)
-    remove_instructions(projected)
     return projected.items
 
 

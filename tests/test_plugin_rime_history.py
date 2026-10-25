@@ -12,8 +12,9 @@ pytest.importorskip("rimelabs_sdk.realtime")
 
 from rimelabs_sdk import realtime as r
 
-from livekit.agents import Agent, function_tool, llm
-from livekit.plugins.rime.realtime import AgentSession, PrismError, RealtimeModelFallbackAdapter
+from livekit.agents import Agent, AgentSession, function_tool, llm
+from livekit.agents.llm import RealtimeModelFallbackAdapter
+from livekit.plugins.rime.realtime import PrismError
 
 from .test_plugin_rime_realtime import peer_model
 from .test_plugin_rime_settings import wait_until
@@ -64,7 +65,7 @@ async def test_truncation_at_connect_update_and_restart(policy):
 async def test_rejected_truncation_leaves_acknowledged_policy_unchanged():
     async with peer_model(truncation="auto") as (peer, model, _):
         session = model.session()
-        await session._update_session()
+        await session.update_instructions("test")
         peer.refusals["session.update"] = ("invalid_session", "event")
         with pytest.raises(PrismError):
             await model.update_session(truncation="disabled")
@@ -212,7 +213,7 @@ async def test_partial_history_failure_closes_uncertain_conversation():
         error = await asyncio.wait_for(errors.get(), 3)
         assert not error.recoverable
         with pytest.raises(llm.RealtimeError):
-            await session.set_input_text("must not use uncertain history")
+            await session.update_instructions("must not use uncertain history")
 
 
 async def test_cancelled_history_update_settles_and_commits_accepted_change():
@@ -242,48 +243,22 @@ async def test_cancelled_history_update_settles_and_commits_accepted_change():
 async def test_running_reply_snapshot_does_not_remove_live_local_items():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session._update_session()
-        message = await session.set_input_text("question")
+        await session.update_instructions("test")
+        ctx = session.chat_ctx
+        message = ctx.add_message(role="user", content="question")
+        await session.update_chat_ctx(ctx)
         pending = session.generate_reply()
         response_id = await peer.start(await peer.next())
         await pending
         await peer.message(response_id)
-        assert await model.get_history() == ()
+        assert [item.text for item in await model.get_history()] == ["question"]
         assert session.chat_ctx.get_by_id(message.id) is not None
-        with pytest.raises(llm.RealtimeError, match="active reply"):
-            await session.update_chat_ctx(llm.ChatContext.empty())
+        with pytest.raises(llm.RealtimeError, match="active replies"):
+            await session.update_chat_ctx(messages("replacement"))
         await peer.end(response_id)
         await wait_until(lambda: len(session.chat_ctx.items) == 2)
         await session.update_chat_ctx(llm.ChatContext.empty())
         assert await model.get_history() == ()
-
-
-async def test_agent_context_commits_after_acknowledgment_even_after_cancellation():
-    async with peer_model() as (peer, model, _):
-        async with AgentSession(llm=model) as session:
-            agent = Agent(instructions="Help", chat_ctx=messages("old"))
-            await session.start(agent)
-            target = agent.chat_ctx.copy()
-            target.add_message(role="system", content="accepted")
-            peer.history_started.clear()
-            peer.history_release.clear()
-            change = asyncio.create_task(agent.update_chat_ctx(target))
-            try:
-                await asyncio.wait_for(peer.history_started.wait(), 3)
-                assert all(
-                    i.text_content != "accepted"
-                    for i in agent.chat_ctx.items
-                    if i.type == "message"
-                )
-                change.cancel()
-            finally:
-                peer.history_release.set()
-            with pytest.raises(asyncio.CancelledError):
-                await change
-            assert any(
-                i.text_content == "accepted" for i in agent.chat_ctx.items if i.type == "message"
-            )
-            assert len(await model.get_history()) == 2
 
 
 async def test_agent_context_stays_unchanged_when_history_update_is_rejected():
@@ -318,7 +293,7 @@ async def test_deleting_half_a_tool_pair_is_rejected_before_mutation(removed_typ
 async def test_history_read_refusal_uses_the_adapter_error_and_keeps_session():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session._update_session()
+        await session.update_instructions("test")
         peer.refusals["prism.conversation.get"] = ("invalid_request", "event")
         with pytest.raises(PrismError) as raised:
             await model.get_history()
@@ -329,7 +304,7 @@ async def test_history_read_refusal_uses_the_adapter_error_and_keeps_session():
 async def test_reply_waiting_for_readiness_does_not_block_live_tool_results():
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session._update_session()
+        await session.update_instructions("test")
         first = session.generate_reply()
         parent = await peer.start(await peer.next())
         generation = await first
@@ -432,26 +407,3 @@ async def test_omitted_new_options_preserve_existing_text_history_requests():
             {"type": "message", "role": "user", "text": "seed"},
             {"type": "message", "role": "assistant", "text": "appended history"},
         ]
-
-
-async def test_truncation_updates_do_not_evict_an_older_response_interruption_policy():
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        await session._update_session()
-        original_revision = model.session_info.settings_revision
-        for _ in range(129):
-            await model.update_session(truncation="auto")
-        await model.update_session(interrupt_on_speech=False)
-        speech = asyncio.Queue()
-        session.on("input_speech_started", speech.put_nowait)
-        await peer.emit(
-            "response.created",
-            response={
-                "id": "prepared-before-updates",
-                "metadata": {"prism_cause": "user_audio"},
-                "prism_settings_revision": original_revision,
-            },
-        )
-        await peer.emit("input_audio_buffer.speech_started", item_id="caller", audio_start_ms=0)
-        event = await asyncio.wait_for(speech.get(), 3)
-        assert event.interrupt_response is True

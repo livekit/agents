@@ -245,7 +245,7 @@ async def test_restart_replays_chat_ctx_onto_new_child() -> None:
     await adapter.restart_session()
 
     # the freshest chat context from the dying child is replayed onto the new child
-    assert session._active.chat_ctx is ctx
+    assert session._active.chat_ctx.is_equivalent(ctx)
 
 
 async def test_restart_preserves_wrapper_subscribers() -> None:
@@ -567,7 +567,7 @@ async def test_swap_replays_child_current_ctx_not_stale_pushed_ctx() -> None:
     await adapter.restart_session()
 
     # replay must use the child's current context, not the stale earlier push
-    assert session._active.chat_ctx is ctx2
+    assert session._active.chat_ctx.is_equivalent(ctx2)
 
 
 async def test_swap_replays_agent_chat_ctx() -> None:
@@ -582,7 +582,7 @@ async def test_swap_replays_agent_chat_ctx() -> None:
     await adapter.restart_session()
 
     # the agent chat context (user-heard version) is replayed, not the child's own context
-    assert session._active.chat_ctx is agent_ctx
+    assert session._active.chat_ctx.is_equivalent(agent_ctx)
 
 
 async def test_emits_availability_changed_on_failure() -> None:
@@ -654,3 +654,46 @@ async def test_emits_availability_changed_on_recovery() -> None:
     await session._swap_task
 
     assert any(e.realtime_model is primary and e.available is True for e in events)
+
+
+async def test_initialization_falls_back_on_fatal_event_without_parallel_swap(monkeypatch) -> None:
+    primary, backup = FakeRealtimeModel(), FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    errors = []
+    session.on("error", errors.append)
+
+    async def fail(context: ChatContext) -> None:
+        primary.active_session.emit_error(recoverable=False)
+
+    monkeypatch.setattr(primary.active_session, "update_chat_ctx", fail)
+    context = ChatContext.empty()
+    context.add_message(role="user", content="Saved question")
+    try:
+        await session._update_session(instructions="Help", chat_ctx=context, tools=[])
+        assert len(primary.created_sessions) == len(backup.created_sessions) == 1
+        assert session._swap_task is None
+        assert session._active is backup.active_session
+        assert session.chat_ctx.is_equivalent(context)
+        assert backup.active_session.updated_instructions == "Help"
+        assert len(errors) == 1
+        assert errors[0].recoverable
+    finally:
+        await session.aclose()
+
+
+async def test_zero_cooldown_initialization_tries_each_candidate_once() -> None:
+    primary, backup = FakeRealtimeModel(), FakeRealtimeModel()
+    primary.bring_up_error = RuntimeError("primary failed")
+    backup.bring_up_error = RuntimeError("backup failed")
+    adapter = RealtimeModelFallbackAdapter([primary, backup], cooldown=0)
+    session = adapter.session()
+    errors = []
+    session.on("error", errors.append)
+    try:
+        with pytest.raises(RuntimeError, match="backup failed"):
+            await asyncio.wait_for(session._update_session(chat_ctx=ChatContext.empty()), 3)
+        assert len(primary.created_sessions) == len(backup.created_sessions) == 1
+        assert [error.recoverable for error in errors] == [True, False]
+    finally:
+        await session.aclose()

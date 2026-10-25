@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, llm
-from livekit.plugins.rime.realtime import AgentSession, RealtimeModelFallbackAdapter
+from livekit.agents import Agent, AgentSession, llm
+from livekit.agents.llm import RealtimeModelFallbackAdapter
 
 from .fake_io import FakeAudioOutput
 from .test_plugin_rime_realtime import peer_model
@@ -22,16 +22,16 @@ async def test_prism_fallback_typed_input_playback_and_explicit_restart() -> Non
             for text in ("First turn", "After explicit restart"):
                 speech = session.generate_reply(user_input=text)
                 request = await peer.next()
-                assert request["response"]["prism_input_text"] == text
+                assert "prism_input_text" not in request["response"]
+                assert peer.items[-1]["text"] == text
                 response_id = await peer.start(request)
                 await peer.message(response_id)
                 await peer.end(response_id)
                 await asyncio.wait_for(speech.wait_for_playout(), 3)
-                receipt = await asyncio.wait_for(peer.receipts.get(), 3)
-                assert receipt["response_id"] == response_id
+                assert peer.receipts.empty()
                 if text == "First turn":
                     await adapter.restart_session()
-                    assert [item["text"] for item in peer.items] == ["First turn", "Hello"]
+                    assert [item["text"] for item in peer.server_items] == ["First turn", "Hello"]
 
 
 async def test_prism_startup_uses_backup_after_primary_initialization_failure() -> None:
@@ -49,7 +49,7 @@ async def test_prism_startup_uses_backup_after_primary_initialization_failure() 
                 assert [item["text"] for item in backup_peer.items] == ["Saved history"]
                 speech = session.generate_reply(user_input="Hello backup")
                 request = await backup_peer.next()
-                assert request["response"]["prism_input_text"] == "Hello backup"
+                assert backup_peer.items[-1]["text"] == "Hello backup"
                 response_id = await backup_peer.start(request)
                 await backup_peer.message(response_id)
                 await backup_peer.end(response_id)
@@ -83,10 +83,12 @@ async def test_prism_restart_initialization_failure_opens_backup_once(monkeypatc
                 assert len(reconnected) == 1
                 assert not created[0]._closed
 
-                await session.set_input_text("Use the backup")
+                ctx = session.chat_ctx
+                ctx.add_message(role="user", content="Use the backup")
+                await session.update_chat_ctx(ctx)
                 reply = session.generate_reply()
                 request = await backup_peer.next()
-                assert request["response"]["prism_input_text"] == "Use the backup"
+                assert backup_peer.items[-1]["text"] == "Use the backup"
                 response_id = await backup_peer.start(request)
                 await backup_peer.end(response_id)
                 assert (await asyncio.wait_for(reply, 3)).response_id == response_id

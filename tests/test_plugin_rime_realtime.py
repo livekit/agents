@@ -16,12 +16,11 @@ r = pytest.importorskip("rimelabs_sdk.realtime")
 from rimelabs_sdk import Rime, RimeInputError
 from websockets.asyncio.server import serve
 
-from livekit.agents import Agent, function_tool, llm
+from livekit.agents import Agent, AgentSession, function_tool, llm
+from livekit.agents.llm import RealtimeModelFallbackAdapter
 from livekit.plugins import rime
 from livekit.plugins.rime.realtime import (
-    AgentSession,
     PrismUnsupported,
-    RealtimeModelFallbackAdapter,
 )
 
 from .fake_io import FakeAudioOutput
@@ -213,6 +212,7 @@ class Peer:
         body = {
             "response": {
                 "id": response_id,
+                "prism_settings_revision": self.revision,
                 "metadata": request["response"]["metadata"]
                 if request
                 else {"prism_cause": "user_audio"},
@@ -268,6 +268,8 @@ class Peer:
             },
         )
 
+        await self.emit("prism.typed_input.ready")
+
 
 @asynccontextmanager
 async def peer_model(**options):
@@ -280,25 +282,6 @@ async def peer_model(**options):
                 yield peer, model, client
             finally:
                 await model.aclose()
-
-
-async def test_history_note_is_not_a_typed_turn():
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        await session._update_session(
-            instructions="test", tools=[], chat_ctx=llm.ChatContext.empty()
-        )
-        ctx = session.chat_ctx
-        ctx.add_message(role="user", content="A history note")
-        await session.update_chat_ctx(ctx)
-        assert peer.items[-1]["text"] == "A history note"
-        await session.set_input_text("Actual typed turn")
-        future = session.generate_reply()
-        request = await peer.next()
-        assert request["response"]["prism_input_text"] == "Actual typed turn"
-        ref = await peer.start(request)
-        await peer.end(ref)
-        assert (await future).response_id == ref
 
 
 async def test_startup_seeds_history_before_first_request():
@@ -338,94 +321,6 @@ async def test_history_update_validates_all_new_items_before_sending(invalid_ite
             await session.update_chat_ctx(ctx)
         assert peer.items == []
         assert session.chat_ctx.items == []
-
-
-@pytest.mark.parametrize("instructions", ["", " \n\t"])
-async def test_blank_instructions_allow_startup_and_restart(instructions):
-    async with peer_model() as (peer, model, _):
-        adapter = RealtimeModelFallbackAdapter([model])
-        async with AgentSession(llm=adapter) as session:
-            await session.start(Agent(instructions=instructions))
-            assert "instructions" not in peer.settings
-            await model._session.update_instructions(instructions)
-            await adapter.restart_session()
-            assert "instructions" not in peer.settings
-            await model._session.update_instructions(instructions)
-            speech = session.generate_reply(user_input="Hello")
-            request = await peer.next()
-            assert request["response"]["prism_input_text"] == "Hello"
-            response_id = await peer.start(request)
-            await peer.message(response_id)
-            await peer.end(response_id)
-            await asyncio.wait_for(speech.wait_for_playout(), 3)
-            assert speech.exception() is None
-
-
-async def test_agent_session_typed_reply_and_playback_receipt():
-    async with peer_model() as (peer, model, _):
-        async with AgentSession(llm=model) as session:
-            session.output.audio = FakeAudioOutput()
-            await session.start(Agent(instructions="test"))
-            handle = session.generate_reply(user_input="Hello Prism")
-            request = await peer.next()
-            assert request["response"]["prism_input_text"] == "Hello Prism"
-            response_id = await peer.start(request)
-            await peer.message(response_id)
-            await peer.end(response_id)
-            await asyncio.wait_for(handle.wait_for_playout(), 5)
-            receipt = await asyncio.wait_for(peer.receipts.get(), 3)
-            assert receipt["response_id"] == response_id
-            assert receipt["drain_token"] == f"drain-{response_id}"
-            assert peer.items == []  # no duplicate history turn
-
-
-@pytest.mark.parametrize("wrapped", [False, True])
-async def test_empty_response_allows_next_typed_turn(wrapped):
-    async with peer_model() as (peer, model, _):
-        realtime = RealtimeModelFallbackAdapter([model]) if wrapped else model
-        async with AgentSession(llm=realtime) as session:
-            session.output.audio = FakeAudioOutput()
-            await session.start(Agent(instructions="test"))
-            first = session.generate_reply(user_input="First question")
-            response_id = await peer.start(await peer.next())
-            await peer.end(response_id)
-            await asyncio.wait_for(first.wait_for_playout(), 3)
-            assert first.exception() is None
-            receipt = await asyncio.wait_for(peer.receipts.get(), 1)
-            assert receipt["response_id"] == response_id
-            assert receipt["played_ms"] == 0
-            assert not peer.cancel_received.is_set()
-
-            second = session.generate_reply(user_input="Next question")
-            request = await peer.next()
-            assert request["response"]["prism_input_text"] == "Next question"
-            next_id = await peer.start(request)
-            await peer.message(next_id)
-            await peer.end(next_id)
-            await asyncio.wait_for(second.wait_for_playout(), 3)
-            assert second.exception() is None
-            receipt = await asyncio.wait_for(peer.receipts.get(), 1)
-            assert receipt["response_id"] == next_id
-            assert peer.receipts.empty()
-
-
-async def test_agent_session_application_stop_reports_drain_not_truncate():
-    async with peer_model() as (peer, model, _):
-        output = FakeAudioOutput(can_pause=True)
-        async with AgentSession(llm=model) as session:
-            session.output.audio = output
-            await session.start(Agent(instructions="test"))
-            handle = session.generate_reply()
-            request = await peer.next()
-            response_id = await peer.start(request)
-            await peer.message(response_id, seconds=1)
-            while output._started_at is None:
-                await asyncio.sleep(0.001)
-            handle.interrupt(force=True)
-            await asyncio.wait_for(handle.wait_for_playout(), 5)
-            receipt = await asyncio.wait_for(peer.receipts.get(), 3)
-            assert receipt["response_id"] == response_id
-            assert peer.truncations.empty()
 
 
 async def test_agent_session_caller_interrupt_reports_truncate():
@@ -510,7 +405,7 @@ async def test_forced_tool_choice_emits_fatal_error():
         session.on("error", errors.append)
         await session._update_session(instructions="test")
         with pytest.raises(PrismUnsupported):
-            session.update_options(tool_choice="none")
+            session.update_options(tool_choice="required")
         assert errors[-1].recoverable is False
 
 
@@ -522,310 +417,22 @@ async def test_injected_client_stays_open():
             assert session.info.session_id == "session-1"
 
 
-async def test_skipped_response_reports_zero_playback_for_its_own_id():
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        await session._update_session(instructions="test")
-        future = session.generate_reply()
-        request = await peer.next()
-        response_id = await peer.start(request)
-        await future
-        session.playback_finished(
-            response_id=response_id,
-            message_id=None,
-            audio_end_ms=0,
-            interrupted=True,
-            interrupted_by_user=False,
-        )
-        receipt = await asyncio.wait_for(peer.receipts.get(), 3)
-        assert receipt["response_id"] == response_id
-        assert receipt["played_ms"] == 0
-        assert peer.truncations.empty()
-
-
-@pytest.mark.parametrize("has_message", [True, False])
-async def test_caller_skips_response_before_output_item_arrives(has_message):
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        await session._update_session(instructions="test")
-        future = session.generate_reply()
-        response_id = await peer.start(await peer.next())
-        await future
-        session.playback_finished(
-            response_id=response_id,
-            message_id=None,
-            audio_end_ms=0,
-            interrupted=True,
-            interrupted_by_user=True,
-        )
-        if has_message:
-            item_id = await peer.message(response_id)
-            report = await asyncio.wait_for(peer.truncations.get(), 3)
-            assert report["item_id"] == item_id
-            assert report["audio_end_ms"] == 0
-        await peer.end(response_id, status="cancelled")
-        await peer.emit("prism.typed_input.ready")
-        future = session.generate_reply()
-        next_id = await peer.start(await peer.next())
-        await peer.end(next_id)
-        assert (await future).response_id == next_id
-        assert peer.truncations.empty()
-        assert peer.receipts.empty()
-
-
-@pytest.mark.parametrize("delta_type", ["text", "audio"])
-@pytest.mark.parametrize(
-    "interruption", ["before_output", "all_outputs", "message", "unheard_message"]
-)
-async def test_caller_skipped_response_discards_late_output(delta_type, interruption):
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        errors = []
-        session.on("error", errors.append)
-        await session._update_session(instructions="test")
-        future = session.generate_reply()
-        response_id = await peer.start(await peer.next())
-        generation = await future
-        item_id = "skipped-message"
-        common = {
-            "response_id": response_id,
-            "item_id": item_id,
-            "output_index": 0,
-            "content_index": 0,
-        }
-        if interruption != "before_output":
-            await peer.emit(
-                "response.output_item.added",
-                response_id=response_id,
-                output_index=0,
-                item={"id": item_id, "type": "message"},
-            )
-            output = await generation.message_stream.__anext__()
-            await peer.emit("response.text.delta", **common, delta="Initial transcript")
-            assert await output.text_stream.__anext__() == "Initial transcript"
-        session.playback_finished(
-            response_id=response_id,
-            message_id=item_id if interruption in ("message", "unheard_message") else None,
-            audio_end_ms=20 if interruption == "message" else 0,
-            interrupted=True,
-            interrupted_by_user=True,
-            **({"audio_transcript": "Heard"} if interruption == "message" else {}),
-        )
-        if interruption == "before_output":
-            await peer.emit(
-                "response.output_item.added",
-                response_id=response_id,
-                output_index=0,
-                item={"id": item_id, "type": "message"},
-            )
-        delta = "Unheard" if delta_type == "text" else base64.b64encode(b"\0\0" * 480).decode()
-        for _ in range(300):
-            await peer.emit(f"response.{delta_type}.delta", **common, delta=delta)
-            await asyncio.sleep(0.001)
-        await peer.emit("response.text.done", **common, text="Unheard final transcript")
-        await peer.emit("response.audio.done", **common)
-        report = await asyncio.wait_for(peer.truncations.get(), 3)
-        assert report["item_id"] == item_id
-        assert report["audio_end_ms"] == (20 if interruption == "message" else 0)
-        await peer.end(response_id, status="cancelled")
-        assert [message async for message in generation.message_stream] == []
-        message = session.chat_ctx.get_by_id(item_id)
-        if interruption == "message":
-            assert isinstance(message, llm.ChatMessage)
-            assert message.text_content == "Heard"
-        else:
-            assert message is None
-        assert not errors
-        await peer.emit("prism.typed_input.ready")
-        future = session.generate_reply()
-        next_id = await peer.start(await peer.next())
-        await peer.end(next_id)
-        assert (await future).response_id == next_id
-        assert peer.truncations.empty()
-        assert peer.receipts.empty()
-
-
-@pytest.mark.parametrize("max_tool_steps", [0, 1, 2])
-async def test_agent_session_tool_step_limit_reports_unsupported_tool_choice(max_tool_steps):
-    ran = []
-
-    @function_tool
-    async def lookup() -> str:
-        """Look up a value."""
-        ran.append(True)
-        return "42"
-
-    async with peer_model() as (peer, model, _):
-        async with AgentSession(llm=model, max_tool_steps=max_tool_steps) as session:
-            await session.start(Agent(instructions="test", tools=[lookup]))
-            error = asyncio.Future()
-            model._session.on(
-                "error", lambda event: error.set_result(event) if not error.done() else None
-            )
-            session.generate_reply()
-            for step in range(max_tool_steps + 1):
-                request = await peer.next()
-                assert ran == [True] * step
-                response_id = await peer.start(request)
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=response_id,
-                    item_id=f"tool-{step}",
-                    call_id=f"call-{step}",
-                    name="lookup",
-                    arguments="{}",
-                )
-                await peer.end(response_id)
-            # LiveKit counts follow-up rounds after the initial tool round. At the
-            # limit it requests tool_choice="none", which Prism cannot enforce.
-            event = await asyncio.wait_for(error, 3)
-            assert isinstance(event.error, PrismUnsupported)
-            assert event.recoverable is False
-            assert ran == [True] * (max_tool_steps + 1)
-            assert peer.requests.empty()
-
-
 async def test_abandoned_reply_does_not_generate_after_ready():
     async with peer_model() as (peer, model, _):
         session = model.session()
         await session._update_session(instructions="test")
-        # Consume the initial ready, then leave the second request waiting for playback.
+        # Keep the first response active so the second request waits for readiness.
         first = session.generate_reply()
         request = await peer.next()
         response_id = await peer.start(request)
-        await peer.end(response_id)
         await first
         abandoned = session.generate_reply()
         await asyncio.sleep(0)
         abandoned.cancel()
         await asyncio.gather(abandoned, return_exceptions=True)
-        await peer.emit("prism.typed_input.ready")
+        await peer.end(response_id)
         await asyncio.sleep(0.02)
         assert peer.requests.empty()
-
-
-async def test_agent_session_releases_resources_after_connection_failure():
-    async with peer_model() as (peer, model, _):
-        async with AgentSession(llm=model) as session:
-            session.output.audio = FakeAudioOutput()
-            await session.start(Agent(instructions="test"))
-            closed = asyncio.get_running_loop().create_future()
-            session.on("close", closed.set_result)
-            session.generate_reply()
-            request = await peer.next()
-            response_id = await peer.start(request)
-            await peer.message(response_id, seconds=1)
-            await peer.socket.close()
-            event = await asyncio.wait_for(closed, 3)
-            assert event.error is not None
-            assert session._activity is None
-            assert session.output.audio is None
-            assert model._session is not None
-            # Late cleanup calls must remain safe after the original failure.
-            model._session.interrupt()
-            model._session.playback_finished(
-                response_id=response_id,
-                message_id=f"message-{response_id}",
-                audio_end_ms=0,
-                interrupted=True,
-                interrupted_by_user=True,
-            )
-
-
-async def test_cleanup_after_explicit_close_and_fresh_session():
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        await session._update_session(instructions="test")
-        future = session.generate_reply()
-        response_id = await peer.start(await peer.next())
-        await future
-        await session.aclose()
-        session.interrupt()
-        session.playback_finished(
-            response_id=response_id,
-            message_id=None,
-            audio_end_ms=0,
-            interrupted=True,
-            interrupted_by_user=False,
-        )
-        replacement = model.session()
-        await replacement._update_session(instructions="new conversation")
-        assert replacement.chat_ctx.items == []
-        future = replacement.generate_reply()
-        response_id = await peer.start(await peer.next())
-        await peer.end(response_id)
-        assert (await future).response_id == response_id
-
-
-@pytest.mark.parametrize(
-    ("operation", "code"),
-    [
-        ("conversation.item.truncate", "truncate_not_current"),
-        ("response.cancel", "response_cancel_not_active"),
-    ],
-)
-async def test_playback_refusal_keeps_session_usable(operation, code):
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        errors = asyncio.Queue()
-        session.on("error", errors.put_nowait)
-        await session._update_session(instructions="test")
-        future = session.generate_reply()
-        response_id = await peer.start(await peer.next())
-        generation = await future
-        await peer.message(response_id)
-        message = await anext(aiter(generation.message_stream))
-        peer.refusals[operation] = (code, "event")
-        session.playback_finished(
-            response_id=response_id,
-            message_id=message.message_id,
-            audio_end_ms=0,
-            interrupted=True,
-            interrupted_by_user=operation == "conversation.item.truncate",
-        )
-        error = await asyncio.wait_for(errors.get(), 3)
-        assert error.recoverable
-        assert error.error.fault.code == code
-        if operation == "response.cancel":
-            receipt = await asyncio.wait_for(peer.receipts.get(), 3)
-            assert receipt["response_id"] == response_id
-        else:
-            await peer.end(response_id, status="cancelled")
-            await peer.emit("prism.typed_input.ready")
-        # Verify recovery through a new request on the same connection.
-        future = session.generate_reply()
-        second_id = await peer.start(await peer.next())
-        await peer.end(second_id)
-        assert (await future).response_id == second_id
-        assert errors.empty()
-
-
-@pytest.mark.parametrize(
-    ("code", "scope"),
-    [("invalid_request", "event"), ("truncate_not_current", "session")],
-)
-async def test_other_playback_failures_remain_fatal(code, scope):
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        errors = asyncio.Queue()
-        session.on("error", errors.put_nowait)
-        await session._update_session(instructions="test")
-        future = session.generate_reply()
-        response_id = await peer.start(await peer.next())
-        generation = await future
-        await peer.message(response_id)
-        message = await anext(aiter(generation.message_stream))
-        peer.refusals["conversation.item.truncate"] = (code, scope)
-        session.playback_finished(
-            response_id=response_id,
-            message_id=message.message_id,
-            audio_end_ms=0,
-            interrupted=True,
-            interrupted_by_user=True,
-        )
-        error = await asyncio.wait_for(errors.get(), 3)
-        assert not error.recoverable
-        assert error.error.fault.code == code
 
 
 async def test_admission_timeout_leaves_conversation_usable(monkeypatch):
@@ -855,62 +462,6 @@ async def test_admission_timeout_leaves_conversation_usable(monkeypatch):
         next_id = await peer.start(await peer.next())
         await peer.end(next_id)
         assert (await next_reply).response_id == next_id
-        assert not errors
-
-
-async def test_cancel_before_acceptance_reports_zero_playback_after_terminal():
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        errors = []
-        session.on("error", errors.append)
-        await session._update_session(instructions="test")
-        future = session.generate_reply()
-        request = await peer.next()
-        future.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await future
-        peer.cancel_release.clear()
-        try:
-            response_id = await peer.start(request)
-            await asyncio.wait_for(peer.cancel_received.wait(), 1)
-            # Output can arrive while cancellation is in flight. It has no player.
-            item_id = "unplayed-message"
-            await peer.emit(
-                "response.output_item.added",
-                response_id=response_id,
-                output_index=0,
-                item={"id": item_id, "type": "message"},
-            )
-            for _ in range(300):
-                await peer.emit(
-                    "response.audio.delta",
-                    response_id=response_id,
-                    item_id=item_id,
-                    output_index=0,
-                    content_index=0,
-                    delta=base64.b64encode(b"\0\0" * 480).decode(),
-                )
-                await asyncio.sleep(0.001)
-            await peer.emit(
-                "response.audio.done",
-                response_id=response_id,
-                item_id=item_id,
-                output_index=0,
-                content_index=0,
-            )
-            assert not errors
-            assert peer.receipts.empty()
-        finally:
-            peer.cancel_release.set()
-        receipt = await asyncio.wait_for(peer.receipts.get(), 3)
-        assert receipt["response_id"] == response_id
-        assert receipt["played_ms"] == 0
-        assert receipt["drain_token"] == f"drain-{response_id}"
-        next_reply = session.generate_reply()
-        next_id = await peer.start(await peer.next())
-        await peer.end(next_id)
-        assert (await next_reply).response_id == next_id
-        assert peer.receipts.empty()
         assert not errors
 
 
@@ -963,39 +514,184 @@ async def test_expired_tool_continuation_reports_result_without_reexecution(code
                 assert peer.requests.empty()
 
 
-@pytest.mark.parametrize("interrupted,by_user", [(True, True), (True, False), (False, False)])
-async def test_stale_playback_message_is_ignored(interrupted, by_user):
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_standard_session_text_and_empty_replies_need_no_playback_receipts(wrapped):
+    async with peer_model() as (peer, model, _):
+        provider = RealtimeModelFallbackAdapter([model]) if wrapped else model
+        async with AgentSession(llm=provider) as session:
+            session.output.audio = FakeAudioOutput()
+            await session.start(Agent(instructions="Help"))
+            for text in ("First question", "Next question"):
+                speech = session.generate_reply(user_input=text)
+                request = await peer.next()
+                assert "prism_input_text" not in request["response"]
+                assert request["response"]["metadata"]["prism_cause"] == "proactive"
+                assert [i["text"] for i in peer.items if i.get("text") == text] == [text]
+                response = await peer.start(request)
+                if text == "Next question":
+                    await peer.message(response)
+                await peer.end(response)
+                await asyncio.wait_for(speech.wait_for_playout(), 3)
+                assert speech.exception() is None
+            assert peer.receipts.empty()
+
+
+@pytest.mark.parametrize("max_tool_steps", [0, 1, 2])
+async def test_standard_session_tool_limit_produces_final_reply_and_restores_tools(max_tool_steps):
+    ran = []
+
+    @function_tool
+    async def lookup() -> str:
+        """Look up a value."""
+        ran.append(True)
+        return "42"
+
+    async with peer_model() as (peer, model, _):
+        async with AgentSession(llm=model, max_tool_steps=max_tool_steps) as session:
+            await session.start(Agent(instructions="Help", tools=[lookup]))
+            speech = session.generate_reply()
+            for step in range(max_tool_steps + 1):
+                request = await peer.next()
+                assert peer.settings["tools"]
+                parent = await peer.start(request)
+                await peer.emit(
+                    "response.function_call_arguments.done",
+                    response_id=parent,
+                    item_id=f"tool-{step}",
+                    call_id=f"call-{step}",
+                    name="lookup",
+                    arguments="{}",
+                )
+                await peer.end(parent)
+            final = await peer.next()
+            assert peer.settings["tools"] == []
+            assert final["response"]["metadata"]["prism_cause"] == "tool_continuation"
+            response = await peer.start(final)
+            await peer.message(response, text="The result is 42.")
+            await peer.end(response)
+            await asyncio.wait_for(speech.wait_for_playout(), 3)
+            assert speech.exception() is None
+            assert ran == [True] * (max_tool_steps + 1)
+            assert peer.settings["tools"][0]["function"]["name"] == "lookup"
+            assert model._session._tool_choice == "auto"
+            assert peer.receipts.empty()
+
+
+async def test_tool_disabled_response_never_executes_unexpected_call():
+    ran = []
+
+    @function_tool
+    async def lookup() -> str:
+        """Look up a value."""
+        ran.append(True)
+        return "42"
+
+    async with peer_model() as (peer, model, _):
+        async with AgentSession(llm=model) as session:
+            await session.start(Agent(instructions="Help", tools=[lookup]))
+            errors = asyncio.Queue()
+            model._session.on("error", errors.put_nowait)
+            session.generate_reply(tool_choice="none")
+            request = await peer.next()
+            assert peer.settings["tools"] == []
+            response = await peer.start(request)
+            # Even if the model calls a tool from history, it must not reach execution.
+            await peer.emit(
+                "response.function_call_arguments.done",
+                response_id=response,
+                item_id="unexpected",
+                call_id="unexpected",
+                name="lookup",
+                arguments="{}",
+            )
+            error = await asyncio.wait_for(errors.get(), 3)
+            assert isinstance(error.error, PrismUnsupported)
+            assert not error.recoverable
+            assert ran == []
+
+
+async def test_cancelled_tool_disabled_reply_restores_after_late_acceptance():
+    @function_tool
+    async def lookup() -> str:
+        """Look up a value."""
+        return "42"
+
     async with peer_model() as (peer, model, _):
         session = model.session()
-        await session._update_session(instructions="test")
-        reply = session.generate_reply()
-        response_id = await peer.start(await peer.next())
-        item_id = await peer.message(response_id)
-        await peer.end(response_id)
-        await reply
-        async with session._generation_ready:
-            await asyncio.wait_for(
-                session._generation_ready.wait_for(lambda: session._generations[response_id].ended),
-                3,
-            )
-        session.playback_finished(
-            response_id=response_id,
-            message_id="stale-message",
-            audio_end_ms=999,
-            audio_transcript="wrong transcript",
-            interrupted=interrupted,
-            interrupted_by_user=by_user,
-        )
-        session.playback_finished(
-            response_id=response_id,
-            message_id=item_id,
-            audio_end_ms=20,
-            interrupted=False,
-            interrupted_by_user=False,
-        )
-        receipt = await asyncio.wait_for(peer.receipts.get(), 3)
-        assert receipt["played_ms"] == 20
-        assert peer.receipts.empty()
-        assert peer.truncations.empty()
-        assert not peer.cancel_received.is_set()
-        assert session.chat_ctx.get_by_id(item_id).text_content == "Hello"
+        await session.update_tools([lookup])
+        pending = session.generate_reply(tool_choice="none")
+        request = await peer.next()
+        pending.cancel()
+        await asyncio.sleep(0)
+        assert peer.settings["tools"] == []
+        response = await peer.start(request)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pending, 3)
+        assert peer.cancel_received.is_set()
+        assert peer.settings["tools"][0]["function"]["name"] == "lookup"
+        assert peer.requests.empty()
+        assert session._generations[response].abandoned
+
+
+async def test_refused_tool_disabled_reply_restores_tools_and_keeps_session():
+    @function_tool
+    async def lookup() -> str:
+        """Look up a value."""
+        return "42"
+
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.update_tools([lookup])
+        errors = []
+        session.on("error", errors.append)
+        peer.refusals["response.create"] = ("invalid_request", "event")
+        with pytest.raises(llm.RealtimeError, match="invalid_request"):
+            await session.generate_reply(tool_choice="none")
+        assert peer.settings["tools"][0]["function"]["name"] == "lookup"
+        assert not errors
+        pending = session.generate_reply(tool_choice="auto")
+        response = await peer.start(await peer.next())
+        await peer.end(response)
+        assert (await pending).response_id == response
+
+
+async def test_failed_tool_restoration_fails_session():
+    @function_tool
+    async def lookup() -> str:
+        """Look up a value."""
+        return "42"
+
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.update_tools([lookup])
+        errors = asyncio.Queue()
+        session.on("error", errors.put_nowait)
+        pending = session.generate_reply(tool_choice="none")
+        request = await peer.next()
+        peer.refusals["session.update"] = ("invalid_session", "event")
+        await peer.start(request)
+        await asyncio.gather(pending, return_exceptions=True)
+        error = await asyncio.wait_for(errors.get(), 3)
+        assert not error.recoverable
+        assert "restoration" in str(error.error)
+        assert session._failure is not None
+
+
+async def test_ordinary_session_application_stop_truncates_without_completion_receipt():
+    async with peer_model() as (peer, model, _):
+        output = FakeAudioOutput(can_pause=True)
+        async with AgentSession(llm=model) as session:
+            session.output.audio = output
+            await session.start(Agent(instructions="Help"))
+            speech = session.generate_reply()
+            response = await peer.start(await peer.next())
+            item = await peer.message(response, seconds=1)
+            async with asyncio.timeout(3):
+                while output._started_at is None:
+                    await asyncio.sleep(0)
+            speech.interrupt(force=True)
+            await asyncio.wait_for(speech.wait_for_playout(), 3)
+            truncate = await asyncio.wait_for(peer.truncations.get(), 3)
+            assert truncate["item_id"] == item
+            assert peer.cancel_received.is_set()
+            assert peer.receipts.empty()
