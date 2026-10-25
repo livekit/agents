@@ -1,0 +1,6 @@
+name = "Review: a question to the person"
+agent = "inputreq"
+endpoint = "frontend"
+description = "A dental front desk whose back office asks for an email: design points 1 and 4."
+voice = true
+start = "uv run python main.py dev"

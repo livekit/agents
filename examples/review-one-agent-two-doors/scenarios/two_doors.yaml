@@ -1,0 +1,42 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/two_doors.yaml --agent-name doors`.
+# The text door only: each scenario drives one tool whose behaviour differs on the call (README,
+# "What to try"). Read the worker log beside the result: the lookup timestamps, whether
+# "after the await" logged, and what the safe verification caught.
+
+id: SCNG_Ek9PxWat0zxa
+name: Review, one agent two doors
+
+scenarios:
+- id: SCN_ghW8cf0F1fva
+  label: "One lookup"
+  instructions: >
+    You are Eve Moss. Ask "can you check order A1?". End the conversation once you have its
+    status.
+  agent_expectations: >
+    The agent says order A1 shipped yesterday. Fails if a status is given that the tool did not
+    return.
+
+- id: SCN_xwI542TanEaY
+  label: "Two lookups in one message"
+  instructions: >
+    You are Finn Hale. Ask "check orders A1 and B2". End the conversation once you have both.
+  agent_expectations: >
+    The agent says both A1 and B2 shipped yesterday. Fails if either order is missing.
+
+- id: SCN_3jGs1Uo0yPsL
+  label: "Verification through a task"
+  instructions: >
+    You are Gia Park. Say "verify me". When asked for a code, give 4821. End the conversation
+    once you are told you are verified.
+  agent_expectations: >
+    The agent asks for the code and confirms the verification with 4821. Fails if it claims
+    verification before the code is given.
+
+- id: SCN_E2u5aZ7dWQyb
+  label: "A tool that asks the model to retry"
+  instructions: >
+    You are Hugo Lund. Say "run the flaky lookup". When asked for an order number, give C3.
+    End the conversation after the answer.
+  agent_expectations: >
+    The agent asks for the order number instead of reporting an internal error, then answers
+    about order C3. Fails if the customer is told an internal error occurred.

@@ -255,7 +255,7 @@ class BookRoom(AgentTask[str, RoomDraft]):
     @function_tool(requires_approval=_read_back)
     async def confirm_booking(self, ctx: RunContext[Hotel, Caller]) -> Completed[str] | str:
         """Write the booking and charge the card. It reads the booking back and asks the guest;
-        their yes comes back as this call's output, and then it is called again the same way."""
+        their yes is the next message, and then it is called again the same way."""
         d = self.state
         assert d.check_in and d.check_out and d.guests and d.room_type  # the read-back checked
         assert d.first_name and d.last_name and d.email and d.card_last4
@@ -413,8 +413,8 @@ async def cancellation(ctx: RunContext[Hotel, Caller]) -> str:
 @backend.tool(requires_approval=cancellation)
 async def cancel_room_booking(ctx: RunContext[Hotel, Caller]) -> str:
     """Cancel the guest's booking. Verifies first, then reads the booking and the refund back
-    and asks the guest; their yes comes back as this call's output, and then it is called
-    again the same way."""
+    and asks the guest; their yes is the next message, and then it is called again the same
+    way."""
     booking = verified(ctx)
     if booking is None:
         raise ToolError("the guest is not verified; call this tool again to verify them")

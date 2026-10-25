@@ -1,0 +1,37 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/input_required.yaml --agent-name inputreq`.
+# Each one ends a back-office turn `input-required` and answers it differently: with the email,
+# with a question, and through an AgentTask whose ask carries no call id. Read the backend log
+# beside the result: the rows, the forced `call:ask`, and the front desk's stored lane.
+
+id: SCNG_yh9tkRntFv6m
+name: Review, a question to the person
+
+scenarios:
+- id: SCN_puGe0qSnYpN9
+  label: "The email given as the answer"
+  instructions: >
+    You are Ana Ruiz. Ask to book a cleaning on Monday. When asked for your email, give
+    ana.ruiz@example.com and nothing else. End the conversation once the booking is confirmed.
+  agent_expectations: >
+    The agent asks for the email, then confirms a booking on Monday with ana.ruiz@example.com.
+    Fails if a booking is confirmed before the email is given.
+
+- id: SCN_dmMBp4x7YFXI
+  label: "A question given instead of the email"
+  instructions: >
+    You are Ben Cole. Ask to book a check-up on Tuesday. When asked for your email, answer only
+    "why do you need my email?". After the answer, give ben.cole@example.com. End the
+    conversation once the booking is confirmed.
+  agent_expectations: >
+    The agent says what the email is for, asks for it again, and books Tuesday with
+    ben.cole@example.com. Fails if the question is taken as the email, or if a booking is
+    confirmed with an address the patient did not give.
+
+- id: SCN_yuhOrHLJ5I1D
+  label: "Newsletter signup through a task"
+  instructions: >
+    You are Cara Diaz. Ask to sign up for the newsletter. When asked for your email, give
+    cara.diaz@example.com. End the conversation once the signup is confirmed.
+  agent_expectations: >
+    The agent asks for the email and confirms the signup with cara.diaz@example.com. Fails if
+    the signup is confirmed before the email is given.

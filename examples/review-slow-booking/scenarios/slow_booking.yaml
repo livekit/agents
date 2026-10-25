@@ -1,0 +1,19 @@
+# Scenarios for `lk agent simulate text --scenarios scenarios/slow_booking.yaml --agent-name booking`.
+# A text simulation sends the next message after the reply. Under `live` the reply to a booking
+# comes at once while the booking runs in the background, so the change of day arrives while the
+# booking still runs (README, case a). The interrupt and cancel cases are run by hand. With the
+# default REVIEW_STEP_SECONDS=5 each booking takes about 50 s.
+
+id: SCNG_xkRGhhgxQmRq
+name: Review, a slow booking
+
+scenarios:
+- id: SCN_iRMgocREKj1e
+  label: "Book, then change the day while the booking runs"
+  instructions: >
+    You are Dev Patel. Ask to book a flight on Monday. As soon as the agent says it is on it,
+    say "actually, make it Tuesday". End the conversation once the agent has told you what was
+    booked.
+  agent_expectations: >
+    The agent tells you the booking is in progress, takes the change, and later reports what
+    was booked. Fails if it claims a booking that the booking office did not report.

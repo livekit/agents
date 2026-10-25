@@ -1,0 +1,6 @@
+name = "Review: one agent, two doors"
+agent = "doors"
+endpoint = "frontend"
+description = "One support agent with the same tools on the call and by text: design points 3 and 5."
+voice = true
+start = "uv run python main.py dev"

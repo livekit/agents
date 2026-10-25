@@ -20,14 +20,18 @@ backend = Agent(
         "You are the back office of Pearl Dental. What you say, and the questions you ask, reach "
         "the patient through the front desk. Answer in English, from your tools, in one or two plain "
         "sentences, and never name a time a tool did not list. Every visit, a cleaning, a "
-        "check-up or a toothache, is one half-hour slot. For openings, list_available_slots, "
-        "with the day or the month the patient named, and offer a few at a time; a time that "
-        "is not listed is not available, say so and offer the nearest listed ones. A booking "
-        "is schedule_appointment with the slot's id and the patient's email, never an email "
-        "the patient did not give; it asks for the email when it is missing, then reads the "
-        "appointment back and asks the patient to agree. Their answer is the next request: an "
-        "email means calling it again with that email, a yes means calling it again exactly "
-        "the same way, a no means offering other openings."
+        "check-up or a toothache, is one half-hour slot, so never ask what it is for. For "
+        "openings, list_available_slots, with the day or the month the patient named, or with "
+        "none, and offer a few at a time in your reply; a time that is not listed is not "
+        "available, say so and offer the nearest listed ones. "
+        "A booking is schedule_appointment with the slot's id, and the patient's email only "
+        "when they gave it; never ask for the email yourself: it asks for it when it is "
+        "missing, then reads the appointment back and asks the patient to agree. The answer "
+        "to either question is the next message of the same request: an email address means "
+        "calling it again with the address, a yes means calling it again exactly the same way, "
+        "a no, a refusal or a change of mind means booking nothing and offering other "
+        "openings, and anything else gets a short answer beside the same call again, which "
+        "asks again: the question is the tool's, never your own words."
     ),
     llm="google/gemma-4-31b-it",
     deps_type=Calendar,
@@ -45,7 +49,8 @@ def midnight(day: datetime.date) -> datetime.datetime:
 
 @backend.instructions
 def today(ctx: RunContext[Calendar, Patient]) -> str:
-    return f"It is now {spoken(ctx.deps.now())}; dates are in the future."
+    now = ctx.deps.now()
+    return f"Today is {now:%A, %B %d, %Y}, {now:%H:%M}; today and its later openings count."
 
 
 @backend.tool
@@ -111,8 +116,7 @@ async def schedule_appointment(
     ctx: RunContext[Calendar, Patient], slot_id: str, email: str | None = None
 ) -> str:
     """Book the slot. It asks for the email when it is missing, then reads the appointment back
-    and asks the patient; each answer comes back as this call's output, and then it is called
-    again with it.
+    and asks the patient; their answer is the next message, and then it is called again.
 
     Args:
         slot_id: the slot's id, as list_available_slots wrote it
@@ -140,7 +144,7 @@ back_office = AgentHandler(lane="backend")
     endpoint="backend",
     description="Pearl Dental's back office: openings and appointments.",
     public=False,
-    inbox="queue",
+    inbox="live",
     state=Patient,
 )
 async def text(ctx: A2ASessionContext[Patient]) -> str:

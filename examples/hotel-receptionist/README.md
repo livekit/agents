@@ -27,8 +27,8 @@ phone.
 - **The guest's yes before a write.** `confirm_booking` and `cancel_room_booking` are
   `requires_approval=` with a read-back function of their own parameters: the booking from
   the task's state, the cancellation with its refund. A call returns the read-back as written
-  and does not run; the guest's answer is written as the call's output on the next turn, and
-  the write runs only when the model repeats the same call after it. The model cannot approve
+  and does not run; the guest's answer is the next message of the same task, and the write
+  runs only when the model repeats the same call after it. The model cannot approve
   for the guest: there is no flag to set.
 - **The lane's state** keeps what outlives a flow: the verified booking and the last booking
   made, rendered into the routing agent's instructions on every turn.

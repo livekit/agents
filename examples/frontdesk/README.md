@@ -18,11 +18,15 @@ email, by text and on the phone.
   call and the text door alike: one tool, `ask`, described from the back office's card. The
   frontend relays what comes back and never guesses.
 - **A tool that asks for what it is missing.** `schedule_appointment` takes the slot and the
-  email. Without the email it returns `InputRequired` with the question; the turn ends there,
-  the frontend relays it, and the patient's answer is written as the call's output on the next
-  turn, so the model calls the tool again with the email. With everything, and before writing,
-  `requires_approval=read_back` reads the appointment back as written; the booking runs only
-  when the model repeats the same call after the patient answered, so it cannot skip the ask.
+  email. Without the email it returns `InputRequired(...)`; the back office's task waits on
+  the question, the frontend relays it, and the patient's answer is that task's next message,
+  which the back office's model reads: an address books with it, a refusal or a change of mind
+  books nothing and offers other openings, anything else gets a short answer and the question
+  again. No code takes the answer as said, so the patient can always say no. With
+  everything, and before writing, `requires_approval=read_back` reads the appointment back as
+  written; the booking runs only when the model repeats the same call after the patient
+  answered, so it cannot skip the ask. Openings and which one to take are plain replies: the
+  patient's choice is a new request.
 - **The calendar as the backend's `deps`**, the same object for every turn of every
   conversation, and the system of record for what is booked. Its clock is read into the
   instructions on every turn, after the static part, so the model knows the date.

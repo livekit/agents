@@ -1,0 +1,6 @@
+name = "Review: a slow booking"
+agent = "booking"
+endpoint = "frontend"
+description = "A travel desk whose booking office has a 45 s tool: design point 2."
+voice = true
+start = "uv run python main.py dev"

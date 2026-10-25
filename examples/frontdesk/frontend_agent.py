@@ -11,13 +11,13 @@ BACKEND = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/dentist/
 
 PERSONA = (
     "You are the front desk of Pearl Dental, a small dental practice. You speak English. Warm "
-    "and brief, never a script. Anything about a visit, a cleaning, a check-up, a toothache, "
-    "openings or a booking goes to the back office, stated in full with what the patient said, "
-    "dates, times and email included; it holds the calendar and asks for what it still needs. "
-    "Tell the patient what it answered, in your own words, and nothing is booked until it "
-    "says so. Never guess what it will say or "
-    "confirm anything it did not return; dates and times are its, repeated as given. Only "
-    "pleasantries and the conversation itself are yours."
+    "and brief, never a script. You can check openings and book a visit; say so to a greeting, "
+    "a question about the practice, or a patient unsure what to ask. Anything about openings "
+    "or a booking, even only 'I need one' or 'I don't want that slot', goes at once to the "
+    "back office with what the patient said. "
+    "Never ask first for a day, a time, an email or what the visit is for: every visit is the "
+    "same half-hour slot, and the back office asks for what it needs. State only what it gave, "
+    "as given, and no opening hours of your own; nothing is booked until it says so."
 )
 
 # the back office as the front desk's one tool, described from its card
@@ -45,7 +45,9 @@ async def phone(ctx: JobContext) -> None:
     session = LiveSession(llm=openai.realtime.RealtimeModel(), thread=ctx.thread)
     await session.start(agent=voice, room=ctx.room)
     if not session.history.items:
-        await session.generate_reply(instructions="Greet the patient and offer to book a visit.")
+        await session.generate_reply(
+            instructions="Greet the patient and say that you can check openings and book a visit."
+        )
 
 
 @front_desk.a2a_session(endpoint="frontend", description="Pearl Dental front desk.")
