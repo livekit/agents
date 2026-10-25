@@ -103,7 +103,6 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "output_replacement_is_clean",
     "provider_failure_is_accounted",
     "provider_streams_closed",
-    "session_settles",
     "speech_error_is_injected",
     "speech_settles",
     "synthesized_speech_is_played",

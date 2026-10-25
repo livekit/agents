@@ -1020,10 +1020,12 @@ impl Driver {
     pub(crate) fn is_idle(&self) -> bool {
         use crate::audio_recognition::Phase;
         let activity = &self.activity;
+        // The user is busy while speaking or while an end-of-turn countdown runs
+        // (`_audio_recognition._speaking`, `_end_of_turn_task`). A turn that ended with no
+        // countdown waits on words that may never come, and does not hold idle off.
         let deciding = match activity.audio_recognition.phase() {
-            Phase::Idle => false,
+            Phase::Idle | Phase::Ended { .. } => false,
             Phase::Speaking { .. }
-            | Phase::Ended { .. }
             | Phase::Awaiting { .. }
             | Phase::Delaying { .. }
             | Phase::ManualCommitted { .. } => true,
